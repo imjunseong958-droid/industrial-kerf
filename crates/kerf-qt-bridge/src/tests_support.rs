@@ -26,6 +26,8 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
         preview_cancel: Mutex::new(None),
+        preview_running: AtomicBool::new(false),
+        preview_stopped: AtomicBool::new(false),
         stale_previews: Mutex::new(Vec::new()),
         shown_preview: Mutex::new(None),
     }

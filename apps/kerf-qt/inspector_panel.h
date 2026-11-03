@@ -1,6 +1,7 @@
 #pragma once
 
 #include "inspector_presentation.h"
+#include "test_friends.h"
 
 #include <QHash>
 #include <QImage>
@@ -45,7 +46,7 @@ class ScrubField;
 // gesture (several clips: one array, so one undo step).
 class InspectorPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     // What one selected clip is, from the snapshot.
     struct Clip {

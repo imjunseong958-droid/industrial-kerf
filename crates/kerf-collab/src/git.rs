@@ -72,6 +72,58 @@ pub struct Status {
     pub conflicted: bool,
     pub branches: Vec<String>,
     pub lfs: bool,
+    /// Who commits made here are by, also outside a repository.
+    pub user: Option<User>,
+    /// The commit checked out.
+    pub head: Option<String>,
+}
+
+/// A person as Git names them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct User {
+    pub name: String,
+    pub email: Option<String>,
+}
+
+/// Who commits in `dir` are by: the author Git's environment names, else
+/// Git's `user.name` and `user.email`, else the identity a sync falls back
+/// on when Git has none.
+pub fn user(dir: &Path) -> Option<User> {
+    let from_env = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    // Git lists system, global, then local values; the last one wins.
+    let configured =
+        git_text(dir, &["config", "--get-regexp", r"^user\.(name|email)$"]).unwrap_or_default();
+    let last = |key: &str| {
+        configured
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(name, value)| *name == key && !value.trim().is_empty())
+            .map(|(_, value)| value.trim().to_owned())
+            .next_back()
+    };
+    let mut name = from_env("GIT_AUTHOR_NAME").or_else(|| last("user.name"));
+    let mut email = from_env("GIT_AUTHOR_EMAIL").or_else(|| last("user.email"));
+    for (key, value) in fallback_identity(dir) {
+        match key {
+            "user.name" if name.is_none() => name = Some(value),
+            "user.email" if email.is_none() => email = Some(value),
+            _ => {}
+        }
+    }
+    Some(User {
+        name: name.filter(|name| !name.is_empty())?,
+        email,
+    })
+}
+
+/// The commit `HEAD` names, when there is one.
+pub fn head(dir: &Path) -> Option<String> {
+    git_text(dir, &["rev-parse", "-q", "--verify", "HEAD"])
 }
 
 /// One commit, as a sync lists what came in.
@@ -405,7 +457,10 @@ fn has_head(dir: &Path) -> bool {
 
 pub fn status(dir: &Path) -> Result<Status> {
     if !is_repository(dir) {
-        return Ok(Status::default());
+        return Ok(Status {
+            user: user(dir),
+            ..Status::default()
+        });
     }
     // A status poll must not take the index lock a commit or merge needs.
     let git_text = |dir: &Path, args: &[&str]| {
@@ -418,8 +473,9 @@ pub fn status(dir: &Path) -> Result<Status> {
     let branch = branch(dir);
     let upstream = upstream(dir);
     let remote = remote_name(dir).and_then(|name| git_text(dir, &["remote", "get-url", &name]));
+    let head = head(dir);
     let (mut ahead, mut behind) = (0, 0);
-    if upstream.is_some() && has_head(dir) {
+    if upstream.is_some() && head.is_some() {
         if let Some(counts) = git_text(
             dir,
             &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
@@ -453,6 +509,8 @@ pub fn status(dir: &Path) -> Result<Status> {
         conflicted,
         branches,
         lfs: git_ok(dir, &["lfs", "version"]),
+        user: user(dir),
+        head,
     })
 }
 
@@ -506,9 +564,14 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
         .ok_or_else(|| {
             CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
         })?;
-    let line = "project.kerf merge=kerf";
+    // The review log is only appended to, so both sides' lines are kept.
+    let lines = ["project.kerf merge=kerf", "review/*.jsonl merge=union"];
     let existing = fs::read_to_string(&attributes).unwrap_or_default();
-    if !existing.lines().any(|existing| existing.trim() == line) {
+    let missing: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| !existing.lines().any(|existing| existing.trim() == *line))
+        .collect();
+    if !missing.is_empty() {
         if let Some(parent) = attributes.parent() {
             fs::create_dir_all(parent).map_err(io)?;
         }
@@ -516,8 +579,10 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
-        text.push_str(line);
-        text.push('\n');
+        for line in missing {
+            text.push_str(line);
+            text.push('\n');
+        }
         fs::write(&attributes, text).map_err(io)?;
     }
     Ok(())
@@ -1323,6 +1388,66 @@ mod tests {
         vars.iter()
             .find(|(name, _)| *name == key)
             .map(|(_, value)| *value)
+    }
+
+    fn plain_git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn the_status_names_who_commits_and_the_commit_checked_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        plain_git(dir, &["init", "-q", "-b", "main"]);
+        plain_git(dir, &["config", "user.name", "Mina Park"]);
+        plain_git(dir, &["config", "user.email", "mina@example.com"]);
+        assert_eq!(head(dir), None, "no commit yet");
+        let user = user(dir).expect("an identity");
+        if std::env::var_os("GIT_AUTHOR_NAME").is_none() {
+            assert_eq!(user.name, "Mina Park");
+        }
+        if std::env::var_os("GIT_AUTHOR_EMAIL").is_none() {
+            assert_eq!(user.email.as_deref(), Some("mina@example.com"));
+        }
+        fs::write(dir.join(PROJECT_FILE), "kerf 1\n").unwrap();
+        plain_git(dir, &["add", "."]);
+        plain_git(dir, &["commit", "-q", "--no-gpg-sign", "-m", "First"]);
+        let status = status(dir).unwrap();
+        assert_eq!(status.head, Some(plain_git(dir, &["rev-parse", "HEAD"])));
+        assert_eq!(status.user, Some(user));
+        // Outside a repository there is still someone to be.
+        let outside = tempfile::tempdir().unwrap();
+        assert!(status_of_folder(outside.path()).user.is_some());
+    }
+
+    fn status_of_folder(dir: &Path) -> Status {
+        let status = status(dir).unwrap();
+        assert!(!status.repository);
+        status
+    }
+
+    #[test]
+    fn the_review_log_merges_by_keeping_both_sides() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        plain_git(dir, &["init", "-q", "-b", "main"]);
+        ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
+        ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
+        assert_eq!(
+            plain_git(dir, &["check-attr", "merge", "--", "review/comments.jsonl"]),
+            "review/comments.jsonl: merge: union"
+        );
+        let attributes = fs::read_to_string(dir.join(".git/info/attributes")).unwrap();
+        assert_eq!(attributes.matches("review/*.jsonl merge=union").count(), 1);
+        assert!(crate::scaffold::gitattributes(false).contains("review/*.jsonl merge=union\n"));
     }
 
     #[test]

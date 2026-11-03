@@ -2,6 +2,7 @@
 
 #include "editor_theme.h"
 #include "launcher_style.h"
+#include "test_friends.h"
 
 #include <QDialog>
 #include <QFocusFrame>
@@ -35,7 +36,7 @@ namespace kerf {
 // folder in chosenPath().
 class ProjectLauncher final : public QDialog {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };

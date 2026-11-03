@@ -9,20 +9,28 @@
 //! A program cut-only playback cannot show plays composited: the compositor
 //! (`kerf-compose`) draws its picture while sound plays natively (see
 //! [`preview_plan`] and [`PlaybackConfig::with_composited`]).
+//!
+//! While it plays, a session meters the program it mixes
+//! ([`PlaybackSession::levels`]), can monitor a few audio tracks alone
+//! ([`PlaybackSession::set_solo`]), and counts the frames it could not show
+//! in time ([`PlaybackClock::dropped`]).
 
 mod audio;
 mod decoder;
 mod drawn;
 mod libav;
+mod loudness;
 mod mix;
 mod timeline;
+
+pub use loudness::LEVEL_FLOOR_DB;
 
 pub use timeline::{
     preview_plan, CaptionCue, ClipKind, PlaybackClip, PlaybackSource, PlaybackTimeline,
     ResolvedClip,
 };
 
-use audio::AudioRuntime;
+use audio::{AudioRuntime, LevelTap};
 use decoder::{DecodedVideoFrame, VideoDecoder};
 use drawn::Drawn;
 use std::collections::{BTreeMap, VecDeque};
@@ -85,6 +93,33 @@ pub struct PlaybackClock {
     pub position: f64,
     pub duration: f64,
     pub source: ClockSource,
+    /// Frames the presenter skipped because they were late: decoded or
+    /// drawn after a later frame was already due, or never delivered
+    /// because the client was not taking frames. Counted while playing,
+    /// and reset when a project opens and on every seek.
+    pub dropped: u64,
+}
+
+/// The program's level where it is being heard, read from the sound as it
+/// is mixed. Levels are in dBFS (1.0 is full scale) and loudness in LUFS;
+/// anything quieter than [`LEVEL_FLOOR_DB`] reads as the floor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Levels {
+    /// The sample peak of left and right over the blocks of the mix
+    /// (1024 frames at 48 kHz, about 21 ms each) heard since the previous
+    /// reading, so a transient between two polls is never missed.
+    pub peak: [f32; 2],
+    /// The RMS of left and right over the same blocks, unweighted: a
+    /// full-scale sine reads −3.01 dBFS.
+    pub rms: [f32; 2],
+    /// BS.1770-4 loudness of the last 400 ms; `None` until 400 ms have
+    /// been mixed since playback started or moved.
+    pub momentary: Option<f32>,
+    /// BS.1770-4 loudness of the last 3 s; `None` until 3 s have been
+    /// mixed since playback started or moved.
+    pub short_term: Option<f32>,
+    /// The program time, in seconds, at the end of the newest block heard.
+    pub at: f64,
 }
 
 /// One decoded RGBA video frame.
@@ -148,6 +183,7 @@ enum WorkerCommand {
     SeekWake,
     SetVolume(f32),
     SetMuted(bool),
+    SetSolo(Vec<kerf_model::Id>),
     Shutdown,
 }
 
@@ -273,6 +309,15 @@ impl PlaybackHandle {
         self.send(WorkerCommand::SetMuted(muted))
     }
 
+    /// Hear only these audio tracks of the program sequence, as a mix of
+    /// them alone would sound; an empty list, or one naming no audio track
+    /// of the program sequence, hears the whole mix. This is monitoring
+    /// only: the project is never changed, and the solo carries over when
+    /// the session opens another project.
+    pub fn set_solo(&self, tracks: Vec<kerf_model::Id>) -> Result<(), PlaybackError> {
+        self.send(WorkerCommand::SetSolo(tracks))
+    }
+
     /// Stop the worker. A new epoch cancels the decode or draw under way,
     /// and the command only wakes the worker, so a full queue cannot keep
     /// it running.
@@ -307,6 +352,7 @@ pub struct PlaybackSession {
     handle: PlaybackHandle,
     events: Receiver<QueuedEvent>,
     control: Arc<Mutex<ControlState>>,
+    levels: Option<LevelTap>,
 }
 
 struct QueuedEvent {
@@ -341,6 +387,7 @@ impl PlaybackSession {
             None
         };
         let audio = AudioRuntime::spawn(timeline.clone(), config.audio_enabled)?;
+        let levels = audio.levels();
         let worker = Worker {
             timeline,
             config,
@@ -370,6 +417,7 @@ impl PlaybackSession {
             drawn,
             drawn_ready: BTreeMap::new(),
             drawn_shown: None,
+            dropped: 0,
         };
         thread::Builder::new()
             .name("kerf-playback".into())
@@ -382,6 +430,7 @@ impl PlaybackSession {
             },
             events: event_rx,
             control,
+            levels: Some(levels),
         })
     }
 
@@ -411,6 +460,22 @@ impl PlaybackSession {
 
     pub fn set_muted(&self, muted: bool) -> Result<(), PlaybackError> {
         self.handle.set_muted(muted)
+    }
+
+    /// See [`PlaybackHandle::set_solo`].
+    pub fn set_solo(&self, tracks: Vec<kerf_model::Id>) -> Result<(), PlaybackError> {
+        self.handle.set_solo(tracks)
+    }
+
+    /// The program's level now, a reading meant to be polled (about 20
+    /// times a second is plenty) by one reader: each reading covers what
+    /// was heard since the previous one, and repeats it while nothing newer
+    /// has been heard. `None` while nothing mixed is
+    /// being heard: paused, stopped, just started or moved, or with audio
+    /// disabled in the [`PlaybackConfig`]. Without an output device the
+    /// program is still mixed in real time and metered.
+    pub fn levels(&self) -> Option<Levels> {
+        self.levels.as_ref().and_then(LevelTap::latest)
     }
 
     pub fn try_next_event(&self) -> Option<PlaybackEvent> {
@@ -538,6 +603,8 @@ struct Worker {
     drawn: Option<Drawn>,
     drawn_ready: BTreeMap<i64, (PlaybackFrame, f64)>,
     drawn_shown: Option<i64>,
+    /// Frames skipped as late since the last open or seek.
+    dropped: u64,
 }
 
 impl Worker {
@@ -670,6 +737,7 @@ impl Worker {
                     }
                     self.timeline = timeline.clone();
                     self.audio.open(timeline);
+                    self.dropped = 0;
                     self.position = 0.0;
                     self.decode_cursor = 0.0;
                     self.decode_queue.clear();
@@ -705,6 +773,7 @@ impl Worker {
                 self.muted = muted;
                 self.audio.set_muted(muted);
             }
+            WorkerCommand::SetSolo(tracks) => self.audio.set_solo(tracks),
             WorkerCommand::Shutdown => return false,
         }
         true
@@ -749,6 +818,7 @@ impl Worker {
         let was_playing = self.state == PlaybackState::Playing;
         self.audio.seek(next);
         self.position = next;
+        self.dropped = 0;
         self.reset_drawn();
         let scrub = !exact && !was_playing;
         self.preview_rough = scrub;
@@ -889,12 +959,26 @@ impl Worker {
         }
 
         self.fill_decode_queue();
-        while self.decode_queue.front().is_some_and(|frame| {
-            frame.timeline_time <= position + frame_interval(self.timeline.fps) * 0.5
-        }) {
-            if let Some(frame) = self.decode_queue.pop_front() {
-                self.emit(PlaybackEvent::Frame(frame));
+        self.present_due(position);
+    }
+
+    /// Show the newest decoded frame due at `position`. The frames due
+    /// before it came too late to be seen and are skipped as dropped.
+    fn present_due(&mut self, position: f64) {
+        let due = position + frame_interval(self.timeline.fps) * 0.5;
+        let mut newest = None;
+        while self
+            .decode_queue
+            .front()
+            .is_some_and(|frame| frame.timeline_time <= due)
+        {
+            let frame = self.decode_queue.pop_front();
+            if std::mem::replace(&mut newest, frame).is_some() {
+                self.dropped += 1;
             }
+        }
+        if let Some(frame) = newest {
+            self.emit(PlaybackEvent::Frame(frame));
         }
     }
 
@@ -1135,6 +1219,11 @@ impl Worker {
                 .remove(&index)
                 .expect("the frame due is ready");
             if self.drawn_shown.is_none_or(|shown| index > shown) {
+                // The frames between the last one shown and this were not
+                // drawn in time.
+                if let Some(shown) = self.drawn_shown {
+                    self.dropped += (index - shown - 1).max(0) as u64;
+                }
                 self.drawn_shown = Some(index);
                 self.emit(PlaybackEvent::Frame(frame));
             }
@@ -1248,7 +1337,10 @@ impl Worker {
     }
 
     fn clock(&self) -> PlaybackClock {
-        self.audio.clock(self.timeline.duration)
+        PlaybackClock {
+            dropped: self.dropped,
+            ..self.audio.clock(self.timeline.duration)
+        }
     }
 
     fn emit_clock(&mut self, force: bool) {
@@ -1268,6 +1360,10 @@ impl Worker {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(event)) => {
                 if matches!(&event.event, PlaybackEvent::Frame(_)) {
+                    // The client is not keeping up: this frame is never seen.
+                    if self.state == PlaybackState::Playing {
+                        self.dropped += 1;
+                    }
                     return;
                 }
                 if matches!(&event.event, PlaybackEvent::Clock(_)) {
@@ -1485,6 +1581,7 @@ mod tests {
             drawn: None,
             drawn_ready: BTreeMap::new(),
             drawn_shown: None,
+            dropped: 0,
         };
         (worker, event_receiver)
     }
@@ -1614,6 +1711,79 @@ mod tests {
         assert!(guard.epoch.load(Ordering::Acquire) >= request.request_id);
     }
 
+    fn frame_at(timeline_time: f64) -> PlaybackFrame {
+        PlaybackFrame {
+            sequence: 0,
+            timeline_time,
+            source_time: timeline_time,
+            clip_id: "clip-a".into(),
+            width: 2,
+            height: 2,
+            pixels: Arc::from(vec![0_u8; 16].into_boxed_slice()),
+            captions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn frames_due_together_show_the_newest_and_count_the_rest_dropped() {
+        let (mut worker, events, _control) = worker_for_state_test();
+        assert_eq!(worker.clock().dropped, 0);
+        worker.state = PlaybackState::Playing;
+        // Four frames decoded late: by the time they are ready, the clock
+        // is past all of them.
+        for index in 0..4 {
+            worker
+                .decode_queue
+                .push_back(frame_at(1.0 + f64::from(index) / 30.0));
+        }
+        worker.decode_queue.push_back(frame_at(1.5));
+        worker.present_due(1.11);
+        let shown: Vec<f64> = events
+            .try_iter()
+            .filter_map(|event| match event.event {
+                PlaybackEvent::Frame(frame) => Some(frame.timeline_time),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, [1.1]);
+        assert_eq!(worker.clock().dropped, 3);
+        assert_eq!(worker.decode_queue.len(), 1, "the frame not due yet waits");
+        // On time, nothing more is dropped.
+        worker.present_due(1.5);
+        assert_eq!(worker.clock().dropped, 3);
+        // A seek starts the count again.
+        worker.seek_to(0.5, 1, true);
+        assert_eq!(worker.clock().dropped, 0);
+    }
+
+    #[test]
+    fn frames_the_client_cannot_take_while_playing_are_dropped() {
+        let (mut worker, events, _control) = worker_for_state_test();
+        worker.state = PlaybackState::Playing;
+        // The event queue holds 16; the client reads none of them.
+        for index in 0..20 {
+            worker.emit(PlaybackEvent::Frame(frame_at(f64::from(index) / 30.0)));
+        }
+        assert_eq!(worker.clock().dropped, 4);
+        drop(events);
+    }
+
+    #[test]
+    fn a_solo_reaches_the_worker_and_leaves_the_session_running() {
+        let session = PlaybackSession::open(
+            project_with_media(),
+            PlaybackConfig::default().with_audio_enabled(false),
+        )
+        .expect("session");
+        let solo = vec![kerf_model::Id::new("A1").expect("id")];
+        session.set_solo(solo).expect("solo");
+        session.set_solo(Vec::new()).expect("unsolo");
+        session.play().expect("play");
+        // With audio disabled nothing is mixed, so nothing is metered.
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(session.levels(), None);
+    }
+
     #[test]
     fn seek_repeats_current_state_after_advancing_event_epoch() {
         let (mut worker, events, control) = worker_for_state_test();
@@ -1688,6 +1858,7 @@ mod tests {
             handle,
             events: event_rx,
             control,
+            levels: None,
         };
         assert!(matches!(
             session.try_next_event(),
@@ -1723,6 +1894,7 @@ mod tests {
             },
             events: event_rx,
             control,
+            levels: None,
         };
         assert!(session.try_next_event().is_none());
     }

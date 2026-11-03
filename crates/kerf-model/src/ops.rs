@@ -2,9 +2,10 @@
 //!
 //! Every change to a project is a list of operations applied atomically: the
 //! whole list succeeds or the project is unchanged. Operations use NLE
-//! semantics. Ripple edits act on every unlocked track so picture and sound
-//! stay in sync, and linked clips (a picture clip and its sound) move, trim,
-//! split, slip, and delete together.
+//! semantics. Ripple edits act on every unlocked, sync-locked track (and on
+//! the tracks they edit) so picture and sound stay in sync, and linked clips
+//! (a picture clip and its sound) move, trim, split, slip, and delete
+//! together.
 
 use crate::catalog::{Catalog, Domain, FxKind};
 use crate::diag::Diagnostic;
@@ -73,6 +74,14 @@ pub struct TrackChange {
     pub muted: Option<bool>,
 }
 
+/// A track's role and sync lock, set with [`Op::SetTrackRole`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrackRoleChange {
+    /// `Some(None)` clears the role back to the kind's default.
+    pub role: Option<Option<String>>,
+    pub sync_locked: Option<bool>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MarkerChange {
     pub at: Option<Time>,
@@ -125,8 +134,15 @@ pub enum Op {
         sequence: Id,
         track: Id,
     },
-    /// Open `duration` at `at` on every unlocked track, then place one clip
-    /// per target track. Several targets are linked.
+    /// Set a track's role and whether ripple edits elsewhere move it.
+    SetTrackRole {
+        sequence: Id,
+        track: Id,
+        change: TrackRoleChange,
+    },
+    /// Open `duration` at `at` on the target tracks and every unlocked,
+    /// sync-locked track, then place one clip per target track. Several
+    /// targets are linked.
     Insert {
         sequence: Id,
         at: Time,
@@ -144,7 +160,8 @@ pub enum Op {
     Delete {
         clips: Vec<Id>,
     },
-    /// Remove clips and close the gap on every unlocked track.
+    /// Remove clips and close the gap on their tracks and every unlocked,
+    /// sync-locked track.
     RippleDelete {
         clips: Vec<Id>,
     },
@@ -382,6 +399,12 @@ fn clip_ids(project: &Project) -> impl Iterator<Item = &Id> {
 
 type Outcome<T = ()> = Result<T, Diagnostic>;
 
+/// A role as a track keeps it ([`crate::model::track_role`]).
+fn track_role(role: Option<&str>) -> Outcome<Option<String>> {
+    crate::model::track_role(role.unwrap_or_default())
+        .map_err(|message| fail("track.role", message))
+}
+
 fn fail(code: &'static str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::error(code, message)
 }
@@ -461,6 +484,24 @@ impl Editor<'_> {
                 track.enabled = change.enabled.unwrap_or(track.enabled);
                 track.locked = change.locked.unwrap_or(track.locked);
                 track.muted = change.muted.unwrap_or(track.muted);
+                Ok(())
+            }
+            Op::SetTrackRole {
+                sequence,
+                track,
+                change,
+            } => {
+                let s = self.sequence(sequence)?;
+                let t = self.track(s, track)?;
+                let role = match &change.role {
+                    Some(role) => Some(track_role(role.as_deref())?),
+                    None => None,
+                };
+                let track = &mut self.project.sequences[s].tracks[t];
+                if let Some(role) = role {
+                    track.role = role;
+                }
+                track.sync_locked = change.sync_locked.unwrap_or(track.sync_locked);
                 Ok(())
             }
             Op::RemoveTrack { sequence, track } => {
@@ -888,6 +929,15 @@ impl Editor<'_> {
             .collect()
     }
 
+    /// The tracks a ripple edit on `edited` moves: those and every
+    /// unlocked track that is sync-locked.
+    fn ripple_tracks(&self, s: usize, edited: &[usize]) -> Vec<usize> {
+        self.unlocked_tracks(s)
+            .into_iter()
+            .filter(|t| edited.contains(t) || self.project.sequences[s].tracks[*t].sync_locked)
+            .collect()
+    }
+
     /// The named tracks, each unlocked, or every unlocked track.
     fn track_set(&self, s: usize, tracks: Option<&[Id]>) -> Outcome<Vec<usize>> {
         match tracks {
@@ -1222,10 +1272,18 @@ impl Editor<'_> {
         tails
     }
 
-    /// Open `amount` of time at `at` on every unlocked track, splitting
-    /// clips that span `at`. Clips in `exclude` neither split nor move.
-    fn open_time(&mut self, s: usize, at: Time, amount: Time, exclude: &HashSet<Id>) {
-        let tracks = self.unlocked_tracks(s);
+    /// Open `amount` of time at `at` on the ripple tracks of an edit on
+    /// `edited`, splitting clips that span `at`. Clips in `exclude` neither
+    /// split nor move.
+    fn open_time(
+        &mut self,
+        s: usize,
+        edited: &[usize],
+        at: Time,
+        amount: Time,
+        exclude: &HashSet<Id>,
+    ) {
+        let tracks = self.ripple_tracks(s, edited);
         let mut spanning = Vec::new();
         for &t in &tracks {
             for clip in &self.project.sequences[s].tracks[t].clips {
@@ -1244,10 +1302,18 @@ impl Editor<'_> {
         }
     }
 
-    /// Close `[from, to)` on every unlocked track. Fails when a clip outside
-    /// `exclude` occupies the range, because closing it would cut that clip.
-    fn close_time(&mut self, s: usize, from: Time, to: Time, exclude: &HashSet<Id>) -> Outcome {
-        let tracks = self.unlocked_tracks(s);
+    /// Close `[from, to)` on the ripple tracks of an edit on `edited`.
+    /// Fails when a clip outside `exclude` occupies the range, because
+    /// closing it would cut that clip.
+    fn close_time(
+        &mut self,
+        s: usize,
+        edited: &[usize],
+        from: Time,
+        to: Time,
+        exclude: &HashSet<Id>,
+    ) -> Outcome {
+        let tracks = self.ripple_tracks(s, edited);
         for &t in &tracks {
             let track = &self.project.sequences[s].tracks[t];
             if let Some(blocker) = track
@@ -1354,7 +1420,8 @@ impl Editor<'_> {
             placed.push((t, id));
         }
         if ripple {
-            self.open_time(s, at, duration, &HashSet::new());
+            let edited: Vec<usize> = placed.iter().map(|(t, _)| *t).collect();
+            self.open_time(s, &edited, at, duration, &HashSet::new());
         } else {
             for (t, _) in &placed {
                 self.clear_track(s, *t, at, at + duration);
@@ -1403,6 +1470,7 @@ impl Editor<'_> {
             .iter()
             .map(|at| self.clip(*at).id.clone())
             .collect();
+        let edited: Vec<usize> = selection.iter().map(|at| at.track).collect();
         for &(from, to) in merged.iter().rev() {
             let here: HashSet<Id> = ids
                 .iter()
@@ -1412,7 +1480,7 @@ impl Editor<'_> {
                 })
                 .cloned()
                 .collect();
-            self.close_time(s, from, to, &here)?;
+            self.close_time(s, &edited, from, to, &here)?;
             for id in &here {
                 let at = self.find(id);
                 self.project.sequences[s].tracks[at.track]
@@ -1497,15 +1565,16 @@ impl Editor<'_> {
         }
         let exclude: HashSet<Id> = members.iter().cloned().collect();
         if ripple {
+            let edited: Vec<usize> = members.iter().map(|id| self.find(id).track).collect();
             match (edge, delta.is_positive()) {
-                (Edge::Out, true) => self.open_time(s, target_edge, delta, &exclude),
+                (Edge::Out, true) => self.open_time(s, &edited, target_edge, delta, &exclude),
                 (Edge::Out, false) => {
-                    self.close_time(s, target_edge + delta, target_edge, &exclude)?
+                    self.close_time(s, &edited, target_edge + delta, target_edge, &exclude)?
                 }
                 (Edge::In, true) => {
-                    self.close_time(s, target_edge, target_edge + delta, &exclude)?
+                    self.close_time(s, &edited, target_edge, target_edge + delta, &exclude)?
                 }
-                (Edge::In, false) => self.open_time(s, target_edge, -delta, &exclude),
+                (Edge::In, false) => self.open_time(s, &edited, target_edge, -delta, &exclude),
             }
         } else {
             for id in &members {

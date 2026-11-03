@@ -19,7 +19,7 @@ use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
     parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size, pinned,
-    sequence_fields, sequence_line, take_mask_shape,
+    sequence_fields, sequence_line, take_mask_shape, take_role, take_sync, word_or_quote,
 };
 use crate::facts::{Facts, NoFacts, Snap};
 use crate::lex::{lex, Arg, Atom, Line};
@@ -28,7 +28,7 @@ use kerf_model::time::{parse_timecode, FLICKS_PER_SECOND};
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
     Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence,
-    SequenceChange, Time, TrackChange, TrackKind,
+    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange,
 };
 use std::fmt::Write as _;
 
@@ -576,9 +576,20 @@ impl Script<'_> {
             };
             if change != TrackChange::default() {
                 ops.push(Op::SetTrack {
+                    sequence: sequence.clone(),
+                    track: id.clone(),
+                    change,
+                });
+            }
+            let role = TrackRoleChange {
+                role: take_role(&mut fields)?,
+                sync_locked: take_sync(&mut fields)?,
+            };
+            if role != TrackRoleChange::default() {
+                ops.push(Op::SetTrackRole {
                     sequence,
                     track: id,
-                    change,
+                    change: role,
                 });
             }
         }
@@ -1581,6 +1592,7 @@ fn context_of(op: &Op) -> Option<&Id> {
     match op {
         Op::AddTrack { sequence, .. }
         | Op::SetTrack { sequence, .. }
+        | Op::SetTrackRole { sequence, .. }
         | Op::RemoveTrack { sequence, .. }
         | Op::Insert { sequence, .. }
         | Op::Overwrite { sequence, .. }
@@ -1708,6 +1720,19 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                 if let Some(value) = value {
                     write!(text, " {flag}={value}").unwrap();
                 }
+            }
+            text
+        }
+        Op::SetTrackRole { track, change, .. } => {
+            let mut text = format!("track set {track}");
+            if let Some(role) = &change.role {
+                match role {
+                    Some(role) => write!(text, " role={}", word_or_quote(role)).unwrap(),
+                    None => text.push_str(" role=\"\""),
+                }
+            }
+            if let Some(sync) = change.sync_locked {
+                write!(text, " sync={}", if sync { "on" } else { "off" }).unwrap();
             }
             text
         }

@@ -323,6 +323,306 @@ pub fn info(src: &str) -> Result<ProbeInfo> {
     Ok(info)
 }
 
+/// Facts about a media file a bin or an inspector shows: its codecs, its
+/// picture's pixel format, bit depth and colour tags, and the camera, lens,
+/// reel and timecode tags the file carries. Each field is present only when
+/// the file says it: an untagged colour space is absent, not guessed.
+///
+/// These are facts about the file, not the edit, so they belong in a cache
+/// beside the project, never in the document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaInfo {
+    /// The picture's codec, or the sound's for a file with no picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// The codec profile, such as `HQ` for ProRes 422 HQ or `High` for H.264.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pix_fmt: Option<String>,
+    /// Bits per picture component: the stream's `bits_per_raw_sample`, or
+    /// what its pixel format holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u32>,
+    /// The YUV matrix, such as `bt709`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_space: Option<String>,
+    /// The transfer characteristic, such as `bt709` or `arib-std-b67`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primaries: Option<String>,
+    /// `tv` (limited) or `pc` (full).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_range: Option<String>,
+    /// The camera's make and model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reel: Option<String>,
+    /// The start timecode, such as `01:00:00:00`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timecode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    /// The sound's sample format, such as `s24le` or `fltp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_sample_fmt: Option<String>,
+    /// Bits per sound sample, when the file states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_bit_depth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_channels: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_sample_rate: Option<u32>,
+}
+
+/// Tags that name the camera's make, then its model, most specific first.
+const MAKE_TAGS: [&str; 3] = [
+    "com.apple.quicktime.make",
+    "com.android.manufacturer",
+    "make",
+];
+const MODEL_TAGS: [&str; 3] = ["com.apple.quicktime.model", "com.android.model", "model"];
+const LENS_TAGS: [&str; 4] = [
+    "com.apple.quicktime.camera.lens_model",
+    "com.apple.quicktime.lens_model",
+    "lens_model",
+    "lens",
+];
+const REEL_TAGS: [&str; 4] = ["reel_name", "com.apple.proapps.reel", "reel", "tape_name"];
+
+/// A tag's value, looked up without regard to case, when it is not blank.
+fn tag(tags: &serde_json::Map<String, serde_json::Value>, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        tags.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .and_then(|(_, value)| match value {
+                serde_json::Value::String(text) => Some(text.trim().to_owned()),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+    })
+}
+
+/// A colour tag FFmpeg reports, or nothing when it says the file has none.
+fn colour_tag(value: Option<&serde_json::Value>) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    (!text.is_empty() && !matches!(text, "unknown" | "unspecified" | "reserved"))
+        .then(|| text.to_owned())
+}
+
+/// A count FFmpeg gives as a number or as a decimal string; 0 is "unknown".
+fn count(value: Option<&serde_json::Value>) -> Option<u32> {
+    let value = value?;
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .and_then(|number| u32::try_from(number).ok())
+        .filter(|number| *number > 0)
+}
+
+/// Bits per component a pixel format holds: `yuv422p10le` 10, `p010le`
+/// 10, `nv12` 8, `rgb48le` 16. Nothing for a format it does not know.
+pub fn pix_fmt_bit_depth(pix_fmt: &str) -> Option<u32> {
+    let name = pix_fmt
+        .strip_suffix("le")
+        .or_else(|| pix_fmt.strip_suffix("be"))
+        .unwrap_or(pix_fmt);
+    let digits = |text: &str| -> Option<u32> { text.parse().ok() };
+    // Semi-planar 4:2:0, 4:2:2 and 4:4:4: p010, p210, p416, and y210.
+    if let Some(rest) = name
+        .strip_prefix('p')
+        .or_else(|| name.strip_prefix('y'))
+        .filter(|rest| rest.len() == 3 && rest.chars().all(|c| c.is_ascii_digit()))
+    {
+        return digits(&rest[1..]);
+    }
+    if let Some(index) = name.rfind('p') {
+        let tail = &name[index + 1..];
+        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+            return digits(tail);
+        }
+    }
+    if let Some(tail) = name
+        .strip_prefix("gray")
+        .or_else(|| name.strip_prefix("ya"))
+    {
+        return if tail.is_empty() {
+            Some(8)
+        } else {
+            digits(tail)
+        };
+    }
+    match name {
+        "rgb48" | "bgr48" | "rgba64" | "bgra64" | "ayuv64" => Some(16),
+        "x2rgb10" | "x2bgr10" | "v30x" | "xv30" => Some(10),
+        "xv36" => Some(12),
+        _ if name.starts_with("yuv")
+            || name.starts_with("yuvj")
+            || name.starts_with("nv")
+            || name.starts_with("gbrp")
+            || matches!(
+                name,
+                "rgb24"
+                    | "bgr24"
+                    | "rgba"
+                    | "bgra"
+                    | "argb"
+                    | "abgr"
+                    | "rgb0"
+                    | "bgr0"
+                    | "0rgb"
+                    | "0bgr"
+                    | "uyvy422"
+                    | "yuyv422"
+                    | "yvyu422"
+                    | "vuya"
+                    | "vuyx"
+            ) =>
+        {
+            Some(8)
+        }
+        _ => None,
+    }
+}
+
+/// [`MediaInfo`] from `ffprobe -print_format json -show_format
+/// -show_streams` output.
+pub fn parse_media_info_json(stdout: &str) -> Result<MediaInfo> {
+    let parsed: serde_json::Value = serde_json::from_str(stdout)?;
+    let empty = serde_json::Map::new();
+    let streams = parsed
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let of_type = |kind: &str| {
+        streams.iter().find(|stream| {
+            stream.get("codec_type").and_then(serde_json::Value::as_str) == Some(kind)
+                // Cover art is a picture stream too; it is not the media's picture.
+                && stream
+                    .get("disposition")
+                    .and_then(|disposition| disposition.get("attached_pic"))
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(1)
+        })
+    };
+    let tags_of = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(|value| value.get("tags"))
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or(&empty)
+            .clone()
+    };
+    let text = |value: Option<&serde_json::Value>, key: &str| {
+        value
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty() && *text != "unknown")
+            .map(str::to_owned)
+    };
+    let video = of_type("video");
+    let audio = of_type("audio");
+    let format_tags = tags_of(parsed.get("format"));
+    // Camera and reel tags live on the container, on the picture, or on a
+    // timecode track, depending on who wrote the file.
+    let mut every = vec![format_tags, tags_of(video)];
+    every.extend(streams.iter().map(|stream| tags_of(Some(stream))));
+    let any = |names: &[&str]| every.iter().find_map(|tags| tag(tags, names));
+    let make = any(&MAKE_TAGS);
+    let model = any(&MODEL_TAGS);
+    let camera = match (make, model) {
+        // "Apple" + "iPhone 16 Pro", but "Canon" + "Canon EOS R5" once.
+        (Some(make), Some(model)) if model.to_lowercase().starts_with(&make.to_lowercase()) => {
+            Some(model)
+        }
+        (Some(make), Some(model)) => Some(format!("{make} {model}")),
+        (make, model) => model.or(make),
+    };
+    let pix_fmt = text(video, "pix_fmt");
+    let bit_depth = count(video.and_then(|video| video.get("bits_per_raw_sample")))
+        .or_else(|| pix_fmt.as_deref().and_then(pix_fmt_bit_depth));
+    Ok(MediaInfo {
+        codec: text(video, "codec_name").or_else(|| text(audio, "codec_name")),
+        profile: text(video, "profile").or_else(|| text(audio, "profile")),
+        pix_fmt,
+        bit_depth,
+        color_space: colour_tag(video.and_then(|video| video.get("color_space"))),
+        transfer: colour_tag(video.and_then(|video| video.get("color_transfer"))),
+        primaries: colour_tag(video.and_then(|video| video.get("color_primaries"))),
+        color_range: colour_tag(video.and_then(|video| video.get("color_range"))),
+        camera,
+        lens: any(&LENS_TAGS),
+        reel: any(&REEL_TAGS),
+        timecode: any(&["timecode"]),
+        audio_codec: text(audio, "codec_name"),
+        audio_sample_fmt: text(audio, "sample_fmt"),
+        audio_bit_depth: count(audio.and_then(|audio| audio.get("bits_per_raw_sample")))
+            .or_else(|| count(audio.and_then(|audio| audio.get("bits_per_sample")))),
+        audio_channels: count(audio.and_then(|audio| audio.get("channels"))),
+        audio_sample_rate: count(audio.and_then(|audio| audio.get("sample_rate"))),
+    })
+}
+
+struct MediaInfoCacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    info: MediaInfo,
+}
+
+fn media_info_cache() -> &'static Mutex<HashMap<String, MediaInfoCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, MediaInfoCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The [`MediaInfo`] of `src`, probed once per version of the file.
+pub fn media_info(src: &str) -> Result<MediaInfo> {
+    let identity = probe_identity(src);
+    if let Some((len, modified)) = identity {
+        let cache = media_info_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(src) {
+            if entry.len == len && entry.modified == modified {
+                return Ok(entry.info.clone());
+            }
+        }
+    }
+    let output = run(
+        resolve_ffprobe_bin(),
+        &[
+            "-v".into(),
+            "quiet".into(),
+            "-print_format".into(),
+            "json".into(),
+            "-show_format".into(),
+            "-show_streams".into(),
+            src.into(),
+        ],
+    )?;
+    let info = parse_media_info_json(&output.stdout)?;
+    if let Some((len, modified)) = identity.or_else(|| probe_identity(src)) {
+        media_info_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                src.to_string(),
+                MediaInfoCacheEntry {
+                    len,
+                    modified,
+                    info: info.clone(),
+                },
+            );
+    }
+    Ok(info)
+}
+
 pub fn silence_detect(
     src: &str,
     threshold_db: f64,
@@ -1139,5 +1439,107 @@ mod tests {
         assert!(!status.success());
         assert_eq!(output.len(), 4);
         assert_eq!(stderr.len(), MAX_WAVEFORM_STDERR_BYTES);
+    }
+
+    #[test]
+    fn bit_depth_comes_from_the_pixel_format() {
+        for (format, bits) in [
+            ("yuv420p", Some(8)),
+            ("yuvj422p", Some(8)),
+            ("nv12", Some(8)),
+            ("uyvy422", Some(8)),
+            ("rgba", Some(8)),
+            ("gbrp", Some(8)),
+            ("yuv422p10le", Some(10)),
+            ("yuva444p12be", Some(12)),
+            ("gbrp16le", Some(16)),
+            ("p010le", Some(10)),
+            ("p210le", Some(10)),
+            ("p416le", Some(16)),
+            ("y210le", Some(10)),
+            ("gray", Some(8)),
+            ("gray10le", Some(10)),
+            ("rgb48le", Some(16)),
+            ("x2rgb10le", Some(10)),
+            ("videotoolbox_vld", None),
+        ] {
+            assert_eq!(pix_fmt_bit_depth(format), bits, "{format}");
+        }
+    }
+
+    #[test]
+    fn media_info_reads_codecs_colour_and_camera_tags() {
+        let probe = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc", "profile": "Main 10",
+                 "pix_fmt": "yuv420p10le", "color_space": "bt2020nc",
+                 "color_transfer": "arib-std-b67", "color_primaries": "bt2020",
+                 "color_range": "tv", "tags": {"handler_name": "Core Media Video"}},
+                {"codec_type": "audio", "codec_name": "aac", "sample_fmt": "fltp",
+                 "sample_rate": "48000", "channels": 2, "bits_per_sample": 0},
+                {"codec_type": "data", "codec_tag_string": "tmcd",
+                 "tags": {"timecode": "01:00:00:00", "reel_name": "A001"}}
+            ],
+            "format": {"tags": {
+                "com.apple.quicktime.make": "Apple",
+                "com.apple.quicktime.model": "iPhone 16 Pro",
+                "com.apple.quicktime.camera.lens_model": "iPhone 16 Pro back camera 6.765mm f/1.78"
+            }}
+        }"#;
+        let info = parse_media_info_json(probe).expect("parses");
+        assert_eq!(info.codec.as_deref(), Some("hevc"));
+        assert_eq!(info.profile.as_deref(), Some("Main 10"));
+        assert_eq!(info.pix_fmt.as_deref(), Some("yuv420p10le"));
+        assert_eq!(info.bit_depth, Some(10));
+        assert_eq!(info.color_space.as_deref(), Some("bt2020nc"));
+        assert_eq!(info.transfer.as_deref(), Some("arib-std-b67"));
+        assert_eq!(info.primaries.as_deref(), Some("bt2020"));
+        assert_eq!(info.color_range.as_deref(), Some("tv"));
+        assert_eq!(info.camera.as_deref(), Some("Apple iPhone 16 Pro"));
+        assert_eq!(
+            info.lens.as_deref(),
+            Some("iPhone 16 Pro back camera 6.765mm f/1.78")
+        );
+        assert_eq!(info.reel.as_deref(), Some("A001"));
+        assert_eq!(info.timecode.as_deref(), Some("01:00:00:00"));
+        assert_eq!(info.audio_codec.as_deref(), Some("aac"));
+        assert_eq!(info.audio_channels, Some(2));
+        assert_eq!(info.audio_sample_rate, Some(48_000));
+        assert_eq!(info.audio_bit_depth, None, "0 bits means unstated");
+        let json = serde_json::to_value(&info).expect("serializes");
+        assert_eq!(json["pixFmt"], "yuv420p10le");
+        assert_eq!(json["bitDepth"], 10);
+        assert_eq!(json["colorSpace"], "bt2020nc");
+    }
+
+    #[test]
+    fn media_info_leaves_out_what_the_file_does_not_say() {
+        let probe = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "mjpeg", "pix_fmt": "yuvj420p",
+                 "disposition": {"attached_pic": 1}},
+                {"codec_type": "audio", "codec_name": "pcm_s24le", "sample_fmt": "s32",
+                 "bits_per_raw_sample": "24", "sample_rate": "48000", "channels": 2}
+            ],
+            "format": {"tags": {"make": "Canon", "model": "Canon EOS R5"}}
+        }"#;
+        let info = parse_media_info_json(probe).expect("parses");
+        // Cover art is not a picture; the sound's codec stands in.
+        assert_eq!(info.codec.as_deref(), Some("pcm_s24le"));
+        assert_eq!(info.pix_fmt, None);
+        assert_eq!(info.bit_depth, None);
+        assert_eq!(info.color_space, None);
+        assert_eq!(info.audio_bit_depth, Some(24));
+        assert_eq!(info.camera.as_deref(), Some("Canon EOS R5"));
+        assert_eq!(info.lens, None);
+        let json = serde_json::to_value(&info).expect("serializes");
+        assert!(json.get("colorSpace").is_none() && json.get("lens").is_none());
+
+        let untagged = r#"{"streams": [{"codec_type": "video", "codec_name": "h264",
+            "pix_fmt": "yuv420p", "bits_per_raw_sample": "8", "color_space": "unknown",
+            "color_primaries": "unknown"}]}"#;
+        let info = parse_media_info_json(untagged).expect("parses");
+        assert_eq!(info.bit_depth, Some(8));
+        assert_eq!((info.color_space, info.primaries), (None, None));
     }
 }

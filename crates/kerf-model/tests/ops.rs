@@ -5,7 +5,7 @@ use kerf_model::{
     apply, validate, AudioInfo, Catalog, Clip, ClipChange, Content, Edge, Id, Media, NewClip, Op,
     Param, Params, Project, Rate, Ratio, Sequence, Time, Track, TrackKind, Value, VideoInfo,
 };
-use kerf_model::{Align, TrackChange};
+use kerf_model::{Align, TrackChange, TrackRoleChange};
 
 fn f(n: i64) -> Time {
     Rate::FPS_24.time_of(n)
@@ -250,6 +250,128 @@ fn ripple_delete_refuses_to_desync_and_succeeds_when_the_bed_is_locked() {
     assert_eq!(layout(&project, "V1"), vec![row("c2", 0, 48)]);
     assert_eq!(layout(&project, "A1"), vec![row("a2", 0, 48)]);
     assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
+}
+
+fn sync(track: &str, on: bool) -> Op {
+    Op::SetTrackRole {
+        sequence: id("s1"),
+        track: id(track),
+        change: TrackRoleChange {
+            sync_locked: Some(on),
+            ..TrackRoleChange::default()
+        },
+    }
+}
+
+#[test]
+fn ripple_edits_leave_tracks_that_are_not_sync_locked_where_they_are() {
+    let scene = scene();
+    assert!(scene.sequences[0].tracks.iter().all(|t| t.sync_locked));
+
+    // Ripple delete: the bed is not cut, and does not move.
+    let project = run(
+        &scene,
+        vec![
+            sync("A2", false),
+            Op::RippleDelete {
+                clips: vec![id("c1")],
+            },
+        ],
+    );
+    assert_eq!(layout(&project, "V1"), vec![row("c2", 0, 48)]);
+    assert_eq!(layout(&project, "A1"), vec![row("a2", 0, 48)]);
+    assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
+    assert!(!project.sequences[0].track("A2").unwrap().sync_locked);
+
+    // Ripple trim: the edited tracks move even when they are not
+    // sync-locked themselves; the bed stays.
+    let project = run(
+        &scene,
+        vec![
+            sync("V1", false),
+            sync("A1", false),
+            sync("A2", false),
+            Op::Trim {
+                clip: id("c1"),
+                edge: Edge::Out,
+                delta: f(-12),
+                ripple: true,
+            },
+        ],
+    );
+    assert_eq!(
+        layout(&project, "V1"),
+        vec![row("c1", 0, 36), row("c2", 36, 84)]
+    );
+    assert_eq!(
+        layout(&project, "A1"),
+        vec![row("a1", 0, 36), row("a2", 36, 84)]
+    );
+    assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
+
+    // Insert: only the target and the sync-locked tracks open.
+    let project = run(
+        &scene,
+        vec![
+            sync("A1", false),
+            Op::Insert {
+                sequence: id("s1"),
+                at: f(48),
+                duration: f(24),
+                targets: vec![(id("V1"), new_media(480))],
+            },
+        ],
+    );
+    assert_eq!(
+        layout(&project, "V1"),
+        vec![row("c1", 0, 48), row("c3", 48, 72), row("c2", 72, 120)]
+    );
+    assert_eq!(
+        layout(&project, "A1"),
+        vec![row("a1", 0, 48), row("a2", 48, 96)]
+    );
+    assert_eq!(
+        layout(&project, "A2"),
+        vec![row("music", 0, 48), row("c4", 72, 216)]
+    );
+
+    // With every track sync-locked, ripple behaves as before.
+    assert_eq!(
+        rejects(
+            &run(&scene, vec![sync("A2", true)]),
+            vec![Op::RippleDelete {
+                clips: vec![id("c1")]
+            }]
+        ),
+        "ripple.blocked"
+    );
+}
+
+#[test]
+fn track_roles_take_known_spellings_and_clear() {
+    let set = |role: Option<&str>| Op::SetTrackRole {
+        sequence: id("s1"),
+        track: id("A2"),
+        change: TrackRoleChange {
+            role: Some(role.map(str::to_owned)),
+            sync_locked: None,
+        },
+    };
+    let role = |project: &Project| project.sequences[0].track("A2").unwrap().role.clone();
+    let music = run(&scene(), vec![set(Some(" Music "))]);
+    assert_eq!(role(&music).as_deref(), Some("music"));
+    assert!(music.sequences[0].track("A2").unwrap().sync_locked);
+    let free = run(&music, vec![set(Some("Room tone"))]);
+    assert_eq!(role(&free).as_deref(), Some("Room tone"));
+    assert_eq!(role(&run(&free, vec![set(None)])), None);
+    assert_eq!(role(&run(&free, vec![set(Some("  "))])), None);
+    assert_eq!(rejects(&scene(), vec![set(Some("a\nb"))]), "track.role");
+    let missing = Op::SetTrackRole {
+        sequence: id("s1"),
+        track: id("A9"),
+        change: TrackRoleChange::default(),
+    };
+    assert_eq!(rejects(&scene(), vec![missing]), "ref.missing");
 }
 
 #[test]

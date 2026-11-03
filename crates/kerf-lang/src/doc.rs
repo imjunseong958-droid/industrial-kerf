@@ -258,6 +258,8 @@ impl Parser<'_> {
         track.enabled = fields.take_bool("enabled")?.unwrap_or(true);
         track.locked = fields.take_bool("locked")?.unwrap_or(false);
         track.muted = fields.take_bool("muted")?.unwrap_or(false);
+        track.role = take_role(&mut fields)?.flatten();
+        track.sync_locked = take_sync(&mut fields)?.unwrap_or(true);
         fields.finish(3)?;
         let tracks = &mut self.project.sequences[s].tracks;
         tracks.push(track);
@@ -698,6 +700,36 @@ pub(crate) fn parse_mask_mode(text: &str) -> Result<MaskMode, String> {
 
 /// A mask's outline from `rect=`, `ellipse=`, or `points=` (with
 /// `closed=`), in fractions of the picture; none when absent.
+/// `role=`: a word or quoted text; empty clears it.
+pub(crate) fn take_role(fields: &mut Fields<'_>) -> Result<Option<Option<String>>, Diagnostic> {
+    fields.take_with("role", |text| {
+        kerf_model::track_role(text).map_err(str::to_owned)
+    })
+}
+
+/// `sync=on|off`: whether ripple edits elsewhere move the track.
+pub(crate) fn take_sync(fields: &mut Fields<'_>) -> Result<Option<bool>, Diagnostic> {
+    fields.take_with("sync", |text| match text {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        other => Err(format!("`sync` is on or off, not `{other}`")),
+    })
+}
+
+/// Text as a bare word when it reads back as one, else quoted.
+pub(crate) fn word_or_quote(text: &str) -> String {
+    let word = !text.is_empty()
+        && !text.starts_with('#')
+        && !text.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '=' | '"' | '{' | '}' | '\\')
+        });
+    if word {
+        text.to_owned()
+    } else {
+        quote(text)
+    }
+}
+
 pub(crate) fn take_mask_shape(fields: &mut Fields<'_>) -> Result<Option<MaskShape>, Diagnostic> {
     let rect = fields.take("rect");
     let ellipse = fields.take("ellipse");
@@ -903,6 +935,12 @@ fn print_sequence(
             if value != default {
                 write!(out, " {flag}={value}").unwrap();
             }
+        }
+        if let Some(role) = &track.role {
+            write!(out, " role={}", word_or_quote(role)).unwrap();
+        }
+        if !track.sync_locked {
+            out.push_str(" sync=off");
         }
         out.push('\n');
         let domain = track.kind.domain();
@@ -1158,6 +1196,54 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         assert_eq!(printed, SAMPLE);
         let again = parse_document(&printed, Catalog::builtin()).unwrap();
         assert_eq!(again.project, document.project);
+    }
+
+    #[test]
+    fn track_roles_and_sync_locks_round_trip() {
+        let text = SAMPLE
+            .replace(
+                "  track V2 video name=\"Titles\"\n",
+                "  track V2 video name=\"Titles\" role=titles sync=off\n",
+            )
+            .replace(
+                "  track A2 audio locked=true\n",
+                "  track A2 audio locked=true role=\"Music & FX\"\n",
+            );
+        let project = parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|e| panic!("{e:#?}"))
+            .project;
+        let tracks = &project.sequences[0].tracks;
+        assert_eq!(tracks[1].role.as_deref(), Some("titles"));
+        assert!(!tracks[1].sync_locked);
+        assert_eq!(tracks[3].role.as_deref(), Some("Music & FX"));
+        assert!(tracks[3].sync_locked);
+        // A track that does not say is sync-locked, with its kind's role.
+        assert!(tracks[0].sync_locked && tracks[0].role.is_none());
+        assert_eq!(tracks[0].role_or_default(), Some("video"));
+        assert_eq!(tracks[2].role_or_default(), Some("dialogue"));
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+
+        // Known roles keep their spelling; sync also reads true and false.
+        let spelled = text
+            .replace("role=titles sync=off", "role=Titles sync=false")
+            .replace("locked=true role=", "locked=true sync=on role=");
+        let again = parse_document(&spelled, Catalog::builtin())
+            .unwrap()
+            .project;
+        assert_eq!(again, project);
+        for (from, to, needle) in [
+            ("sync=off", "sync=maybe", "`sync` is on or off"),
+            ("role=titles", "role=\"a\\nb\"", "one line"),
+        ] {
+            let errors = parse_document(&text.replace(from, to), Catalog::builtin()).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.message.contains(needle)),
+                "{to}: {errors:#?}"
+            );
+        }
     }
 
     #[test]

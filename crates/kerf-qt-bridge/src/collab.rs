@@ -823,6 +823,12 @@ mod tests {
         assert_eq!(status["ahead"], 1);
         assert_eq!(status["live"], false);
         assert_eq!(status["busy"], false);
+        // Who "You" is, and the commit a review link names.
+        assert_eq!(
+            status["user"],
+            json!({"name": "Test", "email": "test@example.com"})
+        );
+        assert_eq!(status["head"], json!(sh(&project, &["rev-parse", "HEAD"])));
         // An unchanged status is not sent again unless asked.
         collab.emit_status(false);
         assert!(events.try_recv().is_err());

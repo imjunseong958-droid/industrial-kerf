@@ -5,7 +5,7 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, Mask, Param, ParamType, Project, Sequence,
+    Catalog, Clip, Content, Domain, Effect, Engine, Id, Mask, Param, ParamType, Project, Sequence,
     Time, TrackKind, Value,
 };
 use std::collections::HashMap;
@@ -134,6 +134,8 @@ pub struct PlaybackTimeline {
     clip_index: Vec<ClipIndexEntry>,
     clip_prefix_max_end: Vec<f64>,
     sounds: Arc<[ProgramSound]>,
+    /// The project as it plays (looks expanded), for a solo to remix.
+    program: Arc<Project>,
 }
 
 impl PlaybackTimeline {
@@ -150,6 +152,16 @@ impl PlaybackTimeline {
     /// The program's sound clip by clip, as a render mixes it.
     pub(crate) fn sounds(&self) -> Arc<[ProgramSound]> {
         Arc::clone(&self.sounds)
+    }
+
+    /// The program's sound with only the audio tracks `solo` heard; the
+    /// whole mix when `solo` names none of them (see
+    /// [`crate::mix::soloed_sounds`]).
+    pub(crate) fn soloed_sounds(&self, solo: &[Id]) -> Arc<[ProgramSound]> {
+        if solo.is_empty() {
+            return self.sounds();
+        }
+        crate::mix::soloed_sounds(&self.program, solo).map_or_else(|| self.sounds(), Into::into)
     }
 
     /// Build a playback plan from the first sequence of a validated project.
@@ -239,6 +251,7 @@ impl PlaybackTimeline {
             clip_index,
             clip_prefix_max_end,
             sounds: sounds.into(),
+            program: Arc::new(expanded),
         })
     }
 

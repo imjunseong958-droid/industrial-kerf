@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QAbstractButton>
 #include <QDateTime>
 #include <QLayout>
@@ -355,7 +357,7 @@ private:
 // which is the panel's footer.
 class ChatPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr int kRadius = 12;
     static constexpr int kHeaderHeight = 52;

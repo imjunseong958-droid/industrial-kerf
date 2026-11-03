@@ -1,0 +1,58 @@
+#pragma once
+
+// The Qt test classes (apps/kerf-qt/tests) that may reach into a widget's
+// private members. A widget names them all with KERF_TEST_FRIENDS where it
+// would name one test class as a friend. A new test class that reaches into
+// private members is added here as well as in its own tests/<name>_test.cpp;
+// one that needs no private access (TokensTest) is not.
+
+namespace kerf {
+
+class BinBrowserTest;
+class BusTest;
+class CommentsTest;
+class DeliverTest;
+class DeviceTest;
+class FinishTest;
+class InspectorTest;
+class KitTest;
+class LauncherTest;
+class ReviewModelTest;
+class ScrubRailTest;
+class SourceTest;
+class StageTest;
+class StatusTest;
+class ThemeTest;
+class TimelineTest;
+class ToolbarTest;
+class WiringTest;
+class WorkspaceTest;
+
+namespace test {
+// The shared fixtures' window into private members (tests/fixtures.cpp).
+struct Access;
+} // namespace test
+
+} // namespace kerf
+
+#define KERF_TEST_FRIENDS                                                                                              \
+    friend class ::kerf::BinBrowserTest;                                                                               \
+    friend class ::kerf::BusTest;                                                                                      \
+    friend class ::kerf::CommentsTest;                                                                                 \
+    friend class ::kerf::DeliverTest;                                                                                  \
+    friend class ::kerf::DeviceTest;                                                                                   \
+    friend class ::kerf::FinishTest;                                                                                   \
+    friend class ::kerf::InspectorTest;                                                                                \
+    friend class ::kerf::KitTest;                                                                                      \
+    friend class ::kerf::LauncherTest;                                                                                 \
+    friend class ::kerf::ReviewModelTest;                                                                              \
+    friend class ::kerf::ScrubRailTest;                                                                                \
+    friend class ::kerf::SourceTest;                                                                                   \
+    friend class ::kerf::StageTest;                                                                                    \
+    friend class ::kerf::StatusTest;                                                                                   \
+    friend class ::kerf::ThemeTest;                                                                                    \
+    friend class ::kerf::TimelineTest;                                                                                 \
+    friend class ::kerf::ToolbarTest;                                                                                  \
+    friend class ::kerf::WiringTest;                                                                                   \
+    friend class ::kerf::WorkspaceTest;                                                                                \
+    friend struct ::kerf::test::Access;

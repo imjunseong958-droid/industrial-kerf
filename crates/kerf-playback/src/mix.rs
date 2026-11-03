@@ -11,13 +11,13 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::util::format::Sample;
 use ffmpeg_next::{decoder, filter, media, ChannelLayout, Rescale};
-use kerf_core::program::{ProgramSound, SoundCut, SAMPLE_RATE};
+use kerf_core::program::{program_sound, ProgramSound, SoundCut, SAMPLE_RATE};
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Catalog, Time};
+use kerf_model::{Catalog, Id, Project, Time, TrackKind};
 use std::sync::Arc;
 
 /// The mix is stereo, as a render's is.
-const CHANNELS: usize = 2;
+pub(crate) const CHANNELS: usize = 2;
 const FLICKS_PER_SAMPLE: i64 = FLICKS_PER_SECOND / SAMPLE_RATE as i64;
 /// How much of a backward clip is decoded at once. A render decodes it
 /// whole before playing any of it.
@@ -98,6 +98,37 @@ impl Mixer {
         self.cursor = end;
         mixed
     }
+
+    /// The program time, in seconds, the next frame mixed plays at.
+    pub fn position(&self) -> f64 {
+        self.cursor as f64 / f64::from(SAMPLE_RATE)
+    }
+}
+
+/// The sound of `project`'s program with only the audio tracks `solo` of
+/// its program sequence heard, for monitoring: the others are muted in a
+/// copy, so a solo mixes exactly as a render of those tracks would, nested
+/// sequences and all, and the project itself never changes. A track muted
+/// in the project stays muted. `None` when no id in `solo` names an audio
+/// track of the program sequence, and the whole mix plays.
+pub(crate) fn soloed_sounds(project: &Project, solo: &[Id]) -> Option<Vec<ProgramSound>> {
+    let sequence = project.sequences.first()?;
+    let heard = |kind: TrackKind, id: &Id| kind == TrackKind::Audio && solo.contains(id);
+    if !sequence
+        .tracks
+        .iter()
+        .any(|track| heard(track.kind, &track.id))
+    {
+        return None;
+    }
+    let mut soloed = project.clone();
+    for track in &mut soloed.sequences[0].tracks {
+        if track.kind == TrackKind::Audio && !heard(track.kind, &track.id) {
+            track.muted = true;
+        }
+    }
+    // A program a render cannot mix plays no sound, as it does unsoloed.
+    Some(program_sound(&soloed, Catalog::builtin(), None).unwrap_or_default())
 }
 
 /// One clip's sound, decoded and run through its filters.
@@ -580,6 +611,56 @@ mod tests {
              -t 4 -ac 2 -c:a pcm_s16le",
         );
         (dialog, music)
+    }
+
+    /// The media clips heard when `solo` is soloed.
+    fn heard(project: &Project, solo: &[&str]) -> Vec<String> {
+        let timeline = PlaybackTimeline::from_project(project).expect("timeline");
+        let solo: Vec<kerf_model::Id> = solo
+            .iter()
+            .map(|id| kerf_model::Id::new(*id).expect("id"))
+            .collect();
+        let mut clips: Vec<String> = timeline
+            .soloed_sounds(&solo)
+            .iter()
+            .map(|sound| sound.clip.to_string())
+            .collect();
+        clips.sort();
+        clips
+    }
+
+    #[test]
+    fn a_solo_mixes_only_the_tracks_soloed() {
+        let text = "kerf 1\nproject name=\"Solo\"\n\
+             media d path=\"/tmp/solo-d.wav\" rate=30 dur=4s audio=2ch@48000\n\
+             sequence s1 rate=30 size=64x36 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=d src=0s at=0s dur=1s\n\
+             \x20 track A2 audio\n\
+             \x20   clip b1 media=d src=0s at=0s dur=1s\n\
+             \x20   clip n1 seq=inner src=0s at=1s dur=1s\n\
+             \x20 track A3 audio muted=true\n\
+             \x20   clip c1 media=d src=0s at=0s dur=1s\n\
+             sequence inner rate=30 size=64x36 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip i1 media=d src=2s at=0s dur=1s\n";
+        let project = kerf_lang::parse_document(text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let before = project.clone();
+        assert_eq!(heard(&project, &[]), ["a1", "b1", "i1"]);
+        assert_eq!(heard(&project, &["A1"]), ["a1"]);
+        // A soloed track brings the sequences nested on it.
+        assert_eq!(heard(&project, &["A2"]), ["b1", "i1"]);
+        assert_eq!(heard(&project, &["A1", "A2"]), ["a1", "b1", "i1"]);
+        // A muted track stays muted, soloed or not.
+        assert!(heard(&project, &["A3"]).is_empty());
+        // Ids that name no audio track of the program leave the mix whole:
+        // a video track, a track of a nested sequence, a deleted one.
+        assert_eq!(heard(&project, &["V1"]), ["a1", "b1", "i1"]);
+        assert_eq!(heard(&project, &["gone"]), ["a1", "b1", "i1"]);
+        assert_eq!(project, before, "a solo never changes the project");
     }
 
     #[test]

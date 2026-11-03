@@ -49,7 +49,16 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             source
         }).collect::<Vec<_>>(),
         "sequences": project.sequences.iter().map(|sequence| {
-            json!({"id": sequence.id.as_str(), "name": sequence.name})
+            json!({
+                "id": sequence.id.as_str(),
+                "name": sequence.name,
+                "width": sequence.width,
+                "height": sequence.height,
+                "rate": sequence.rate.to_string(),
+                "fps": sequence.rate.fps(),
+                "dropFrame": sequence.drop_frame,
+                "duration": sequence.duration().seconds(),
+            })
         }).collect::<Vec<_>>(),
         "properties": properties_json(),
         "maskProperties": Catalog::builtin().mask_props().iter().map(param_def_json).collect::<Vec<_>>(),
@@ -284,23 +293,42 @@ pub fn fx_catalog_json() -> Json {
     let entries: Vec<Json> = Catalog::builtin()
         .all()
         .filter(|fx| fx.domain == Domain::Video && fx.kind != FxKind::Generator)
-        .map(|fx| {
-            let name = fx
-                .doc
-                .split_once(": ")
-                .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
-            json!({
-                "id": fx.id.as_str(),
-                "kind": fx.kind.name(),
-                "category": fx.category,
-                "name": name,
-                "doc": fx.doc,
-                "engine": fx.engine.name(),
-                "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
-            })
-        })
+        .map(fx_entry_json)
         .collect();
     Json::Array(entries)
+}
+
+/// The whole catalog in the shape of [`fx_catalog_json`]: picture and
+/// sound effects, transitions, and generators (titles and other pictures a
+/// clip makes on its own, `kind` `generator`), each with its `domain`
+/// (`video` or `audio`).
+pub fn fx_catalog_all_json() -> Json {
+    Json::Array(
+        Catalog::builtin()
+            .all()
+            .map(|fx| {
+                let mut entry = fx_entry_json(fx);
+                entry["domain"] = json!(fx.domain.name());
+                entry
+            })
+            .collect(),
+    )
+}
+
+fn fx_entry_json(fx: &kerf_model::FxDef) -> Json {
+    let name = fx
+        .doc
+        .split_once(": ")
+        .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
+    json!({
+        "id": fx.id.as_str(),
+        "kind": fx.kind.name(),
+        "category": fx.category,
+        "name": name,
+        "doc": fx.doc,
+        "engine": fx.engine.name(),
+        "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
+    })
 }
 
 fn param_def_json(def: &ParamDef) -> Json {
@@ -356,6 +384,51 @@ fn value_json(value: &Value) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_sequence_is_listed_with_its_format() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\n\
+             sequence s1 name=\"Main\" rate=25 size=1920x1080 audio=48000\n\
+             sequence vertical name=\"Vertical cut\" rate=29.97 size=1080x1920 audio=48000\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_json(&project);
+        let sequences = value["sequences"].as_array().unwrap();
+        assert_eq!(sequences.len(), 2);
+        assert_eq!(sequences[0]["id"], "s1");
+        assert_eq!(sequences[0]["name"], "Main");
+        assert_eq!(sequences[0]["width"], 1920);
+        assert_eq!(sequences[0]["rate"], "25");
+        assert_eq!(sequences[0]["fps"], 25.0);
+        assert_eq!(sequences[1]["id"], "vertical");
+        assert_eq!(sequences[1]["width"], 1080);
+        assert_eq!(sequences[1]["height"], 1920);
+        assert_eq!(sequences[1]["duration"], 0.0);
+    }
+
+    #[test]
+    fn the_whole_catalog_holds_generators_and_sound_effects() {
+        let all = fx_catalog_all_json();
+        let all = all.as_array().unwrap();
+        let picture = fx_catalog_json();
+        assert!(all.len() > picture.as_array().unwrap().len());
+        assert!(all
+            .iter()
+            .any(|fx| fx["id"] == "title" && fx["kind"] == "generator" && fx["domain"] == "video"));
+        assert!(all.iter().any(|fx| fx["domain"] == "audio"));
+        assert!(all
+            .iter()
+            .all(|fx| fx["params"].is_array() && fx["name"].is_string()));
+        // The picture catalog is as it was: no generators, no domain field.
+        assert!(picture
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|fx| fx["kind"] != "generator" && fx.get("domain").is_none()));
+    }
 
     #[test]
     fn clips_keep_their_own_spans_beside_transitions() {

@@ -1,11 +1,13 @@
 //! What an editor would catch in a cut that validation does not: black
 //! frames, picture that leaves the frame's edges uncovered, flash frames
-//! (including a sliver of another shot at a clip's edge), and sound cut
-//! inside a word.
+//! (including a sliver of another shot at a clip's edge), sound cut
+//! inside a word, and text and captions a viewer cannot read (see
+//! `text_lint`).
 
+use crate::qc::Finding;
+use crate::text_lint;
 use kerf_lang::{Breaks, Clock, Facts, Speech};
 use kerf_model::{Clip, Content, Param, Project, Sequence, Time, TrackKind, Value};
-use serde_json::{json, Value as Json};
 
 /// A picture or sound clip shorter than this many frames is a flash frame.
 const FLASH_FRAMES: i64 = 3;
@@ -18,19 +20,21 @@ const EDGE_TOLERANCE: f64 = 0.5;
 /// Findings for every sequence of `project`, whose media paths are
 /// resolved. `facts` knows what transcripts and indexes already made of its
 /// media heard and found; nothing is analysed for a check.
-pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Json> {
+pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
     let mut findings = Vec::new();
     for sequence in &project.sequences {
         picture(project, sequence, &mut findings);
         flash_frames(sequence, &mut findings);
         slivers(project, sequence, facts, &mut findings);
         cuts_in_words(project, sequence, facts, &mut findings);
+        text_lint::text(sequence, &mut findings);
+        text_lint::captions(sequence, &mut findings);
     }
     findings
 }
 
-fn finding(code: &str, entity: &str, message: String) -> Json {
-    json!({"severity": "warning", "code": code, "entity": entity, "message": message})
+fn finding(code: &str, entity: &str, message: String) -> Finding {
+    Finding::warning(code, entity, message)
 }
 
 /// The clips that show a picture: enabled clips on enabled video tracks,
@@ -54,7 +58,7 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
 
 /// Black stretches with no picture, and stretches where no picture covers
 /// the whole frame.
-fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Json>) {
+fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) {
     let duration = sequence.duration();
     if duration <= Time::ZERO
         || !sequence
@@ -69,16 +73,19 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Json>) {
     let span = |clip: &&Clip| (clip.start, clip.end());
     let pictured = union(shown.iter().map(span));
     for (from, to) in complement(&pictured, duration) {
-        findings.push(finding(
-            "picture.black",
-            sequence.id.as_str(),
-            format!(
-                "nothing is on screen in `{}` from {} to {}",
-                sequence.id,
-                clock.print_position(from),
-                clock.print_position(to)
-            ),
-        ));
+        findings.push(
+            finding(
+                "picture.black",
+                sequence.id.as_str(),
+                format!(
+                    "nothing is on screen in `{}` from {} to {}",
+                    sequence.id,
+                    clock.print_position(from),
+                    clock.print_position(to)
+                ),
+            )
+            .during(sequence, from, to),
+        );
     }
     let covered = union(
         shown
@@ -109,7 +116,8 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Json>) {
                 sequence.width,
                 sequence.height,
             ),
-        ));
+        )
+        .during(sequence, from, to));
     }
 }
 
@@ -164,7 +172,7 @@ fn covers(project: &Project, sequence: &Sequence, clip: &Clip) -> bool {
         && center_y + shown_height / 2.0 >= frame_height - EDGE_TOLERANCE
 }
 
-fn flash_frames(sequence: &Sequence, findings: &mut Vec<Json>) {
+fn flash_frames(sequence: &Sequence, findings: &mut Vec<Finding>) {
     let rate = sequence.rate;
     for track in sequence
         .tracks
@@ -178,16 +186,19 @@ fn flash_frames(sequence: &Sequence, findings: &mut Vec<Json>) {
                 Content::Media { .. } | Content::Sequence { .. }
             ) && frames < FLASH_FRAMES
             {
-                findings.push(finding(
-                    "clip.flash",
-                    clip.id.as_str(),
-                    format!(
-                        "clip `{}` on {} is {frames} frame{} long",
-                        clip.id,
-                        track.id,
-                        if frames == 1 { "" } else { "s" }
-                    ),
-                ));
+                findings.push(
+                    finding(
+                        "clip.flash",
+                        clip.id.as_str(),
+                        format!(
+                            "clip `{}` on {} is {frames} frame{} long",
+                            clip.id,
+                            track.id,
+                            if frames == 1 { "" } else { "s" }
+                        ),
+                    )
+                    .during(sequence, clip.start, clip.end()),
+                );
             }
         }
     }
@@ -196,7 +207,7 @@ fn flash_frames(sequence: &Sequence, findings: &mut Vec<Json>) {
 /// Picture clips that show a frame or two of another shot at an edge: a
 /// cut of their media's picture just inside the clip, which plays as a
 /// flash frame.
-fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: &mut Vec<Json>) {
+fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: &mut Vec<Finding>) {
     let rate = sequence.rate;
     let mut known: std::collections::HashMap<_, Option<Breaks>> = std::collections::HashMap::new();
     for clip in pictures(project, sequence) {
@@ -226,9 +237,19 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
             let Some(played) = clip.played_at(at).map(|time| rate.round(time)) else {
                 continue;
             };
-            for (edge, frames) in [
-                ("starts", rate.frames_round(played - clip.start)),
-                ("ends", rate.frames_round(clip.end() - played)),
+            for (edge, frames, from, to) in [
+                (
+                    "starts",
+                    rate.frames_round(played - clip.start),
+                    clip.start,
+                    played,
+                ),
+                (
+                    "ends",
+                    rate.frames_round(clip.end() - played),
+                    played,
+                    clip.end(),
+                ),
             ] {
                 if frames <= 0 || frames >= FLASH_FRAMES {
                     continue;
@@ -244,7 +265,8 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
                         media.id,
                         clock.print_position(media.rate.round(at)),
                     ),
-                ));
+                )
+                .during(sequence, from, to));
             }
         }
     }
@@ -255,7 +277,7 @@ fn cuts_in_words(
     project: &Project,
     sequence: &Sequence,
     facts: &dyn Facts,
-    findings: &mut Vec<Json>,
+    findings: &mut Vec<Finding>,
 ) {
     let mut known: std::collections::HashMap<_, Speech> = std::collections::HashMap::new();
     for track in sequence
@@ -280,7 +302,11 @@ fn cuts_in_words(
                 .entry(media.id.clone())
                 .or_insert_with(|| facts.speech(media));
             let clock = Clock::of_media(media);
-            for (end, at) in [("starts", source_in), ("ends", source_out)] {
+            let frame = sequence.rate.frame_duration();
+            for (end, at, cut) in [
+                ("starts", source_in, clip.start),
+                ("ends", source_out, clip.end() - frame),
+            ] {
                 let at = at.seconds();
                 let Some((from, to, word)) = spoken
                     .words
@@ -304,7 +330,8 @@ fn cuts_in_words(
                         position(*to),
                         media.id,
                     ),
-                ));
+                )
+                .during(sequence, cut, cut + frame));
             }
         }
     }
@@ -412,12 +439,7 @@ sequence s1 rate=24 size=1920x1080
         };
         findings(&project, &known)
             .into_iter()
-            .map(|finding| {
-                (
-                    finding["code"].as_str().unwrap().to_owned(),
-                    finding["message"].as_str().unwrap().to_owned(),
-                )
-            })
+            .map(|finding| (finding.code, finding.message))
             .collect()
     }
 

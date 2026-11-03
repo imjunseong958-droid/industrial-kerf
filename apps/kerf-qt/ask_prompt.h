@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QFrame>
 
 class QComboBox;
@@ -13,7 +15,7 @@ namespace kerf {
 // line; Escape or a click elsewhere closes it.
 class AskPrompt final : public QFrame {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     explicit AskPrompt(QWidget *parent = nullptr);
 

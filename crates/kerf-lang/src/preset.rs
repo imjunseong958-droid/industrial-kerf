@@ -7,7 +7,7 @@ use crate::{apply_script, parse_document, print_document, print_ops, PrintOption
 use kerf_model::look::{self, Look};
 use kerf_model::{
     Catalog, Clip, ClipChange, Content, Id, Media, NewClip, Op, Param, ParamType, Project, Rate,
-    Sequence, SequenceChange, Time, TrackChange, TrackKind, Transition, Value,
+    Sequence, SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange, Transition, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -728,5 +728,15 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
                 muted: Some(track.muted),
             },
         });
+        if track.role.is_some() || !track.sync_locked {
+            ops.push(Op::SetTrackRole {
+                sequence: sequence.id.clone(),
+                track: track.id.clone(),
+                change: TrackRoleChange {
+                    role: Some(track.role.clone()),
+                    sync_locked: Some(track.sync_locked),
+                },
+            });
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 #include "device_frame.h"
 #include "editor_common.h"
+#include "test_friends.h"
 
 #include <QAction>
 #include <QCheckBox>
@@ -60,7 +61,7 @@ class ViewerWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;

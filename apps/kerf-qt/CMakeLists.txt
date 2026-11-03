@@ -65,6 +65,7 @@ set(KERF_QT_SOURCES
     chat_panel.h
     command_registry.cpp
     command_registry.h
+    design_tokens.h
     device_frame.cpp
     device_frame.h
     editor_common.cpp
@@ -99,12 +100,16 @@ set(KERF_QT_SOURCES
     project_panel.h
     source_monitor_panel.cpp
     source_monitor_panel.h
+    test_friends.h
     timeline_widget.cpp
     timeline_widget.h
     viewer_widget.cpp
     viewer_widget.h
     workspace.cpp
     workspace.h)
+# Shared UI parts live under ui/ and join the build without a list here.
+file(GLOB_RECURSE KERF_QT_UI_SOURCES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" ui/*.cpp ui/*.h)
+list(APPEND KERF_QT_SOURCES ${KERF_QT_UI_SOURCES})
 if(APPLE)
     # The launcher and the editor draw their own titles under AppKit's
     # transparent title bar, beside its window buttons.
@@ -117,13 +122,23 @@ endif()
 # window and the launcher behave differently under KERF_QT_TESTING, so each
 # executable compiles its own; their headers go with them, since AUTOMOC
 # runs moc on a source's header in whichever target compiles the source.
-set(KERF_QT_VARIANT_SOURCES main_window.cpp main_window.h project_launcher.cpp project_launcher.h)
+# MainWindow's members are split by region into main_window_<region>.cpp,
+# which go with main_window.cpp.
+file(GLOB KERF_QT_WINDOW_PARTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" main_window_*.cpp)
+set(KERF_QT_VARIANT_SOURCES main_window.cpp main_window.h ${KERF_QT_WINDOW_PARTS} project_launcher.cpp project_launcher.h)
 set(KERF_QT_SHARED_SOURCES ${KERF_QT_SOURCES})
 list(REMOVE_ITEM KERF_QT_SHARED_SOURCES ${KERF_QT_VARIANT_SOURCES})
 add_library(kerf-qt-shared OBJECT ${KERF_QT_SHARED_SOURCES})
-target_include_directories(kerf-qt-shared PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(kerf-qt-shared PUBLIC ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/ui)
 target_link_libraries(kerf-qt-shared PUBLIC Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"
     ${KERF_QT_PLATFORM_LIBRARIES})
+
+# Bundled fonts (resources/fonts/*.ttf, *.otf) are served at :/fonts/<file>;
+# with none there the editor uses the system's.
+file(GLOB KERF_QT_FONTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" resources/fonts/*.ttf resources/fonts/*.otf)
+if(KERF_QT_FONTS)
+    qt_add_resources(kerf-qt-shared fonts PREFIX /fonts BASE resources/fonts FILES ${KERF_QT_FONTS})
+endif()
 
 add_executable(kerf-qt main.cpp ${KERF_QT_VARIANT_SOURCES})
 if(APPLE)
@@ -145,7 +160,10 @@ option(KERF_QT_BUILD_TESTS "Build Qt behavior tests" OFF)
 if(KERF_QT_BUILD_TESTS)
     include(CTest)
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    add_executable(kerf-qt-tests editor_test.cpp test_footage.cpp ${KERF_QT_VARIANT_SOURCES})
+    # One test class per region under tests/, run together by tests/test_main.cpp.
+    file(GLOB KERF_QT_TEST_SOURCES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" tests/*.cpp tests/*.h)
+    add_executable(kerf-qt-tests ${KERF_QT_TEST_SOURCES} test_footage.cpp test_footage.h ${KERF_QT_VARIANT_SOURCES})
+    target_include_directories(kerf-qt-tests PRIVATE ${CMAKE_CURRENT_LIST_DIR}/tests)
     target_compile_definitions(kerf-qt-tests PRIVATE KERF_QT_TESTING)
     target_link_libraries(kerf-qt-tests PRIVATE kerf-qt-shared Qt6::Test)
     kerf_copy_runtime_dlls(kerf-qt-tests)

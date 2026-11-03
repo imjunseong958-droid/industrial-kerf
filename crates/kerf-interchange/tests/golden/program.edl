@@ -1,0 +1,31 @@
+TITLE: Main Edit
+FCM: NON-DROP FRAME
+
+001  A001     V     C        14:22:35:00 14:22:41:06 01:00:00:00 01:00:06:06
+* FROM CLIP NAME: A001_C003.mov
+* SOURCE FILE: A001_C003.mov
+* LOC: 01:00:05:00 RED     pickup needed - ADR line 4
+
+002  A001     V     C        14:22:41:06 14:22:41:06 01:00:06:06 01:00:06:06
+002  B002_C01 V     D    012 10:00:09:18 10:00:14:00 01:00:06:06 01:00:10:12
+* FROM CLIP NAME: A001_C003.mov
+* TO CLIP NAME: Wide
+* SOURCE FILE: B002_C010-graded.mov
+
+003  A001     V     C        14:23:00:00 14:23:02:00 01:00:10:12 01:00:12:12
+M2   A001           048.0                14:23:00:00
+* FROM CLIP NAME: A001_C003.mov
+* SOURCE FILE: A001_C003.mov
+* LOC: 01:00:11:00 YELLOW  Caption sits on the logo
+* LOC: 01:00:30:00 MAGENTA
+
+004  AX       V     C        00:00:00:00 00:00:02:00 01:00:01:00 01:00:03:00
+* FROM CLIP NAME: Lower third
+
+005  A001     A     C        14:22:35:00 14:22:41:12 01:00:00:00 01:00:06:12
+* FROM CLIP NAME: A001_C003.mov
+* SOURCE FILE: A001_C003.mov
+
+006  Score_Fi A2    C        00:00:10:00 00:00:30:00 01:00:00:00 01:00:20:00
+* FROM CLIP NAME: Score Final.wav
+* SOURCE FILE: Score Final.wav

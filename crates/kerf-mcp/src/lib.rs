@@ -10,8 +10,12 @@ pub mod harness;
 pub mod inbound;
 mod lint;
 mod presets;
+pub mod qc;
+mod text_lint;
 
 pub use presets::{keep_looks, PRESET_FOLDERS};
+pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
+pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TITLE_SAFE};
 
 use kerf_agent::{AgentTool, ToolMap};
 use kerf_runtime::{RuntimeClient, RuntimeError, RuntimeLease};

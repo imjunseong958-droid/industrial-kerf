@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QAbstractButton>
 #include <QList>
 #include <QPointer>
@@ -67,7 +69,7 @@ private:
 // latches none, and the bank's tooltip names it ("Custom · 1280 × 720").
 class FormatBank final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr int kHeight = FormatKey::kHeight + 4;
 
@@ -108,7 +110,7 @@ private:
 // the default.
 class ExportButton final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr int kHeight = 20;
     static constexpr int kArrowWidth = 18;

@@ -100,8 +100,28 @@ enum Commands {
         /// Draw the picture with the FFmpeg graph, as before the compositor.
         #[arg(long)]
         graph: bool,
+        /// `standard`, `review` (H.264 12 Mb/s) or `prores_hq` (the
+        /// ProRes 422 HQ master in QuickTime with 24-bit PCM).
+        #[arg(long, default_value = "standard")]
+        preset: String,
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Measure a sequence's EBU R128 loudness: integrated, range, true
+    /// peak and the momentary and short-term series.
+    Loudness {
+        /// The `.kerf` document.
+        project: PathBuf,
+        #[arg(long)]
+        sequence: Option<String>,
+    },
+    /// Run the picture QC pass over a sequence: gamut, luma levels,
+    /// flashing and black.
+    Qc {
+        /// The `.kerf` document.
+        project: PathBuf,
+        #[arg(long)]
+        sequence: Option<String>,
     },
 }
 
@@ -131,6 +151,11 @@ struct FrameArgs {
 #[derive(Subcommand)]
 enum ProbeAction {
     Info {
+        src: String,
+    },
+    /// Codecs, pixel format, bit depth, colour tags and the camera, lens,
+    /// reel and timecode tags of a file.
+    MediaInfo {
         src: String,
     },
     Silence {
@@ -238,6 +263,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Probe { action } => match action {
             ProbeAction::Info { src } => print_json(&info(&src)?)?,
+            ProbeAction::MediaInfo { src } => print_json(&kerf_engine::media_info(&src)?)?,
             ProbeAction::Silence {
                 src,
                 threshold_db,
@@ -459,8 +485,12 @@ fn main() -> Result<()> {
             sequence,
             draft,
             graph,
+            preset,
             out,
         } => {
+            let Some(preset) = kerf_engine::render::RenderPreset::parse(&preset) else {
+                bail!("unknown preset `{preset}`: use standard, review or prores_hq");
+            };
             let document = read_project(&project)?;
             let started = std::time::Instant::now();
             kerf_engine::render::render_program::<fn(f64)>(
@@ -471,6 +501,7 @@ fn main() -> Result<()> {
                     output: out.to_string_lossy().into_owned(),
                     draft,
                     graph,
+                    preset,
                     project_dir: project.parent().map(std::path::Path::to_path_buf),
                     ..kerf_engine::render::RenderOptions::default()
                 },
@@ -480,6 +511,26 @@ fn main() -> Result<()> {
                 "out": out,
                 "seconds": (started.elapsed().as_secs_f64() * 100.0).round() / 100.0,
             }))?;
+        }
+        Commands::Loudness { project, sequence } => {
+            let document = read_project(&project)?;
+            let loudness = kerf_engine::loudness::measure_program(
+                &document,
+                sequence.as_deref(),
+                project_dir(&project),
+                &CancellationToken::new(),
+            )?;
+            print_json(&loudness.to_json())?;
+        }
+        Commands::Qc { project, sequence } => {
+            let document = read_project(&project)?;
+            let qc = kerf_engine::qc::picture_qc(
+                &document,
+                sequence.as_deref(),
+                project_dir(&project),
+                &CancellationToken::new(),
+            )?;
+            print_json(&qc)?;
         }
     }
     Ok(())
@@ -572,6 +623,14 @@ fn run_transcription(
 }
 
 /// A `.kerf` document's project, its media paths resolved against it.
+/// The directory a `.kerf` document's relative paths resolve against.
+fn project_dir(document: &std::path::Path) -> &std::path::Path {
+    document
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."))
+}
+
 fn read_project(path: &std::path::Path) -> Result<kerf_model::Project> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QImage>
 #include <QJsonObject>
 #include <QProcess>
@@ -15,7 +17,7 @@ namespace kerf {
 // in the background; the latest request wins.
 class SourceMonitorPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     explicit SourceMonitorPanel(QWidget *parent = nullptr);
     ~SourceMonitorPanel() override;

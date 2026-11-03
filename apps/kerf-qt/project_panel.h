@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QHash>
 #include <QIcon>
 #include <QJsonArray>
@@ -18,7 +20,7 @@ class MediaArtwork;
 // outside the project folder carry a badge saying so.
 class ProjectPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     // The grid at 1440x900 (a column of 300): two columns of 124 by 70
     // tiles, 10 apart, 16 in from the column's edge, with room for a

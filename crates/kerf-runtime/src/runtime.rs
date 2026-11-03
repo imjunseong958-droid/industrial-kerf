@@ -4,20 +4,21 @@
 
 use crate::kernel::{self, CachedFacts, Edit, Edited};
 use crate::render::render_cancel_path;
+use crate::review::{self, Review};
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
     preserve_previous_state, projection_digest, projection_matches, seal_journal_record,
     sha256_hex, truncate_journal, write_bytes_atomic, write_json_atomic, Change, HistoryEntry,
     ImportRecord, JournalAction, JournalImport, JournalOperation, JournalRecord, Loaded,
-    OperationRecord, PersistedCheckpoint, ProjectionStatus, ProposalReceipt, ProposalRecord,
-    RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE, JOURNAL_VERSION,
-    PREVIOUS_STATE_PREFIX, PROJECT_FILE,
+    OperationRecord, PersistedCheckpoint, ProjectionStatus, ProposalMeta, ProposalReceipt,
+    ProposalRecord, RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE,
+    JOURNAL_VERSION, PREVIOUS_STATE_PREFIX, PROJECT_FILE,
 };
 use crate::timeline;
 use crate::{
-    io_error, unique_id, validate_actor, EditOp, MailboxMessage, PendingProposal,
-    ProposalFreshness, RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse,
-    StateSnapshot, SOURCE_VERSION,
+    io_error, unique_id, validate_actor, Author, EditOp, MailboxMessage, PendingProposal,
+    ProposalEntry, ProposalFreshness, ProposalVersion, RenderJob, RenderRange, RuntimeError,
+    RuntimeRequest, RuntimeResponse, StateSnapshot, MAX_PROPOSALS, SOURCE_VERSION,
 };
 use kerf_lang::NoFacts;
 use kerf_model::Project;
@@ -36,6 +37,9 @@ const MAX_RECEIPTS: usize = 1024;
 /// Finished render jobs kept for clients that ask after them; queued and
 /// running jobs are always kept.
 const MAX_FINISHED_JOBS: usize = 50;
+/// Settled proposals kept beside the open ones, so their cards can say how
+/// they ended and a retried accept or reject finds its receipt.
+const MAX_SETTLED_PROPOSALS: usize = 4;
 
 #[allow(clippy::large_enum_variant)]
 enum JournalEvent {
@@ -44,10 +48,10 @@ enum JournalEvent {
         change: Option<Change>,
         operation: Option<JournalOperation>,
         import: Option<JournalImport>,
-        proposal: Option<ProposalRecord>,
+        proposals: Vec<ProposalRecord>,
     },
     Proposal {
-        proposal: Option<ProposalRecord>,
+        proposals: Vec<ProposalRecord>,
     },
     Job {
         job: RenderJob,
@@ -70,6 +74,8 @@ impl JournalRecord {
             import: None,
             proposal: None,
             job: None,
+            proposals: None,
+            time: None,
             checksum: String::new(),
         };
         match event {
@@ -78,17 +84,17 @@ impl JournalRecord {
                 change,
                 operation,
                 import,
-                proposal,
+                proposals,
             } => {
                 record.action = action;
                 record.change = change;
                 record.operation = operation;
                 record.import = import;
-                record.proposal = proposal;
+                record.proposals = Some(proposals);
             }
-            JournalEvent::Proposal { proposal } => {
+            JournalEvent::Proposal { proposals } => {
                 record.action = JournalAction::StageProposal;
-                record.proposal = proposal;
+                record.proposals = Some(proposals);
             }
             JournalEvent::Job { job } => {
                 record.action = JournalAction::Job;
@@ -113,7 +119,10 @@ struct DurableState {
     jobs: HashMap<String, RenderJob>,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
-    proposal: Option<ProposalRecord>,
+    /// Newest first: the open proposals and the last few settled.
+    proposals: Vec<ProposalRecord>,
+    /// When `revision` was made, RFC 3339.
+    revision_time: Option<String>,
 }
 
 impl DurableState {
@@ -141,6 +150,8 @@ struct Runtime {
     journal_records_since_checkpoint: u64,
     projection_status: ProjectionStatus,
     projection_digest: Option<String>,
+    /// The review log beside the project; never part of its state.
+    review: Review,
 }
 
 pub(crate) fn runtime_actor(
@@ -214,13 +225,19 @@ impl Runtime {
                         .into_iter()
                         .map(|(key, record)| (key, record.settled()))
                         .collect(),
-                    proposal: checkpoint.proposal,
+                    proposals: if checkpoint.proposals.is_empty() {
+                        checkpoint.proposal.into_iter().collect()
+                    } else {
+                        checkpoint.proposals
+                    },
+                    revision_time: checkpoint.revision_time,
                 },
                 import_warnings: checkpoint.import_warnings,
                 journal_sequence: checkpoint.journal_sequence,
                 journal_records_since_checkpoint: 0,
                 projection_status: ProjectionStatus::Missing,
                 projection_digest: checkpoint.projection_digest,
+                review: Review::open(directory),
             }
         } else {
             let project = load_bootstrap_project(directory)?;
@@ -236,13 +253,15 @@ impl Runtime {
                     jobs: HashMap::new(),
                     operations: HashMap::new(),
                     imports: HashMap::new(),
-                    proposal: None,
+                    proposals: Vec::new(),
+                    revision_time: None,
                 },
                 import_warnings: notes,
                 journal_sequence: 0,
                 journal_records_since_checkpoint: 0,
                 projection_status: ProjectionStatus::Missing,
                 projection_digest: None,
+                review: Review::open(directory),
             }
         };
         bound_receipts(
@@ -342,25 +361,33 @@ impl Runtime {
             revision: state.revision,
             can_undo: !state.past.is_empty(),
             can_redo: !state.future.is_empty(),
-            pending_proposal: state.proposal.as_ref().map(|record| {
-                let mut lifecycle = record.lifecycle.clone();
-                if let PendingProposal::Pending {
-                    base_revision,
-                    freshness,
-                    ..
-                } = &mut lifecycle
-                {
-                    *freshness = if *base_revision == state.revision {
-                        ProposalFreshness::Current
-                    } else {
-                        ProposalFreshness::Stale
-                    };
-                }
-                lifecycle
-            }),
+            pending_proposal: state
+                .proposals
+                .iter()
+                .find(|record| matches!(record.lifecycle, PendingProposal::Pending { .. }))
+                .or(state.proposals.first())
+                .map(|record| {
+                    let mut lifecycle = record.lifecycle.clone();
+                    if let PendingProposal::Pending {
+                        base_revision,
+                        freshness,
+                        ..
+                    } = &mut lifecycle
+                    {
+                        *freshness = freshness_at(*base_revision, state.revision);
+                    }
+                    lifecycle
+                }),
             source_version: SOURCE_VERSION,
             projection_status: self.projection_status.as_str().into(),
             import_warnings: self.import_warnings.clone(),
+            proposals: state
+                .proposals
+                .iter()
+                .map(|record| proposal_entry(record, state.revision))
+                .collect(),
+            review_revision: self.review.revision(),
+            revision_time: state.revision_time.clone(),
         }
     }
 
@@ -424,6 +451,10 @@ impl Runtime {
             preserve_import,
             ImportRecord::revision,
         );
+        let revised = candidate.revision != self.state.revision;
+        if revised && candidate.revision_time == self.state.revision_time {
+            candidate.revision_time = Some(review::timestamp());
+        }
         let project_changed = candidate.project != self.state.project;
         if project_changed {
             self.projection_status = inspect_projection(&self.project_path, &self.state.project);
@@ -436,11 +467,11 @@ impl Runtime {
         }
 
         let sequence = self.journal_sequence + 1;
-        let record = seal_journal_record(JournalRecord::from_event(
-            sequence,
-            candidate.revision,
-            event,
-        ))?;
+        let mut record = JournalRecord::from_event(sequence, candidate.revision, event);
+        if revised {
+            record.time = candidate.revision_time.clone();
+        }
+        let record = seal_journal_record(record)?;
         // The journal is the authoritative durable commit. Publish the
         // document only after the record is safely appended; startup can then
         // replay a committed record and repair a stale document without
@@ -496,17 +527,19 @@ impl Runtime {
         })
     }
 
-    /// The state the current proposal's acceptance or rejection left, when
-    /// `actor`'s request `key` at `base_revision` made it.
+    /// The state a proposal's acceptance or rejection left, when `actor`'s
+    /// request `key` at `base_revision` made it.
     fn proposal_receipt(
         &self,
         actor: &str,
         key: &str,
         base_revision: u64,
     ) -> Option<StateSnapshot> {
-        let receipt = self.state.proposal.as_ref()?.receipt.as_ref()?;
-        (receipt.actor == actor && receipt.key == key && receipt.base_revision == base_revision)
-            .then(|| (*receipt.snapshot).clone())
+        self.state.proposals.iter().find_map(|record| {
+            let receipt = record.receipt.as_ref()?;
+            (receipt.actor == actor && receipt.key == key && receipt.base_revision == base_revision)
+                .then(|| (*receipt.snapshot).clone())
+        })
     }
 
     /// The state after an edit, with a history entry, and how to journal
@@ -545,7 +578,8 @@ impl Runtime {
                 script: script.to_owned(),
             },
             base_revision,
-            self.state.proposal.clone(),
+            self.state.proposals.clone(),
+            None,
         )
     }
 
@@ -562,17 +596,21 @@ impl Runtime {
             key,
             Edit::Ops { ops },
             base_revision,
-            self.state.proposal.clone(),
+            self.state.proposals.clone(),
+            None,
         )
     }
 
+    /// Apply `edit`, leaving `proposals`. `accepted` is the index of the
+    /// proposal the edit accepts, whose receipt keeps the state it leaves.
     fn apply_edit_request(
         &mut self,
         actor: &str,
         key: &str,
         edit: Edit,
         base_revision: u64,
-        proposal: Option<ProposalRecord>,
+        proposals: Vec<ProposalRecord>,
+        accepted: Option<usize>,
     ) -> Result<StateSnapshot, RuntimeError> {
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:{}", edit.fingerprint());
@@ -582,16 +620,11 @@ impl Runtime {
         self.check_revision(Some(base_revision))?;
         let (mut candidate, change) =
             self.edit_candidate(edit.run(&self.state.project, &self.facts())?);
-        candidate.proposal = proposal;
-        let accepting = candidate.proposal.as_ref().is_some_and(|proposal| {
-            matches!(proposal.lifecycle, PendingProposal::Accepted { .. })
-                && proposal.receipt.is_none()
-        });
-        if accepting {
-            // The one proposal's receipt keeps its state; there is never
-            // more than one.
+        candidate.proposals = proposals;
+        candidate.revision_time = Some(review::timestamp());
+        if let Some(index) = accepted {
             let snapshot = Arc::new(self.snapshot_of(&candidate));
-            if let Some(proposal) = candidate.proposal.as_mut() {
+            if let Some(proposal) = candidate.proposals.get_mut(index) {
                 proposal.receipt = Some(ProposalReceipt {
                     actor: actor.to_owned(),
                     key: key.to_owned(),
@@ -601,7 +634,7 @@ impl Runtime {
             }
         }
         let operation = candidate.record_operation(operation, fingerprint);
-        let proposal = candidate.proposal.clone();
+        let proposals = candidate.proposals.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
@@ -609,13 +642,15 @@ impl Runtime {
                 change: Some(change),
                 operation: Some(operation),
                 import: None,
-                proposal,
+                proposals,
             },
         )
     }
 
     /// Stage an agent's edit script as a pending proposal that keeps
-    /// `source` as the script it was written as, or `script` itself.
+    /// `source` as the script it was written as, or `script` itself. Kerf
+    /// is its author. Requests reach `stage_script_proposal_by`.
+    #[cfg(test)]
     pub fn stage_script_proposal(
         &mut self,
         request_key: &str,
@@ -623,60 +658,157 @@ impl Runtime {
         script: &str,
         source: Option<&str>,
     ) -> Result<StateSnapshot, RuntimeError> {
+        self.stage_script_proposal_by(
+            request_key,
+            base_revision,
+            script,
+            source,
+            &Author::kerf(),
+            None,
+        )
+    }
+
+    /// Stage `script` as a proposal by `author`, beside any already open.
+    /// With `revises`, it replaces that open proposal as its next version,
+    /// which keeps the versions before it.
+    pub fn stage_script_proposal_by(
+        &mut self,
+        request_key: &str,
+        base_revision: u64,
+        script: &str,
+        source: Option<&str>,
+        author: &Author,
+        revises: Option<&str>,
+    ) -> Result<StateSnapshot, RuntimeError> {
         if request_key.trim().is_empty() {
             return Err(RuntimeError::new(
                 "AGENT_PROTOCOL_ERROR",
                 "agent request requires a non-empty idempotency key",
             ));
         }
+        author.validate()?;
         self.check_revision(Some(base_revision))?;
         let edit = Edit::Script {
             script: script.to_owned(),
         };
-        let fingerprint = format!("{base_revision}:{}", edit.fingerprint());
+        let fingerprint = format!(
+            "{base_revision}:{}{}",
+            edit.fingerprint(),
+            revises
+                .map(|id| format!(":revises:{id}"))
+                .unwrap_or_default()
+        );
 
-        if let Some(existing) = self.state.proposal.as_ref() {
-            if existing.request_key == request_key {
-                if existing.fingerprint != fingerprint {
-                    return Err(RuntimeError::new(
-                        "IDEMPOTENCY_CONFLICT",
-                        "agent request key was already used for a different proposal",
-                    ));
-                }
-                return Ok(self.snapshot());
-            }
-            if matches!(existing.lifecycle, PendingProposal::Pending { .. }) {
+        if let Some(existing) = self
+            .state
+            .proposals
+            .iter()
+            .find(|record| record.request_key == request_key)
+        {
+            if existing.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
-                    "PROPOSAL_PENDING",
-                    "another agent proposal is awaiting approval",
+                    "IDEMPOTENCY_CONFLICT",
+                    "agent request key was already used for a different proposal",
                 ));
             }
+            return Ok(self.snapshot());
         }
+        let revised = match revises {
+            Some(id) => {
+                let index = find_proposal(&self.state.proposals, id)
+                    .ok_or_else(|| proposal_not_found(id))?;
+                if !matches!(
+                    self.state.proposals[index].lifecycle,
+                    PendingProposal::Pending { .. }
+                ) {
+                    return Err(RuntimeError::new(
+                        "PROPOSAL_NOT_PENDING",
+                        format!("only an open proposal can be revised: {id}"),
+                    ));
+                }
+                Some(index)
+            }
+            None => {
+                let open = self
+                    .state
+                    .proposals
+                    .iter()
+                    .filter(|record| matches!(record.lifecycle, PendingProposal::Pending { .. }))
+                    .count();
+                if open >= MAX_PROPOSALS {
+                    return Err(RuntimeError::new(
+                        "PROPOSAL_PENDING",
+                        format!(
+                            "{MAX_PROPOSALS} proposals are awaiting review; accept, reject, or revise one first"
+                        ),
+                    ));
+                }
+                None
+            }
+        };
 
         let edited = edit.run(&self.state.project, &self.facts())?;
         let document_diff = kerf_lang::diff_text(
             &kernel::print(&self.state.project),
             &kernel::print(&edited.project),
         );
-        let mut candidate = self.state.clone();
-        candidate.proposal = Some(ProposalRecord {
+        let proposal_id = format!("proposal-{}", unique_id());
+        let source = source.unwrap_or(script).to_owned();
+        let previous = revised.map(|index| proposal_meta(&self.state.proposals[index]));
+        let version = previous.as_ref().map_or(1, |meta| meta.version + 1);
+        let mut versions = previous
+            .as_ref()
+            .map(|meta| meta.versions.clone())
+            .unwrap_or_default();
+        versions.push(ProposalVersion {
+            version,
+            proposal_id: proposal_id.clone(),
+            base_revision,
+            script: edited.script.clone(),
+            source: source.clone(),
+            document_diff: document_diff.clone(),
+        });
+        let supersedes = revised.and_then(|index| {
+            let PendingProposal::Pending { proposal_id, .. } =
+                &self.state.proposals[index].lifecycle
+            else {
+                return None;
+            };
+            Some(proposal_id.clone())
+        });
+        let record = ProposalRecord {
             lifecycle: PendingProposal::Pending {
-                proposal_id: format!("proposal-{}", unique_id()),
+                proposal_id,
                 base_revision,
                 script: edited.script,
-                source: source.unwrap_or(script).to_owned(),
+                source,
                 document_diff,
                 freshness: ProposalFreshness::Current,
             },
             request_key: request_key.to_owned(),
             fingerprint,
             receipt: None,
-        });
-        let proposal = candidate.proposal.clone();
-        self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
+            meta: Some(ProposalMeta {
+                author: author.clone(),
+                version,
+                supersedes,
+                versions,
+                staged: Some(review::timestamp()),
+            }),
+        };
+        let mut candidate = self.state.clone();
+        if let Some(index) = revised {
+            candidate.proposals.remove(index);
+        }
+        candidate.proposals.insert(0, record);
+        bound_proposals(&mut candidate.proposals);
+        let proposals = candidate.proposals.clone();
+        self.commit_candidate(candidate, JournalEvent::Proposal { proposals })
     }
 
-    /// Apply a previously staged proposal as exactly one canonical request.
+    /// Apply a previously staged proposal, or one of its earlier versions,
+    /// as exactly one canonical request. The other open proposals go stale,
+    /// and the comments about this one are resolved.
     pub fn accept_proposal(
         &mut self,
         proposal_id: &str,
@@ -691,54 +823,71 @@ impl Runtime {
                 "proposalId is required",
             ));
         }
-        let record = self
-            .state
-            .proposal
-            .clone()
+        let index = find_proposal(&self.state.proposals, proposal_id)
             .ok_or_else(|| proposal_not_found(proposal_id))?;
-        match record.lifecycle {
-            PendingProposal::Pending {
-                proposal_id: current_id,
-                base_revision: proposal_revision,
-                script,
-                ..
-            } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
+        let record = self.state.proposals[index].clone();
+        match &record.lifecycle {
+            PendingProposal::Pending { .. } => {
+                let version = proposal_version(&record, proposal_id)
+                    .ok_or_else(|| proposal_not_found(proposal_id))?;
                 self.check_revision(Some(base_revision))?;
-                if base_revision != proposal_revision {
+                if base_revision != version.base_revision {
                     return Err(RuntimeError::new(
                         "PROPOSAL_BASE_MISMATCH",
                         format!(
-                            "proposal was created at revision {proposal_revision}, not {base_revision}"
+                            "proposal was created at revision {}, not {base_revision}",
+                            version.base_revision
                         ),
                     ));
                 }
-                let accepted_proposal = Some(ProposalRecord {
+                let mut proposals = self.state.proposals.clone();
+                proposals[index] = ProposalRecord {
                     lifecycle: PendingProposal::Accepted {
-                        proposal_id: current_id.clone(),
-                        base_revision: proposal_revision,
+                        proposal_id: proposal_id.to_owned(),
+                        base_revision: version.base_revision,
                         applied_revision: self.state.revision + 1,
                     },
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
-                });
-                self.apply_edit_request(
+                    meta: Some(proposal_meta(&record)),
+                };
+                let state = self.apply_edit_request(
                     actor,
                     key,
-                    Edit::Script { script },
+                    Edit::Script {
+                        script: version.script,
+                    },
                     base_revision,
-                    accepted_proposal,
-                )
+                    proposals,
+                    Some(index),
+                )?;
+                let accepted = self.state.proposals.get(index).is_some_and(|record| {
+                    matches!(&record.lifecycle, PendingProposal::Accepted { proposal_id: id, .. } if id == proposal_id)
+                });
+                if !accepted {
+                    return Ok(state);
+                }
+                let by = (actor == "ui").then(|| self.local_person()).flatten();
+                match self
+                    .review
+                    .resolve_proposal(&proposal_ids(&record), state.revision, by)
+                {
+                    Ok(true) => Ok(self.snapshot()),
+                    // The edit is committed; a review log that cannot be
+                    // written leaves its comments open, never the edit undone.
+                    Ok(false) | Err(_) => Ok(state),
+                }
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
+                    return Err(RuntimeError::new(
+                        "PROPOSAL_ALREADY_ACCEPTED",
+                        format!("another version of this proposal was accepted: {current_id}"),
+                    ));
                 }
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
@@ -760,24 +909,26 @@ impl Runtime {
                 // later mutation advances the live project.
                 Ok((*receipt.snapshot).clone())
             }
-            PendingProposal::Rejected {
-                proposal_id: current_id,
-                ..
-            } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
-                Err(RuntimeError::new(
-                    "PROPOSAL_REJECTED",
-                    "proposal has already been rejected",
-                ))
-            }
+            PendingProposal::Rejected { .. } => Err(RuntimeError::new(
+                "PROPOSAL_REJECTED",
+                "proposal has already been rejected",
+            )),
         }
     }
 
-    /// Reject a proposal without changing canonical project state, revision,
-    /// or undo/redo history.  Rejection is represented as a terminal receipt
-    /// so a repeated request is a harmless no-op.
+    /// The person this machine's Git names, who accepts in the editor.
+    fn local_person(&self) -> Option<Author> {
+        let user = kerf_collab::git::user(self.directory())?;
+        Some(Author {
+            id: user.email,
+            ..Author::new("person", user.name)
+        })
+    }
+
+    /// Reject a proposal, every version of it, without changing canonical
+    /// project state, revision, or undo/redo history.  Rejection is
+    /// represented as a terminal receipt so a repeated request is a
+    /// harmless no-op.
     pub fn reject_proposal(&mut self, proposal_id: &str) -> Result<StateSnapshot, RuntimeError> {
         if proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
@@ -785,45 +936,30 @@ impl Runtime {
                 "proposalId is required",
             ));
         }
-        let record = self
-            .state
-            .proposal
-            .clone()
+        let index = find_proposal(&self.state.proposals, proposal_id)
             .ok_or_else(|| proposal_not_found(proposal_id))?;
+        let record = self.state.proposals[index].clone();
         match record.lifecycle {
             PendingProposal::Pending {
                 proposal_id: current_id,
                 base_revision,
                 ..
             } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
-                let rejected_proposal = Some(ProposalRecord {
+                let mut candidate = self.state.clone();
+                candidate.proposals[index] = ProposalRecord {
                     lifecycle: PendingProposal::Rejected {
-                        proposal_id: current_id.clone(),
+                        proposal_id: current_id,
                         base_revision,
                     },
-                    request_key: record.request_key.clone(),
-                    fingerprint: record.fingerprint.clone(),
+                    request_key: record.request_key,
+                    fingerprint: record.fingerprint,
                     receipt: None,
-                });
-                let mut candidate = self.state.clone();
-                candidate.proposal = rejected_proposal;
-                let proposal = candidate.proposal.clone();
-                self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
+                    meta: record.meta,
+                };
+                let proposals = candidate.proposals.clone();
+                self.commit_candidate(candidate, JournalEvent::Proposal { proposals })
             }
-            PendingProposal::Accepted {
-                proposal_id: current_id,
-                ..
-            }
-            | PendingProposal::Rejected {
-                proposal_id: current_id,
-                ..
-            } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
+            PendingProposal::Accepted { .. } | PendingProposal::Rejected { .. } => {
                 Ok(self.snapshot())
             }
         }
@@ -851,28 +987,23 @@ impl Runtime {
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:reject:{proposal_id}");
         if let Some(replayed) = self.replayed(&operation, &fingerprint) {
-            // While the rejected proposal is the current one, its receipt
-            // still holds the state the rejection left.
+            // While the rejected proposal is kept, its receipt still holds
+            // the state the rejection left.
             return replayed.map(|state| {
                 self.proposal_receipt(actor, key, base_revision)
                     .unwrap_or(state)
             });
         }
 
-        let record = self
-            .state
-            .proposal
-            .clone()
+        let index = find_proposal(&self.state.proposals, proposal_id)
             .ok_or_else(|| proposal_not_found(proposal_id))?;
+        let record = self.state.proposals[index].clone();
         match record.lifecycle {
             PendingProposal::Pending {
                 proposal_id: current_id,
                 base_revision: proposal_revision,
                 ..
             } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
                 self.check_revision(Some(base_revision))?;
                 if base_revision != proposal_revision {
                     return Err(RuntimeError::new(
@@ -883,7 +1014,8 @@ impl Runtime {
                     ));
                 }
 
-                let rejected_proposal = Some(ProposalRecord {
+                let mut candidate = self.state.clone();
+                candidate.proposals[index] = ProposalRecord {
                     lifecycle: PendingProposal::Rejected {
                         proposal_id: current_id,
                         base_revision: proposal_revision,
@@ -891,20 +1023,17 @@ impl Runtime {
                     request_key: record.request_key,
                     fingerprint: record.fingerprint,
                     receipt: None,
-                });
-                let mut candidate = self.state.clone();
-                candidate.proposal = rejected_proposal;
+                    meta: record.meta,
+                };
                 let snapshot = Arc::new(self.snapshot_of(&candidate));
-                if let Some(proposal) = candidate.proposal.as_mut() {
-                    proposal.receipt = Some(ProposalReceipt {
-                        actor: actor.to_owned(),
-                        key: key.to_owned(),
-                        base_revision,
-                        snapshot,
-                    });
-                }
+                candidate.proposals[index].receipt = Some(ProposalReceipt {
+                    actor: actor.to_owned(),
+                    key: key.to_owned(),
+                    base_revision,
+                    snapshot,
+                });
                 let operation = candidate.record_operation(operation, fingerprint);
-                let proposal = candidate.proposal.clone();
+                let proposals = candidate.proposals.clone();
                 self.commit_candidate(
                     candidate,
                     JournalEvent::Mutation {
@@ -912,29 +1041,15 @@ impl Runtime {
                         change: None,
                         operation: Some(operation),
                         import: None,
-                        proposal,
+                        proposals,
                     },
                 )
             }
-            PendingProposal::Accepted {
-                proposal_id: current_id,
-                ..
-            } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
-                Err(RuntimeError::new(
-                    "PROPOSAL_ALREADY_ACCEPTED",
-                    "proposal has already been accepted",
-                ))
-            }
-            PendingProposal::Rejected {
-                proposal_id: current_id,
-                ..
-            } => {
-                if current_id != proposal_id {
-                    return Err(proposal_not_found(proposal_id));
-                }
+            PendingProposal::Accepted { .. } => Err(RuntimeError::new(
+                "PROPOSAL_ALREADY_ACCEPTED",
+                "proposal has already been accepted",
+            )),
+            PendingProposal::Rejected { .. } => {
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
                         "IDEMPOTENCY_CONFLICT",
@@ -1007,7 +1122,7 @@ impl Runtime {
             (candidate, direction.action(), Some(change))
         };
         let operation = candidate.record_operation(operation, fingerprint);
-        let proposal = candidate.proposal.clone();
+        let proposals = candidate.proposals.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
@@ -1015,7 +1130,7 @@ impl Runtime {
                 change,
                 operation: Some(operation),
                 import: None,
-                proposal,
+                proposals,
             },
         )
     }
@@ -1129,39 +1244,31 @@ impl Runtime {
         ))
     }
 
-    /// The project a pending, current proposal would produce.
+    /// The project a pending, current proposal, or one of its earlier
+    /// versions, would produce.
     fn proposal_result(&self, proposal_id: &str) -> Result<Project, RuntimeError> {
-        let record = self
-            .state
-            .proposal
-            .as_ref()
+        let record = find_proposal(&self.state.proposals, proposal_id)
+            .map(|index| &self.state.proposals[index])
             .ok_or_else(|| proposal_not_found(proposal_id))?;
-        let PendingProposal::Pending {
-            proposal_id: current_id,
-            base_revision,
-            script,
-            ..
-        } = &record.lifecycle
-        else {
+        if !matches!(record.lifecycle, PendingProposal::Pending { .. }) {
             return Err(RuntimeError::new(
                 "PROPOSAL_NOT_PENDING",
                 format!("proposal is not pending: {proposal_id}"),
             ));
-        };
-        if current_id != proposal_id {
-            return Err(proposal_not_found(proposal_id));
         }
-        if *base_revision != self.state.revision {
+        let version =
+            proposal_version(record, proposal_id).ok_or_else(|| proposal_not_found(proposal_id))?;
+        if version.base_revision != self.state.revision {
             return Err(RuntimeError::new(
                 "PROPOSAL_STALE",
                 format!(
-                    "proposal was created at revision {base_revision}, current revision is {}",
-                    self.state.revision
+                    "proposal was created at revision {}, current revision is {}",
+                    version.base_revision, self.state.revision
                 ),
             ));
         }
         let edit = Edit::Script {
-            script: script.clone(),
+            script: version.script,
         };
         Ok(edit.run(&self.state.project, &NoFacts)?.project)
     }
@@ -1221,7 +1328,7 @@ impl Runtime {
             clip_id.clone(),
         );
         candidate.imports.insert(operation.clone(), record.clone());
-        let proposal = candidate.proposal.clone();
+        let proposals = candidate.proposals.clone();
         let snapshot = self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
@@ -1232,7 +1339,7 @@ impl Runtime {
                     key: operation,
                     record,
                 }),
-                proposal,
+                proposals,
             },
         )?;
         kernel::prepare_media(file, self.directory().to_path_buf());
@@ -1279,7 +1386,7 @@ impl Runtime {
         let (mut candidate, change) =
             self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
         let operation = candidate.record_operation(operation, fingerprint);
-        let proposal = candidate.proposal.clone();
+        let proposals = candidate.proposals.clone();
         let snapshot = self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
@@ -1287,7 +1394,7 @@ impl Runtime {
                 change: Some(change),
                 operation: Some(operation),
                 import: None,
-                proposal,
+                proposals,
             },
         )?;
         kernel::prepare_media(file, self.directory().to_path_buf());
@@ -1386,6 +1493,7 @@ impl Runtime {
 
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         self.refresh_projection_status();
+        self.review.refresh();
         // Looks another process added, as an applied preset's, join the
         // catalog edits are checked with; one that does not read leaves the
         // catalog as it was, and edits that use it say so.
@@ -1425,12 +1533,36 @@ impl Runtime {
                 base_revision,
                 script,
                 source,
-            } => Ok(RuntimeResponse::State(self.stage_script_proposal(
+                author,
+                revises,
+            } => Ok(RuntimeResponse::State(self.stage_script_proposal_by(
                 &request_key,
                 base_revision,
                 &script,
                 source.as_deref(),
+                &author.unwrap_or_else(Author::kerf),
+                revises.as_deref(),
             )?)),
+            RuntimeRequest::ListComments => Ok(RuntimeResponse::Comments {
+                log: self.review.log(),
+                comment: None,
+            }),
+            RuntimeRequest::AddComment { actor, comment } => {
+                let comment =
+                    self.review
+                        .add(&actor, comment, &self.state.project, self.state.revision)?;
+                Ok(RuntimeResponse::Comments {
+                    log: self.review.log(),
+                    comment: Some(comment),
+                })
+            }
+            RuntimeRequest::SetComment { actor, id, patch } => {
+                let comment = self.review.set(&actor, &id, patch, self.state.revision)?;
+                Ok(RuntimeResponse::Comments {
+                    log: self.review.log(),
+                    comment,
+                })
+            }
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalDocuments { before, after })
@@ -1608,7 +1740,7 @@ impl Runtime {
         }
     }
 
-    fn replay_journal_record(&mut self, record: JournalRecord) -> Result<(), RuntimeError> {
+    fn replay_journal_record(&mut self, mut record: JournalRecord) -> Result<(), RuntimeError> {
         if record.sequence != self.journal_sequence + 1 {
             return Err(RuntimeError::new(
                 "JOURNAL_SEQUENCE_ERROR",
@@ -1638,7 +1770,7 @@ impl Runtime {
                 bound_history(&mut self.state.past);
                 self.state.future.clear();
                 self.state.revision = record.revision;
-                self.state.proposal = record.proposal;
+                self.state.proposals = record.take_proposals();
             }
             JournalAction::Undo | JournalAction::Redo => {
                 let direction = if matches!(record.action, JournalAction::Undo) {
@@ -1662,14 +1794,14 @@ impl Runtime {
                 self.state.past = past;
                 self.state.future = future;
                 self.state.revision = record.revision;
-                self.state.proposal = record.proposal;
+                self.state.proposals = record.take_proposals();
             }
             JournalAction::Noop | JournalAction::RejectProposal => {
                 self.state.revision = record.revision;
-                self.state.proposal = record.proposal;
+                self.state.proposals = record.take_proposals();
             }
             JournalAction::StageProposal => {
-                self.state.proposal = record.proposal;
+                self.state.proposals = record.take_proposals();
             }
             JournalAction::Job => {
                 let job = record
@@ -1694,9 +1826,12 @@ impl Runtime {
                 if project_changed {
                     self.state.past.clear();
                     self.state.future.clear();
-                    self.state.proposal = None;
+                    self.state.proposals.clear();
                 }
             }
+        }
+        if let Some(time) = record.time.take() {
+            self.state.revision_time = Some(time);
         }
         if let Some(operation) = record.operation {
             self.state
@@ -1747,7 +1882,9 @@ impl Runtime {
             journal_sequence: self.journal_sequence,
             operations: self.state.operations.clone(),
             imports: self.state.imports.clone(),
-            proposal: self.state.proposal.clone(),
+            proposal: None,
+            proposals: self.state.proposals.clone(),
+            revision_time: self.state.revision_time.clone(),
             jobs: self.state.jobs.clone(),
             import_warnings: self.import_warnings.clone(),
             projection_digest: self.projection_digest.clone(),
@@ -1801,7 +1938,7 @@ impl Runtime {
         if project_changed {
             candidate.past.clear();
             candidate.future.clear();
-            candidate.proposal = None;
+            candidate.proposals.clear();
         }
         let operation = candidate.record_operation(operation, fingerprint);
         if !project_changed && self.projection_status != ProjectionStatus::Current {
@@ -1911,7 +2048,7 @@ impl Runtime {
         candidate.revision = self.state.revision + 1;
         candidate.past.clear();
         candidate.future.clear();
-        candidate.proposal = None;
+        candidate.proposals.clear();
         let operation = candidate.record_operation(receipt, fingerprint);
         let change = Change {
             script: None,
@@ -2117,6 +2254,164 @@ fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
     }
 }
 
+fn freshness_at(base_revision: u64, revision: u64) -> ProposalFreshness {
+    if base_revision == revision {
+        ProposalFreshness::Current
+    } else {
+        ProposalFreshness::Stale
+    }
+}
+
+/// Who made `record` and its versions; a proposal staged before they were
+/// kept reads as Kerf's v1.
+fn proposal_meta(record: &ProposalRecord) -> ProposalMeta {
+    let mut meta = record.meta.clone().unwrap_or_else(|| ProposalMeta {
+        author: Author::kerf(),
+        version: 1,
+        supersedes: None,
+        versions: Vec::new(),
+        staged: None,
+    });
+    if meta.versions.is_empty() {
+        if let PendingProposal::Pending {
+            proposal_id,
+            base_revision,
+            script,
+            source,
+            document_diff,
+            ..
+        } = &record.lifecycle
+        {
+            meta.versions.push(ProposalVersion {
+                version: meta.version,
+                proposal_id: proposal_id.clone(),
+                base_revision: *base_revision,
+                script: script.clone(),
+                source: source.clone(),
+                document_diff: document_diff.clone(),
+            });
+        }
+    }
+    meta
+}
+
+/// Every id `record` has gone by, one per version.
+fn proposal_ids(record: &ProposalRecord) -> Vec<String> {
+    let mut ids: Vec<String> = proposal_meta(record)
+        .versions
+        .into_iter()
+        .map(|version| version.proposal_id)
+        .collect();
+    let (PendingProposal::Pending { proposal_id, .. }
+    | PendingProposal::Accepted { proposal_id, .. }
+    | PendingProposal::Rejected { proposal_id, .. }) = &record.lifecycle;
+    if !ids.contains(proposal_id) {
+        ids.push(proposal_id.clone());
+    }
+    ids
+}
+
+/// The version of `record` that `proposal_id` names.
+fn proposal_version(record: &ProposalRecord, proposal_id: &str) -> Option<ProposalVersion> {
+    proposal_meta(record)
+        .versions
+        .into_iter()
+        .find(|version| version.proposal_id == proposal_id)
+}
+
+/// The proposal that `proposal_id` names, by any of its versions' ids.
+fn find_proposal(proposals: &[ProposalRecord], proposal_id: &str) -> Option<usize> {
+    proposals
+        .iter()
+        .position(|record| proposal_ids(record).iter().any(|id| id == proposal_id))
+}
+
+/// Keep every open proposal and the newest settled ones, at most
+/// `MAX_PROPOSALS` in all.
+fn bound_proposals(proposals: &mut Vec<ProposalRecord>) {
+    let open = proposals
+        .iter()
+        .filter(|record| matches!(record.lifecycle, PendingProposal::Pending { .. }))
+        .count();
+    let mut settled = MAX_SETTLED_PROPOSALS.min(MAX_PROPOSALS.saturating_sub(open));
+    proposals.retain(|record| {
+        if matches!(record.lifecycle, PendingProposal::Pending { .. }) {
+            true
+        } else if settled > 0 {
+            settled -= 1;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+/// How a client lists `record` at project `revision`.
+fn proposal_entry(record: &ProposalRecord, revision: u64) -> ProposalEntry {
+    let meta = proposal_meta(record);
+    let (status, proposal_id, base_revision, applied_revision, freshness) = match &record.lifecycle
+    {
+        PendingProposal::Pending {
+            proposal_id,
+            base_revision,
+            ..
+        } => (
+            "pending",
+            proposal_id,
+            *base_revision,
+            None,
+            freshness_at(*base_revision, revision),
+        ),
+        PendingProposal::Accepted {
+            proposal_id,
+            base_revision,
+            applied_revision,
+        } => (
+            "accepted",
+            proposal_id,
+            *base_revision,
+            Some(*applied_revision),
+            ProposalFreshness::Current,
+        ),
+        PendingProposal::Rejected {
+            proposal_id,
+            base_revision,
+        } => (
+            "rejected",
+            proposal_id,
+            *base_revision,
+            None,
+            ProposalFreshness::Current,
+        ),
+    };
+    let shown = meta
+        .versions
+        .iter()
+        .find(|version| version.proposal_id == *proposal_id)
+        .or(meta.versions.last());
+    ProposalEntry {
+        proposal_id: proposal_id.clone(),
+        status: status.into(),
+        freshness,
+        base_revision,
+        applied_revision,
+        script: shown
+            .map(|version| version.script.clone())
+            .unwrap_or_default(),
+        source: shown
+            .map(|version| version.source.clone())
+            .unwrap_or_default(),
+        document_diff: shown
+            .map(|version| version.document_diff.clone())
+            .unwrap_or_default(),
+        author: meta.author.clone(),
+        version: shown.map_or(meta.version, |version| version.version),
+        supersedes: meta.supersedes.clone(),
+        versions: meta.versions.clone(),
+        staged: meta.staged.clone(),
+    }
+}
+
 fn proposal_not_found(proposal_id: &str) -> RuntimeError {
     RuntimeError::new(
         "PROPOSAL_NOT_FOUND",
@@ -2212,6 +2507,9 @@ fn project_relative(directory: &Path, file: &Path) -> Option<String> {
         .collect::<Option<Vec<_>>>()?;
     (!parts.is_empty()).then(|| parts.join("/"))
 }
+
+#[cfg(test)]
+mod proposal_tests;
 
 #[cfg(test)]
 mod tests {

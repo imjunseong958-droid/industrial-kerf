@@ -693,6 +693,29 @@ fn builtin_catalog() -> Catalog {
         .param(P::number("mid", 0.0).range(-24.0, 24.0).unit("dB"))
         .param(P::number("high", 0.0).range(-24.0, 24.0).unit("dB")),
         FxDef::new(
+            "audio.eq",
+            FxKind::Effect,
+            Domain::Audio,
+            "Channel EQ: low cut and presence at 3 kHz.",
+        )
+        .category("Audio")
+        .param(
+            P::number("lowcut_hz", 0.0)
+                .range(0.0, 300.0)
+                .unit("Hz")
+                .doc("0 is off."),
+        )
+        .param(P::number("presence_db", 0.0).range(-12.0, 12.0).unit("dB")),
+        FxDef::new(
+            "audio.limiter",
+            FxKind::Effect,
+            Domain::Audio,
+            "Peak limiter.",
+        )
+        .category("Audio")
+        .param(P::number("limit_db", -1.0).range(-12.0, 0.0).unit("dBFS"))
+        .param(P::number("release_ms", 50.0).range(10.0, 1000.0).unit("ms")),
+        FxDef::new(
             "dissolve",
             FxKind::Transition,
             Domain::Video,

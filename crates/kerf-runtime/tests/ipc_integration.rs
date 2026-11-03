@@ -4,7 +4,8 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    EndpointAddress, RuntimeClient, RuntimeLease, StateSnapshot, MAX_REQUEST_BYTES,
+    Author, CommentPatch, EndpointAddress, NewComment, RuntimeClient, RuntimeLease, StateSnapshot,
+    MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -320,6 +321,91 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
     );
     stop_daemon(restarted);
     let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn comments_are_added_listed_and_set_over_the_socket_without_touching_the_project() {
+    let project = Project::new("comments");
+    let directory = project.0.clone();
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory).unwrap();
+    wait_until_ready(&client);
+    let opened = client.get_state().unwrap();
+    assert_eq!(client.comments().unwrap().items, Vec::new());
+
+    let mut note = NewComment::new(
+        Author {
+            id: Some("mina@example.com".into()),
+            ..Author::new("person", "Mina Park")
+        },
+        "The flare hides the logo",
+    );
+    note.id = Some("c-socket-1".into());
+    note.at = Some(2.0);
+    note.tags = vec!["picture".into()];
+    let (added, log) = client.add_comment("ui", note.clone()).unwrap();
+    assert_eq!(added.id, "c-socket-1");
+    assert_eq!(added.frame, Some(60));
+    assert_eq!(log.items, vec![added.clone()]);
+    // A retry with the same id adds nothing.
+    let (again, log) = client.add_comment("ui", note).unwrap();
+    assert_eq!(again, added);
+    assert_eq!(log.items.len(), 1);
+
+    // An agent's reply arrives from another client, as an MCP note does.
+    let agent = RuntimeClient::new(&directory).unwrap();
+    let mut reply = NewComment::new(
+        Author {
+            role: Some("MCP".into()),
+            ..Author::new("mcp", "Claude Code")
+        },
+        "Masked the flare",
+    );
+    reply.parent = Some(added.id.clone());
+    let (reply, _) = agent.add_comment("mcp", reply).unwrap();
+
+    let (resolved, log) = client
+        .set_comment(
+            "ui",
+            &added.id,
+            CommentPatch {
+                resolved: Some(true),
+                ..CommentPatch::default()
+            },
+        )
+        .unwrap();
+    let resolved = resolved.unwrap();
+    assert!(resolved.resolved);
+    assert_eq!(log.items.len(), 2);
+    let state = client.get_state().unwrap();
+    assert_eq!(state.revision, opened.revision);
+    assert_eq!(state.document, opened.document);
+    assert!(state.review_revision > opened.review_revision);
+    assert_eq!(state.review_revision, log.review_revision);
+
+    let (deleted, log) = client
+        .set_comment(
+            "ui",
+            &reply.id,
+            CommentPatch {
+                deleted: Some(true),
+                ..CommentPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(deleted.is_none());
+    assert_eq!(log.items, vec![resolved.clone()]);
+    let missing = client
+        .set_comment("ui", "c-missing", CommentPatch::default())
+        .unwrap_err();
+    assert_eq!(missing.code, "COMMENT_NOT_FOUND");
+
+    // The log outlives the daemon.
+    stop_daemon(daemon);
+    let restarted = start_daemon(&directory);
+    wait_until_ready(&client);
+    assert_eq!(client.comments().unwrap().items, vec![resolved]);
+    stop_daemon(restarted);
 }
 
 /// `seconds` of 64x36 picture at 24 fps with a tone.

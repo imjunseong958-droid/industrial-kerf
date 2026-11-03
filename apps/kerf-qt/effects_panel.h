@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QHash>
 #include <QJsonArray>
 #include <QWidget>
@@ -19,7 +21,7 @@ namespace kerf {
 // Double-click or Return adds the effect to the clip.
 class EffectsPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     explicit EffectsPanel(QWidget *parent = nullptr);
 

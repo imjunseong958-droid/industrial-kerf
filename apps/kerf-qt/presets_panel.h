@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QJsonObject>
 #include <QWidget>
 
@@ -17,7 +19,7 @@ namespace kerf {
 // program sequence in the library.
 class PresetsPanel final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 
 public:
     explicit PresetsPanel(QWidget *parent = nullptr);

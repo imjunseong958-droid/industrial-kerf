@@ -378,8 +378,12 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
     let context = kerf_mcp::harness::context(router.runtime()).unwrap();
     assert!(context.contains(&format!("Proposal {id}")), "{context}");
 
-    let pending = error(&router, "edit", json!({"script": "trim c1 in +1f"}));
-    assert_eq!(pending["code"], "PROPOSAL_PENDING");
+    // The runtime keeps several proposals open: another edit is a second
+    // proposal beside the first.
+    let second = ok(&router, "edit", json!({"script": "trim c1 in +1f"}));
+    let second = second["proposal"].as_str().unwrap().to_owned();
+    assert_ne!(second, id, "a separate proposal");
+    router.runtime().reject_proposal(&second).unwrap();
     let stale = error(
         &router,
         "edit",

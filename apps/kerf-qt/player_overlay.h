@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_friends.h"
+
 #include <QFont>
 #include <QObject>
 #include <QPointF>
@@ -33,7 +35,7 @@ namespace kerf {
 // a strip of buttons would leave the transport as it is.
 class PlayerOverlay final : public QObject {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     enum class Control { Play, StepBack, StepForward };
     static constexpr int kRowHeight = 44;      // The control row.

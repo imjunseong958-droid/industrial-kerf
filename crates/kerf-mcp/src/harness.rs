@@ -92,8 +92,11 @@ earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, a frame or two of another shot at \
-a clip's edge (from the media's index), and sound cut inside a word (known once \
-a transcript of that media has been made).
+a clip's edge (from the media's index), sound cut inside a word (known once \
+a transcript of that media has been made), titles and captions outside 90% \
+title safe or over each other (with the overlap's rect and depth in pixels), \
+and captions faster than 17 characters a second, up for less than 5/6 of a \
+second, or less than 2 frames after the one before.
 
 Work like an editor. Look at the footage before choosing ranges, and look at \
 the proposal before saying it is done: its preview, its findings, and with \
@@ -980,7 +983,7 @@ impl KerfMcpRouter {
         kerf_engine::render::renderable(project, Some(sequence), &RenderOptions::default())
             .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
-        let identities = used_media(project)
+        let identities = crate::qc::used_media(project)
             .map(|media| {
                 SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
                     McpError::new(
@@ -1309,7 +1312,7 @@ impl KerfMcpRouter {
         let after_program = parse(&after_document)?;
         let mut before_program = before.clone();
         kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
-        let check = check(&after_program, &self.dir);
+        let check = crate::qc::check(&after_program, &self.dir).to_json();
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
@@ -1567,63 +1570,6 @@ fn after(mut errors: Vec<kerf_model::Diagnostic>, lines: usize) -> Vec<kerf_mode
         }
     }
     errors
-}
-
-/// Media that some clip uses.
-fn used_media(project: &Project) -> impl Iterator<Item = &Media> {
-    project.media.iter().filter(|media| {
-        project.sequences.iter().any(|sequence| {
-            sequence.tracks.iter().any(|track| {
-                track.clips.iter().any(|clip| {
-                    matches!(&clip.content, Content::Media { media: id, .. } if *id == media.id)
-                })
-            })
-        })
-    })
-}
-
-/// What stands between a project and its render: media that cannot be
-/// read, features the renderer cannot lower, and the model's warnings;
-/// and what an editor would catch in the cut. `project` has its media paths
-/// resolved; `dir` is the project, whose transcripts show where words are.
-fn check(project: &Project, dir: &Path) -> Value {
-    let mut findings = Vec::new();
-    for media in used_media(project) {
-        if !std::path::Path::new(&media.path).is_file() {
-            findings.push(json!({
-                "severity": "error",
-                "code": "missing_media",
-                "entity": media.id.as_str(),
-                "message": format!("media `{}` is missing: {}", media.id, media.path),
-            }));
-        }
-    }
-    for sequence in &project.sequences {
-        let id = sequence.id.as_str();
-        if let Err(error) =
-            kerf_engine::render::renderable(project, Some(id), &RenderOptions::default())
-        {
-            findings.push(json!({
-                "severity": "error",
-                "code": "unrenderable",
-                "entity": error.entity().unwrap_or(id),
-                "message": error.to_string(),
-            }));
-        }
-    }
-    for warning in kerf_model::validate(project, catalog()) {
-        findings.push(json!({
-            "severity": if warning.is_error() { "error" } else { "warning" },
-            "code": warning.code,
-            "entity": warning.entity.as_ref().map(|id| id.as_str()),
-            "message": warning.message,
-        }));
-    }
-    findings.extend(crate::lint::findings(project, &CachedFacts::new(dir)));
-    let valid = !findings
-        .iter()
-        .any(|finding| finding["severity"] == "error");
-    json!({"valid": valid, "findings": findings})
 }
 
 /// The first sequence that differs between two projects, and the span of

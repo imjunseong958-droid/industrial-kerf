@@ -42,6 +42,17 @@ Commands:
 | `encoders` / `select-encoder` | hardware encoder discovery (`select-encoder` stays opt-in) |
 | `resources` | laptop CPU/encode budget |
 | `proxy-key` / `proxy-args` / `proxy-run` | deterministic proxy cache keys, proxy ffmpeg argv, and proxy transcodes |
+| `probe media-info` | codec, profile, pixel format, bit depth, colour tags, and the camera, lens, reel and timecode tags a file carries |
+| `render --preset standard\|review\|prores_hq` | a program render; `review` is full-size H.264 at 12 Mb/s, `prores_hq` the ProRes 422 HQ master in QuickTime with 24-bit PCM |
+| `loudness` | programme EBU R128 loudness (`loudness::measure_program`): integrated, LRA, true peak per channel, momentary/short-term series every 100 ms |
+| `qc` | the picture QC pass (`qc::picture_qc`): Rec.709 gamut (BRNG), Y′ 64–940, flashing, black |
+
+Loudness mixes the program's sound with the render graph and runs FFmpeg's
+`ebur128` over it; levels with no signal are `-inf` in Rust and `null` in
+JSON. Picture QC draws every frame with the compositor at 360 p, converts it
+to 10-bit 4:2:2 Rec.709 limited range as a master is encoded, and measures it
+with `signalstats` and `blackdetect`. The ProRes master uses
+`prores_videotoolbox` on a Mac where it opens, otherwise `prores_ks` profile 3.
 
 Transcription uses `KERF_WHISPER_BIN` (or `whisper-cli` on `PATH`) and
 `KERF_WHISPER_MODEL`. It prepares mono 16 kHz WAV ranges and stores typed JSON

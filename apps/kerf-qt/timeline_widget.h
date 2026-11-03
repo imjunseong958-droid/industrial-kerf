@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor_common.h"
+#include "test_friends.h"
 
 #include <QHash>
 #include <QImage>
@@ -41,7 +42,7 @@ enum class TimelineTool { Selection, Razor, Ripple, Roll, Slip, Slide };
 
 class TimelineWidget final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     explicit TimelineWidget(QWidget *parent = nullptr);
     void setProject(const QJsonObject &project, double duration, double fps);

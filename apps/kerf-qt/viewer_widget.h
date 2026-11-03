@@ -2,6 +2,7 @@
 
 #include "device_frame.h"
 #include "editor_common.h"
+#include "test_friends.h"
 
 #include <QImage>
 #include <QJsonArray>
@@ -23,7 +24,7 @@ class PlayerOverlay;
 // removes the selected one. Every change leaves as a typed operation.
 class ViewerWidget final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     explicit ViewerWidget(QWidget *parent = nullptr);
     void setFrame(const QImage &frame, double time);

@@ -1250,6 +1250,7 @@ dependencies = [
  "kerf-model",
  "kerf-runtime",
  "kerf-skills",
+ "kerf-text",
  "libc",
  "serde",
  "serde_json",

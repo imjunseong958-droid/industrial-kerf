@@ -2,6 +2,7 @@
 
 #include "editor_common.h"
 #include "inspector_presentation.h"
+#include "test_friends.h"
 
 #include <QAbstractButton>
 #include <QLabel>
@@ -39,7 +40,7 @@ QColor changedValueInk();
 // (`doneEditing`).
 class ScrubField final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr int kHeight = 24;
 
@@ -160,7 +161,7 @@ private:
 // pointer moves, so a stray click or an off-centre grab changes nothing.
 class InspectorSlider final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr double kGrab = 6.0;
     explicit InspectorSlider(QWidget *parent = nullptr);

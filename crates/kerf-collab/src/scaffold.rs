@@ -39,11 +39,14 @@ project.kerf.tmp
 .DS_Store
 ";
 
-/// `project.kerf` merges structurally; media goes through Git LFS when it
-/// was available when the project was made.
+/// `project.kerf` merges structurally, and the review log by keeping both
+/// sides' lines (it is only appended to); media goes through Git LFS when
+/// it was available when the project was made.
 pub fn gitattributes(lfs: bool) -> String {
-    let mut text =
-        String::from("*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n");
+    let mut text = String::from(
+        "*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n\
+         review/*.jsonl merge=union\n",
+    );
     if lfs {
         text.push_str("media/** filter=lfs diff=lfs merge=lfs -text\n");
     }

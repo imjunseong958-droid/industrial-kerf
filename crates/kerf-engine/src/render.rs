@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use kerf_compose::{ComposeOptions, Compositor, Frame};
 use kerf_model::{Rate, Time};
+use serde::{Deserialize, Serialize};
 
 use crate::encoder::{
     encode_output_args, keep_encoders_that_open, parse_encoder_capabilities, select_video_encoder,
@@ -127,6 +128,72 @@ fn hardware_or_software_codec(
     ))
 }
 
+/// How a master converts drawn RGBA: the Rec.709 matrix into limited
+/// range, with the frames tagged so the encoder writes the tags too.
+const MASTER_CONVERT: &str = "scale=out_color_matrix=bt709:out_range=tv,\
+    setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv";
+
+/// The review copy's video bit rate.
+pub const REVIEW_BITRATE: &str = "12M";
+const REVIEW_BUFFER: &str = "24M";
+
+/// What a render's file is for, which decides how it is encoded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RenderPreset {
+    /// [`RenderOptions::codec`] at the resource budget's quality, as
+    /// renders have always been encoded.
+    #[default]
+    #[serde(rename = "standard")]
+    Standard,
+    /// A review copy: full size and rate, H.264 at 12 Mb/s, in MP4.
+    #[serde(rename = "review")]
+    Review,
+    /// The master: Apple ProRes 422 HQ, 10-bit 4:2:2, tagged Rec.709
+    /// limited range, in QuickTime with 24-bit PCM sound.
+    #[serde(rename = "prores_hq")]
+    ProRes422Hq,
+}
+
+impl RenderPreset {
+    pub const ALL: [Self; 3] = [Self::Standard, Self::Review, Self::ProRes422Hq];
+
+    /// `standard`, `review` or `prores_hq`, as the bridge and the runtime
+    /// name them.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Review => "review",
+            Self::ProRes422Hq => "prores_hq",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "standard" => Some(Self::Standard),
+            "review" => Some(Self::Review),
+            "prores_hq" | "prores" | "prores_422_hq" | "prores422hq" => Some(Self::ProRes422Hq),
+            _ => None,
+        }
+    }
+
+    /// The file extension the preset's container takes.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Standard | Self::Review => "mp4",
+            Self::ProRes422Hq => "mov",
+        }
+    }
+
+    /// A short description for a render queue: `ProRes 422 HQ`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Standard => "H.264",
+            Self::Review => "H.264 review",
+            Self::ProRes422Hq => "ProRes 422 HQ",
+        }
+    }
+}
+
 /// How to encode a rendered program.
 #[derive(Debug, Clone)]
 pub struct RenderOptions {
@@ -143,6 +210,9 @@ pub struct RenderOptions {
     /// Draw the picture with the FFmpeg graph, as renders did before the
     /// compositor. Kept for one release.
     pub graph: bool,
+    /// What the file is for. A draft has its own encoding and takes only
+    /// [`RenderPreset::Standard`].
+    pub preset: RenderPreset,
 }
 
 impl Default for RenderOptions {
@@ -155,8 +225,193 @@ impl Default for RenderOptions {
             codec: VideoCodec::H264,
             project_dir: None,
             graph: false,
+            preset: RenderPreset::Standard,
         }
     }
+}
+
+/// How a render's output is encoded: the video codec arguments, the pixel
+/// format, a conversion the picture needs first, and the sound, container
+/// and colour tag arguments that follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Encoding {
+    video: Vec<String>,
+    pix_fmt: &'static str,
+    /// A filter that converts drawn RGBA frames the way the codec needs.
+    convert: Option<&'static str>,
+    output: Vec<String>,
+}
+
+fn encoding(opts: &RenderOptions) -> Result<Encoding> {
+    let plain = |video| Encoding {
+        video,
+        pix_fmt: "yuv420p",
+        convert: None,
+        output: Vec::new(),
+    };
+    if opts.draft {
+        if opts.preset != RenderPreset::Standard {
+            return Err(EngineError::msg(format!(
+                "a draft render has its own encoding; it cannot be a {} render",
+                opts.preset.label()
+            )));
+        }
+        return Ok(plain(draft_codec_args()));
+    }
+    match opts.preset {
+        RenderPreset::Standard => Ok(plain(hardware_or_software_codec(
+            opts.prefer_hardware,
+            opts.force_software,
+            opts.codec,
+        )?)),
+        RenderPreset::Review => {
+            let mut encoding = plain(review_codec_args(
+                opts.prefer_hardware,
+                opts.force_software,
+            )?);
+            encoding.output = ["-c:a", "aac", "-b:a", "320k", "-movflags", "+faststart"]
+                .map(String::from)
+                .into();
+            Ok(encoding)
+        }
+        RenderPreset::ProRes422Hq => {
+            let (video, pix_fmt) = prores_hq_args(opts.prefer_hardware, opts.force_software);
+            let mut output: Vec<String> = [
+                "-c:a",
+                "pcm_s24le",
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
+                "-color_range",
+                "tv",
+                // The ProRes frame headers carry the tags too, whichever
+                // way the picture was drawn.
+                "-bsf:v",
+                "prores_metadata=color_primaries=bt709:color_trc=bt709:colorspace=bt709",
+                "-f",
+                "mov",
+            ]
+            .map(String::from)
+            .into();
+            if pix_fmt == "yuv422p10le" {
+                // prores_ks tags the file as Apple's encoder does.
+                output.splice(0..0, ["-vendor".to_owned(), "apl0".to_owned()]);
+            }
+            Ok(Encoding {
+                video,
+                pix_fmt,
+                convert: Some(MASTER_CONVERT),
+                output,
+            })
+        }
+    }
+}
+
+/// H.264 at [`REVIEW_BITRATE`], on a hardware encoder when the budget
+/// allows one and it opens.
+fn review_codec_args(prefer_hardware: bool, force_software: bool) -> Result<Vec<String>> {
+    let budget = budget();
+    let selection = if should_try_hardware_encode(prefer_hardware, force_software) {
+        detect_and_select_encoder(&SelectEncoderOptions {
+            prefer_hardware: true,
+            codec: VideoCodec::H264,
+            ..Default::default()
+        })?
+    } else {
+        select_video_encoder(&[], &SelectEncoderOptions::default())
+    };
+    let mut args = crate::encoder::encoder_args(&selection);
+    args.extend(
+        [
+            "-b:v",
+            REVIEW_BITRATE,
+            "-maxrate",
+            REVIEW_BITRATE,
+            "-bufsize",
+            REVIEW_BUFFER,
+        ]
+        .map(String::from),
+    );
+    if !selection.hardware {
+        args.extend(["-preset".to_owned(), budget.software_preset.to_owned()]);
+    }
+    Ok(args)
+}
+
+/// ProRes 422 HQ: Apple's VideoToolbox encoder on a Mac when the budget
+/// allows hardware and it opens here, otherwise FFmpeg's `prores_ks`
+/// profile 3. The video arguments and the pixel format each takes.
+fn prores_hq_args(prefer_hardware: bool, force_software: bool) -> (Vec<String>, &'static str) {
+    if cfg!(target_os = "macos")
+        && should_try_hardware_encode(prefer_hardware, force_software)
+        && prores_videotoolbox_opens()
+    {
+        return (
+            ["-c:v", "prores_videotoolbox", "-profile:v", "hq"]
+                .map(String::from)
+                .into(),
+            "p210le",
+        );
+    }
+    (
+        ["-c:v", "prores_ks", "-profile:v", "3"]
+            .map(String::from)
+            .into(),
+        "yuv422p10le",
+    )
+}
+
+/// Whether `prores_videotoolbox` is listed and encodes a 10-bit 4:2:2
+/// frame. Tried once per process: a sandbox or a busy media engine can
+/// refuse a compression session.
+fn prores_videotoolbox_opens() -> bool {
+    static OPENS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OPENS.get_or_init(|| {
+        let listed = cached_encoder_listing().is_ok_and(|listing| {
+            listing.lines().any(|line| {
+                line.split_whitespace()
+                    .any(|token| token == "prores_videotoolbox")
+            })
+        });
+        listed
+            && run_allow_failure(
+                resolve_ffmpeg_bin(),
+                &[
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=black:s=256x144:r=24",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "prores_videotoolbox",
+                    "-profile:v",
+                    "hq",
+                    "-pix_fmt",
+                    "p210le",
+                    "-f",
+                    "null",
+                    "-",
+                ]
+                .map(String::from),
+            )
+            .is_ok_and(|output| output.code == 0)
+    })
+}
+
+/// Whether the encoder `name` is in this FFmpeg's `-encoders` listing.
+pub fn encoder_available(name: &str) -> bool {
+    cached_encoder_listing().is_ok_and(|listing| {
+        listing
+            .lines()
+            .any(|line| line.split_whitespace().any(|token| token == name))
+    })
 }
 
 /// Whether a render draws the picture with the graph.
@@ -221,13 +476,15 @@ pub fn render_program_args(
             ..ProgramOptions::default()
         },
     )?;
+    let encoding = encoding(opts)?;
     let mut args = crate::ffmpeg::program_decode_prefix(&compiled.argv);
     args.extend(compiled.argv.iter().skip(1).cloned());
-    args.extend(if opts.draft {
-        draft_codec_args()
-    } else {
-        hardware_or_software_codec(opts.prefer_hardware, opts.force_software, opts.codec)?
-    });
+    args.extend(encoding.video);
+    if encoding.pix_fmt != "yuv420p" {
+        // The graph finishes in 4:2:0; the codec needs its own format.
+        args.extend(["-pix_fmt".into(), encoding.pix_fmt.into()]);
+    }
+    args.extend(encoding.output);
     args.extend([
         "-r".into(),
         compiled.rate_arg(),
@@ -359,21 +616,20 @@ fn composited_render(
         ],
     );
     args.extend(["-map".to_owned(), format!("{picture}:v")]);
-    args.extend(if opts.draft {
-        draft_codec_args()
-    } else {
-        hardware_or_software_codec(opts.prefer_hardware, opts.force_software, opts.codec)?
-    });
+    let encoding = encoding(opts)?;
+    args.extend(encoding.video);
+    let mut filters = Vec::new();
     if size.0 % 2 == 1 || size.1 % 2 == 1 {
         // 4:2:0 needs even sides.
-        args.extend([
-            "-vf".to_owned(),
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2".to_owned(),
-        ]);
+        filters.push("scale=trunc(iw/2)*2:trunc(ih/2)*2");
     }
+    filters.extend(encoding.convert);
+    if !filters.is_empty() {
+        args.extend(["-vf".to_owned(), filters.join(",")]);
+    }
+    args.extend(["-pix_fmt".to_owned(), encoding.pix_fmt.to_owned()]);
+    args.extend(encoding.output);
     args.extend([
-        "-pix_fmt".to_owned(),
-        "yuv420p".to_owned(),
         "-r".to_owned(),
         crate::program::rate_arg(rate),
         "-t".to_owned(),
@@ -468,7 +724,7 @@ where
 
 /// Draw `count` frames on `threads` threads, handing them to `write` in
 /// order. Drawing stays at most a few frames ahead of writing.
-fn draw_in_order(
+pub(crate) fn draw_in_order(
     count: usize,
     threads: usize,
     draw: impl Fn(usize) -> Frame + Sync,
@@ -777,6 +1033,109 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| pair[0] == "-t" && pair[1] == "3"));
+    }
+
+    /// The value of the last `name` flag: output options follow the inputs'.
+    fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+        args.windows(2)
+            .rfind(|pair| pair[0] == name)
+            .map(|pair| pair[1].as_str())
+    }
+
+    #[test]
+    fn the_master_is_prores_hq_in_quicktime_with_24_bit_pcm() {
+        let opts = RenderOptions {
+            output: "master.mov".into(),
+            force_software: true,
+            preset: RenderPreset::ProRes422Hq,
+            ..RenderOptions::default()
+        };
+        let render = composited_render(&project(), None, None, &opts, (161, 120)).expect("render");
+        let args = &render.args;
+        assert_eq!(flag(args, "-c:v"), Some("prores_ks"));
+        assert_eq!(flag(args, "-profile:v"), Some("3"));
+        assert_eq!(flag(args, "-vendor"), Some("apl0"));
+        assert_eq!(flag(args, "-pix_fmt"), Some("yuv422p10le"));
+        assert_eq!(flag(args, "-c:a"), Some("pcm_s24le"));
+        assert_eq!(flag(args, "-f"), Some("mov"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-f" && pair[1] == "rawvideo"));
+        assert_eq!(flag(args, "-colorspace"), Some("bt709"));
+        assert_eq!(flag(args, "-color_range"), Some("tv"));
+        assert_eq!(
+            flag(args, "-vf"),
+            Some(format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,{MASTER_CONVERT}").as_str())
+        );
+        assert!(!args.iter().any(|arg| arg == "yuv420p"));
+        assert_eq!(args.last().map(String::as_str), Some("master.mov"));
+
+        // The graph finishes in 4:2:0, so the master converts it.
+        let (args, _) = render_program_args(&project(), None, None, &opts).expect("args");
+        assert_eq!(flag(&args, "-c:v"), Some("prores_ks"));
+        assert_eq!(flag(&args, "-pix_fmt"), Some("yuv422p10le"));
+        assert_eq!(flag(&args, "-c:a"), Some("pcm_s24le"));
+    }
+
+    #[test]
+    fn the_review_copy_is_full_size_h264_at_12_mbps() {
+        let opts = RenderOptions {
+            output: "review.mp4".into(),
+            force_software: true,
+            preset: RenderPreset::Review,
+            ..RenderOptions::default()
+        };
+        let render =
+            composited_render(&project(), None, None, &opts, (1920, 1080)).expect("render");
+        assert_eq!((render.size, render.scale), ((1920, 1080), 1.0));
+        assert_eq!(render.times.len(), 240, "the sequence's own rate");
+        let args = &render.args;
+        assert_eq!(flag(args, "-c:v"), Some("libx264"));
+        assert_eq!(flag(args, "-b:v"), Some("12M"));
+        assert_eq!(flag(args, "-maxrate"), Some("12M"));
+        assert_eq!(flag(args, "-pix_fmt"), Some("yuv420p"));
+        assert!(!args.iter().any(|arg| arg == "-crf"));
+    }
+
+    #[test]
+    fn standard_renders_are_unchanged_and_drafts_refuse_other_presets() {
+        let standard = RenderOptions {
+            output: "out.mp4".into(),
+            force_software: true,
+            ..RenderOptions::default()
+        };
+        let render =
+            composited_render(&project(), None, None, &standard, (160, 120)).expect("render");
+        assert!(!render.args.iter().any(|arg| arg == "-c:a" || arg == "-vf"));
+        assert_eq!(flag(&render.args, "-pix_fmt"), Some("yuv420p"));
+
+        let draft = RenderOptions {
+            output: "out.mov".into(),
+            draft: true,
+            preset: RenderPreset::ProRes422Hq,
+            ..RenderOptions::default()
+        };
+        assert!(composited_render(&project(), None, None, &draft, (160, 120)).is_err());
+        assert!(render_program_args(&project(), None, None, &draft).is_err());
+    }
+
+    #[test]
+    fn presets_have_names_extensions_and_serde_names() {
+        for preset in RenderPreset::ALL {
+            assert_eq!(RenderPreset::parse(preset.as_str()), Some(preset));
+            assert_eq!(
+                serde_json::to_value(preset).expect("serializes"),
+                preset.as_str()
+            );
+        }
+        assert_eq!(
+            RenderPreset::parse("ProRes_HQ"),
+            Some(RenderPreset::ProRes422Hq)
+        );
+        assert_eq!(RenderPreset::parse("dnxhd"), None);
+        assert_eq!(RenderPreset::ProRes422Hq.extension(), "mov");
+        assert_eq!(RenderPreset::Review.extension(), "mp4");
+        assert_eq!(RenderPreset::default(), RenderPreset::Standard);
     }
 
     #[test]

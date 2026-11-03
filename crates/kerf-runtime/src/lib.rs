@@ -18,6 +18,7 @@ mod kernel;
 #[cfg(windows)]
 mod named_pipe;
 mod render;
+pub mod review;
 mod runtime;
 mod store;
 mod timeline;
@@ -28,7 +29,8 @@ pub use ipc::{
 };
 pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, EditOp, MaskOutline, TrimSide};
 pub use render::{render_cancel_path, run_render_job};
-pub use timeline::fx_catalog_json;
+pub use review::{Author, Comment, CommentPatch, NewComment, ReviewLog, Stroke};
+pub use timeline::{fx_catalog_all_json, fx_catalog_json};
 
 use kerf_model::Project;
 use runtime::runtime_actor;
@@ -53,8 +55,14 @@ fn default_projection_status() -> String {
     "current".into()
 }
 
+/// The most proposals kept at once, open and settled together.
+pub const MAX_PROPOSALS: usize = 8;
+
 /// What clients see of the runtime. `document` is the canonical `.kerf`
 /// text and `timeline` a JSON view of its first sequence for editors.
+///
+/// The fields after `import_warnings` are left out while empty, so the
+/// receipts older journals keep still read back byte for byte.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
@@ -73,6 +81,66 @@ pub struct StateSnapshot {
     /// What opening the project changed or left behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_warnings: Vec<String>,
+    /// Every proposal the runtime keeps, newest first: the open ones and
+    /// the last few settled. `pending_proposal` is the first open one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposals: Vec<ProposalEntry>,
+    /// Changes whenever the review log does, here or on disk.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub review_revision: u64,
+    /// When the current revision was made, RFC 3339; absent for a project
+    /// last edited by a kerfd that did not record it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_time: Option<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// One version of a proposal: v1, and each `revise` after it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalVersion {
+    pub version: u32,
+    pub proposal_id: String,
+    pub base_revision: u64,
+    pub script: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    pub document_diff: String,
+}
+
+/// A proposal as clients list it: its lifecycle, who made it, and its
+/// versions. A settled one keeps the script and diff of the version that
+/// was accepted or rejected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalEntry {
+    /// The current version's id; for an accepted proposal, the version
+    /// accepted.
+    pub proposal_id: String,
+    /// `pending`, `accepted` or `rejected`.
+    pub status: String,
+    pub freshness: ProposalFreshness,
+    pub base_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_revision: Option<u64>,
+    pub script: String,
+    #[serde(default)]
+    pub source: String,
+    pub document_diff: String,
+    pub author: Author,
+    pub version: u32,
+    /// The proposal id this version replaced.
+    #[serde(default)]
+    pub supersedes: Option<String>,
+    /// Every version, oldest first, the current one included.
+    #[serde(default)]
+    pub versions: Vec<ProposalVersion>,
+    /// When the current version was staged, RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<String>,
 }
 
 /// Whether a pending proposal still targets the canonical project revision.
@@ -276,6 +344,28 @@ pub enum RuntimeRequest {
         /// extension runs the operations of the proposal it extends.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
+        /// Who proposes it; Kerf when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author: Option<Author>,
+        /// The open proposal this one replaces as its next version.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revises: Option<String>,
+    },
+    /// The review log's comments.
+    ListComments,
+    /// Add a comment to the review log. It never changes the project.
+    AddComment {
+        actor: String,
+        comment: NewComment,
+    },
+    /// Resolve, reopen, edit, tag or delete a comment. The comment's id is
+    /// `commentId` on the wire, as `id` names the request.
+    SetComment {
+        #[serde(default = "default_comment_actor")]
+        actor: String,
+        #[serde(rename = "commentId")]
+        id: String,
+        patch: CommentPatch,
     },
     Undo {
         actor: String,
@@ -519,6 +609,12 @@ pub enum RuntimeResponse {
         output: PathBuf,
     },
     RenderJob(RenderJob),
+    /// The review log after a comment request, with the comment it added
+    /// or changed (none once deleted, or for a listing).
+    Comments {
+        log: ReviewLog,
+        comment: Option<Comment>,
+    },
     /// A git operation and the state after it: what was committed, merged,
     /// or switched, as `kerf_collab` reports it.
     Collab {
@@ -588,6 +684,10 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
             "actor must be ui, agent, mcp, or system",
         ))
     }
+}
+
+fn default_comment_actor() -> String {
+    "ui".into()
 }
 
 fn io_error(error: std::io::Error) -> RuntimeError {
