@@ -80,10 +80,10 @@ QString timelineTimecode(double seconds, double fps);
 // The ruler's ticks (mockup-spec 7.3): a minor tick every `minorFrames`,
 // a major one every `majorFrames` (five minor), a label every `labelFrames`
 // (ten minor). At the design's 25p and 26.8 pt/s that is 10, 50 and 100
-// frames. Minor ticks stand at least 8 pt apart. Labels under a second apart
-// step 1, 2, 5, 10, 20, 50 ... frames tenfold; a second or more apart, they
-// land on whole seconds (1, 2, 4, 8, 15, 30, 60 ...) at any rate, so 24p reads
-// 00:04 with ticks every 12 frames.
+// frames. Minor ticks stand at least 8 pt apart. Labels land on whole seconds
+// (1, 2, 4, 8, 15, 30, 60 ...) at any rate and zoom, so 24p reads 00:04 with
+// ticks every 12 frames. Past one label a second, only the ticks get finer,
+// down to one a frame.
 struct RulerTicks {
     qint64 minorFrames = 10;
     qint64 majorFrames = 50;
@@ -91,9 +91,8 @@ struct RulerTicks {
 };
 RulerTicks rulerTicks(double pixelsPerSecond, double fps);
 // A ruler label for `frame`: minutes and seconds ("00:04"), with hours in
-// front from an hour on, and the frame after them ("00:04:04") when labels
-// do not fall on whole seconds.
-QString rulerLabel(qint64 frame, double fps, qint64 labelFrames);
+// front from an hour on.
+QString rulerLabel(qint64 frame, double fps);
 
 QString clipName(const QJsonObject &clip);
 
