@@ -57,6 +57,10 @@ public:
     // A control at the end of the strip (the sheet's close button).
     void addToStrip(QWidget *widget);
 
+    // The keys the tips name: the registry's window.inspector and
+    // inspector.video, .audio and .info.
+    void setKeys(const QString &inspector, const QString &video, const QString &audio, const QString &info);
+
 signals:
     void pageChanged(InspectorColumn::Page page);
     void kindChanged(InspectorColumn::Kind kind);

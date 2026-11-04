@@ -30,6 +30,7 @@
 #include <QColor>
 #include <QElapsedTimer>
 #include <QFont>
+#include <QKeySequence>
 #include <QList>
 #include <QMargins>
 #include <QPointer>
@@ -91,6 +92,9 @@ QMargins shadowMargins(const tokens::Shadow &shadow = tokens::pop);
 void setTip(QWidget *widget, const QString &name, const QString &shortcut = {});
 QString tipName(const QWidget *widget);
 QString tipShortcut(const QWidget *widget);
+// `keys` as a tip or menu shows them on this platform: ⌘↩ on a Mac, Ctrl+Return
+// elsewhere.
+QString keyText(const QKeySequence &keys);
 
 class TooltipManager final : public QObject {
     Q_OBJECT

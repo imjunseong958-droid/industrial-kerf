@@ -364,7 +364,8 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     connect(m_reject, &QAbstractButton::clicked, this, [this] { emit rejectRequested(shownId()); });
     footer->addWidget(m_reject);
     m_accept = new ui::Button(QStringLiteral("Accept"), ui::Button::Kind::Secondary);
-    m_accept->setTip(QStringLiteral("Accept"), QStringLiteral("⌘↩"));
+    m_acceptKey = ui::keyText(QKeySequence(Qt::CTRL | Qt::Key_Return));
+    m_accept->setTip(m_acceptTip, m_acceptKey);
     connect(m_accept, &QAbstractButton::clicked, this, [this] { emit acceptRequested(shownId()); });
     footer->addWidget(m_accept);
     m_layout->addWidget(m_footer);
@@ -496,7 +497,15 @@ bool ProposalCard::previewOn() const { return m_preview->isChecked(); }
 
 void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
 
-void ProposalCard::setAcceptTip(const QString &tip) { m_accept->setTip(tip, QStringLiteral("⌘↩")); }
+void ProposalCard::setAcceptTip(const QString &tip) {
+    m_acceptTip = tip;
+    if (!m_acceptBlocked) m_accept->setTip(m_acceptTip, m_acceptKey);
+}
+
+void ProposalCard::setAcceptKey(const QString &key) {
+    m_acceptKey = key;
+    if (!m_acceptBlocked) m_accept->setTip(m_acceptTip, m_acceptKey);
+}
 
 void ProposalCard::setGuest(bool guest) {
     m_guest = guest;
@@ -505,7 +514,9 @@ void ProposalCard::setGuest(bool guest) {
 
 void ProposalCard::setAcceptBlocked(const QString &reason) {
     m_accept->setEnabled(reason.isEmpty());
-    if (!reason.isEmpty()) m_accept->setTip(reason);
+    m_acceptBlocked = !reason.isEmpty();
+    if (m_acceptBlocked) m_accept->setTip(reason);
+    else m_accept->setTip(m_acceptTip, m_acceptKey);
 }
 
 void ProposalCard::setActionsEnabled(bool enabled) {

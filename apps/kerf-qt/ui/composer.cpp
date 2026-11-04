@@ -72,7 +72,7 @@ SendButton::SendButton(Mode mode, QWidget *parent) : QPushButton(parent), m_mode
     // The app's push-button sheet has no say over how it looks.
     setStyleSheet(QStringLiteral("QPushButton { border: 0; background: transparent; padding: 0; min-width: 0; }"));
     if (mode == Mode::Send) {
-        ui::setTip(this, QStringLiteral("Send"), QStringLiteral("↩"));
+        ui::setTip(this, QStringLiteral("Send"), ui::keyText(QKeySequence(Qt::Key_Return)));
         setAccessibleName(QStringLiteral("Send"));
     } else {
         ui::setTip(this, QStringLiteral("Stop"), QStringLiteral("Esc"));

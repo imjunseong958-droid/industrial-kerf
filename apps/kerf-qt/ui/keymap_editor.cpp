@@ -189,7 +189,7 @@ void KeymapCustomiser::load() {
         entry.where = whereOf(command);
         entry.scope = command.value(QStringLiteral("scope")).toString().toLower();
         for (const QJsonValue &key : keys) {
-            const QKeySequence sequence = QKeySequence::fromString(key.toString(), QKeySequence::PortableText);
+            const QKeySequence sequence = CommandRegistry::keymapKey(key.toString());
             if (!sequence.isEmpty()) entry.defaults << sequence;
         }
         m_index.insert(id, int(m_commands.size()));

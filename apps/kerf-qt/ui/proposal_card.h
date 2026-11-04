@@ -131,6 +131,8 @@ public:
     // Accept is primary for the pinned or blocking proposal, else secondary.
     void setPrimary(bool primary);
     void setAcceptTip(const QString &tip);
+    // The key Accept's tip names: proposal.accept's, ⌘↩ until told otherwise.
+    void setAcceptKey(const QString &key);
     // Guest mode: the buttons give way to "Waiting for the editor".
     void setGuest(bool guest);
     // Accept refused (stale, offline): disabled with the reason as its tip.
@@ -211,6 +213,9 @@ private:
     QLabel *m_wait = nullptr;
     ui::Button *m_reject = nullptr;
     ui::Button *m_accept = nullptr;
+    QString m_acceptTip = QStringLiteral("Accept");
+    QString m_acceptKey;
+    bool m_acceptBlocked = false;
     QLabel *m_settledLabel = nullptr;
 };
 

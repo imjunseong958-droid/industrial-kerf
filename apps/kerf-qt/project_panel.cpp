@@ -409,7 +409,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     m_viewButton->setObjectName(QStringLiteral("binViewButton"));
     m_importButton = new ui::IconButton(QStringLiteral("g-import"));
     m_importButton->setObjectName(QStringLiteral("binImportButton"));
-    m_importButton->setTip(QStringLiteral("Import media"), QStringLiteral("⌘I"));
+    m_importButton->setTip(QStringLiteral("Import media"));
     for (ui::IconButton *button : {m_searchButton, m_viewButton, m_importButton}) stripLayout->addWidget(button);
     layout->addWidget(strip);
     connect(m_searchButton, &QAbstractButton::clicked, this, [this](bool on) {

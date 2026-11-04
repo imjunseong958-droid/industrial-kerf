@@ -51,7 +51,7 @@ constexpr ButtonSpec kButtons[] = {
     {"source.nextFrame", "Next frame", "→"},
     {"source.insert", "Insert", ","},
     {"source.overwrite", "Overwrite", "."},
-    {"source.clearMarks", "Clear in and out", "⇧⌘X"},
+    {"source.clearMarks", "Clear in and out", ""},
 };
 const QStringList kTransportIds{QStringLiteral("source.markIn"), QStringLiteral("source.markOut"),
                                 QStringLiteral("source.previousFrame"), QStringLiteral("source.play"),

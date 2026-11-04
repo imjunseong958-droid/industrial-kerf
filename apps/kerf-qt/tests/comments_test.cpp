@@ -581,7 +581,28 @@ private slots:
         QCOMPARE(logo->versions().at(0).label, QStringLiteral("v1 00:00:25:21 · −7 fr"));
         QCOMPARE(logo->acceptButton()->kind(), ui::Button::Kind::Primary);
         QCOMPARE(ui::tipName(logo->acceptButton()), QStringLiteral("Accept · resolves Mina's note"));
+        QCOMPARE(ui::tipShortcut(logo->acceptButton()), ui::keyText(QKeySequence(Qt::CTRL | Qt::Key_Return)));
+#ifdef Q_OS_MACOS
         QCOMPARE(ui::tipShortcut(logo->acceptButton()), QStringLiteral("⌘↩"));
+#endif
+        {
+            // The tip names proposal.accept's key and follows it, except while
+            // Accept is refused, when the tip is the reason.
+            const QString tip = ui::tipName(logo->acceptButton());
+            const QString key = ui::tipShortcut(logo->acceptButton());
+            QAction accept;
+            accept.setShortcut(Qt::Key_F9);
+            panel.setAcceptAction(&accept);
+            QCOMPARE(ui::tipShortcut(logo->acceptButton()), QKeySequence(Qt::Key_F9).toString(QKeySequence::NativeText));
+            logo->setAcceptBlocked(QStringLiteral("Out of date"));
+            accept.setShortcut(Qt::Key_F8);
+            QCOMPARE(ui::tipName(logo->acceptButton()), QStringLiteral("Out of date"));
+            QVERIFY(ui::tipShortcut(logo->acceptButton()).isEmpty());
+            logo->setAcceptBlocked(QString());
+            QCOMPARE(ui::tipName(logo->acceptButton()), tip);
+            QCOMPARE(ui::tipShortcut(logo->acceptButton()), QKeySequence(Qt::Key_F8).toString(QKeySequence::NativeText));
+            logo->setAcceptKey(key);
+        }
         QCOMPARE(sea->acceptButton()->kind(), ui::Button::Kind::Secondary);
         // The card sits under Claude Code's first reply, across the thread.
         CommentRow *carrier = panel.rowFor("c-2614-r1");

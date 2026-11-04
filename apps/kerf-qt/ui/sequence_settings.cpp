@@ -312,7 +312,7 @@ SequenceSettingsDialog::SequenceSettingsDialog(const QJsonObject &timeline, QWid
     m_apply = new ui::Button(QStringLiteral("Apply"), ui::Button::Kind::Primary);
     m_apply->setObjectName(QStringLiteral("sequenceSettingsApply"));
     m_cancel->setTip(QStringLiteral("Close without changing the sequence"), QStringLiteral("Esc"));
-    m_apply->setTip(QStringLiteral("Change the sequence"), QStringLiteral("↩"));
+    m_apply->setTip(QStringLiteral("Change the sequence"), ui::keyText(QKeySequence(Qt::Key_Return)));
     buttons->addWidget(m_cancel);
     buttons->addWidget(m_apply);
     layout->addLayout(buttons);
@@ -428,7 +428,7 @@ void SequenceSettingsDialog::syncApply() {
     m_apply->setEnabled(problem.isEmpty());
     m_apply->setTip(problem.isEmpty() ? (change.isEmpty() ? QStringLiteral("Nothing changed") : QStringLiteral("Change the sequence"))
                                       : problem,
-                    QStringLiteral("↩"));
+                    ui::keyText(QKeySequence(Qt::Key_Return)));
 }
 
 void SequenceSettingsDialog::apply() {

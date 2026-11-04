@@ -58,7 +58,7 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     stripLayout->setSpacing(tokens::space::s4);
     m_pages = new ui::SegmentedControl;
     m_pages->setObjectName(QStringLiteral("inspectorPages"));
-    m_pages->addSegment(QStringLiteral("Inspector"), QStringLiteral("Inspector"), QStringLiteral("⌘4"));
+    m_pages->addSegment(QStringLiteral("Inspector"), QStringLiteral("Inspector"));
     m_pages->addSegment(QStringLiteral("Source"), QStringLiteral("Source"));
     m_pages->setCurrentIndex(0, false);
     stripLayout->addWidget(m_pages);
@@ -66,9 +66,9 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     m_kinds = new ui::SegmentedControl;
     m_kinds->setObjectName(QStringLiteral("inspectorKinds"));
     m_kinds->setIconSegmentWidth(20);
-    m_kinds->addIconSegment(QStringLiteral("g-video"), QStringLiteral("Video"), QStringLiteral("⌃⌥4"));
-    m_kinds->addIconSegment(QStringLiteral("g-audio"), QStringLiteral("Audio"), QStringLiteral("⌃⌥5"));
-    m_kinds->addIconSegment(QStringLiteral("g-info"), QStringLiteral("Info"), QStringLiteral("⌃⌥6"));
+    m_kinds->addIconSegment(QStringLiteral("g-video"), QStringLiteral("Video"));
+    m_kinds->addIconSegment(QStringLiteral("g-audio"), QStringLiteral("Audio"));
+    m_kinds->addIconSegment(QStringLiteral("g-info"), QStringLiteral("Info"));
     m_kinds->setCurrentIndex(0, false);
     const char *names[] = {"Video", "Audio", "Info"};
     for (int index = 0; index < 3; ++index) {
@@ -189,6 +189,13 @@ QAbstractButton *InspectorColumn::kindButton(Kind kind) const {
 
 QWidget *InspectorColumn::currentPage() const {
     return m_stack->currentWidget();
+}
+
+void InspectorColumn::setKeys(const QString &inspector, const QString &video, const QString &audio, const QString &info) {
+    m_pages->setSegmentTip(0, QStringLiteral("Inspector"), inspector);
+    m_kinds->setSegmentTip(0, QStringLiteral("Video"), video);
+    m_kinds->setSegmentTip(1, QStringLiteral("Audio"), audio);
+    m_kinds->setSegmentTip(2, QStringLiteral("Info"), info);
 }
 
 void InspectorColumn::showCurrent() {

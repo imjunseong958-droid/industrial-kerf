@@ -64,6 +64,8 @@ class InspectorPanel final : public QWidget {
     KERF_TEST_FRIENDS
 public:
     enum class Pane { Video, Audio, Info };
+    // The registry's ai.ask: the ⋯ menu's Ask row names its key.
+    void setAskAction(QAction *action);
 
     // What one selected clip is, from the snapshot.
     struct Clip {
@@ -241,6 +243,7 @@ private:
     // The clip header.
     void buildHeader();
     void refreshHeader();
+    QString askKey() const;
     void refreshFooter();
     void updateFade();
 
@@ -351,6 +354,7 @@ private:
     bool m_silent = false;
     double m_playhead = 0.0;
     QPointer<MediaArtwork> m_artwork;
+    QPointer<QAction> m_askAction;
     QImage m_programFrame;
     QHash<QString, QJsonObject> m_effectDefs;
     QStringList m_pictureTracks;

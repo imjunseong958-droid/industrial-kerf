@@ -54,6 +54,18 @@ void InspectorWiring::attachCommands() {
     m_commandsAttached = true;
     // ⌃⌥4 is the window's (inspector.video); ⌃⌥5 and ⌃⌥6 choose the
     // Audio and Info panes the same way, once kerf-commands enables them.
+    const auto followKeys = [this] {
+        CommandRegistry *commands = m_window->m_commands;
+        const auto key = [commands](const char *id) {
+            QAction *action = commands->action(QString::fromLatin1(id));
+            return action ? action->shortcut().toString(QKeySequence::NativeText) : QString();
+        };
+        if (InspectorColumn *column = m_window->m_inspectorColumn)
+            column->setKeys(key("window.inspector"), key("inspector.video"), key("inspector.audio"), key("inspector.info"));
+        if (m_window->m_inspector) m_window->m_inspector->setAskAction(commands->action(QStringLiteral("ai.ask")));
+    };
+    connect(m_window->m_commands, &CommandRegistry::shortcutsChanged, this, followKeys);
+    followKeys();
     connect(m_window->m_commands, &CommandRegistry::toggled, this, [this](const QString &id, bool) {
         if (id != QStringLiteral("inspector.audio") && id != QStringLiteral("inspector.info")) return;
         InspectorColumn *column = m_window->m_inspectorColumn;

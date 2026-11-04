@@ -990,8 +990,19 @@ void InspectorPanel::buildHeader() {
     m_moreMenu = new QMenu(this);
     m_moreMenu->setObjectName(QStringLiteral("inspectorMoreMenu"));
     ui::styleMenu(m_moreMenu);
-    connect(m_more, &QAbstractButton::clicked, this, [this] { ui::popupMenu(m_moreMenu, m_more); });
+    connect(m_more, &QAbstractButton::clicked, this, [this] {
+        // Ask's key as it stands now: a keymap may have moved it.
+        for (QAction *action : m_moreMenu->actions())
+            if (action->objectName() == QStringLiteral("inspectorAsk")) ui::setMenuKey(action, askKey());
+        ui::popupMenu(m_moreMenu, m_more);
+    });
     layout->addWidget(m_more, 0, Qt::AlignTop);
+}
+
+void InspectorPanel::setAskAction(QAction *action) { m_askAction = action; }
+
+QString InspectorPanel::askKey() const {
+    return m_askAction ? m_askAction->shortcut().toString(QKeySequence::NativeText) : QString();
 }
 
 void InspectorPanel::refreshHeader() {
@@ -1009,7 +1020,7 @@ void InspectorPanel::refreshHeader() {
     const auto ask = [this](const QString &label, const QString &subject) {
         QAction *action = m_moreMenu->addAction(label, this, [this, subject] { askAbout(subject); });
         action->setObjectName(QStringLiteral("inspectorAsk"));
-        ui::setMenuKey(action, QStringLiteral("⌘J"));
+        ui::setMenuKey(action, askKey());
     };
     if (m_mode == Mode::Sequence) {
         QString name;
@@ -1078,7 +1089,6 @@ void InspectorPanel::refreshHeader() {
                 emit revealRequested(m_clips.first().clip.value(QStringLiteral("sourceId")).toString());
             });
             reveal->setObjectName(QStringLiteral("inspectorReveal"));
-            ui::setMenuKey(reveal, QStringLiteral("⇧F"));
         }
     } else {
         m_name->setName(QStringLiteral("%1 clips").arg(m_clips.size()));

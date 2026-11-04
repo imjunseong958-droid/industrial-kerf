@@ -1147,6 +1147,7 @@ pub static COMMANDS: &[Command] = &[
             Menu::View,
             2,
         )),
+        // Meta is a Mac's Control key; the editor binds it to Ctrl elsewhere.
         &["Meta+Alt+4"],
     )),
     checkable(keys(

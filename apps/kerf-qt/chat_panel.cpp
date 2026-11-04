@@ -691,6 +691,7 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
         if (proposal.hasVersion(it.key()) || it.key() == proposal.id) settledKey = it.key();
     if (!proposal.isOpen() && settledKey.isEmpty()) return nullptr;
     auto *card = new ProposalCard(proposal.id);
+    if (m_acceptAction) card->setAcceptKey(ui::keyText(m_acceptAction->shortcut()));
     const QList<ReviewModel::Proposal> open = m_model->openProposals();
     const bool pinned = proposal.isOpen() && !open.isEmpty() && open.constFirst().id == proposal.id;
     CardState &state = m_cardState[proposal.id];
@@ -1007,6 +1008,16 @@ CommentRow *ChatPanel::rowFor(const QString &commentId) const {
     for (CommentRow *row : rows())
         if (row->commentId() == commentId) return row;
     return nullptr;
+}
+
+void ChatPanel::setAcceptAction(QAction *action) {
+    m_acceptAction = action;
+    if (!action) return;
+    const auto follow = [this, action] {
+        for (ProposalCard *card : cards()) card->setAcceptKey(ui::keyText(action->shortcut()));
+    };
+    connect(action, &QAction::changed, this, follow);
+    follow();
 }
 
 ProposalCard *ChatPanel::card(const QString &proposalId) const {
@@ -1608,7 +1619,7 @@ QMenu *ChatPanel::buildMoreMenu() {
     // Search, sort and the filter: what the header held.
     QAction *search = menu->addAction(QStringLiteral("Search comments"));
     search->setObjectName(QStringLiteral("commentsSearch"));
-    ui::setMenuKey(search, QStringLiteral("⌘F"));
+    ui::setMenuKey(search, QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText));
     connect(search, &QAction::triggered, this, [this] { setSearchShown(true); });
     QMenu *sort = buildSortMenu();
     sort->setAttribute(Qt::WA_DeleteOnClose, false);

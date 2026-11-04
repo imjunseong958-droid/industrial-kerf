@@ -106,12 +106,14 @@ AskPrompt::AskPrompt(QWidget *parent) : QFrame(parent, Qt::Popup | Qt::Frameless
     auto *row = new QHBoxLayout;
     row->setSpacing(8);
     QLabel *hint = makeLabel(meta, ink3);
-    hint->setText(QStringLiteral("↵ Send · ⇧↵ New line"));
+    hint->setText(QStringLiteral("%1 Send · %2 New line")
+                      .arg(QKeySequence(Qt::Key_Return).toString(QKeySequence::NativeText),
+                           QKeySequence(Qt::SHIFT | Qt::Key_Return).toString(QKeySequence::NativeText)));
     row->addWidget(hint);
     row->addStretch(1);
     m_ask = new ui::Button(QStringLiteral("Ask"), ui::Button::Kind::Primary);
     m_ask->setObjectName(QStringLiteral("askSend"));
-    m_ask->setTip(QStringLiteral("Ask"), QStringLiteral("↩"));
+    m_ask->setTip(QStringLiteral("Ask"), ui::keyText(QKeySequence(Qt::Key_Return)));
     connect(m_ask, &QAbstractButton::clicked, this, &AskPrompt::submit);
     row->addWidget(m_ask);
     layout->addLayout(row);

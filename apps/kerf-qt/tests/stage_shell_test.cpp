@@ -22,8 +22,13 @@
 #include "viewer_widget.h"
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QKeySequence>
 #include <QLineEdit>
+#include <QSet>
 #include <QSettings>
 #include <QTest>
 
@@ -376,6 +381,68 @@ private slots:
     // Selecting a clip opens nothing by itself.
     // ⌘4 over the Source page turns to the Inspector, as its menu row (not
     // checked there) says; on its own page it closes.
+    // The Inspector's tips and its ⋯ menu name the registry's keys, on every
+    // platform and in every keymap.
+    void theInspectorsTipsNameTheRegistrysKeys() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 10}, {"timeline", QJsonObject{{"fps", 25}, {"tracks", QJsonArray{}}}}});
+        const auto key = [&window](const char *id) {
+            return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText);
+        };
+        auto *pages = window.m_inspectorColumn->findChild<ui::SegmentedControl *>(QStringLiteral("inspectorPages"));
+        auto *kinds = window.m_inspectorColumn->findChild<ui::SegmentedControl *>(QStringLiteral("inspectorKinds"));
+        QVERIFY(pages && kinds);
+        QVERIFY(!key("inspector.video").isEmpty());
+        QCOMPARE(ui::tipShortcut(pages->segment(0)), key("window.inspector"));
+        QCOMPARE(ui::tipShortcut(kinds->segment(0)), key("inspector.video"));
+        QCOMPARE(ui::tipShortcut(kinds->segment(1)), key("inspector.audio"));
+        QCOMPARE(ui::tipShortcut(kinds->segment(2)), key("inspector.info"));
+        QCOMPARE(ui::tipName(kinds->segment(2)), QStringLiteral("Info"));
+        QAction *video = window.m_commands->action(QStringLiteral("inspector.video"));
+        video->setShortcut(Qt::Key_F9);
+        emit window.m_commands->shortcutsChanged();
+        QCOMPARE(ui::tipShortcut(kinds->segment(0)), QKeySequence(Qt::Key_F9).toString(QKeySequence::NativeText));
+        auto *ask = window.m_inspector->findChild<QAction *>(QStringLiteral("inspectorAsk"));
+        QVERIFY(ask);
+        QCOMPARE(ui::menuKey(ask), key("ai.ask"));
+    }
+
+    // A Mac's Control key is Meta in the keymaps. Elsewhere those keys go on
+    // Ctrl, away from the Windows and Super keys, and take no other command's.
+    void metaKeysMoveToCtrlOffTheMac() {
+        QCOMPARE(CommandRegistry::keymapKey(QStringLiteral("Meta+Alt+4"), true), QKeySequence(Qt::META | Qt::ALT | Qt::Key_4));
+        QCOMPARE(CommandRegistry::keymapKey(QStringLiteral("Meta+Alt+4"), false), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_4));
+        QCOMPARE(CommandRegistry::keymapKey(QStringLiteral("Meta+Shift+2"), false), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_2));
+        QCOMPARE(CommandRegistry::keymapKey(QStringLiteral("Ctrl+Return"), false), QKeySequence(Qt::CTRL | Qt::Key_Return));
+        QCOMPARE(CommandRegistry::keymapKey(QStringLiteral("Shift+F"), false), QKeySequence(Qt::SHIFT | Qt::Key_F));
+
+        MainWindow window{QString(), QString()};
+        CommandRegistry *commands = window.m_commands;
+        const QList<QAction *> actions = commands->findChildren<QAction *>();
+        QVERIFY(actions.size() > 50);
+        const QString original = commands->keymap();
+        int moved = 0;
+        for (const QJsonValue &keymap : commands->keymaps()) {
+            commands->setKeymap(keymap.toObject().value(QStringLiteral("id")).toString());
+            QSet<QString> others;
+            QStringList meta;
+            for (const QAction *action : actions)
+                for (const QKeySequence &shortcut : action->shortcuts()) {
+                    const QString text = shortcut.toString(QKeySequence::PortableText);
+                    if (text.contains(QStringLiteral("Meta+"))) meta << text;
+                    else others << text;
+                }
+            for (const QString &text : std::as_const(meta)) {
+                ++moved;
+                const QString there = CommandRegistry::keymapKey(text, false).toString(QKeySequence::PortableText);
+                QVERIFY2(!others.contains(there), qPrintable(commands->keymap() + QLatin1Char(' ') + there));
+            }
+        }
+        commands->setKeymap(original);
+        if (CommandRegistry::isMac()) QVERIFY(moved >= 3);
+    }
+
     void theInspectorCommandTurnsFromSource() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));

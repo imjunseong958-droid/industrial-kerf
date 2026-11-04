@@ -44,6 +44,8 @@ class QTimer;
 class QVBoxLayout;
 class QVariantAnimation;
 
+class QAction;
+
 namespace kerf {
 
 class Composer;
@@ -240,6 +242,8 @@ public:
     QWidget *listContent() const { return m_content; }
     ReplyBar *replyBar() const { return m_replyBar; }
     Composer *composerWidget() const { return m_composer; }
+    // The registry's proposal.accept: every card's Accept tip names its key.
+    void setAcceptAction(QAction *action);
     QFrame *composer() const;
     // ⇧⌘J: the keys in the composer.
     void focusComposer();
@@ -347,6 +351,7 @@ private:
     void refillWelcome();
 
     QPointer<ReviewModel> m_model;
+    QPointer<QAction> m_acceptAction;
     QJsonObject m_timeline;
     QJsonObject m_named;
     QJsonObject m_proposalTimelines;

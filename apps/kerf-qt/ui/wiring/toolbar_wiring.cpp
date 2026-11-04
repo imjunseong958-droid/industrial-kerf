@@ -233,6 +233,7 @@ void ToolbarWiring::installCommands() {
     w->m_commandHandlers.insert(QStringLiteral("composer.draw"), [this] { drawInComposer(); });
     if (Composer *composer = w->m_chat ? w->m_chat->composerWidget() : nullptr)
         composer->setDrawAction(w->m_commands->action(QStringLiteral("composer.draw")));
+    if (w->m_chat) w->m_chat->setAcceptAction(w->m_commands->action(QStringLiteral("proposal.accept")));
     // The bin's and the source's commands, now that the registry is there.
     if (w->m_binWiring) w->m_binWiring->attachCommands();
     if (w->m_sourceWiring) w->m_sourceWiring->attachCommands();

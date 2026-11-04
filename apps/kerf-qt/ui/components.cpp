@@ -349,6 +349,10 @@ bool kitTipOwnsToolTip(QWidget *widget) {
 
 } // namespace
 
+QString keyText(const QKeySequence &keys) {
+    return keys.toString(QKeySequence::NativeText).replace(QChar(0x21B5), QChar(0x21A9));
+}
+
 void setTip(QWidget *widget, const QString &name, const QString &shortcut) {
     if (!widget) return;
     widget->setProperty(kTipProperty, name);
