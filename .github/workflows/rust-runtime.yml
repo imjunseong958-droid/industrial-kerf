@@ -88,7 +88,11 @@ jobs:
           LD_LIBRARY_PATH="$root/lib" "$root/bin/ffmpeg" -hide_banner -version | head -n 1
       # Caches the registry and dependency builds, keyed on Cargo.lock.
       # Workspace crates, the EffectCraft ones included, rebuild each run.
+      # Only main saves, in all three jobs: a pull request's own cache would
+      # serve only that pull request, so pull requests restore main's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test workspace
         env:
           KERF_PARITY_DUMP: ${{ runner.temp }}/parity
@@ -149,6 +153,8 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The kernel and the durable runtime against Windows paths, line
       # endings, and processes. The runtime's integration tests start real
       # kerfd daemons and reach them over the named pipe.
@@ -208,6 +214,8 @@ jobs:
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Only what Linux cannot show: the editor's dylib against Homebrew's
       # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
       # and sockets, which the bridge workflow below goes through.
