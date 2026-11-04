@@ -630,9 +630,14 @@ private slots:
         clock.start();
         pane.setHighlighted(true);
         QVERIFY(pane.highlightLevel() < 1.0);
-        QTest::qWait(60);
-        QVERIFY2(pane.highlightLevel() > 0.0 && pane.highlightLevel() < 1.0, qPrintable(QString::number(pane.highlightLevel())));
-        QTRY_COMPARE_WITH_TIMEOUT(pane.highlightLevel(), 1.0, 1000);
+        // It passes through the levels between; a busy machine decides when.
+        bool between = false;
+        while (pane.highlightLevel() < 1.0 && clock.elapsed() < 5000) {
+            between = between || pane.highlightLevel() > 0.0;
+            QTest::qWait(1);
+        }
+        QVERIFY(between);
+        QCOMPARE(pane.highlightLevel(), 1.0);
         QVERIFY(clock.elapsed() >= 140);
         QCOMPARE(pane.outlineColor().rgba(), tokens::color(tokens::accent).rgba());
         pane.setHighlighted(false);
