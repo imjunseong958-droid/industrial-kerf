@@ -162,17 +162,19 @@ QJsonObject seedState(const QSize &canvas) {
 struct Format {
     const char *query; // the mockup's ?fmt=
     QSize canvas;
+    QRect slot; // the viewer
     QRect picture;
     QRect conversation;
     QRect timeline;
 };
 
-// The minimal mockup's layout() at 1600 x 1000, in window coordinates.
+// The minimal mockup's layout() at 1600 x 1000, in window coordinates; 16:9
+// with the timeline lifted over the mockup's.
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(0, 40, 1200, 675), QRect(1200, 40, 400, 675), QRect(0, 715, 1600, 285)},
-    {"916", QSize(1080, 1920), QRect(0, 40, 540, 960), QRect(540, 40, 1060, 616), QRect(540, 656, 1060, 344)},
-    {"45", QSize(1080, 1350), QRect(0, 40, 768, 960), QRect(768, 40, 832, 616), QRect(768, 656, 832, 344)},
-    {"11", QSize(1080, 1080), QRect(0, 40, 960, 960), QRect(960, 40, 640, 616), QRect(960, 656, 640, 344)},
+    {"169", QSize(1920, 1080), QRect(0, 40, 1200, 615), QRect(53, 40, 1093, 615), QRect(1200, 40, 400, 615), QRect(0, 655, 1600, 345)},
+    {"916", QSize(1080, 1920), QRect(0, 40, 540, 960), QRect(0, 40, 540, 960), QRect(540, 40, 1060, 616), QRect(540, 656, 1060, 344)},
+    {"45", QSize(1080, 1350), QRect(0, 40, 768, 960), QRect(0, 40, 768, 960), QRect(768, 40, 832, 616), QRect(768, 656, 832, 344)},
+    {"11", QSize(1080, 1080), QRect(0, 40, 960, 960), QRect(0, 40, 960, 960), QRect(960, 40, 640, 616), QRect(960, 656, 640, 344)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -424,9 +426,9 @@ private slots:
 private:
     void checkBase(MainWindow &window, const Format &format) {
         QCOMPARE(window.m_toolbar->height(), 40);
-        QCOMPARE(inWindow(window.m_viewer, &window), format.picture);
-        // Flush: the frame fills its region, with no margin.
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(QPointF(0, 0), QSizeF(format.picture.size())));
+        QCOMPARE(inWindow(window.m_viewer, &window), format.slot);
+        // With no margin: the frame fills its region's height, or its width too.
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(format.picture.translated(-format.slot.topLeft())));
         QCOMPARE(inWindow(window.m_chat, &window), format.conversation);
         QCOMPARE(inWindow(window.m_timelinePanel, &window), format.timeline);
         QVERIFY(window.m_viewer->isVisible());

@@ -459,7 +459,7 @@ private slots:
         const QHash<QString, int> heights{{"V5", 24}, {"V4", 24}, {"V3", 24}, {"V2", 36}, {"V1", 48}};
         for (int row = 0; row < timeline.trackRowCount(); ++row) {
             const QString id = timeline.trackRowId(row);
-            timeline.setTrackHeight(row, heights.value(id, kTrackHeight));
+            timeline.setTrackHeight(row, heights.value(id, 32));
         }
     }
 
@@ -569,21 +569,22 @@ private slots:
     void wideSequencesDefaultToCompactTracks() {
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);
-        QCOMPARE(trackHeights(timeline), (QList<int>{36, 36, 36, 36, 36, 32, 32, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{28, 28, 28, 28, 28, 24, 24, 24, 24}));
         timeline.setWideSequence(true);
-        const QList<int> wide{20, 20, 20, 28, 40, 24, 24, 24, 24};
+        const QList<int> wide{20, 20, 20, 24, 28, 20, 20, 20, 20};
         QCOMPARE(trackHeights(timeline), wide);
-        QCOMPARE(std::accumulate(wide.cbegin(), wide.cend(), 0), 285 - 28 - 32 - 1);
+        // They all show at once in the design's panel, under its bar and ruler.
+        QVERIFY(std::accumulate(wide.cbegin(), wide.cend(), 0) <= 345 - 28 - 32 - 1);
         // By number, for any count of tracks.
         timeline.setProject(trackList({"video", "video", "audio"}), 8, 24);
-        QCOMPARE(trackHeights(timeline), (QList<int>{28, 40, 24}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{24, 28, 20}));
         // A track's own height still wins, and the reset comes back to these.
         timeline.setTrackHeight(0, 60);
-        QCOMPARE(trackHeights(timeline), (QList<int>{60, 40, 24}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{60, 28, 20}));
         timeline.resetTrackHeights();
-        QCOMPARE(trackHeights(timeline), (QList<int>{28, 40, 24}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{24, 28, 20}));
         timeline.setWideSequence(false);
-        QCOMPARE(trackHeights(timeline), (QList<int>{36, 36, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{28, 28, 24}));
     }
 
     // S on a sound track hears it alone (monitoring only): the window sends
@@ -727,6 +728,14 @@ private slots:
         QCOMPARE(rulerLabel(96, 24.0), QStringLiteral("00:04"));
         QCOMPARE(rulerLabel(100, 25.0), QStringLiteral("00:04"));
         QCOMPARE(rulerLabel(25 * 3725, 25.0), QStringLiteral("1:02:05"));
+        // An empty sequence's ruler has seconds to read past the playhead.
+        {
+            TimelineWidget empty;
+            empty.setProject(QJsonObject{{"tracks", QJsonArray{}}}, 0, 24);
+            empty.fitToWidth(1366);
+            QVERIFY(empty.scale() < TimelineWidget::kMaxScale);
+            QCOMPARE(rulerTicks(empty.scale(), 24.0).labelFrames, 48);
+        }
 
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);
@@ -1489,17 +1498,17 @@ private slots:
     }
 
     void timelineSetsEveryTrackHeight() {
-        QCOMPARE(kVideoTrackHeight, 36);
-        QCOMPARE(kTrackHeight, 32);
-        QCOMPARE(kSmallTrackHeight, 24);
+        QCOMPARE(kVideoTrackHeight, 28);
+        QCOMPARE(kTrackHeight, 24);
+        QCOMPARE(kSmallTrackHeight, 20);
         QCOMPARE(kLargeTrackHeight, 48);
         TimelineWidget timeline;
         timeline.resize(900, 520);
         timeline.setProject(trackList({"video", "video", "audio", "audio"}), 8, 24);
         timeline.show();
-        QCOMPARE(trackHeights(timeline), (QList<int>{36, 36, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{28, 28, 24, 24}));
         timeline.setAllTrackHeights(kSmallTrackHeight);
-        QCOMPARE(trackHeights(timeline), QList<int>(4, 24));
+        QCOMPARE(trackHeights(timeline), QList<int>(4, 20));
         timeline.setAllTrackHeights(kLargeTrackHeight);
         QCOMPARE(trackHeights(timeline), QList<int>(4, 48));
         // One track dragged apart.
@@ -1509,7 +1518,7 @@ private slots:
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(50, edge + 10));
         QCOMPARE(trackHeights(timeline), (QList<int>{58, 48, 48, 48}));
         timeline.resetTrackHeights();
-        QCOMPARE(trackHeights(timeline), (QList<int>{36, 36, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{28, 28, 24, 24}));
         // Fit fills the lanes under the ruler, leaving the add-track row.
         const int each = (timeline.height() - kRulerHeight - kAddLaneHeight) / 4;
         timeline.fitTracksToView();
@@ -1570,8 +1579,11 @@ private slots:
             expected.append(QList<int>(10, sound));
             return expected;
         };
-        QCOMPARE(trackHeights(*timeline), heights(36, 32));
+        QCOMPARE(trackHeights(*timeline), heights(28, 24));
         timeline->setFocus();
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(36, 32));
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
         QCOMPARE(trackHeights(*timeline), heights(32, 28));
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
@@ -1646,26 +1658,26 @@ private slots:
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(100, pictureEdge));
         QTest::mouseMove(&timeline, QPoint(100, pictureEdge + 100 - kVideoTrackHeight));
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(100, pictureEdge + 100 - kVideoTrackHeight));
-        QCOMPARE(trackHeights(timeline), (QList<int>{100, 100, 100, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{100, 100, 100, 24, 24}));
         const int heroEdge = timeline.trackHeaderRect(0).bottom() + 1;
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, heroEdge));
         QTest::mouseMove(&timeline, QPoint(100, heroEdge + 20));
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, heroEdge + 20));
-        QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, 24, 24}));
         timeline.stepAllTrackHeights(1);
-        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 36, 36}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 28, 28}));
         timeline.stepAllTrackHeights(-1);
-        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 32, 32}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 24, 24}));
         QWheelEvent wheel(QPointF(100, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(100, 0)), QPoint(),
                           QPoint(0, 120), Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(&timeline, &wheel);
-        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 36, 36}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 28, 28}));
         QJsonArray tracks = project.value("tracks").toArray();
         tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
         project.insert("tracks", tracks);
         timeline.setProject(project, 8, 24);
-        QCOMPARE(timeline.allTrackHeight(), 42);
-        QCOMPARE(trackHeights(timeline).constLast(), 42);
+        QCOMPARE(timeline.allTrackHeight(), 32);
+        QCOMPARE(trackHeights(timeline).constLast(), 32);
         timeline.setAllTrackHeights(kSmallTrackHeight);
         QCOMPARE(trackHeights(timeline), QList<int>(6, kSmallTrackHeight));
     }
@@ -1692,7 +1704,7 @@ private slots:
         QToolTip::hideText();
 
         const QRect lock = timeline.headerToggleRect(2, 1);
-        QVERIFY(lock.top() > edge && lock.top() - edge <= 3);
+        QVERIFY(lock.top() >= edge && lock.top() - edge <= 3);
         QTest::mouseMove(&timeline, lock.center());
         QVERIFY(timeline.cursor().shape() != Qt::SplitVCursor);
         for (const QPoint &at : {lock.center(), QPoint(lock.center().x(), lock.top())}) {
@@ -1705,17 +1717,17 @@ private slots:
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(60, edge - 1));
         QTest::mouseMove(&timeline, QPoint(60, edge + 19));
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(60, edge + 19));
-        QCOMPARE(trackHeights(timeline), (QList<int>{24, 44, 24, 24, 24}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{20, 40, 20, 20, 20}));
         const int soundEdge = timeline.trackHeaderRect(3).bottom() + 1;
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, soundEdge));
         QTest::mouseMove(&timeline, QPoint(60, soundEdge + 12));
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, soundEdge + 12));
-        QCOMPARE(trackHeights(timeline), (QList<int>{24, 44, 24, 36, 36}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{20, 40, 20, 32, 32}));
         const int pictureEdge = timeline.trackHeaderRect(0).bottom() + 1;
         QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, pictureEdge));
         QTest::mouseMove(&timeline, QPoint(60, pictureEdge + 6));
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, pictureEdge + 6));
-        QCOMPARE(trackHeights(timeline), (QList<int>{30, 30, 30, 36, 36}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{26, 26, 26, 32, 32}));
         QCOMPARE(toggles.count(), 2);
     }
 
@@ -1835,7 +1847,7 @@ private slots:
         auto *timeline = new TimelineWidget;
         scroll.setWidget(timeline);
         QJsonArray tracks;
-        for (int i = 0; i < 12; ++i) tracks.append(QJsonObject{{"id", QString::number(i)}, {"type", "video"}, {"clips", QJsonArray{}}});
+        for (int i = 0; i < 16; ++i) tracks.append(QJsonObject{{"id", QString::number(i)}, {"type", "video"}, {"clips", QJsonArray{}}});
         timeline->setProject(QJsonObject{{"tracks", tracks}}, 120, 24);
         scroll.show();
         QTest::qWait(20);

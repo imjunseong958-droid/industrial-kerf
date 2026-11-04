@@ -218,7 +218,9 @@ constexpr int band = 344;       // a tray's height, and the timeline's beside a 
 constexpr int conversationWide = 400;  // the conversation beside a wide picture
 constexpr int conversationLeast = 300; // its least width there, and its least height over the timeline
 constexpr int leastPicture = 600;      // a wide picture's width before the conversation gives way
-constexpr int timelineLeast = 200;     // the timeline's least height
+constexpr int timelineLeast = 200;     // the timeline's least height beside a vertical picture
+constexpr int timelineWideLeast = 260; // its least height under a wide picture
+constexpr int timelineLift = 60;       // how far it comes up over a wide picture's full height
 constexpr int rightLeast = 560;        // what a vertical picture leaves on its right, at least
 constexpr int seam = 1;                // every seam is a 1 pt line
 } // namespace layout

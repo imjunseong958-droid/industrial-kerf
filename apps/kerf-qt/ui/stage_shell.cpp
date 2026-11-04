@@ -42,9 +42,10 @@ Rects rects(const QSize &window, double aspect, int toolbar) {
         // 600 wide, down to 300.
         const int conversation = std::min(w, std::clamp(w - leastPicture, conversationLeast, conversationWide));
         const int width = w - conversation;
-        // The picture's height follows its aspect while the timeline keeps its least.
-        const int most = std::max(0, h - timelineLeast);
-        const int slotHeight = std::min(most, int(std::lround(width / shape)));
+        // The picture's height follows its aspect, less the timeline's lift,
+        // while the timeline keeps its least.
+        const int most = std::max(0, h - timelineWideLeast);
+        const int slotHeight = std::min(most, std::max(0, int(std::lround(width / shape)) - timelineLift));
         out.slot = QRect(0, toolbar, width, slotHeight);
         out.conversation = QRect(width, toolbar, conversation, slotHeight);
         out.timeline = QRect(0, toolbar + slotHeight, w, h - slotHeight);

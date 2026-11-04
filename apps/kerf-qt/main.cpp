@@ -33,6 +33,10 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
 } // namespace
 
 int main(int argc, char **argv) {
+#ifdef Q_OS_MACOS
+    // Before any thread starts, and for every tool the editor and kerfd run.
+    qputenv("PATH", kerf::pathWithToolFolders(qEnvironmentVariable("PATH"), QDir::homePath()).toLocal8Bit());
+#endif
     // A smoke run may keep its settings in a folder of its own (INI files),
     // so a capture neither reads nor changes the user's: set before the
     // first QSettings is made.

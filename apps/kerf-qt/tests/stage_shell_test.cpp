@@ -78,10 +78,10 @@ private slots:
     void wideAtTheDesignSize() {
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide);
         QVERIFY(r.wide);
-        QCOMPARE(r.slot, QRect(0, 40, 1200, 675));
-        QCOMPARE(r.picture, QRect(0, 40, 1200, 675));
-        QCOMPARE(r.conversation, QRect(1200, 40, 400, 675));
-        QCOMPARE(r.timeline, QRect(0, 715, 1600, 285));
+        QCOMPARE(r.slot, QRect(0, 40, 1200, 615));
+        QCOMPARE(r.picture, QRect(53, 40, 1093, 615));
+        QCOMPARE(r.conversation, QRect(1200, 40, 400, 615));
+        QCOMPARE(r.timeline, QRect(0, 655, 1600, 345));
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
@@ -105,15 +105,15 @@ private slots:
     }
 
     // The conversation stays 400, then gives way down to 300, the picture
-    // having the rest; the timeline takes what is left, at least 200.
+    // having the rest; the timeline takes what is left, at least 260.
     void wideAtOtherWindowSizes() {
         // The least window.
         {
             const stage::Rects r = stage::rects(QSize(1080, 700), kWide);
             QCOMPARE(r.conversation.width(), 400);
             QCOMPARE(r.slot.width(), 680);
-            QCOMPARE(r.slot.height(), 383);
-            QCOMPARE(r.timeline, QRect(0, 423, 1080, 277));
+            QCOMPARE(r.slot.height(), 323);
+            QCOMPARE(r.timeline, QRect(0, 363, 1080, 337));
             expectFilled(r, QSize(1080, 700), "least");
         }
         // Narrow: the conversation gives way, to 300 and no further.
@@ -125,23 +125,23 @@ private slots:
             QCOMPARE(least.slot.width(), 500);
             expectFilled(least, QSize(800, 900), "narrow");
         }
-        // Large and short: the picture would leave the timeline under 200, so
+        // Large and short: the picture would leave the timeline under 260, so
         // it shrinks and pillarboxes in black.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kWide);
             QCOMPARE(r.conversation.width(), 400);
-            QCOMPARE(r.slot, QRect(0, 40, 2160, 1200));
-            QCOMPARE(r.timeline, QRect(0, 1240, 2560, 200));
-            QCOMPARE(r.picture.height(), 1200);
-            QCOMPARE(r.picture.width(), 2133);
-            QCOMPARE(r.picture.left(), (2160 - 2133) / 2);
+            QCOMPARE(r.slot, QRect(0, 40, 2160, 1140));
+            QCOMPARE(r.timeline, QRect(0, 1180, 2560, 260));
+            QCOMPARE(r.picture.height(), 1140);
+            QCOMPARE(r.picture.width(), 2027);
+            QCOMPARE(r.picture.left(), (2160 - 2027) / 2);
             expectFilled(r, QSize(2560, 1440), "large");
         }
         // Tall: the timeline has the rest.
         {
             const stage::Rects r = stage::rects(QSize(1600, 1800), kWide);
-            QCOMPARE(r.slot, QRect(0, 40, 1200, 675));
-            QCOMPARE(r.timeline.height(), 1800 - 715);
+            QCOMPARE(r.slot, QRect(0, 40, 1200, 615));
+            QCOMPARE(r.timeline.height(), 1800 - 655);
             expectFilled(r, QSize(1600, 1800), "tall");
         }
     }
@@ -150,17 +150,17 @@ private slots:
         const double scope = 2.39;
         const stage::Rects r = stage::rects(QSize(1600, 1000), scope);
         QVERIFY(r.wide);
-        QCOMPARE(r.slot, QRect(0, 40, 1200, 502));
-        QCOMPARE(r.picture, r.slot);
-        QCOMPARE(r.conversation, QRect(1200, 40, 400, 502));
-        QCOMPARE(r.timeline, QRect(0, 542, 1600, 458));
+        QCOMPARE(r.slot, QRect(0, 40, 1200, 442));
+        QCOMPARE(r.picture.height(), 442);
+        QCOMPARE(r.conversation, QRect(1200, 40, 400, 442));
+        QCOMPARE(r.timeline, QRect(0, 482, 1600, 518));
         expectFilled(r, QSize(1600, 1000), "scope");
         // Just over the line: tall enough to pillarbox at the design's size.
         const stage::Rects four = stage::rects(QSize(1600, 1000), 1.25);
-        QCOMPARE(four.slot, QRect(0, 40, 1200, 760));
-        QCOMPARE(four.picture.size(), QSize(950, 760));
-        QCOMPARE(four.picture.left(), 125);
-        QCOMPARE(four.timeline.height(), 200);
+        QCOMPARE(four.slot, QRect(0, 40, 1200, 700));
+        QCOMPARE(four.picture.size(), QSize(875, 700));
+        QCOMPARE(four.picture.left(), 162);
+        QCOMPARE(four.timeline.height(), 260);
         expectFilled(four, QSize(1600, 1000), "1.25");
     }
 
@@ -286,7 +286,7 @@ private slots:
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
             QCOMPARE(window.m_bus->workspace(), QStringLiteral("Review"));
             QVERIFY(window.m_chat->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), QRect(1200, 40, 400, 675));
+            QCOMPARE(inWindow(window.m_chat, &window), QRect(1200, 40, 400, 615));
             window.close();
         }
         settings.remove(QStringLiteral("workspace"));
@@ -464,7 +464,8 @@ private slots:
     void askingUncoversTheComposer() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        window.resize(1600, 1000);
+        // Short enough for a tray to reach the composer over a wide picture.
+        window.resize(1600, 900);
         window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 30},
                                          {"timeline", QJsonObject{{"width", 1920}, {"height", 1080}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
         window.show();
