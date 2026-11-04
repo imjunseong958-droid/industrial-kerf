@@ -2071,6 +2071,27 @@ private slots:
         QVERIFY2(many < 20.0 * std::max(few, 0.2), qPrintable(QStringLiteral("%1 ms for 30 tracks, %2 ms for 3000").arg(few).arg(many)));
     }
 
+    // Selecting a clip under the pointer ends its skim, so the picture does not
+    // stay on the skimmed frame with the playhead elsewhere.
+    void pressingAClipEndsTheSkim() {
+        TimelineWidget timeline;
+        timeline.resize(700, 240);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "clip"}, {"timelineStart", 1.0}, {"duration", 4.0}, {"name", "Opening"}}
+        }}}}}}, 8, 24);
+        timeline.show();
+        QSignalSpy hovers(&timeline, &TimelineWidget::hoverSeekRequested);
+        QSignalSpy ended(&timeline, &TimelineWidget::hoverSeekEnded);
+        QSignalSpy selected(&timeline, &TimelineWidget::clipSelected);
+        const QPoint onClip(kTimelineOrigin + 144, kRulerHeight + kVideoTrackHeight / 2);
+        QTest::mouseMove(&timeline, onClip);
+        QCOMPARE(hovers.count(), 1);
+        QCOMPARE(ended.count(), 0);
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, onClip);
+        QCOMPARE(selected.count(), 1);
+        QCOMPARE(ended.count(), 1);
+    }
+
     void timelineScrubsFromThePointer() {
         TimelineWidget timeline;
         timeline.resize(700, 240);

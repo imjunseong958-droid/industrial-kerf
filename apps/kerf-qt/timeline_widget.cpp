@@ -913,7 +913,10 @@ void TimelineWidget::moveEvent(QMoveEvent *event) {
 void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
     setFocus();
+    // The skim ends here, so the viewer goes back to the playhead's frame.
+    const bool skimming = m_hasSkimmer;
     clearSkimmer();
+    if (skimming) emit hoverSeekEnded();
     const QPoint pos = event->position().toPoint();
     const int grip = resizeRowAt(pos);
     if (grip >= 0) {
