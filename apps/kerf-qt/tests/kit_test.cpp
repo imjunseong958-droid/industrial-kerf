@@ -46,7 +46,8 @@ QString pointText(QPointF p) { return QStringLiteral("(%1, %2)").arg(p.x()).arg(
 // The colour at (x, y) of `name` painted at `px` in `color` on a transparent
 // 16 x 16 (or larger) image.
 QColor iconPixel(const QString &name, QColor color, QPointF at, qreal px = 16) {
-    QImage image(QSize(int(px), int(px)) * 4, QImage::Format_ARGB32_Premultiplied);
+    const int side = int(px) * 4;
+    QImage image(side, side, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     {
         QPainter p(&image);

@@ -802,11 +802,11 @@ private slots:
         QJsonObject timeline = snapshot.value("timeline").toObject();
         timeline.insert("name", "Harbor Teaser, the long cut for review");
         timeline.insert("sequence", "seq-1");
-        timeline.insert("sequences", QJsonArray{QJsonObject{{"id", "seq-1"}, {"name", "Client review cut v12 with burnt-in captions and temp music for the second agency round, version after the Friday notes"},
+        timeline.insert("sequences", QJsonArray{QJsonObject{{"id", "seq-1"}, {"name", "Client review cut v12 with burnt-in captions and temp music for the second agency round, version after the Friday notes and the second colour pass with the new end card"},
                                                             {"width", 1920}, {"height", 1080}, {"rate", "25"}, {"fps", 25}}});
         snapshot.insert("timeline", timeline);
         window.applySnapshot(snapshot);
-        const QString fullTitle = QStringLiteral("Harbor Teaser, the long cut for review · Client review cut v12 with burnt-in captions and temp music for the second agency round, version after the Friday notes");
+        const QString fullTitle = QStringLiteral("Harbor Teaser, the long cut for review · Client review cut v12 with burnt-in captions and temp music for the second agency round, version after the Friday notes and the second colour pass with the new end card");
         QCOMPARE(window.m_toolbarWiring->titleText(), fullTitle);
         window.resize(1366, 768);
         window.show();

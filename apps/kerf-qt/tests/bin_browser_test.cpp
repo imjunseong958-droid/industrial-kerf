@@ -596,7 +596,7 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "media_index"}, {"media", "vo"}, {"cuts", QJsonArray{2.0, 5.48}},
                                        {"ranges", QJsonArray{QJsonObject{{"start", 0.0}, {"end", 2.0}}, QJsonObject{{"start", 2.0}, {"end", 5.48}},
                                                              QJsonObject{{"start", 5.48}, {"end", 10.4}}}},
-                                       {"silences", QJsonArray{QJsonArray{6.0, 6.8}}}, {"loudest", QJsonArray{3.2}}});
+                                       {"silences", QJsonArray{QJsonValue(QJsonArray{6.0, 6.8})}}, {"loudest", QJsonArray{3.2}}});
         QStringList rows;
         for (int row = 0; row < bin->m_index->count(); ++row) {
             const QListWidgetItem *item = bin->m_index->item(row);
