@@ -202,6 +202,11 @@ impl VideoDecoder {
         self.cancelled
     }
 
+    /// Go on decoding for a newer seek that stays where this decoder is.
+    pub fn serve(&mut self, serve_epoch: u64) {
+        self.serve_epoch = serve_epoch;
+    }
+
     /// Seek inside the open file and rebuild the filter for a new target.
     /// Reopening the container on every pointer move is what makes a scrub stall.
     pub fn retarget(

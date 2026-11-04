@@ -864,7 +864,7 @@ impl Worker {
         if self
             .decoder
             .as_ref()
-            .is_some_and(|decoder| decoder.is_preview_graph())
+            .is_some_and(|decoder| decoder.is_preview_graph() || decoder.is_cancelled())
         {
             return false;
         }
@@ -881,6 +881,12 @@ impl Worker {
             .is_some_and(|decoder| decoder.clip_id() == clip_id.as_str())
         {
             return false;
+        }
+        // A decoder kept under an older seek's epoch would cancel itself on
+        // its next frame, and this seek would show nothing.
+        let serve = self.serve_epoch;
+        if let Some(decoder) = self.decoder.as_mut() {
+            decoder.serve(serve);
         }
         let interval = frame_interval(self.timeline.fps);
         while self
