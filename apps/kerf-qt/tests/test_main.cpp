@@ -209,6 +209,8 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setOrganizationName(QStringLiteral("Industrial Kerf Tests"));
     // The galleries save into it without making it.
     if (const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR"); !shots.isEmpty()) QDir().mkpath(shots);
+    // The faces a person gets, so text is measured as they will see it.
+    loadBundledFonts();
     useEditorStyle();
     // The editor's one (dark) theme, applied as the app applies it:
     // offscreen reports a light system, and painted colours are the ramp's.

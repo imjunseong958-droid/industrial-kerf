@@ -2,7 +2,7 @@
 # Install Kerf's command-line tools (kerf, kerfd, kerf-mcp) to ~/.local/bin,
 # and the editor: on macOS as an app, ~/Applications/Industrial Kerf.app,
 # which carries its own libraries and kerfd; elsewhere as ~/.local/bin/kerf-qt
-# with its libraries (the Qt bridge and docking) in ~/.local/lib/kerf. The
+# with its library (the Qt bridge) and font licences in ~/.local/lib/kerf. The
 # install does not refer back to this checkout, so cleaning or moving it is
 # safe.
 # System libraries (Qt, FFmpeg) still come from their package manager.
@@ -59,6 +59,8 @@ install_cli() {
 relink_qt_linux() {
     local editor="$dest/kerf-qt"
     place "$bridge_dir/libkerf_qt_bridge.so" "$lib_dir/libkerf_qt_bridge.so"
+    mkdir -p "$lib_dir/fonts"
+    cp -f "$kerf_root"/apps/kerf-qt/resources/fonts/*-LICENSE.txt "$lib_dir/fonts/"
     if command -v patchelf >/dev/null 2>&1; then
         patchelf --replace-needed "$bridge_dir/libkerf_qt_bridge.so" libkerf_qt_bridge.so "$editor" 2>/dev/null || true
         patchelf --set-rpath "$lib_dir" "$editor"

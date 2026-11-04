@@ -102,6 +102,7 @@
 
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <functional>
@@ -481,7 +482,7 @@ private slots:
         const int v1 = 4;
         const QRect row = timeline.trackHeaderRect(v1);
         QCOMPARE(row.width(), 140);
-        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(8, row.top() + 14, 24, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(12, row.top() + 14, 24, 20));
         // Lock and the eye against the padding on picture; lock, mute and solo on sound.
         QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(92, row.top() + 14, 20, 20));
         QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(114, row.top() + 14, 20, 20));
@@ -670,6 +671,25 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("ops").toArray().first().toObject().value("syncLocked").toBool(false), true);
     }
 
+    // A title named for its own text says it once on its clip; one with
+    // other text shows that beside the name.
+    void aTitleNamedForItsTextSaysItOnce() {
+        const auto picture = [](const QString &text) {
+            const QJsonObject clip{{"id", "t"}, {"name", "Atlas Coffee"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 0.0},
+                                   {"duration", 8.0}, {"props", text.isEmpty() ? QJsonObject{} : QJsonObject{{"text", text}}}};
+            TimelineWidget timeline;
+            timeline.setProject(QJsonObject{{"fps", 25}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"name", "Titles"},
+                                                                                         {"clips", QJsonArray{clip}}}}}},
+                                10, 25);
+            timeline.setScale(60.0);
+            timeline.resize(800, 200);
+            return timeline.grab().toImage();
+        };
+        const QImage bare = picture(QString());
+        QCOMPARE(picture(QStringLiteral("Atlas Coffee")), bare);
+        QVERIFY(picture(QStringLiteral("Roasted in Lisbon")) != bare);
+    }
+
     // ---- ruler -----------------------------------------------------------
 
     // Ticks every 10 frames, major every 50, labels every 100 at the
@@ -680,7 +700,25 @@ private slots:
         QCOMPARE(design.majorFrames, 50);
         QCOMPARE(design.labelFrames, 100);
         QCOMPARE(rulerTicks(480.0, 25.0).minorFrames, 1);
-        QCOMPARE(rulerTicks(20.0, 60.0).minorFrames, 50);
+        QCOMPARE(rulerTicks(100.0, 25.0).labelFrames, 20);
+        // A second or more apart, labels land on whole seconds at any rate.
+        const auto ticks = [](double pps, double fps) {
+            const RulerTicks t = rulerTicks(pps, fps);
+            return std::array<qint64, 3>{t.minorFrames, t.majorFrames, t.labelFrames};
+        };
+        QCOMPARE(ticks(26.8, 24.0), (std::array<qint64, 3>{12, 48, 96}));
+        QCOMPARE(ticks(26.8, 23.976), (std::array<qint64, 3>{12, 48, 96}));
+        QCOMPARE(ticks(26.8, 30.0), (std::array<qint64, 3>{12, 60, 120}));
+        QCOMPARE(ticks(20.0, 60.0), (std::array<qint64, 3>{24, 120, 240}));
+        QCOMPARE(ticks(2.0, 25.0), (std::array<qint64, 3>{150, 750, 1500}));
+        for (const double pps : {2.0, 8.0, 26.8, 60.0, 90.0, 480.0})
+            for (const double fps : {23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 60.0}) {
+                const RulerTicks t = rulerTicks(pps, fps);
+                QVERIFY(double(t.minorFrames) / fps * pps >= 7.9);
+                QCOMPARE(t.majorFrames % t.minorFrames, 0);
+                QCOMPARE(t.labelFrames % t.majorFrames, 0);
+            }
+        QCOMPARE(rulerLabel(96, 24.0, 96), QStringLiteral("00:04"));
         QCOMPARE(rulerLabel(100, 25.0, 100), QStringLiteral("00:04"));
         QCOMPARE(rulerLabel(100, 24.0, 100), QStringLiteral("00:04:04"));
         QCOMPARE(rulerLabel(25 * 3725, 25.0, 250), QStringLiteral("1:02:05"));
@@ -1176,8 +1214,15 @@ private slots:
             QCOMPARE(button->size(), QSize(24, 24));
             x = button->x();
         }
-        QVERIFY(tools->tools()->x() > x);
-        QVERIFY(tools->snapButton()->x() > tools->tools()->x());
+        // At the mockup's x: the tools at 176, Snap at 240, the zoom ending
+        // 12 from the edge with − centred at 1480; Play in ink, the rest ink2.
+        QCOMPARE(tools->tools()->x(), 176);
+        QCOMPARE(tools->snapButton()->x(), 240);
+        QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
+        QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
+        auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
+        QVERIFY(zoomOut);
+        QCOMPARE(zoomOut->geometry().center().x(), 1479);
         QVERIFY(tools->zoomOutButton()->x() > tools->snapButton()->x());
         QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 12);
         // The transport runs the registry's playback commands.
@@ -1292,7 +1337,7 @@ private slots:
         TimelineWidget timeline;
         timeline.setProject(trackList({"video"}), 20, 24);
         TimelineToolStrip zoom(&timeline);
-        QCOMPARE(zoom.slider()->width(), 64);
+        QCOMPARE(zoom.slider()->width(), 72);
         QCOMPARE(zoom.zoomOutButton()->size(), QSize(24, 24));
         QCOMPARE(zoom.height(), tokens::layout::strip);
         QCOMPARE(TimelineToolStrip::position(TimelineWidget::kMinScale), 0);

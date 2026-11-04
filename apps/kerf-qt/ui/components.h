@@ -201,6 +201,8 @@ public:
     // The on state (.ib.on): a checked, checkable button.
     void setOn(bool on);
     bool isOn() const { return isChecked(); }
+    // Ink instead of ink2 at rest, for the one control that leads a row.
+    void setInkAtRest(bool ink);
     // The colour the icon is drawn in now.
     QColor iconColor() const;
 
@@ -212,6 +214,7 @@ protected:
 private:
     QString m_icon;
     Size m_size;
+    bool m_inkAtRest = false;
     qreal m_iconPx = -1;
 };
 

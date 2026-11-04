@@ -118,7 +118,7 @@ constexpr TypeStyle badge{11, 12, 400, true};          // bin duration badge
 // Letter spacing is 0 everywhere but the scrub marker initials.
 constexpr qreal markerInitialsSpacing = -0.2;
 
-// The bundled families (resources/fonts) and what stands in when they are not.
+// The bundled families (resources/fonts) and what stands in if one fails to load.
 constexpr char uiFamily[] = "Inter";
 constexpr char monoFamily[] = "JetBrains Mono";
 constexpr char monoFallback[] = "Menlo";
@@ -139,7 +139,6 @@ inline QFont font(const TypeStyle &style) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
     font.setFeature(QFont::Tag("tnum"), 1);
     if (style.mono) font.setFeature(QFont::Tag("zero"), 0);
-    else font.setFeature(QFont::Tag("cv11"), 1);
 #endif
     return font;
 }

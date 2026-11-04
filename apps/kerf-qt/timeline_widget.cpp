@@ -76,7 +76,7 @@ const QFont &cornerFont() {
 // after that, and on hover the row of 20 pt toggles (gap 2) against the right
 // padding, over the name's end. Every control is 20 tall, centred in its row.
 constexpr int kControlSize = 20;
-constexpr int kTargetX = 8;
+constexpr int kTargetX = 12;
 constexpr int kNameX = kTargetX + 24 + 8;
 constexpr int kTogglesX = kTimelineLabelWidth - 6 - (3 * kControlSize + 2 * 2);
 constexpr int kToggleStep = kControlSize + 2;
@@ -130,7 +130,7 @@ QString clipSecondary(const QJsonObject &clip, ClipKind kind) {
     if (kind == ClipKind::Generator) {
         QStringList parts;
         const QString text = props.value(QStringLiteral("text")).toString().simplified();
-        if (!text.isEmpty()) parts << text;
+        if (!text.isEmpty() && text != clipName(clip).simplified()) parts << text;
         const QString blend = props.value(QStringLiteral("blend")).toString();
         if (!blend.isEmpty() && blend != QStringLiteral("normal")) parts << blend.left(1).toUpper() + blend.mid(1);
         const QJsonValue opacity = props.value(QStringLiteral("opacity"));
@@ -2435,17 +2435,18 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
         m_transport[index] = iconButton(info.object, info.icon, transportName(which));
         m_transport[index]->setCheckable(false);
         connect(m_transport[index], &QAbstractButton::clicked, this, [this, which] { emit transportRequested(which); });
+        m_transport[index]->setInkAtRest(which == Transport::Play);
         if (index) layout->addSpacing(4);
         layout->addWidget(m_transport[index], 0, Qt::AlignVCenter);
     }
-    layout->addSpacing(24);
+    layout->addSpacing(28);
     m_tools = new ui::SegmentedControl(this);
     m_tools->setObjectName(QStringLiteral("timelineToolSegments"));
     for (const ToolInfo &info : kTools)
         m_tools->addIconSegment(QString::fromLatin1(info.icon), QCoreApplication::translate("kerf::TimelineToolStrip", info.name));
     m_tools->setCurrentIndex(toolIndex(timeline->tool()), false);
     layout->addWidget(m_tools, 0, Qt::AlignVCenter);
-    layout->addSpacing(8);
+    layout->addSpacing(12);
     m_snap = iconButton("timelineSnap", "g-snap", tr("Snap"));
     m_snap->setOn(timeline->snapping());
     layout->addWidget(m_snap, 0, Qt::AlignVCenter);
@@ -2467,7 +2468,8 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
     m_slider->setObjectName(QStringLiteral("timelineZoomSlider"));
     m_slider->setRange(0, kSteps);
     m_slider->setSingleStep(1);
-    m_slider->setFixedWidth(64);
+    // A 62 track and the knob's overhang, flush with the buttons.
+    m_slider->setFixedWidth(72);
     m_slider->setTip(tr("Timeline zoom"));
     m_slider->setAccessibleName(tr("Timeline zoom"));
     m_slider->setFocusPolicy(Qt::NoFocus);

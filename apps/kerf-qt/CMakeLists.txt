@@ -106,15 +106,16 @@ target_include_directories(kerf-qt-shared PUBLIC ${CMAKE_CURRENT_LIST_DIR} ${CMA
 target_link_libraries(kerf-qt-shared PUBLIC Qt6::Widgets "${KERF_BRIDGE_LIBRARY}"
     ${KERF_QT_PLATFORM_LIBRARIES})
 
-# Bundled fonts (resources/fonts/*.ttf, *.otf) are served at :/fonts/<file>;
-# with none there the editor uses the system's.
+# The design's fonts are compiled in and served at :/fonts/<file>, so an
+# install needs none on the system. Their licences travel with the app.
 file(GLOB KERF_QT_FONTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" resources/fonts/*.ttf resources/fonts/*.otf)
-if(KERF_QT_FONTS)
-    qt_add_resources(kerf-qt-shared fonts PREFIX /fonts BASE resources/fonts FILES ${KERF_QT_FONTS})
-endif()
+qt_add_resources(kerf-qt-shared fonts PREFIX /fonts BASE resources/fonts FILES ${KERF_QT_FONTS})
+file(GLOB KERF_QT_FONT_LICENSES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" resources/fonts/*-LICENSE.txt)
 
 add_executable(kerf-qt main.cpp ${KERF_QT_VARIANT_SOURCES})
 if(APPLE)
+    target_sources(kerf-qt PRIVATE ${KERF_QT_FONT_LICENSES})
+    set_source_files_properties(${KERF_QT_FONT_LICENSES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources/fonts)
     # A macOS application bundle (target/qt/kerf-qt.app), so the system
     # treats the editor as an app of its own: its name in the menu bar and
     # the Dock, and an identifier other apps and tools can address it by.

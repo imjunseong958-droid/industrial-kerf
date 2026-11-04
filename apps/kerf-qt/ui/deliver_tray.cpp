@@ -214,7 +214,8 @@ void DeliverTray::updateBar() {
     if (const QString project = deliver::projectTitle(directory, m_bus ? m_bus->timeline() : QJsonObject()); !project.isEmpty())
         parts << project;
     if (m_bus) {
-        if (const QString sequence = deliver::masterSequence(m_bus->timeline()).value(QStringLiteral("name")).toString(); !sequence.isEmpty())
+        if (const QString sequence = deliver::masterSequence(m_bus->timeline()).value(QStringLiteral("name")).toString();
+            !sequence.isEmpty() && !parts.contains(sequence))
             parts << sequence;
         if (m_bus->revision() > 0) parts << QStringLiteral("rev %1").arg(m_bus->revision());
     }

@@ -80,8 +80,10 @@ QString timelineTimecode(double seconds, double fps);
 // The ruler's ticks (mockup-spec 7.3): a minor tick every `minorFrames`,
 // a major one every `majorFrames` (five minor), a label every `labelFrames`
 // (ten minor). At the design's 25p and 26.8 pt/s that is 10, 50 and 100
-// frames; other rates and zooms take the smallest step of the ladder 1, 2,
-// 5, 10, 20, 50 ... frames whose minor ticks stand at least 8 pt apart.
+// frames. Minor ticks stand at least 8 pt apart. Labels under a second apart
+// step 1, 2, 5, 10, 20, 50 ... frames tenfold; a second or more apart, they
+// land on whole seconds (1, 2, 4, 8, 15, 30, 60 ...) at any rate, so 24p reads
+// 00:04 with ticks every 12 frames.
 struct RulerTicks {
     qint64 minorFrames = 10;
     qint64 majorFrames = 50;

@@ -156,7 +156,24 @@ RulerTicks rulerTicks(double pixelsPerSecond, double fps) {
         }
         if (found) break;
     }
-    return {minor, minor * 5, minor * 10};
+    const qint64 perSecond = std::max<qint64>(1, std::llround(rate));
+    if (minor * 10 < perSecond) return {minor, minor * 5, minor * 10};
+    // Ten minor ticks 8 apart is the least a label step may span.
+    const double least = 80.0 / std::max(pixelsPerSecond, 1e-6);
+    qint64 seconds = 0;
+    for (const qint64 step : {1, 2, 4, 8, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600}) {
+        if (double(step) >= least) {
+            seconds = step;
+            break;
+        }
+    }
+    if (seconds == 0) seconds = 3600 * qint64(std::ceil(least / 3600.0));
+    const qint64 label = seconds * perSecond;
+    // The most minor ticks the label step divides into whole frames.
+    for (const qint64 parts : {10, 8, 5, 4, 2}) {
+        if (label % parts == 0) return {label / parts, parts % 2 == 0 ? label / 2 : label, label};
+    }
+    return {label, label, label};
 }
 
 QString rulerLabel(qint64 frame, double fps, qint64 labelFrames) {

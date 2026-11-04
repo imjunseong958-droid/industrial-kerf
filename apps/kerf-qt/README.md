@@ -37,11 +37,13 @@ as Final Cut Pro does. There is one graphite ramp (#050505 behind everything,
 #1c1c1c cards and menus, #262626 raised controls, #303030 chosen ones) with
 ink #ededed / #a1a1a1 / #8a8a8a, and one blue accent (#3366e6) for Kerf, focus,
 proposals and the default action; the playhead is its own red. Colours, type
-(Inter and JetBrains Mono when bundled under `resources/fonts/`, else the
-system UI font and Menlo at the same sizes, with tabular figures), radii,
+(Inter and JetBrains Mono at 400 and 500, with tabular figures), radii,
 spacing, control heights and motion (120/160/200/220 ms) come only from
 `design_tokens.h` and the kit in `ui/components.h` and `ui/icons.h` (icons
 are the mockup's SVG path data drawn as `QPainterPath`, without QtSvg).
+The fonts are compiled into the app from `resources/fonts/` (Inter 4.1 and
+JetBrains Mono 2.304, both SIL OFL 1.1), so an install needs none on the
+system; their licences ship beside it, in the bundle's `Resources/fonts`.
 Menus, tooltips and popovers are flat cards with the `--pop` shadow
 (0 8 24, 45% black) round them; tooltips name the control and its shortcut.
 There is no light appearance and no `KERF_COLOR_SCHEME`. On macOS the

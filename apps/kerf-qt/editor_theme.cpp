@@ -3,7 +3,10 @@
 #include "editor_style.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QDirIterator>
 #include <QEvent>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHash>
 #include <QJsonArray>
@@ -503,6 +506,11 @@ const EditorTheme &editorTheme() {
         s.computed = true;
     }
     return s.theme;
+}
+
+void loadBundledFonts() {
+    QDirIterator files(QStringLiteral(":/fonts"), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files);
+    while (files.hasNext()) QFontDatabase::addApplicationFont(files.next());
 }
 
 void applyEditorAppearance() {

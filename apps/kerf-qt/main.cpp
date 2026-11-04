@@ -7,8 +7,6 @@
 
 #include <QApplication>
 #include <QDir>
-#include <QDirIterator>
-#include <QFontDatabase>
 #include <QPointer>
 #include <QSettings>
 #include <QSize>
@@ -16,14 +14,6 @@
 #include <QTimer>
 
 namespace {
-
-// Register every font file under :/fonts (resources/fonts, compiled in only
-// when that folder holds .ttf or .otf files).
-void loadBundledFonts() {
-    QDirIterator files(QStringLiteral(":/fonts"), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files,
-                       QDirIterator::Subdirectories);
-    while (files.hasNext()) QFontDatabase::addApplicationFont(files.next());
-}
 
 // An editor window for `project`. It lives on the heap and is deleted when
 // closed; opening another project from it opens a new window first, so the
@@ -58,10 +48,8 @@ int main(int argc, char **argv) {
     QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
     // The design's faces: Inter for the interface and JetBrains Mono for
-    // figures, from the bundle's :/fonts when it carries them. Without them
-    // the interface is the system's UI font and figures Menlo, at the same
-    // sizes, with tabular figures (design_tokens.h).
-    loadBundledFonts();
+    // figures, compiled into the app.
+    kerf::loadBundledFonts();
     app.setFont(kerf::tokens::font(kerf::tokens::body));
     // Fusion with the design's flat metrics and focus outline.
     kerf::useEditorStyle();

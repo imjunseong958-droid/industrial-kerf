@@ -986,7 +986,9 @@ void ProjectPanel::rebuildRoles() {
         rowLayout->addWidget(check);
         rowLayout->addWidget(label(group.name, tokens::control, tokens::ink));
         rowLayout->addStretch(1);
-        rowLayout->addWidget(label(group.tracks.join(QLatin1Char(' ')), tokens::monoSmall, tokens::ink3));
+        QStringList badges;
+        for (const QString &track : group.tracks) badges << trackBadge(QJsonObject{{QStringLiteral("tracks"), m_tracks}}, track).badge;
+        rowLayout->addWidget(label(badges.join(QLatin1Char(' ')), tokens::monoSmall, tokens::ink3));
         m_roleRows->addWidget(row);
         m_roleChecks << check;
     }

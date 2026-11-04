@@ -271,6 +271,12 @@ private slots:
         named["name"] = "Harbor Teaser";
         h.setTimeline(named);
         QCOMPARE(tray.projectText(), QStringLiteral("Harbor Teaser · 30 s spot v7 · rev 22 · deliveries/"));
+        // A sequence named for the project is not said twice.
+        named["name"] = "30 s spot v7";
+        h.setTimeline(named);
+        QCOMPARE(tray.projectText(), QStringLiteral("30 s spot v7 · rev 22 · deliveries/"));
+        named["name"] = "Harbor Teaser";
+        h.setTimeline(named);
         // The link names the folder, as the comments' Copy link does.
         QCOMPARE(tray.paperworkView()->reviewLinkText(), QStringLiteral("kerf://atlas/rev22"));
         // Before the notes are known, nothing is said of them and the master waits.

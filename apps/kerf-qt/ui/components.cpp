@@ -612,8 +612,14 @@ void IconButton::setOn(bool on) {
 
 QColor IconButton::iconColor() const {
     if (!isEnabled()) return color(dis);
-    if (isChecked()) return color(ink);
+    if (isChecked() || m_inkAtRest) return color(ink);
     return mix(color(ink2), color(ink), hoverProgress());
+}
+
+void IconButton::setInkAtRest(bool ink) {
+    if (ink == m_inkAtRest) return;
+    m_inkAtRest = ink;
+    update();
 }
 
 QSize IconButton::sizeHint() const { return QSize(int(m_size), int(m_size)); }

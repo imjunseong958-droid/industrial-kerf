@@ -6,10 +6,14 @@
 
 #include <QColor>
 #include <QEasingCurve>
+#include <QFile>
 #include <QFont>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QObject>
 #include <QSet>
 #include <QSettings>
+#include <QStringList>
 #include <QTest>
 
 #include <initializer_list>
@@ -98,7 +102,40 @@ private slots:
         // Figures are tabular everywhere, so timecodes and counts hold still.
         QCOMPARE(ui.featureValue(QFont::Tag("tnum")), 1u);
         QCOMPARE(mono.featureValue(QFont::Tag("tnum")), 1u);
+        // Inter keeps its default two-storey a, as the mockup shows it.
+        QVERIFY(!ui.isFeatureSet(QFont::Tag("cv11")));
 #endif
+    }
+
+    // Inter and JetBrains Mono come from the app, at the two weights the
+    // design uses, whatever the system has installed.
+    void theDesignsFontsComeWithTheApp() {
+        using namespace tokens;
+        const std::initializer_list<std::pair<const char *, const char *>> files{
+            {"Inter-Regular.ttf", uiFamily},
+            {"Inter-Medium.ttf", uiFamily},
+            {"JetBrainsMono-Regular.ttf", monoFamily},
+            {"JetBrainsMono-Medium.ttf", monoFamily}};
+        for (const auto &[file, family] : files) {
+            const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/") + QString::fromLatin1(file));
+            QVERIFY2(id >= 0, file);
+            QVERIFY2(QFontDatabase::applicationFontFamilies(id).contains(QString::fromLatin1(family)), file);
+        }
+        for (const char *family : {uiFamily, monoFamily}) {
+            const QStringList styles = QFontDatabase::styles(QString::fromLatin1(family));
+            QVERIFY2(styles.contains(QStringLiteral("Regular")), family);
+            QVERIFY2(styles.contains(QStringLiteral("Medium")), family);
+        }
+        // A style's font resolves to the bundled face at its weight.
+        QCOMPARE(QFontInfo(font(body)).family(), QString::fromLatin1(uiFamily));
+        QCOMPARE(QFontInfo(font(title)).family(), QString::fromLatin1(uiFamily));
+        QCOMPARE(QFontInfo(font(title)).styleName(), QStringLiteral("Medium"));
+        QCOMPARE(QFontInfo(font(timecode)).family(), QString::fromLatin1(monoFamily));
+        QCOMPARE(QFontInfo(font(timecode)).styleName(), QStringLiteral("Regular"));
+        QVERIFY(QFontInfo(font(timecode)).fixedPitch());
+        // Each face's licence is there to ship beside it.
+        for (const char *license : {"Inter-LICENSE.txt", "JetBrainsMono-LICENSE.txt"})
+            QVERIFY2(QFile::exists(QStringLiteral(KERF_QT_SOURCE_DIR "/resources/fonts/") + QString::fromLatin1(license)), license);
     }
 
     // cubic-bezier(.22, 1, .36, 1): fast out of the start, settled at the end.

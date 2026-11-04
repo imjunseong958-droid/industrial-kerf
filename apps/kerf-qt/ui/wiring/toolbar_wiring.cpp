@@ -105,8 +105,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
     w->m_windowButtons->setFixedWidth(firstControlX(0, false) - 16 - row->spacing());
     row->addWidget(w->m_windowButtons);
-    // The ≡ button's own 4 past the lights' room (mockup #appBtn).
-    row->addSpacing(4);
+    // The toolbar's 4 gap and the ≡ button's own 4 past the lights' room
+    // (mockup #appBtn).
+    row->addSpacing(8);
 #endif
     // The one way to everything else: Media, Effects and titles, Inspector,
     // the trays, Import, Sequence settings, Settings, and View.

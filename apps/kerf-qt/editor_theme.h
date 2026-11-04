@@ -313,6 +313,10 @@ struct EditorTheme {
 // The editor's one theme, built from design_tokens.h.
 EditorTheme makeEditorTheme();
 
+// Register every font compiled in under :/fonts with the application, so
+// tokens::font() finds them on a system that has none installed.
+void loadBundledFonts();
+
 // The theme in force.
 const EditorTheme &editorTheme();
 // Set the application's palette and style sheet from the theme the first

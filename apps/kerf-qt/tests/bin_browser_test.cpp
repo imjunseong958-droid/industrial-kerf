@@ -647,6 +647,10 @@ private slots:
         window.applySnapshot(QJsonObject{{"revision", 9}, {"duration", 30}, {"timeline", QJsonObject{{"fps", 25}, {"tracks", tracks}}}});
         ProjectPanel *bin = window.m_projectPanel;
         QCOMPARE(bin->m_roleChecks.size(), 6);
+        // A row names its tracks as the timeline's heads do, captions too.
+        auto *captionsRow = bin->findChild<QWidget *>(QStringLiteral("binRole_captions"));
+        QVERIFY(captionsRow);
+        QCOMPARE(captionsRow->findChildren<QLabel *>().constLast()->text(), QStringLiteral("V6"));
         ui::CheckBox *titles = bin->findChild<ui::CheckBox *>(QStringLiteral("binRoleCheck_titles"));
         QVERIFY(titles);
         QVERIFY(!titles->isChecked());
