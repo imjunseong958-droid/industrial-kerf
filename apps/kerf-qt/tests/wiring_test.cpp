@@ -8,19 +8,16 @@
 #include "editor_bus.h"
 #include "inspector_column.h"
 #include "chat_panel.h"
-#include "stage_rail.h"
 #include "command_registry.h"
-#include "device_frame.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "effects_panel.h"
 #include "inspector_panel.h"
 #include "inspector_widgets.h"
 #include "main_window.h"
+#include "ui/wiring/toolbar_wiring.h"
 #include "media_artwork.h"
-#include "player_overlay.h"
 #include "presets_panel.h"
-#include "program_level.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
@@ -28,7 +25,7 @@
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -81,7 +78,6 @@
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -97,14 +93,6 @@
 #include <QWheelEvent>
 #include <QWidget>
 
-#include <DockAreaTabBar.h>
-#include <DockAreaTitleBar.h>
-#include <DockAreaWidget.h>
-#include <DockManager.h>
-#include <DockSplitter.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
-#include <ElidingLabel.h>
 
 #include <algorithm>
 #include <climits>
@@ -216,7 +204,6 @@ private slots:
         QCOMPARE(split->shortcut(), portable);
         window.m_commands->setKeymap(QStringLiteral("kerf"));
         QCOMPARE(split->shortcut(), QKeySequence(Qt::Key_S));
-        QVERIFY(window.m_viewer->overlay()->controlTip(PlayerOverlay::Control::Play).startsWith(QStringLiteral("Play (")));
     }
 
     void liveSyncAndCommitsAreCollabRequests() {
@@ -238,8 +225,7 @@ private slots:
             QVERIFY(QSettings().value(QStringLiteral("collab/liveProjects")).toStringList().contains(path));
             status.insert("live", true);
             window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
-            QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("live"));
-            QVERIFY(window.m_syncChip->text().endsWith(QStringLiteral("· live")));
+            QVERIFY(window.m_commands->action(QStringLiteral("collab.live"))->isChecked());
 
             window.m_commands->action(QStringLiteral("collab.sync"))->trigger();
             QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_sync"}}));
@@ -297,10 +283,10 @@ private slots:
         // Without gh the bridge answers with GitHub's page for starting one.
         const QString compare = QStringLiteral("https://github.com/jun/film/compare/color?expand=1");
         window.handleEvent(QJsonObject{{"type", "collab_pull_request"}, {"url", compare}, {"created", false}});
-        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Opened GitHub's page for a new pull request: ") + compare);
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Opened GitHub's page for a new pull request: ") + compare);
         const QString existing = QStringLiteral("https://github.com/jun/compare/pull/4");
         window.handleEvent(QJsonObject{{"type", "collab_pull_request"}, {"url", existing}, {"created", false}});
-        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This branch already has a pull request: ") + existing);
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("This branch already has a pull request: ") + existing);
     }
 
     // Every command the registry lists for the editor is wired: a frontend
@@ -350,33 +336,33 @@ private slots:
         QCOMPARE(safe->isChecked(), window.m_viewer->safeZonesShown());
         safe->trigger();
         QCOMPARE(window.m_viewer->safeZonesShown(), safe->isChecked());
-        QCOMPARE(window.m_safeZonesAction->isChecked(), safe->isChecked());
-        window.m_safeZonesAction->trigger();
-        QCOMPARE(safe->isChecked(), window.m_viewer->safeZonesShown());
-        QAction *device = window.m_commands->action(QStringLiteral("view.devicePreview"));
-        const bool shown = device->isChecked();
-        device->trigger();
-        QCOMPARE(device->isChecked(), !shown);
-        QCOMPARE(window.m_rail->deviceButton()->isChecked(), !shown);
-        device->trigger();
-        // Comments is the assistant's switch.
-        QAction *comments = window.m_commands->action(QStringLiteral("view.comments"));
-        QVERIFY(comments->isChecked() && window.chatOpen());
-        comments->trigger();
-        QVERIFY(!window.chatOpen());
-        QVERIFY(!window.m_commands->action(QStringLiteral("window.assistant"))->isChecked());
-        comments->trigger();
-        QVERIFY(window.chatOpen());
+        safe->trigger();
+        QSettings().remove(QStringLiteral("viewer/safeZones"));
+        // The commands of the old layout are gone.
+        for (const char *gone : {"workspace.edit", "window.saveWorkspace", "window.saveWorkspaceAs", "window.resetWorkspace", "window.program",
+                                 "window.timeline", "window.inspectorFollows", "view.dim", "view.devicePreview", "view.comments"})
+            QVERIFY2(!window.m_commands->action(QString::fromLatin1(gone)), gone);
+        // ⇧⌘J puts the keys in the composer: the conversation is always open.
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QAction *assistant = window.m_commands->action(QStringLiteral("window.assistant"));
+        QVERIFY(!assistant->isCheckable());
+        window.activateWindow();
+        window.m_timeline->setFocus();
+        assistant->trigger();
+        QTRY_VERIFY(window.m_chatInput->hasFocus() || QApplication::focusWidget() == window.m_chatInput);
+        window.close();
         // The card's Accept and Reject go out as the proposal's.
         window.bus()->run(QStringLiteral("comment.reject"), QJsonObject{{"proposal", "p4"}});
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "reject"}, {"proposalId", "p4"}, {"revision", 3}}));
-        // The workspaces' commands are a radio group.
+        // The trays' commands and the base state are a radio group.
         window.m_commands->action(QStringLiteral("workspace.deliver"))->trigger();
-        QCOMPARE(window.m_workspace->current(), QStringLiteral("Deliver"));
+        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Deliver);
         QVERIFY(window.m_commands->action(QStringLiteral("workspace.deliver"))->isChecked());
         QVERIFY(!window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
         window.m_commands->action(QStringLiteral("workspace.review"))->trigger();
-        QSettings().remove(QStringLiteral("workspace"));
+        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
+        QVERIFY(window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
     }
 
     void syncConflictsSayWhereAndWhoseVersionWasKept() {
@@ -392,7 +378,7 @@ private slots:
         const int count = window.m_activityList->count();
         QVERIFY(window.m_activityList->item(count - 2)->text().endsWith(QStringLiteral("Kept yours · s1/V1/c3: duration changed on both sides")));
         QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept theirs · s1/V1/c9: overlapped c5 on V1; moved to V2")));
-        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Synced: 1 change kept yours, 1 change kept theirs"));
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Synced: 1 change kept yours, 1 change kept theirs"));
     }
 };
 

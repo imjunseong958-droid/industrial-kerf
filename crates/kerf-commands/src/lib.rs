@@ -1055,6 +1055,14 @@ pub static COMMANDS: &[Command] = &[
         ))),
         &["O"],
     ),
+    keys(
+        timeline(frontend(menu(
+            command("mark.clear", "Clear Marks", connected),
+            Menu::Markers,
+            2,
+        ))),
+        &["Ctrl+Shift+X"],
+    ),
     // Add Marker (M) is `marker.add`; Snap (⇧S) is `sequence.snap`.
     keys(
         timeline(frontend(menu(
@@ -1124,22 +1132,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["'"],
     )),
-    checkable(keys(
-        frontend(menu(
-            command("view.dim", "Dim Surround", always),
-            Menu::View,
-            0,
-        )),
-        &["Shift+L"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("view.devicePreview", "Device Preview", always),
-            Menu::View,
-            0,
-        )),
-        &["Shift+D"],
-    )),
     keys(
         frontend(menu(
             command("viewer.zoom", "Viewer Zoom…", always),
@@ -1148,12 +1140,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Shift+Z"],
     ),
-    // The comments panel; ⇧⌘J belongs to `window.assistant`, the same switch.
-    checkable(frontend(menu(
-        command("view.comments", "Comments", always),
-        Menu::View,
-        0,
-    ))),
     // The Inspector column's kinds, ⌃⌥4-6 as in Final Cut Pro.
     checkable(keys(
         frontend(menu(
@@ -1264,15 +1250,7 @@ pub static COMMANDS: &[Command] = &[
         Menu::Collaborate,
         2,
     ),
-    // The four built-in workspaces, one chosen at a time.
-    checkable(keys(
-        frontend(menu(
-            command("workspace.edit", "Edit", always),
-            Menu::Window,
-            0,
-        )),
-        &["Alt+Shift+1"],
-    )),
+    // The base state and the two trays over it, one chosen at a time.
     checkable(keys(
         frontend(menu(
             command("workspace.review", "Review", always),
@@ -1297,45 +1275,17 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Alt+Shift+4"],
     )),
-    frontend(menu(
-        command(
-            "window.saveWorkspace",
-            "Save Changes to This Workspace",
-            always,
-        ),
-        Menu::Window,
-        0,
-    )),
-    frontend(menu(
-        command("window.saveWorkspaceAs", "Save as New Workspace…", always),
-        Menu::Window,
-        0,
-    )),
-    keys(
+    // The sheets over the conversation; the same command opens and closes one.
+    checkable(keys(
         frontend(menu(
-            command("window.resetWorkspace", "Reset to Saved Layout", always),
+            command("window.project", "Media", always),
             Menu::Window,
-            0,
+            1,
         )),
-        &["Alt+Shift+0"],
-    ),
-    checkable(frontend(menu(
-        command("window.project", "Project", always),
-        Menu::Window,
-        1,
-    ))),
+        &["Ctrl+1"],
+    )),
     checkable(frontend(menu(
         command("window.source", "Source Monitor", always),
-        Menu::Window,
-        1,
-    ))),
-    checkable(frontend(menu(
-        command("window.program", "Program Monitor", always),
-        Menu::Window,
-        1,
-    ))),
-    checkable(frontend(menu(
-        command("window.timeline", "Timeline", always),
         Menu::Window,
         1,
     ))),
@@ -1350,39 +1300,29 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Ctrl+4"],
     )),
-    // Whether clicking a clip brings the Inspector to the front of its column.
     checkable(keys(
         frontend(menu(
-            command(
-                "window.inspectorFollows",
-                "Inspector Follows Selection",
-                always,
-            ),
+            command("window.effects", "Effects and titles", always),
             Menu::Window,
             1,
         )),
-        &["Ctrl+Alt+4"],
+        &["Ctrl+5"],
     )),
-    checkable(frontend(menu(
-        command("window.effects", "Effects", always),
-        Menu::Window,
-        1,
-    ))),
     checkable(frontend(menu(
         command("window.presets", "Presets", always),
         Menu::Window,
         1,
     ))),
-    // Shows and hides Kerf's conversation beside the Program monitor, as
-    // the comments button does beside a Short; Ask Kerf is Ctrl+J.
-    checkable(keys(
+    // Kerf's conversation is always open: this puts the keys in its composer.
+    // Ask Kerf is Ctrl+J.
+    keys(
         frontend(menu(
             command("window.assistant", "Kerf Assistant", always),
             Menu::Window,
             1,
         )),
         &["Ctrl+Shift+J"],
-    )),
+    ),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.
@@ -1430,8 +1370,7 @@ pub static KEYMAPS: &[Keymap] = &[
             ("tool.roll", &[]),
             ("tool.slip", &[]),
             ("tool.slide", &[]),
-            // Final Cut Pro's workspaces are on ⌃⇧1, ⌃⇧2, …
-            ("workspace.edit", &["Meta+Shift+1"]),
+            // Final Cut Pro's workspaces are on ⌃⇧2, ⌃⇧3, …
             ("workspace.review", &["Meta+Shift+2"]),
             ("workspace.finish", &["Meta+Shift+3"]),
             ("workspace.deliver", &["Meta+Shift+4"]),
@@ -1942,32 +1881,29 @@ mod tests {
     }
 
     #[test]
-    fn the_assistant_toggles_from_the_keyboard_in_every_keymap() {
+    fn the_assistant_has_its_key_in_every_keymap() {
         let assistant = find("window.assistant").unwrap();
-        assert!(assistant.checkable);
+        // It focuses the composer: the conversation has no closed state.
+        assert!(!assistant.checkable);
         for keymap in KEYMAPS {
             assert_eq!(keymap.keys(assistant), ["Ctrl+Shift+J"], "{}", keymap.id);
         }
     }
 
     #[test]
-    fn workspaces_and_viewer_switches_have_their_keys_in_every_keymap() {
+    fn base_state_trays_sheets_and_viewer_switches_have_their_keys_in_every_keymap() {
         let kerf = Keymap::find("kerf");
         let premiere = Keymap::find("premiere");
         let fcp = Keymap::find("fcp");
-        for (index, id) in [
-            "workspace.edit",
-            "workspace.review",
-            "workspace.finish",
-            "workspace.deliver",
-        ]
-        .into_iter()
-        .enumerate()
+        for (index, id) in ["workspace.review", "workspace.finish", "workspace.deliver"]
+            .into_iter()
+            .enumerate()
         {
             let command = find(id).unwrap();
             assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
             assert_eq!(command.menu, Some(Menu::Window), "{id}");
-            let number = index + 1;
+            // On the same keys as before the Edit workspace went.
+            let number = index + 2;
             assert_eq!(kerf.keys(command), [format!("Alt+Shift+{number}")], "{id}");
             assert_eq!(
                 premiere.keys(command),
@@ -1977,11 +1913,17 @@ mod tests {
             assert_eq!(fcp.keys(command), [format!("Meta+Shift+{number}")], "{id}");
         }
         let keys = |id: &str| kerf.keys(find(id).unwrap());
-        assert_eq!(keys("window.resetWorkspace"), ["Alt+Shift+0"]);
-        assert_eq!(keys("view.dim"), ["Shift+L"]);
+        assert_eq!(keys("window.project"), ["Ctrl+1"]);
+        assert_eq!(keys("window.inspector"), ["Ctrl+4"]);
+        assert_eq!(keys("window.effects"), ["Ctrl+5"]);
+        assert_eq!(find("window.project").unwrap().label, "Media");
+        assert_eq!(find("window.effects").unwrap().label, "Effects and titles");
+        for id in ["window.project", "window.inspector", "window.effects"] {
+            let command = find(id).unwrap();
+            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
+        }
         assert_eq!(keys("view.annotations"), ["Shift+A"]);
         assert_eq!(keys("view.safeZones"), ["'"]);
-        assert_eq!(keys("view.devicePreview"), ["Shift+D"]);
         assert_eq!(keys("viewer.zoom"), ["Shift+Z"]);
         assert_eq!(keys("playback.loop"), ["Ctrl+L"]);
         assert_eq!(keys("mark.in"), ["I"]);
@@ -2000,13 +1942,29 @@ mod tests {
         assert_eq!(keys("composer.draw"), ["D"]);
         assert!(keys("source.play").is_empty());
         assert!(keys("source.reveal").is_empty());
-        // The comments panel is the assistant's switch, whose key it is.
-        assert!(keys("view.comments").is_empty());
         assert_eq!(keys("window.assistant"), ["Ctrl+Shift+J"]);
         // The program's marks are the timeline's, the source's the Source
         // monitor's: the same keys in their own panels.
         assert_eq!(find("mark.in").unwrap().scope, Scope::Timeline);
         assert_eq!(find("source.markIn").unwrap().scope, Scope::Source);
+    }
+
+    #[test]
+    fn the_commands_of_the_old_layout_are_gone() {
+        for id in [
+            "workspace.edit",
+            "window.saveWorkspace",
+            "window.saveWorkspaceAs",
+            "window.resetWorkspace",
+            "window.program",
+            "window.timeline",
+            "window.inspectorFollows",
+            "view.dim",
+            "view.devicePreview",
+            "view.comments",
+        ] {
+            assert!(find(id).is_none(), "{id}");
+        }
     }
 
     #[test]
@@ -2019,21 +1977,18 @@ mod tests {
         for id in [
             "sequence.settings",
             "keyboard.customise",
-            "view.dim",
             "view.annotations",
             "viewer.zoom",
             "playback.loop",
             "mark.in",
             "mark.out",
+            "mark.clear",
             "inspector.audio",
             "inspector.info",
-            "workspace.edit",
             "workspace.review",
             "workspace.finish",
             "workspace.deliver",
             "view.safeZones",
-            "view.devicePreview",
-            "view.comments",
             "inspector.video",
             "timeline.addTrack",
             "export.master",
@@ -2046,11 +2001,10 @@ mod tests {
         assert_eq!(offline["qc.run"], json!(OFFLINE));
         // The program's marks and loop need a program; the viewer's
         // switches and the Inspector's kinds work without one.
-        for id in ["playback.loop", "mark.in", "mark.out"] {
+        for id in ["playback.loop", "mark.in", "mark.out", "mark.clear"] {
             assert_eq!(offline[id], json!(OFFLINE), "{id}");
         }
         for id in [
-            "view.dim",
             "view.annotations",
             "viewer.zoom",
             "inspector.audio",

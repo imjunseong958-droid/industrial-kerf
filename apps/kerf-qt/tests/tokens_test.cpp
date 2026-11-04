@@ -119,22 +119,23 @@ private slots:
         QVERIFY(tokens::motion::segment < tokens::motion::move);
     }
 
-    // The default sizes fill the 1600 x 1000 design edge to edge, and the
-    // stage's own measures meet as section 3.0 places them.
+    // The default sizes fill the 1600 x 1000 design edge to edge.
     void layoutFillsTheDesignCanvas() {
         using namespace tokens::layout;
-        const int program = canvasHeight - toolbar - band - status;
-        QCOMPARE(program, 592);
-        QCOMPARE(program - strip, 564); // the stage
-        const int timeline = canvasWidth - bin - browser;
-        QCOMPARE(timeline, 1024);
+        // A wide picture and its conversation over the timeline.
+        const int picture = canvasWidth - conversationWide;
+        QCOMPARE(picture, 1200);
+        QCOMPARE(picture * 9 / 16, 675);
+        QCOMPARE(canvasHeight - toolbar - 675, 285);
+        // The strip and the ruler over the default tracks' 225.
+        QCOMPARE(285 - strip - 32, 225);
+        // A vertical picture has the content's height.
+        QCOMPARE(canvasHeight - toolbar, 960);
+        QCOMPARE(band, 344);
+        QVERIFY(conversationLeast < conversationWide);
+        QVERIFY(timelineLeast < band);
         QCOMPARE(inspector, browser);
-        const int stage = program - strip;
-        const int scrubTop = stage - stageBottom - scrub;
-        QCOMPARE(scrubTop, 500);
-        QCOMPARE(scrubTop - 9 - stageTop, 483); // the device box height
-        QVERIFY(panelMin <= panel && panel <= panelMax);
-        QVERIFY(panelMin <= panelPhone && panelPhone <= panelMax);
+        QVERIFY(bin < inspector);
     }
 };
 

@@ -9,20 +9,17 @@
 #include "ask_prompt.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "device_frame.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "effects_panel.h"
 #include "inspector_panel.h"
 #include "inspector_widgets.h"
 #include "main_window.h"
+#include "ui/inspector_column.h"
 #include "media_artwork.h"
-#include "player_overlay.h"
 #include "presets_panel.h"
 #include "proposal_card.h"
 #include "comment_row.h"
-#include "program_strip.h"
-#include "program_level.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
@@ -30,7 +27,7 @@
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -84,7 +81,6 @@
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -101,14 +97,6 @@
 #include <QWheelEvent>
 #include <QWidget>
 
-#include <DockAreaTabBar.h>
-#include <DockAreaTitleBar.h>
-#include <DockAreaWidget.h>
-#include <DockManager.h>
-#include <DockSplitter.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
-#include <ElidingLabel.h>
 
 #include <algorithm>
 #include <climits>
@@ -124,6 +112,28 @@ class ThemeTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    // A colour or size on the app sheet's * rule beats every label's own
+    // palette and setFont: role names and times read as bright 12 pt text.
+    void aLabelKeepsItsOwnInkAndSize() {
+        applyEditorAppearance();
+        QLabel label(QStringLiteral("HHHHHHHH"));
+        label.setFont(tokens::font(tokens::meta));
+        QPalette palette = label.palette();
+        palette.setColor(QPalette::WindowText, tokens::color(tokens::ink3));
+        label.setPalette(palette);
+        label.ensurePolished();
+        QCOMPARE(label.font().pixelSize(), tokens::meta.px);
+        label.resize(label.sizeHint());
+        QImage image(label.size(), QImage::Format_RGB32);
+        image.fill(Qt::black);
+        label.render(&image);
+        int brightest = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) brightest = std::max(brightest, qGray(image.pixel(x, y)));
+        QVERIFY(brightest > 0);
+        QVERIFY2(brightest <= qGray(tokens::ink3), qPrintable(QString::number(brightest)));
+    }
+
     // Each test starts with the conversation's preferences as a new user has them.
     void init() { QSettings().remove(QStringLiteral("viewer")); }
 
@@ -170,9 +180,6 @@ private slots:
         // rail button is clear at rest and the on fill when on (.ib.on), its
         // symbol the ink; the launcher's format tiles are raised on the page.
         QCOMPARE(t.viewerCaptionBorder.rgba(), t.viewerCaption.rgba());
-        QCOMPARE(t.railButton.alpha(), 0);
-        QCOMPARE(t.railButtonActive.rgb(), QColor("#303030").rgb());
-        QCOMPARE(t.railGlyphActive.rgb(), QColor("#ededed").rgb());
         QVERIFY(l.tile.lightness() > l.content.lightness());
         // Clips are graphite: no clip kind's header has any colour in it,
         // and every label reads on its header.
@@ -200,7 +207,7 @@ private slots:
     // text on the filled accent reads at 4.5:1 too, with no exemption.
     void accentTextReadsOnEverySurfaceItIsDrawnOn() {
         const EditorTheme theme = makeEditorTheme();
-        for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar, theme.raised, theme.window,
+        for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.raised, theme.window,
                                       theme.chrome, theme.well, theme.field, theme.dialog, theme.group, theme.chatSurface,
                                       theme.accentTint, theme.accentTintPressed}) {
             const qreal ratio = contrastRatio(theme.accentText, surface);
@@ -221,7 +228,7 @@ private slots:
         static const QRegularExpression rule(QStringLiteral("([^{}]+)\\{([^{}]*)\\}"));
         static const QRegularExpression size(QStringLiteral("font-size:\\s*(\\d+)px"));
         const EditorTheme t = makeEditorTheme();
-        for (const QString &sheet : {editorStyleSheet(t), dockStyleSheet(t), launcherStyleSheet(launcherTheme())}) {
+        for (const QString &sheet : {editorStyleSheet(t), launcherStyleSheet(launcherTheme())}) {
             for (auto it = rule.globalMatch(sheet); it.hasNext();) {
                 const QRegularExpressionMatch match = it.next();
                 const QString selector = match.captured(1).trimmed();
@@ -275,7 +282,6 @@ private slots:
                 {"default button's label", t.onAccent, t.accent, 4.5},
                 {"check box's tick", t.ink2, t.on, 3.0},
                 {"tertiary text on chrome", t.ink3, t.chrome, 4.5},
-                {"status bar text", t.statusText, t.statusBar, 4.5},
                 {"primary button's label under the pointer", t.onAccent, t.accentHover, 4.5},
                 {"picture clip's name", t.clipVideo.label, t.clipVideo.header, 4.5},
                 {"sound clip's name", t.clipAudio.label, t.clipAudio.header, 4.5},
@@ -303,10 +309,6 @@ private slots:
                 {"Kerf's monogram on its avatar", t.chatAvatarKerfText, t.chatAvatarKerf, 4.5},
                 {"the user's initials on their avatar", t.chatAvatarUserText, t.chatAvatarUser, 4.5},
                 {"chip's label on its wash", t.chatChipText, laidOn(t.chatSurface, t.chatChip), 4.5},
-                {"open chat toggle's symbol on its disc", t.railGlyphActive, laidOn(t.viewerSurround, t.railButtonActive), 3.0},
-                {"rail symbol on its disc", t.railGlyph, laidOn(t.viewerSurround, t.railButton), 3.0},
-                {"rail label on the stage", t.railLabel, t.viewerSurround, 4.5},
-                {"rail symbol on its disc under the pointer", t.railGlyph, laidOn(t.viewerSurround, t.railButtonHover), 3.0},
                 {"chat's text on its surface", t.chatText, t.chatSurface, 4.5},
                 {"chat's error tag", t.errorText, t.chatSurface, 4.5},
                 {"chat's header buttons' symbols on their wash", t.chatText, laidOn(t.chatSurface, t.chatChipHover), 3.0},
@@ -416,8 +418,7 @@ private slots:
             window.selectClip(QStringLiteral("c1"));
             window.m_inspector->selectMask(QStringLiteral("k1"));
             window.m_inspector->section(QStringLiteral("masks"))->setOpen(true);
-            window.m_workspace->panel(QStringLiteral("inspector"))->toggleView(true);
-            window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
+            window.m_shell->setSheet(StageShell::Sheet::Inspector);
             window.resize(1440, 900);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
@@ -477,16 +478,6 @@ private slots:
         QCOMPARE(ink(other->icon()), theme.textSecondary.rgb());
         QCOMPARE(ink(other->icon(), QIcon::Active, QIcon::Off), theme.text.rgb());
             QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
-            // The Program strip (mockup .ib) carries the same tools: the
-            // chosen one is on (the `on` fill, full ink), as every kit
-            // icon button is.
-            auto *strip = qobject_cast<ui::IconButton *>(window.m_programStrip->buttonFor(rectangle));
-            QVERIFY(strip && strip->isVisible() && strip->isChecked());
-            {
-                const QImage image = strip->grab().toImage();
-                QCOMPARE(image.pixelColor(QPoint(3, strip->height() / 2) * image.devicePixelRatio()).rgb(), tokens::on);
-            }
-            QCOMPARE(strip->iconColor().rgb(), tokens::ink);
             rectangle->trigger();
             QVERIFY(!rectangle->isChecked());
             QVERIFY(clear(chosen));
@@ -553,8 +544,8 @@ private slots:
             // The ramp, exactly (mockup-spec 0.2).
             const std::pair<const char *, QColor> ramp[] = {
                 {"#050505", theme.window},    {"#0e0e0e", theme.viewerSurround}, {"#121212", theme.well},
-                {"#171717", theme.chrome},    {"#171717", theme.panel},          {"#171717", theme.statusBar},
-                {"#1c1c1c", theme.card},      {"#1c1c1c", theme.chatSurface},    {"#1c1c1c", theme.menu},
+                {"#171717", theme.chrome},    {"#171717", theme.panel},
+                {"#1c1c1c", theme.card},      {"#171717", theme.chatSurface},    {"#1c1c1c", theme.menu},
                 {"#1c1c1c", theme.tooltip},   {"#1c1c1c", theme.dialog},         {"#262626", theme.raised},
                 {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
                 {"#363636", theme.hover2},    {"#ededed", theme.text},           {"#a8a8a8", theme.textSecondary},
@@ -574,7 +565,7 @@ private slots:
                 QVERIFY2(isGraphite(surface), qPrintable(surface.name()));
             // Every token is filled in, and nothing amber or gold is left but
             // the design's own warn colour.
-            const QString sheet = qApp->styleSheet() + dockStyleSheet(theme);
+            const QString sheet = qApp->styleSheet();
             QVERIFY(!sheet.contains(QLatin1Char('@')));
             static const QRegularExpression hex(QStringLiteral("#[0-9a-fA-F]{6,8}\\b"));
             for (auto it = hex.globalMatch(sheet); it.hasNext();) {
@@ -610,7 +601,7 @@ private slots:
             QCOMPARE(theme.panelTitleActive.rgb(), theme.panelTitle.rgb());
             // The accent as text reads on each surface it is drawn on; see
             // accentTextReadsOnEverySurfaceItIsDrawnOn for every accent.
-            for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar})
+            for (const QColor &surface : {theme.panel, theme.rulerCorner})
                 QVERIFY2(contrastRatio(theme.accentText, surface) >= 4.5, qPrintable(surface.name()));
             // An unchecked check box's edge is the design's outline.
             const auto over = [](const QColor &under, QColor top) {
@@ -632,7 +623,6 @@ private slots:
             QVERIFY(contrastRatio(theme.viewerText, theme.viewerCanvas) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.viewerSurround) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.panel) >= 4.5);
-            QVERIFY(contrastRatio(theme.statusText, theme.statusBar) >= 4.5);
             // Placeholders carry guidance (example searches, what to ask), so
             // they read as text.
             QVERIFY(contrastRatio(theme.placeholderText, theme.field) >= 4.5);
@@ -668,16 +658,11 @@ private slots:
             // Test builds have no runtime to send to; that is not this picture's subject.
             window.m_errorBanner->hide();
             // Nothing under the pointer.
-            QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
+            QTest::mouseMove(window.m_toolbar, QPoint(window.m_toolbar->width() / 2, 4));
             QVERIFY(window.m_timeline->hasProposal());
-            // The conversation is open beside the picture, so it, not the
-            // timeline's bar, carries the proposal.
-            QVERIFY(window.chatOpen());
-            QVERIFY(!window.m_aiBar->isVisible());
             QCoreApplication::processEvents();
             const QImage image = window.grab().toImage();
-            // The bars are the theme's: the toolbar's plate (flat chrome),
-            // status bar, and dock title strips.
+            // The bars are the theme's: the toolbar's plate (flat chrome).
             auto *toolbar = window.findChild<QToolBar *>();
             QVERIFY(qobject_cast<FaceplateToolBar *>(toolbar));
             {
@@ -689,7 +674,6 @@ private slots:
                 const QColor middle = plate.pixelColor(QPoint(1, toolbar->height() / 2) * ratio);
                 QVERIFY2(nearColor(middle.rgb(), tokens::color(tokens::chrome).rgb()), qPrintable(middle.name()));
             }
-            QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
             // The window is titled with the project, so the Window menu,
             // Mission Control and the Dock name it, and the toolbar shows the same.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
@@ -700,142 +684,34 @@ private slots:
             QCOMPARE(title->font().pixelSize(), 13);
             QVERIFY2(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1,
                      qPrintable(QStringLiteral("%1 of %2").arg(title->geometry().center().x()).arg(toolbar->width())));
-            QVERIFY(title->geometry().left() > window.m_toolbarLeftEnd->geometry().right());
             QVERIFY(title->geometry().right() < window.m_formatBank->geometry().left());
-            // The flat bar (mockup-spec 2): the format bank, 8, the
-            // sequence's ghost button, 12, Export as tall as the bank's
-            // keys, 8, and Settings 12 in from the window's right edge.
+            // The flat bar: the format bank, 12, Export as tall as the bank's
+            // keys, 12 in from the window's right edge.
             ExportButton *exportButton = window.m_exportButton;
-            auto *sequenceButton = toolbar->findChild<QAbstractButton *>(QStringLiteral("sequenceButton"));
-            QVERIFY(sequenceButton && sequenceButton->isVisible());
             const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-            QCOMPARE(inBar(sequenceButton).left() - inBar(window.m_formatBank).right() - 1, 8);
-            QCOMPARE(inBar(exportButton).left() - inBar(sequenceButton).right() - 1, 12);
+            QCOMPARE(inBar(exportButton).left() - inBar(window.m_formatBank).right() - 1, 12);
             QCOMPARE(exportButton->height(), window.m_formatBank->height());
-            auto *settingsButton = toolbar->findChild<QAbstractButton *>(QStringLiteral("settingsButton"));
-            QVERIFY(settingsButton && settingsButton->isVisible());
-            QCOMPARE(inBar(settingsButton).left() - inBar(exportButton).right() - 1, 8);
-            QCOMPARE(toolbar->width() - inBar(settingsButton).right() - 1, 12);
-            // The conversation's switch is the stage rail's now, not the bar's.
-            for (const QToolButton *retired : window.findChildren<QToolButton *>(QStringLiteral("chatToggle")))
-                QVERIFY(!retired->isVisible());
-#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-            // The toolbar is the title bar: the window runs up under a
-            // transparent one, and its commands start past the window buttons.
-            QVERIFY(window.windowFlags().testFlag(Qt::ExpandedClientAreaHint));
-            QVERIFY(window.windowFlags().testFlag(Qt::NoTitleBarBackgroundHint));
-            QCOMPARE(toolbar->geometry().top(), 0);
-            QVERIFY(window.m_windowButtons->isVisible());
-            QVERIFY(toolbar->mapTo(&window, window.m_windowButtons->geometry().topRight()).x() >= 72);
-            for (QAction *action : toolbar->actions())
-                if (QWidget *item = toolbar->widgetForAction(action); item && item->isVisible() && item != window.m_windowButtons)
-                    QVERIFY(item->x() > window.m_windowButtons->geometry().right());
-#endif
-            // Nothing is ringed: the window handed its first control focus as
-            // it opened, which is no keyboard navigation.
-            QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
-            // Fields draw their placeholders in the palette's colour, which
-            // reads at 4.5:1, not in their text colour at half strength (as
-            // Qt's style sheets draw them unless told).
-            for (QWidget *field : std::initializer_list<QWidget *>{window.m_effects->m_search, window.m_chatInput, window.m_cloudToken}) {
-                field->ensurePolished();
-                for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
-                    QCOMPARE(field->palette().color(group, QPalette::PlaceholderText), theme.placeholderText);
-            }
-            // The Source viewer paints its timecodes (mono, ink) itself:
-            // no accent label is left on any panel.
-            QVERIFY(window.m_sourceMonitor->findChildren<QLabel *>(QStringLiteral("transportTime")).isEmpty());
+            QCOMPARE(toolbar->width() - inBar(exportButton).right() - 1, 12);
             // The toolbar is chrome.
             QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
-            // Tabs never show a close button, under the pointer or not, so
-            // hovering one changes no tab's width and no name is shortened.
-            const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
-            QVERIFY(closeButtons.size() >= 3);
-            for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
-            {
-                // Only areas that show their title strip show tabs (the
-                // program, inspector, bin and browser draw their own
-                // strips), so the name checked is the visible one: the
-                // timeline's.
-                ads::CDockWidgetTab *timelineTab = window.m_workspace->panel(QStringLiteral("timeline"))->tabWidget();
-                QVERIFY(timelineTab->isVisible());
-                QWidget *strip = timelineTab->parentWidget();
-                QList<QRect> before;
-                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) before.append(tab->geometry());
-                QEvent enter(QEvent::Enter);
-                QCoreApplication::sendEvent(timelineTab, &enter);
-                QCoreApplication::processEvents();
-                QList<QRect> after;
-                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) after.append(tab->geometry());
-                QCOMPARE(after, before);
-                int shown = 0;
-                for (auto *tab : window.findChildren<ads::CDockWidgetTab *>()) {
-                    QVERIFY(!tab->findChild<QWidget *>(QStringLiteral("tabCloseButton"))->isVisible());
-                    if (!tab->isVisible()) continue;
-                    ++shown;
-                    const QString name = tab->dockWidget()->windowTitle();
-                    QVERIFY2(tab->sizeHint().width() <= tab->width(), qPrintable(name + QStringLiteral(" is shortened")));
-                }
-                QVERIFY(shown >= 1);
-                QVERIFY(!window.m_workspace->panel(QStringLiteral("project"))->tabWidget()->isVisible());
-                QEvent leave(QEvent::Leave);
-                QCoreApplication::sendEvent(timelineTab, &leave);
-            }
             // The tools live in the timeline bar's segmented control; the
             // old vertical palette is gone.
             QVERIFY(!window.findChild<QToolBar *>(QStringLiteral("toolPalette")));
-            // An unavailable command's symbol is dimmed (the kit's `dis`),
-            // never brightened: no pixel of the bar's Undo or Redo is lighter.
-            for (const char *id : {"edit.undo", "edit.redo"}) {
-                QAction *action = window.m_commands->action(QString::fromLatin1(id));
-                QVERIFY(!action->isEnabled());
-                auto *button = toolbar->findChild<ui::IconButton *>(QStringLiteral("toolbar.%1").arg(QString::fromLatin1(id)));
-                QVERIFY2(button && !button->isEnabled(), id);
+            // An unavailable command's symbol is dimmed (the kit's `dis`), never
+            // brightened: no pixel of the strip's transport is lighter.
+            {
+                window.setConnection(QStringLiteral("disconnected"));
+                auto *button = window.findChild<ui::IconButton *>(QStringLiteral("timelineGoToEnd"));
+                QVERIFY(button && !button->isEnabled());
                 QCOMPARE(button->iconColor().rgb(), tokens::dis);
                 const QImage dim = button->grab().toImage();
                 int lightest = 0;
                 for (int y = 0; y < dim.height(); ++y)
                     for (int x = 0; x < dim.width(); ++x) lightest = std::max(lightest, qGray(dim.pixel(x, y)));
                 QVERIFY2(lightest <= qGray(tokens::dis) + 1, qPrintable(QString::number(lightest)));
-            }
-            // A tab row's details are plain text on the panel's own surface
-            // (text tabs have no strip), not a dead button. The Program
-            // monitor's tab row is hidden: its ProgramStrip stands in for it.
-            {
-                auto *detail = window.findChild<QToolButton *>(QStringLiteral("viewerDetail"));
-                QVERIFY(detail && !detail->isVisible() && !detail->isEnabled());
-                QVERIFY(!window.m_workspace->panel(QStringLiteral("program"))->dockAreaWidget()->titleBar()->isVisible());
-                auto *tracks = window.findChild<QLabel *>(QStringLiteral("timelineDetail"));
-                QVERIFY(tracks && tracks->isVisible());
-                QCOMPARE(dominantColor(tracks->parentWidget()->grab(tracks->geometry()).toImage()), theme.panel.rgb());
-                QCOMPARE(tracks->palette().color(QPalette::WindowText).rgb(), theme.textSecondary.rgb());
+                window.setConnection(QStringLiteral("ready"));
             }
             save(image, QStringLiteral("editor-%1").arg(name));
-            // With the conversation closed, the timeline's bar stands in for
-            // it: the window's chrome, no coloured stripe at its start, not
-            // amber, and 22px chips on `raised` for its buttons (no outline).
-            window.setChatOpen(false);
-            QCoreApplication::processEvents();
-            QVERIFY(window.m_aiBar->isVisible());
-            {
-                const QImage aiBar = window.m_aiBar->grab().toImage();
-                QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
-                QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()).rgb(), theme.chrome.rgb());
-                QCOMPARE(amberPixels(aiBar), 0);
-                const QImage shown = window.grab().toImage();
-                for (QToolButton *control : window.m_aiBar->findChildren<QToolButton *>()) {
-                    if (!control->isVisible()) continue;
-                    QCOMPARE(control->height(), 22);
-                    if (control->objectName() == QStringLiteral("aiAccept")) continue;
-                    const QImage chip = shown.copy(QRect(control->mapTo(&window, QPoint()) * shown.devicePixelRatio(),
-                                                         control->size() * shown.devicePixelRatio()));
-                    QVERIFY2(nearColor(dominantColor(chip), laidOn(theme.chrome, theme.chatChip).rgb()), qPrintable(control->text()));
-                }
-            }
-            window.setChatOpen(true);
-            QCoreApplication::processEvents();
-            QVERIFY(!window.m_aiBar->isVisible());
-
             // Export's menu opens as the design's menu: a card, rounded and
             // clipped to its corners, under the button.
             window.m_exportButton->showMenu();
@@ -918,13 +794,18 @@ private slots:
                     if (QMenu *menu = menuAction->menu())
                         for (QAction *action : menu->actions()) QVERIFY2(!action->isIconVisibleInMenu(), qPrintable(action->text()));
             }
-            // A menu with checks (the Window menu's panels) pads its rows by
+            // A menu with checks (Collaborate's Live Sync) pads its rows by
             // less, so its text starts where a menu's without checks does.
             {
                 QMenu *panels = nullptr;
                 for (QAction *action : window.menuBar()->actions())
-                    if (action->text() == QStringLiteral("Window")) panels = action->menu();
+                    if (action->text() == QStringLiteral("Collaborate")) panels = action->menu();
                 QVERIFY(panels);
+                {
+                    QAction *live = window.m_commands->action(QStringLiteral("collab.live"));
+                    const QSignalBlocker blocker(live);
+                    live->setChecked(true);
+                }
                 panels->popup(window.mapToGlobal(QPoint(400, 300)));
                 QVERIFY(QTest::qWaitForWindowExposed(panels));
                 QVERIFY(panels->property("checkColumn").toBool());
@@ -1047,7 +928,6 @@ private slots:
             window.m_errorBanner->hide();
             QCoreApplication::processEvents();
             QVERIFY(!window.m_divergedBanner->isHidden());
-            QVERIFY(!window.m_aiBar->isVisible());
             // The pinned proposal's card (mockup .pcard): Reject, then the
             // primary Accept filled with the accent, its label reading on it.
             ProposalCard *pinned = nullptr;
@@ -1120,8 +1000,7 @@ private slots:
                                                        QJsonObject{{"fx", "test.look"}, {"enabled", true},
                                                                    {"params", QJsonObject{{"look_lut", "looks/harbor-dusk.cube"}}}}}}}}}}}}}}});
             window.selectClip(QStringLiteral("c1"));
-            window.m_workspace->panel(QStringLiteral("inspector"))->toggleView(true);
-            window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
+            window.m_shell->setSheet(StageShell::Sheet::Inspector);
             InspectorPanel *inspector = window.m_inspector;
             inspector->section(QStringLiteral("effects"))->setOpen(true);
             QCoreApplication::processEvents();
@@ -1180,12 +1059,12 @@ private slots:
                 window.resize(window.width(), window.height() + 20);
                 QCoreApplication::processEvents();
             }
-            const QImage inspectorImage = window.m_workspace->panel(QStringLiteral("inspector"))->grab().toImage();
+            const QImage inspectorImage = window.m_inspectorColumn->grab().toImage();
             // A group (mockup .grp) is flat on the column, no plate: chrome
             // above its foot, and a 1 pt line (lighter) at its foot.
             {
                 const InspectorSection *effects = inspector->section(QStringLiteral("effects"));
-                const QPoint foot = effects->mapTo(window.m_workspace->panel(QStringLiteral("inspector")), QPoint(effects->width() / 2, effects->height() - 1));
+                const QPoint foot = effects->mapTo(window.m_inspectorColumn, QPoint(effects->width() / 2, effects->height() - 1));
                 const qreal ratio = inspectorImage.devicePixelRatio();
                 const QColor line = inspectorImage.pixelColor(foot * ratio);
                 QCOMPARE(inspectorImage.pixelColor((foot - QPoint(0, 2)) * ratio).rgb(), tokens::chrome);
@@ -1221,7 +1100,6 @@ private slots:
         QCOMPARE(nameInk(), editorTheme().chatText.rgb());
         for (int again = 0; again < 3; ++again) applyEditorAppearance();
         QCOMPARE(changed.count(), 0);
-        QVERIFY(window.m_workspace->manager()->styleSheet().contains(editorTheme().panel.name()));
         QCoreApplication::processEvents();
         QCOMPARE(surface(), editorTheme().chatSurface.rgb());
         QCOMPARE(nameInk(), editorTheme().chatText.rgb());
@@ -1493,7 +1371,7 @@ private slots:
             const EditorTheme &theme = editorTheme();
             const QString name = QStringLiteral("dark");
 
-            // Program monitor: a picture, a caption, and two masks, one selected.
+            // The picture region: a picture, a caption, and two masks, one selected.
             ViewerWidget viewer;
             viewer.resize(640, 380);
             viewer.setProjectInfo(1920, 1080);
@@ -1506,7 +1384,7 @@ private slots:
             viewer.selectMask(QStringLiteral("k1"));
             const QImage view = viewer.grab().toImage();
             const qreal ratio = view.devicePixelRatio();
-            QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), theme.viewerSurround);
+            QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), QColor(Qt::black));
             const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
             QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
             // The selected mask's name is light over the picture.
@@ -1522,9 +1400,8 @@ private slots:
             viewer.setMasks(QString(), {}, {});
             viewer.setCaption(QString());
             const QImage empty = viewer.grab().toImage();
-            // Empty, the picture is the laptop's black screen (the plain card's canvas without one).
-            QCOMPARE(empty.pixelColor((viewer.videoRect().topLeft() + QPointF(6, 6)).toPoint() * ratio),
-                     viewer.stageLayout().device ? theme.deviceScreen : theme.viewerCanvas);
+            // Empty, the picture is the canvas.
+            QCOMPARE(empty.pixelColor((viewer.videoRect().topLeft() + QPointF(6, 6)).toPoint() * ratio), theme.viewerCanvas);
             save(empty, QStringLiteral("viewer-empty-%1").arg(name));
 
             // The focus region picker.
@@ -1546,8 +1423,7 @@ private slots:
             monitor.seek(2.0);
             monitor.show();
             QVERIFY(QTest::qWaitForWindowExposed(&monitor));
-            // mockup-spec 3.6: a 4 pt bar in track, the marked range in
-            // track2, and the position as a 2 x 12 tick in the playhead colour.
+            // A 4 pt bar in track, the marked range in track2.
             const QRect bar = monitor.barRect();
             QVERIFY(bar.isValid() && bar.height() == 4);
             {
@@ -1557,7 +1433,6 @@ private slots:
                 QCOMPARE(shot.pixelColor(QPoint(barX(0.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
                 QCOMPARE(shot.pixelColor(QPoint(barX(1.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track2).rgb());
                 QCOMPARE(shot.pixelColor(QPoint(barX(3.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
-                QCOMPARE(shot.pixelColor(QPoint(barX(2.0), bar.top() - 3) * shotRatio).rgb(), tokens::color(tokens::playhead).rgb());
             }
             const QImage source = monitor.grab().toImage();
             QCOMPARE(amberPixels(source), 0);
@@ -1611,7 +1486,7 @@ private slots:
         snapshot.insert(QStringLiteral("timeline"), timeline);
         window.applySnapshot(snapshot);
         window.selectClip(QStringLiteral("v1a"));
-        window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
+        window.m_shell->setSheet(StageShell::Sheet::Inspector);
         QCoreApplication::processEvents();
         QTest::qWait(50);
         QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("editor-dark.png"))));

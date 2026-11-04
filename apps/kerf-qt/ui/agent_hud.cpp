@@ -63,7 +63,7 @@ AgentHud::~AgentHud() {
 QAbstractButton *AgentHud::stopButton() const { return m_stop; }
 
 QSize AgentHud::sizeHint() const {
-    return m_docked ? QSize(400, kStripHeight) : QSize(kCardWidth, kCardHeight);
+    return QSize(kCardWidth, kCardHeight);
 }
 
 QRectF AgentHud::cardRect(const QSizeF &picture) {
@@ -71,14 +71,6 @@ QRectF AgentHud::cardRect(const QSizeF &picture) {
     const double tx = std::round(w * 0.05), ty = std::round(h * 0.05);
     const double hw = std::max(0.0, std::min<double>(kCardWidth, w - 2 * tx - 16));
     return QRectF(w - tx - 8 - hw, ty + 8, hw, kCardHeight);
-}
-
-void AgentHud::setDocked(bool docked) {
-    if (docked == m_docked) return;
-    m_docked = docked;
-    updateGeometry();
-    relayout();
-    update();
 }
 
 void AgentHud::handle(const QString &type, const QJsonObject &event) {
@@ -180,22 +172,12 @@ void AgentHud::refresh() {
 void AgentHud::relayout() {
     const int pctWidth = ui::snapWidth(tokens::monoSmall, percentText());
     const QSize stop = m_stop->sizeHint();
-    if (m_docked) {
-        // pad 0 4 0 8; the bar, the percent and Stop at the right.
-        const int right = width() - 4;
-        const int stopX = right - stop.width();
-        const int pctX = stopX - 8 - pctWidth;
-        const int barX = pctX - 8 - kStripBar;
-        m_stop->move(stopX, (height() - stop.height()) / 2);
-        m_bar->setGeometry(barX, height() / 2 - 2, kStripBar, 4);
-    } else {
-        // pad 8 12; row 3 (24 tall) at y 40, 24 in from the content's left.
-        const int left = 12 + 24, right = width() - 12;
-        const int stopX = right - stop.width();
-        const int pctX = stopX - 8 - pctWidth;
-        m_stop->move(stopX, 40);
-        m_bar->setGeometry(left, 40 + 10, std::max(0, pctX - 8 - left), 4);
-    }
+    // pad 8 12; row 3 (24 tall) at y 40, 24 in from the content's left.
+    const int left = 12 + 24, right = width() - 12;
+    const int stopX = right - stop.width();
+    const int pctX = stopX - 8 - pctWidth;
+    m_stop->move(stopX, 40);
+    m_bar->setGeometry(left, 40 + 10, std::max(0, pctX - 8 - left), 4);
 }
 
 void AgentHud::resizeEvent(QResizeEvent *event) {
@@ -213,15 +195,15 @@ void AgentHud::paintEvent(QPaintEvent *) {
     ui::paintInsetLine(p, r, tokens::radius::card, color(tokens::line2));
 
     // Row 1: the 16 x 16 Kerf tile (radius 4, on, g-kerf 14 ink) and the title.
-    const qreal left = m_docked ? 8 : 12;
-    const qreal row1 = m_docked ? (height() - 16) / 2.0 : 8;
+    const qreal left = 12;
+    const qreal row1 = 8;
     const QRectF tile(left, row1, 16, 16);
     p.setPen(Qt::NoPen);
     p.setBrush(color(tokens::on));
     p.drawRoundedRect(tile, tokens::radius::small, tokens::radius::small);
     icons::paint(p, QStringLiteral("g-kerf"), tile, color(tokens::ink), 14);
     const qreal textLeft = tile.right() + 8;
-    const qreal titleRight = m_docked ? m_bar->geometry().left() - 12 : width() - 12;
+    const qreal titleRight = width() - 12;
     const QFont titleFont = tokens::font(tokens::controlStrong);
     p.setFont(titleFont);
     p.setPen(color(tokens::ink));
@@ -229,7 +211,7 @@ void AgentHud::paintEvent(QPaintEvent *) {
                QFontMetricsF(titleFont).elidedText(title(), Qt::ElideRight, std::max<qreal>(0, titleRight - textLeft)));
 
     // Row 2 (the card only): 11/16 ink3, the timecode in mono, with an ellipsis.
-    if (!m_docked) {
+    {
         qreal x = 12 + 24;
         const qreal limit = width() - 12;
         p.setPen(color(tokens::ink3));

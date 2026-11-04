@@ -9,12 +9,11 @@
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "timeline_widget.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "ui/browser_panel.h"
 #include "ui/components.h"
 #include "ui/tray_shell.h"
 
-#include <DockWidget.h>
 
 #include <QAction>
 #include <QComboBox>
@@ -417,8 +416,7 @@ void BinWiring::attachCommands() {
 
 void BinWiring::searchBin() {
     MainWindow *w = m_window;
-    if (ads::CDockWidget *bin = w->m_workspace ? w->m_workspace->panel(QStringLiteral("project")) : nullptr)
-        if (bin->isClosed()) bin->toggleView(true);
+    w->m_shell->setSheet(StageShell::Sheet::Media);
     w->m_projectPanel->focusSearch();
 }
 
@@ -429,8 +427,7 @@ void BinWiring::toggleBinView() {
 
 void BinWiring::searchBrowser() {
     MainWindow *w = m_window;
-    if (ads::CDockWidget *browser = w->m_workspace ? w->m_workspace->panel(QStringLiteral("browser")) : nullptr)
-        if (browser->isClosed()) browser->toggleView(true);
+    w->m_shell->setSheet(StageShell::Sheet::Browser);
     w->m_browserPanel->focusSearch();
 }
 

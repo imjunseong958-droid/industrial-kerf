@@ -373,22 +373,6 @@ QString checkMarkImagePath(const QColor &color) {
     });
 }
 
-QString closeMarkImagePath(const QColor &color) {
-    return glyphImagePath(colorKey("close", color), QSize(12, 12), [&color](QPainter &painter) {
-        // Through pixel centres, so the strokes are solid even at 1x.
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(3.5, 3.5), QPointF(8.5, 8.5));
-        painter.drawLine(QPointF(8.5, 3.5), QPointF(3.5, 8.5));
-    });
-}
-
-QString tabsMenuImagePath(const QColor &color) {
-    return glyphImagePath(colorKey("tabs-menu", color), QSize(12, 12), [&color](QPainter &painter) {
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(QPolygonF{{3.0, 4.75}, {6.0, 7.75}, {9.0, 4.75}});
-    });
-}
-
 void drawMenuCheck(QPainter &painter, const QPointF &at, const QColor &color) {
     painter.save();
     painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));

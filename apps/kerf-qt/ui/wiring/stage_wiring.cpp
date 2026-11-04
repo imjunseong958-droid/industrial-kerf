@@ -5,18 +5,18 @@
 #include "components.h"
 #include "editor_bus.h"
 #include "main_window.h"
-#include "program_strip.h"
 #include "review_model.h"
-#include "scrub_strip.h"
-#include "source_monitor_panel.h"
+#include "timeline_widget.h"
 #include "viewer_widget.h"
-#include "workspace.h"
 
 #include <QAbstractButton>
 #include <QAction>
 #include <QJsonArray>
+#include <QHBoxLayout>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMenu>
+#include <QPainter>
 #include <QSettings>
 #include <QSignalBlocker>
 
@@ -41,18 +41,93 @@ StageWiring::~StageWiring() {
     for (const QMetaObject::Connection &connection : std::as_const(m_reviewConnections)) disconnect(connection);
 }
 
+// ---------------------------------------------------------------- PreviewChip
+
+PreviewChip::PreviewChip(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus(bus) {
+    setObjectName(QStringLiteral("previewChip"));
+    setFixedHeight(24);
+    auto *layout = new QHBoxLayout(this);
+    // The chip's padding of 8, then .ptxt's own 8 before its 6 pt dot.
+    layout->setContentsMargins(16, 0, 4, 0);
+    layout->setSpacing(8);
+    auto *dot = new ui::Dot(tokens::color(tokens::ink2));
+    dot->setObjectName(QStringLiteral("previewChipDot"));
+    layout->addWidget(dot, 0, Qt::AlignVCenter);
+    m_text = new QLabel;
+    m_text->setObjectName(QStringLiteral("previewChipText"));
+    m_text->setFont(tokens::font(tokens::control));
+    m_text->setStyleSheet(QStringLiteral("QLabel { color: %1; background: transparent; }").arg(tokens::color(tokens::ink3).name()));
+    layout->addWidget(m_text);
+    auto *exit = new ui::GhostButton(QStringLiteral("Exit preview"));
+    exit->setObjectName(QStringLiteral("exitPreview"));
+    exit->setTip(QStringLiteral("Exit preview"));
+    exit->setControlHeight(20);
+    connect(exit, &QAbstractButton::clicked, this, [this] {
+        if (m_bus) m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview_exit")}});
+    });
+    m_exit = exit;
+    layout->addWidget(exit);
+    hide();
+    if (m_bus)
+        connect(m_bus, &EditorBus::event, this, [this](const QString &type, const QJsonObject &event) {
+            if (type == QStringLiteral("preview")) follow(event);
+            else if (type == QStringLiteral("viewer_reset")) follow(QJsonObject{{QStringLiteral("status"), QStringLiteral("exited")}});
+        });
+}
+
+QString PreviewChip::text() const { return m_text->text(); }
+
+QAbstractButton *PreviewChip::exitButton() const { return m_exit; }
+
+void PreviewChip::follow(const QJsonObject &event) {
+    const QString status = event.value(QStringLiteral("status")).toString();
+    const QString proposal = event.value(QStringLiteral("proposalId")).toString();
+    const bool on = !proposal.isEmpty() &&
+                    (status == QStringLiteral("running") || status == QStringLiteral("ready") || status == QStringLiteral("live"));
+    if (!on) {
+        // Stopped, exited, failed, or the program's own preview.
+        m_text->clear();
+        setVisible(false);
+        return;
+    }
+    // The version the proposal is at, from the snapshot's proposals.
+    int version = 0;
+    if (m_bus)
+        for (const QJsonValue &value : m_bus->snapshot().value(QStringLiteral("proposals")).toArray()) {
+            const QJsonObject entry = value.toObject();
+            bool matches = entry.value(QStringLiteral("proposalId")).toString() == proposal;
+            for (const QJsonValue &v : entry.value(QStringLiteral("versions")).toArray())
+                if (v.toObject().value(QStringLiteral("proposalId")).toString() == proposal) {
+                    matches = true;
+                    version = v.toObject().value(QStringLiteral("version")).toInt();
+                }
+            if (matches && version == 0) version = entry.value(QStringLiteral("version")).toInt();
+        }
+    m_text->setText(version > 0 ? QStringLiteral("Previewing proposal v%1").arg(version) : QStringLiteral("Previewing proposal"));
+    adjustSize();
+    setVisible(true);
+    raise();
+}
+
+void PreviewChip::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF area(rect());
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(28, 28, 28, tokens::alpha(0.94)));
+    p.drawRoundedRect(area, tokens::radius::control, tokens::radius::control);
+    ui::paintInsetLine(p, area, tokens::radius::control, tokens::color(tokens::line2));
+}
+
+// ---------------------------------------------------------------- StageWiring
+
 void StageWiring::build() {
     ViewerWidget *viewer = m_window->m_viewer;
-    m_scrub = new ScrubStrip(nullptr, m_bus);
-    m_scrub->setObjectName(QStringLiteral("scrubStrip"));
     m_hud = new AgentHud(nullptr, m_bus);
     m_hud->setObjectName(QStringLiteral("agentHud"));
-    viewer->setStageParts(m_scrub, m_hud, nullptr);
-    // A seek from the scrub strip goes the way the window's own do.
-    connect(m_scrub, &ScrubStrip::seekRequested, m_window, [this](double seconds) { m_window->queueSeek(seconds); });
-    connect(viewer, &ViewerWidget::stageLaidOut, this, &StageWiring::placeParts);
+    m_chip = new PreviewChip(nullptr, m_bus);
+    viewer->setOverlays(m_hud, m_chip);
     viewer->setAnnotationsShown(QSettings().value(kAnnotationsKey, true).toBool());
-    placeParts();
 }
 
 void StageWiring::attach() {
@@ -60,39 +135,20 @@ void StageWiring::attach() {
     m_attached = true;
     MainWindow *w = m_window;
     ViewerWidget *viewer = w->m_viewer;
-    // The Source column: the stage's own Source monitor.
-    viewer->setStageParts(m_scrub, m_hud, w->m_stageSource);
 
-    // The switches: view.dim, view.annotations and the zoom.
+    // The switches: view.annotations, the zoom, the marks and the loop.
     if (w->m_commands) {
         connect(w->m_commands, &CommandRegistry::toggled, this, [this](const QString &id, bool checked) {
-            if (id == QStringLiteral("view.dim")) setDim(checked);
-            else if (id == QStringLiteral("view.annotations")) setAnnotations(checked);
-            else if (id == QStringLiteral("playback.loop") && m_scrub) m_scrub->setLoop(checked);
+            if (id == QStringLiteral("view.annotations")) setAnnotations(checked);
+            else if (id == QStringLiteral("playback.loop")) setLoop(checked);
         });
         w->m_commandHandlers.insert(QStringLiteral("viewer.zoom"), [this] { showZoomMenu(); });
-        // The program's marks and loop are the scrub strip's (I, O, ⌘L).
-        w->m_commandHandlers.insert(QStringLiteral("mark.in"), [this] { if (m_scrub) m_scrub->markIn(); });
-        w->m_commandHandlers.insert(QStringLiteral("mark.out"), [this] { if (m_scrub) m_scrub->markOut(); });
-        if (m_scrub) {
-            QHash<QString, QAction *> actions;
-            for (const char *id : {"playback.toggle", "playback.goToStart", "playback.previousFrame", "playback.nextFrame",
-                                   "playback.goToEnd", "playback.loop", "mark.in", "mark.out"})
-                if (QAction *action = w->m_commands->action(QString::fromLatin1(id))) actions.insert(QString::fromLatin1(id), action);
-            m_scrub->setActions(actions);
-            connect(m_scrub, &ScrubStrip::loopChanged, this, [this](bool loop) {
-                QAction *action = m_window->m_commands ? m_window->m_commands->action(QStringLiteral("playback.loop")) : nullptr;
-                if (!action || action->isChecked() == loop) return;
-                const QSignalBlocker blocker(action);
-                action->setChecked(loop);
-            });
-        }
+        w->m_commandHandlers.insert(QStringLiteral("mark.in"), [this] { markIn(); });
+        w->m_commandHandlers.insert(QStringLiteral("mark.out"), [this] { markOut(); });
+        w->m_commandHandlers.insert(QStringLiteral("mark.clear"), [this] { clearMarks(); });
     }
-    if (w->m_programStrip)
-        connect(w->m_programStrip, &ProgramStrip::zoomMenuRequested, this, [this](QAbstractButton *anchor) { showZoomMenu(anchor); });
 
     // The engine and the other regions.
-    connect(m_bus, &EditorBus::workspaceChanged, this, &StageWiring::applyWorkspaceStage);
     connect(m_bus, &EditorBus::event, this, [this](const QString &type, const QJsonObject &json) {
         if (type == QStringLiteral("check")) {
             if (json.value(QStringLiteral("status")).toString() == QStringLiteral("done")) m_lastCheck = json;
@@ -109,7 +165,8 @@ void StageWiring::attach() {
     connect(m_bus, &EditorBus::threadHovered, this, &StageWiring::hoverThread);
     connect(m_bus, &EditorBus::commentSelected, this, &StageWiring::selectComment);
     connect(m_bus, &EditorBus::reviewChanged, this, &StageWiring::watchReview);
-    connect(m_bus, &EditorBus::snapshotChanged, this, &StageWiring::refreshDetail);
+    connect(m_bus, &EditorBus::playheadChanged, this, &StageWiring::followPlayhead);
+    connect(m_bus, &EditorBus::playingChanged, this, &StageWiring::followPlaying);
 
     // A drawing on the frame, for the composer.
     connect(m_bus, &EditorBus::drawingRequested, viewer, &ViewerWidget::beginDrawing);
@@ -139,36 +196,8 @@ void StageWiring::attach() {
         check.value(QStringLiteral("status")).toString() == QStringLiteral("done"))
         m_lastCheck = check;
     watchReview();
-    applyWorkspaceStage();
-    refreshDetail();
     syncSwitches();
 }
-
-void StageWiring::placeParts() {
-    const ViewerWidget::StageLayout layout = m_window->m_viewer->shownLayout();
-    if (m_scrub) m_scrub->setNarrow(layout.narrowScrub);
-    if (m_hud) m_hud->setDocked(layout.hudStrip);
-}
-
-void StageWiring::applyWorkspaceStage() {
-    // Each workspace's own stage: Finish dims, the others do not.
-    if (!m_window->m_workspace) return;
-    setDim(m_window->m_workspace->stageState().dim, /*remember=*/false);
-}
-
-void StageWiring::setDim(bool dim, bool remember) {
-    m_window->m_viewer->setDim(dim);
-    if (remember && m_window->m_workspace) {
-        Workspace::StageState stage = m_window->m_workspace->stageState();
-        if (stage.dim != dim) {
-            stage.dim = dim;
-            m_window->m_workspace->setStageState(stage);
-        }
-    }
-    syncSwitches();
-}
-
-bool StageWiring::dim() const { return m_window->m_viewer->dimmed(); }
 
 void StageWiring::setAnnotations(bool shown) {
     m_window->m_viewer->setAnnotationsShown(shown);
@@ -185,7 +214,6 @@ QString StageWiring::zoomText(double zoom) {
 
 void StageWiring::setZoom(double zoom) {
     m_window->m_viewer->setZoom(zoom);
-    if (m_window->m_programStrip) m_window->m_programStrip->setZoomText(zoomText(zoom));
     for (const auto &[value, action] : std::as_const(m_zoomActions)) {
         const QSignalBlocker blocker(action);
         action->setChecked(value == zoom);
@@ -198,6 +226,7 @@ QMenu *StageWiring::zoomMenu() {
     if (m_zoomMenu) return m_zoomMenu;
     auto *menu = new QMenu(m_window);
     menu->setObjectName(QStringLiteral("viewerZoomMenu"));
+    menu->setTitle(QStringLiteral("Viewer zoom"));
     ui::styleMenu(menu);
     const QAction *zoomCommand = m_window->m_commands ? m_window->m_commands->action(QStringLiteral("viewer.zoom")) : nullptr;
     for (const double value : {0.0, 0.5, 1.0, 2.0}) {
@@ -228,7 +257,7 @@ QMenu *StageWiring::zoomMenu() {
 }
 
 void StageWiring::showZoomMenu(QWidget *anchor) {
-    if (!anchor && m_window->m_programStrip) anchor = m_window->m_programStrip->zoomButton();
+    if (!anchor) anchor = m_window->findChild<QWidget *>(QStringLiteral("appMenu"));
     QMenu *menu = zoomMenu();
     if (anchor) ui::popupMenu(menu, anchor);
     else menu->popup(m_window->mapToGlobal(m_window->rect().center()));
@@ -237,16 +266,78 @@ void StageWiring::showZoomMenu(QWidget *anchor) {
 void StageWiring::syncSwitches() {
     const CommandRegistry *commands = m_window->m_commands;
     if (!commands) return;
-    const QList<QPair<QString, bool>> states{{QStringLiteral("view.dim"), dim()}, {QStringLiteral("view.annotations"), annotations()}};
-    for (const auto &[id, on] : states)
-        if (QAction *action = commands->action(id); action && action->isChecked() != on) {
-            {
-                const QSignalBlocker blocker(action);
-                action->setChecked(on);
-            }
-            // A blocked toggle tells the strip nothing: tell it.
-            emit action->changed();
-        }
+    if (QAction *action = commands->action(QStringLiteral("view.annotations")); action && action->isChecked() != annotations()) {
+        const QSignalBlocker blocker(action);
+        action->setChecked(annotations());
+    }
+}
+
+// ---- marks and loop ------------------------------------------------------------------
+
+void StageWiring::showMarks() {
+    if (m_window->m_timeline) m_window->m_timeline->setMarkedRange(m_in, m_out);
+}
+
+void StageWiring::markIn() {
+    if (m_bus->duration() <= 0.0) return;
+    m_in = std::clamp(m_bus->playhead(), 0.0, m_bus->duration());
+    if (hasOut() && m_out <= m_in) m_out = std::numeric_limits<double>::quiet_NaN();
+    m_wrapped = false;
+    showMarks();
+}
+
+void StageWiring::markOut() {
+    if (m_bus->duration() <= 0.0) return;
+    m_out = std::clamp(m_bus->playhead(), 0.0, m_bus->duration());
+    if (hasIn() && m_in >= m_out) m_in = std::numeric_limits<double>::quiet_NaN();
+    m_wrapped = false;
+    showMarks();
+}
+
+void StageWiring::clearMarks() {
+    if (!hasIn() && !hasOut()) return;
+    m_in = m_out = std::numeric_limits<double>::quiet_NaN();
+    m_wrapped = false;
+    showMarks();
+}
+
+void StageWiring::setLoop(bool loop) {
+    if (loop == m_loop) return;
+    m_loop = loop;
+    m_wrapped = false;
+}
+
+double StageWiring::loopStart() const { return hasIn() ? m_in : 0.0; }
+
+double StageWiring::loopEnd() const { return hasOut() ? std::min(m_out, m_bus->duration()) : m_bus->duration(); }
+
+void StageWiring::followPlayhead() {
+    if (!m_loop || !m_bus->playing()) return;
+    const double frame = 1.0 / std::max(1.0, m_bus->fps());
+    const double end = loopEnd(), start = loopStart();
+    if (m_bus->playhead() < end - frame / 2) {
+        m_wrapped = false;
+        return;
+    }
+    // Playing on past the out mark: back to the in mark, still playing. At
+    // the program's own end playback stops, and followPlaying starts it again.
+    const bool atProgramEnd = end >= m_bus->duration() - frame;
+    if (m_wrapped || atProgramEnd || end - start < frame) return;
+    m_wrapped = true;
+    m_window->queueSeek(start);
+}
+
+void StageWiring::followPlaying(bool playing) {
+    if (playing || !m_loop) return;
+    const double frame = 1.0 / std::max(1.0, m_bus->fps());
+    const double end = loopEnd(), start = loopStart();
+    // Stopped at the loop's end (the program's end, where playback ends by
+    // itself, or an out mark the playhead had reached): start again.
+    const double slack = std::max(2.0 * frame, 0.1);
+    if (end - start < frame || m_bus->playhead() < end - slack) return;
+    m_wrapped = true;
+    m_window->queueSeek(start);
+    m_bus->run(QStringLiteral("playback.toggle"));
 }
 
 void StageWiring::watchReview() {
@@ -390,19 +481,6 @@ void StageWiring::refreshAnnotations() {
     collect(currentThread(), QString());
     if (!m_selected.isEmpty()) collect(rootOf(m_selected), m_selected);
     viewer->setAnnotations(shown);
-}
-
-void StageWiring::refreshDetail() {
-    if (!m_window->m_programStrip) return;
-    const QSize size = m_bus->frameSize();
-    if (size.isEmpty()) {
-        m_window->m_programStrip->setDetail(QString());
-        return;
-    }
-    m_window->m_programStrip->setDetail(QStringLiteral("%1 × %2 · %3 fps")
-                                            .arg(size.width())
-                                            .arg(size.height())
-                                            .arg(QString::number(m_bus->fps(), 'g', 4)));
 }
 
 } // namespace kerf

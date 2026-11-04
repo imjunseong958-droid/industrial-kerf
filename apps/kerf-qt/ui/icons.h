@@ -4,8 +4,8 @@
 //
 // Every icon of the review-thread design (mockup-spec 16) is kept as its SVG
 // markup, copied verbatim, in a table keyed by name: g-169 ... g-cdr, plus
-// g-phone (the owner's phone glyph), "rail-chevron", "playhead-head" and
-// "checkbox-check". The retired g-isl and g-punch are left out. A small SVG
+// "playhead-head" and "checkbox-check". The retired g-isl and g-punch and the
+// device preview's glyphs are left out. A small SVG
 // reader turns that markup into QPainterPaths once, on first use.
 //
 // The design's icon convention (mockup svg.i): fill none, stroke currentColor,
@@ -44,8 +44,8 @@ struct IconStates {
 QStringList names();
 bool has(const QString &name);
 
-// The icon's viewBox size: 16 x 16 for most, 24 x 24 for g-settings, 10 x 10
-// for the rail chevron, 9 x 12 for the playhead head. Empty for an unknown name.
+// The icon's viewBox size: 16 x 16 for most, 24 x 24 for g-settings, 9 x 12
+// for the playhead head. Empty for an unknown name.
 QSizeF viewBox(const QString &name);
 
 // The icon's geometry, every shape of it in document order, in viewBox units.

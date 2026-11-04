@@ -6,9 +6,7 @@
 #include "source_monitor_panel.h"
 #include "source_state.h"
 #include "timeline_widget.h"
-#include "workspace.h"
 
-#include <DockWidget.h>
 
 #include <QAction>
 #include <QDir>
@@ -28,16 +26,9 @@ SourceWiring::~SourceWiring() = default;
 
 void SourceWiring::attach() {
     MainWindow *w = m_window;
-    for (SourceMonitorPanel *panel : {w->m_sourceMonitor, w->m_stageSource})
-        if (panel) connect(panel, &SourceMonitorPanel::revealRequested, this, &SourceWiring::reveal);
-    connect(m_state, &SourceState::opened, this, [this](const QString &media) {
-        if (!media.isEmpty()) requestIndex();
-        updateReveal();
-    });
-    if (m_bus) {
-        connect(m_bus, &EditorBus::event, this, &SourceWiring::onEvent);
-        connect(m_bus, &EditorBus::snapshotChanged, this, &SourceWiring::onSnapshot);
-    }
+    if (w->m_sourceMonitor) connect(w->m_sourceMonitor, &SourceMonitorPanel::revealRequested, this, &SourceWiring::reveal);
+    connect(m_state, &SourceState::opened, this, &SourceWiring::updateReveal);
+    if (m_bus) connect(m_bus, &EditorBus::snapshotChanged, this, &SourceWiring::onSnapshot);
 }
 
 void SourceWiring::attachCommands() {
@@ -63,17 +54,6 @@ bool SourceWiring::togglePlay() {
     return true;
 }
 
-void SourceWiring::onEvent(const QString &type, const QJsonObject &event) {
-    if (type == QStringLiteral("media_index")) {
-        m_state->applyIndex(event);
-    } else if (type == QStringLiteral("error") && event.value(QStringLiteral("command")).toString() == QStringLiteral("media_index")) {
-        m_state->applyIndexError(event);
-    } else if (type == QStringLiteral("connection")) {
-        // A new connection answers nothing asked of the last one.
-        m_askAgain = true;
-    }
-}
-
 void SourceWiring::onSnapshot() {
     if (m_state->isOpen()) {
         // The open media's entry, and its file when it was replaced.
@@ -83,30 +63,8 @@ void SourceWiring::onSnapshot() {
             m_state->refresh(source, QDir(m_window->m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString()));
             break;
         }
-        const SourceState::IndexStatus status = m_state->indexStatus();
-        if (m_askAgain || status == SourceState::IndexStatus::None || status == SourceState::IndexStatus::Unavailable)
-            requestIndex(true);
     }
     updateReveal();
-}
-
-void SourceWiring::requestIndex(bool again) {
-    if (!m_state->isOpen()) return;
-    const QString media = m_state->mediaId();
-    if (m_state->hasIndex(media)) return;
-    if (!again && m_state->indexStatus() == SourceState::IndexStatus::Pending) return;
-    // Only a live bridge is asked: without one the window would report the
-    // runtime missing for a request nobody made by hand.
-    if (!m_window->m_bridge || !m_window->m_connected || !m_bus) {
-        m_state->setIndexUnavailable();
-        return;
-    }
-    if (m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("media_index")}, {QStringLiteral("media"), media}})) {
-        m_askAgain = false;
-        m_state->setIndexPending();
-    } else {
-        m_state->setIndexUnavailable();
-    }
 }
 
 SourceWiring::Target SourceWiring::revealTarget() const {
@@ -145,8 +103,6 @@ bool SourceWiring::reveal() {
     const Target target = revealTarget();
     if (target.clip.isEmpty()) return false;
     MainWindow *w = m_window;
-    if (ads::CDockWidget *timeline = w->m_workspace ? w->m_workspace->panel(QStringLiteral("timeline")) : nullptr)
-        if (timeline->isClosed()) timeline->toggleView(true);
     w->selectClip(target.clip);
     w->queueSeek(target.at);
     if (w->m_timeline) w->m_timeline->setFocus(Qt::OtherFocusReason);

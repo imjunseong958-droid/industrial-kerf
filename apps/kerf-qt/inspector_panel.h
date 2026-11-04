@@ -48,7 +48,7 @@ class IconButton;
 // control, value, keyframe). Three panes share it, as the column's kinds:
 //   Video  the effect stack (with the proposal hint row), Compositing,
 //          Transform, Crop, Distort, Stabilization, Masks and Time; in the
-//          Finish workspace the Lift / Gamma / Gain wheels above them; a
+//          Finish tray the Lift / Gamma / Gain wheels above them; a
 //          footer with Save effects preset.
 //   Audio  Volume (level, pan) and Channel EQ (audio.eq, added on first
 //          edit) of the clip's sound (its own, or its linked clip's).
@@ -97,13 +97,13 @@ public:
     // The pane the column shows (its kind: Video, Audio or Info).
     void setPane(Pane pane);
     Pane pane() const { return m_pane; }
-    // The Finish workspace: the colour wheels over the Video pane's groups.
+    // While the Finish tray is open: the colour wheels over the Video pane's groups.
     void setFinish(bool finish);
     bool finish() const { return m_finish; }
     // The playhead, for animated values and keyframes.
     void setPlayhead(double seconds);
     void setArtwork(MediaArtwork *artwork);
-    // The Program monitor's frame (kept for the sequence; nothing draws it).
+    // The picture's frame (kept for the sequence; nothing draws it).
     void setProgramFrame(const QImage &frame);
     // The catalog from kerf_fx_catalog (or _all), for the effects'
     // parameters. Entries are added to those already known, so the sound

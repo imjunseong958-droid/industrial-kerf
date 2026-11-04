@@ -14,11 +14,10 @@
 #include "editor_bus.h"
 #include "inspector_column.h"
 #include "main_window.h"
-#include "program_strip.h"
-#include "scrub_strip.h"
+#include "ui/wiring/stage_wiring.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 #include "wiring/review_wiring.h"
 
 #include <QAction>
@@ -100,20 +99,15 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("export"));
         bus->run(QStringLiteral("proposal.accept"), QJsonObject{{"proposal", "p9"}});
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "accept"}, {"proposalId", "p9"}, {"revision", 5}}));
-        // A frontend command runs as its menu item does: a switch toggles.
-        QVERIFY(window.chatOpen());
-        QVERIFY(bus->run(QStringLiteral("view.comments")));
-        QVERIFY(!window.chatOpen());
+        // A frontend command runs as its menu item does: a switch toggles; a
+        // command the registry does not have does not run.
         QVERIFY(bus->run(QStringLiteral("window.assistant")));
-        QVERIFY(window.chatOpen());
-        // The viewer's switches run now; a command the registry does not
-        // have does not.
-        QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
-        const bool dimmed = dim->isChecked();
-        QVERIFY(bus->run(QStringLiteral("view.dim")));
-        QCOMPARE(dim->isChecked(), !dimmed);
-        QVERIFY(bus->run(QStringLiteral("view.dim")));
-        QCOMPARE(dim->isChecked(), dimmed);
+        QAction *safe = window.m_commands->action(QStringLiteral("view.safeZones"));
+        const bool shown = safe->isChecked();
+        QVERIFY(bus->run(QStringLiteral("view.safeZones")));
+        QCOMPARE(safe->isChecked(), !shown);
+        QVERIFY(bus->run(QStringLiteral("view.safeZones")));
+        QCOMPARE(safe->isChecked(), shown);
         QVERIFY(!bus->run(QStringLiteral("no.such.command")));
         QVERIFY(!bus->run(QString()));
     }
@@ -152,7 +146,7 @@ private slots:
         QVERIFY(!bus->playing());
         window.setConnection(QStringLiteral("ready"));
         // Selections, by click, by edit and by ⌘-click.
-        window.clickSelectClip(QStringLiteral("v1b"));
+        window.selectClip(QStringLiteral("v1b"));
         QCOMPARE(bus->selection(), QStringList{QStringLiteral("v1b")});
         window.extendClipSelection(QStringLiteral("v1a"), true);
         QCOMPARE(bus->selection(), (QStringList{QStringLiteral("v1b"), QStringLiteral("v1a")}));
@@ -189,9 +183,9 @@ private slots:
         QCOMPARE(bus->review(), window.m_reviewWiring->model());
     }
 
-    // The shells hear the engine through the bus: the Program strip says
-    // when a proposal is previewed and exits it; the HUD follows the
-    // agent; the scrub strip shows the playhead.
+    // The shells hear the engine through the bus: the chip says when a
+    // proposal is previewed and exits it; the HUD follows its render; the
+    // ruler shows the playhead.
     void shellsHearTheEngineThroughTheBus() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -200,21 +194,21 @@ private slots:
             {"proposalId", "p2"}, {"status", "pending"}, {"version", 2},
             {"versions", QJsonArray{QJsonObject{{"version", 1}, {"proposalId", "p1"}}, QJsonObject{{"version", 2}, {"proposalId", "p2"}}}}}});
         window.applySnapshot(snapshot);
-        ProgramStrip *strip = window.m_programStrip;
-        QVERIFY(!strip->previewShown());
+        PreviewChip *chip = window.m_stageWiring->previewChip();
+        QVERIFY(chip->isHidden());
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "running"}, {"proposalId", "p2"}});
-        QVERIFY(strip->previewShown());
-        QCOMPARE(strip->previewText(), QStringLiteral("Previewing proposal v2"));
+        QVERIFY(!chip->isHidden());
+        QCOMPARE(chip->text(), QStringLiteral("Previewing proposal v2"));
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"}, {"proposalId", "p1"}});
-        QCOMPARE(strip->previewText(), QStringLiteral("Previewing proposal v1"));
+        QCOMPARE(chip->text(), QStringLiteral("Previewing proposal v1"));
         window.m_lastCommand = {};
-        strip->exitPreviewButton()->click();
+        chip->exitButton()->click();
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preview_exit"}}));
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "exited"}});
-        QVERIFY(!strip->previewShown());
+        QVERIFY(chip->isHidden());
         // The program's own preview is not a proposal's.
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "running"}});
-        QVERIFY(!strip->previewShown());
+        QVERIFY(chip->isHidden());
 
         // The HUD follows a proposal's preview render (mockup-spec 3.3),
         // not the agent's turn.
@@ -230,11 +224,6 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}, {"proposalId", "p2"}});
         QVERIFY(!hud.active() && hud.text().isEmpty());
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
-
-        ScrubStrip scrub(nullptr, window.bus());
-        QCOMPARE(scrub.height(), 56);
-        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 1.0}, {"duration", window.m_duration}});
-        QVERIFY(scrub.timeText().startsWith(QStringLiteral("00:00:01:00 / ")));
     }
 };
 

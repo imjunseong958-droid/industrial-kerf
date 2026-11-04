@@ -98,7 +98,6 @@ void SourceState::open(const QJsonObject &source, const QString &path) {
     m_frame = QImage();
     m_message = m_hasVideo ? QStringLiteral("Loading…") : QString();
     m_position = -1.0;
-    showIndexFor(m_mediaId);
     emit opened(m_mediaId);
     emit frameChanged();
     seek(0.0);
@@ -117,8 +116,6 @@ void SourceState::refresh(const QJsonObject &source, const QString &path) {
     m_out = std::min(m_out, m_duration);
     if (m_out <= 0.0) m_out = m_duration;
     m_in = std::min(m_in, std::max(0.0, m_out - 1.0 / m_fps));
-    forgetIndex(m_mediaId);
-    // The other file's index is not this one's: ask again.
     emit opened(m_mediaId);
     const double at = std::clamp(m_position, 0.0, lastFrameStart());
     m_position = -1.0;
@@ -135,7 +132,6 @@ void SourceState::close() {
     m_frame = QImage();
     m_message = kNoMedia;
     m_revealClip.clear();
-    showIndexFor(QString());
     emit opened(QString());
     emit frameChanged();
     emit revealChanged();
@@ -330,103 +326,6 @@ void SourceState::playerFinished() {
     m_stream.clear();
     emit playingChanged(false);
     settleStill();
-}
-
-// ---------------------------------------------------------------- the media index
-
-QVector<SourceState::Range> SourceState::rangesFromIndex(const QJsonObject &index, double duration) {
-    QVector<Range> ranges;
-    for (const QJsonValue &value : index.value(QStringLiteral("ranges")).toArray()) {
-        double start = 0.0;
-        double end = 0.0;
-        if (value.isArray()) {
-            start = value.toArray().at(0).toDouble();
-            end = value.toArray().at(1).toDouble();
-        } else {
-            const QJsonObject range = value.toObject();
-            start = range.value(QStringLiteral("start")).toDouble();
-            end = range.value(QStringLiteral("end")).toDouble();
-        }
-        if (end > start) ranges.append(Range{start, end, {}});
-    }
-    if (ranges.isEmpty()) {
-        QVector<double> cuts;
-        for (const QJsonValue &cut : index.value(QStringLiteral("cuts")).toArray()) {
-            const double t = cut.toDouble();
-            if (t > 0.0 && (duration <= 0.0 || t < duration)) cuts.append(t);
-        }
-        if (!cuts.isEmpty() && duration > 0.0) {
-            std::sort(cuts.begin(), cuts.end());
-            cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
-            cuts.prepend(0.0);
-            cuts.append(duration);
-            for (qsizetype i = 0; i + 1 < cuts.size(); ++i) ranges.append(Range{cuts.at(i), cuts.at(i + 1), {}});
-        }
-    }
-    std::sort(ranges.begin(), ranges.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
-    for (qsizetype i = 0; i < ranges.size(); ++i) ranges[i].name = QStringLiteral("Shot %1").arg(i + 1);
-    return ranges;
-}
-
-bool SourceState::applyIndex(const QJsonObject &event) {
-    const QString media = event.value(QStringLiteral("media")).toString();
-    if (media.isEmpty()) return false;
-    m_indexes.insert(media, event);
-    m_indexErrors.remove(media);
-    if (media != m_mediaId) return false;
-    showIndexFor(media);
-    return true;
-}
-
-bool SourceState::applyIndexError(const QJsonObject &event) {
-    QString media = event.value(QStringLiteral("media")).toString();
-    if (media.isEmpty() && m_indexStatus == IndexStatus::Pending) media = m_mediaId;
-    if (media.isEmpty()) return false;
-    const QString message = event.value(QStringLiteral("message")).toString();
-    m_indexErrors.insert(media, message.isEmpty() ? QStringLiteral("This media could not be indexed") : message);
-    m_indexes.remove(media);
-    if (media != m_mediaId) return false;
-    showIndexFor(media);
-    return true;
-}
-
-void SourceState::setIndexPending() {
-    if (!isOpen() || m_indexStatus == IndexStatus::Ready) return;
-    m_indexErrors.remove(m_mediaId);
-    m_indexStatus = IndexStatus::Pending;
-    m_indexMessage = QStringLiteral("Finding shots…");
-    emit indexChanged();
-}
-
-void SourceState::setIndexUnavailable() {
-    if (!isOpen() || m_indexStatus == IndexStatus::Ready) return;
-    m_indexStatus = IndexStatus::Unavailable;
-    m_indexMessage = QStringLiteral("Shots show once Kerf is connected");
-    emit indexChanged();
-}
-
-void SourceState::forgetIndex(const QString &media) {
-    m_indexes.remove(media);
-    m_indexErrors.remove(media);
-    if (media == m_mediaId) showIndexFor(media);
-}
-
-void SourceState::showIndexFor(const QString &media) {
-    m_ranges.clear();
-    m_indexMessage.clear();
-    if (media.isEmpty()) {
-        m_indexStatus = IndexStatus::None;
-    } else if (m_indexes.contains(media)) {
-        m_indexStatus = IndexStatus::Ready;
-        m_ranges = rangesFromIndex(m_indexes.value(media), m_duration);
-        if (m_ranges.isEmpty()) m_indexMessage = QStringLiteral("No cuts in this media");
-    } else if (m_indexErrors.contains(media)) {
-        m_indexStatus = IndexStatus::Failed;
-        m_indexMessage = m_indexErrors.value(media);
-    } else {
-        m_indexStatus = IndexStatus::None;
-    }
-    emit indexChanged();
 }
 
 // ---------------------------------------------------------------- around it

@@ -1,8 +1,9 @@
 #pragma once
 
-// The Comments panel (the agent chat), mockup-spec 4: a 12-radius card
-// beside the picture with the header (Comments, Search, Sort, Filter, More,
-// Close), the All/Open/Proposals chips, the scroll-aware pin bar, the list
+// The Comments panel (the agent chat), mockup-spec 4: beside the picture,
+// always open, filling its region edge to edge: the header
+// (Comments and a ⋯ menu with search, sort and the All/Open/Proposals filter),
+// the scroll-aware pin bar, the list
 // of threads with their proposal cards, the reply-to bar and the composer.
 //
 // Everything it lists is the review model's (ui/review_model.h): comment
@@ -92,9 +93,7 @@ class ChatPanel final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    static constexpr int kRadius = 12;
     static constexpr int kHeaderHeight = 40;
-    static constexpr int kChipsHeight = 32;
     static constexpr int kPinHeight = 32;
     static constexpr int kSearchHeight = 32;
     static constexpr int kSidePadding = 16;
@@ -150,7 +149,7 @@ public:
     QJsonObject colourPreviewRequest(const QString &versionId) const;
     // A proposal accepted or rejected from this panel: its card settles to one line.
     void markSettledHere(const QString &proposalId, bool accepted);
-    // Whether the editor is in the Review workspace (first-show placement).
+    // Whether the editor is in its base state, no tray open (first-show placement).
     void setReviewWorkspace(bool review) { m_reviewWorkspace = review; }
 
     // ---- threads -----------------------------------------------------------
@@ -223,18 +222,10 @@ public:
 
     // ---- parts ---------------------------------------------------------------
     QLabel *title() const { return m_title; }
-    ui::IconButton *searchButton() const { return m_searchButton; }
     QLineEdit *searchField() const { return m_search; }
     QWidget *searchRow() const { return m_searchRow; }
-    ui::IconButton *sortButton() const { return m_sortButton; }
-    QLabel *sortLabel() const { return m_sortLabel; }
-    ui::IconButton *filterButton() const { return m_filterButton; }
     bool filterDotShown() const;
     ChatIconButton *moreButton() const { return m_more; }
-    ChatIconButton *closeButton() const { return m_close; }
-    ui::Chip *chipAll() const { return m_chipAll; }
-    ui::Chip *chipOpen() const { return m_chipOpen; }
-    ui::Chip *chipProposals() const { return m_chipProposals; }
     QFrame *pinBar() const { return m_pinBar; }
     QLabel *pinAuthor() const { return m_pinAuthor; }
     QLabel *pinSummary() const { return m_pinSummary; }
@@ -250,13 +241,14 @@ public:
     ReplyBar *replyBar() const { return m_replyBar; }
     Composer *composerWidget() const { return m_composer; }
     QFrame *composer() const;
+    // ⇧⌘J: the keys in the composer.
+    void focusComposer();
     QTextEdit *input() const;
     QPushButton *sendButton() const;
     QPushButton *stopButton() const;
     CommentRow *welcomeRow() const { return m_welcomeRow; }
     QWidget *welcome() const;
     QList<QAbstractButton *> examples() const;
-    QWidget *resizeHandle() const { return m_resizeHandle; }
     // The menus, built as they open (for tests).
     QMenu *buildSortMenu();
     QMenu *buildFilterMenu();
@@ -264,10 +256,8 @@ public:
     QMenu *buildRowMenu(const QString &commentId);
 
 signals:
-    // A drag on the panel's leading edge asks for this width, and its end
-    // for keeping it.
-    void widthDragged(int width);
-    void widthDragFinished();
+    // Esc reached the composer with nothing of its own to stop or cancel.
+    void escapeUnused();
     // "Ask again" on a row: the request to send again, in its thread.
     void askAgainInThread(const QString &text, const QString &threadId);
     void seekRequested(double seconds);
@@ -292,7 +282,6 @@ signals:
     // The More menu: "settings", "activity", "viewAs" (a person id, or empty
     // for oneself), "export" (markers, csv, edl), "model" (a model id).
     void moreAction(const QString &action, const QString &argument);
-    void closeRequested();
     void currentThreadChosen(const QString &threadId);
     // The thread of the row under the pointer, or empty when it leaves.
     void threadHovered(const QString &threadId);
@@ -333,7 +322,6 @@ private:
     };
 
     QWidget *buildHeader();
-    QWidget *buildChips();
     QFrame *buildPinBar();
     QWidget *buildSearch();
     void scheduleRebuild();
@@ -395,18 +383,10 @@ private:
     bool m_rebuildQueued = false;
 
     QLabel *m_title = nullptr;
-    ui::IconButton *m_searchButton = nullptr;
-    ui::IconButton *m_sortButton = nullptr;
-    QLabel *m_sortLabel = nullptr;
-    ui::IconButton *m_filterButton = nullptr;
     ui::Dot *m_filterDot = nullptr;
     ChatIconButton *m_more = nullptr;
-    ChatIconButton *m_close = nullptr;
     QWidget *m_searchRow = nullptr;
     QLineEdit *m_search = nullptr;
-    ui::Chip *m_chipAll = nullptr;
-    ui::Chip *m_chipOpen = nullptr;
-    ui::Chip *m_chipProposals = nullptr;
     QFrame *m_pinBar = nullptr;
     QLabel *m_pinAuthor = nullptr;
     QLabel *m_pinSummary = nullptr;
@@ -422,10 +402,7 @@ private:
     CommentRow *m_welcomeRow = nullptr;
     ReplyBar *m_replyBar = nullptr;
     Composer *m_composer = nullptr;
-    QWidget *m_resizeHandle = nullptr;
     QTimer *m_clock = nullptr;
-    int m_dragFromX = 0;
-    int m_dragFromWidth = 0;
     QDateTime m_welcomeSince;
     QLabel *m_welcomeTime = nullptr;
 

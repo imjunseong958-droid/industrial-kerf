@@ -48,14 +48,12 @@ public:
     MainWindow *window() const { return m_window; }
     EditorBus *bus() const { return m_bus; }
 
-    // Once the timeline, its title strip's widgets and the bus exist
-    // (MainWindow::wireTimeline). Safe to call once only.
+    // Once the timeline and the bus exist (MainWindow::wireTimeline). Safe to
+    // call once only.
     void attach();
     TimelineToolStrip *tools() const { return m_tools; }
     // The review the timeline reads: the bus's when set, else its own.
     ReviewModel *review() const;
-    // The Ask ghost's count: open threads while the panel is closed.
-    void refreshAsk();
 
     // The review's marks and open proposals as the timeline draws them.
     static QList<TimelineWidget::CommentMark> commentMarks(const ReviewModel &review, const QString &current);
@@ -69,9 +67,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void placeTools();
     void refreshReview();
-    void refreshPatch();
     void bindCommands();
     void followCommands();
     void sendSolo(const QStringList &tracks);

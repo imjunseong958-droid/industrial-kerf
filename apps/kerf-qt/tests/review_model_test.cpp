@@ -1,7 +1,7 @@
 // Tests for the review model (ui/review_model.h): the mockup's seed threads
 // (mockup-spec 4.9) as the bridge sends them — comments {items}, the state
 // snapshot's proposals and proposalTimelines, collab.status.user — and what
-// the Comments panel, the scrub lane and the ruler read back.
+// the Comments panel and the ruler read back.
 
 #include "review_model.h"
 #include "test_registry.h"

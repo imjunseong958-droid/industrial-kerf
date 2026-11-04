@@ -79,8 +79,8 @@ struct EditorTheme {
     QColor accent;
     QColor accentPressed;     // An accent button held down.
     QColor accentText;        // The accent as text or a thin line, 4.5:1 on every surface it is drawn on:
-                              // `panel` (the transports' timecodes), `rulerCorner` (the timeline's
-                              // corner time), and `statusBar` (the sync chip).
+                              // `panel` (the transports' timecodes), and `rulerCorner` (the timeline's
+                              // corner time).
     QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge, the chosen
                               // mask tool and the selected mask. `accentText` reads on it at 3:1.
     QColor accentTintPressed; // `accentTint` darkened while held, as a bezel darkens; `accentText`
@@ -90,9 +90,9 @@ struct EditorTheme {
                               // it still reads at 4.5:1.
 
     // Surfaces, from the back of the window forwards.
-    QColor window;           // Behind everything: the main window, the dock container.
+    QColor window;           // Behind everything: the main window.
     QColor chrome;           // Toolbar, menu bar, and tool palette.
-    QColor panel;            // A docked panel's body: monitors' frames, timeline, inspector, transport.
+    QColor panel;            // A panel's body: the timeline, the sheets.
     QColor panelTitle;       // A dock's title strip, and its inactive tabs.
     QColor panelTitleActive; // The current tab in a title strip.
     QColor raised;           // Cards inside a panel or dialog.
@@ -102,8 +102,6 @@ struct EditorTheme {
     QColor dialog;           // Dialog and settings window background.
 
     // Lines.
-    QColor dockSeparator;      // Splitter handles between docked panels.
-    QColor dockSeparatorHover; // A splitter handle under the pointer.
     QColor divider;            // The hairline between bars and panels (toolbar foot, title strip foot).
     QColor borderSubtle;       // Quiet edges: menus, menu separators.
     QColor border;             // Ordinary edges: pills, group boxes.
@@ -183,13 +181,9 @@ struct EditorTheme {
     QColor switchOffStroke;  // ...its edge...
     QColor knob;             // ...and its knob.
 
-    QColor statusBar;
-    QColor statusText;
-    QColor statusDivider; // Between status bar items.
 
     // Status. `*Surface` and `*Border` are a banner's fill and edge; `*Text`
-    // reads on the surface at 4.5:1. The plain colour reads on `panel` and
-    // `statusBar`.
+    // reads on the surface at 4.5:1. The plain colour reads on `panel`.
     QColor error;
     QColor errorSurface;
     QColor errorBorder;
@@ -234,12 +228,6 @@ struct EditorTheme {
     QColor chatScrollHandle;      // The list's scroll bar, shown only while the pointer is over the panel...
     QColor chatScrollHandleHover; // ...and under the pointer.
     // The round buttons between the picture and the chat.
-    QColor railButton;
-    QColor railButtonHover;
-    QColor railButtonActive;      // The chat's toggle while it is open: tonal, not filled...
-    QColor railGlyph;
-    QColor railGlyphActive;       // ...its symbol in Kerf's ink.
-    QColor railLabel;             // The count or label under a button.
     // A tonal pill (Reject, a secondary action): a fill and no outline.
     QColor pillTonal;
     QColor pillTonalText;
@@ -284,17 +272,15 @@ struct EditorTheme {
     // design_tokens.h's).
     QColor proposalChange;
 
-    // Viewers (Program and Source monitors, the region picker): the stage is
-    // the surround, the picture's canvas black.
-    QColor viewerSurround;      // The stage around the picture card.
+    // Viewers (the picture, the Source monitor, the region picker): the picture's
+    // canvas black.
+    QColor viewerSurround;      // Around the region picker's frame.
     QColor viewerCanvas;        // The canvas behind a picture that does not fill it, and when empty.
     QColor viewerText;          // The empty viewer's title...
     QColor viewerTextDim;       // ...and its hint; the Source monitor's message.
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
-    // The device frames' colours are device_frame's own (design_tokens.h
-    // overlay::deviceGlass and deviceScreen); this is the screen's black
-    // above and below the picture, for the viewer's empty state.
+    // The Source viewer's black above and below its picture.
     QColor deviceScreen;
     // Masks and regions over the picture: white over a dark rule; only the
     // handles are the accent.

@@ -26,6 +26,7 @@ BrowserPanel::BrowserPanel(QWidget *parent, EditorBus *bus) : QWidget(parent), m
     strip->setObjectName(QStringLiteral("browserStrip"));
     strip->setFixedHeight(tokens::layout::strip);
     auto *stripLayout = new QHBoxLayout(strip);
+    m_stripLayout = stripLayout;
     stripLayout->setContentsMargins(tokens::space::s12, 0, tokens::space::s8, 0);
     stripLayout->setSpacing(tokens::space::s4);
     m_pages = new ui::SegmentedControl;
@@ -54,6 +55,8 @@ BrowserPanel::BrowserPanel(QWidget *parent, EditorBus *bus) : QWidget(parent), m
     m_stack->addWidget(m_placeholder);
     layout->addWidget(m_stack, 1);
 }
+
+void BrowserPanel::addToStrip(QWidget *widget) { m_stripLayout->addWidget(widget); }
 
 void BrowserPanel::setEffects(EffectsPanel *effects) {
     if (m_effects == effects) return;

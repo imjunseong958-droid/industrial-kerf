@@ -2007,6 +2007,8 @@ void setMenuKey(QAction *action, const QString &key, bool uiFont) {
     action->setProperty(kMenuKeyUi, uiFont);
 }
 
+QString menuKey(const QAction *action) { return action ? action->property(kMenuKey).toString() : QString(); }
+
 void setMenuKeyIcon(QAction *action, const QString &icon) {
     if (action) action->setProperty(kMenuKeyIcon, icon);
 }

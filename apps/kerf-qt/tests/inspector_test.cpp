@@ -13,7 +13,6 @@
 #include "wiring/inspector_wiring.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "device_frame.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "effects_panel.h"
@@ -21,9 +20,7 @@
 #include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "player_overlay.h"
 #include "presets_panel.h"
-#include "program_level.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
@@ -31,7 +28,7 @@
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -84,7 +81,6 @@
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -100,14 +96,6 @@
 #include <QWheelEvent>
 #include <QWidget>
 
-#include <DockAreaTabBar.h>
-#include <DockAreaTitleBar.h>
-#include <DockAreaWidget.h>
-#include <DockManager.h>
-#include <DockSplitter.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
-#include <ElidingLabel.h>
 
 #include <algorithm>
 #include <climits>
@@ -742,7 +730,11 @@ private slots:
         window.show();
         QVERIFY(QTest::qWaitForWindowActive(&window));
         window.m_errorBanner->hide();
-        window.clickSelectClip(QStringLiteral("v"));
+        window.selectClip(QStringLiteral("v"));
+        QCoreApplication::processEvents();
+        window.m_timeline->setFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY(window.m_timeline->hasFocus());
+        window.m_shell->setSheet(StageShell::Sheet::Inspector);
         QCoreApplication::processEvents();
         window.m_timeline->setFocus(Qt::OtherFocusReason);
         QTRY_VERIFY(window.m_timeline->hasFocus());
@@ -1322,12 +1314,10 @@ private slots:
         QVERIFY(takeOps(window).isEmpty());
         QVERIFY(!name->editor()->isVisibleTo(name));
         QCOMPARE(name->name(), QStringLiteral("fisher-close.mov"));
-        // ⋯ ▸ Ask Kerf about This Clip: the conversation, open, about it.
-        window.setChatOpen(false);
+        // ⋯ ▸ Ask Kerf about This Clip: the conversation, about it.
         QAction *ask = inspector->m_moreMenu->findChild<QAction *>(QStringLiteral("inspectorAsk"));
         QVERIFY(ask);
         ask->trigger();
-        QVERIFY(window.chatOpen());
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@fisher-close.mov "));
         window.selectClip(QString());
         // A sequence is not renamed here.
@@ -1520,7 +1510,8 @@ private slots:
         window.resize(1440, 900);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.clickSelectClip(QStringLiteral("c1"));
+        window.selectClip(QStringLiteral("c1"));
+        window.m_shell->setSheet(StageShell::Sheet::Inspector);
         InspectorPanel *inspector = window.m_inspector;
         QVERIFY(inspector->isVisible());
         ScrubField *opacity = inspector->findChild<ScrubField *>(QStringLiteral("prop_opacity"));
@@ -1539,7 +1530,7 @@ private slots:
         const auto timedSwitch = [&](const char *id) {
             QElapsedTimer timer;
             timer.start();
-            window.clickSelectClip(QString::fromLatin1(id));
+            window.selectClip(QString::fromLatin1(id));
             inspector->repaint();
             return timer.nsecsElapsed() / 1.0e6;
         };
@@ -1592,22 +1583,22 @@ private slots:
                 if (row->isVisibleTo(inspector)) labels << row->label()->text();
             return labels;
         };
-        window.clickSelectClip(QStringLiteral("t"));
+        window.selectClip(QStringLiteral("t"));
         QCoreApplication::processEvents();
         const QStringList titleRows = visibleRows();
         const QString titleName = inspector->nameText();
         QVERIFY(!titleRows.isEmpty());
-        window.clickSelectClip(QStringLiteral("v"));
+        window.selectClip(QStringLiteral("v"));
         QCoreApplication::processEvents();
         const QStringList videoRows = visibleRows();
         QVERIFY(videoRows != titleRows);
         for (int round = 0; round < 2; ++round) {
-            window.clickSelectClip(QStringLiteral("t"));
+            window.selectClip(QStringLiteral("t"));
             QCoreApplication::processEvents();
             QCOMPARE(visibleRows(), titleRows);
             QCOMPARE(inspector->nameText(), titleName);
             QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
-            window.clickSelectClip(QStringLiteral("v"));
+            window.selectClip(QStringLiteral("v"));
             QCoreApplication::processEvents();
             QCOMPARE(visibleRows(), videoRows);
             QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
@@ -1615,7 +1606,7 @@ private slots:
         // A font or screen density change (EditorAppearance::changed)
         // builds every body again.
         emit EditorAppearance::instance()->changed();
-        window.clickSelectClip(QStringLiteral("t"));
+        window.selectClip(QStringLiteral("t"));
         QCoreApplication::processEvents();
         QCOMPARE(visibleRows(), titleRows);
         QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
@@ -2072,12 +2063,9 @@ private slots:
         // In the group of what it changes: Compositing holds Opacity.
         QVERIFY(inspector->section(QStringLiteral("compositing"))->bodyWidget()->isAncestorOf(hint));
         QSignalSpy opened(window.m_bus, &EditorBus::openThread);
-        QSignalSpy panel(window.m_bus, &EditorBus::commentsPanelRequested);
         hint->findChild<QPushButton *>(QStringLiteral("proposalHintShow"))->click();
         QCOMPARE(opened.size(), 1);
         QCOMPARE(opened.first().first().toString(), QStringLiteral("c-root"));
-        QCOMPARE(panel.size(), 1);
-        QVERIFY(panel.first().first().toBool());
         // An effect change only: in Effects.
         clip.insert("props", QJsonObject{});
         clips.replace(0, clip);
@@ -2113,7 +2101,7 @@ private slots:
         window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.clickSelectClip(QStringLiteral("v"));
+        window.selectClip(QStringLiteral("v"));
         InspectorColumn *column = window.m_inspectorColumn;
         InspectorPanel *inspector = window.m_inspector;
         for (const auto kind : {InspectorColumn::Kind::Video, InspectorColumn::Kind::Audio, InspectorColumn::Kind::Info})
@@ -2134,7 +2122,7 @@ private slots:
         QCOMPARE(inspector->pane(), InspectorPanel::Pane::Video);
         QVERIFY(!inspector->footer()->isHidden());
         // Deliver: the Deliver pane stands in for the Video kind.
-        window.m_workspace->activate(QString::fromLatin1(Workspace::kDeliver));
+        window.m_shell->setTray(StageShell::Tray::Deliver);
         QCoreApplication::processEvents();
         QVERIFY(column->deliverShown());
         QCOMPARE(column->currentPage(), column->deliverPane());
@@ -2144,12 +2132,12 @@ private slots:
         QCOMPARE(column->currentPage(), column->deliverPane());
         // Finish: the wheels over the Video pane.
         column->setPage(InspectorColumn::Page::Source);
-        window.m_workspace->activate(QString::fromLatin1(Workspace::kFinish));
+        window.m_shell->setTray(StageShell::Tray::Finish);
         QCoreApplication::processEvents();
         QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
         QVERIFY(inspector->finish());
         QVERIFY(inspector->wheels());
-        window.m_workspace->activate(QString::fromLatin1(Workspace::kReview));
+        window.m_shell->setTray(StageShell::Tray::None);
         QCoreApplication::processEvents();
         QVERIFY(!inspector->finish());
     }
@@ -2220,12 +2208,13 @@ private slots:
         window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.clickSelectClip(QStringLiteral("v"));
+        window.selectClip(QStringLiteral("v"));
+        window.m_shell->setSheet(StageShell::Sheet::Inspector);
         QCoreApplication::processEvents();
         InspectorColumn *column = window.m_inspectorColumn;
         InspectorPanel *inspector = window.m_inspector;
-        // 304 with its seam: 303 of content.
-        QVERIFY2(std::abs(column->width() - (tokens::layout::inspector - 1)) <= 1, qPrintable(QString::number(column->width())));
+        // 304 wide; its hairline stands outside it.
+        QCOMPARE(column->width(), tokens::layout::inspector);
         QCOMPARE(column->findChild<QWidget *>(QStringLiteral("inspectorStrip"))->height(), 28);
         QCOMPARE(inspector->mapTo(column, QPoint()).y(), 28);
         QCOMPARE(inspector->header()->height(), 44);
@@ -2281,7 +2270,7 @@ private slots:
             QCOMPARE(shot.pixelColor(QPoint(column->width() / 2, 2) * shot.devicePixelRatio()).rgb(), tokens::color(tokens::chrome).rgb());
             if (!shots.isEmpty()) QVERIFY(shot.save(QDir(shots).filePath(QStringLiteral("inspector-%1.png").arg(InspectorColumn::kindId(kind)))));
         }
-        window.m_workspace->activate(QString::fromLatin1(Workspace::kFinish));
+        window.m_shell->setTray(StageShell::Tray::Finish);
         column->setKind(InspectorColumn::Kind::Video);
         QCoreApplication::processEvents();
         if (!shots.isEmpty()) QVERIFY(column->grab().toImage().save(QDir(shots).filePath(QStringLiteral("inspector-finish.png"))));

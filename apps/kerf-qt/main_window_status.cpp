@@ -1,5 +1,5 @@
-// MainWindow's status bar and connection state.
-// The region's state and its building live in ToolbarWiring.
+// MainWindow's connection state, and its passing messages (shown in the
+// toolbar's subtitle by ToolbarWiring).
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -12,14 +12,12 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -69,7 +67,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -78,9 +75,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -92,28 +86,14 @@
 #include "editor_bus.h"
 #include "finish_tray.h"
 #include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 #include "wiring/toolbar_wiring.h"
 
 namespace kerf {
 
 using namespace window_parts;
 
-// The sync chip (mockup-spec 9): the branch glyph, "branch ↑a ↓b" and the
-// sync's state; its tip "Revision N · k commits to pull"; a click opens the
-// Sync menu. ToolbarWiring::updateSyncChip words it.
-void MainWindow::updateSyncChip() {
-    if (m_toolbarWiring) m_toolbarWiring->updateSyncChip();
-}
-
-// The status bar (mockup-spec 9): the selection, the rate and dropped
-// frames, the guest, then the draft export, the keymap chip, the sync chip
-// and the agent's connection. ToolbarWiring::buildStatusBar builds it.
-void MainWindow::setupStatusBar() {
-    m_toolbarWiring->buildStatusBar();
-    updateCloudStatus();
-    updateSyncChip();
+void MainWindow::showStatus(const QString &message, int timeout) {
+    if (m_toolbarWiring) m_toolbarWiring->showMessage(message, timeout);
 }
 
 void MainWindow::setConnection(const QString &status, const QString &message) {
@@ -127,18 +107,14 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     if (m_formatBank) m_formatBank->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);
     if (m_toolbarWiring) {
-        const QString state = m_connected ? QStringLiteral("ready")
+        // The toolbar's subtitle says so while it lasts.
+        m_toolbarWiring->m_connection = m_connected ? QStringLiteral("ready")
             : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
-        // A new connection has played nothing yet.
-        if (m_connected != wasConnected) m_toolbarWiring->m_dropped = -1;
-        m_toolbarWiring->m_connection = state;
-        m_toolbarWiring->updateAgent();
-        m_toolbarWiring->updateRate();
+        layoutProjectTitle();
     }
     if (!m_connected) {
         m_playing = false;
         m_bus->setPlaying(false);
-        updateTransport();
         m_hasPendingSeek = false;
         m_hasPendingHoverSeek = false;
         m_hoverSkimming = false;
@@ -156,7 +132,11 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateChatControls();
     if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
-    if (m_connected && !wasConnected) startSession();
+    if (m_connected && !wasConnected) {
+        startSession();
+        // The timeline was disabled, which handed the keys to the next control.
+        settleFocus();
+    }
     QTimer::singleShot(0, this, [this] {
         if (m_timelineScroll && m_timeline && m_timelineScroll->viewport()->width() > 0) {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());

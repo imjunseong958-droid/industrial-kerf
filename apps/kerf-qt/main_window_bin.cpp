@@ -13,14 +13,12 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -70,7 +68,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -79,9 +76,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -93,8 +87,6 @@
 #include "editor_bus.h"
 #include "finish_tray.h"
 #include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 #include "wiring/bin_wiring.h"
 
 namespace kerf {
@@ -413,9 +405,8 @@ void MainWindow::buildBin() {
         if (m_effectsFromInspector && clips.size() == 1) {
             m_effectsFromInspector = false;
             m_inspector->revealEffect(int(selectedClipObject().value(QStringLiteral("effects")).toArray().size()));
-            // The clip it shows, so a later click on the same clip after
-            // choosing Project by hand leaves Project in front.
-            m_workspace->raiseInspector(Workspace::InspectorOrigin::Edit, true, clips.constFirst());
+            m_shell->setSheet(StageShell::Sheet::Inspector);
+            m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
         }
     });
     connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {

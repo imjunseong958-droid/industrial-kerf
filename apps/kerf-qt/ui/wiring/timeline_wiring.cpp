@@ -8,19 +8,18 @@
 #include <QAction>
 #include <QEvent>
 #include <QJsonArray>
-#include <QLabel>
-#include <QTimer>
-
-#include <DockAreaTitleBar.h>
+#include <QLayout>
 
 namespace kerf {
 
 namespace {
 
-// The registry's commands behind the strip, in its order: the six tools
-// (TimelineToolStrip::toolAt), then Snap, Add marker, Add track and Ask.
-constexpr const char *kStripCommands[] = {"tool.selection", "tool.razor", "tool.ripple", "tool.roll", "tool.slip",
-                                          "tool.slide",     "sequence.snap", "marker.add", "timeline.addTrack", "ai.ask"};
+// The registry's commands behind the strip: its two tools, Snap, and the
+// transport in its order.
+constexpr const char *kToolCommands[] = {"tool.selection", "tool.razor"};
+constexpr const char *kSnapCommand = "sequence.snap";
+constexpr const char *kTransportCommands[] = {"playback.goToStart", "playback.previousFrame", "playback.toggle", "playback.nextFrame",
+                                              "playback.goToEnd"};
 
 } // namespace
 
@@ -31,8 +30,7 @@ TimelineWiring::TimelineWiring(MainWindow *window, EditorBus *bus) : QObject(nul
 }
 
 TimelineWiring::~TimelineWiring() {
-    // The strip is the title strip's child once placed; a strip never placed is ours.
-    if (m_tools && !m_tools->parent()) delete m_tools.data();
+    // The strip is the panel's child, gone with it.
 }
 
 ReviewModel *TimelineWiring::review() const { return m_shared ? m_shared.data() : m_own; }
@@ -43,25 +41,24 @@ void TimelineWiring::attach() {
     if (m_attached || !m_window || !m_window->m_timeline) return;
     m_attached = true;
     TimelineWidget *timeline = m_window->m_timeline;
-    m_tools = new TimelineToolStrip(timeline);
-    m_tools->hide();
-    // The strip follows "N tracks · duration" into whatever title strip
-    // shows the timeline (the workspace moves it between areas).
-    if (QLabel *detail = m_window->m_timelineDetail) {
-        detail->installEventFilter(this);
-        QTimer::singleShot(0, this, &TimelineWiring::placeTools);
-    }
+    // The strip over the timeline, the first thing in its panel.
+    m_tools = new TimelineToolStrip(timeline, m_window->m_timelinePanel);
+    if (auto *layout = qobject_cast<QVBoxLayout *>(m_window->m_timelinePanel->layout())) layout->insertWidget(0, m_tools);
     connect(m_tools, &TimelineToolStrip::toolRequested, this, [this](TimelineTool tool) {
-        triggerCommand(QString::fromLatin1(kStripCommands[TimelineToolStrip::toolIndex(tool)]));
+        triggerCommand(QString::fromLatin1(kToolCommands[TimelineToolStrip::toolIndex(tool)]));
     });
     connect(m_tools, &TimelineToolStrip::snapRequested, this, [this](bool on) {
-        QAction *snap = m_window->m_commands ? m_window->m_commands->action(QStringLiteral("sequence.snap")) : nullptr;
+        QAction *snap = m_window->m_commands ? m_window->m_commands->action(QString::fromLatin1(kSnapCommand)) : nullptr;
         if (snap) snap->setChecked(on);
         else m_window->m_timeline->setSnapping(on);
     });
-    connect(m_tools, &TimelineToolStrip::addMarkerRequested, this, [this] { triggerCommand(QStringLiteral("marker.add")); });
-    connect(m_tools, &TimelineToolStrip::addTrackRequested, this, [this] { triggerCommand(QStringLiteral("timeline.addTrack")); });
-    connect(m_tools, &TimelineToolStrip::askRequested, this, [this] { triggerCommand(QStringLiteral("ai.ask")); });
+    connect(m_tools, &TimelineToolStrip::transportRequested, this, [this](TimelineToolStrip::Transport which) {
+        triggerCommand(QString::fromLatin1(kTransportCommands[int(which)]));
+    });
+    connect(m_bus, &EditorBus::playingChanged, this, [this](bool playing) {
+        m_tools->setPlaying(playing);
+        followCommands();
+    });
     // Each control stands for its registry command (bindCommands).
     bindCommands();
 
@@ -91,10 +88,7 @@ void TimelineWiring::attach() {
     });
 
     connect(m_bus, &EditorBus::event, this, &TimelineWiring::handleEvent);
-    connect(m_bus, &EditorBus::snapshotChanged, this, [this] {
-        m_own->setSnapshot(m_bus->snapshot());
-        refreshPatch();
-    });
+    connect(m_bus, &EditorBus::snapshotChanged, this, [this] { m_own->setSnapshot(m_bus->snapshot()); });
     connect(m_bus, &EditorBus::identityChanged, this, [this](const QJsonObject &user) { m_own->setIdentity(user); });
     connect(m_bus, &EditorBus::currentThreadChanged, this, [this](const QString &id) {
         if (!m_shared) m_own->setCurrentThread(id);
@@ -103,8 +97,6 @@ void TimelineWiring::attach() {
     connect(m_bus, &EditorBus::reviewChanged, this, &TimelineWiring::followSharedReview);
     connect(m_own, &ReviewModel::changed, this, &TimelineWiring::refreshReview);
     connect(m_own, &ReviewModel::currentChanged, this, &TimelineWiring::refreshReview);
-    if (m_window->m_sourceMonitor) connect(m_window->m_sourceMonitor, &SourceMonitorPanel::changed, this, &TimelineWiring::refreshPatch);
-    connect(timeline, &TimelineWidget::targetsChanged, this, &TimelineWiring::refreshPatch);
     followSharedReview();
 }
 
@@ -116,12 +108,15 @@ void TimelineWiring::bindCommands() {
     // The window makes its registry after its regions (setupActions runs
     // after buildUi), so this binds on the first call that finds it: from
     // attach, the first connection change (setConnection, in the window's
-    // constructor) or the first Ask refresh.
+    // constructor) or the first review refresh.
     if (m_commandsBound || !m_tools || !m_window || !m_window->m_commands) return;
     m_commandsBound = true;
     CommandRegistry *commands = m_window->m_commands;
-    for (const char *id : kStripCommands)
-        if (QAction *action = commands->action(QString::fromLatin1(id))) connect(action, &QAction::changed, this, &TimelineWiring::followCommands);
+    QStringList ids{QString::fromLatin1(kSnapCommand)};
+    for (const char *id : kToolCommands) ids << QString::fromLatin1(id);
+    for (const char *id : kTransportCommands) ids << QString::fromLatin1(id);
+    for (const QString &id : std::as_const(ids))
+        if (QAction *action = commands->action(id)) connect(action, &QAction::changed, this, &TimelineWiring::followCommands);
     connect(commands, &CommandRegistry::shortcutsChanged, this, &TimelineWiring::followCommands);
     followCommands();
 }
@@ -140,16 +135,17 @@ void TimelineWiring::followCommands() {
         if (!action) return State{false, QStringLiteral("Unavailable"), {}};
         return State{action->isEnabled(), commands->reason(CommandRegistry::resolve(id)), action->shortcut().toString(QKeySequence::NativeText)};
     };
-    for (int index = 0; index < 6; ++index) {
-        const TimelineTool tool = TimelineToolStrip::toolAt(index);
-        const auto s = state(QString::fromLatin1(kStripCommands[index]));
-        m_tools->followTool(tool, s.enabled, s.reason, s.shortcut);
+    for (int index = 0; index < 2; ++index) {
+        const auto s = state(QString::fromLatin1(kToolCommands[index]));
+        m_tools->followTool(TimelineToolStrip::toolAt(index), s.enabled, s.reason, s.shortcut);
     }
-    using Control = TimelineToolStrip::Control;
-    const std::pair<Control, int> controls[] = {{Control::Snap, 6}, {Control::Marker, 7}, {Control::Track, 8}, {Control::Ask, 9}};
-    for (const auto &[control, index] : controls) {
-        const auto s = state(QString::fromLatin1(kStripCommands[index]));
-        m_tools->followControl(control, s.enabled, s.reason, s.shortcut);
+    {
+        const auto s = state(QString::fromLatin1(kSnapCommand));
+        m_tools->followSnap(s.enabled, s.reason, s.shortcut);
+    }
+    for (int index = 0; index < TimelineToolStrip::kTransports; ++index) {
+        const auto s = state(QString::fromLatin1(kTransportCommands[index]));
+        m_tools->followTransport(TimelineToolStrip::Transport(index), s.enabled, s.reason, s.shortcut);
     }
 }
 
@@ -165,37 +161,7 @@ bool TimelineWiring::eventFilter(QObject *watched, QEvent *event) {
         if (timeline->isEnabled() && !timeline->soloTracks().isEmpty()) sendSolo(timeline->soloTracks());
         return QObject::eventFilter(watched, event);
     }
-    if (m_window && watched == m_window->m_timelineDetail && m_tools) {
-        switch (event->type()) {
-        case QEvent::ParentChange:
-            // Inserted into its new strip after this event: place the tools then.
-            m_tools->hide();
-            if (m_tools->parentWidget() != m_window->m_timelineDetail->parentWidget())
-                m_tools->setParent(m_window->m_timelineDetail->parentWidget());
-            QTimer::singleShot(0, this, &TimelineWiring::placeTools);
-            break;
-        case QEvent::Show: placeTools(); break;
-        case QEvent::Hide: m_tools->hide(); break;
-        default: break;
-        }
-    }
     return QObject::eventFilter(watched, event);
-}
-
-void TimelineWiring::placeTools() {
-    if (!m_tools || !m_window || !m_window->m_timelineDetail) return;
-    QLabel *detail = m_window->m_timelineDetail;
-    auto *bar = qobject_cast<ads::CDockAreaTitleBar *>(detail->parentWidget());
-    if (!bar) {
-        m_tools->hide();
-        return;
-    }
-    if (m_tools->parentWidget() != bar || bar->indexOf(m_tools) < 0) {
-        const int at = bar->indexOf(detail);
-        if (at < 0) return;
-        bar->insertWidget(at + 1, m_tools);
-    }
-    m_tools->setVisible(!detail->isHidden());
 }
 
 void TimelineWiring::followSharedReview() {
@@ -252,34 +218,7 @@ void TimelineWiring::refreshReview() {
     TimelineWidget *timeline = m_window->m_timeline;
     timeline->setCommentMarks(commentMarks(*m_own, currentThread()));
     timeline->setProposalBands(proposalBands(*m_own));
-    refreshAsk();
-}
-
-void TimelineWiring::refreshAsk() {
-    if (!m_tools || !m_window) return;
     bindCommands();
-    const ReviewModel *model = review();
-    m_tools->setAskNotes(m_window->chatOpen() ? 0 : model->counts().open);
-}
-
-void TimelineWiring::refreshPatch() {
-    if (!m_window || !m_window->m_timeline) return;
-    QHash<QString, QString> patch;
-    if (m_window->m_sourceMonitor && m_window->m_sourceMonitor->isOpen()) {
-        // Where the Source viewer's picture and sound go: v1 and a1 on the
-        // tracks a source edit writes.
-        int video = 0;
-        int audio = 0;
-        const QJsonArray tracks = m_window->m_project.value(QStringLiteral("tracks")).toArray();
-        for (const QString &id : m_window->sourceTargets()) {
-            for (const QJsonValue &value : tracks) {
-                const QJsonObject track = value.toObject();
-                if (track.value(QStringLiteral("id")).toString() != id) continue;
-                patch.insert(id, isAudioTrack(track) ? QStringLiteral("a%1").arg(++audio) : QStringLiteral("v%1").arg(++video));
-            }
-        }
-    }
-    m_window->m_timeline->setSourcePatch(patch);
 }
 
 QList<TimelineWidget::CommentMark> TimelineWiring::commentMarks(const ReviewModel &review, const QString &current) {

@@ -1,6 +1,5 @@
-// MainWindow's toolbar (mockup-spec 1): the window buttons' room, the
-// commands, the workspaces, the centred title, the format, the sequence,
-// Export and Settings. The region's state and its building live in
+// MainWindow's toolbar: the window buttons' room, the ≡ menu, the centred
+// title and subtitle, the format and Export. The region's state and its building live in
 // ToolbarWiring (ui/wiring/toolbar_wiring.*); these are the window's own
 // entry points into it.
 
@@ -10,7 +9,7 @@
 #include "components.h"
 #include "editor_bus.h"
 #include "toolbar_widgets.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/toolbar_wiring.h"
 #ifdef Q_OS_MACOS
@@ -49,45 +48,15 @@ void MainWindow::syncCanvasPreset(const QSize &size) {
     m_updatingCanvasPreset = true;
     m_formatBank->setCanvasSize(size);
     m_updatingCanvasPreset = false;
-    m_toolbarWiring->updateSequence();
     layoutProjectTitle();
-}
-
-void MainWindow::buildWorkspaceMenu(QMenu *menu) {
-    // As mockup-spec 10 lists it: the built-ins with their keys (the
-    // registry's actions, the current one checked), one's own (saved),
-    // then saving and resetting the current one.
-    menu->clear();
-    qDeleteAll(menu->findChildren<QActionGroup *>(Qt::FindDirectChildrenOnly));
-    QAction *header = ui::addMenuHeader(menu, QStringLiteral("Workspaces"));
-    header->setObjectName(QStringLiteral("workspacesHeader"));
-    syncWorkspaceCommands();
-    auto *group = new QActionGroup(menu);
-    for (const QString &name : m_workspace->names()) {
-        if (Workspace::isBuiltIn(name)) {
-            if (QAction *builtIn = m_commands->action(QStringLiteral("workspace.%1").arg(name.toLower()))) menu->addAction(builtIn);
-            continue;
-        }
-        QAction *choice = menu->addAction(name);
-        choice->setObjectName(QStringLiteral("workspace.%1").arg(name));
-        choice->setCheckable(true);
-        choice->setChecked(name == m_workspace->current());
-        choice->setToolTip(QStringLiteral("%1 · saved").arg(name));
-        ui::setMenuKey(choice, QStringLiteral("saved"), true);
-        group->addAction(choice);
-        connect(choice, &QAction::triggered, this, [this, name] { m_workspace->activate(name); });
-    }
-    menu->addSeparator();
-    for (const char *id : {"window.saveWorkspace", "window.saveWorkspaceAs", "window.resetWorkspace"})
-        if (QAction *action = m_commands->action(QString::fromLatin1(id))) menu->addAction(action);
 }
 
 void MainWindow::fitTitleBar() {
 #if KERF_EDITOR_OWN_TITLE_BAR
     if (!m_toolbar || !m_windowButtons) return;
     // The safe area's top is the title bar the window buttons sit in. The
-    // commands start past them (52 + 16 reserved, mockup-spec 1); in full
-    // screen there are no buttons beside them.
+    // ≡ button starts past them (52 + 16 reserved); in full screen there are
+    // no buttons beside it.
     const QWindow *handle = windowHandle();
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
     const int first = ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen());

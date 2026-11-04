@@ -13,14 +13,12 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -70,7 +68,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -79,9 +76,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -93,8 +87,6 @@
 #include "editor_bus.h"
 #include "finish_tray.h"
 #include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 #include "wiring/inspector_wiring.h"
 
 namespace kerf {
@@ -165,21 +157,18 @@ void MainWindow::buildInspector() {
     connect(m_inspector, &InspectorPanel::focusReturnRequested, this, [this] { m_timeline->setFocus(Qt::OtherFocusReason); });
     connect(m_inspector, &InspectorPanel::askRequested, this, &MainWindow::askAboutInChat);
     connect(m_inspector, &InspectorPanel::revealRequested, this, [this](const QString &) {
-        if (ads::CDockWidget *project = m_workspace->panel(QStringLiteral("project"))) {
-            if (project->isClosed()) project->toggleView(true);
-            project->setAsCurrentTab();
-        }
+        m_shell->setSheet(StageShell::Sheet::Media);
     });
     connect(m_inspector, &InspectorPanel::addEffectRequested, this, [this](bool) {
         // The Effects browser, its search ready; adding brings the
         // Inspector back with the new effect open.
-        m_workspace->showBrowserForInspector(QStringLiteral("effects"));
+        m_shell->setSheet(StageShell::Sheet::Browser);
+        m_browserPanel->setPage(BrowserPanel::Page::Effects);
         m_effects->focusSearch();
         m_effectsFromInspector = true;
     });
     // Mask tools draw a new mask on the selected picture clip over the
-    // Program monitor; the Program panel's title bar and Effect Controls
-    // both carry them.
+    // picture; the ≡ menu's View and the Inspector both carry them.
     auto *maskTools = new QActionGroup(this);
     maskTools->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
     struct MaskToolAction {
@@ -216,7 +205,6 @@ void MainWindow::buildInspector() {
     m_inspectorColumn->setInspector(m_inspector);
     m_inspectorColumn->setSourceMonitor(m_sourceMonitor);
     connect(m_inspectorColumn, &InspectorColumn::kindChanged, this, [this] {
-        rememberStage();
         syncPanelCommands();
     });
     connect(m_inspectorColumn, &InspectorColumn::pageChanged, this, &MainWindow::syncPanelCommands);

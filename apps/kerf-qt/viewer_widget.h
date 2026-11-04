@@ -1,7 +1,6 @@
 #pragma once
 
 #include "design_tokens.h"
-#include "device_frame.h"
 #include "editor_common.h"
 #include "test_friends.h"
 
@@ -21,29 +20,15 @@ class QVariantAnimation;
 
 namespace kerf {
 
-class PlayerOverlay;
-
-// The Program stage (mockup-spec 3): the picture in its device, the rail on
-// the device's right, the comments panel anchored to the stage's right edge,
-// the scrub strip under the device, the agent HUD and, in the Edit workspace
-// and the phone formats, the Source column on the left. It also draws the
-// picture's overlays (safe zones, the caption, the QC overlap box and the
-// comments' drawings), captures a drawing on the frame, and draws the
-// selected picture clip's masks over the picture and edits them: a mask tool
-// draws a new one, a handle drag moves a corner or point, a drag inside a
-// mask moves it, and Delete removes the selected one. Every change leaves as
-// a typed operation.
-//
-// Placement (the [OWNER] table of mockup-spec 3.1): the device's top is
-// kStageTop; the scrub strip's (SY) is the stage's height less 64; the
-// laptop's box is SY - 9 - TOP tall and the phone's SY - 12 - TOP. The panel
-// keeps a 12 margin to the stage's right edge, the rail stands 12 right of
-// the device. With the panel open a 16:9 device and its rail are centred in
-// 16 ... panel - 12, and a phone stands 12 left of the rail; closed, the rail
-// ends 12 from the stage's edge and the Source column fills the left. The
-// device is scaled to fit its box at its product's exact proportions, its
-// outer rect snapped to whole points; "Off" draws the picture as a plain
-// rect where the device's picture would be.
+// The picture region (mockup, minimal pass): the frame, flush, on black bars
+// where the region is not of its shape. Over it the caption, the QC overlap
+// box, safe zones (off by default) and the comments' drawings; it captures a
+// drawing on the frame, and draws the selected picture clip's masks and edits
+// them: a mask tool draws a new one, a handle drag moves a corner or point, a
+// drag inside a mask moves it, and Delete removes the selected one. Every
+// change leaves as a typed operation. The agent HUD sits in title safe, and a
+// proposal's preview chip 12 inside the picture's top left, as children that
+// show and hide themselves.
 class ViewerWidget final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
@@ -58,114 +43,38 @@ public:
     QString caption() const { return m_caption; }
     void setProjectInfo(double width, double height);
 
-    enum class Device { None, Phone, Laptop };
-    struct StageLayout {
-        QRectF card;    // The picture (at Fit).
-        QRectF body;    // The device; the picture itself when the device is Off.
-        QRectF screen;  // The device's screen; empty without one.
-        QRect rail;     // The rail's geometry (railRect rounded).
-        QRectF railRect;
-        QRect panel;    // The comments panel; empty while it is closed.
-        QRect panelSlot; // Where the panel stands when open (its width for this format).
-        QRectF scrub;   // The scrub strip under the device.
-        bool narrowScrub = false;
-        QRect source;   // The Source column; empty when it does not show.
-        QRectF hud;     // The agent HUD: a card in title safe, or a strip over the Source column.
-        bool hudStrip = false;
-        bool phone = false;   // A phone format (9:16, 1:1, 4:5): the phone, its 480 panel.
-        bool overlay = false; // Too narrow for the group: the panel lies over the stage.
-        bool device = false;  // In a phone or a laptop.
-        Device kind = Device::None;
-    };
-
-    // ---- placement (tokens::layout) ----
-    static constexpr int kStageTop = tokens::layout::stageTop;          // the device's top
-    static constexpr int kStageFoot = tokens::layout::stageBottom;      // under the scrub strip
-    static constexpr int kScrubHeight = tokens::layout::scrub;          // 56
-    static constexpr int kLaptopScrubGap = 9;                            // laptop base to the scrub
-    static constexpr int kPhoneScrubGap = 12;                            // phone body to the scrub
-    static constexpr int kStageEdge = tokens::layout::stageMargin;      // 12: rail and panel to the edge, device to rail
-    static constexpr int kSourceInset = tokens::layout::stageInset;     // 16: the Source column's (and the group's) left
-    static constexpr int kRailWidth = tokens::layout::rail;             // 44
-    static constexpr int kPhoneScrubWidth = 360;
-    static constexpr int kPhoneSourceWidth = 400;
-    // The Source column's least width; narrower, it does not show.
-    static constexpr int kLeastSourceWidth = 240;
-    // The device's least width before the panel lies over the stage.
-    static constexpr int kMinDeviceWidth = 160;
-    // A 16:9 picture narrower than this has the scrub strip's narrow mode.
-    static constexpr int kNarrowScrubWidth = 480;
     static constexpr int kHudWidth = 288;
     static constexpr int kHudHeight = 72;
-    static constexpr int kHudStripHeight = 32;
-    // The panel's width: 368 beside a 16:9 picture, 480 beside a phone,
-    // dragged between 300 and 480 and remembered per format.
-    static constexpr int kMinChatWidth = tokens::layout::panelMin;
-    static constexpr int kMaxChatWidth = tokens::layout::panelMax;
-    static constexpr int kDefaultChatWidth = tokens::layout::panel;
-    static constexpr int kPhoneChatWidth = tokens::layout::panelPhone;
-    // Stage and device moves, the panel's open and close.
-    static constexpr int kMoveDuration = tokens::motion::move;
+    // The preview chip's place, inside the picture's top left.
+    static constexpr int kChipInset = 12;
 
-    // The rail and the comments panel, laid out in the stage as children.
-    void setStage(QWidget *rail, QWidget *panel);
-    // The scrub strip, the agent HUD and the Source column, the same way.
-    // The HUD shows and hides itself; the stage follows.
-    void setStageParts(QWidget *scrub, QWidget *hud, QWidget *source);
-    QWidget *scrubStrip() const { return m_scrub; }
+    // The agent HUD and the preview chip, as children; each shows and hides itself.
+    void setOverlays(QWidget *hud, QWidget *chip);
     QWidget *hud() const { return m_hud; }
-    QWidget *sourceColumn() const { return m_source; }
-    void setChatOpen(bool open);
-    bool chatOpen() const { return m_chatOpen; }
-    // The panel's width for the format in use (300-480).
-    void setChatWidth(int width);
-    int chatWidth() const { return phoneFormat() ? m_phoneChatWidth : m_chatWidth; }
-    // The width for 16:9 (`phone` false) or the phone formats.
-    void setChatWidth(bool phone, int width);
-    int chatWidth(bool phone) const { return phone ? m_phoneChatWidth : m_chatWidth; }
+    QWidget *previewChip() const { return m_chip; }
 
-    // The phone a portrait, square or 4:5 picture shows in, or Off.
-    void setDevicePreview(DevicePreview preview);
-    DevicePreview devicePreview() const { return m_device; }
-    // Action and title safe over the picture, every format.
+    // Action and title safe over the picture, every format; off by default.
     void setSafeZones(bool shown);
     bool safeZonesShown() const { return m_safeZones; }
-    // The laptop a wide picture shows in, or Off.
-    void setLaptopPreview(LaptopPreview preview);
-    LaptopPreview laptopPreview() const { return m_laptop; }
-    // Whether the picture is taller than wide, or wider than tall.
-    bool portrait() const { return aspect() < 1.0; }
-    bool landscape() const { return aspect() > 1.0; }
     // The picture's width over its height.
     double pictureAspect() const { return aspect(); }
-    // A phone format: 9:16, 1:1, 4:5 (anything up to square).
-    bool phoneFormat() const { return aspect() <= 1.0 + 1e-3; }
-    // The device the picture shows in, as the previews and its shape choose.
-    Device device() const;
-    // How many times a device's frame was drawn rather than blitted from
-    // its cache (see DeviceFrameCache).
-    int deviceFrameRenders() const { return m_frameCache.renders(); }
-    // The stage as it is laid out (where a move is going to).
-    StageLayout stageLayout() const { return stageLayout(device()); }
-    // The stage with the picture in `device` (None: the device Off).
-    StageLayout stageLayout(Device device) const;
-    // The stage as it is drawn now, part way through a move.
-    StageLayout shownLayout() const;
+    // A vertical sequence (under 1.2): a caption wraps and balances.
+    bool verticalSequence() const;
+    // The frame at Fit: the largest of its shape in the region, centred.
     QRectF videoRect() const;
-    // The picture as drawn: the card at Fit, else the frame at the zoom,
-    // centred on the card (clipped to the screen).
+    // The picture as drawn: the frame at Fit, else at the zoom, centred on it
+    // (clipped to the frame at Fit).
     QRectF pictureRect() const;
     // Where the caption sits: centred, its foot on title safe's (mockup-spec 3.3).
     QRectF captionRect() const;
-    PlayerOverlay *overlay() const { return m_overlay; }
+    // The agent HUD's place: a card in title safe, at the picture's top right.
+    QRect hudRect() const;
+    // A click on the picture plays or pauses while this is on (Play's state).
+    void setPlayEnabled(bool enabled) { m_playEnabled = enabled; }
+    bool playEnabled() const { return m_playEnabled; }
     // Where the agent HUD's pop shadow reaches (empty while it is hidden).
     QRectF hudShadowRect() const;
 
-    // Dim surround: the stage's backdrop from surround to surroundDim over
-    // 220 ms (view.dim, and the Finish workspace).
-    void setDim(bool dim);
-    bool dimmed() const { return m_dim; }
-    QColor surroundColor() const;
     // The comments' drawings over the picture (view.annotations).
     void setAnnotationsShown(bool shown);
     bool annotationsShown() const { return m_annotationsShown; }
@@ -212,25 +121,22 @@ public:
     void selectMask(const QString &name);
     QString selectedMask() const { return m_selectedMask; }
 
-    // Tests: -1 moves where something shows them (not on the offscreen
+    // Tests: -1 fades where something shows them (not on the offscreen
     // platform, not under reduced motion), 0 never, 1 always.
     static void setMotionOverride(int state);
-    bool moving() const;
 
 signals:
     void scrubbed(double fraction);
     void scrubEnded();
     void editRequested(const QJsonArray &ops);
-    // The panel's width changed (a drag on its edge).
-    void chatWidthChanged(int width);
+    // A click on the picture (see setPlayEnabled).
+    void playRequested();
     // A mask was drawn or the tool was put down.
     void maskToolChanged(MaskTool tool);
     // A click chose a mask, or none.
     void maskSelected(const QString &name);
     void drawingFinished(const QJsonArray &strokes);
     void drawingCancelled();
-    // Placed again (a resize, the panel, the format): the stage's parts moved.
-    void stageLaidOut();
 
 protected:
     bool event(QEvent *event) override;
@@ -245,15 +151,8 @@ protected:
     void showEvent(QShowEvent *) override;
 
 private:
-    // Place the stage's parts where the layout puts them now (part way
-    // through a move while one runs: see setChatOpen).
-    void layoutStage();
-    void applyLayout(const StageLayout &layout);
-    // The panel's fade while it opens or closes, `m_move` of the way; none
-    // once the move ends.
-    void fadePanel();
-    // Ends a move under way at once (a format or device change jumps).
-    void jump();
+    // The HUD and the chip where the picture is now.
+    void placeOverlays();
     bool motionAllowed() const;
     double aspect() const;
     // Across the picture, as the player's bar is.
@@ -278,8 +177,8 @@ private:
     void paintOverlap(QPainter &p);
     void paintAnnotations(QPainter &p);
     void paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials);
-    // The caption's text box: its lines wrapped (and balanced) on a phone,
-    // one line on 16:9, and the box with its padding.
+    // The caption's text box: its lines wrapped (and balanced) on a vertical
+    // picture, one line on a wide one, and the box with its padding.
     QRectF captionBox(QString *text) const;
     // Add `mask` (an outline) as the next free `k1`, `k2`, …, select it, and
     // put the tool down.
@@ -293,36 +192,16 @@ private:
     double m_time = 0.0;
     double m_width = 0.0;
     double m_height = 0.0;
-    QPointer<QWidget> m_rail;
-    QPointer<QWidget> m_panel;
-    QPointer<QWidget> m_scrub;
     QPointer<QWidget> m_hud;
-    QPointer<QWidget> m_source;
-    bool m_chatOpen = false;
-    int m_chatWidth = kDefaultChatWidth;
-    int m_phoneChatWidth = kPhoneChatWidth;
-    DevicePreview m_device = DevicePreview::Phone;
-    LaptopPreview m_laptop = LaptopPreview::Laptop;
-    DeviceFrameCache m_frameCache;
-    bool m_safeZones = true;
-    PlayerOverlay *m_overlay = nullptr;
+    QPointer<QWidget> m_chip;
+    bool m_safeZones = false;
+    bool m_playEnabled = true;
     double m_skimFraction = -1.0;
     bool m_skimming = false;
     bool m_liveScrub = false;
     bool m_scaledFast = false;
     QString m_caption;
 
-    // The move under way: from the layout drawn when it began to the
-    // layout's target, `m_move` (eased) of the way.
-    QVariantAnimation *m_mover = nullptr;
-    StageLayout m_from;
-    double m_move = 1.0;
-    bool m_laidOut = false;
-    QPointer<QGraphicsOpacityEffect> m_panelFade;
-    // Dim, 0 (surround) to 1 (surroundDim).
-    bool m_dim = false;
-    double m_dimLevel = 0.0;
-    QVariantAnimation *m_dimmer = nullptr;
     bool m_annotationsShown = true;
     QList<Annotation> m_annotations;
     QRectF m_overlapRect;

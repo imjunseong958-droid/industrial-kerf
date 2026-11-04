@@ -1,20 +1,19 @@
 #pragma once
 
-// The stage region's wiring (Q-STAGE, W2): the Program stage's own state and
-// its traffic with the engine and the other regions, for MainWindow (a friend
-// of it), so the stage changes the window's behaviour only here and in
-// main_window_stage.cpp.
+// The picture region's wiring: its own state and its traffic with the engine
+// and the other regions, for MainWindow (a friend of it).
 //
-//   - The stage's parts: the scrub strip and the agent HUD (built here), the
-//     Source column (the window's m_stageSource), placed by the viewer's
-//     stage layout; the scrub's narrow mode and the HUD's strip follow it.
-//   - Dim surround (view.dim, and each workspace's stage: Finish dims), the
-//     comments' drawings (view.annotations, remembered on this Mac), and the
-//     viewer's zoom (viewer.zoom: the Fit menu of the Program strip).
-//   - The picture's overlays from the engine: the QC overlap box (the
-//     `check` finding text.overlap whose comment is the current thread,
-//     while the playhead is in it) and the drawings of the current thread's
-//     comments (while the playhead is in the comment's time).
+//   - The agent HUD and the preview chip (built here), children of the picture.
+//   - The comments' drawings (view.annotations, remembered on this Mac), and
+//     the viewer's zoom (viewer.zoom: the ≡ menu's View ▸ Viewer zoom).
+//   - The program's in and out marks and the loop (mark.in, mark.out,
+//     mark.clear, playback.loop): with the loop on, playback that reaches the out mark goes
+//     back to the in mark (or the start), and playback that ends at the
+//     program's end starts again from there. The timeline's ruler shows them.
+//   - The picture's overlays from the engine: the QC overlap box (the `check`
+//     finding text.overlap whose comment is the current thread, while the
+//     playhead is in it) and the drawings of the current thread's comments
+//     (while the playhead is in the comment's time).
 //   - A drawing on the frame for the composer: bus drawingRequested starts
 //     it, drawingFinished / drawingCancelled end it.
 
@@ -27,16 +26,39 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QWidget>
+
+#include <cmath>
+#include <limits>
 
 class QAbstractButton;
-class QWidget;
+class QLabel;
 
 namespace kerf {
 
 class AgentHud;
 class EditorBus;
 class MainWindow;
-class ScrubStrip;
+
+// "Previewing proposal vN" and Exit preview, 12 inside the picture's top left
+// (mockup #ptitle). It exists only while a proposal is being previewed: the
+// bridge's `preview` events say so, and Exit sends preview_exit.
+class PreviewChip final : public QWidget {
+    Q_OBJECT
+public:
+    explicit PreviewChip(QWidget *parent, EditorBus *bus);
+    QString text() const;
+    QAbstractButton *exitButton() const;
+    void follow(const QJsonObject &preview);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    EditorBus *m_bus = nullptr;
+    QLabel *m_text = nullptr;
+    QAbstractButton *m_exit = nullptr;
+};
 
 class StageWiring final : public QObject {
     Q_OBJECT
@@ -46,29 +68,39 @@ public:
     MainWindow *window() const { return m_window; }
     EditorBus *bus() const { return m_bus; }
 
-    // From buildStage, once the viewer exists: the scrub strip and the HUD.
+    // From buildStage, once the viewer exists: the HUD and the preview chip.
     void build();
-    // From setupProgramStrip, once every region and the registry exist: the
-    // Source column, the commands, the bus.
+    // From setupPictureCommands, once every region and the registry exist:
+    // the commands, the bus.
     void attach();
 
-    ScrubStrip *scrub() const { return m_scrub; }
     AgentHud *hud() const { return m_hud; }
+    PreviewChip *previewChip() const { return m_chip; }
 
-    // Dim surround, as view.dim sets it; `remember` keeps it as the
-    // workspace's stage (a workspace's own stage does not).
-    void setDim(bool dim, bool remember = true);
-    bool dim() const;
     void setAnnotations(bool shown);
     bool annotations() const;
     // 0 is Fit; 0.5, 1, 2 the share of the frame's pixels.
     void setZoom(double zoom);
     double zoom() const;
     static QString zoomText(double zoom);
-    // The Fit menu (Fit, 50%, 100%, 200%, Sequence settings…), under the
-    // Program strip's zoom button or `anchor`.
+    // The Fit menu (Fit, 50%, 100%, 200%, Sequence settings…), as the ≡ menu's
+    // Viewer zoom; viewer.zoom's key shows it under the ≡ button.
     QMenu *zoomMenu();
     void showZoomMenu(QWidget *anchor = nullptr);
+
+    // ---- marks and loop
+    void markIn();
+    void markOut();
+    void clearMarks();
+    bool hasIn() const { return !std::isnan(m_in); }
+    bool hasOut() const { return !std::isnan(m_out); }
+    double inPoint() const { return m_in; }
+    double outPoint() const { return m_out; }
+    void setLoop(bool loop);
+    bool loop() const { return m_loop; }
+    // Where a loop starts and ends: the marks, else the program's ends.
+    double loopStart() const;
+    double loopEnd() const;
 
     // The thread the overlays follow: the last the bus or the review made
     // current.
@@ -88,17 +120,22 @@ public slots:
 
 private:
     void watchReview();
-    void applyWorkspaceStage();
     void syncSwitches();
-    void placeParts();
+    void showMarks();
+    void followPlayhead();
+    void followPlaying(bool playing);
     void refreshOverlap();
     void refreshAnnotations();
-    void refreshDetail();
 
     MainWindow *m_window = nullptr;
     EditorBus *m_bus = nullptr;
-    ScrubStrip *m_scrub = nullptr;
     AgentHud *m_hud = nullptr;
+    PreviewChip *m_chip = nullptr;
+    double m_in = std::numeric_limits<double>::quiet_NaN();
+    double m_out = std::numeric_limits<double>::quiet_NaN();
+    bool m_loop = false;
+    // Sent back from the out mark, until the playhead leaves it again.
+    bool m_wrapped = false;
     QPointer<QMenu> m_zoomMenu;
     QList<QPair<double, QAction *>> m_zoomActions;
     QPointer<QAction> m_sequenceSettings;

@@ -13,7 +13,8 @@
 #include "render_queue_view.h"
 #include "review_model.h"
 #include "toolbar_widgets.h"
-#include "workspace.h"
+#include "stage_shell.h"
+#include "wiring/stage_wiring.h"
 #include "wiring/bin_wiring.h"
 #include "wiring/source_wiring.h"
 
@@ -25,11 +26,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenuBar>
-#include <QProgressBar>
 #include <QRadioButton>
 #include <QSet>
 #include <QSettings>
-#include <QStatusBar>
 #include <QTimer>
 #include <QToolButton>
 
@@ -47,27 +46,6 @@ QString nativeKeys(const QAction *action) {
     return action ? action->shortcut().toString(QKeySequence::NativeText) : QString();
 }
 
-// The design's names for the toolbar's commands (mockup-spec 15).
-struct ToolbarCommand {
-    const char *id;
-    const char *icon;
-    const char *name;
-};
-constexpr ToolbarCommand kCommands[] = {
-    {"file.import", "g-import", "Import media"},
-    {"edit.undo", "g-undo", "Undo"},
-    {"edit.redo", "g-redo", "Redo"},
-    {"clip.split", "g-split", "Split at playhead"},
-    {"clip.delete", "g-delete", "Delete"},
-};
-
-// The workspaces' tips (mockup-spec 15), in Workspace::builtIns() order.
-QString workspaceTip(const QString &name) {
-    if (name == QStringLiteral("Finish")) return QStringLiteral("Finish workspace · scopes, loudness, QC");
-    if (name == QStringLiteral("Deliver")) return QStringLiteral("Deliver workspace · masters, preflight");
-    return QStringLiteral("%1 workspace").arg(name);
-}
-
 // The first letter in lower case, unless the word is an initialism ("QC").
 QString lowerFirst(const QString &text) {
     if (text.size() < 2 || text.at(1).isUpper()) return text;
@@ -83,6 +61,12 @@ QString plural(qint64 count, const QString &one, const QString &many) {
 ToolbarWiring::ToolbarWiring(MainWindow *window, EditorBus *bus)
     : QObject(nullptr), m_window(window), m_bus(bus), m_clock([] { return QDateTime::currentDateTimeUtc(); }) {
     setObjectName(QStringLiteral("toolbarWiring"));
+    m_messageTimer = new QTimer(this);
+    m_messageTimer->setSingleShot(true);
+    connect(m_messageTimer, &QTimer::timeout, this, [this] {
+        m_message.clear();
+        layoutTitle();
+    });
 }
 
 void ToolbarWiring::setClock(std::function<QDateTime()> clock) {
@@ -110,12 +94,6 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     // the title bar), and its size places the title.
     toolbar->installEventFilter(w);
 
-    // The window's older status labels and the conversation's toolbar
-    // switch, kept for the code that still writes to them, out of sight.
-    m_retired = new QWidget(w);
-    m_retired->setObjectName(QStringLiteral("retiredChrome"));
-    m_retired->hide();
-
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("toolbarRow"));
     auto *row = new QHBoxLayout(m_content);
@@ -127,100 +105,49 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
     w->m_windowButtons->setFixedWidth(firstControlX(0, false) - 16 - row->spacing());
     row->addWidget(w->m_windowButtons);
+    // The ≡ button's own 4 past the lights' room (mockup #appBtn).
+    row->addSpacing(4);
 #endif
+    // The one way to everything else: Media, Effects and titles, Inspector,
+    // the trays, Import, Sequence settings, Settings, and View.
+    m_appButton = new ui::IconButton(QStringLiteral("g-menu"), ui::IconButton::Size::S28);
+    m_appButton->setObjectName(QStringLiteral("appMenu"));
+    m_appButton->setAccessibleName(QStringLiteral("Menu"));
+    m_appButton->setTip(QStringLiteral("Media, effects, inspector, finish, deliver"));
+    m_appButton->setFocusPolicy(Qt::TabFocus);
+    m_appMenu = new QMenu(m_content);
+    m_appMenu->setObjectName(QStringLiteral("appMenuPopup"));
+    ui::styleMenu(m_appMenu);
+    m_menus = menus;
+    connect(m_appButton, &QAbstractButton::clicked, this, [this] {
+        buildAppMenu();
+        ui::popupMenu(m_appMenu, m_appButton);
+    });
+    row->addWidget(m_appButton);
     if (!w->menuBar()->isNativeMenuBar()) {
-        // Keep menus reachable without a row of their own.
-        m_appMenu = new ui::IconButton(QStringLiteral("g-list"), ui::IconButton::Size::S28);
-        m_appMenu->setObjectName(QStringLiteral("applicationMenuButton"));
-        m_appMenu->setAccessibleName(QStringLiteral("Application menu"));
-        m_appMenu->setTip(QStringLiteral("Application menu"));
-        auto *applicationMenu = new QMenu(m_appMenu);
+        // The native menus live in the ≡ menu; their keys go on working.
         for (const QString &name : w->m_commands->menuNames()) {
             QMenu *menu = menus.value(name);
             if (!menu) continue;
-            applicationMenu->addMenu(menu);
             for (QAction *action : menu->actions())
                 if (action->shortcutContext() != Qt::WidgetShortcut) w->addAction(action);
         }
-        connect(m_appMenu, &QAbstractButton::clicked, this, [this, applicationMenu] {
-            applicationMenu->popup(m_appMenu->mapToGlobal(QPoint(0, m_appMenu->height() + 4)));
-        });
-        row->addWidget(m_appMenu);
         w->menuBar()->hide();
     }
-    // Import, Undo, Redo, Split, Delete: the registry's actions.
-    for (const ToolbarCommand &command : kCommands) {
-        const QString id = QString::fromLatin1(command.id);
-        auto *button = new ui::IconButton(QString::fromLatin1(command.icon), ui::IconButton::Size::S28);
-        button->setObjectName(QStringLiteral("toolbar.%1").arg(id));
-        button->setAccessibleName(QString::fromLatin1(command.name));
-        button->setFocusPolicy(Qt::TabFocus);
-        connect(button, &QAbstractButton::clicked, this, [this, id] {
-            if (QAction *action = m_window->m_commands->action(id); action && action->isEnabled()) action->trigger();
-        });
-        if (QAction *action = w->m_commands->action(id)) connect(action, &QAction::changed, this, &ToolbarWiring::syncCommands);
-        m_commandButtons.append({button, id});
-        row->addWidget(button);
-    }
-    row->addWidget(new ui::Separator(8));
-    // The workspaces: Edit, Review, Finish, Deliver and the Workspaces menu.
-    m_workspaces = new ToolbarSegments;
-    m_workspaces->setObjectName(QStringLiteral("workspaceSegments"));
-    m_workspaces->setAccessibleName(QStringLiteral("Workspaces"));
-    for (const QString &name : Workspace::builtIns()) m_workspaces->addSegment(name, workspaceTip(name));
-    m_workspaces->setMenuTail(QStringLiteral("Workspaces"));
-    connect(m_workspaces, &ToolbarSegments::activated, this, [this](int index) {
-        const QString name = Workspace::builtIns().value(index);
-        if (!name.isEmpty() && name != m_window->m_workspace->current()) m_window->m_workspace->activate(name);
-    });
-    m_workspaceMenu = new QMenu(m_content);
-    m_workspaceMenu->setObjectName(QStringLiteral("toolbarWorkspacesMenu"));
-    ui::styleMenu(m_workspaceMenu);
-    connect(m_workspaces, &ToolbarSegments::menuRequested, this, [this] {
-        m_window->buildWorkspaceMenu(m_workspaceMenu);
-        ui::popupMenu(m_workspaceMenu, m_workspaces->menuTail());
-    });
-    m_workspaces->installEventFilter(this);
-    row->addWidget(m_workspaces);
     row->addStretch(1);
 
-    // The right group: format, sequence, Export, Settings.
+    // The right group: the format, then Export.
     w->m_formatBank = new FormatBank;
     connect(w->m_formatBank, &FormatBank::formatChosen, w, &MainWindow::canvasPresetChanged);
     w->m_formatBank->installEventFilter(this);
     row->addWidget(w->m_formatBank);
-    row->addSpacing(8 - row->spacing());
-    m_sequence = new ui::GhostButton;
-    m_sequence->setObjectName(QStringLiteral("sequenceButton"));
-    m_sequence->setMono(true);
-    m_sequence->setControlHeight(28);
-    m_sequence->setFocusPolicy(Qt::TabFocus);
-    m_sequenceMenu = new QMenu(m_content);
-    m_sequenceMenu->setObjectName(QStringLiteral("sequenceMenu"));
-    ui::styleMenu(m_sequenceMenu);
-    connect(m_sequence, &QAbstractButton::clicked, this, [this] {
-        buildSequenceMenu(m_sequenceMenu);
-        ui::popupMenu(m_sequenceMenu, m_sequence);
-    });
-    row->addWidget(m_sequence);
     row->addSpacing(12 - row->spacing());
     w->m_exportButton = new ExportButton;
     connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
     connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
     connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
     row->addWidget(w->m_exportButton);
-    row->addSpacing(8 - row->spacing());
-    m_settings = new ui::IconButton(QStringLiteral("g-settings"), ui::IconButton::Size::S28);
-    m_settings->setObjectName(QStringLiteral("settingsButton"));
-    m_settings->setAccessibleName(QStringLiteral("Settings"));
-    m_settings->setFocusPolicy(Qt::TabFocus);
-    connect(m_settings, &QAbstractButton::clicked, this, [this] { m_window->triggerCommand(QStringLiteral("app.preferences")); });
-    row->addWidget(m_settings);
     toolbar->setContent(m_content);
-
-    // The toolbar's old left end, which the title no longer reads.
-    w->m_toolbarLeftEnd = new QToolButton(m_retired);
-    w->m_toolbarLeftEnd->setObjectName(QStringLiteral("retiredToolbarLeftEnd"));
 
     // One's own keys go on before anything reads the registry's (and back
     // on whenever it loads a keymap).
@@ -262,38 +189,19 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
 
     connect(m_bus, &EditorBus::event, this, &ToolbarWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &ToolbarWiring::onSnapshot);
-    connect(m_bus, &EditorBus::workspaceChanged, this, &ToolbarWiring::setWorkspace);
-    connect(w->m_commands, &CommandRegistry::shortcutsChanged, this, [this] {
-        syncCommands();
-        updateKeymap();
-    });
+    connect(w->m_commands, &CommandRegistry::shortcutsChanged, this, &ToolbarWiring::syncCommands);
+    connect(m_bus, &EditorBus::viewAsChanged, this, &ToolbarWiring::layoutTitle);
+    connect(m_bus, &EditorBus::reviewChanged, this, &ToolbarWiring::followReview);
+    followReview();
     if (QAction *master = w->m_commands->action(QStringLiteral("export.master")))
         connect(master, &QAction::changed, this, &ToolbarWiring::syncCommands);
     syncCommands();
-    setWorkspace(w->m_workspace->current());
-    updateSequence();
 }
 
 void ToolbarWiring::syncCommands() {
     MainWindow *w = m_window;
     if (!w->m_commands) return;
     CommandRegistry *commands = w->m_commands;
-    for (const auto &[button, id] : std::as_const(m_commandButtons)) {
-        QAction *action = commands->action(id);
-        const bool enabled = action && action->isEnabled();
-        QString name;
-        for (const ToolbarCommand &command : kCommands)
-            if (id == QLatin1String(command.id)) name = QString::fromLatin1(command.name);
-        const QString reason = commands->reason(id);
-        button->setEnabled(enabled);
-        ui::setTip(button, enabled || reason.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, reason), nativeKeys(action));
-    }
-    if (m_workspaces) {
-        const QStringList names = Workspace::builtIns();
-        for (int i = 0; i < names.size(); ++i)
-            m_workspaces->setSegmentTip(i, workspaceTip(names.at(i)),
-                                        nativeKeys(commands->action(QStringLiteral("workspace.%1").arg(names.at(i).toLower()))));
-    }
     if (w->m_exportButton) {
         QAction *master = commands->action(QStringLiteral("export.master"));
         const bool enabled = master && master->isEnabled();
@@ -307,8 +215,6 @@ void ToolbarWiring::syncCommands() {
     if (FormatBank *bank = w->m_formatBank)
         for (int i = 0; i < m_formatActions.size() && i < bank->count(); ++i)
             bank->setSegmentTip(i, formatTip(i), nativeKeys(m_formatActions.at(i)));
-    if (m_settings) ui::setTip(m_settings, QStringLiteral("Settings"), nativeKeys(commands->action(QStringLiteral("app.preferences"))));
-    if (m_sequence) ui::setTip(m_sequence, QStringLiteral("Sequence settings"), nativeKeys(commands->action(QStringLiteral("sequence.settings"))));
 }
 
 QStringList ToolbarWiring::formatCommands() {
@@ -397,11 +303,6 @@ KeymapEditor *ToolbarWiring::openKeymapEditor() {
     return m_keymapEditor;
 }
 
-void ToolbarWiring::setWorkspace(const QString &name) {
-    // One's own workspace turns no built-in on; its menu checks it.
-    if (m_workspaces) m_workspaces->setCurrentIndex(Workspace::builtIns().indexOf(name));
-}
-
 void ToolbarWiring::chooseFormat(int index) {
     FormatBank *bank = m_window->m_formatBank;
     if (!bank || !bank->isEnabled() || index < 0 || index >= bank->count()) return;
@@ -409,74 +310,74 @@ void ToolbarWiring::chooseFormat(int index) {
     emit bank->activated(index);
 }
 
-void ToolbarWiring::updateSequence() {
-    if (!m_sequence) return;
-    const bool known = !m_bus->snapshot().isEmpty();
-    // The window's format: the snapshot's, or the one just chosen.
-    const QSize size = m_window->m_canvasSize;
-    m_sequence->setText(known ? sequenceLabel(size, m_bus->fps()) : QStringLiteral("Sequence"));
-    m_sequence->setFixedSize(m_sequence->sizeHint());
-    m_sequence->setEnabled(known);
-    m_sequence->update();
+// ================================================================ the ≡ menu
+
+void ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name) {
+    // The mockup's words for the registry's command: its state, its key.
+    CommandRegistry *commands = m_window->m_commands;
+    QAction *command = commands->action(id);
+    QAction *item = menu->addAction(label);
+    item->setObjectName(QString::fromLatin1(name));
+    if (!command) {
+        item->setEnabled(false);
+        return;
+    }
+    item->setEnabled(command->isEnabled());
+    item->setToolTip(commands->reason(id));
+    item->setCheckable(command->isCheckable());
+    item->setChecked(command->isChecked());
+    ui::setMenuKey(item, nativeKeys(command));
+    connect(item, &QAction::triggered, this, [this, id] { m_window->triggerCommand(id); });
 }
 
-void ToolbarWiring::buildSequenceMenu(QMenu *menu) {
+void ToolbarWiring::buildAppMenu() {
+    MainWindow *w = m_window;
+    QMenu *menu = m_appMenu;
     menu->clear();
-    qDeleteAll(menu->findChildren<QActionGroup *>(Qt::FindDirectChildrenOnly));
-    const QSize size = m_window->m_canvasSize;
-    const QString rate = frameRateLabel(m_bus->fps());
-    // The colour space, only when the sequence carries one.
-    QString colour;
-    const QJsonObject timeline = m_bus->timeline();
-    const QString id = timeline.value(QStringLiteral("sequence")).toString();
-    for (const QJsonValue &value : timeline.value(QStringLiteral("sequences")).toArray()) {
-        const QJsonObject sequence = value.toObject();
-        if (sequence.value(QStringLiteral("id")).toString() != id) continue;
-        for (const char *key : {"colorSpace", "colourSpace", "colorspace"})
-            if (const QString found = sequence.value(QLatin1String(key)).toString(); !found.isEmpty()) colour = found;
-    }
-    QStringList header{QStringLiteral("Sequence"), QStringLiteral("%1×%2").arg(size.width()).arg(size.height())};
-    if (!rate.isEmpty()) header << rate;
-    if (!colour.isEmpty()) header << colour;
-    QAction *title = ui::addMenuHeader(menu, header.join(QStringLiteral(" · ")));
-    title->setObjectName(QStringLiteral("sequenceHeader"));
-    // Frame size: the presets, through the format segments' path.
-    auto *sizes = new QMenu(QStringLiteral("Frame size"), menu);
-    sizes->setObjectName(QStringLiteral("frameSizeMenu"));
-    ui::styleMenu(sizes);
-    auto *group = new QActionGroup(menu);
-    const int current = FormatBank::presetIndex(size);
-    const QList<CanvasPreset> presets = canvasPresets();
-    for (int i = 0; i < presets.size(); ++i) {
-        QAction *choice = sizes->addAction(formatName(i));
-        choice->setObjectName(QStringLiteral("frameSize.%1").arg(QString::fromLatin1(presets.at(i).ratio)));
-        choice->setCheckable(true);
-        choice->setChecked(i == current);
-        choice->setEnabled(m_window->m_connected);
-        ui::setMenuKey(choice, QStringLiteral("%1×%2").arg(presets.at(i).width).arg(presets.at(i).height));
-        group->addAction(choice);
-        connect(choice, &QAction::triggered, this, [this, i] { chooseFormat(i); });
-    }
-    QAction *frameSize = menu->addMenu(sizes);
-    frameSize->setObjectName(QStringLiteral("sequenceFrameSize"));
-    ui::setMenuKey(frameSize, QStringLiteral("%1×%2").arg(size.width()).arg(size.height()));
-    // The rate changes in Sequence Settings, and only while the sequence is
-    // empty; here it is information.
-    QAction *frameRate = menu->addAction(QStringLiteral("Frame rate"));
-    frameRate->setObjectName(QStringLiteral("sequenceFrameRate"));
-    frameRate->setEnabled(false);
-    frameRate->setToolTip(SequenceSettingsDialog::fromTimeline(timeline).empty ? QStringLiteral("Change it in Sequence Settings…")
-                                                                                : SequenceSettingsDialog::rateNote());
-    ui::setMenuKey(frameRate, rate);
-    if (!colour.isEmpty()) {
-        QAction *space = menu->addAction(QStringLiteral("Colour space"));
-        space->setObjectName(QStringLiteral("sequenceColourSpace"));
-        space->setEnabled(false);
-        ui::setMenuKey(space, colour, true);
-    }
-    menu->addSeparator();
-    if (QAction *settings = m_window->m_commands->action(QStringLiteral("sequence.settings"))) menu->addAction(settings);
     menu->setToolTipsVisible(true);
+    addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
+    addCommandItem(menu, QStringLiteral("window.effects"), QStringLiteral("Effects and titles"), "appMenu.effects");
+    addCommandItem(menu, QStringLiteral("window.inspector"), QStringLiteral("Inspector"), "appMenu.inspector");
+    menu->addSeparator();
+    addCommandItem(menu, QStringLiteral("workspace.finish"), QStringLiteral("Scopes, loudness, QC"), "appMenu.finish");
+    addCommandItem(menu, QStringLiteral("workspace.deliver"), QStringLiteral("Deliver"), "appMenu.deliver");
+    menu->addSeparator();
+    addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
+    addCommandItem(menu, QStringLiteral("sequence.settings"), QStringLiteral("Sequence settings…"), "appMenu.sequenceSettings");
+    addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings");
+
+    // The picture's switches, the keyboard's choice and the sync.
+    if (!m_viewMenu) {
+        m_viewMenu = new QMenu(QStringLiteral("View"), menu);
+        m_viewMenu->setObjectName(QStringLiteral("appMenuView"));
+        ui::styleMenu(m_viewMenu);
+        m_keymapMenu = new QMenu(QStringLiteral("Keyboard"), m_viewMenu);
+        m_keymapMenu->setObjectName(QStringLiteral("keymapMenu"));
+        ui::styleMenu(m_keymapMenu);
+        m_syncMenu = new QMenu(QStringLiteral("Sync"), m_viewMenu);
+        m_syncMenu->setObjectName(QStringLiteral("syncMenu"));
+        ui::styleMenu(m_syncMenu);
+    }
+    m_viewMenu->clear();
+    for (QAction *tool : std::as_const(w->m_maskTools)) m_viewMenu->addAction(tool);
+    m_viewMenu->addSeparator();
+    for (const char *id : {"view.annotations", "view.safeZones"})
+        if (QAction *action = w->m_commands->action(QString::fromLatin1(id))) m_viewMenu->addAction(action);
+    if (w->m_stageWiring) m_viewMenu->addMenu(w->m_stageWiring->zoomMenu());
+    m_viewMenu->addSeparator();
+    buildKeymapMenu(m_keymapMenu);
+    m_viewMenu->addMenu(m_keymapMenu);
+    buildSyncMenu(m_syncMenu);
+    m_viewMenu->addMenu(m_syncMenu);
+    QAction *view = menu->addMenu(m_viewMenu);
+    view->setObjectName(QStringLiteral("appMenu.view"));
+
+    // Without a native menu bar, the application's menus stay reachable here.
+    if (!w->menuBar()->isNativeMenuBar()) {
+        menu->addSeparator();
+        for (const QString &name : w->m_commands->menuNames())
+            if (QMenu *native = m_menus.value(name)) menu->addMenu(native);
+    }
 }
 
 // ================================================================ title
@@ -497,13 +398,61 @@ QString ToolbarWiring::titleText() const {
     return project.isEmpty() ? sequence : QStringLiteral("%1 · %2").arg(project, sequence);
 }
 
-QString ToolbarWiring::subtitleText() const {
+QString ToolbarWiring::normalSubtitle() const {
     const QJsonObject snapshot = m_bus->snapshot();
     if (snapshot.isEmpty()) return QString();
     const QString revision = QStringLiteral("rev %1").arg(m_bus->revision());
     const QDateTime when = QDateTime::fromString(snapshot.value(QStringLiteral("revisionTime")).toString(), Qt::ISODateWithMs);
     const QString ago = editedAgo(when, m_clock());
-    return ago.isEmpty() ? revision : QStringLiteral("Edited %1 · %2").arg(ago, revision);
+    QString line = ago.isEmpty() ? revision : QStringLiteral("Edited %1 · %2").arg(ago, revision);
+    const ReviewModel *review = m_bus->review();
+    const bool guest = review ? review->guestMode() : !m_bus->viewAs().isEmpty();
+    if (guest) {
+        const QString name = review ? review->viewAsName() : m_bus->viewAs();
+        line += QStringLiteral(" · Viewing as %1").arg(name.isEmpty() ? m_bus->viewAs() : name);
+    }
+    return line;
+}
+
+QString ToolbarWiring::standingProblem() const {
+    const MainWindow *w = m_window;
+    if (m_connection == QStringLiteral("disconnected")) return QStringLiteral("Offline");
+    if (m_connection == QStringLiteral("connecting")) return QStringLiteral("Connecting…");
+    if (w->m_errorBanner && !w->m_errorBanner->isHidden() && w->m_errorMessage) return w->m_errorMessage->text();
+    if (w->m_collabStatus.value(QStringLiteral("conflicted")).toBool()) return QStringLiteral("A merge is unfinished; finish it with git");
+    if (!w->m_syncFailure.isEmpty()) return QStringLiteral("Sync failed: %1").arg(w->m_syncFailure);
+    return {};
+}
+
+QString ToolbarWiring::runningText() const {
+    const MainWindow *w = m_window;
+    static const QHash<QString, QString> stages{
+        {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
+        {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
+        {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
+    const auto percent = [](double fraction) { return int(std::floor(std::clamp(fraction, 0.0, 1.0) * 100.0)); };
+    const RunningExport *latest = nullptr;
+    for (auto it = m_runningExports.cbegin(); it != m_runningExports.cend(); ++it)
+        if (!latest || std::pair(!it->queued, it->started) > std::pair(!latest->queued, latest->started)) latest = &it.value();
+    if (latest) return QStringLiteral("%1 · %2%").arg(latest->label).arg(percent(latest->fraction));
+    if (m_previewRunning) return QStringLiteral("Rendering preview · %1%").arg(percent(m_previewFraction));
+    if (!w->m_syncStage.isEmpty() || w->m_collabStatus.value(QStringLiteral("busy")).toBool())
+        return QStringLiteral("%1…").arg(stages.value(w->m_syncStage, QStringLiteral("Syncing")));
+    return {};
+}
+
+QString ToolbarWiring::subtitleText() const {
+    if (!m_message.isEmpty()) return m_message;
+    if (const QString problem = standingProblem(); !problem.isEmpty()) return problem;
+    if (const QString running = runningText(); !running.isEmpty()) return running;
+    return normalSubtitle();
+}
+
+void ToolbarWiring::showMessage(const QString &message, int timeout) {
+    m_message = message;
+    m_messageTimer->stop();
+    if (timeout > 0 && !message.isEmpty()) m_messageTimer->start(timeout);
+    layoutTitle();
 }
 
 void ToolbarWiring::layoutTitle() {
@@ -511,7 +460,7 @@ void ToolbarWiring::layoutTitle() {
     QLabel *title = w->m_projectTitle;
     QLabel *subtitle = w->m_projectSubtitle;
     QToolBar *toolbar = w->m_toolbar;
-    if (!title || !subtitle || !toolbar || !m_workspaces || !w->m_formatBank) return;
+    if (!title || !subtitle || !toolbar || !m_appButton || !w->m_formatBank) return;
     title->ensurePolished();
     subtitle->ensurePolished();
     const QString full = titleText();
@@ -519,7 +468,7 @@ void ToolbarWiring::layoutTitle() {
     const QFontMetrics metrics(title->font());
     const QFontMetrics subMetrics(subtitle->font());
     // The room between the groups, and the title's own width.
-    const int left = m_workspaces->mapTo(toolbar, QPoint(m_workspaces->width(), 0)).x() + kTitleClearance;
+    const int left = m_appButton->mapTo(toolbar, QPoint(m_appButton->width(), 0)).x() + kTitleClearance;
     const int right = w->m_formatBank->mapTo(toolbar, QPoint(0, 0)).x() - kTitleClearance;
     const int natural = std::max(metrics.horizontalAdvance(full), subMetrics.horizontalAdvance(sub)) + 2;
     const int width = std::min(natural, std::max(0, right - left));
@@ -530,6 +479,12 @@ void ToolbarWiring::layoutTitle() {
     title->setText(shown);
     title->setToolTip(shown == full ? QString() : full);
     subtitle->setText(subMetrics.elidedText(sub, Qt::ElideRight, width));
+    // The whole of a long message, and an offline or error state in its colour.
+    subtitle->setToolTip(subtitle->text() == sub ? QString() : sub);
+    const bool problem = m_message.isEmpty() && !standingProblem().isEmpty();
+    subtitle->setProperty("problem", problem);
+    subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; background: transparent; }")
+                                .arg(tokens::color(problem ? tokens::neg : tokens::ink3).name()));
     // Two 16 pt lines from 4 pt down (mockup-spec 1), on a taller title bar
     // centred as the controls are.
     const int top = 4 + std::max(0, (toolbar->height() - kToolbarHeight) / 2);
@@ -542,12 +497,7 @@ void ToolbarWiring::layoutTitle() {
 
 bool ToolbarWiring::eventFilter(QObject *watched, QEvent *event) {
     const QEvent::Type type = event->type();
-    if ((watched == m_workspaces || watched == m_window->m_formatBank) && (type == QEvent::Move || type == QEvent::Resize)) {
-        layoutTitle();
-    } else if (m_row && watched == m_window->statusBar() && type == QEvent::Resize) {
-        m_row->setGeometry(m_window->statusBar()->rect());
-        m_row->raise();
-    }
+    if (watched == m_window->m_formatBank && (type == QEvent::Move || type == QEvent::Resize)) layoutTitle();
     return QObject::eventFilter(watched, event);
 }
 
@@ -655,7 +605,7 @@ void ToolbarWiring::buildExportMenu() {
     QAction *preflight = ui::addMenuHeader(menu, QStringLiteral("Preflight"));
     preflight->setObjectName(QStringLiteral("preflightHeader"));
     const auto openQc = [this] {
-        m_window->m_workspace->activate(QStringLiteral("Finish"));
+        m_window->openTray(QStringLiteral("Finish"));
         emit m_bus->highlightPane(QStringLiteral("qc"));
     };
     if (m_checkStatus == QStringLiteral("running")) {
@@ -695,7 +645,6 @@ void ToolbarWiring::buildExportMenu() {
             const QString text = row.ask;
             const QString thread = row.commentId;
             connect(item, &QAction::triggered, this, [this, text, thread] {
-                emit m_bus->commentsPanelRequested(true);
                 if (!thread.isEmpty()) emit m_bus->openThread(thread);
                 emit m_bus->askPrefill(text, thread);
             });
@@ -716,7 +665,6 @@ void ToolbarWiring::buildExportMenu() {
     ui::setMenuDot(notes, tokens::color(blocking > 0 ? tokens::neg : tokens::pos));
     if (blocking > 0) ui::setMenuRole(notes, ui::MenuRole::Warn);
     connect(notes, &QAction::triggered, this, [this, blocking] {
-        emit m_bus->commentsPanelRequested(true);
         if (ReviewModel *review = m_bus->review(); review && blocking > 0) review->setTag(QString::fromLatin1(ReviewModel::kBlockingTag));
     });
     menu->addSeparator();
@@ -742,186 +690,20 @@ void ToolbarWiring::buildExportMenu() {
     locators->setChecked(deliver::option(directory, QStringLiteral("edlLocators")));
     if (!kept) locators->setToolTip(QStringLiteral("Open a project to keep this choice"));
     connect(locators, &QAction::toggled, this, [directory](bool on) { deliver::setOption(directory, QStringLiteral("edlLocators"), on); });
-    QAction *deliver = menu->addAction(QStringLiteral("Open Deliver workspace"));
+    QAction *deliver = menu->addAction(QStringLiteral("Open Deliver"));
     deliver->setObjectName(QStringLiteral("exportOpenDeliver"));
-    connect(deliver, &QAction::triggered, this, [this] { m_window->m_workspace->activate(QStringLiteral("Deliver")); });
+    connect(deliver, &QAction::triggered, this, [this] { m_window->openTray(QStringLiteral("Deliver")); });
 }
 
-// ================================================================ status bar
-
-void ToolbarWiring::buildStatusBar() {
-    MainWindow *w = m_window;
-    QStatusBar *bar = w->statusBar();
-    bar->setSizeGripEnabled(false);
-    // 24 points tall (mockup-spec 0.1), whatever its items ask for.
-    bar->setFixedHeight(tokens::layout::status);
-    if (!m_retired) {
-        m_retired = new QWidget(w);
-        m_retired->hide();
-    }
-    // The older device label, still written to by main_window.cpp; the row
-    // below shows the design's items instead.
-    w->m_statusDevice = new QLabel(m_retired);
-    w->m_statusDevice->setObjectName(QStringLiteral("statusDevice"));
-    w->m_statusDevice->hide();
-    if (w->m_exportProgress) w->m_exportProgress->setParent(m_retired);
-
-    m_row = new StatusRow(bar);
-    m_row->setGeometry(bar->rect());
-    bar->installEventFilter(this);
-    connect(bar, &QStatusBar::messageChanged, m_row, &StatusRow::setMessage);
-
-    m_selection = new StatusText;
-    m_selection->setObjectName(QStringLiteral("statusSelectionText"));
-    m_selection->setElidable(true);
-    m_rate = new StatusText;
-    m_rate->setObjectName(QStringLiteral("statusRate"));
-    m_rate->setColor(tokens::ink3);
-    m_guest = new StatusText;
-    m_guest->setObjectName(QStringLiteral("statusGuest"));
-    m_guest->setColor(tokens::ink);
-    m_guest->hide();
-    m_row->leftLayout()->addWidget(m_selection, 1);
-    m_row->leftLayout()->addWidget(m_rate);
-    m_row->leftLayout()->addWidget(m_guest);
-
-    // On the right: progress, keymap, sync and the agent. The chips' 6 pt
-    // padding sits in the 16 pt gaps (margin 0 -6).
-    QHBoxLayout *right = m_row->rightLayout();
-    right->setSpacing(0);
-    m_progress = new StatusProgress;
-    m_progress->hide();
-    right->addWidget(m_progress);
-    right->addSpacing(16 - 6);
-    m_keymap = new StatusChip;
-    m_keymap->setObjectName(QStringLiteral("keymapChip"));
-    ui::setTip(m_keymap, QStringLiteral("Keyboard shortcuts"));
-    m_keymapMenu = new QMenu(m_keymap);
-    m_keymapMenu->setObjectName(QStringLiteral("keymapMenu"));
-    ui::styleMenu(m_keymapMenu);
-    connect(m_keymap, &QAbstractButton::clicked, this, [this] {
-        buildKeymapMenu(m_keymapMenu);
-        ui::popupMenu(m_keymapMenu, m_keymap);
-    });
-    right->addWidget(m_keymap);
-    right->addSpacing(16 - 12);
-    auto *sync = new StatusChip;
-    sync->setObjectName(QStringLiteral("syncChip"));
-    sync->setIconName(QStringLiteral("g-branch"));
-    sync->setMono(true);
-    sync->hide();
-    w->m_syncChip = sync;
-    m_syncMenu = new QMenu(sync);
-    m_syncMenu->setObjectName(QStringLiteral("syncMenu"));
-    ui::styleMenu(m_syncMenu);
-    connect(sync, &QAbstractButton::clicked, this, [this, sync] {
-        buildSyncMenu(m_syncMenu);
-        ui::popupMenu(m_syncMenu, sync);
-    });
-    right->addWidget(sync);
-    right->addSpacing(16 - 6);
-    m_agent = new AgentStatus;
-    right->addWidget(m_agent);
-    m_row->raise();
-
-    connect(m_bus, &EditorBus::selectionChanged, this, &ToolbarWiring::updateSelection);
-    connect(m_bus, &EditorBus::viewAsChanged, this, &ToolbarWiring::updateGuest);
-    connect(m_bus, &EditorBus::reviewChanged, this, &ToolbarWiring::followReview);
-    // The agent's access follows the Settings choices as they change.
-    for (QRadioButton *radio : {w->m_cloudRadio, w->m_ownKeyRadio, w->m_openaiActiveRadio})
-        if (radio) connect(radio, &QRadioButton::toggled, this, &ToolbarWiring::updateAgent);
-    for (QLineEdit *key : {w->m_anthropicKey, w->m_openaiKey})
-        if (key) connect(key, &QLineEdit::textChanged, this, &ToolbarWiring::updateAgent);
-    followReview();
-    updateKeymap();
-    updateAgent();
-    updateSelection();
-    updateRate();
-    updateGuest();
-    updateProgress();
-}
-
-QPair<QString, QString> ToolbarWiring::selectionText(const QJsonObject &timeline, const QStringList &selection, double fps) {
-    QList<QPair<QJsonObject, QJsonObject>> found; // clip, track
-    for (const QJsonValue &trackValue : timeline.value(QStringLiteral("tracks")).toArray()) {
-        const QJsonObject track = trackValue.toObject();
-        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray()) {
-            const QJsonObject clip = clipValue.toObject();
-            if (selection.contains(clip.value(QStringLiteral("id")).toString())) found.append({clip, track});
-        }
-    }
-    if (found.isEmpty()) return {};
-    double start = 0;
-    double end = 0;
-    for (qsizetype i = 0; i < found.size(); ++i) {
-        const double from = found.at(i).first.value(QStringLiteral("timelineStart")).toDouble();
-        const double to = from + found.at(i).first.value(QStringLiteral("duration")).toDouble();
-        start = i ? std::min(start, from) : from;
-        end = i ? std::max(end, to) : to;
-    }
-    const QString span = QStringLiteral("%1–%2").arg(timelineTimecode(start, fps), timelineTimecode(end, fps));
-    if (found.size() > 1) return {QStringLiteral("%1 clips · ").arg(found.size()), span};
-    const QJsonObject clip = found.first().first;
-    const QJsonObject track = found.first().second;
-    const QString clipName = clip.value(QStringLiteral("name")).toString(clip.value(QStringLiteral("id")).toString());
-    const QString trackName = track.value(QStringLiteral("name")).toString(track.value(QStringLiteral("id")).toString());
-    return {QStringLiteral("%1 · %2 · ").arg(clipName, trackName), span};
-}
-
-void ToolbarWiring::updateSelection() {
-    if (!m_selection) return;
-    const auto [text, span] = selectionText(m_bus->timeline(), m_bus->selection(), m_bus->fps());
-    m_selection->setText(text, span);
-    m_selection->setVisible(!text.isEmpty());
-}
-
-QString ToolbarWiring::rateText() const {
-    if (m_bus->snapshot().isEmpty()) return QString();
-    const QString rate = frameRateLabel(m_bus->fps());
-    if (m_dropped < 0) return rate;
-    return QStringLiteral("%1 · %2 dropped").arg(rate).arg(m_dropped);
-}
-
-void ToolbarWiring::updateRate() {
-    if (!m_rate) return;
-    m_rate->setText(rateText());
-    m_rate->setVisible(!m_rate->text().isEmpty());
-    ui::setTip(m_rate, m_dropped < 0 ? QString() : QStringLiteral("Frames the player skipped as late since the program was opened"));
-}
-
-void ToolbarWiring::updateGuest() {
-    if (!m_guest) return;
-    const ReviewModel *review = m_bus->review();
-    const bool guest = review ? review->guestMode() : !m_bus->viewAs().isEmpty();
-    const QString name = review ? review->viewAsName() : m_bus->viewAs();
-    m_guest->setText(guest ? QStringLiteral("Viewing as %1").arg(name.isEmpty() ? m_bus->viewAs() : name) : QString());
-    m_guest->setVisible(guest);
-}
+// ================================================================ the guest's view
 
 void ToolbarWiring::followReview() {
     ReviewModel *review = m_bus->review();
     if (m_review == review) return;
     if (m_review) disconnect(m_review, nullptr, this, nullptr);
     m_review = review;
-    if (review) connect(review, &ReviewModel::changed, this, &ToolbarWiring::updateGuest);
-    updateGuest();
-}
-
-QString ToolbarWiring::keymapChipText(const QString &label) {
-    QString name = label;
-    if (name.endsWith(QStringLiteral(" Pro"))) name.chop(4);
-    return name.isEmpty() ? QStringLiteral("Keys") : QStringLiteral("%1 keys").arg(name);
-}
-
-void ToolbarWiring::updateKeymap() {
-    if (!m_keymap || !m_window->m_commands) return;
-    const QString current = m_window->m_commands->keymap();
-    QString label = current;
-    for (const QJsonValue &value : m_window->m_commands->keymaps())
-        if (value.toObject().value(QStringLiteral("id")).toString() == current) label = value.toObject().value(QStringLiteral("label")).toString();
-    m_keymap->setText(keymapChipText(label));
-    m_keymap->setAccessibleName(QStringLiteral("Keyboard shortcuts: %1").arg(label));
-    m_keymap->updateGeometry();
+    if (review) connect(review, &ReviewModel::changed, this, &ToolbarWiring::layoutTitle);
+    layoutTitle();
 }
 
 void ToolbarWiring::buildKeymapMenu(QMenu *menu) {
@@ -944,7 +726,6 @@ void ToolbarWiring::buildKeymapMenu(QMenu *menu) {
             for (QAction *other : m_window->findChildren<QAction *>())
                 if (other->objectName().startsWith(QStringLiteral("keymap.")))
                     other->setChecked(other->objectName() == QStringLiteral("keymap.%1").arg(id));
-            updateKeymap();
         });
     }
     menu->addSeparator();
@@ -963,74 +744,6 @@ QString ToolbarWiring::syncSummary() const {
     if (ahead > 0) parts << plural(ahead, QStringLiteral("1 commit to push"), QStringLiteral("%1 commits to push"));
     if (behind == 0 && ahead == 0) parts << QStringLiteral("up to date");
     return parts.join(QStringLiteral(" · "));
-}
-
-void ToolbarWiring::updateSyncChip() {
-    MainWindow *w = m_window;
-    auto *chip = qobject_cast<StatusChip *>(w->m_syncChip);
-    if (!chip) return;
-    const QJsonObject &status = w->m_collabStatus;
-    if (status.isEmpty()) {
-        chip->hide();
-        return;
-    }
-    const auto field = [&status](const char *key) { return status.value(QLatin1String(key)); };
-    QString text;
-    QString state;
-    QRgb ink = tokens::ink2;
-    QStringList details;
-    if (!field("repository").toBool()) {
-        text = QStringLiteral("Not shared");
-        state = QStringLiteral("local");
-        details << QStringLiteral("This project is not a Git repository yet; Publish to GitHub… shares it.");
-    } else {
-        const QString branch = field("branch").toString();
-        const int ahead = field("ahead").toInt();
-        const int behind = field("behind").toInt();
-        text = branch.isEmpty() ? QStringLiteral("detached") : branch;
-        if (ahead > 0) text += QStringLiteral(" ↑%1").arg(ahead);
-        if (behind > 0) text += QStringLiteral(" ↓%1").arg(behind);
-        const QString remote = field("remote").toString();
-        const QString upstream = field("upstream").toString();
-        details << (remote.isEmpty() ? QStringLiteral("No remote yet: Publish to GitHub… shares the project.")
-                    : upstream.isEmpty() ? QStringLiteral("%1, not pushed yet").arg(remote)
-                                         : QStringLiteral("Syncs with %1").arg(upstream));
-        if (field("changed").toBool()) details << QStringLiteral("Edits not committed yet");
-        static const QHash<QString, QString> stages{
-            {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
-            {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
-            {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
-        if (!w->m_syncStage.isEmpty() || field("busy").toBool()) {
-            text = QStringLiteral("%1…").arg(stages.value(w->m_syncStage, QStringLiteral("Syncing")));
-            state = QStringLiteral("syncing");
-            ink = tokens::accentInk;
-        } else if (field("conflicted").toBool()) {
-            text += QStringLiteral(" · merge unfinished");
-            state = QStringLiteral("conflict");
-            ink = tokens::neg;
-            details.prepend(QStringLiteral("A merge is in progress with unresolved files; finish it with git."));
-        } else if (!w->m_syncFailure.isEmpty()) {
-            text += QStringLiteral(" · sync failed");
-            state = QStringLiteral("failed");
-            ink = tokens::neg;
-            details.prepend(QStringLiteral("Sync failed: %1").arg(w->m_syncFailure));
-        } else if (field("live").toBool()) {
-            text += QStringLiteral(" · live");
-            state = QStringLiteral("live");
-        } else {
-            state = QStringLiteral("idle");
-        }
-        if (!w->m_syncLines.isEmpty()) details << QStringLiteral("Last sync: %1").arg(w->m_syncLines.join(QStringLiteral("; ")));
-    }
-    chip->setText(text);
-    chip->setInk(ink);
-    chip->setAccessibleName(text);
-    chip->setAccessibleDescription(details.join(QLatin1Char('\n')));
-    chip->setProperty("state", state);
-    chip->setProperty("details", details);
-    ui::setTip(chip, syncSummary());
-    chip->updateGeometry();
-    chip->show();
 }
 
 void ToolbarWiring::buildSyncMenu(QMenu *menu) {
@@ -1088,51 +801,6 @@ void ToolbarWiring::buildSyncMenu(QMenu *menu) {
     menu->setToolTipsVisible(true);
 }
 
-void ToolbarWiring::updateAgent() {
-    MainWindow *w = m_window;
-    if (!m_agent) return;
-    QString agent;
-    if (w->usesCloud()) {
-        const QString email = w->m_cloudAccount.value(QStringLiteral("email")).toString();
-        const QString access = w->m_cloudAccess;
-        if (access.isEmpty() || access == QStringLiteral("unavailable")) agent = QStringLiteral("Agent: Kerf Cloud unavailable");
-        else if (email.isEmpty() || access == QStringLiteral("signedOut")) agent = QStringLiteral("Agent: Kerf Cloud · signed out");
-        else agent = QStringLiteral("Agent: Kerf Cloud");
-    } else {
-        agent = w->aiAccess() == QStringLiteral("noKey") ? QStringLiteral("Agent: no key") : QStringLiteral("Agent: own key");
-    }
-    QRgb dot = tokens::neg;
-    QString connection = QStringLiteral("Offline");
-    if (m_connection == QStringLiteral("ready")) {
-        dot = tokens::pos;
-        connection = QStringLiteral("Connected");
-    } else if (m_connection == QStringLiteral("connecting")) {
-        dot = tokens::warn;
-        connection = QStringLiteral("Connecting…");
-    }
-    m_agent->setStatus(agent, dot, connection);
-    ui::setTip(m_agent, QStringLiteral("The agent's connection (Settings) · the project's runtime"),
-               nativeKeys(w->m_commands ? w->m_commands->action(QStringLiteral("app.preferences")) : nullptr));
-}
-
-void ToolbarWiring::updateProgress() {
-    if (!m_progress) return;
-    const RunningExport *latest = nullptr;
-    for (auto it = m_runningExports.cbegin(); it != m_runningExports.cend(); ++it)
-        if (!latest || std::pair(!it->queued, it->started) > std::pair(!latest->queued, latest->started)) latest = &it.value();
-    if (latest) {
-        m_progress->setProgress(latest->label, latest->fraction);
-        ui::setTip(m_progress, latest->label == QStringLiteral("Draft export") ? QStringLiteral("Draft export · H.264 review copy") : latest->label);
-        m_progress->show();
-    } else if (m_previewRunning) {
-        m_progress->setProgress(QStringLiteral("Rendering preview"), m_previewFraction);
-        ui::setTip(m_progress, QStringLiteral("Rendering the preview"));
-        m_progress->show();
-    } else {
-        m_progress->hide();
-    }
-}
-
 // ================================================================ events
 
 void ToolbarWiring::trackExport(const QString &job, const QString &quality, const QString &name, double fraction, bool queued) {
@@ -1140,6 +808,7 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
     if (it == m_runningExports.end()) it = m_runningExports.insert(job, RunningExport{{}, 0, ++m_exportsStarted});
     // A progress event may leave the name out: the job keeps the one it had.
     if (quality == QStringLiteral("review") || quality == QStringLiteral("preview")) it->label = QStringLiteral("Draft export");
+    else if (quality == QStringLiteral("master") && name.isEmpty()) it->label = QStringLiteral("Master export");
     else if (!name.isEmpty()) it->label = name;
     else if (it->label.isEmpty()) it->label = QStringLiteral("Export");
     it->fraction = fraction;
@@ -1162,9 +831,6 @@ void ToolbarWiring::onSnapshot() {
         }
     }
     layoutTitle();
-    updateSequence();
-    updateSelection();
-    updateRate();
 }
 
 void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
@@ -1181,11 +847,6 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
             m_checkStatus = status;
             m_checkMessage = event.value(QStringLiteral("message")).toString();
         }
-    } else if (type == QStringLiteral("clock")) {
-        if (event.value(QStringLiteral("dropped")).isDouble()) {
-            m_dropped = std::max<qint64>(0, event.value(QStringLiteral("dropped")).toInteger());
-            updateRate();
-        }
     } else if (type == QStringLiteral("export")) {
         const QString kind = event.value(QStringLiteral("kind")).toString();
         if (!kind.isEmpty() && kind != QStringLiteral("render")) return; // paperwork and captions are no renders
@@ -1193,18 +854,12 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
         QString quality = event.value(QStringLiteral("quality")).toString();
         if (quality.isEmpty()) quality = m_jobQuality.value(job, m_sentQuality);
         if (status == QStringLiteral("running") || status == QStringLiteral("queued")) {
-            // The master's progress is the Deliver queue's; the status bar
-            // shows the drafts.
-            if (quality == QStringLiteral("master")) {
-                m_runningExports.remove(job);
-            } else {
-                trackExport(job, quality, event.value(QStringLiteral("name")).toString(), event.value(QStringLiteral("progress")).toDouble(),
-                            status == QStringLiteral("queued"));
-            }
+            trackExport(job, quality, event.value(QStringLiteral("name")).toString(), event.value(QStringLiteral("progress")).toDouble(),
+                        status == QStringLiteral("queued"));
         } else if (!status.isEmpty()) {
             m_runningExports.remove(job);
         }
-        updateProgress();
+        layoutTitle();
     } else if (type == QStringLiteral("render_queue")) {
         // The whole queue: what it no longer runs has stopped.
         QSet<QString> running;
@@ -1214,7 +869,7 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
             const QString quality = job.value(QStringLiteral("quality")).toString();
             m_jobQuality.insert(id, quality);
             const QString state = job.value(QStringLiteral("status")).toString();
-            if (quality != QStringLiteral("master") && (state == QStringLiteral("running") || state == QStringLiteral("queued"))) {
+            if (state == QStringLiteral("running") || state == QStringLiteral("queued")) {
                 running.insert(id);
                 trackExport(id, quality, job.value(QStringLiteral("name")).toString(), job.value(QStringLiteral("progress")).toDouble(),
                             state == QStringLiteral("queued"));
@@ -1222,13 +877,11 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
         }
         for (auto it = m_runningExports.begin(); it != m_runningExports.end();)
             it = running.contains(it.key()) ? std::next(it) : m_runningExports.erase(it);
-        updateProgress();
+        layoutTitle();
     } else if (type == QStringLiteral("preview")) {
         m_previewRunning = status == QStringLiteral("running");
         m_previewFraction = event.value(QStringLiteral("progress")).toDouble();
-        if (!status.isEmpty()) updateProgress();
-    } else if (type == QStringLiteral("cloud")) {
-        updateAgent();
+        if (!status.isEmpty()) layoutTitle();
     } else if (type == QStringLiteral("error") && m_sequencePending && m_sequenceSettings) {
         // kerfd refused the sequence's change: its words, in the dialog.
         const QString command = event.value(QStringLiteral("command")).toString();

@@ -228,8 +228,6 @@ EditorTheme makeEditorTheme() {
     // Lines: the seams are a 1 pt line drawn inside the panel, so the solid
     // roles are that line as it shows on chrome; control outlines stay
     // translucent so they read on any surface.
-    t.dockSeparator = laid(tk::chrome, tk::line);
-    t.dockSeparatorHover = laid(tk::chrome, tk::lineh);
     t.divider = laid(tk::chrome, tk::line);
     t.borderSubtle = token(tk::line);
     t.border = token(tk::line2);
@@ -299,9 +297,6 @@ EditorTheme makeEditorTheme() {
     // Sliders (.sl): a 2 pt track, a track2 fill and an ink knob.
     t.sliderGroove = token(tk::track);
     t.sliderHandle = token(tk::ink);
-    t.statusBar = token(tk::chrome);
-    t.statusText = token(tk::ink3);
-    t.statusDivider = laid(tk::chrome, tk::line);
 
     // Status: neg, warn and pos; a banner is its colour washed into chrome.
     t.error = token(tk::neg);
@@ -324,7 +319,7 @@ EditorTheme makeEditorTheme() {
     t.assistantHover = token(tk::hover2);
 
     // The comments panel (4): a card; chips and pills on `raised`.
-    t.chatSurface = token(tk::card);
+    t.chatSurface = token(tk::chrome);
     t.chatText = token(tk::ink);
     t.chatSecondary = token(tk::ink2);
     t.chatChip = token(tk::raised);
@@ -341,14 +336,6 @@ EditorTheme makeEditorTheme() {
     t.messageUser = t.chatSurface;
     t.messageAgent = t.chatSurface;
     t.messageUserRole = t.chatText;
-    // The stage rail's icon buttons (.ib): clear at rest, `raised` under the
-    // pointer, `on` while on; ink2 symbols, ink when on.
-    t.railButton = alphaOf(tk::raised, 0.0);
-    t.railButtonHover = token(tk::raised);
-    t.railButtonActive = token(tk::on);
-    t.railGlyph = token(tk::ink2);
-    t.railGlyphActive = token(tk::ink);
-    t.railLabel = token(tk::ink3);
     t.pillTonal = token(tk::raised);
     t.pillTonalText = token(tk::ink);
 
@@ -407,7 +394,6 @@ EditorTheme makeEditorTheme() {
     t.viewerTextDim = token(tk::ink3);
     t.viewerCaption = token(tk::overlay::captionBackground);
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
-    // Device frames (3.2, owner) draw from device_frame's own colours.
     t.deviceScreen = token(tk::overlay::deviceScreen);
     // Masks over the picture: white over a dark rule; handles the accent.
     t.maskOutline = token(0xffffffff);
@@ -444,14 +430,12 @@ EditorTheme makeEditorTheme() {
     t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
     for (const QColor &surface : {t.field, t.chatSurface, t.dialog})
         t.placeholderText = justReadableOn(t.placeholderText, surface, 4.5);
-    t.statusText = justReadableOn(t.statusText, t.statusBar, 4.5);
-    t.railLabel = justReadableOn(t.railLabel, t.viewerSurround, 4.5);
     t.viewerTextDim = justReadableOn(t.viewerTextDim, t.viewerCanvas, 4.5);
     t.errorText = justReadableOn(t.errorText, t.errorSurface, 4.5);
     t.errorText = justReadableOn(t.errorText, t.chatSurface, 4.5);
     t.badgeErrorText = readableOn(t.badgeErrorText, t.badgeError, 4.5);
     // ...the accent as text on every surface it is drawn on...
-    for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar, t.raised, t.window, t.chrome, t.well, t.field,
+    for (const QColor &surface : {t.panel, t.rulerCorner, t.raised, t.window, t.chrome, t.well, t.field,
                                   t.dialog, t.group, t.chatSurface, t.accentTint, t.accentTintPressed})
         t.accentText = readableOn(t.accentText, surface, 4.5);
     t.chatExpander = t.accentText;
@@ -532,6 +516,8 @@ void applyEditorAppearance() {
     QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
 #endif
     QApplication::setPalette(editorPalette(s.theme));
+    // Controls are 12/16 unless a widget says otherwise.
+    QApplication::setFont(tokens::font(tokens::control));
     qApp->setStyleSheet(editorStyleSheet(s.theme));
     // The style sheet repolishes every widget; painted ones read the theme
     // as they paint.

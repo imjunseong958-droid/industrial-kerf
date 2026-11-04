@@ -13,25 +13,6 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
-# Docking: Qt Advanced Docking System (LGPL-2.1), built from a pinned
-# release and linked as a shared library. Set
-# FETCHCONTENT_SOURCE_DIR_QTADS to build from a local checkout instead.
-include(FetchContent)
-set(QT_VERSION_MAJOR 6)
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(ADS_VERSION 5.1.1)
-FetchContent_Declare(qtads
-    GIT_REPOSITORY https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System.git
-    GIT_TAG v5.1.1
-    GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(qtads)
-if(APPLE)
-    # Qt 6.11's moc follows framework headers to Q_OS_UNIX but not to
-    # Q_OS_MACOS, so it reads qtads' floating container as the Linux
-    # QDockWidget while the compiler builds the macOS QWidget.
-    set_property(TARGET qtadvanceddocking-qt6 APPEND PROPERTY AUTOMOC_MOC_OPTIONS -DQ_OS_MACOS)
-endif()
-
 if(WIN32)
     # MSVC links a DLL through its import library, which Cargo writes beside
     # it as kerf_qt_bridge.dll.lib.
@@ -45,14 +26,14 @@ if(NOT EXISTS "${KERF_BRIDGE_LIBRARY}")
     message(WARNING "Rust bridge was not found at ${KERF_BRIDGE_LIBRARY}; build kerf_qt_bridge before linking.")
 endif()
 
-# Windows looks for a program's DLLs beside it: copy there the bridge and
-# the docking library built here. Qt's own come from its bin folder on PATH.
+# Windows looks for a program's DLLs beside it: copy there the bridge. Qt's
+# own come from its bin folder on PATH.
 function(kerf_copy_runtime_dlls target)
     if(WIN32)
         string(REGEX REPLACE "\\.lib$" "" bridge_dll "${KERF_BRIDGE_LIBRARY}")
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${bridge_dll}" "$<TARGET_FILE:qtadvanceddocking-qt6>" "$<TARGET_FILE_DIR:${target}>"
+                "${bridge_dll}" "$<TARGET_FILE_DIR:${target}>"
             VERBATIM)
     endif()
 endfunction()
@@ -66,8 +47,6 @@ set(KERF_QT_SOURCES
     command_registry.cpp
     command_registry.h
     design_tokens.h
-    device_frame.cpp
-    device_frame.h
     editor_common.cpp
     editor_common.h
     editor_style.h
@@ -88,12 +67,8 @@ set(KERF_QT_SOURCES
     main_window.h
     media_artwork.cpp
     media_artwork.h
-    player_overlay.cpp
-    player_overlay.h
     presets_panel.cpp
     presets_panel.h
-    program_level.cpp
-    program_level.h
     project_launcher.cpp
     project_launcher.h
     project_panel.cpp
@@ -104,9 +79,7 @@ set(KERF_QT_SOURCES
     timeline_widget.cpp
     timeline_widget.h
     viewer_widget.cpp
-    viewer_widget.h
-    workspace.cpp
-    workspace.h)
+    viewer_widget.h)
 # Shared UI parts live under ui/ and join the build without a list here.
 file(GLOB_RECURSE KERF_QT_UI_SOURCES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" ui/*.cpp ui/*.h)
 list(APPEND KERF_QT_SOURCES ${KERF_QT_UI_SOURCES})
@@ -130,7 +103,7 @@ set(KERF_QT_SHARED_SOURCES ${KERF_QT_SOURCES})
 list(REMOVE_ITEM KERF_QT_SHARED_SOURCES ${KERF_QT_VARIANT_SOURCES})
 add_library(kerf-qt-shared OBJECT ${KERF_QT_SHARED_SOURCES})
 target_include_directories(kerf-qt-shared PUBLIC ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/ui)
-target_link_libraries(kerf-qt-shared PUBLIC Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"
+target_link_libraries(kerf-qt-shared PUBLIC Qt6::Widgets "${KERF_BRIDGE_LIBRARY}"
     ${KERF_QT_PLATFORM_LIBRARIES})
 
 # Bundled fonts (resources/fonts/*.ttf, *.otf) are served at :/fonts/<file>;

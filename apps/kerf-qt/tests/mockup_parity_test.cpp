@@ -1,17 +1,14 @@
-// The whole editor against the approved mockup (03-review-thread.html) at its
-// 1600 x 1000 canvas: every workspace (review, edit, finish, deliver) in
-// every format (16:9, 9:16, 1:1, 4:5), its comments panel open and closed.
-// Each state's regions are checked against mockup-spec 0.1, its stage
-// against the 3.1 [OWNER] table (with the W3 phone scrub: it ends 12 left of
-// the rail), and its device against the exact MacBook Pro 14" and iPhone 16
-// Pro sizes of spec 3.2 to within half a point. The editor is fed the seed
-// (comments, proposals, a check, loudness and a render queue) as kerfd sends
-// it, through handleEvent.
+// The whole editor against the approved minimal mockup (03-review-thread.html)
+// at its 1600 x 1000 canvas: in every format (16:9, 9:16, 1:1, 4:5), the base
+// state, each of the three sheets, and both trays, fed the seed (comments,
+// proposals, a check, loudness and a render queue) as kerfd sends it, through
+// handleEvent. Each state's rects are checked against the brief's table, with no
+// gaps, cards, radii or margins around the three regions.
 //
-// With KERF_SCREENSHOT_DIR set, every state is saved under the mockup's
-// query state: <ws>-<fmt>.png for the workspace as it opens (?ws=edit&fmt=916
-// is edit-916.png), and <ws>-<fmt>-panel0.png / -panel1.png for the panel
-// toggled (?panel=0).
+// With KERF_SCREENSHOT_DIR set, every state is saved under the mockup's query
+// state: <fmt>.png for ?fmt=, <fmt>-media.png, <fmt>-browser.png and
+// <fmt>-inspector.png for the sheets, <fmt>-finish.png and <fmt>-deliver.png for
+// ?ws=, and <fmt>-preview.png for ?preview=1.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -20,23 +17,26 @@
 #include "components.h"
 #include "command_registry.h"
 #include "design_tokens.h"
-#include "device_frame.h"
 #include "main_window.h"
-#include "program_strip.h"
 #include "source_monitor_panel.h"
-#include "scrub_strip.h"
-#include "stage_rail.h"
 #include "test_footage.h"
 #include "ui/editor_bus.h"
 #include "ui/inspector_column.h"
 #include "ui/review_model.h"
 #include "ui/wiring/review_wiring.h"
+#include "ui/agent_hud.h"
+#include "ui/comment_row.h"
+#include "ui/deliver_tray.h"
+#include "ui/browser_panel.h"
+#include "ui/finish_tray.h"
+#include "ui/proposal_card.h"
 #include "ui/wiring/stage_wiring.h"
+#include "ui/wiring/timeline_wiring.h"
+#include "project_panel.h"
+#include "timeline_widget.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 
-#include <DockAreaWidget.h>
-#include <DockWidget.h>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -162,32 +162,20 @@ QJsonObject seedState(const QSize &canvas) {
 struct Format {
     const char *query; // the mockup's ?fmt=
     QSize canvas;
-    double pictureHeight; // in the phone at the 1600 x 1000 stage (spec 3.2)
+    QRect picture;
+    QRect conversation;
+    QRect timeline;
 };
 
-struct Expected {
-    double bodyLeft;
-    int railLeft;
-    QRect panel;
-    QRectF scrub;
-    QRect source; // empty: no Source column
-    double sourceWidthTolerance;
+// The minimal mockup's layout() at 1600 x 1000, in window coordinates.
+const Format kFormats[] = {
+    {"169", QSize(1920, 1080), QRect(0, 40, 1200, 675), QRect(1200, 40, 400, 675), QRect(0, 715, 1600, 285)},
+    {"916", QSize(1080, 1920), QRect(0, 40, 540, 960), QRect(540, 40, 1060, 616), QRect(540, 656, 1060, 344)},
+    {"45", QSize(1080, 1350), QRect(0, 40, 768, 960), QRect(768, 40, 832, 616), QRect(768, 656, 832, 344)},
+    {"11", QSize(1080, 1080), QRect(0, 40, 960, 960), QRect(960, 40, 640, 616), QRect(960, 656, 640, 344)},
 };
 
-// The [OWNER] table (mockup-spec 3.1) at the 1296 x 564 stage, with the W3
-// phone scrub: sx = rx - 372.
-// PENDING OWNER CONFIRMATION: the phone Source column's 344 (open) and 836
-// (closed) follow from the moved scrub through the "scrub - 32" rule; the
-// spec's table says 400 at x 16 beside the open panel. Only the scrub was
-// moved by the owner; these two widths wait for the owner's answer.
-Expected expectedStage(bool phone, bool open) {
-    if (!phone && open) return {85.0, 0, QRect(916, 8, 368, 548), QRectF(96.3, 500, 671.8, 56), QRect(), 0};
-    if (!phone) return {533.5, 1240, QRect(), QRectF(544.8, 500, 671.8, 56), QRect(16, 8, 506, 548), 0.5};
-    if (open) return {506.6, 748, QRect(804, 8, 480, 548), QRectF(376, 500, 360, 56), QRect(16, 8, 344, 548), 0};
-    return {998.6, 1240, QRect(), QRectF(868, 500, 360, 56), QRect(16, 8, 836, 548), 0};
-}
-
-bool nearly(double actual, double expected, double tolerance) { return std::abs(actual - expected) <= tolerance; }
+QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
 
 } // namespace
 
@@ -210,13 +198,11 @@ private slots:
         const auto motion = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         if (!shots.isEmpty()) QVERIFY(QDir().mkpath(shots));
-        const Format formats[] = {{"169", QSize(1920, 1080), 0}, {"916", QSize(1080, 1920), 379.8},
-                                  {"11", QSize(1080, 1080), 213.7}, {"45", QSize(1080, 1350), 267.1}};
-        const char *workspaces[] = {"review", "edit", "finish", "deliver"};
         int states = 0;
-        for (const Format &format : formats) {
-            init();
+        for (const Format &format : kFormats) {
             MainWindow window{QString(), QString()};
+            // An agent that can take requests, as the mockup's composer shows.
+            window.m_cloudAccess = QStringLiteral("ready");
             window.setConnection(QStringLiteral("ready"));
             window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
             window.handleEvent(seedState(format.canvas));
@@ -229,55 +215,181 @@ private slots:
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             window.m_errorBanner->hide();
-            const QSize frameSize = format.canvas / 4;
-            window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, frameSize), 0.0);
-            const bool phone = format.canvas.width() <= format.canvas.height();
+            window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, format.canvas / 2), 0.0);
             QVERIFY(window.m_bus->review());
             QVERIFY(window.m_bus->review()->counts().open > 0);
+            const QString fmt = QString::fromLatin1(format.query);
+            const auto save = [&window, &shots, &states](const QString &label) {
+                for (int i = 0; i < 3; ++i) QCoreApplication::processEvents();
+                ++states;
+                if (shots.isEmpty()) return true;
+                return window.grab().toImage().save(QDir(shots).filePath(label + QStringLiteral(".png")));
+            };
 
-            for (const char *ws : workspaces) {
-                const QString name = QString::fromLatin1(ws);
-                QAction *choose = window.m_commands->action(QStringLiteral("workspace.%1").arg(name));
-                QVERIFY2(choose, ws);
-                choose->trigger();
-                QCoreApplication::processEvents();
-                const Workspace::StageState stage = window.m_workspace->stageState();
-                // mockup-spec 10: Edit closes the panel, Finish dims.
-                QCOMPARE(stage.panelOpen, name != QLatin1String("edit"));
-                QCOMPARE(stage.dim, name == QLatin1String("finish"));
-                QCOMPARE(window.m_viewer->chatOpen(), stage.panelOpen);
-                // Switching rings no button: the keys go to the timeline or the stage.
-                for (ui::KitButton *button : window.findChildren<ui::KitButton *>())
-                    QVERIFY2(!(button->isVisible() && button->focusVisible()),
-                             qPrintable(QStringLiteral("%1: %2 shows its focus ring (focus %3, in window %4)")
-                                            .arg(name, button->objectName(),
-                                                 QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : QStringLiteral("none"))
-                                            .arg(window.isAncestorOf(button))));
-                for (const bool toggled : {false, true}) {
-                    const bool open = toggled ? !stage.panelOpen : stage.panelOpen;
-                    if (window.m_viewer->chatOpen() != open) window.setChatOpen(open);
-                    for (int i = 0; i < 3; ++i) QCoreApplication::processEvents();
-                    const QString label = QStringLiteral("%1-%2%3").arg(name, QString::fromLatin1(format.query),
-                                                                       toggled ? QStringLiteral("-panel%1").arg(open ? 1 : 0) : QString());
-                    checkRegions(window, name, label);
-                    checkStage(window, format, phone, open, name, label);
-                    if (!shots.isEmpty()) {
-                        const QImage image = window.grab().toImage();
-                        QVERIFY2(image.save(QDir(shots).filePath(label + QStringLiteral(".png"))), qPrintable(label));
-                    }
-                    ++states;
-                }
-                // Back to the workspace's own stage before the next one.
-                if (window.m_viewer->chatOpen() != stage.panelOpen) window.setChatOpen(stage.panelOpen);
+            // The base state: the picture, the conversation and the timeline.
+            QCoreApplication::processEvents();
+            checkBase(window, format);
+            checkNothingElseShows(window);
+            // One painted hairline between the regions.
+            {
+                const QImage shot = window.grab().toImage();
+                const int chrome = tokens::color(tokens::chrome).red();
+                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() > chrome);
+                QVERIFY(shot.pixelColor(format.timeline.left() + 100, format.timeline.top()).red() > chrome);
             }
+            QVERIFY(save(fmt));
+
+            // The sheets, each at the window's right edge and the conversation's height.
+            const struct {
+                StageShell::Sheet sheet;
+                const char *name;
+                const char *command;
+                QWidget *widget;
+                int width;
+            } sheets[] = {{StageShell::Sheet::Media, "media", "window.project", window.m_projectPanel, 272},
+                          {StageShell::Sheet::Browser, "browser", "window.effects", window.m_browserPanel, 304},
+                          {StageShell::Sheet::Inspector, "inspector", "window.inspector", window.m_inspectorColumn, 304}};
+            for (const auto &sheet : sheets) {
+                window.triggerCommand(QString::fromLatin1(sheet.command));
+                QCOMPARE(window.m_shell->sheet(), sheet.sheet);
+                QVERIFY2(sheet.widget->isVisible(), sheet.name);
+                QCOMPARE(inWindow(sheet.widget, &window),
+                         QRect(1600 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
+                // What is under it has not moved.
+                checkBase(window, format);
+                QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
+                window.triggerCommand(QString::fromLatin1(sheet.command));
+                QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
+            }
+
+            // The trays, 344 tall across the full window at the bottom.
+            const struct {
+                StageShell::Tray tray;
+                const char *name;
+                QWidget *widget;
+            } trays[] = {{StageShell::Tray::Finish, "finish", window.m_finishTray}, {StageShell::Tray::Deliver, "deliver", window.m_deliverTray}};
+            for (const auto &tray : trays) {
+                window.triggerCommand(QStringLiteral("workspace.%1").arg(QString::fromLatin1(tray.name)));
+                QCOMPARE(window.m_shell->tray(), tray.tray);
+                QVERIFY2(tray.widget->isVisible(), tray.name);
+                QCOMPARE(inWindow(tray.widget, &window), QRect(0, 656, 1600, 344));
+                checkBase(window, format);
+                // Changing state rings no button: the keys go to the timeline.
+                for (ui::KitButton *button : window.findChildren<ui::KitButton *>())
+                    QVERIFY2(!(button->isVisible() && button->focusVisible()), qPrintable(button->objectName()));
+                QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(tray.name))));
+                window.triggerCommand(QStringLiteral("workspace.review"));
+                QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
+            }
+
+            // ?preview=1: the chip, 12 inside the picture's top left.
+            window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}, {"proposalId", "p7"}});
+            PreviewChip *chip = window.m_stageWiring->previewChip();
+            QVERIFY(chip->isVisible());
+            QCOMPARE(chip->text(), QStringLiteral("Previewing proposal v1"));
+            // .ptxt: the 6 pt ink2 dot 16 in, the text 8 past it in ink3.
+            auto *dot = chip->findChild<ui::Dot *>(QStringLiteral("previewChipDot"));
+            QVERIFY(dot);
+            QCOMPARE(dot->color(), tokens::color(tokens::ink2));
+            QCOMPARE(dot->geometry(), QRect(16, 9, 6, 6));
+            auto *chipText = chip->findChild<QLabel *>(QStringLiteral("previewChipText"));
+            QCOMPARE(chipText->geometry().left(), 30);
+            QVERIFY(chipText->styleSheet().contains(tokens::color(tokens::ink3).name()));
+            QCOMPARE(chip->height(), 24);
+            QCOMPARE(inWindow(chip, &window).topLeft(), format.picture.topLeft() + QPoint(12, 12));
+            QVERIFY(save(QStringLiteral("%1-preview").arg(fmt)));
+            window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "exited"}});
+            QVERIFY(!chip->isVisible());
+
+            // Rows and proposal cards fill the panel's full width, at every format.
+            checkConversationRows(window);
             window.close();
         }
-        QCOMPARE(states, 4 * 4 * 2);
+        QCOMPARE(states, 4 * (1 + 3 + 2 + 1));
     }
 
-    // A fresh launch opens in the saved workspace with its stage applied, as
-    // choosing it does: Edit with the panel closed and the Source column
-    // showing, Finish dimmed with its tray, Deliver with its tray.
+    // The timeline at the design's size: its strip, heads, default heights, and a
+    // scale that fits the sequence to the lanes.
+    void timelineMatchesTheMockup() {
+        for (const Format &format : kFormats) {
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            window.handleEvent(seedState(format.canvas));
+            window.resize(1600, 1000);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QCoreApplication::processEvents();
+            TimelineToolStrip *strip = window.m_timelineWiring->tools();
+            QCOMPARE(strip->height(), 28);
+            QCOMPARE(inWindow(strip, &window), QRect(format.timeline.topLeft(), QSize(format.timeline.width(), 28)));
+            QCOMPARE(window.m_timeline->trackHeaderRect(0).width(), 140);
+            QVERIFY(window.m_timeline->isFitToWidth());
+            QCOMPARE(window.m_timeline->wideSequence(), format.canvas.width() > format.canvas.height());
+            QCOMPARE(window.m_timelineScroll->viewport()->height(), format.timeline.height() - 28);
+            window.close();
+        }
+    }
+
+    // The real launch: shown and activated while connecting (the timeline is
+    // disabled, so Qt hands the keys to the next control), then state and
+    // ready in the bridge's order. The timeline's keys must work.
+    void theKeysStartOnTheTimeline() {
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QCoreApplication::processEvents();
+        QVERIFY(!window.m_timeline->isEnabled());
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
+        QVERIFY(window.m_timeline->hasFocus());
+        // Space plays, C takes the razor, I sets the mark.
+        window.m_lastCommand = {};
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("play"));
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_C);
+        QCOMPARE(window.m_timeline->tool(), TimelineTool::Razor);
+        QVERIFY(!window.m_stageWiring->hasIn());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_I);
+        QVERIFY(window.m_stageWiring->hasIn());
+        // A reconnection takes the same path.
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "disconnected"}, {"message", "gone"}});
+        QVERIFY(!window.m_timeline->hasFocus());
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
+        QVERIFY(window.m_timeline->hasFocus());
+        window.close();
+    }
+
+    // Coming ready leaves the keys with someone typing, and with a sheet in use.
+    void comingReadyLeavesTypingAndSheetsAlone() {
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QCoreApplication::processEvents();
+        window.triggerCommand(QStringLiteral("window.project"));
+        window.m_projectPanel->focusSearch();
+        QLineEdit *search = window.m_projectPanel->m_search;
+        QVERIFY(search->hasFocus());
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
+        QVERIFY(search->hasFocus());
+        // Not a text field, but in the open sheet.
+        QAbstractButton *inSheet = nullptr;
+        for (QAbstractButton *button : window.m_projectPanel->findChildren<QAbstractButton *>())
+            if (button->isVisible() && button->isEnabled()) inSheet = button;
+        QVERIFY(inSheet);
+        inSheet->setFocus();
+        window.settleFocus();
+        QCOMPARE(window.focusWidget(), inSheet);
+        // The sheet closed, they go back to the timeline.
+        window.triggerCommand(QStringLiteral("window.project"));
+        QVERIFY(window.m_timeline->hasFocus());
+        window.close();
+    }
+
     // The keys start on the timeline the first time the window is active;
     // coming back to the window later keeps the button a keyboard user
     // tabbed to (settleFocus runs on the first activation, not on each).
@@ -291,7 +403,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowActive(&window));
         QCoreApplication::processEvents();
         QVERIFY(window.m_focusSettled);
-        QVERIFY(!qobject_cast<QAbstractButton *>(QApplication::focusWidget()));
+        QVERIFY(window.m_timeline->hasFocus());
         QAbstractButton *button = nullptr;
         for (QAbstractButton *candidate : window.findChildren<QAbstractButton *>())
             if (candidate->isVisible() && candidate->isEnabled() && (candidate->focusPolicy() & Qt::TabFocus)) {
@@ -309,165 +421,50 @@ private slots:
         window.close();
     }
 
-    void launchAppliesTheWorkspaceStage() {
-        for (const char *ws : {"Edit", "Finish", "Deliver", "Review"}) {
-            init();
-            QSettings().setValue(QStringLiteral("workspace/current"), QString::fromLatin1(ws));
-            MainWindow window{QString(), QString()};
-            window.setConnection(QStringLiteral("ready"));
-            window.handleEvent(seedState(QSize(1920, 1080)));
-            window.resize(1600, 1000);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QCoreApplication::processEvents();
-            const QString name = QString::fromLatin1(ws);
-            QCOMPARE(window.m_workspace->current(), name);
-            QCOMPARE(window.m_bus->workspace(), name);
-            QCOMPARE(window.m_viewer->chatOpen(), name != QLatin1String("Edit"));
-            QCOMPARE(window.m_chat->isVisible(), name != QLatin1String("Edit"));
-            QCOMPARE(window.m_stageSource->isVisible(), name == QLatin1String("Edit"));
-            QCOMPARE(window.m_viewer->dimmed(), name == QLatin1String("Finish"));
-            QCOMPARE(window.m_commands->action(QStringLiteral("workspace.%1").arg(name.toLower()))->isChecked(), true);
-            QCOMPARE(window.m_commands->action(QStringLiteral("view.dim"))->isChecked(), name == QLatin1String("Finish"));
-            const QImage image = window.grab().toImage();
-            const QPoint origin = window.m_viewer->mapTo(&window, QPoint(4, 4));
-            QCOMPARE(image.pixelColor(origin * image.devicePixelRatio()).rgb(),
-                     tokens::color(name == QLatin1String("Finish") ? tokens::surroundDim : tokens::surround).rgb());
-            window.close();
-        }
-        cleanup();
-    }
-
 private:
-    // mockup-spec 0.1 at 1600 x 1000, each region with its 1 pt seam.
-    void checkRegions(MainWindow &window, const QString &ws, const QString &label) {
-        Workspace *workspace = window.m_workspace;
-        const auto frame = [&window](const QWidget *widget) { return QRect(widget->mapTo(&window, QPoint()), widget->size()); };
-        const auto area = [&](const char *id) { return frame(workspace->panel(QString::fromLatin1(id))->dockAreaWidget()); };
-        const auto shown = [&](const char *id) { return !workspace->panel(QString::fromLatin1(id))->isClosed(); };
-        const auto near = [](int actual, int expected) { return std::abs(actual - expected) <= 1; };
-        const QRect toolbar = frame(window.m_toolbar);
-        const QRect status = frame(window.statusBar());
-        const QRect program = area("program");
-        const QRect inspector = area("inspector");
-        const QString got = QStringLiteral("%1: toolbar %2 status %3,%4 program %5,%6 %7x%8 inspector %9,%10 %11x%12")
-                                .arg(label).arg(toolbar.height()).arg(status.top()).arg(status.height())
-                                .arg(program.x()).arg(program.y()).arg(program.width()).arg(program.height())
-                                .arg(inspector.x()).arg(inspector.y()).arg(inspector.width()).arg(inspector.height());
-        QVERIFY2(toolbar == QRect(0, 0, 1600, 40), qPrintable(got));
-        QVERIFY2(status == QRect(0, 976, 1600, 24), qPrintable(got));
-        // Program x 0-1296, y 40-632: its 28 strip over the 564 stage.
-        QVERIFY2(program.topLeft() == QPoint(0, 40) && program.width() == 1296 && near(program.height(), 592), qPrintable(got));
-        QVERIFY2(frame(window.m_programStrip) == QRect(0, 40, 1296, 28), qPrintable(got));
-        QVERIFY2(frame(window.m_viewer) == QRect(0, 68, 1296, 564), qPrintable(got));
-        // The Inspector column x 1296-1600, as tall as Program.
-        QVERIFY2(near(inspector.left(), 1297) && inspector.right() == 1599 && inspector.top() == 40 &&
-                     inspector.height() == program.height(),
-                 qPrintable(got));
-        const bool tray = ws == QLatin1String("finish") || ws == QLatin1String("deliver");
-        if (tray) {
-            // Finish and Deliver: the tray in the whole band, x 0-1600, y 632-976.
-            const char *own = ws == QLatin1String("finish") ? "finish" : "deliver";
-            QVERIFY2(shown(own), qPrintable(label));
-            for (const char *id : {"project", "timeline", "browser", ws == QLatin1String("finish") ? "deliver" : "finish"})
-                QVERIFY2(!shown(id), qPrintable(QStringLiteral("%1: %2 shown").arg(label, QString::fromLatin1(id))));
-            const QRect band = area(own);
-            QVERIFY2(band.left() == 0 && band.right() == 1599 && near(band.top(), 633) && band.bottom() == 975,
-                     qPrintable(QStringLiteral("%1: tray %2,%3 %4x%5").arg(label).arg(band.x()).arg(band.y()).arg(band.width()).arg(band.height())));
-        } else {
-            // The band y 632-976: bin x 0-272, timeline 272-1296, browser 1296-1600.
-            for (const char *id : {"project", "timeline", "browser"}) QVERIFY2(shown(id), qPrintable(QStringLiteral("%1: %2").arg(label, QString::fromLatin1(id))));
-            for (const char *id : {"finish", "deliver"}) QVERIFY2(!shown(id), qPrintable(QStringLiteral("%1: %2").arg(label, QString::fromLatin1(id))));
-            const QRect bin = area("project");
-            const QRect timeline = area("timeline");
-            const QRect browser = area("browser");
-            const QString band = QStringLiteral("%1: bin %2,%3 %4x%5 timeline %6 %7 browser %8 %9")
-                                     .arg(label).arg(bin.x()).arg(bin.y()).arg(bin.width()).arg(bin.height())
-                                     .arg(timeline.x()).arg(timeline.width()).arg(browser.x()).arg(browser.width());
-            QVERIFY2(bin.left() == 0 && near(bin.top(), 633) && bin.bottom() == 975 && near(bin.width() + 1, 272), qPrintable(band));
-            QVERIFY2(near(timeline.left(), 272) && near(timeline.width(), 1024) && timeline.top() == bin.top(), qPrintable(band));
-            QVERIFY2(near(browser.left(), 1297) && browser.right() == 1599 && browser.top() == bin.top(), qPrintable(band));
-        }
-        // Deliver's Inspector shows the Deliver pane while Video is chosen.
-        QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Inspector);
+    void checkBase(MainWindow &window, const Format &format) {
+        QCOMPARE(window.m_toolbar->height(), 40);
+        QCOMPARE(inWindow(window.m_viewer, &window), format.picture);
+        // Flush: the frame fills its region, with no margin.
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(QPointF(0, 0), QSizeF(format.picture.size())));
+        QCOMPARE(inWindow(window.m_chat, &window), format.conversation);
+        QCOMPARE(inWindow(window.m_timelinePanel, &window), format.timeline);
+        QVERIFY(window.m_viewer->isVisible());
+        QVERIFY(window.m_chat->isVisible());
+        QVERIFY(window.m_timelinePanel->isVisible());
     }
 
-    // The 3.1 [OWNER] placement and the 3.2 exact devices, in stage points.
-    void checkStage(MainWindow &window, const Format &format, bool phone, bool open, const QString &ws, const QString &label) {
-        ViewerWidget *viewer = window.m_viewer;
-        QVERIFY2(!viewer->moving(), qPrintable(label));
-        const ViewerWidget::StageLayout layout = viewer->stageLayout();
-        const Expected want = expectedStage(phone, open);
-        const QString got = QStringLiteral("%1: body %2,%3 %4x%5 rail %6 panel %7,%8 %9x%10 scrub %11,%12 %13 source %14,%15 %16x%17")
-                                .arg(label).arg(layout.body.left()).arg(layout.body.top()).arg(layout.body.width()).arg(layout.body.height())
-                                .arg(layout.rail.left()).arg(layout.panel.x()).arg(layout.panel.y()).arg(layout.panel.width())
-                                .arg(layout.panel.height()).arg(layout.scrub.left()).arg(layout.scrub.top()).arg(layout.scrub.width())
-                                .arg(layout.source.x()).arg(layout.source.y()).arg(layout.source.width()).arg(layout.source.height());
-        QVERIFY2(!layout.overlay, qPrintable(got));
-        QCOMPARE(layout.kind, phone ? ViewerWidget::Device::Phone : ViewerWidget::Device::Laptop);
-        // The device, the rail 12 right of it, 44 x 548 from TOP 8.
-        QVERIFY2(nearly(layout.body.left(), want.bodyLeft, 0.5) && layout.body.top() == 8.0, qPrintable(got));
-        QVERIFY2(layout.rail.width() == 44 && layout.rail.height() == 548 && layout.rail.top() == 8, qPrintable(got));
-        QVERIFY2(nearly(layout.railRect.left() - layout.body.right(), 12, 0.5), qPrintable(got));
-        if (want.railLeft) QVERIFY2(layout.rail.left() == want.railLeft, qPrintable(got));
-        else QVERIFY2(nearly(layout.railRect.left(), 791.5, 0.5), qPrintable(got));
-        // The panel 12 from the stage's right edge, or none.
-        QVERIFY2(layout.panel == want.panel, qPrintable(got));
-        QCOMPARE(window.m_chat->isVisible(), open);
-        if (open) QCOMPARE(window.m_chat->geometry(), layout.panel);
-        // The scrub strip, 56 tall at SY 500: the picture's width under the
-        // laptop; 360 under a phone, ending 12 left of the rail.
-        QVERIFY2(nearly(layout.scrub.left(), want.scrub.left(), 0.5) && nearly(layout.scrub.width(), want.scrub.width(), 0.05) &&
-                     layout.scrub.top() == 500.0 && layout.scrub.height() == 56.0,
-                 qPrintable(got));
-        QCOMPARE(layout.narrowScrub, phone);
-        if (phone) QVERIFY2(nearly(layout.scrub.right(), layout.rail.left() - 12, 1e-6), qPrintable(got));
-        QCOMPARE(window.m_stageWiring->scrub()->geometry(), layout.scrub.toRect());
-        QCOMPARE(window.m_rail->geometry(), layout.rail);
-        // The Source column on the left, or none.
-        if (want.source.isEmpty()) {
-            QVERIFY2(layout.source.isEmpty(), qPrintable(got));
-            QVERIFY2(!window.m_stageSource->isVisible(), qPrintable(got));
-        } else {
-            QVERIFY2(layout.source.topLeft() == QPoint(16, 8) && layout.source.height() == 548 &&
-                         nearly(layout.source.width(), want.source.width(), want.sourceWidthTolerance + 0.5),
-                     qPrintable(got));
-            QVERIFY2(window.m_stageSource->isVisible(), qPrintable(got));
-            QCOMPARE(window.m_stageSource->geometry(), layout.source);
+    void checkNothingElseShows(MainWindow &window) {
+        for (QWidget *closed : {static_cast<QWidget *>(window.m_projectPanel), static_cast<QWidget *>(window.m_browserPanel),
+                                static_cast<QWidget *>(window.m_inspectorColumn), static_cast<QWidget *>(window.m_finishTray),
+                                static_cast<QWidget *>(window.m_deliverTray)})
+            QVERIFY2(!closed->isVisible(), qPrintable(closed->objectName()));
+        QVERIFY(!window.findChild<QStatusBar *>());
+        QVERIFY(window.m_stageWiring->previewChip()->isHidden());
+        QVERIFY(window.m_stageWiring->hud()->isHidden());
+        // Safe zones are off by default.
+        QVERIFY(!window.m_viewer->safeZonesShown());
+    }
+
+    void checkConversationRows(MainWindow &window) {
+        ChatPanel *chat = window.m_chat;
+        chat->m_content->layout()->activate();
+        QCoreApplication::processEvents();
+        const int width = chat->scroll()->viewport()->width();
+        QCOMPARE(chat->m_content->width(), width);
+        // Every thread and card stands as wide as the list, whatever its width.
+        const QList<CommentRow *> rows = chat->m_content->findChildren<CommentRow *>();
+        QVERIFY(!rows.isEmpty());
+        // (A row keeps the design's 8 to the list's edge at every width.)
+        for (const CommentRow *row : rows)
+            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8);
+        const QList<ProposalCard *> cards = chat->m_content->findChildren<ProposalCard *>();
+        for (const ProposalCard *card : cards) {
+            if (!card->isVisibleTo(chat)) continue;
+            // Its gutters are its row's own, not a max-width's.
+            const int right = card->mapTo(chat->m_content, QPoint(card->width(), 0)).x();
+            QVERIFY2(right >= width - 16, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
         }
-        // The exact devices (spec 3.2), to within half a point.
-        const double aspect = double(format.canvas.width()) / format.canvas.height();
-        if (phone) {
-            const DeviceGeometry device = deviceGeometry(layout.body, aspect);
-            QVERIFY2(nearly(layout.body.width(), 229.4, 0.5) && nearly(layout.body.height(), 480, 0.5), qPrintable(got));
-            QVERIFY2(nearly(device.screen.width(), 213.7, 0.5) && nearly(device.screen.height(), 464.5, 0.5), qPrintable(got));
-            QVERIFY2(nearly(device.bezel, 7.87, 0.5) && nearly(device.topBezel, 7.73, 0.5), qPrintable(got));
-            QVERIFY2(nearly(device.screenRadius, 33.0, 0.5) && nearly(device.bodyRadius, 40.8, 0.5), qPrintable(got));
-            QVERIFY2(nearly(layout.card.width(), 213.7, 0.5) && nearly(layout.card.height(), format.pictureHeight, 0.5), qPrintable(got));
-            QVERIFY2(nearly(layout.card.center().y(), device.screen.center().y(), 0.5), qPrintable(got));
-            QCOMPARE(layout.screen, device.screen);
-        } else {
-            const LaptopGeometry laptop = laptopGeometry(layout.body, aspect);
-            QVERIFY2(nearly(layout.body.width(), 694.5, 0.5) && nearly(layout.body.height(), 483, 0.5), qPrintable(got));
-            QVERIFY2(nearly(laptop.lid.width(), 694.5, 0.5) && nearly(laptop.lid.height(), 459.0, 0.5), qPrintable(got));
-            QVERIFY2(nearly(laptop.screen.width(), 671.8, 0.5) && nearly(laptop.screen.height(), 436.3, 0.5), qPrintable(got));
-            QVERIFY2(nearly(laptop.base.width(), 694.5, 0.5) && nearly(laptop.base.height(), 24.0, 0.5), qPrintable(got));
-            QVERIFY2(nearly(laptop.bezel, 11.33, 0.5) && nearly(laptop.topBezel, laptop.bezel, 1e-9), qPrintable(got));
-            QVERIFY2(nearly(layout.card.width(), 671.8, 0.5) && nearly(layout.card.height(), 377.9, 0.5), qPrintable(got));
-            // 29.2 of the screen's black above and below the 16:9 picture.
-            QVERIFY2(nearly(layout.card.top() - laptop.screen.top(), 29.2, 0.5), qPrintable(got));
-            QCOMPARE(layout.screen, laptop.screen);
-        }
-        // Dim: Finish's surround is surroundDim, the others' surround.
-        const QImage image = window.grab().toImage();
-        const qreal ratio = image.devicePixelRatio();
-        const QPoint origin = viewer->mapTo(&window, QPoint());
-        const QPointF probe(layout.body.left() - 6, layout.body.top() + 8);
-        QCOMPARE(image.pixelColor((QPointF(origin) + probe).toPoint() * ratio).rgb(),
-                 tokens::color(ws == QLatin1String("finish") ? tokens::surroundDim : tokens::surround).rgb());
-        // The rail's badge counts the seed's open threads.
-        QVERIFY2(!window.m_rail->commentsBadge()->isHidden(), qPrintable(label));
-        QCOMPARE(window.m_rail->commentsBadge()->text(), QString::number(window.m_bus->review()->counts().open));
     }
 };
 

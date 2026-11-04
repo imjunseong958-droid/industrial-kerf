@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
             const QStringList parts = QString::fromUtf8(argv[++i]).split(QLatin1Char('x'));
             if (parts.size() == 2) windowSize = QSize(parts.at(0).toInt(), parts.at(1).toInt());
         } else if (argument == QStringLiteral("--workspace") && i + 1 < argc) {
-            // A built-in or saved workspace's name: Review, Edit, Finish, Deliver.
+            // Review (the base state), or the tray to open over it: Finish, Deliver.
             workspace = QString::fromUtf8(argv[++i]);
         } else if (kerf::links::isReviewLink(argument)) {
             // kerf://<project>/rev<N>[@TC], from a shell (macOS hands a
@@ -163,9 +163,8 @@ int main(int argc, char **argv) {
         if (chosen) project = launcher.chosenPath();
     }
     if (!shown && !project.isEmpty()) {
-        // The workspace to open in, as if chosen when the editor last closed.
-        if (!workspace.isEmpty()) QSettings().setValue(QStringLiteral("workspace/current"), workspace);
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        if (!workspace.isEmpty()) window->openTray(workspace);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
         if (renderPreview) {

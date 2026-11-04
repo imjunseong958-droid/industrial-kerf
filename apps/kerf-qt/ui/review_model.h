@@ -2,8 +2,7 @@
 
 // The review: comment threads from kerfd's review log, the proposals of the
 // state snapshot, and who is looking at them. A pure model with no widgets;
-// the Comments panel, the scrub lane, the ruler, the rail badge and the
-// Deliver gate all read the same instance (EditorBus::review()).
+// the Comments panel, the ruler and the Deliver gate all read the same instance (EditorBus::review()).
 //
 // Inputs, all bridge data (plan §3):
 //   comments {items}        → setComments(items)
@@ -202,7 +201,7 @@ public:
         bool hasVersion(const QString &proposalId) const;
     };
 
-    // A root comment with a time, as the scrub lane and the ruler draw it.
+    // A root comment with a time, as the ruler draws it.
     struct LaneMarker {
         QString id;
         double at = 0.0;

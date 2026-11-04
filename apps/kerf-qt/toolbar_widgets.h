@@ -1,22 +1,16 @@
 #pragma once
 
-// The toolbar's and the status bar's flat controls (mockup-spec 1, 9, 14),
+// The toolbar's flat controls (mockup-spec 1, 14),
 // painted from design_tokens.h and the kit (ui/components.h, ui/icons.h) so
 // the app's style sheet cannot change them:
 //
 //   FlatToolBar      the 40 pt toolbar: chrome with a bottom hairline; its
 //                    content is one row laid over it
 //   ToolbarSegments  the toolbar's .seg (28 tall): text or icon segments, a
-//                    sliding fill, an optional menu tail, and no segment on
-//                    when nothing it offers is current (a custom frame size,
-//                    one's own workspace)
+//                    sliding fill, and no segment on when nothing it offers is
+//                    current (a custom frame size)
 //   FormatBank       the format segments 16:9 / 9:16 / 1:1 / 4:5
 //   ExportButton     the Export split button: "Export  Master" and a chevron
-//   StatusRow        the 24 pt status bar's row, laid over the QStatusBar
-//   StatusText       one status item: UI text with an optional mono tail
-//   StatusProgress   "Draft export", a 64 x 4 bar and the percentage
-//   StatusChip       a 20 pt chip (the keymap chip, the sync chip)
-//   AgentStatus      "Agent: own key", a 6 pt dot and the connection
 //
 // The hardware faceplate (FaceplateToolBar, FormatKey and the accent
 // ExportButton) is gone; FormatBank and ExportButton keep their names and
@@ -48,8 +42,7 @@ namespace kerf {
 
 // ---------------------------------------------------------------- helpers
 
-// "25p", "23.98p", "29.97p": a frame rate as the toolbar and status bar
-// name it.
+// "25p", "23.98p", "29.97p": a frame rate as the toolbar names it.
 QString frameRateLabel(double fps);
 // "1920×1080 · 25p": the sequence button's text.
 QString sequenceLabel(const QSize &size, double fps);
@@ -89,15 +82,13 @@ using FaceplateToolBar = FlatToolBar;
 // padding and radius 6; segments 24 tall, radius 4. Text segments are pad
 // 0 8, UI 12/16 ink2, hover ink, on ink 500, each as wide as its label at
 // weight 500. Icon segments are `iconWidth` wide (28 in the toolbar). The
-// sliding fill (on, inset line2, a 6% top highlight) moves in 200 ms. An
-// optional 20 pt tail with a 14 pt chevron asks for a menu. Current -1
+// sliding fill (on, inset line2, a 6% top highlight) moves in 200 ms. Current -1
 // shows no segment on.
 class ToolbarSegments : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
     static constexpr int kHeight = 28;
-    static constexpr int kTailWidth = 20;
 
     explicit ToolbarSegments(QWidget *parent = nullptr);
 
@@ -108,8 +99,6 @@ public:
     QString segmentText(int index) const;
     void setSegmentTip(int index, const QString &tip, const QString &shortcut = {});
     void setIconWidth(int width);
-    void setMenuTail(const QString &tip, const QString &shortcut = {});
-    QAbstractButton *menuTail() const { return m_tail; }
 
     int currentIndex() const { return m_current; }
     // -1 turns every segment off. Emits nothing.
@@ -124,7 +113,6 @@ public:
 signals:
     // A segment was clicked or chosen with ←→ (even the current one).
     void activated(int index);
-    void menuRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -138,7 +126,6 @@ private:
     void relayout();
 
     QList<ui::KitButton *> m_segments;
-    ui::KitButton *m_tail = nullptr;
     QVariantAnimation *m_slide = nullptr;
     QRectF m_fill;
     int m_current = -1;
@@ -237,132 +224,6 @@ private:
     QAction *m_master = nullptr;
     QAction *m_draft = nullptr;
     QString m_quality = QStringLiteral("master");
-};
-
-// ---------------------------------------------------------------- status bar
-
-// The status bar's row (mockup-spec 9): chrome with an inset 1 pt line at
-// its top, pad 0 12 0 16, gap 16, laid over the QStatusBar so the bar's own
-// items and style never show. Its left part gives way to the status bar's
-// message while one shows.
-class StatusRow final : public QWidget {
-    Q_OBJECT
-    KERF_TEST_FRIENDS
-public:
-    explicit StatusRow(QWidget *parent = nullptr);
-    QHBoxLayout *leftLayout() const { return m_left; }
-    QHBoxLayout *rightLayout() const { return m_right; }
-    // The status bar's current message; empty shows the left items again.
-    void setMessage(const QString &message);
-    QString message() const;
-    QWidget *leftItems() const { return m_leftItems; }
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QWidget *m_leftItems = nullptr;
-    class StatusText *m_message = nullptr;
-    QHBoxLayout *m_left = nullptr;
-    QHBoxLayout *m_right = nullptr;
-};
-
-// One status item: `text` in UI 11/16, then `monoTail` in mono 11/16, in
-// one colour; elided at the right when narrower than its text.
-class StatusText final : public QWidget {
-    Q_OBJECT
-public:
-    explicit StatusText(QWidget *parent = nullptr);
-    void setText(const QString &text, const QString &monoTail = {});
-    QString text() const { return m_text; }
-    QString monoTail() const { return m_mono; }
-    QString fullText() const { return m_text + m_mono; }
-    void setColor(QRgb color);
-    QColor color() const { return tokens::color(m_color); }
-    // The widget may shrink below its text (the selection gives way first).
-    void setElidable(bool elidable);
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override;
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QString m_text;
-    QString m_mono;
-    QRgb m_color = tokens::ink2;
-    bool m_elidable = false;
-};
-
-// "Draft export", a 64 x 4 bar (track, ink2 fill) and the mono percentage,
-// gap 8, ink3 label and ink2 number.
-class StatusProgress final : public QWidget {
-    Q_OBJECT
-public:
-    static constexpr int kBarWidth = 64;
-    explicit StatusProgress(QWidget *parent = nullptr);
-    void setProgress(const QString &label, double fraction);
-    QString label() const { return m_label; }
-    double fraction() const { return m_fraction; }
-    QString percentText() const;
-    QRectF barRect() const;
-    QSize sizeHint() const override;
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QString m_label;
-    double m_fraction = 0;
-};
-
-// The status bar's chips (.gb): 20 tall, pad 0 6, radius 6, gap 4, an
-// optional 14 pt leading icon, UI or mono 11/16 in ink2 (or the state's
-// colour); hover raised + ink. A QToolButton so MainWindow keeps its type.
-class StatusChip final : public QToolButton {
-    Q_OBJECT
-public:
-    static constexpr int kHeight = 20;
-    explicit StatusChip(QWidget *parent = nullptr);
-    void setIconName(const QString &icon);
-    QString iconName() const { return m_icon; }
-    void setMono(bool mono);
-    // The text's colour at rest (ink2 by default).
-    void setInk(QRgb ink);
-    QColor ink() const;
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override { return sizeHint(); }
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-    void enterEvent(QEnterEvent *event) override;
-    void leaveEvent(QEvent *event) override;
-
-private:
-    QString m_icon;
-    QRgb m_ink = tokens::ink2;
-    bool m_mono = false;
-};
-
-// "Agent: own key", a 6 pt dot and "Connected", gap 6, UI 11/16 ink2.
-class AgentStatus final : public QWidget {
-    Q_OBJECT
-public:
-    explicit AgentStatus(QWidget *parent = nullptr);
-    void setStatus(const QString &agent, QRgb dot, const QString &connection);
-    QString agentText() const { return m_agent; }
-    QString connectionText() const { return m_connection; }
-    QColor dotColor() const { return tokens::color(m_dot); }
-    QRectF dotRect() const;
-    QSize sizeHint() const override;
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QString m_agent;
-    QString m_connection;
-    QRgb m_dot = tokens::dis;
 };
 
 } // namespace kerf

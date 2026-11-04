@@ -12,8 +12,6 @@
 //            00:00:26:12 · 2 changes" (the review model's proposal diff),
 //            else its summary, else the event's message
 //     row 3  the progress bar, "62%" and Stop (preview_stop; Esc)
-//   Phone formats, docked: a 32-tall strip (row 2 hidden, the bar 120 wide)
-//   on top of the Source column.
 
 #include <QJsonObject>
 #include <QPointer>
@@ -38,8 +36,6 @@ class AgentHud final : public QWidget {
 public:
     static constexpr int kCardWidth = 288;
     static constexpr int kCardHeight = 72;
-    static constexpr int kStripHeight = 32;
-    static constexpr int kStripBar = 120;
 
     explicit AgentHud(QWidget *parent, EditorBus *bus);
     ~AgentHud() override;
@@ -56,9 +52,6 @@ public:
     QString percentText() const;
     QString proposalId() const { return m_proposal; }
 
-    // The phone strip (true) or the 16:9 card.
-    void setDocked(bool docked);
-    bool docked() const { return m_docked; }
     QSize sizeHint() const override;
     // Where the card sits on a picture of `picture` size, in the picture's
     // coordinates: w = min(288, w - 2tx - 16), 72 tall, at
@@ -94,7 +87,6 @@ private:
     ui::ThinProgress *m_bar = nullptr;
     bool m_running = false;
     bool m_stopped = false;
-    bool m_docked = false;
     bool m_wasActive = false;
     bool m_filtering = false;
     double m_progress = 0.0;

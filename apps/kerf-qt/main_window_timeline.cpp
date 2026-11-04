@@ -13,14 +13,12 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -70,7 +68,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -79,9 +76,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -95,8 +89,6 @@
 #include "editor_bus.h"
 #include "finish_tray.h"
 #include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 
 namespace kerf {
 
@@ -107,12 +99,8 @@ void MainWindow::addTrack() {
     ui::styleMenu(&menu);
     auto *video = menu.addAction(QStringLiteral("Add video track"));
     auto *audio = menu.addAction(QStringLiteral("Add audio track"));
-    // Under the bar's Add track when it shows, else at the row under the tracks.
-    const TimelineToolStrip *tools = m_timelineWiring ? m_timelineWiring->tools() : nullptr;
-    const QWidget *button = tools ? tools->trackButton() : nullptr;
-    const QPoint at = button && button->isVisible() ? button->mapToGlobal(QPoint(0, button->height() + 4))
-                                                    : m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter());
-    const QAction *choice = menu.exec(at);
+    // At the row under the tracks.
+    const QAction *choice = menu.exec(m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter()));
     if (choice != video && choice != audio) return;
     execute(choice == audio ? QStringLiteral("sequence.addAudioTrack") : QStringLiteral("sequence.addVideoTrack"));
 }
@@ -149,7 +137,7 @@ void MainWindow::trimClip(const QString &id, bool leading, double frame) {
                     before = other.value(QStringLiteral("id")).toString();
             }
             if (before.isEmpty()) {
-                statusBar()->showMessage(QStringLiteral("A roll needs a clip on the other side of the cut"), 4000);
+                showStatus(QStringLiteral("A roll needs a clip on the other side of the cut"), 4000);
                 return;
             }
         }
@@ -471,34 +459,6 @@ void MainWindow::deleteSelected() {
     execute(QStringLiteral("clip.delete"));
 }
 
-void MainWindow::updateAiBar() {
-    if (!m_aiBar) return;
-    const bool pending = !m_proposalId.isEmpty();
-    // The bar stands in for Kerf's conversation while it is closed, as a
-    // Short's comment count does: open beside the picture, the conversation
-    // already shows the work and the proposal, and the timeline keeps the
-    // row. Kerf's next steps are the panel's suggestions.
-    const bool chatOpen = this->chatOpen();
-    m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending));
-    if (m_agentBusy) {
-        m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
-                                                         : QStringLiteral("Kerf is working on %1…").arg(m_agentFocusLabel));
-    } else if (pending) {
-        // The pin bar's whole summary (the bar may show it cut).
-        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_chat->pinSummary()->toolTip()));
-    }
-    for (QToolButton *button : m_aiBar->findChildren<QToolButton *>()) {
-        const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
-        button->setVisible(id == QStringLiteral("ai.stop") ? m_agentBusy : id.startsWith(QStringLiteral("proposal.")) ? pending && !m_agentBusy : true);
-    }
-    // The bar's Ask counts the open notes while the panel is closed.
-    if (m_timelineWiring) m_timelineWiring->refreshAsk();
-}
-
-// The timeline's panel: the AI bar over the timeline in its scroll area.
-// Its bar (the tools, Ask, zoom and track heights) is the panel's title
-// strip: TimelineWiring places the tools after "N tracks · duration", and
-// the zoom control (addPanels) sits on its right.
 void MainWindow::buildTimeline() {
     m_timelinePanel = new QWidget;
     m_timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
@@ -523,25 +483,9 @@ void MainWindow::buildTimeline() {
     timelineScroll->setWidget(m_timeline);
     timelineScroll->viewport()->installEventFilter(this);
     timelineLayout->addWidget(timelineScroll);
-    // What Kerf is doing, and the proposal to review, where the edit happens.
-    m_aiBar = new QFrame;
-    m_aiBar->setObjectName(QStringLiteral("aiBar"));
-    auto *aiLayout = new QHBoxLayout(m_aiBar);
-    aiLayout->setContentsMargins(10, 3, kTrailingInset, 3);
-    aiLayout->setSpacing(8);
-    m_aiBarText = new QLabel;
-    m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
-    aiLayout->addWidget(m_aiBarText, 1);
-    m_aiBar->hide();
-    timelinePanelLayout->addWidget(m_aiBar);
     timelinePanelLayout->addWidget(timelineFrame, 1);
     m_askPrompt = new AskPrompt(this);
     connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
-    // Dragging the split down for a larger picture never squeezes the
-    // timeline under a few tracks and its ruler (its dock area takes this
-    // and its tab strip as its least height, which the Editing
-    // arrangement's 290 points hold).
-    m_timelinePanel->setMinimumHeight(240);
 }
 
 // The timeline's gestures, and the viewer's scrubs that show on it.
@@ -564,9 +508,10 @@ void MainWindow::wireTimeline() {
         m_timeline->clearSkimmer();
         endHoverSeek();
     });
-    connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::clickSelectClip);
+    // Selecting a clip opens nothing by itself.
+    connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
     connect(m_timeline, &TimelineWidget::clipSelectionExtended, this, &MainWindow::extendClipSelection);
-    connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { clickSelectClip(QString()); });
+    connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { selectClip(QString()); });
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
     connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {

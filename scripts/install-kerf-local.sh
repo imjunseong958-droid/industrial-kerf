@@ -57,11 +57,8 @@ install_cli() {
 }
 
 relink_qt_linux() {
-    local editor="$dest/kerf-qt" library
-    for library in "$bridge_dir/libkerf_qt_bridge.so" \
-                   $(find "$kerf_root/target/qt" -name 'libqtadvanceddocking*.so*' -type f); do
-        place "$library" "$lib_dir/$(basename "$library")"
-    done
+    local editor="$dest/kerf-qt"
+    place "$bridge_dir/libkerf_qt_bridge.so" "$lib_dir/libkerf_qt_bridge.so"
     if command -v patchelf >/dev/null 2>&1; then
         patchelf --replace-needed "$bridge_dir/libkerf_qt_bridge.so" libkerf_qt_bridge.so "$editor" 2>/dev/null || true
         patchelf --set-rpath "$lib_dir" "$editor"
@@ -72,10 +69,10 @@ relink_qt_linux() {
 
 # The editor as an app, for Finder, the Dock and Spotlight, and its only
 # install on macOS (kerf opens it too): the build's bundle in place of an
-# older install's (never copied over it), carrying its libraries (the Qt
-# bridge and docking) in Contents/Frameworks and kerfd beside its
-# executable, where the editor looks first (an app opened from Finder has no
-# shell PATH). It is signed again inside out, as macOS refuses to run code
+# older install's (never copied over it), carrying the Qt bridge in
+# Contents/Frameworks and kerfd beside its executable, where the editor
+# looks first (an app opened from Finder has no shell PATH). It is signed
+# again inside out, as macOS refuses to run code
 # whose signature no longer matches.
 install_qt_macos() {
     local app="$apps_dir/Industrial Kerf.app"
@@ -92,11 +89,6 @@ install_qt_macos() {
     place "$bridge_dir/libkerf_qt_bridge.dylib" "$frameworks/libkerf_qt_bridge.dylib"
     install_name_tool -id @rpath/libkerf_qt_bridge.dylib "$frameworks/libkerf_qt_bridge.dylib"
     install_name_tool -change "$bridge_ref" @rpath/libkerf_qt_bridge.dylib "$editor"
-    local ref name
-    for ref in $(otool -L "$editor" | awk '/@rpath\/libqtadvanceddocking/ {print $1}'); do
-        name="${ref#@rpath/}"
-        place "$(find "$kerf_root/target/qt" -name "$name" -print -quit)" "$frameworks/$name"
-    done
     local rpath
     for rpath in $(otool -l "$editor" | awk '/LC_RPATH/ {getline; getline; print $2}'); do
         case "$rpath" in "$kerf_root"/*) install_name_tool -delete_rpath "$rpath" "$editor" ;; esac

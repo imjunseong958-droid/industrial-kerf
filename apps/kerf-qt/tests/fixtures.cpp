@@ -38,8 +38,8 @@ int lightnessAt(const QImage &image, const QPointF &at) {
 // The parts of the fixtures that reach into the editor's private members,
 // which only the test classes and this one are friends of (test_friends.h).
 struct Access {
-    static void showAssistant(MainWindow &window) {
-        window.setChatOpen(true);
+    static void showAssistant(MainWindow &) {
+        // Always open now; its layout settles.
         QCoreApplication::processEvents();
     }
 

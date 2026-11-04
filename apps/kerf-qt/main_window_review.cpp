@@ -21,10 +21,9 @@
 #include "proposal_card.h"
 #include "review_link.h"
 #include "review_model.h"
-#include "stage_rail.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/review_wiring.h"
 
@@ -50,7 +49,6 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-#include <DockWidget.h>
 
 #include <algorithm>
 #include <cmath>
@@ -164,12 +162,10 @@ void ReviewWiring::attach(ChatPanel *panel) {
         if (m_panel) m_panel->setReviewWorkspace(name == QLatin1String("Review"));
     });
     // Cross-region requests.
-    connect(m_bus, &EditorBus::openThread, this, [this, w](const QString &id) {
-        if (!w->chatOpen()) w->setChatOpen(true);
+    connect(m_bus, &EditorBus::openThread, this, [this](const QString &id) {
         if (m_panel) m_panel->openThread(id);
     });
-    connect(m_bus, &EditorBus::askPrefill, this, [this, w](const QString &text, const QString &threadId) {
-        if (!w->chatOpen()) w->setChatOpen(true);
+    connect(m_bus, &EditorBus::askPrefill, this, [this](const QString &text, const QString &threadId) {
         if (!m_panel) return;
         if (!threadId.isEmpty()) {
             const ReviewModel::Thread *thread = m_model->threadOf(threadId);
@@ -178,9 +174,10 @@ void ReviewWiring::attach(ChatPanel *panel) {
                 m_panel->setReplyTarget(thread->id);
             }
         }
+        // Filled where it can be seen.
+        m_window->uncoverComposer();
         m_panel->composerWidget()->fill(text);
     });
-    connect(m_bus, &EditorBus::commentsPanelRequested, this, [w](bool open) { w->setChatOpen(open); });
     connect(m_bus, &EditorBus::drawingFinished, this, [this](const QJsonArray &strokes) {
         if (m_panel) m_panel->composerWidget()->setDraw(strokes.isEmpty() ? Composer::Draw::None : Composer::Draw::Attached, strokes);
     });
@@ -192,7 +189,6 @@ void ReviewWiring::attach(ChatPanel *panel) {
     connect(panel, &ChatPanel::threadHovered, m_bus, &EditorBus::threadHovered);
     connect(panel, &ChatPanel::commentSelected, m_bus, &EditorBus::commentSelected);
     connect(m_model, &ReviewModel::changed, this, &ReviewWiring::syncPinnedProposal);
-    connect(m_model, &ReviewModel::countsChanged, this, [w] { w->updateChatCount(); });
     connect(m_model, &ReviewModel::changed, m_bus, &EditorBus::reviewChanged);
 
     // What the panel asks for.
@@ -259,7 +255,6 @@ void ReviewWiring::attach(ChatPanel *panel) {
             exportComments(argument, path);
         }
     });
-    connect(panel, &ChatPanel::closeRequested, w, [w] { w->setChatOpen(false); });
 
     panel->setFps(m_bus->fps());
     panel->setPlayhead(m_bus->playhead());
@@ -358,7 +353,6 @@ bool ReviewWiring::sendTurn(const QString &text, const QJsonObject &focus, const
     w->m_pendingReplies.clear();
     w->addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
     w->updateChatControls();
-    w->updateAiBar();
     w->updateCommandStates();
     return true;
 }
@@ -487,7 +481,6 @@ void ReviewWiring::syncPinnedProposal() {
     w->m_proposalId = pinned;
     if (moved && w->m_timeline) w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
     w->m_proposalBlocked = stale;
-    w->updateAiBar();
     w->updateCommandStates();
 }
 
@@ -538,7 +531,6 @@ void ReviewWiring::handleEvent(const QString &type, const QJsonObject &event) {
 
 void MainWindow::askAboutInChat(const QString &subject) {
     // The panel, open, with the subject in the composer.
-    if (!chatOpen()) setChatOpen(true);
     QString text = m_chatInput->toPlainText().trimmed();
     if (!text.startsWith(subject)) text = subject + QLatin1Char(' ') + text;
     else text += QLatin1Char(' ');
@@ -598,12 +590,27 @@ void MainWindow::updateChatControls() {
     m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
     m_abortButton->setEnabled(m_agentBusy);
     m_chat->updateComposer(m_agentBusy);
-    m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
-                                         : QStringLiteral("Return sends · Shift-Return starts a new line"));
-    // The design's one placeholder; offline says so.
-    m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Connect to comment or ask Kerf") : QStringLiteral("Comment or ask Kerf"));
+    updateComposerHint();
     m_chat->setConnected(m_connected);
     updateChatStatus();
+}
+
+void MainWindow::updateComposerHint() {
+    // The design's one placeholder. Offline says so, and so does an agent that
+    // cannot take requests (no key, Kerf Cloud signed out): the registry's
+    // reason for ai.ask says why and what to do.
+    QString placeholder = QStringLiteral("Comment or ask Kerf");
+    QString tip = QStringLiteral("Return sends · Shift-Return starts a new line");
+    if (!m_connected) {
+        placeholder = QStringLiteral("Connect to comment or ask Kerf");
+        tip = QStringLiteral("Connect to start editing");
+    } else if (const QString reason = m_commands ? m_commands->reason(QStringLiteral("ai.ask")) : QString();
+               !m_agentBusy && !reason.isEmpty()) {
+        placeholder = QStringLiteral("Comment, or set up Kerf in Settings to ask");
+        tip = reason;
+    }
+    m_chatInput->setPlaceholderText(placeholder);
+    m_chatInput->setToolTip(tip);
 }
 
 void MainWindow::updateProposal(const QJsonValue &value) {
@@ -618,7 +625,6 @@ void MainWindow::updateProposal(const QJsonValue &value) {
         m_proposalBlocked = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
         if (m_reviewWiring) m_reviewWiring->syncPinnedProposal();
     }
-    updateAiBar();
 }
 
 ProposalChange MainWindow::describeScriptLine(const QString &line) const {
@@ -775,64 +781,6 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
         for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
         m_pendingReplies.clear();
     }
-    updateChatCount();
-}
-
-void MainWindow::updateChatCount() {
-    // The rail's Comments badge counts the review's open threads
-    // (review()->counts().open); its tip follows.
-    m_rail->refreshCounts();
-}
-
-void MainWindow::updateChatTips() {
-    if (!m_commands) return;
-    QAction *assistant = m_commands->action(QStringLiteral("window.assistant"));
-    const QString key = assistant ? assistant->shortcut().toString(QKeySequence::NativeText) : QString();
-    ui::setTip(m_chat->closeButton(), QStringLiteral("Close"), key);
-    // The rail's button keeps the rail's own tip ("Comments · N open" and
-    // the panel's shortcut); only what it does is named here.
-    RailButton *rail = m_rail->chatButton();
-    rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close comments") : QStringLiteral("Open comments"));
-}
-
-bool MainWindow::chatOpen() const {
-    // The viewer's panel, open, in an open Program monitor: with the
-    // Program monitor closed the timeline's bar stands in for it and its
-    // switches read as closed.
-    const ads::CDockWidget *program = m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr;
-    return m_viewer && m_viewer->chatOpen() && program && !program->isClosed();
-}
-
-void MainWindow::setChatOpen(bool open) {
-    m_viewer->setChatOpen(open);
-    QSettings().setValue(QStringLiteral("viewer/chatOpen"), open);
-    // The workspace's stage as it is now, for Save Changes.
-    rememberStage();
-    // It lives in the Program monitor's stage, so that comes forward with it.
-    if (ads::CDockWidget *program = open && m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr) {
-        if (program->isClosed()) program->toggleView(true);
-        program->setAsCurrentTab();
-    }
-    syncChatSwitches();
-}
-
-void MainWindow::syncChatSwitches() {
-    // The toolbar's bubble, Window ▸ Kerf Assistant and the rail's button
-    // read open only while the panel is open and in sight.
-    const bool open = chatOpen();
-    if (m_commands) {
-        for (const QString &id : {QStringLiteral("window.assistant"), QStringLiteral("view.comments")})
-            if (QAction *chat = m_commands->action(id)) {
-                const QSignalBlocker blocker(chat);
-                chat->setChecked(open);
-            }
-    }
-    {
-        const QSignalBlocker blocker(m_rail->chatButton());
-        m_rail->chatButton()->setChecked(m_viewer->chatOpen());
-    }
-    updateChatTips();
-    updateAiBar();
 }
 
 void MainWindow::showActivity() {
@@ -909,8 +857,7 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         m_chat->setTurnBusy(busy);
         if (!busy) m_chat->finishTurn();
         updateChatControls();
-        updateAiBar();
-        updateCommandStates();
+            updateCommandStates();
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
         updateChatStatus();
@@ -929,12 +876,9 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     return true;
 }
 
-// The comments panel (the agent chat) and the rail beside the picture.
+// The comments panel (the agent chat).
 void MainWindow::buildReview() {
-    // The panel lives in the Program monitor's stage beside the picture, as
-    // tall as the device (see ViewerWidget::stageLayout).
     m_chat = new ChatPanel;
-    m_rail = new StageRail;
     m_chatScroll = m_chat->scroll();
     m_chatComposer = m_chat->composer();
     m_chatInput = m_chat->input();

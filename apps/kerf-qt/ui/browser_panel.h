@@ -1,6 +1,6 @@
 #pragma once
 
-// The browser at the right of the bottom band (mockup-spec 8), 304 wide: a
+// The Effects and titles sheet (mockup-spec 8), 304 wide: a
 // 28-point strip with the segmented Effects | Titles | Presets and Search
 // (⌘⇧F), over the page chosen:
 //
@@ -19,6 +19,7 @@
 
 class QAbstractButton;
 class QAction;
+class QHBoxLayout;
 class QStackedWidget;
 
 namespace kerf {
@@ -64,6 +65,8 @@ public:
     // The registry's browser.search (⌘⇧F): its key works while the browser
     // is on screen and the Search button's tip names it. The window runs it.
     void setSearchAction(QAction *action);
+    // A control at the end of the strip (the sheet's close button).
+    void addToStrip(QWidget *widget);
 
 signals:
     void pageChanged(BrowserPanel::Page page);
@@ -76,6 +79,7 @@ private:
     void updateSearchTip();
 
     EditorBus *m_bus = nullptr;
+    QHBoxLayout *m_stripLayout = nullptr;
     EffectsPanel *m_effects = nullptr;
     EffectsPanel *m_titles = nullptr;
     PresetsPanel *m_presets = nullptr;

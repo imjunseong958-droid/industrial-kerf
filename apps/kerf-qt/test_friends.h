@@ -12,7 +12,6 @@ class BinBrowserTest;
 class BusTest;
 class CommentsTest;
 class DeliverTest;
-class DeviceTest;
 class FeatureTest;
 class FinishTest;
 class InspectorTest;
@@ -21,15 +20,14 @@ class LauncherTest;
 class LinkTest;
 class MockupParityTest;
 class ReviewModelTest;
-class ScrubRailTest;
 class SourceTest;
+class StageShellTest;
 class StageTest;
 class StatusTest;
 class ThemeTest;
 class TimelineTest;
 class ToolbarTest;
 class WiringTest;
-class WorkspaceTest;
 
 namespace test {
 // The shared fixtures' window into private members (tests/fixtures.cpp).
@@ -43,7 +41,6 @@ struct Access;
     friend class ::kerf::BusTest;                                                                                      \
     friend class ::kerf::CommentsTest;                                                                                 \
     friend class ::kerf::DeliverTest;                                                                                  \
-    friend class ::kerf::DeviceTest;                                                                                   \
     friend class ::kerf::FeatureTest;                                                                                  \
     friend class ::kerf::FinishTest;                                                                                   \
     friend class ::kerf::InspectorTest;                                                                                \
@@ -52,13 +49,13 @@ struct Access;
     friend class ::kerf::LinkTest;                                                                                     \
     friend class ::kerf::MockupParityTest;                                                                             \
     friend class ::kerf::ReviewModelTest;                                                                              \
-    friend class ::kerf::ScrubRailTest;                                                                                \
     friend class ::kerf::SourceTest;                                                                                   \
+    friend class ::kerf::StageShellTest;                                                                                \
     friend class ::kerf::StageTest;                                                                                    \
     friend class ::kerf::StatusTest;                                                                                   \
     friend class ::kerf::ThemeTest;                                                                                    \
     friend class ::kerf::TimelineTest;                                                                                 \
     friend class ::kerf::ToolbarTest;                                                                                  \
     friend class ::kerf::WiringTest;                                                                                   \
-    friend class ::kerf::WorkspaceTest;                                                                                \
+                                                                                    \
     friend struct ::kerf::test::Access;

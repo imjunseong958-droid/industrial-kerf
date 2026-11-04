@@ -81,8 +81,8 @@ void paintEdgeLine(QPainter &p, const QRect &rect, bool top) {
 // control paints the track and the sliding fill behind it.
 class ToolbarSegment final : public ui::KitButton {
 public:
-    ToolbarSegment(QWidget *parent, QString text, QString icon, bool tail)
-        : ui::KitButton(parent), m_text(std::move(text)), m_icon(std::move(icon)), m_tail(tail) {
+    ToolbarSegment(QWidget *parent, QString text, QString icon)
+        : ui::KitButton(parent), m_text(std::move(text)), m_icon(std::move(icon)) {
         setFocusPolicy(Qt::NoFocus);
         setText(m_text);
         setAccessibleName(m_text);
@@ -107,9 +107,7 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QColor c = labelColor();
-        if (m_tail) {
-            icons::paint(p, QStringLiteral("g-chev"), rect(), c, 14);
-        } else if (isIcon()) {
+        if (isIcon()) {
             icons::paint(p, m_icon, rect(), c, 16);
         } else {
             p.setFont(tokens::font(m_on ? controlStrong : control));
@@ -121,7 +119,6 @@ protected:
 private:
     QString m_text;
     QString m_icon;
-    bool m_tail;
     bool m_on = false;
 };
 
@@ -234,7 +231,7 @@ ToolbarSegments::ToolbarSegments(QWidget *parent) : QWidget(parent) {
 }
 
 int ToolbarSegments::add(const QString &text, const QString &icon, const QString &tip, const QString &shortcut) {
-    auto *button = new ToolbarSegment(this, text, icon, false);
+    auto *button = new ToolbarSegment(this, text, icon);
     const int index = int(m_segments.size());
     m_segments << button;
     if (!tip.isEmpty()) {
@@ -270,17 +267,6 @@ void ToolbarSegments::setIconWidth(int width) {
     relayout();
 }
 
-void ToolbarSegments::setMenuTail(const QString &tip, const QString &shortcut) {
-    if (!m_tail) {
-        m_tail = new ToolbarSegment(this, {}, {}, true);
-        m_tail->setObjectName(QStringLiteral("segmentsMenu"));
-        connect(m_tail, &QAbstractButton::clicked, this, &ToolbarSegments::menuRequested);
-    }
-    m_tail->setTip(tip, shortcut);
-    m_tail->setAccessibleName(tip);
-    relayout();
-}
-
 void ToolbarSegments::relayout() {
     constexpr int inner = kHeight - 4;
     int x = 2;
@@ -290,10 +276,6 @@ void ToolbarSegments::relayout() {
         const int w = segment->isIcon() ? m_iconWidth : space::s8 + ui::snapWidth(controlStrong, segment->label()) + space::s8;
         segment->setGeometry(x, 2, w, inner);
         x += w;
-    }
-    if (m_tail) {
-        m_tail->setGeometry(x, 2, kTailWidth, inner);
-        x += kTailWidth;
     }
     setFixedSize(x + 2, kHeight);
     if (m_slide->state() != QAbstractAnimation::Running) m_fill = segmentRect(m_current);
@@ -307,7 +289,6 @@ QSize ToolbarSegments::sizeHint() const {
         auto *segment = asSegment(button);
         x += segment->isIcon() ? m_iconWidth : space::s8 + ui::snapWidth(controlStrong, segment->label()) + space::s8;
     }
-    if (m_tail) x += kTailWidth;
     return QSize(x + 2, kHeight);
 }
 
@@ -514,278 +495,6 @@ void ExportButton::paintEvent(QPaintEvent *) {
     // 1px line at its left.
     ui::paintInsetLine(p, QRectF(rect()), radius::control, color(line2));
     p.fillRect(QRect(m_arrow->x(), 1, 1, height() - 2), color(line));
-}
-
-// ================================================================ StatusRow
-
-StatusRow::StatusRow(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("statusRow"));
-    setAttribute(Qt::WA_OpaquePaintEvent);
-    auto *row = new QHBoxLayout(this);
-    row->setContentsMargins(16, 0, 12, 0);
-    row->setSpacing(16);
-    m_leftItems = new QWidget(this);
-    m_leftItems->setObjectName(QStringLiteral("statusLeft"));
-    m_left = new QHBoxLayout(m_leftItems);
-    m_left->setContentsMargins(0, 0, 0, 0);
-    m_left->setSpacing(16);
-    m_message = new StatusText(this);
-    m_message->setObjectName(QStringLiteral("statusMessage"));
-    m_message->setElidable(true);
-    m_message->hide();
-    row->addWidget(m_leftItems, 0);
-    row->addWidget(m_message, 1);
-    row->addStretch(1);
-    auto *right = new QWidget(this);
-    right->setObjectName(QStringLiteral("statusRight"));
-    m_right = new QHBoxLayout(right);
-    m_right->setContentsMargins(0, 0, 0, 0);
-    m_right->setSpacing(16);
-    row->addWidget(right, 0);
-}
-
-void StatusRow::setMessage(const QString &message) {
-    m_message->setText(message);
-    m_message->setVisible(!message.isEmpty());
-    m_leftItems->setVisible(message.isEmpty());
-}
-
-QString StatusRow::message() const { return m_message->text(); }
-
-void StatusRow::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.fillRect(rect(), color(chrome));
-    paintEdgeLine(p, rect(), true);
-}
-
-// ================================================================ StatusText
-
-StatusText::StatusText(QWidget *parent) : QWidget(parent) {
-    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    setFixedHeight(meta.line);
-}
-
-void StatusText::setText(const QString &text, const QString &monoTail) {
-    if (text == m_text && monoTail == m_mono) return;
-    m_text = text;
-    m_mono = monoTail;
-    setAccessibleName(fullText());
-    updateGeometry();
-    update();
-}
-
-void StatusText::setColor(QRgb color) {
-    m_color = color;
-    update();
-}
-
-void StatusText::setElidable(bool elidable) {
-    m_elidable = elidable;
-    setSizePolicy(elidable ? QSizePolicy::Ignored : QSizePolicy::Preferred, QSizePolicy::Fixed);
-    updateGeometry();
-}
-
-QSize StatusText::sizeHint() const {
-    const int w = (m_text.isEmpty() ? 0 : ui::snapWidth(meta, m_text)) + (m_mono.isEmpty() ? 0 : ui::snapWidth(monoSmall, m_mono));
-    return QSize(w, meta.line);
-}
-
-QSize StatusText::minimumSizeHint() const { return m_elidable ? QSize(0, meta.line) : sizeHint(); }
-
-void StatusText::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setPen(color());
-    const QFont uiFont = tokens::font(meta);
-    const QFont monoFont = tokens::font(monoSmall);
-    const int textWidth = m_text.isEmpty() ? 0 : ui::snapWidth(meta, m_text);
-    if (textWidth + (m_mono.isEmpty() ? 0 : ui::snapWidth(monoSmall, m_mono)) <= width()) {
-        p.setFont(uiFont);
-        p.drawText(QRectF(0, 0, textWidth + 1, height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
-        p.setFont(monoFont);
-        p.drawText(QRectF(textWidth, 0, width() - textWidth, height()), Qt::AlignVCenter | Qt::AlignLeft, m_mono);
-        return;
-    }
-    // Too narrow: the UI part elides first, then the mono tail.
-    const int room = width();
-    if (textWidth >= room || m_mono.isEmpty()) {
-        p.setFont(uiFont);
-        p.drawText(rect(), Qt::AlignVCenter | Qt::AlignLeft, QFontMetrics(uiFont).elidedText(m_text + m_mono, Qt::ElideRight, room));
-        return;
-    }
-    p.setFont(uiFont);
-    p.drawText(QRectF(0, 0, textWidth + 1, height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
-    p.setFont(monoFont);
-    p.drawText(QRectF(textWidth, 0, room - textWidth, height()), Qt::AlignVCenter | Qt::AlignLeft,
-               QFontMetrics(monoFont).elidedText(m_mono, Qt::ElideRight, room - textWidth));
-}
-
-// ================================================================ StatusProgress
-
-StatusProgress::StatusProgress(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("statusExport"));
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    setFixedHeight(meta.line);
-}
-
-void StatusProgress::setProgress(const QString &label, double fraction) {
-    m_label = label;
-    m_fraction = std::isfinite(fraction) ? std::clamp(fraction, 0.0, 1.0) : 0.0;
-    setAccessibleName(QStringLiteral("%1 %2").arg(m_label, percentText()));
-    setFixedWidth(sizeHint().width());
-    update();
-}
-
-QString StatusProgress::percentText() const { return QStringLiteral("%1%").arg(int(std::floor(m_fraction * 100.0 + 1e-9))); }
-
-QRectF StatusProgress::barRect() const {
-    const int x = ui::snapWidth(meta, m_label) + space::s8;
-    return QRectF(x, (height() - 4) / 2.0, kBarWidth, 4);
-}
-
-QSize StatusProgress::sizeHint() const {
-    return QSize(ui::snapWidth(meta, m_label) + space::s8 + kBarWidth + space::s8 + ui::snapWidth(monoSmall, QStringLiteral("100%")), meta.line);
-}
-
-void StatusProgress::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setFont(tokens::font(meta));
-    p.setPen(color(ink3));
-    p.drawText(QRectF(0, 0, barRect().left(), height()), Qt::AlignVCenter | Qt::AlignLeft, m_label);
-    const QRectF bar = barRect();
-    p.setPen(Qt::NoPen);
-    p.setBrush(color(track));
-    p.drawRoundedRect(bar, 2, 2);
-    if (m_fraction > 0) {
-        p.save();
-        QPainterPath clip;
-        clip.addRoundedRect(bar, 2, 2);
-        p.setClipPath(clip);
-        p.fillRect(QRectF(bar.left(), bar.top(), bar.width() * m_fraction, bar.height()), color(ink2));
-        p.restore();
-    }
-    p.setFont(tokens::font(monoSmall));
-    p.setPen(color(ink2));
-    p.drawText(QRectF(bar.right() + space::s8, 0, width() - bar.right() - space::s8, height()), Qt::AlignVCenter | Qt::AlignLeft,
-               percentText());
-}
-
-// ================================================================ StatusChip
-
-StatusChip::StatusChip(QWidget *parent) : QToolButton(parent) {
-    setAttribute(Qt::WA_Hover);
-    setCursor(Qt::PointingHandCursor);
-    setFocusPolicy(Qt::TabFocus);
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    // Its look is painted; the app's QStatusBar QToolButton rules must not
-    // give it a border or padding.
-    setStyleSheet(QStringLiteral("QToolButton { border: 0px; padding: 0px; margin: 0px; background: transparent; "
-                                 "min-width: 0px; min-height: 20px; max-height: 20px; }"));
-    setFixedHeight(kHeight);
-}
-
-void StatusChip::setIconName(const QString &icon) {
-    m_icon = icon;
-    updateGeometry();
-    update();
-}
-
-void StatusChip::setMono(bool mono) {
-    m_mono = mono;
-    updateGeometry();
-    update();
-}
-
-void StatusChip::setInk(QRgb ink) {
-    m_ink = ink;
-    update();
-}
-
-QColor StatusChip::ink() const {
-    if (!isEnabled()) return color(dis);
-    return underMouse() && m_ink == tokens::ink2 ? color(tokens::ink) : color(m_ink);
-}
-
-QSize StatusChip::sizeHint() const {
-    int w = space::s6;
-    if (!m_icon.isEmpty()) w += 14;
-    if (!text().isEmpty()) {
-        if (!m_icon.isEmpty()) w += space::s4;
-        w += ui::snapWidth(m_mono ? monoSmall : meta, text());
-    }
-    return QSize(w + space::s6, kHeight);
-}
-
-void StatusChip::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    const QRectF r = rect();
-    if (isEnabled() && (underMouse() || isDown())) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(color(raised));
-        p.drawRoundedRect(r, radius::control, radius::control);
-    }
-    const QColor c = ink();
-    qreal x = space::s6;
-    if (!m_icon.isEmpty()) {
-        icons::paint(p, m_icon, QRectF(x, (r.height() - 14) / 2.0, 14, 14), c, 14);
-        x += 14 + space::s4;
-    }
-    p.setFont(tokens::font(m_mono ? monoSmall : meta));
-    p.setPen(c);
-    p.drawText(QRectF(x, 0, r.width() - x, r.height()), Qt::AlignVCenter | Qt::AlignLeft, text());
-    if (hasFocus() && focusPolicy() != Qt::NoFocus && testAttribute(Qt::WA_KeyboardFocusChange))
-        ui::paintFocusRing(p, r.adjusted(1, 1, -1, -1), radius::control - 1);
-}
-
-void StatusChip::enterEvent(QEnterEvent *event) {
-    QToolButton::enterEvent(event);
-    update();
-}
-
-void StatusChip::leaveEvent(QEvent *event) {
-    QToolButton::leaveEvent(event);
-    update();
-}
-
-// ================================================================ AgentStatus
-
-AgentStatus::AgentStatus(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("statusAgent"));
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    setFixedHeight(meta.line);
-}
-
-void AgentStatus::setStatus(const QString &agent, QRgb dot, const QString &connection) {
-    m_agent = agent;
-    m_dot = dot;
-    m_connection = connection;
-    setAccessibleName(QStringLiteral("%1, %2").arg(agent, connection));
-    setFixedWidth(sizeHint().width());
-    update();
-}
-
-QRectF AgentStatus::dotRect() const {
-    return QRectF(ui::snapWidth(meta, m_agent) + space::s6, (height() - 6) / 2.0, 6, 6);
-}
-
-QSize AgentStatus::sizeHint() const {
-    return QSize(ui::snapWidth(meta, m_agent) + space::s6 + 6 + space::s6 + ui::snapWidth(meta, m_connection), meta.line);
-}
-
-void AgentStatus::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setFont(tokens::font(meta));
-    p.setPen(color(ink2));
-    const QRectF dot = dotRect();
-    p.drawText(QRectF(0, 0, dot.left(), height()), Qt::AlignVCenter | Qt::AlignLeft, m_agent);
-    p.setPen(Qt::NoPen);
-    p.setBrush(color(m_dot));
-    p.drawEllipse(dot);
-    p.setPen(color(ink2));
-    p.drawText(QRectF(dot.right() + space::s6, 0, width() - dot.right() - space::s6, height()), Qt::AlignVCenter | Qt::AlignLeft,
-               m_connection);
 }
 
 } // namespace kerf

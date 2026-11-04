@@ -72,17 +72,14 @@ const QFont &cornerFont() {
     return font;
 }
 
-// A track head's controls (mockup-spec 7.2): pad 0 6 0 8; the patch box at
-// 8 (16 wide), the target 4 after it (24 wide), the name 8 after that, and
-// the 3 x 20 grid of toggles (gap 2) against the right padding; sync-lock
-// at right 72 on hover. Every control is 20 tall, centred in its row.
+// A track head's controls: pad 0 6 0 8; the target at 8 (24 wide), the name 8
+// after that, and on hover the row of 20 pt toggles (gap 2) against the right
+// padding, over the name's end. Every control is 20 tall, centred in its row.
 constexpr int kControlSize = 20;
-constexpr int kPatchX = 8;
-constexpr int kTargetX = kPatchX + 16 + 4;
+constexpr int kTargetX = 8;
 constexpr int kNameX = kTargetX + 24 + 8;
 constexpr int kTogglesX = kTimelineLabelWidth - 6 - (3 * kControlSize + 2 * 2);
 constexpr int kToggleStep = kControlSize + 2;
-constexpr int kSyncX = kTimelineLabelWidth - 72 - kControlSize;
 // A clip's name bar, and the narrowest clip that shows one.
 constexpr qreal kNameBarHeight = 16.0;
 constexpr qreal kNameBarFrom = 40.0;
@@ -117,7 +114,6 @@ QString controlField(TimelineWidget::HeaderControl control, bool audio) {
     switch (control) {
     case TimelineWidget::HeaderControl::Lock: return QStringLiteral("locked");
     case TimelineWidget::HeaderControl::Output: return audio ? QStringLiteral("muted") : QStringLiteral("enabled");
-    case TimelineWidget::HeaderControl::Sync: return QStringLiteral("syncLocked");
     default: return {};
     }
 }
@@ -194,8 +190,12 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
 }
 
 void TimelineWidget::setProject(const QJsonObject &project, double duration, double fps) {
+    const double scaleBefore = pixelsPerSecond();
+    const double leastBefore = minScale();
     m_project = project;
     m_duration = std::max(duration, 1.0);
+    // A zoomed view stays in reach of a sequence that got shorter.
+    if (m_fitWidth <= 0) m_zoom = std::max(m_zoom, minScale() / 72.0);
     m_fps = fps > 0.0 ? fps : 24.0;
     // Targets and solos name tracks that may be gone.
     const auto present = [this](const QString &id) {
@@ -209,6 +209,8 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
     if (solos != m_solo.size()) emit soloChanged(m_solo);
     rebuildBandIndex();
     relayout();
+    // A new length moves the fit, and with it the zoom's scale and range.
+    if (pixelsPerSecond() != scaleBefore || minScale() != leastBefore) emit scaleChanged(pixelsPerSecond());
 }
 
 void TimelineWidget::setSelectedClip(const QString &id) {
@@ -254,7 +256,7 @@ void TimelineWidget::showSkimmer(double time) {
 }
 
 void TimelineWidget::setZoom(double zoom) {
-    m_zoom = std::clamp(zoom, kMinScale / 72.0, kMaxScale / 72.0);
+    m_zoom = std::clamp(zoom, minScale() / 72.0, kMaxScale / 72.0);
     m_fitWidth = 0;
     invalidateLanes();
     updateContentSize();
@@ -266,10 +268,36 @@ void TimelineWidget::setScale(double pixelsPerSecond) { setZoom(pixelsPerSecond 
 
 void TimelineWidget::fitToWidth(int width) {
     m_fitWidth = std::max(kTimelineLabelWidth + 32, width);
+    m_viewportWidth = m_fitWidth;
     invalidateLanes();
     updateContentSize();
     update();
     emit scaleChanged(pixelsPerSecond());
+}
+
+void TimelineWidget::followViewportWidth(int width) {
+    if (isFitToWidth()) {
+        fitToWidth(width);
+        return;
+    }
+    const double least = minScale();
+    m_viewportWidth = std::max(kTimelineLabelWidth + 32, width);
+    if (minScale() != least) emit scaleChanged(pixelsPerSecond());
+}
+
+void TimelineWidget::refit() {
+    if (m_viewportWidth > 0) fitToWidth(m_viewportWidth);
+}
+
+double TimelineWidget::fitScale() const {
+    if (m_viewportWidth <= 0) return 0.0;
+    const double fitted = (m_viewportWidth - kTimelineOrigin - kTimelineTail) / std::max(m_duration, 0.001);
+    return std::max(fitted, kMinPixelsPerSecond);
+}
+
+double TimelineWidget::minScale() const {
+    const double fit = fitScale();
+    return fit > 0.0 ? std::min(kMinScale, fit) : kMinScale;
 }
 
 void TimelineWidget::setArtwork(MediaArtwork *artwork) {
@@ -404,10 +432,16 @@ void TimelineWidget::setQcClips(const QSet<QString> &clips) {
     update();
 }
 
-void TimelineWidget::setSourcePatch(const QHash<QString, QString> &patch) {
-    if (patch == m_patch) return;
-    m_patch = patch;
-    update(headerColumnRect());
+void TimelineWidget::setWideSequence(bool wide) {
+    if (wide == m_wideSequence) return;
+    m_wideSequence = wide;
+    relayout();
+}
+
+void TimelineWidget::setMarkedRange(double in, double out) {
+    m_markIn = in;
+    m_markOut = out;
+    update();
 }
 
 QStringList TimelineWidget::targetTracks() const {
@@ -484,7 +518,7 @@ void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
     // Each track from its own height; tracks added later from the height
     // tracks without one of their own have. Only the tracks that end up
     // apart from that keep a height of their own.
-    m_allHeight = steppedHeight(defaultTrackHeight(false), steps);
+    m_allHeight = steppedHeight(defaultTrackHeight(false, 1), steps);
     QHash<QString, int> heights;
     for (int index = 0; index < m_rows.size(); ++index) {
         const int height = steppedHeight(m_rows.at(index).height, steps);
@@ -495,31 +529,9 @@ void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
     saveHeights();
 }
 
-void TimelineWidget::applyHeightPreset(HeightPreset preset) {
-    switch (preset) {
-    case HeightPreset::Small: setAllTrackHeights(kSmallTrackHeight); break;
-    case HeightPreset::Medium: resetTrackHeights(); break;
-    case HeightPreset::Large: setAllTrackHeights(kLargeTrackHeight); break;
-    case HeightPreset::None: break;
-    }
-}
-
-TimelineWidget::HeightPreset TimelineWidget::heightPreset() const {
-    if (m_trackHeights.isEmpty() && m_allHeight == 0) return HeightPreset::Medium;
-    const auto everyTrackAt = [this](int height) {
-        return !m_rows.isEmpty() && std::all_of(m_rows.cbegin(), m_rows.cend(), [height](const TrackRow &row) { return row.height == height; });
-    };
-    if (everyTrackAt(kSmallTrackHeight)) return HeightPreset::Small;
-    if (everyTrackAt(kLargeTrackHeight)) return HeightPreset::Large;
-    if (m_trackHeights.isEmpty() && m_rows.isEmpty()) {
-        if (m_allHeight == kSmallTrackHeight) return HeightPreset::Small;
-        if (m_allHeight == kLargeTrackHeight) return HeightPreset::Large;
-    }
-    return HeightPreset::None;
-}
-
-int TimelineWidget::defaultTrackHeight(bool audio) const {
+int TimelineWidget::defaultTrackHeight(bool audio, int number) const {
     if (m_allHeight > 0) return m_allHeight;
+    if (m_wideSequence) return audio ? kWideAudioHeight : number == 1 ? kWideV1Height : number == 2 ? kWideV2Height : kWideVideoHeight;
     return audio ? kTrackHeight : kVideoTrackHeight;
 }
 
@@ -613,7 +625,7 @@ void TimelineWidget::layoutRows() {
     m_rows.reserve(tracks.size());
     int top = kRulerHeight;
     const auto add = [&](int index, bool audio, int number) {
-        const int height = m_trackHeights.value(trackKey(tracks.at(index).toObject(), index), defaultTrackHeight(audio));
+        const int height = m_trackHeights.value(trackKey(tracks.at(index).toObject(), index), defaultTrackHeight(audio, number));
         m_rows.append(TrackRow{index, audio, number, top, height});
         top += height;
     };
@@ -670,13 +682,10 @@ QRect TimelineWidget::headerControlRect(int row, HeaderControl control) const {
     const int top = layout.top + (layout.height - kControlSize) / 2;
     const int left = stickyOrigin().x();
     switch (control) {
-    case HeaderControl::Patch:
-        if (m_patch.value(rowKey(row)).isEmpty()) return {};
-        return QRect(left + kPatchX, top, 16, kControlSize);
     case HeaderControl::Target: return QRect(left + kTargetX, top, 24, kControlSize);
-    case HeaderControl::Sync: return QRect(left + kSyncX, top, kControlSize, kControlSize);
-    case HeaderControl::Lock: return QRect(left + kTogglesX, top, kControlSize, kControlSize);
-    case HeaderControl::Output: return QRect(left + kTogglesX + kToggleStep, top, kControlSize, kControlSize);
+    // Lock and the eye against the padding on picture; lock, mute and solo on sound.
+    case HeaderControl::Lock: return QRect(left + (layout.audio ? kTogglesX : kTogglesX + kToggleStep), top, kControlSize, kControlSize);
+    case HeaderControl::Output: return QRect(left + (layout.audio ? kTogglesX + kToggleStep : kTogglesX + 2 * kToggleStep), top, kControlSize, kControlSize);
     case HeaderControl::Solo:
         if (!layout.audio) return {};
         return QRect(left + kTogglesX + 2 * kToggleStep, top, kControlSize, kControlSize);
@@ -692,10 +701,7 @@ bool TimelineWidget::controlAt(const QPoint &point, int *row, HeaderControl *con
     if (!inHeader(point) || inRuler(point)) return false;
     const int at = rowAt(point.y());
     if (at < 0) return false;
-    const bool syncShown = at == m_hoverRow || !trackFlag(rowTrack(at), QStringLiteral("syncLocked"));
-    for (const HeaderControl candidate : {HeaderControl::Target, HeaderControl::Sync, HeaderControl::Lock, HeaderControl::Output,
-                                          HeaderControl::Solo}) {
-        if (candidate == HeaderControl::Sync && !syncShown) continue;
+    for (const HeaderControl candidate : {HeaderControl::Target, HeaderControl::Lock, HeaderControl::Output, HeaderControl::Solo}) {
         if (!headerControlRect(at, candidate).contains(point)) continue;
         *row = at;
         *control = candidate;
@@ -716,8 +722,7 @@ void TimelineWidget::pressControl(int row, HeaderControl control) {
     const QString id = track.value(QStringLiteral("id")).toString();
     switch (control) {
     case HeaderControl::Lock:
-    case HeaderControl::Output:
-    case HeaderControl::Sync: {
+    case HeaderControl::Output: {
         const QString field = controlField(control, m_rows.at(row).audio);
         emit trackToggleRequested(id, field, !trackFlag(track, field));
         break;
@@ -738,7 +743,6 @@ void TimelineWidget::pressControl(int row, HeaderControl control) {
         setSoloTracks(solo);
         break;
     }
-    case HeaderControl::Patch: break;
     }
 }
 
@@ -799,23 +803,12 @@ bool TimelineWidget::event(QEvent *event) {
                             ? tr("Targeted: source edits land here (the first unlocked %1 track)").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))
                             : tr("Source edits land on the first unlocked %1 track").arg(m_rows.at(row).audio ? tr("sound") : tr("picture")),
                         {}, area);
-        case HeaderControl::Sync:
-            return show(trackFlag(track, QStringLiteral("syncLocked")) ? tr("Sync lock: ripple edits move this track")
-                                                                       : tr("Sync lock off: ripple edits leave this track"),
-                        {}, area);
         case HeaderControl::Lock: return show(trackFlag(track, QStringLiteral("locked")) ? tr("Unlock track") : tr("Lock track"), {}, area);
         case HeaderControl::Output:
             if (m_rows.at(row).audio) return show(trackFlag(track, QStringLiteral("muted")) ? tr("Unmute") : tr("Mute"), {}, area);
             return show(trackFlag(track, QStringLiteral("enabled")) ? tr("Hide track") : tr("Show track"), {}, area);
         case HeaderControl::Solo: return show(tr("Solo (monitoring only)"), {}, area);
-        case HeaderControl::Patch: break;
         }
-    }
-    if (inHeader(pos) && !inRuler(pos) && row < 0) {
-        const int at = rowAt(pos.y());
-        const QRect patch = headerControlRect(at, HeaderControl::Patch);
-        if (patch.contains(pos))
-            return show(tr("Source %1 patched to %2").arg(m_patch.value(rowKey(at)), trackRowLabel(at)), {}, patch);
     }
     if (inRuler(pos) && !inHeader(pos)) {
         if (const int mark = commentMarkAt(pos); mark >= 0)
@@ -1186,19 +1179,32 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
     QMenu menu(this);
     ui::styleMenu(&menu);
     // Medium is a track's default height.
-    const auto presetHeight = [this](const TrackHeightPreset &preset, bool audio) {
-        return preset.height > 0 ? preset.height : defaultTrackHeight(audio);
+    const auto presetHeight = [this](const TrackHeightPreset &preset, const TrackRow &track) {
+        return preset.height > 0 ? preset.height : defaultTrackHeight(track.audio, track.number);
     };
     if (row >= 0) {
         // A key, not a row index: a snapshot can relayout rows while the menu is open.
         const QString key = rowKey(row);
         const TrackRow track = m_rows.at(row);
+        // Sync lock: whether ripple edits move this track.
+        const QJsonObject trackObject = rowTrack(row);
+        const QString trackId = trackObject.value(QStringLiteral("id")).toString();
+        const bool synced = trackFlag(trackObject, QStringLiteral("syncLocked"));
+        QAction *sync = menu.addAction(tr("Sync lock"));
+        sync->setObjectName(QStringLiteral("trackSyncLock"));
+        sync->setCheckable(true);
+        sync->setChecked(synced);
+        sync->setToolTip(tr("Ripple edits move this track"));
+        connect(sync, &QAction::triggered, this, [this, trackId, synced] {
+            emit trackToggleRequested(trackId, QStringLiteral("syncLocked"), !synced);
+        });
+        menu.addSeparator();
         QMenu *one = menu.addMenu(tr("Track height"));
         ui::styleMenu(one);
         for (const auto &preset : kTrackHeightPresets) {
             QAction *action = one->addAction(tr(preset.name));
             action->setCheckable(true);
-            action->setChecked(track.height == presetHeight(preset, track.audio));
+            action->setChecked(track.height == presetHeight(preset, track));
             connect(action, &QAction::triggered, this, [this, key, height = preset.height] {
                 if (height > 0) m_trackHeights.insert(key, height);
                 else m_trackHeights.remove(key);
@@ -1214,7 +1220,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
             QAction *action = all->addAction(tr(preset.name));
             action->setCheckable(true);
             action->setChecked(std::all_of(m_rows.cbegin(), m_rows.cend(), [&](const TrackRow &track) {
-                return track.height == presetHeight(preset, track.audio);
+                return track.height == presetHeight(preset, track);
             }));
             connect(action, &QAction::triggered, this, [this, height = preset.height] {
                 if (height > 0) setAllTrackHeights(height);
@@ -1918,6 +1924,14 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
         }
     }
     paintMarkerRow(p, dirty, top);
+    // The program's in and out marks: the range between them, and each mark's line.
+    if (!std::isnan(m_markIn) || !std::isnan(m_markOut)) {
+        const int from = int(std::lround(timeToX(std::isnan(m_markIn) ? 0.0 : m_markIn)));
+        const int to = int(std::lround(timeToX(std::isnan(m_markOut) ? m_duration : m_markOut)));
+        p.fillRect(QRect(from, top + kRulerHeight - 4, std::max(0, to - from), 3), withAlpha(qRgb(255, 255, 255), 0.20));
+        if (!std::isnan(m_markIn)) p.fillRect(QRect(from, top + kRulerHeight - 10, 1, 10), C(tk::ink));
+        if (!std::isnan(m_markOut)) p.fillRect(QRect(to, top + kRulerHeight - 10, 1, 10), C(tk::ink));
+    }
 }
 
 void TimelineWidget::paintHeaders(QPainter &p, const QRect &dirty) {
@@ -1968,15 +1982,6 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         if (outline.alpha() > 0) ui::paintInsetLine(p, QRectF(rect), tk::radius::small, outline, 1.0);
     };
     const auto hovered = [&](HeaderControl control) { return m_hoverControl == row * 8 + int(control); };
-    // The patch: the Source viewer's channel that goes to this track.
-    const QString patch = m_patch.value(rowKey(row));
-    if (!patch.isEmpty()) {
-        const QRect rect = headerControlRect(row, HeaderControl::Patch).translated(left - stickyOrigin().x(), 0);
-        box(rect, Qt::transparent, C(tk::line2));
-        p.setFont(monoSmallFont());
-        p.setPen(C(tk::ink3));
-        p.drawText(rect.adjusted(0, 2, 0, 0), Qt::AlignHCenter | Qt::AlignTop, patch);
-    }
     // The target: the track's id, held on when targeted.
     {
         const QRect rect = headerControlRect(row, HeaderControl::Target).translated(left - stickyOrigin().x(), 0);
@@ -1987,13 +1992,16 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         p.setPen(C(targeted || hovered(HeaderControl::Target) ? tk::ink : tk::ink3));
         p.drawText(rect.adjusted(0, 2, 0, 0), Qt::AlignHCenter | Qt::AlignTop, trackRowLabel(row));
     }
-    // The name, to the toggles.
+    // The name, to the head's end; on hover, to the toggles. A muted or hidden
+    // track reads dim, so its state shows with the toggles out of sight.
+    const bool hoverRow = row == m_hoverRow;
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = isCaptionTrack(track) ? tr("Captions") : (layout.audio ? tr("Audio %1") : tr("Video %1")).arg(layout.number);
     const bool enabled = trackFlag(track, QStringLiteral("enabled"));
-    p.setPen(C(enabled ? tk::ink : tk::ink3));
+    p.setPen(C(enabled && !(layout.audio && trackFlag(track, QStringLiteral("muted"))) ? tk::ink : tk::ink3));
     const int nameLeft = left + kNameX;
-    drawName(p, QRectF(nameLeft, layout.top, left + kTogglesX - nameLeft, layout.height - 1), trackNameFont(), name);
+    const int nameRight = hoverRow ? left + (layout.audio ? kTogglesX : kTogglesX + kToggleStep) : left + kTimelineLabelWidth - 6;
+    drawName(p, QRectF(nameLeft, layout.top, nameRight - nameLeft, layout.height - 1), trackNameFont(), name);
     // The toggles: 20 pt, ink3; raised and ink under the pointer; on and ink when on.
     const auto toggle = [&](HeaderControl control, bool on, const QString &icon, const QString &text) {
         const QRect rect = headerControlRect(row, control).translated(left - stickyOrigin().x(), 0);
@@ -2009,24 +2017,16 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
             p.drawText(rect, Qt::AlignCenter, text);
         }
     };
-    const bool locked = trackFlag(track, QStringLiteral("locked"));
-    toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
-    if (layout.audio) {
-        toggle(HeaderControl::Output, trackFlag(track, QStringLiteral("muted")), {}, QStringLiteral("M"));
-        toggle(HeaderControl::Solo, m_solo.contains(id), {}, QStringLiteral("S"));
-    } else {
-        toggle(HeaderControl::Output, !enabled, enabled ? QStringLiteral("g-eye") : QStringLiteral("g-eyeoff"), {});
-    }
-    // Sync-lock, on the row under the pointer (and on any track it is off
-    // for, so that stays in sight), over the name's end on the chrome.
-    const bool sync = trackFlag(track, QStringLiteral("syncLocked"));
-    if (row == m_hoverRow || !sync) {
-        const QRect rect = headerControlRect(row, HeaderControl::Sync).translated(left - stickyOrigin().x(), 0);
-        p.fillRect(rect, C(tk::chrome));
-        const bool hover = hovered(HeaderControl::Sync);
-        box(rect, sync ? C(tk::on) : hover ? C(tk::raised) : QColor(Qt::transparent), Qt::transparent);
-        p.drawPixmap(QPointF(rect.left() + 3, rect.top() + 3),
-                     iconPixmap(QStringLiteral("g-synclock"), C(sync || hover ? tk::ink : row == m_hoverRow ? tk::ink3 : tk::dis), 14, dpr));
+    if (hoverRow) {
+        const bool locked = trackFlag(track, QStringLiteral("locked"));
+        if (layout.audio) {
+            toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
+            toggle(HeaderControl::Output, trackFlag(track, QStringLiteral("muted")), {}, QStringLiteral("M"));
+            toggle(HeaderControl::Solo, m_solo.contains(id), {}, QStringLiteral("S"));
+        } else {
+            toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
+            toggle(HeaderControl::Output, !enabled, enabled ? QStringLiteral("g-eye") : QStringLiteral("g-eyeoff"), {});
+        }
     }
     p.restore();
 }
@@ -2253,9 +2253,7 @@ void TimelineWidget::updateContentSize() {
 }
 
 double TimelineWidget::pixelsPerSecond() const {
-    if (m_fitWidth <= 0) return 72.0 * m_zoom;
-    const double fitted = (m_fitWidth - kTimelineOrigin - kTimelineTail) / std::max(m_duration, 0.001);
-    return std::max(fitted, kMinPixelsPerSecond);
+    return m_fitWidth > 0 ? fitScale() : 72.0 * m_zoom;
 }
 
 double TimelineWidget::timeAt(qreal x) const { return std::clamp((x - kTimelineOrigin) / pixelsPerSecond(), 0.0, m_duration); }
@@ -2382,19 +2380,25 @@ TimelineWidget::ClipHit TimelineWidget::clipAt(const QPoint &point) const {
 
 namespace {
 
-// The tools, in the bar's order. Their shortcuts are the keymap's (the
-// registry's tool.* actions), never written here.
+// The tools the strip shows, in its order. Their shortcuts are the keymap's
+// (the registry's tool.* actions), never written here.
 struct ToolInfo {
     TimelineTool tool;
     const char *icon;
     const char *name;
 };
 constexpr ToolInfo kTools[] = {{TimelineTool::Selection, "g-sel", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Selection")},
-                               {TimelineTool::Razor, "g-razor", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Razor")},
-                               {TimelineTool::Ripple, "g-ripple", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Ripple")},
-                               {TimelineTool::Roll, "g-roll", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Roll")},
-                               {TimelineTool::Slip, "g-slip", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Slip")},
-                               {TimelineTool::Slide, "g-slide", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Slide")}};
+                               {TimelineTool::Razor, "g-razor", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Razor")}};
+struct TransportInfo {
+    const char *object;
+    const char *icon;
+    const char *name;
+};
+constexpr TransportInfo kTransportInfo[] = {{"timelineGoToStart", "g-tostart", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Go to start")},
+                                            {"timelinePrevious", "g-prev", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Previous frame")},
+                                            {"timelinePlay", "g-play", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Play")},
+                                            {"timelineNext", "g-next", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Next frame")},
+                                            {"timelineGoToEnd", "g-toend", QT_TRANSLATE_NOOP("kerf::TimelineToolStrip", "Go to end")}};
 
 // "name", or "name · why" while unavailable.
 QString tipWithReason(const QString &name, bool enabled, const QString &reason) {
@@ -2406,17 +2410,35 @@ QString tipWithReason(const QString &name, bool enabled, const QString &reason) 
 int TimelineToolStrip::toolIndex(TimelineTool tool) {
     for (int index = 0; index < int(std::size(kTools)); ++index)
         if (kTools[index].tool == tool) return index;
-    return 0;
+    return -1;
 }
 
 TimelineTool TimelineToolStrip::toolAt(int index) { return kTools[std::clamp(index, 0, int(std::size(kTools)) - 1)].tool; }
 
 TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
     setObjectName(QStringLiteral("timelineTools"));
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setFixedHeight(tk::layout::strip);
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(12, 0, 0, 0);
+    layout->setContentsMargins(12, 0, 12, 0);
     layout->setSpacing(0);
+    const auto iconButton = [this](const char *object, const char *icon, const QString &name) {
+        auto *button = new ui::IconButton(QString::fromLatin1(icon), ui::IconButton::Size::S24, this);
+        button->setObjectName(QString::fromLatin1(object));
+        button->setTip(name);
+        button->setAccessibleName(name);
+        return button;
+    };
+    // The transport first, 4 apart; Play in ink.
+    for (int index = 0; index < kTransports; ++index) {
+        const TransportInfo &info = kTransportInfo[index];
+        const Transport which = Transport(index);
+        m_transport[index] = iconButton(info.object, info.icon, transportName(which));
+        m_transport[index]->setCheckable(false);
+        connect(m_transport[index], &QAbstractButton::clicked, this, [this, which] { emit transportRequested(which); });
+        if (index) layout->addSpacing(4);
+        layout->addWidget(m_transport[index], 0, Qt::AlignVCenter);
+    }
+    layout->addSpacing(24);
     m_tools = new ui::SegmentedControl(this);
     m_tools->setObjectName(QStringLiteral("timelineToolSegments"));
     for (const ToolInfo &info : kTools)
@@ -2424,93 +2446,11 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
     m_tools->setCurrentIndex(toolIndex(timeline->tool()), false);
     layout->addWidget(m_tools, 0, Qt::AlignVCenter);
     layout->addSpacing(8);
-    const auto iconButton = [this, layout](const char *object, const char *icon, Control control) {
-        auto *button = new ui::IconButton(QString::fromLatin1(icon), ui::IconButton::Size::S24, this);
-        button->setObjectName(QString::fromLatin1(object));
-        button->setTip(controlName(control));
-        button->setAccessibleName(controlName(control));
-        layout->addWidget(button, 0, Qt::AlignVCenter);
-        return button;
-    };
-    m_snap = iconButton("timelineSnap", "g-snap", Control::Snap);
+    m_snap = iconButton("timelineSnap", "g-snap", tr("Snap"));
     m_snap->setOn(timeline->snapping());
-    m_marker = iconButton("timelineAddMarker", "g-marker", Control::Marker);
-    m_track = iconButton("timelineAddTrack", "g-addtrack", Control::Track);
-    layout->addWidget(new ui::Separator(4, this), 0, Qt::AlignVCenter);
-    m_ask = new ui::GhostButton(tr("Ask"), this);
-    m_ask->setObjectName(QStringLiteral("timelineAsk"));
-    m_ask->setIconName(QStringLiteral("g-ask"));
-    m_ask->setTip(controlName(Control::Ask));
-    m_ask->setFixedSize(m_ask->sizeHint());
-    layout->addWidget(m_ask, 0, Qt::AlignVCenter);
-    setFixedHeight(tk::layout::strip);
-
-    connect(m_tools, &ui::SegmentedControl::activated, this, [this](int index) {
-        const TimelineTool tool = toolAt(index);
-        if (isSignalConnected(QMetaMethod::fromSignal(&TimelineToolStrip::toolRequested))) emit toolRequested(tool);
-        else m_timeline->setTool(tool);
-        // The tool in force, whether the request was taken or not.
-        m_tools->setCurrentIndex(toolIndex(m_timeline->tool()));
-    });
-    connect(m_snap, &QAbstractButton::clicked, this, [this](bool checked) {
-        if (isSignalConnected(QMetaMethod::fromSignal(&TimelineToolStrip::snapRequested))) emit snapRequested(checked);
-        else m_timeline->setSnapping(checked);
-        m_snap->setOn(m_timeline->snapping());
-    });
-    connect(m_marker, &QAbstractButton::clicked, this, &TimelineToolStrip::addMarkerRequested);
-    connect(m_track, &QAbstractButton::clicked, this, &TimelineToolStrip::addTrackRequested);
-    connect(m_ask, &QAbstractButton::clicked, this, &TimelineToolStrip::askRequested);
-    connect(timeline, &TimelineWidget::toolChanged, this, [this](TimelineTool tool) { m_tools->setCurrentIndex(toolIndex(tool)); });
-    connect(timeline, &TimelineWidget::snappingChanged, this, [this](bool on) { m_snap->setOn(on); });
-}
-
-QString TimelineToolStrip::toolName(TimelineTool tool) {
-    return QCoreApplication::translate("kerf::TimelineToolStrip", kTools[toolIndex(tool)].name);
-}
-
-QString TimelineToolStrip::controlName(Control control) {
-    switch (control) {
-    case Control::Snap: return tr("Snap");
-    case Control::Marker: return tr("Add marker");
-    case Control::Track: return tr("Add track");
-    case Control::Ask: return tr("Ask Kerf about the selection");
-    }
-    return {};
-}
-
-void TimelineToolStrip::followTool(TimelineTool tool, bool enabled, const QString &reason, const QString &shortcut) {
-    const int index = toolIndex(tool);
-    m_tools->setSegmentEnabled(index, enabled);
-    m_tools->setSegmentTip(index, tipWithReason(toolName(tool), enabled, reason), shortcut);
-}
-
-void TimelineToolStrip::followControl(Control control, bool enabled, const QString &reason, const QString &shortcut) {
-    ui::KitButton *button = control == Control::Snap     ? static_cast<ui::KitButton *>(m_snap)
-                            : control == Control::Marker ? static_cast<ui::KitButton *>(m_marker)
-                            : control == Control::Track  ? static_cast<ui::KitButton *>(m_track)
-                                                         : static_cast<ui::KitButton *>(m_ask);
-    button->setEnabled(enabled);
-    button->setTip(tipWithReason(controlName(control), enabled, reason), shortcut);
-}
-
-void TimelineToolStrip::setAskNotes(int notes) {
-    const QString text = notes <= 0 ? tr("Ask") : notes == 1 ? tr("Ask · 1 note") : tr("Ask · %1 notes").arg(notes);
-    if (text == m_ask->text()) return;
-    m_ask->setText(text);
-    m_ask->setFixedSize(m_ask->sizeHint());
-    adjustSize();
-}
-
-QString TimelineToolStrip::askText() const { return m_ask->text(); }
-
-// ---- TimelineZoomControl -------------------------------------------------
-
-TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
-    setObjectName(QStringLiteral("timelineZoom"));
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 12, 0);
-    layout->setSpacing(0);
+    layout->addWidget(m_snap, 0, Qt::AlignVCenter);
+    layout->addStretch(1);
+    // The zoom at the far end.
     const auto key = [this](bool plus) {
         auto *button = new ui::IconButton(plus ? QStringLiteral("g-zin") : QStringLiteral("g-zout"), ui::IconButton::Size::S24, this);
         button->setObjectName(plus ? QStringLiteral("timelineZoomIn") : QStringLiteral("timelineZoomOut"));
@@ -2535,24 +2475,24 @@ TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *pare
     layout->addWidget(m_out, 0, Qt::AlignVCenter);
     layout->addWidget(m_slider, 0, Qt::AlignVCenter);
     layout->addWidget(m_in, 0, Qt::AlignVCenter);
-    layout->addSpacing(8);
-    m_heights = new ui::SegmentedControl(this);
-    m_heights->setObjectName(QStringLiteral("timelineHeights"));
-    const QString stepping = tr("Option-Up and Option-Down step every track");
-    m_heights->addSegment(tr("S"), tr("Small tracks"), {});
-    m_heights->addSegment(tr("M"), tr("Medium tracks"), {});
-    m_heights->addSegment(tr("L"), tr("Large tracks"), {});
-    m_heights->addSegment(tr("Fit"), tr("Fit tracks to the panel"), {});
-    for (int index = 0; index < 4; ++index) m_heights->segment(index)->setAccessibleDescription(stepping);
-    m_heights->setCurrentIndex(1, false);
-    layout->addWidget(m_heights, 0, Qt::AlignVCenter);
-    setFixedHeight(tk::layout::strip);
 
-    m_slider->setValue(position(timeline->scale()));
-    connect(m_slider, &ui::Slider::valueChanged, this, [this](double value) {
-        const int at = int(std::lround(value));
-        if (position(m_timeline->scale()) != at) m_timeline->setScale(scaleAt(at));
+    connect(m_tools, &ui::SegmentedControl::activated, this, [this](int index) {
+        const TimelineTool tool = toolAt(index);
+        if (isSignalConnected(QMetaMethod::fromSignal(&TimelineToolStrip::toolRequested))) emit toolRequested(tool);
+        else m_timeline->setTool(tool);
+        // The tool in force, whether the request was taken or not.
+        m_tools->setCurrentIndex(toolIndex(m_timeline->tool()));
     });
+    connect(m_snap, &QAbstractButton::clicked, this, [this](bool checked) {
+        if (isSignalConnected(QMetaMethod::fromSignal(&TimelineToolStrip::snapRequested))) emit snapRequested(checked);
+        else m_timeline->setSnapping(checked);
+        m_snap->setOn(m_timeline->snapping());
+    });
+    connect(timeline, &TimelineWidget::toolChanged, this, [this](TimelineTool tool) { m_tools->setCurrentIndex(toolIndex(tool)); });
+    connect(timeline, &TimelineWidget::snappingChanged, this, [this](bool on) { m_snap->setOn(on); });
+
+    m_slider->setValue(position(timeline->scale(), timeline->minScale()));
+    connect(m_slider, &ui::Slider::valueChanged, this, [this](double value) { zoomTo(int(std::lround(value))); });
     connect(m_out, &QAbstractButton::clicked, this, [this] { step(-1); });
     connect(m_in, &QAbstractButton::clicked, this, [this] { step(1); });
     // Command-= and Command-minus while the timeline (or a child) has focus.
@@ -2566,45 +2506,105 @@ TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *pare
     }
     connect(timeline, &TimelineWidget::scaleChanged, this, [this](double scale) {
         const QSignalBlocker blocker(m_slider);
-        m_slider->setValue(position(scale));
+        m_slider->setValue(position(scale, m_timeline->minScale()));
         m_slider->update();
     });
-    connect(m_heights, &ui::SegmentedControl::activated, this, [this](int index) {
-        if (index == 3) m_timeline->fitTracksToView();
-        else m_timeline->applyHeightPreset(TimelineWidget::HeightPreset(index));
-        syncHeights();
-    });
-    connect(timeline, &TimelineWidget::heightsChanged, this, &TimelineZoomControl::syncHeights);
-    syncHeights();
 }
 
-TimelineZoomControl::~TimelineZoomControl() {
-    // The shortcuts live on the timeline, which may outlive this control.
+TimelineToolStrip::~TimelineToolStrip() {
+    // The shortcuts live on the timeline, which may outlive this strip.
     for (const QPointer<QShortcut> &shortcut : std::as_const(m_shortcuts)) delete shortcut.data();
 }
 
-QList<QKeySequence> TimelineZoomControl::zoomInKeys() {
+void TimelineToolStrip::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.fillRect(rect(), C(tk::chrome));
+    p.fillRect(QRect(0, height() - 1, width(), 1), C(tk::line));
+}
+
+QString TimelineToolStrip::toolName(TimelineTool tool) {
+    switch (tool) {
+    case TimelineTool::Selection: return tr("Selection");
+    case TimelineTool::Razor: return tr("Razor");
+    case TimelineTool::Ripple: return tr("Ripple");
+    case TimelineTool::Roll: return tr("Roll");
+    case TimelineTool::Slip: return tr("Slip");
+    case TimelineTool::Slide: return tr("Slide");
+    }
+    return {};
+}
+
+QString TimelineToolStrip::transportName(Transport which) {
+    return QCoreApplication::translate("kerf::TimelineToolStrip", kTransportInfo[int(which)].name);
+}
+
+void TimelineToolStrip::followTool(TimelineTool tool, bool enabled, const QString &reason, const QString &shortcut) {
+    const int index = toolIndex(tool);
+    if (index < 0) return;
+    m_tools->setSegmentEnabled(index, enabled);
+    m_tools->setSegmentTip(index, tipWithReason(toolName(tool), enabled, reason), shortcut);
+}
+
+void TimelineToolStrip::followSnap(bool enabled, const QString &reason, const QString &shortcut) {
+    m_snap->setEnabled(enabled);
+    m_snap->setTip(tipWithReason(tr("Snap"), enabled, reason), shortcut);
+}
+
+void TimelineToolStrip::followTransport(Transport which, bool enabled, const QString &reason, const QString &shortcut) {
+    ui::IconButton *button = m_transport[int(which)];
+    button->setEnabled(enabled);
+    const QString name = which == Transport::Play && m_playing ? tr("Pause") : transportName(which);
+    button->setTip(tipWithReason(name, enabled, reason), shortcut);
+}
+
+void TimelineToolStrip::setPlaying(bool playing) {
+    if (playing == m_playing) return;
+    m_playing = playing;
+    ui::IconButton *play = m_transport[int(Transport::Play)];
+    play->setIconName(playing ? QStringLiteral("g-pause") : QStringLiteral("g-play"));
+    play->setAccessibleName(playing ? tr("Pause") : tr("Play"));
+}
+
+QList<QKeySequence> TimelineToolStrip::zoomInKeys() {
     return {QKeySequence(Qt::CTRL | Qt::Key_Equal), QKeySequence(Qt::CTRL | Qt::Key_Plus)};
 }
 
-QList<QKeySequence> TimelineZoomControl::zoomOutKeys() { return {QKeySequence(Qt::CTRL | Qt::Key_Minus)}; }
+QList<QKeySequence> TimelineToolStrip::zoomOutKeys() { return {QKeySequence(Qt::CTRL | Qt::Key_Minus)}; }
 
-void TimelineZoomControl::step(int direction) { m_slider->setValue(m_slider->value() + 10 * direction); }
-
-void TimelineZoomControl::syncHeights() {
-    const TimelineWidget::HeightPreset preset = m_timeline->heightPreset();
-    if (preset != TimelineWidget::HeightPreset::None) m_heights->setCurrentIndex(int(preset));
+int TimelineToolStrip::fitPosition() const {
+    const double fit = m_timeline->fitScale();
+    return fit > 0.0 ? position(fit, m_timeline->minScale()) : -1;
 }
 
-int TimelineZoomControl::position(double pixelsPerSecond) {
-    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
-    const double at = std::log(std::clamp(pixelsPerSecond, TimelineWidget::kMinScale, TimelineWidget::kMaxScale) / TimelineWidget::kMinScale);
+void TimelineToolStrip::zoomTo(int at) {
+    // The fit's own place on the slider is the fit: the view comes back to
+    // the whole sequence, and stays fitted as the window and the sequence change.
+    if (at == fitPosition()) {
+        if (!m_timeline->isFitToWidth()) m_timeline->refit();
+        return;
+    }
+    const double least = m_timeline->minScale();
+    if (position(m_timeline->scale(), least) != at) m_timeline->setScale(scaleAt(at, least));
+}
+
+void TimelineToolStrip::step(int direction) {
+    // From the scale in force, and stopping at the fit on the way past it.
+    const int at = position(m_timeline->scale(), m_timeline->minScale());
+    int next = std::clamp(at + 10 * direction, 0, kSteps);
+    const int fit = fitPosition();
+    if (fit >= 0 && std::min(at, next) < fit && fit < std::max(at, next)) next = fit;
+    zoomTo(next);
+}
+
+int TimelineToolStrip::position(double pixelsPerSecond, double least) {
+    const double span = std::log(TimelineWidget::kMaxScale / least);
+    const double at = std::log(std::clamp(pixelsPerSecond, least, TimelineWidget::kMaxScale) / least);
     return int(std::lround(kSteps * at / span));
 }
 
-double TimelineZoomControl::scaleAt(int position) {
-    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
-    return TimelineWidget::kMinScale * std::exp(span * std::clamp(position, 0, kSteps) / double(kSteps));
+double TimelineToolStrip::scaleAt(int position, double least) {
+    const double span = std::log(TimelineWidget::kMaxScale / least);
+    return least * std::exp(span * std::clamp(position, 0, kSteps) / double(kSteps));
 }
 
 } // namespace kerf

@@ -12,7 +12,7 @@
 //   CheckBox         the 14 pt box with the check path
 //   Slider           16 tall, 2 pt track, 10 pt knob, bipolar tick
 //   Chip             filter chip with a count
-//   Badge            the count badge (the rail's open-thread count)
+//   Badge            the count badge
 //   Avatar           person (circle), agent or QC (radius 6), Kerf (g-kerf)
 //   Dot              6 pt status dot
 //   ThinProgress     the 4 pt progress bar
@@ -705,7 +705,8 @@ MenuRole menuRole(const QAction *action);
 // The right column's text, instead of the action's shortcut. `uiFont` uses
 // the UI face (.k.ui) instead of mono.
 void setMenuKey(QAction *action, const QString &key, bool uiFont = false);
-// An icon (ink3, 14 pt) in the right column, as the device menu shows.
+QString menuKey(const QAction *action);
+// An icon (ink3, 14 pt) in the right column.
 void setMenuKeyIcon(QAction *action, const QString &icon);
 // A 6 pt dot in the check column (the preflight rows).
 void setMenuDot(QAction *action, const QColor &color);

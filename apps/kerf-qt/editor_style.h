@@ -35,8 +35,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("groupBorder"), &EditorTheme::groupBorder},
         {QStringLiteral("well"), &EditorTheme::well},
         {QStringLiteral("dialog"), &EditorTheme::dialog},
-        {QStringLiteral("dockSeparator"), &EditorTheme::dockSeparator},
-        {QStringLiteral("dockSeparatorHover"), &EditorTheme::dockSeparatorHover},
         {QStringLiteral("divider"), &EditorTheme::divider},
         {QStringLiteral("borderSubtle"), &EditorTheme::borderSubtle},
         {QStringLiteral("border"), &EditorTheme::border},
@@ -86,9 +84,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("tabSelectedText"), &EditorTheme::tabSelectedText},
         {QStringLiteral("sliderGroove"), &EditorTheme::sliderGroove},
         {QStringLiteral("sliderHandle"), &EditorTheme::sliderHandle},
-        {QStringLiteral("statusBar"), &EditorTheme::statusBar},
-        {QStringLiteral("statusText"), &EditorTheme::statusText},
-        {QStringLiteral("statusDivider"), &EditorTheme::statusDivider},
         {QStringLiteral("error"), &EditorTheme::error},
         {QStringLiteral("errorSurface"), &EditorTheme::errorSurface},
         {QStringLiteral("errorBorder"), &EditorTheme::errorBorder},
@@ -129,7 +124,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("accentHover"), &EditorTheme::accentHover},
         {QStringLiteral("accentInk"), &EditorTheme::accentInk},
         {QStringLiteral("pos"), &EditorTheme::pos},
-        {QStringLiteral("statusText"), &EditorTheme::statusText},
     };
     static const QRegularExpression token(QStringLiteral("@([A-Za-z][A-Za-z0-9]*)"));
     QString out;
@@ -138,8 +132,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     for (auto it = token.globalMatch(sheet); it.hasNext();) {
         const QRegularExpressionMatch match = it.next();
         // Images: the tick, pop-up chevrons, menu checks and submenu
-        // chevrons in the text colours, and the dock tabs' symbols in the
-        // glyph colours.
+        // chevrons in the text colours.
         using ImagePath = QString (*)(const QColor &);
         static const QHash<QString, std::pair<ImagePath, QColor EditorTheme::*>> images{
             {QStringLiteral("checkMark"), {checkMarkImagePath, &EditorTheme::ink2}},
@@ -151,9 +144,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
             {QStringLiteral("menuChevron"), {menuChevronImagePath, &EditorTheme::menuText}},
             {QStringLiteral("menuChevronSelected"), {menuChevronImagePath, &EditorTheme::menuSelectionText}},
             {QStringLiteral("menuChevronDisabled"), {menuChevronImagePath, &EditorTheme::textDisabled}},
-            {QStringLiteral("closeMark"), {closeMarkImagePath, &EditorTheme::glyph}},
-            {QStringLiteral("closeMarkDisabled"), {closeMarkImagePath, &EditorTheme::glyphDisabled}},
-            {QStringLiteral("tabsMenuMark"), {tabsMenuImagePath, &EditorTheme::glyph}},
         };
         const auto image = [](const QString &path) {
             return path.isEmpty() ? QStringLiteral("none") : QStringLiteral("url(%1)").arg(path);
@@ -188,19 +178,19 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
 // (else Menlo). Every objectName selector widgets set is kept.
 inline QString editorStyleSheet(const EditorTheme &theme) {
     return themedStyleSheet(QStringLiteral(R"QSS(
+/* No colour or size here: a rule on * beats every label's own palette and
+   setFont. The defaults are the application palette's text colour and the
+   application font (applyEditorAppearance), which a widget can still set. */
 * {
-    color: @text;
     /* Placeholders carry guidance, so they read as text. Without this, Qt
        draws them in each widget's text colour at half strength. */
     placeholder-text-color: @placeholderText;
-    font-size: 12px;
 }
 
 QWidget {
     background: transparent;
 }
-QMainWindow,
-QWidget#workspaceRoot {
+QMainWindow {
     background: @window;
 }
 QLabel {
@@ -295,8 +285,6 @@ QFrame#timelineFrame {
     border: 0;
 }
 /* Seams: a 1pt line. */
-QSplitter::handle { background: @dockSeparator; }
-QSplitter::handle:hover { background: @dockSeparatorHover; }
 QSplitter::handle:horizontal { width: 1px; }
 QSplitter::handle:vertical { height: 1px; }
 
@@ -609,10 +597,6 @@ QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed { bac
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: 0; background: transparent; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QAbstractScrollArea::corner { background: transparent; border: 0; }
-/* Status bar (9): 24pt on chrome, a top hairline, UI 11 meta. */
-QStatusBar { background: @statusBar; color: @statusText; border-top: 1px solid @divider; font-size: 11px; min-height: 23px; max-height: 23px; }
-QStatusBar::item { border: 0; }
-QStatusBar QLabel { color: @statusText; font-size: 11px; padding: 0 8px; border-left: 1px solid @statusDivider; }
 /* Banners are bars under the toolbar, edge to edge, with a hairline below. */
 QFrame#connectionBanner,
 QFrame#errorBanner { background: @errorSurface; border: 0; border-bottom: 1px solid @errorBorder; border-radius: 0; }
@@ -707,21 +691,6 @@ QListWidget#activityList { background: transparent; border: 0; padding: 0; }
 QFrame#divergedBanner { background: @warningSurface; border: 0; border-bottom: 1px solid @warningBorder; border-radius: 0; }
 QLabel#divergedTitle { color: @warningTitle; font-size: 12px; font-weight: 500; }
 QLabel#divergedMessage { color: @warningText; font-size: 12px; }
-QStatusBar QToolButton#syncChip {
-    background: transparent;
-    border: 0;
-    border-left: 1px solid @statusDivider;
-    border-radius: 0;
-    color: @statusText;
-    font-size: 11px;
-    padding: 0 8px;
-    min-height: 0;
-}
-QStatusBar QToolButton#syncChip:hover { color: @textStrong; background: @raised; }
-QStatusBar QToolButton#syncChip[state="syncing"] { color: @accentText; }
-QStatusBar QToolButton#syncChip[state="live"] { color: @success; }
-QStatusBar QToolButton#syncChip[state="conflict"],
-QStatusBar QToolButton#syncChip[state="failed"] { color: @error; }
 QWidget#presetsPanel,
 QWidget#effectsPanel { background: @panel; }
 QLabel#presetsTitle { color: @textSecondary; font-size: 11px; font-weight: 500; }
@@ -766,80 +735,6 @@ QDialog#publishDialog QCheckBox::indicator {
 }
 QDialog#publishDialog QCheckBox::indicator:checked { background: @on; border-color: @checkBorder; image: @checkMark; }
 QDialog#publishDialog QCheckBox::indicator:disabled { background: transparent; border-color: @borderSubtle; }
-)QSS"), theme);
-}
-
-// Docked panels, layered over the dock manager's own style sheet. Each
-// area's title bar is a 28pt strip on chrome with a bottom hairline and the
-// panel names in UI 500 12 (mockup 2, 4.2, 7.1): no tab look, no boxes and
-// no underline, so an area with one panel shows its strip and title only;
-// in an area with several, the current name is ink and the others ink3.
-// Tabs never show a close button (Workspace hides it); here every tab takes
-// the editor's symbol in the glyph colour.
-inline QString dockStyleSheet(const EditorTheme &theme) {
-    return themedStyleSheet(QStringLiteral(R"QSS(
-ads--CDockContainerWidget { background: @window; }
-ads--CDockContainerWidget > QSplitter { padding: 0; }
-/* As specific as the dock manager's Linux sheet, which names the container. */
-ads--CDockContainerWidget ads--CDockSplitter::handle { background: @dockSeparator; }
-ads--CDockContainerWidget ads--CDockSplitter::handle:hover { background: @dockSeparatorHover; }
-ads--CDockAreaWidget { background: @panel; border: 0; }
-ads--CDockAreaTitleBar { background: @chrome; border: 0; border-bottom: 1px solid @divider; min-height: 27px; max-height: 27px; padding-left: 8px; }
-ads--CDockAreaWidget[focused="true"] ads--CDockAreaTitleBar { background: @chrome; border-bottom: 1px solid @divider; }
-ads--CDockAreaTabBar { background: transparent; }
-ads--CDockWidgetTab { background: transparent; border: 0; margin: 0 4px; padding: 0 4px; }
-ads--CDockWidgetTab QLabel { color: @ink3; font-size: 12px; font-weight: 500; }
-ads--CDockWidgetTab[focused="true"] { background: transparent; border: 0; }
-ads--CDockWidgetTab[focused="true"] QLabel { color: @ink3; }
-ads--CDockWidgetTab[activeTab="true"] { background: transparent; border: 0; }
-ads--CDockWidgetTab[activeTab="true"] QLabel { color: @text; }
-ads--CDockWidgetTab > #tabCloseButton,
-ads--CDockWidgetTab[focused="true"] > #tabCloseButton {
-    qproperty-icon: @closeMark, @closeMarkDisabled disabled;
-    qproperty-iconSize: 12px 12px;
-    background: transparent;
-    border: 0;
-    border-radius: 4px;
-    padding: 1px;
-}
-ads--CDockWidgetTab > #tabCloseButton:hover,
-ads--CDockWidgetTab[focused="true"] > #tabCloseButton:hover { background: @raised; }
-ads--CDockWidgetTab > #tabCloseButton:pressed,
-ads--CDockWidgetTab[focused="true"] > #tabCloseButton:pressed { background: @on; }
-/* The dock manager's own tabs menu button (ADS names it). */
-#tabsMenuButton { qproperty-icon: @tabsMenuMark; qproperty-iconSize: 12px 12px; }
-ads--CDockWidget { background: @panel; border: 0; }
-/* A strip's actions are icon buttons (.ib, 20-24pt) and meta text; the
-   details (frame size, track count) are disabled actions, so they read as
-   text, not as dead buttons. */
-ads--CTitleBarButton {
-    color: @textSecondary;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0 4px;
-    margin: 2px 1px;
-    min-height: 20px;
-    max-height: 20px;
-    font-size: 11px;
-}
-ads--CTitleBarButton:hover { background: @raised; border-color: transparent; }
-ads--CTitleBarButton:pressed,
-ads--CTitleBarButton:checked { background: @on; border-color: transparent; }
-ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
-/* A chosen mask tool in the Program strip is on, as in the Inspector. */
-ads--CTitleBarButton#maskRectangle:checked:enabled,
-ads--CTitleBarButton#maskEllipse:checked:enabled,
-ads--CTitleBarButton#maskPen:checked:enabled { background: @accentTint; border-color: transparent; }
-ads--CTitleBarButton#maskRectangle:checked:enabled:pressed,
-ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
-ads--CTitleBarButton#maskPen:checked:enabled:pressed { background: @accentTintPressed; }
-/* The Timeline's track heights are one segmented control the timeline
-   paints: 20x24 each, edge to edge. */
-ads--CFloatingDockContainer { background: @panel; }
-/* The timeline's strip: its details after its name. */
-QLabel#timelineDetail { color: @textSecondary; font-size: 11px; padding: 0 0 0 8px; }
-QWidget#timelineZoom QToolButton { background: transparent; border: 0; padding: 0; min-height: 20px; max-height: 20px; }
 )QSS"), theme);
 }
 

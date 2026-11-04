@@ -117,21 +117,21 @@ private slots:
 
     // ------------------------------------------------------------- icons
 
-    // The table is spec 16: every icon it names, the owner's phone glyph,
-    // the three drawn outside the 16 set, and neither retired phone glyph.
+    // The table is spec 16 without the device preview's glyphs, and the two
+    // drawn outside the 16 set.
     void kitIconTableIsTheDesignsSet() {
         const QStringList names = icons::names();
-        QCOMPARE(names.size(), 81);
+        QCOMPARE(names.size(), 77);
         QCOMPARE(names.first(), QStringLiteral("g-169"));
-        for (const char *name : {"g-169", "g-916", "g-11", "g-45", "g-laptop", "g-phone", "g-feed", "g-devoff",
-                                 "g-comments", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr", "rail-chevron",
+        for (const char *name : {"g-169", "g-916", "g-11", "g-45", "g-comments", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
                                  "playhead-head", "checkbox-check"})
             QVERIFY2(icons::has(QString::fromLatin1(name)), name);
         QVERIFY(!icons::has(QStringLiteral("g-isl")));
         QVERIFY(!icons::has(QStringLiteral("g-punch")));
+        QVERIFY(!icons::has(QStringLiteral("g-phone")));
+        QVERIFY(!icons::has(QStringLiteral("rail-chevron")));
         QCOMPARE(icons::viewBox(QStringLiteral("g-play")), QSizeF(16, 16));
         QCOMPARE(icons::viewBox(QStringLiteral("g-settings")), QSizeF(24, 24));
-        QCOMPARE(icons::viewBox(QStringLiteral("rail-chevron")), QSizeF(10, 10));
         QCOMPARE(icons::viewBox(QStringLiteral("playhead-head")), QSizeF(9, 12));
         QVERIFY(icons::path(QStringLiteral("no-such-icon")).isEmpty());
         QVERIFY(icons::viewBox(QStringLiteral("no-such-icon")).isEmpty());

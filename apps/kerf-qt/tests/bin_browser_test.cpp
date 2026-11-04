@@ -7,7 +7,6 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "device_frame.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "effects_panel.h"
@@ -15,9 +14,7 @@
 #include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "player_overlay.h"
 #include "presets_panel.h"
-#include "program_level.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
@@ -25,7 +22,7 @@
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
 #include "ui/browser_panel.h"
@@ -87,7 +84,6 @@
 #include <QSignalSpy>
 #include <QStackedWidget>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -103,14 +99,6 @@
 #include <QWheelEvent>
 #include <QWidget>
 
-#include <DockAreaTabBar.h>
-#include <DockAreaTitleBar.h>
-#include <DockAreaWidget.h>
-#include <DockManager.h>
-#include <DockSplitter.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
-#include <ElidingLabel.h>
 
 #include <algorithm>
 #include <climits>
@@ -228,7 +216,7 @@ private slots:
         QSettings().remove(QStringLiteral("workspace"));
         MainWindow window{QString(), QString()};
         // The browser is in the band, its Effects page in front.
-        QVERIFY(!window.m_workspace->panel(QStringLiteral("browser"))->isClosed());
+        window.m_shell->setSheet(StageShell::Sheet::Browser);
         QVERIFY(window.m_commands->action(QStringLiteral("window.effects")));
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
@@ -705,9 +693,10 @@ private slots:
         QSettings().remove(QStringLiteral("workspace"));
         QTemporaryDir project;
         MainWindow window{project.path(), QString()};
-        // Presets is a page of the browser in the band.
+        // Presets is a page of the Effects and titles sheet.
+        window.triggerCommand(QStringLiteral("window.presets"));
+        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Browser);
         QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
-        QVERIFY(!window.m_workspace->panel(QStringLiteral("presets"))->isClosed());
         PresetsPanel *panel = window.m_presets;
         QVERIFY(!panel->m_apply->isEnabled());
         window.setConnection(QStringLiteral("ready"));

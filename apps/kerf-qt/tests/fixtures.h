@@ -100,7 +100,7 @@ QImage paintedAt(qreal ratio, const QSize &logical, const std::function<void(QPa
 // The lightness of `image`'s pixel at the logical point `at`.
 int lightnessAt(const QImage &image, const QPointF &at);
 
-// Open Kerf's conversation in the Program monitor's stage.
+// Kerf's conversation, its layout settled.
 void showAssistant(MainWindow &window);
 
 // The catalog's clip properties and generators, as a snapshot carries

@@ -12,7 +12,6 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
-#include "stage_rail.h"
 #include "command_registry.h"
 #include "comment_row.h"
 #include "components.h"
@@ -309,7 +308,6 @@ class CommentsTest final : public QObject {
             if (show) {
                 window.resize(1600, 1000);
                 window.show();
-                window.setChatOpen(true);
             }
             settle();
         }
@@ -473,15 +471,19 @@ private slots:
         Seeded seed;
         ChatPanel &panel = seed.panel;
         QCOMPARE(panel.title()->text(), QStringLiteral("Comments"));
-        QCOMPARE(panel.chipAll()->count(), 7);
-        QCOMPARE(panel.chipOpen()->count(), 4);
-        QCOMPARE(panel.chipProposals()->count(), 2);
-        QVERIFY(panel.chipAll()->isChecked());
+        QCOMPARE(seed.model.counts().all, 7);
+        QCOMPARE(seed.model.counts().open, 4);
+        QCOMPARE(seed.model.counts().proposals, 2);
+        QCOMPARE(seed.model.chip(), ReviewModel::Chip::All);
         QCOMPARE(threadIds(panel), (QStringList{QString::fromLatin1(ReviewModel::kWelcomeId), "c-0300", "c-0903", "c-1708", "c-2614",
                                                 "c-2718", "c-2916"}));
         // Frame and header metrics.
         QCOMPARE(panel.findChild<QWidget *>(QStringLiteral("chatHeader"))->height(), ChatPanel::kHeaderHeight);
-        QCOMPARE(panel.findChild<QWidget *>(QStringLiteral("chatChips"))->height(), ChatPanel::kChipsHeight);
+        // Comments and ⋯ only: search, sort and the filter are in its menu.
+        QVERIFY(!panel.findChild<QWidget *>(QStringLiteral("chatChips")));
+        QVERIFY(!panel.findChild<QWidget *>(QStringLiteral("chatClose")));
+        QVERIFY(!panel.findChild<QWidget *>(QStringLiteral("chatResizeHandle")));
+        QCOMPARE(panel.findChild<QWidget *>(QStringLiteral("chatHeader"))->findChildren<QAbstractButton *>().size(), 1);
         // The welcome: Kerf, agent, its words.
         CommentRow *welcome = panel.welcomeRow();
         QCOMPARE(welcome->name(), QStringLiteral("Kerf"));
@@ -606,15 +608,32 @@ private slots:
     void filtersSortAndSearch() {
         Seeded seed;
         ChatPanel &panel = seed.panel;
-        panel.chipOpen()->click();
-        seed.settle();
-        QVERIFY(panel.chipOpen()->isChecked() && !panel.chipAll()->isChecked());
+        const auto choose = [&panel, &seed](const char *name) {
+            QMenu *more = panel.buildMoreMenu();
+            const auto actions = more->findChildren<QAction *>();
+            for (QAction *action : actions)
+                if (action->objectName() == QLatin1String(name)) action->trigger();
+            delete more;
+            seed.settle();
+        };
+        choose("commentsShow.Open");
+        QCOMPARE(seed.model.chip(), ReviewModel::Chip::Open);
+        // A filter that hides rows shows on the ⋯ button.
+        QVERIFY(panel.filterDotShown());
         QVERIFY(!threadIds(panel).contains("c-0300") && threadIds(panel).contains("c-1708"));
-        panel.chipProposals()->click();
-        seed.settle();
+        choose("commentsShow.Proposals");
         QCOMPARE(recordIds(panel), (QStringList{"c-0903", "c-2614"}));
-        panel.chipAll()->click();
-        seed.settle();
+        // Its rows name their counts.
+        {
+            QMenu *more = panel.buildMoreMenu();
+            QAction *open = nullptr;
+            for (QAction *action : more->findChildren<QAction *>())
+                if (action->objectName() == QLatin1String("commentsShow.Open")) open = action;
+            QVERIFY(open);
+            QCOMPARE(ui::menuKey(open), QStringLiteral("4"));
+            delete more;
+        }
+        choose("commentsShow.All");
         // From Kerf, through the menu.
         QVERIFY(!panel.filterDotShown());
         QMenu *filter = panel.buildFilterMenu();
@@ -646,20 +665,16 @@ private slots:
         QVERIFY(!threadIds(panel).contains("c-0300") && !threadIds(panel).contains("c-2916"));
         seed.model.clearFilters();
         seed.settle();
-        // Sort: Newest, with its label.
-        QVERIFY(panel.sortLabel()->isHidden());
+        // Sort: Newest.
         QMenu *sort = panel.buildSortMenu();
         QVERIFY(actionNamed(sort, QStringLiteral("Timecode"))->isChecked());
         actionNamed(sort, QStringLiteral("Newest"))->trigger();
         delete sort;
         seed.settle();
-        QVERIFY(!panel.sortLabel()->isHidden());
-        QCOMPARE(panel.sortLabel()->text(), QStringLiteral("Newest"));
-        QCOMPARE(ui::tipName(panel.sortButton()), QStringLiteral("Sort: Newest"));
         QCOMPARE(threadIds(panel).at(1), QStringLiteral("c-2718"));
         seed.model.setSort(ReviewModel::Sort::Timecode);
-        // Search (⌘F).
-        panel.searchButton()->click();
+        // Search (⌘F, and ⋯ ▸ Search comments).
+        choose("commentsSearch");
         QVERIFY(panel.searchRow()->isVisible());
         panel.searchField()->setText(QStringLiteral("magenta"));
         seed.settle();
@@ -779,19 +794,13 @@ private slots:
         QVERIFY(window.m_bus->review());
         QCOMPARE(window.m_bus->review(), window.m_reviewWiring->model());
         QVERIFY(!seeded.last(QStringLiteral("comment_list")).isEmpty());
-        QCOMPARE(window.m_chat->chipAll()->count(), 7);
-        QCOMPARE(window.m_chat->chipOpen()->count(), 4);
+        QCOMPARE(window.m_reviewWiring->model()->counts().all, 7);
+        QCOMPARE(window.m_reviewWiring->model()->counts().open, 4);
         // ⌘↩ and Esc act on the pinned proposal.
         QCOMPARE(window.m_proposalId, QStringLiteral("proposal-cc2"));
-        // The rail's badge counts the open threads; its tip says so.
-        QVERIFY(!window.m_rail->commentsBadge()->isHidden());
-        QCOMPARE(window.m_rail->commentsBadge()->text(), QStringLiteral("4"));
-        QCOMPARE(ui::tipName(window.m_rail->chatButton()), QStringLiteral("Comments · 4 open"));
-        // bus openThread opens the panel at the thread and flashes its root.
-        window.setChatOpen(false);
+        // bus openThread goes to the thread and flashes its root.
         emit window.m_bus->openThread(QStringLiteral("c-2718-r2"));
         seeded.settle();
-        QVERIFY(window.chatOpen());
         QCOMPARE(window.m_reviewWiring->model()->currentThread(), QStringLiteral("c-2718"));
         QVERIFY(window.m_chat->threadWidget("c-2718")->root()->isFlashing());
         // askPrefill opens the composer as a reply.
@@ -1266,6 +1275,9 @@ private slots:
         window.setConnection(QStringLiteral("ready"));
         QVERIFY(window.m_sendButton->isEnabled());
         QCOMPARE(send->background(), tokens::color(tokens::accent));
+        // An agent that can take requests reads the design's placeholder.
+        window.m_cloudAccess = QStringLiteral("ready");
+        window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
     }
 
@@ -1347,10 +1359,8 @@ private slots:
         const QJsonObject comment = window.m_lastCommand.value("comment").toObject();
         QCOMPARE(comment.value("at").toDouble(), 1.0);
         QCOMPARE(comment.value("duration").toDouble(), 2.0);
-        // While Kerf works with the panel closed, the timeline says so and offers Stop.
-        window.setChatOpen(false);
+        // While Kerf works, Stop is the registry's.
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-        QVERIFY(window.m_aiBar->isVisible());
         QVERIFY(window.m_commands->isEnabled(QStringLiteral("ai.stop")));
     }
 
@@ -1377,7 +1387,7 @@ private slots:
         }
         {
             Seeded seed(480, 548);
-            seed.panel.chipOpen()->click();
+            seed.model.setChip(ReviewModel::Chip::Open);
             seed.settle();
             save(seed.panel, QStringLiteral("open-480"));
         }

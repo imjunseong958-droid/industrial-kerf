@@ -5,7 +5,6 @@
 #include "editor_bus.h"
 #include "inspector_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
 
 #include <QAbstractButton>
 #include <QHBoxLayout>
@@ -46,7 +45,6 @@ InspectorPanel::Pane paneOf(InspectorColumn::Kind kind) {
 InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus(bus) {
     setObjectName(QStringLiteral("inspectorColumn"));
     auto *layout = new QVBoxLayout(this);
-    // The column's left seam is the dock splitter's line.
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     // The strip (spec 5): 28, pad 0 12, a line at its foot; the segmented
@@ -55,7 +53,8 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     strip->setObjectName(QStringLiteral("inspectorStrip"));
     strip->setFixedHeight(tokens::layout::strip);
     auto *stripLayout = new QHBoxLayout(strip);
-    stripLayout->setContentsMargins(tokens::space::s12, 0, tokens::space::s12, 0);
+    m_stripLayout = stripLayout;
+    stripLayout->setContentsMargins(tokens::space::s12, 0, tokens::space::s8, 0);
     stripLayout->setSpacing(tokens::space::s4);
     m_pages = new ui::SegmentedControl;
     m_pages->setObjectName(QStringLiteral("inspectorPages"));
@@ -98,14 +97,16 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     m_stack->addWidget(m_deliver);
     layout->addWidget(m_stack, 1);
     if (m_bus)
-        // A workspace switch goes back to the Inspector (spec 10) and shows
-        // the Deliver pane in Deliver.
+        // A tray opening or closing goes back to the Inspector (spec 10) and
+        // shows the Deliver pane in Deliver.
         connect(m_bus, &EditorBus::workspaceChanged, this, [this] {
             setPage(Page::Inspector);
             showCurrent();
         });
     showCurrent();
 }
+
+void InspectorColumn::addToStrip(QWidget *widget) { m_stripLayout->addWidget(widget); }
 
 void InspectorColumn::setInspector(InspectorPanel *inspector) {
     if (m_inspector == inspector) return;
@@ -175,7 +176,7 @@ InspectorColumn::Kind InspectorColumn::kindFromId(const QString &id) {
 
 bool InspectorColumn::deliverShown() const {
     return m_page == Page::Inspector && m_kind == Kind::Video && m_bus &&
-           m_bus->workspace() == QLatin1String(Workspace::kDeliver);
+           m_bus->workspace() == QLatin1String("Deliver");
 }
 
 QAbstractButton *InspectorColumn::pageButton(Page page) const {

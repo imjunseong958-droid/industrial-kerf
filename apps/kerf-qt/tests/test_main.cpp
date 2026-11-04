@@ -2,11 +2,11 @@
 // single application, as the one EditorTest class used to run.
 //
 //   kerf-qt-tests -platform offscreen                     every class
-//   kerf-qt-tests -platform offscreen widePictureShowsInALaptop themeColorsReadWhereTheyAreDrawn:ink
+//   kerf-qt-tests -platform offscreen editorMatchesTheMockupInEveryState themeColorsReadWhereTheyAreDrawn:ink
 //                                                         only the classes those slots belong to
 //   kerf-qt-tests -functions                              every class's test functions
 //   kerf-qt-tests -platform offscreen -o r.xml,xml        one report per class:
-//                                                         r.DeviceTest.xml, r.ThemeTest.xml, ...
+//                                                         r.StageTest.xml, r.ThemeTest.xml, ...
 //
 // QTest's own options pass through to each class, except a log written to a
 // file. Each class is a QTest run of its own, and each run would rewrite the
@@ -26,6 +26,7 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QGuiApplication>
 #include <QList>
@@ -206,6 +207,8 @@ int main(int argc, char *argv[]) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings.path());
     QCoreApplication::setOrganizationName(QStringLiteral("Industrial Kerf Tests"));
+    // The galleries save into it without making it.
+    if (const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR"); !shots.isEmpty()) QDir().mkpath(shots);
     useEditorStyle();
     // The editor's one (dark) theme, applied as the app applies it:
     // offscreen reports a light system, and painted colours are the ramp's.

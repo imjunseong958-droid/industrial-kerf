@@ -151,14 +151,13 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     layout->setSpacing(0);
     layout->addWidget(buildHeader());
     layout->addWidget(buildSearch());
-    layout->addWidget(buildChips());
     layout->addWidget(buildPinBar());
 
     m_list = new ui::FadeScrollArea;
     m_list->setObjectName(QStringLiteral("chatScroll"));
     m_list->setWidgetResizable(true);
     m_list->setFrameShape(QFrame::NoFrame);
-    m_list->setFadeColor(color(tokens::card));
+    m_list->setFadeColor(color(tokens::chrome));
     m_list->setStyleSheet(QStringLiteral("QScrollArea#chatScroll { background: transparent; border: 0; }"));
     m_list->viewport()->setAutoFillBackground(false);
     m_content = new QWidget;
@@ -210,15 +209,11 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
             emit stopRequested();
         } else if (m_composer->drawState() == Composer::Draw::Drawing) {
             emit drawCancelRequested();
+        } else {
+            emit escapeUnused();
         }
     });
     layout->addWidget(m_composer);
-
-    m_resizeHandle = new QWidget(this);
-    m_resizeHandle->setObjectName(QStringLiteral("chatResizeHandle"));
-    m_resizeHandle->setCursor(Qt::SizeHorCursor);
-    ui::setTip(m_resizeHandle, QStringLiteral("Drag to resize · 300–480"));
-    m_resizeHandle->installEventFilter(this);
 
     m_stash = new QWidget(this);
     m_stash->hide();
@@ -250,6 +245,8 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
 
 ChatPanel::~ChatPanel() = default;
 
+void ChatPanel::focusComposer() { input()->setFocus(Qt::ShortcutFocusReason); }
+
 QWidget *ChatPanel::buildHeader() {
     auto *header = new QWidget;
     header->setObjectName(QStringLiteral("chatHeader"));
@@ -262,41 +259,17 @@ QWidget *ChatPanel::buildHeader() {
     m_title->setText(QStringLiteral("Comments"));
     layout->addWidget(m_title);
     layout->addStretch(1);
-    m_searchButton = new ui::IconButton(QStringLiteral("g-search"));
-    m_searchButton->setTip(QStringLiteral("Search comments"), QStringLiteral("⌘F"));
-    m_searchButton->setCheckable(true);
-    connect(m_searchButton, &QAbstractButton::clicked, this, [this] { setSearchShown(m_searchRow->isHidden()); });
-    layout->addWidget(m_searchButton);
-    m_sortButton = new ui::IconButton(QStringLiteral("g-sort"));
-    m_sortButton->setTip(QStringLiteral("Sort: Timecode"));
-    connect(m_sortButton, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildSortMenu(), m_sortButton); });
-    layout->addWidget(m_sortButton);
-    m_sortLabel = makeLabel(control, ink2);
-    m_sortLabel->setContentsMargins(0, 0, 4, 0);
-    m_sortLabel->hide();
-    layout->addWidget(m_sortLabel);
-    // #sortLbl's margin-left −2: the label sits 2 nearer its button.
-    layout->setSpacing(4);
-    m_filterButton = new ui::IconButton(QStringLiteral("g-filter"));
-    m_filterButton->setTip(QStringLiteral("Filter"));
-    connect(m_filterButton, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFilterMenu(), m_filterButton); });
-    m_filterDot = new ui::Dot(color(ink), m_filterButton);
+    m_more = new ChatIconButton(ChatIconButton::Glyph::More, 24);
+    m_more->setObjectName(QStringLiteral("chatMore"));
+    ui::setTip(m_more, QStringLiteral("Search, sort, filter and more"));
+    m_more->setAccessibleName(QStringLiteral("More"));
+    connect(m_more, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildMoreMenu(), m_more); });
+    // On while a filter hides rows.
+    m_filterDot = new ui::Dot(color(ink), m_more);
     m_filterDot->setGeometry(24 - 3 - 6, 3, 6, 6);
     m_filterDot->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_filterDot->hide();
-    layout->addWidget(m_filterButton);
-    m_more = new ChatIconButton(ChatIconButton::Glyph::More, 24);
-    m_more->setObjectName(QStringLiteral("chatMore"));
-    ui::setTip(m_more, QStringLiteral("More"));
-    m_more->setAccessibleName(QStringLiteral("More"));
-    connect(m_more, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildMoreMenu(), m_more); });
     layout->addWidget(m_more);
-    m_close = new ChatIconButton(ChatIconButton::Glyph::Close, 24);
-    m_close->setObjectName(QStringLiteral("chatClose"));
-    ui::setTip(m_close, QStringLiteral("Close"), QStringLiteral("⇧⌘J"));
-    m_close->setAccessibleName(QStringLiteral("Close comments"));
-    connect(m_close, &QAbstractButton::clicked, this, &ChatPanel::closeRequested);
-    layout->addWidget(m_close);
     return header;
 }
 
@@ -323,7 +296,6 @@ QWidget *ChatPanel::buildSearch() {
     m_search->installEventFilter(this);
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString &text) {
         if (m_model) m_model->setSearch(text);
-        m_searchButton->setOn(!text.isEmpty() || m_searchRow->isVisible());
         m_list->verticalScrollBar()->setValue(0);
     });
     layout->addWidget(m_search);
@@ -333,44 +305,12 @@ QWidget *ChatPanel::buildSearch() {
 
 void ChatPanel::setSearchShown(bool shown) {
     m_searchRow->setVisible(shown);
-    m_searchButton->setOn(shown);
     if (shown) {
         m_search->setFocus(Qt::ShortcutFocusReason);
         m_search->selectAll();
     } else {
         m_search->clear();
     }
-}
-
-QWidget *ChatPanel::buildChips() {
-    auto *row = new QWidget;
-    row->setObjectName(QStringLiteral("chatChips"));
-    row->setFixedHeight(kChipsHeight);
-    auto *layout = new QHBoxLayout(row);
-    layout->setContentsMargins(16, 0, 16, 0);
-    layout->setSpacing(4);
-    m_chipAll = new ui::Chip(QStringLiteral("All"));
-    m_chipOpen = new ui::Chip(QStringLiteral("Open"));
-    m_chipProposals = new ui::Chip(QStringLiteral("Proposals"));
-    const std::pair<ui::Chip *, ReviewModel::Chip> chips[] = {
-        {m_chipAll, ReviewModel::Chip::All}, {m_chipOpen, ReviewModel::Chip::Open}, {m_chipProposals, ReviewModel::Chip::Proposals}};
-    for (const auto &[chip, which] : chips) {
-        chip->setCount(0);
-        connect(chip, &QAbstractButton::clicked, this, [this, chip = chip, which = which] {
-            if (m_model) m_model->setChip(which);
-            for (ui::Chip *other : {m_chipAll, m_chipOpen, m_chipProposals}) {
-                const QSignalBlocker blocker(other);
-                other->setChecked(other == chip);
-            }
-            m_list->verticalScrollBar()->setValue(0);
-        });
-        layout->addWidget(chip);
-    }
-    m_chipAll->setChecked(true);
-    layout->addStretch(1);
-    // The row's bottom line.
-    row->installEventFilter(this);
-    return row;
 }
 
 QFrame *ChatPanel::buildPinBar() {
@@ -1035,25 +975,13 @@ void ChatPanel::refillWelcome() {
 }
 
 void ChatPanel::updateCounts() {
-    const ReviewModel::Counts counts = m_model ? m_model->counts() : ReviewModel::Counts{};
-    m_chipAll->setCount(counts.all);
-    m_chipOpen->setCount(counts.open);
-    m_chipProposals->setCount(counts.proposals);
 }
 
 void ChatPanel::updateHeader() {
-    const ReviewModel::Sort sort = m_model ? m_model->sort() : ReviewModel::Sort::Timecode;
-    m_sortButton->setTip(QStringLiteral("Sort: %1").arg(ReviewModel::sortName(sort)));
-    m_sortLabel->setText(ReviewModel::sortName(sort));
-    m_sortLabel->setFixedWidth(ui::snapWidth(control, m_sortLabel->text()) + 4);
-    m_sortLabel->setVisible(sort != ReviewModel::Sort::Timecode);
-    m_filterDot->setVisible(m_model && m_model->from() != ReviewModel::From::Anyone);
-    const ReviewModel::Chip chip = m_model ? m_model->chip() : ReviewModel::Chip::All;
-    for (const auto &[button, which] : {std::pair{m_chipAll, ReviewModel::Chip::All}, std::pair{m_chipOpen, ReviewModel::Chip::Open},
-                                        std::pair{m_chipProposals, ReviewModel::Chip::Proposals}}) {
-        const QSignalBlocker blocker(button);
-        button->setChecked(chip == which);
-    }
+    // A filter that hides rows shows on the ⋯ button.
+    const bool chip = m_model && m_model->chip() != ReviewModel::Chip::All;
+    const bool from = m_model && m_model->from() != ReviewModel::From::Anyone;
+    m_filterDot->setVisible(chip || from);
 }
 
 bool ChatPanel::filterDotShown() const { return !m_filterDot->isHidden(); }
@@ -1677,6 +1605,45 @@ QMenu *ChatPanel::buildMoreMenu() {
     auto *menu = new QMenu(this);
     menu->setObjectName(QStringLiteral("commentsMoreMenu"));
     menu->setAttribute(Qt::WA_DeleteOnClose);
+    // Search, sort and the filter: what the header held.
+    QAction *search = menu->addAction(QStringLiteral("Search comments"));
+    search->setObjectName(QStringLiteral("commentsSearch"));
+    ui::setMenuKey(search, QStringLiteral("⌘F"));
+    connect(search, &QAction::triggered, this, [this] { setSearchShown(true); });
+    QMenu *sort = buildSortMenu();
+    sort->setAttribute(Qt::WA_DeleteOnClose, false);
+    sort->setParent(menu, sort->windowFlags());
+    sort->setTitle(QStringLiteral("Sort"));
+    ui::styleMenu(sort);
+    QAction *sortItem = menu->addMenu(sort);
+    sortItem->setObjectName(QStringLiteral("commentsSort"));
+    ui::setMenuKey(sortItem, m_model ? ReviewModel::sortName(m_model->sort()) : QString());
+    menu->addSeparator();
+    const ReviewModel::Counts counts = m_model ? m_model->counts() : ReviewModel::Counts{};
+    const std::tuple<const char *, ReviewModel::Chip, int> chips[] = {{"All", ReviewModel::Chip::All, counts.all},
+                                                                      {"Open", ReviewModel::Chip::Open, counts.open},
+                                                                      {"Proposals", ReviewModel::Chip::Proposals, counts.proposals}};
+    for (const auto &[name, chip, count] : chips) {
+        QAction *action = menu->addAction(QString::fromLatin1(name));
+        action->setObjectName(QStringLiteral("commentsShow.%1").arg(QString::fromLatin1(name)));
+        action->setCheckable(true);
+        action->setChecked(m_model ? m_model->chip() == chip : chip == ReviewModel::Chip::All);
+        action->setEnabled(m_model);
+        ui::setMenuKey(action, QString::number(count));
+        connect(action, &QAction::triggered, this, [this, chip = chip] {
+            if (!m_model) return;
+            m_model->setChip(chip);
+            updateHeader();
+            m_list->verticalScrollBar()->setValue(0);
+        });
+    }
+    QMenu *filter = buildFilterMenu();
+    filter->setAttribute(Qt::WA_DeleteOnClose, false);
+    filter->setParent(menu, filter->windowFlags());
+    filter->setTitle(QStringLiteral("Filter"));
+    ui::styleMenu(filter);
+    menu->addMenu(filter)->setObjectName(QStringLiteral("commentsFilter"));
+    menu->addSeparator();
     QAction *settings = menu->addAction(QStringLiteral("Agent settings…"));
     ui::setMenuKey(settings, m_currentModel);
     connect(settings, &QAction::triggered, this, [this] { emit moreAction(QStringLiteral("settings"), QString()); });
@@ -1774,15 +1741,12 @@ void ChatPanel::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF area(rect());
     p.setPen(Qt::NoPen);
-    p.setBrush(color(tokens::card));
-    p.drawRoundedRect(area, kRadius, kRadius);
-    ui::paintInsetLine(p, area, kRadius, color(line));
+    p.setBrush(color(tokens::chrome));
+    p.drawRect(area);
 }
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
-    m_resizeHandle->setGeometry(0, 0, 4, height());
-    m_resizeHandle->raise();
     QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
 }
 
@@ -1792,26 +1756,6 @@ void ChatPanel::showEvent(QShowEvent *event) {
 }
 
 bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == m_resizeHandle) {
-        switch (event->type()) {
-        case QEvent::MouseButtonPress: {
-            auto *mouse = static_cast<QMouseEvent *>(event);
-            if (mouse->button() != Qt::LeftButton) break;
-            m_dragFromX = int(mouse->globalPosition().x());
-            m_dragFromWidth = width();
-            return true;
-        }
-        case QEvent::MouseMove: {
-            auto *mouse = static_cast<QMouseEvent *>(event);
-            if (!(mouse->buttons() & Qt::LeftButton)) break;
-            // The right edge stays: dragging left widens the panel.
-            emit widthDragged(m_dragFromWidth - (int(mouse->globalPosition().x()) - m_dragFromX));
-            return true;
-        }
-        case QEvent::MouseButtonRelease: emit widthDragFinished(); return true;
-        default: break;
-        }
-    }
     if (watched == m_pinBar && event->type() == QEvent::MouseButtonRelease) {
         // Opens the card and scrolls it to the list's top + 24.
         const QString id = pinBarProposal();
@@ -1835,12 +1779,6 @@ bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
         QPainter p(m_pinBar);
         p.fillRect(m_pinBar->rect(), color(chrome));
         p.fillRect(QRect(0, m_pinBar->height() - 1, m_pinBar->width(), 1), color(line));
-        return false;
-    }
-    if (event->type() == QEvent::Paint && watched->objectName() == QLatin1String("chatChips")) {
-        auto *row = static_cast<QWidget *>(watched);
-        QPainter p(row);
-        p.fillRect(QRect(0, row->height() - 1, row->width(), 1), color(line));
         return false;
     }
     if (watched == m_search && event->type() == QEvent::KeyPress) {

@@ -16,7 +16,7 @@
 #include "scope_math.h"
 #include "scopes.h"
 #include "tray_shell.h"
-#include "workspace.h"
+#include "ui/stage_shell.h"
 
 #include <QAction>
 #include <QElapsedTimer>

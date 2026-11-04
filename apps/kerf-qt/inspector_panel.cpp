@@ -3110,7 +3110,7 @@ void InspectorPanel::buildMask(QVBoxLayout *into, const QString &name) {
     select->setText(name);
     select->setCheckable(true);
     select->setAutoRaise(true);
-    select->setToolTip(QStringLiteral("Show this mask's handles on the Program monitor"));
+    select->setToolTip(QStringLiteral("Show this mask's handles on the picture"));
     connect(select, &QToolButton::clicked, this, [this, name] {
         selectMask(name);
         emit maskSelected(name);

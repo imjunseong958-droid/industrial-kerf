@@ -394,6 +394,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     strip->setObjectName(QStringLiteral("binStrip"));
     strip->setFixedHeight(tokens::layout::strip);
     auto *stripLayout = new QHBoxLayout(strip);
+    m_stripLayout = stripLayout;
     stripLayout->setContentsMargins(tokens::space::s12, 0, tokens::space::s8, 0);
     stripLayout->setSpacing(tokens::space::s4);
     m_tabs = new BinTabs;
@@ -990,5 +991,11 @@ void ProjectPanel::rebuildRoles() {
         m_roleChecks << check;
     }
 }
+
+} // namespace kerf
+
+namespace kerf {
+
+void ProjectPanel::addToStrip(QWidget *widget) { m_stripLayout->addWidget(widget); }
 
 } // namespace kerf

@@ -17,28 +17,33 @@ class QComboBox;
 
 namespace kerf {
 
-// The timeline's geometry (mockup-spec 7). The track headers' column, 200
-// wide: patch, target, name, and the lock, eye or mute and solo toggles on
-// one line.
-constexpr int kTimelineLabelWidth = 200;
+// The timeline's geometry (the minimal mockup). The track heads' column, 140
+// wide: target and name, with the lock, eye or mute and solo toggles on hover.
+constexpr int kTimelineLabelWidth = 140;
 // Time zero sits 8 into the lanes (the mockup's x = 8 + t * px/s), so the
 // playhead's 9 pt head shows whole at the start.
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 8;
-constexpr int kTimelineTail = 30;
+constexpr int kTimelineTail = 8;
 // The ruler, 32 tall: a 12 pt row of comment marks, proposal bands and
 // sequence markers over the ticks and their labels.
 constexpr int kRulerHeight = 32;
 constexpr int kRulerMarkerRow = 12;
-// Track heights. M, each kind's default, is 36 for picture and 32 for
-// sound; S is 24 and L 48 for both. Fit shares the panel's height.
+// Track heights. M, each kind's default beside a vertical picture, is 36 for
+// picture and 32 for sound; S is 24 and L 48 for both. Fit shares the panel's
+// height. Under a wide picture the defaults fit the shorter lanes: V1 40, V2 28,
+// each track above them 20, and sound 24 (the design's nine fill 225 of them).
 constexpr int kVideoTrackHeight = 36;
 constexpr int kTrackHeight = 32;
 constexpr int kSmallTrackHeight = 24;
 constexpr int kLargeTrackHeight = 48;
 // The add-track row under the last track, shown under the pointer.
 constexpr int kAddLaneHeight = 32;
-// S is the shortest: a header's 20 pt patch, target and toggles fit it.
-constexpr int kMinTrackHeight = kSmallTrackHeight;
+constexpr int kWideV1Height = 40;
+constexpr int kWideV2Height = 28;
+constexpr int kWideVideoHeight = 20;
+constexpr int kWideAudioHeight = 24;
+// The shortest: a head's 20 pt target and toggles fit it.
+constexpr int kMinTrackHeight = kWideVideoHeight;
 constexpr int kMaxTrackHeight = 160;
 // How far from the line between two headers a drag still resizes the
 // upper track: a sixth of the shorter track, at least 2px and at most this.
@@ -47,16 +52,17 @@ constexpr int kTrimHandle = 8;
 
 struct TrackHeightPreset {
     const char *name;
-    int height; // 0: each track's default (kVideoTrackHeight or kTrackHeight).
+    int height; // 0: each track's default height.
 };
 
 // The track height bar's presets, S, M and L.
 constexpr TrackHeightPreset kTrackHeightPresets[] = {
     {"Small", kSmallTrackHeight}, {"Medium", 0}, {"Large", kLargeTrackHeight}};
 // The heights Option-scroll and Option-Up/Down step every track through.
-constexpr int kTrackHeightSteps[] = {24, 28, 32, 36, 42, 48, 56, 64, 72, 86, 104, 128, 160};
-// One pixel stays under a frame, so the pointer time cannot step in multi-second jumps.
-constexpr double kMinPixelsPerSecond = 80.0;
+constexpr int kTrackHeightSteps[] = {20, 24, 28, 32, 36, 42, 48, 56, 64, 72, 86, 104, 128, 160};
+// A fitted scale keeps a pixel to half a second at the least, so the pointer
+// time cannot step in longer jumps on a long program.
+constexpr double kMinPixelsPerSecond = 2.0;
 
 // While the pointer is driving the viewer, keep a frame when it is closer to
 // the target than the one already on screen. Equal distance still replaces so
@@ -153,11 +159,6 @@ void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &col
 QString popUpChevronsImagePath(const QColor &color);
 // The same for a checked check box's tick, drawn in `color` (`onAccent`).
 QString checkMarkImagePath(const QColor &color);
-// The same for a dock tab's close symbol (an ×) and its area's tabs menu
-// (a ⌄). The dock manager's own symbols are SVG files, which a Qt without
-// its SVG plugin (as Linux distributions split it out) leaves blank.
-QString closeMarkImagePath(const QColor &color);
-QString tabsMenuImagePath(const QColor &color);
 // And for a menu's check (in its 18-point check column) and a submenu's
 // chevron, so the menus Qt draws mark choices as the pop-ups do.
 QString menuCheckImagePath(const QColor &color);
@@ -247,10 +248,10 @@ void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip,
 enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End, MarkIn, MarkOut, Insert, Overwrite };
 
 // Transport symbols drawn on a 16-point grid so they share weight and size:
-// the Program monitor's playback, and the Source monitor's marks and edits.
+// the picture's playback, and the Source monitor's marks and edits.
 QIcon transportIcon(TransportGlyph glyph);
 
-// What a drag or click on the Program monitor draws: nothing, or a new mask
+// What a drag or click on the picture draws: nothing, or a new mask
 // on the selected picture clip.
 enum class MaskTool { None, Rectangle, Ellipse, Pen };
 

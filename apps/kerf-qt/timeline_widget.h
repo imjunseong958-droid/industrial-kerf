@@ -1,17 +1,17 @@
 #pragma once
 
-// The timeline (mockup-spec 7): the bar's tools and zoom, 200 pt track heads
-// with patch, target, lock, eye or mute and solo, and sync-lock on hover; a
-// 32 pt ruler with comment marks, proposal bands and sequence markers over
-// its ticks; and flat clips on the well: filmstrips, waveforms with the
-// volume rubber band, titles and captions, proposal veils and, while a
-// proposal plays as a preview, ghosts where its clips were.
+// The timeline (the minimal mockup): its 28 pt strip (transport, tools, snap,
+// zoom), 140 pt track heads with the target and name, and lock, eye or mute and
+// solo on hover (sync lock in the head's context menu); a 32 pt ruler with
+// comment marks, proposal bands, sequence markers and the program's marks over
+// its ticks; and flat clips on the well: filmstrips, waveforms with the volume
+// rubber band, titles and captions, proposal veils and, while a proposal plays
+// as a preview, ghosts where its clips were.
 //
 // Everything drawn is the snapshot's (clips, tracks, markers, gain keys) or
 // what the window feeds it from the engine: comment marks and proposal
-// bands from the review (TimelineWiring), QC findings from `check`, the
-// source patch from the Source viewer's media. Solo is monitoring only and
-// lasts the session. The targets show where a source edit lands (the first
+// bands from the review (TimelineWiring), QC findings from `check`. Solo is
+// monitoring only and lasts the session. The targets show where a source edit lands (the first
 // unlocked track of each kind, as MainWindow::sourceTargets() picks); they
 // are read-only until source edits follow them (setTargetsEditable).
 
@@ -36,6 +36,7 @@
 #include <QVector>
 #include <QWidget>
 
+#include <limits>
 #include <utility>
 
 class QAction;
@@ -102,9 +103,8 @@ public:
         QList<Ghost> ghosts;
     };
     // A track head's controls, left to right.
-    enum class HeaderControl { Patch, Target, Sync, Lock, Output, Solo };
+    enum class HeaderControl { Target, Lock, Output, Solo };
     // The track height bar's presets.
-    enum class HeightPreset { None = -1, Small = 0, Medium = 1, Large = 2 };
 
     explicit TimelineWidget(QWidget *parent = nullptr);
     void setProject(const QJsonObject &project, double duration, double fps);
@@ -118,14 +118,24 @@ public:
     double skimmerTime() const { return m_skimmerTime; }
     void setZoom(double zoom);
     void fitToWidth(int width);
+    // The viewport's width changed: a fitted timeline fits it again, a zoomed
+    // one remembers it for fitScale().
+    void followViewportWidth(int width);
+    // Back to the whole sequence, at the width last fitted or followed.
+    void refit();
     // The scale, in points per second of the sequence: the bar's zoom
     // control sets it between these, and hears of every change (a fit to
-    // the width included).
+    // the width and a fit the sequence's length moved included).
     static constexpr double kMinScale = 20.0;
     static constexpr double kMaxScale = 480.0;
     void setScale(double pixelsPerSecond);
     double scale() const { return pixelsPerSecond(); }
     bool isFitToWidth() const { return m_fitWidth > 0; }
+    // The scale that shows the whole sequence, zoomed or not; 0 until a width
+    // is known.
+    double fitScale() const;
+    // The least the zoom goes to: kMinScale, or a long sequence's fit below it.
+    double minScale() const;
     double fps() const { return m_fps; }
     void setArtwork(MediaArtwork *artwork);
     void clearSkimmer();
@@ -137,7 +147,7 @@ public:
     // A head's output (index 0: eye on picture, M on sound) and lock (1).
     QRect headerToggleRect(int row, int index) const;
     // Any of a head's controls, in widget coordinates; empty where the row
-    // has none (Solo on picture, the patch box with nothing patched).
+    // has none (Solo on picture).
     QRect headerControlRect(int row, HeaderControl control) const;
     // A clip's rectangle in widget coordinates; empty when it is not shown.
     QRect clipBounds(const QString &id) const;
@@ -166,9 +176,12 @@ public:
     // Clips a QC check found a problem in: a --neg dot in their name.
     void setQcClips(const QSet<QString> &clips);
     QSet<QString> qcClips() const { return m_qcClips; }
-    // The Source viewer's channels and where they go: track id → "v1", "a1".
-    void setSourcePatch(const QHash<QString, QString> &patch);
-    QHash<QString, QString> sourcePatch() const { return m_patch; }
+    // The default track heights for a wide sequence (aspect >= 1.2): they fit
+    // the shorter lanes under a wide picture.
+    void setWideSequence(bool wide);
+    bool wideSequence() const { return m_wideSequence; }
+    // The program's in and out marks, on the ruler; NaN for none.
+    void setMarkedRange(double in, double out);
     // The targeted tracks: the first unlocked picture and sound tracks, or,
     // once the targets are editable, those chosen with the target toggles.
     QStringList targetTracks() const;
@@ -201,10 +214,6 @@ public:
     // height. Option-Up and Option-Down, and (keeping the track under the
     // pointer in place) Option-scroll over the headers.
     void stepAllTrackHeights(int steps);
-    // S, M or L: every track at 24, at its default, or at 48.
-    void applyHeightPreset(HeightPreset preset);
-    // The preset every track is at, or None.
-    HeightPreset heightPreset() const;
     // Remember track heights for the project at `projectPath` in the
     // editor's settings (never in the project, which collaborators share),
     // and restore the ones remembered for it. An empty path forgets nothing
@@ -342,7 +351,7 @@ private:
     void stepAllTrackHeightsKeeping(int steps, int row);
     void setTrackHeight(int row, int height);
     // A track's height when it has none of its own.
-    int defaultTrackHeight(bool audio) const;
+    int defaultTrackHeight(bool audio, int number) const;
     void saveHeights() const;
     int tracksBottom() const { return m_rows.isEmpty() ? kRulerHeight : m_rows.constLast().bottom(); }
     // The last picture row, whose line parts picture from sound; -1 with none.
@@ -480,7 +489,9 @@ private:
     QHash<QString, QJsonObject> m_previewTracks;
     QList<CommentMark> m_marks;
     QSet<QString> m_qcClips;
-    QHash<QString, QString> m_patch;
+    bool m_wideSequence = false;
+    double m_markIn = std::numeric_limits<double>::quiet_NaN();
+    double m_markOut = std::numeric_limits<double>::quiet_NaN();
     QStringList m_targets;
     bool m_targetsChosen = false;
     bool m_targetsEditable = false;
@@ -521,6 +532,8 @@ private:
     double m_hoverFrame = -1.0;
     double m_zoom = 1.0;
     int m_fitWidth = 0;
+    // The width a fit would use, kept while zoomed in.
+    int m_viewportWidth = 0;
     double m_dragStart = 0.0;
     double m_dragDuration = 0.0;
     double m_pressTime = 0.0;
@@ -564,89 +577,77 @@ private:
     int m_lanesPainted = 0;
 };
 
-// The timeline bar's left half (mockup-spec 7.1), after "Timeline" and its
-// "N tracks · duration": the tools (Selection V, Razor C, Ripple B, Roll N,
-// Slip Y, Slide U), Snap, Add marker, Add track, and the Ask ghost, which
-// reads "Ask · N notes" while the comments panel is closed and notes are
-// open. It follows the timeline's tool and snapping; what it asks for goes
-// out as signals (TimelineWiring runs the commands), and a tool or snap
-// nobody listens for is set on the timeline directly.
+// The timeline's strip (mockup .tbar), 28 tall, padded 12: the transport, the
+// Selection and Razor tools (the others remain on keys and in the menu), Snap,
+// and at the far end the zoom: Zoom out, a 64 pt slider, Zoom in. The slider
+// runs over the timeline's scale on a log scale; the keys step it, as do
+// Command-= and Command-minus while the timeline has focus (shortcuts on the
+// timeline, owned by this strip), and it follows the timeline's own changes.
+// The fit's place on it is the fit: a zoomed view comes back to the whole
+// sequence there, and a long sequence's fit is its low end.
 class TimelineToolStrip final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
+    enum class Transport { Start, Previous, Play, Next, End };
+    static constexpr int kTransports = 5;
+    static constexpr int kSteps = 100;
+
     explicit TimelineToolStrip(TimelineWidget *timeline, QWidget *parent = nullptr);
+    ~TimelineToolStrip() override;
     ui::SegmentedControl *tools() const { return m_tools; }
     ui::IconButton *snapButton() const { return m_snap; }
-    ui::IconButton *markerButton() const { return m_marker; }
-    ui::IconButton *trackButton() const { return m_track; }
-    ui::GhostButton *askButton() const { return m_ask; }
+    ui::IconButton *transportButton(Transport which) const { return m_transport[int(which)]; }
+    ui::Slider *slider() const { return m_slider; }
+    ui::IconButton *zoomOutButton() const { return m_out; }
+    ui::IconButton *zoomInButton() const { return m_in; }
     // A control as the registry's command for it stands: enabled, and its
     // tip "name", or "name · why" while the command is unavailable, with
     // the command's shortcut in the keymap in use. TimelineWiring calls it
     // whenever the command's QAction changes; until then a control has no
     // shortcut in its tip.
-    enum class Control { Snap, Marker, Track, Ask };
     void followTool(TimelineTool tool, bool enabled, const QString &reason, const QString &shortcut);
-    void followControl(Control control, bool enabled, const QString &reason, const QString &shortcut);
+    void followSnap(bool enabled, const QString &reason, const QString &shortcut);
+    void followTransport(Transport which, bool enabled, const QString &reason, const QString &shortcut);
+    // Play shows Pause while the program plays.
+    void setPlaying(bool playing);
+    bool playing() const { return m_playing; }
     static QString toolName(TimelineTool tool);
-    static QString controlName(Control control);
-    // Open notes while the panel is closed; 0 reads plain "Ask".
-    void setAskNotes(int notes);
-    QString askText() const;
+    static QString transportName(Transport which);
+    // The tool's place in the strip, -1 for one it does not show.
     static int toolIndex(TimelineTool tool);
     static TimelineTool toolAt(int index);
-
-signals:
-    void toolRequested(TimelineTool tool);
-    void snapRequested(bool snapping);
-    void addMarkerRequested();
-    void addTrackRequested();
-    void askRequested();
-
-private:
-    TimelineWidget *m_timeline;
-    ui::SegmentedControl *m_tools = nullptr;
-    ui::IconButton *m_snap = nullptr;
-    ui::IconButton *m_marker = nullptr;
-    ui::IconButton *m_track = nullptr;
-    ui::GhostButton *m_ask = nullptr;
-};
-
-// The timeline bar's right half: Zoom out, a 64 pt slider and Zoom in,
-// then the track heights S, M, L and Fit. The slider runs over the
-// timeline's scale on a log scale; the keys step it, as do Command-= and
-// Command-minus while the timeline has focus (shortcuts on the timeline,
-// owned by this control); it follows the timeline's own changes (a fit to
-// the width), and the heights follow its tracks.
-class TimelineZoomControl final : public QWidget {
-    Q_OBJECT
-    KERF_TEST_FRIENDS
-public:
-    static constexpr int kSteps = 100;
-    explicit TimelineZoomControl(TimelineWidget *timeline, QWidget *parent = nullptr);
-    ~TimelineZoomControl() override;
-    ui::Slider *slider() const { return m_slider; }
-    ui::IconButton *zoomOutButton() const { return m_out; }
-    ui::IconButton *zoomInButton() const { return m_in; }
-    ui::SegmentedControl *heights() const { return m_heights; }
-    // A scale's place on the slider, and back.
-    static int position(double pixelsPerSecond);
-    static double scaleAt(int position);
+    // The slider's place for a scale, and back, between `least` (the
+    // timeline's minScale) and kMaxScale, evenly in ratio.
+    static int position(double pixelsPerSecond, double least = TimelineWidget::kMinScale);
+    static double scaleAt(int position, double least = TimelineWidget::kMinScale);
     // The zoom keys' shortcuts: Command-= (and Command-+), Command-minus.
     static QList<QKeySequence> zoomInKeys();
     static QList<QKeySequence> zoomOutKeys();
     // One step of the keys (a tenth of the slider) in or out.
     void step(int direction);
+    void zoomTo(int position);
+    // The fit's place on the slider, or -1 before a width is known.
+    int fitPosition() const;
+
+signals:
+    void toolRequested(TimelineTool tool);
+    void snapRequested(bool snapping);
+    void transportRequested(TimelineToolStrip::Transport which);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
 
 private:
-    void syncHeights();
     TimelineWidget *m_timeline;
+    ui::SegmentedControl *m_tools = nullptr;
+    ui::IconButton *m_snap = nullptr;
+    ui::IconButton *m_transport[kTransports] = {};
+    bool m_playing = false;
     QList<QPointer<QShortcut>> m_shortcuts;
     ui::Slider *m_slider = nullptr;
     ui::IconButton *m_out = nullptr;
     ui::IconButton *m_in = nullptr;
-    ui::SegmentedControl *m_heights = nullptr;
 };
 
 } // namespace kerf

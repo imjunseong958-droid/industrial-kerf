@@ -24,8 +24,8 @@ namespace kerf::tokens {
 // ---------------------------------------------------------------- colour (0.2)
 // Each colour is a QRgb (0xAARRGGBB); color() makes a QColor of it.
 
-constexpr QRgb surround = qRgb(0x0e, 0x0e, 0x0e);    // Program stage background
-constexpr QRgb surroundDim = qRgb(0x05, 0x05, 0x05); // stage with Dim on; window background
+constexpr QRgb surround = qRgb(0x0e, 0x0e, 0x0e);    // around the region picker's frame
+constexpr QRgb surroundDim = qRgb(0x05, 0x05, 0x05); // window background
 constexpr QRgb well = qRgb(0x12, 0x12, 0x12);        // bin grid, timeline lanes, scope plots, vectorscope chip
 constexpr QRgb chrome = qRgb(0x17, 0x17, 0x17);      // toolbar, strips, inspector, bands, status, pin bar, diff box
 constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // comments panel, Source viewer, menus, tooltips, tray panes, clips
@@ -71,8 +71,7 @@ constexpr QRgb roomTonePeak = qRgba(106, 106, 106, alpha(0.41));
 constexpr QRgb roomToneRms = qRgba(106, 106, 106, alpha(0.75));
 constexpr QRgb rubberBand = qRgb(0xa8, 0xa8, 0xa8);
 constexpr QRgb keyframe = qRgb(0xed, 0xed, 0xed);
-// The device frame's glass and the black screen around a letterboxed picture.
-constexpr QRgb deviceGlass = qRgb(0x0b, 0x0b, 0x0c);
+// The black around a letterboxed picture.
 constexpr QRgb deviceScreen = qRgb(0x00, 0x00, 0x00);
 } // namespace overlay
 
@@ -107,7 +106,7 @@ constexpr TypeStyle bodyName{13, 20, 500, false};      // comment names
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: Comments, Source, clip name
 constexpr TypeStyle control{12, 16, 400, false};       // controls, labels, rows, chips
 constexpr TypeStyle controlStrong{12, 16, 500, false}; // buttons, dock names, segment on
-constexpr TypeStyle meta{11, 16, 400, false};          // meta, roles, small labels, status bar
+constexpr TypeStyle meta{11, 16, 400, false};          // meta, roles, small labels, subtitle
 constexpr TypeStyle metaStrong{11, 16, 500, false};    // avatar initials
 constexpr TypeStyle timecode{12, 16, 400, true};       // timecodes in rows and links, values
 constexpr TypeStyle timecodeStrong{12, 16, 500, true}; // the transport's current timecode
@@ -189,7 +188,7 @@ namespace motion {
 constexpr int hover = 120;   // hover and colour changes, ms
 constexpr int fade = 160;    // popovers and fades
 constexpr int segment = 200; // the segmented control's sliding fill
-constexpr int move = 220;    // stage and device moves, panel open and close
+constexpr int move = 220;    // the kit's larger moves
 // The one easing curve: cubic-bezier(.22, 1, .36, 1).
 constexpr qreal easeX1 = 0.22;
 constexpr qreal easeY1 = 1.0;
@@ -211,23 +210,18 @@ namespace layout {
 constexpr int canvasWidth = 1600;
 constexpr int canvasHeight = 1000;
 constexpr int toolbar = 40;     // toolbar height
-constexpr int strip = 28;       // dock title strips, the timeline bar
-constexpr int status = 24;      // status bar height
-constexpr int inspector = 304;  // Inspector column width
-constexpr int bin = 272;        // media bin width
-constexpr int browser = 304;    // Effects/Titles/Presets browser width
-constexpr int band = 344;       // bottom band height
-constexpr int rail = 44;        // stage rail width
-constexpr int scrub = 56;       // scrub strip height
-constexpr int panel = 368;      // comments panel width beside a 16:9 picture
-constexpr int panelPhone = 480; // comments panel width beside a phone format
-constexpr int panelMin = 300;   // the comments panel's drag range
-constexpr int panelMax = 480;
-constexpr int stageTop = 8;     // the device's top in the stage
-constexpr int stageBottom = 8;  // under the scrub strip
-constexpr int stageMargin = 12; // device to rail, rail and panel to the stage edge
-constexpr int stageInset = 16;  // the Source viewer's left inset
-constexpr int seam = 1;         // every seam is a 1 pt line drawn inside its panel
+constexpr int strip = 28;       // the sheets' strips, the timeline's
+constexpr int inspector = 304;  // the Inspector sheet's width
+constexpr int bin = 272;        // the Media sheet's width
+constexpr int browser = 304;    // the Effects and titles sheet's width
+constexpr int band = 344;       // a tray's height, and the timeline's beside a vertical picture
+// The minimal layout (ui/stage_shell.h).
+constexpr int conversationWide = 400;  // the conversation beside a wide picture
+constexpr int conversationLeast = 300; // its least width there, and its least height over the timeline
+constexpr int leastPicture = 600;      // a wide picture's width before the conversation gives way
+constexpr int timelineLeast = 200;     // the timeline's least height
+constexpr int rightLeast = 560;        // what a vertical picture leaves on its right, at least
+constexpr int seam = 1;                // every seam is a 1 pt line
 } // namespace layout
 
 } // namespace kerf::tokens

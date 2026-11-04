@@ -31,6 +31,7 @@
 #include <QWidget>
 
 class QAbstractButton;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -134,6 +135,9 @@ public:
     // Whether an FFmpeg pixel format carries alpha (yuva420p, rgba, ...).
     static bool pixelFormatHasAlpha(const QString &pixFmt);
 
+    // A control at the end of the strip (the sheet's close button).
+    void addToStrip(QWidget *widget);
+
 signals:
     void openRequested(const QString &mediaId);
     // A right-click, on an item (its media id) or on the empty bin.
@@ -156,6 +160,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
+    QHBoxLayout *m_stripLayout = nullptr;
     void refresh();
     // Redraw every tile, for new artwork or appearance.
     void refreshTiles();

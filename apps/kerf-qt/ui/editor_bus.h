@@ -87,7 +87,8 @@ public:
     void setDuration(double seconds);
     void setPlaying(bool playing);
     void setSelection(const QStringList &clips);
-    // The workspace in use. workspaceChanged is sent when the name changes,
+    // The base state or the tray open ("Review", "Finish", "Deliver").
+    // workspaceChanged is sent when the name changes,
     // and with `reapplied` also when it does not: a workspace chosen, saved
     // as or reset has its stage applied again, so the regions re-apply
     // theirs (dim, the Inspector's page and kind).
@@ -125,8 +126,6 @@ signals:
     void drawingCancelled();
     // Open the composer with `text`, as a reply to `threadId` when it is set.
     void askPrefill(const QString &text, const QString &threadId);
-    // Open (true) or close the comments panel.
-    void commentsPanelRequested(bool open);
     void currentThreadChanged(const QString &id);
     // The comments panel's thread under the pointer (empty when none), and
     // the comment last chosen there: the stage shows their overlap box and

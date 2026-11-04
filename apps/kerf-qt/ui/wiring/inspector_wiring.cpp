@@ -6,9 +6,8 @@
 #include "inspector_panel.h"
 #include "main_window.h"
 #include "review_model.h"
-#include "workspace.h"
+#include "stage_shell.h"
 
-#include <DockWidget.h>
 
 #include <QAction>
 #include <QInputDialog>
@@ -36,7 +35,7 @@ void InspectorWiring::attach() {
     InspectorPanel *inspector = m_window->m_inspector;
     if (!inspector || !m_bus) return;
     // Finish shows the colour wheels over the Video pane.
-    const auto finish = [this, inspector] { inspector->setFinish(m_bus->workspace() == QLatin1String(Workspace::kFinish)); };
+    const auto finish = [this, inspector] { inspector->setFinish(m_bus->workspace() == QLatin1String("Finish")); };
     connect(m_bus, &EditorBus::workspaceChanged, inspector, finish);
     finish();
     connect(m_bus, &EditorBus::event, this, &InspectorWiring::hear);
@@ -45,7 +44,6 @@ void InspectorWiring::attach() {
     inspector->setThreadResolver([this](const QString &proposal) { return threadOf(proposal); });
     // The hint's Show: the comments panel open on the proposal's thread.
     connect(inspector, &InspectorPanel::proposalShowRequested, m_bus, [this](const QString &thread, const QString &) {
-        emit m_bus->commentsPanelRequested(true);
         emit m_bus->openThread(thread);
     });
     connect(inspector, &InspectorPanel::savePresetRequested, this, &InspectorWiring::savePreset);
@@ -60,7 +58,7 @@ void InspectorWiring::attachCommands() {
         if (id != QStringLiteral("inspector.audio") && id != QStringLiteral("inspector.info")) return;
         InspectorColumn *column = m_window->m_inspectorColumn;
         if (!column) return;
-        if (ads::CDockWidget *panel = m_window->m_workspace->panel(QStringLiteral("inspector")); panel && panel->isClosed()) panel->toggleView(true);
+        m_window->m_shell->setSheet(StageShell::Sheet::Inspector);
         column->setPage(InspectorColumn::Page::Inspector);
         column->setKind(id == QStringLiteral("inspector.audio") ? InspectorColumn::Kind::Audio : InspectorColumn::Kind::Info);
         m_window->syncPanelCommands();

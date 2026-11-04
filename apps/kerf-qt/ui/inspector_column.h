@@ -1,17 +1,18 @@
 #pragma once
 
-// The Inspector column (mockup-spec 5): a 28-point strip with the segmented
+// The Inspector sheet (mockup-spec 5): a 28-point strip with the segmented
 // Inspector | Source and the kinds Video, Audio and Info, over the pages it
 // stacks: the Inspector (InspectorPanel), the compact Source monitor, and
-// in the Deliver workspace, while Video is chosen, the Deliver pane.
+// while the Deliver tray is open and Video is chosen, the Deliver pane.
 //
 // The kinds are the Inspector's panes (InspectorPanel::setPane): Video,
-// Audio and Info. Choosing a kind turns the Inspector page back on; a
-// workspace switch goes back to the Inspector page (spec 10).
+// Audio and Info. Choosing a kind turns the Inspector page back on; a tray
+// opening or closing goes back to the Inspector page (spec 10).
 
 #include <QWidget>
 
 class QAbstractButton;
+class QHBoxLayout;
 class QStackedWidget;
 
 namespace kerf {
@@ -47,12 +48,14 @@ public:
     static bool kindAvailable(Kind kind);
     static QString kindId(Kind kind);
     static Kind kindFromId(const QString &id);
-    // The Deliver pane stands in for the Inspector (Deliver workspace, Video).
+    // The Deliver pane stands in for the Inspector (the Deliver tray, Video).
     bool deliverShown() const;
     QAbstractButton *pageButton(Page page) const;
     QAbstractButton *kindButton(Kind kind) const;
     // The widget the column shows now.
     QWidget *currentPage() const;
+    // A control at the end of the strip (the sheet's close button).
+    void addToStrip(QWidget *widget);
 
 signals:
     void pageChanged(InspectorColumn::Page page);
@@ -65,6 +68,7 @@ private:
     void showCurrent();
 
     EditorBus *m_bus = nullptr;
+    QHBoxLayout *m_stripLayout = nullptr;
     InspectorPanel *m_inspector = nullptr;
     SourceMonitorPanel *m_source = nullptr;
     DeliverPane *m_deliver = nullptr;

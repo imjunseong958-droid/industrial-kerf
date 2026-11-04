@@ -12,14 +12,12 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -69,7 +67,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -78,9 +75,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -92,8 +86,6 @@
 #include "editor_bus.h"
 #include "finish_tray.h"
 #include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 #include "source_state.h"
 #include "wiring/source_wiring.h"
 
@@ -106,16 +98,10 @@ void MainWindow::openSource(const QString &mediaId) {
         const QJsonObject source = value.toObject();
         if (source.value(QStringLiteral("id")).toString() != mediaId) continue;
         m_sourceMonitor->open(source, QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString()));
-        // Where the stage shows its Source column (Edit, the phone
-        // formats), the media opens there; elsewhere on the Inspector
-        // column's Source page, its column opened for it.
-        if (m_stageSource && m_stageSource->isVisible()) {
-            m_stageSource->setFocus();
-            return;
-        }
-        if (ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("inspector")))
-            if (panel->isClosed()) panel->toggleView(true);
+        // On the Inspector sheet's Source page, opened for it.
+        m_shell->setSheet(StageShell::Sheet::Inspector);
         m_inspectorColumn->setPage(InspectorColumn::Page::Source);
+        syncPanelCommands();
         m_sourceMonitor->setFocus();
         return;
     }
@@ -175,17 +161,13 @@ QImage MainWindow::sourceFrame(const QJsonObject &clip, double timelineTime) con
                ? QImage::fromData(process.readAllStandardOutput(), "PNG") : QImage();
 }
 
-// The Source viewers: the Inspector column's compact Source pane, and the
-// stage column's (Edit and the phone formats, placed by the viewer). Both
-// show the one SourceState the region's wiring keeps.
+// The Source viewer: the Inspector column's Source pane, showing the
+// SourceState the region's wiring keeps.
 void MainWindow::buildSource() {
     SourceState *state = m_sourceWiring->state();
     state->setArtwork(m_artwork);
-    m_sourceMonitor = new SourceMonitorPanel(state, SourceMonitorPanel::Mode::Compact);
+    m_sourceMonitor = new SourceMonitorPanel(state);
     connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
-    m_stageSource = new SourceMonitorPanel(state, SourceMonitorPanel::Mode::Stage, this);
-    m_stageSource->setObjectName(QStringLiteral("stageSource"));
-    m_stageSource->hide();
     m_sourceWiring->attach();
 }
 
