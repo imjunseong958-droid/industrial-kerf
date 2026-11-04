@@ -821,11 +821,12 @@ impl Worker {
         self.position = next;
         self.dropped = 0;
         self.reset_drawn();
+        let picture = self.picture_time();
         let scrub = !exact && !was_playing;
         self.preview_rough = scrub;
         if scrub {
             self.decode_queue.clear();
-            self.decode_cursor = next;
+            self.decode_cursor = picture;
             self.needs_retarget = true;
             self.retarget_early = true;
             self.preview_requested = true;
@@ -835,7 +836,7 @@ impl Worker {
             self.preview_requested = !was_playing;
         } else {
             self.decode_queue.clear();
-            self.decode_cursor = next;
+            self.decode_cursor = picture;
             self.needs_retarget = true;
             self.retarget_early = false;
             self.preview_requested = !was_playing;
@@ -850,6 +851,17 @@ impl Worker {
         // so a state transition queued before the seek cannot be filtered
         // away without leaving clients with an out-of-date state.
         self.emit(PlaybackEvent::StateChanged(self.state));
+    }
+
+    /// Where the picture for the playhead comes from: the playhead itself,
+    /// or at the sequence's end, where no frame starts, the last frame.
+    fn picture_time(&self) -> f64 {
+        let duration = self.timeline.duration;
+        if duration > 0.0 && self.position >= duration {
+            (duration - frame_interval(self.timeline.fps)).max(0.0)
+        } else {
+            self.position
+        }
     }
 
     fn seek_waiting(&self) -> bool {
@@ -1026,7 +1038,7 @@ impl Worker {
             .is_some_and(|decoder| decoder.is_cancelled())
         {
             self.preview_requested = false;
-        } else if self.timeline.video_at_ref(self.position).is_none() {
+        } else if self.timeline.video_at_ref(self.picture_time()).is_none() {
             self.stop_decoder();
             self.preview_requested = false;
         } else if self.decoder.is_none() {
@@ -1041,7 +1053,8 @@ impl Worker {
         };
         match decoded {
             Ok(Some(decoded)) => {
-                let Some((clip_index, _)) = self.timeline.video_at_indices(self.position) else {
+                let picture = self.picture_time();
+                let Some((clip_index, _)) = self.timeline.video_at_indices(picture) else {
                     return;
                 };
                 let timeline_time = decoded
@@ -1049,7 +1062,7 @@ impl Worker {
                     .map(|source_time| {
                         self.timeline.clips()[clip_index].timeline_time_for_source(source_time)
                     })
-                    .unwrap_or(self.position);
+                    .unwrap_or(picture);
                 let frame = self.make_frame(clip_index, decoded, timeline_time);
                 self.emit(PlaybackEvent::Frame(frame));
             }
@@ -1059,7 +1072,8 @@ impl Worker {
     }
 
     fn install_decoder(&mut self, release_early: bool) -> Result<(), PlaybackError> {
-        let Some((clip_index, source_index)) = self.timeline.video_at_indices(self.position) else {
+        let timeline_time = self.picture_time();
+        let Some((clip_index, source_index)) = self.timeline.video_at_indices(timeline_time) else {
             self.stop_decoder();
             return Ok(());
         };
@@ -1067,7 +1081,6 @@ impl Worker {
         let source = self.timeline.sources()[source_index].clone();
         let serve = self.serve_epoch;
         let epoch = Arc::clone(&self.epoch);
-        let timeline_time = self.position;
         if let Some(mut decoder) = self.decoder.take() {
             if decoder.same_source(&source.path)
                 && decoder

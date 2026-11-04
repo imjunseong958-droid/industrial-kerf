@@ -244,6 +244,76 @@ fn seeking_back_after_a_skim_shows_the_playheads_frame() {
     }
 }
 
+/// The end of a sequence has no frame of its own: the playhead stays there and
+/// the picture is the last frame, not whatever was showing before.
+#[test]
+fn seeking_to_the_end_shows_the_last_frame() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("source.mp4");
+    let status = Command::new(&binary)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=10",
+            "-t",
+            "2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            source.to_str().expect("utf8 source path"),
+        ])
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+
+    let session = PlaybackSession::open(
+        project(&source, "The end", 20),
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36),
+    )
+    .expect("open playback session");
+    // The frame near `target`, and the last clock position before it.
+    let frame_near = |target: f64, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut clock = None;
+        while Instant::now() < deadline {
+            match session.next_event_timeout(Duration::from_millis(100)) {
+                Some(PlaybackEvent::Frame(frame))
+                    if (frame.timeline_time - target).abs() < 0.05 =>
+                {
+                    return clock;
+                }
+                Some(PlaybackEvent::Clock(now)) => clock = Some(now.position),
+                _ => {}
+            }
+        }
+        panic!("no frame near {target} after {what}");
+    };
+
+    session.seek(1.0).expect("seek inside");
+    frame_near(1.0, "the seek inside");
+    session.seek(2.0).expect("seek to the end");
+    let clock = frame_near(1.9, "the seek to the end");
+    assert_eq!(clock, Some(2.0), "the playhead stays at the end");
+    session.seek(0.5).expect("seek back");
+    frame_near(0.5, "the seek back from the end");
+    // A skim to the end settles on the same frame.
+    session.scrub(2.0).expect("skim to the end");
+    session.seek(2.0).expect("settle the skim");
+    frame_near(1.9, "the skim to the end");
+}
+
 #[test]
 fn raster_effects_play_live_inside_the_letterbox() {
     let binary = ffmpeg_binary();
