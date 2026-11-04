@@ -700,8 +700,8 @@ private slots:
         QCOMPARE(design.majorFrames, 50);
         QCOMPARE(design.labelFrames, 100);
         QCOMPARE(rulerTicks(480.0, 25.0).minorFrames, 1);
-        QCOMPARE(rulerTicks(100.0, 25.0).labelFrames, 20);
-        // A second or more apart, labels land on whole seconds at any rate.
+        QCOMPARE(rulerTicks(100.0, 25.0).labelFrames, 25);
+        // Labels land on whole seconds at any rate and zoom.
         const auto ticks = [](double pps, double fps) {
             const RulerTicks t = rulerTicks(pps, fps);
             return std::array<qint64, 3>{t.minorFrames, t.majorFrames, t.labelFrames};
@@ -711,17 +711,22 @@ private slots:
         QCOMPARE(ticks(26.8, 30.0), (std::array<qint64, 3>{12, 60, 120}));
         QCOMPARE(ticks(20.0, 60.0), (std::array<qint64, 3>{24, 120, 240}));
         QCOMPARE(ticks(2.0, 25.0), (std::array<qint64, 3>{150, 750, 1500}));
-        for (const double pps : {2.0, 8.0, 26.8, 60.0, 90.0, 480.0})
+        // Further in than a label a second, only the ticks get finer.
+        QCOMPARE(ticks(96.0, 24.0), (std::array<qint64, 3>{2, 12, 24}));
+        QCOMPARE(ticks(192.0, 24.0), (std::array<qint64, 3>{1, 6, 24}));
+        QCOMPARE(ticks(480.0, 24.0), (std::array<qint64, 3>{1, 6, 24}));
+        QCOMPARE(ticks(480.0, 25.0), (std::array<qint64, 3>{1, 5, 25}));
+        for (const double pps : {2.0, 8.0, 26.8, 60.0, 80.0, 90.0, 96.0, 120.0, 192.0, 480.0})
             for (const double fps : {23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 60.0}) {
                 const RulerTicks t = rulerTicks(pps, fps);
                 QVERIFY(double(t.minorFrames) / fps * pps >= 7.9);
                 QCOMPARE(t.majorFrames % t.minorFrames, 0);
                 QCOMPARE(t.labelFrames % t.majorFrames, 0);
+                QCOMPARE(t.labelFrames % qint64(std::lround(fps)), 0);
             }
-        QCOMPARE(rulerLabel(96, 24.0, 96), QStringLiteral("00:04"));
-        QCOMPARE(rulerLabel(100, 25.0, 100), QStringLiteral("00:04"));
-        QCOMPARE(rulerLabel(100, 24.0, 100), QStringLiteral("00:04:04"));
-        QCOMPARE(rulerLabel(25 * 3725, 25.0, 250), QStringLiteral("1:02:05"));
+        QCOMPARE(rulerLabel(96, 24.0), QStringLiteral("00:04"));
+        QCOMPARE(rulerLabel(100, 25.0), QStringLiteral("00:04"));
+        QCOMPARE(rulerLabel(25 * 3725, 25.0), QStringLiteral("1:02:05"));
 
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);

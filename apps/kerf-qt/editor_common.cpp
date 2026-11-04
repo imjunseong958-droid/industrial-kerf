@@ -142,24 +142,19 @@ QString timelineTimecode(double seconds, double fps) {
 
 RulerTicks rulerTicks(double pixelsPerSecond, double fps) {
     const double rate = std::max(1.0, fps);
-    const double perFrame = std::max(pixelsPerSecond, 1e-6) / rate;
-    // 1, 2, 5, 10, 20, 50 ... frames: the first whose ticks stand 8 apart.
-    qint64 minor = 1;
-    for (qint64 decade = 1; decade < (qint64(1) << 40); decade *= 10) {
-        bool found = false;
-        for (const qint64 step : {decade, 2 * decade, 5 * decade}) {
-            if (double(step) * perFrame >= 8.0) {
-                minor = step;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-    }
     const qint64 perSecond = std::max<qint64>(1, std::llround(rate));
-    if (minor * 10 < perSecond) return {minor, minor * 5, minor * 10};
     // Ten minor ticks 8 apart is the least a label step may span.
     const double least = 80.0 / std::max(pixelsPerSecond, 1e-6);
+    if (least <= 1.0) {
+        // Labels stop at one a second; further in, only the ticks get finer.
+        const double perFrame = std::max(pixelsPerSecond, 1e-6) / rate;
+        qint64 minor = 1;
+        while (perSecond % minor != 0 || double(minor) * perFrame < 8.0) ++minor;
+        // The first whole part of the second at least five minor ticks long.
+        qint64 major = minor * 5;
+        while (major < perSecond && perSecond % major != 0) major += minor;
+        return {minor, std::min(major, perSecond), perSecond};
+    }
     qint64 seconds = 0;
     for (const qint64 step : {1, 2, 4, 8, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600}) {
         if (double(step) >= least) {
@@ -176,18 +171,14 @@ RulerTicks rulerTicks(double pixelsPerSecond, double fps) {
     return {label, label, label};
 }
 
-QString rulerLabel(qint64 frame, double fps, qint64 labelFrames) {
+QString rulerLabel(qint64 frame, double fps) {
     const int frameRate = std::max(1, static_cast<int>(std::lround(std::max(1.0, fps))));
-    const qint64 at = std::max<qint64>(0, frame);
-    const qint64 seconds = at / frameRate;
-    const int frames = static_cast<int>(at % frameRate);
+    const qint64 seconds = std::max<qint64>(0, frame) / frameRate;
     const int hours = static_cast<int>(seconds / 3600);
     const int minutes = static_cast<int>((seconds / 60) % 60);
     const int secs = static_cast<int>(seconds % 60);
-    QString text = hours > 0 ? QStringLiteral("%1:%2:%3").arg(hours).arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'))
-                             : QStringLiteral("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'));
-    if (labelFrames % frameRate != 0) text += QStringLiteral(":%1").arg(frames, 2, 10, QLatin1Char('0'));
-    return text;
+    return hours > 0 ? QStringLiteral("%1:%2:%3").arg(hours).arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'))
+                     : QStringLiteral("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'));
 }
 
 QString clipName(const QJsonObject &clip) {

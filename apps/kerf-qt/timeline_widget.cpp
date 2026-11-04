@@ -1906,7 +1906,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
             labelX = x;
             labelEnd = x;
             if (frame < lastFrame) {
-                const QString text = rulerLabel(frame, m_fps, ticks.labelFrames);
+                const QString text = rulerLabel(frame, m_fps);
                 const int w = metrics.horizontalAdvance(text);
                 labelEnd = x + 4 + w + 4;
                 // Faded out within 24 of the playhead.
