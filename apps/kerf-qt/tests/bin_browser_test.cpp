@@ -207,6 +207,10 @@ private slots:
         QCOMPARE(names.value("d"), QStringLiteral("Interview-bbbb2222.mov"));
         QCOMPARE(names.value("e"), QStringLiteral("harbor"));
         // Hundredths carry into the seconds and minutes.
+        QCOMPARE(pathWithToolFolders(QStringLiteral("/usr/bin:/bin"), QStringLiteral("/Users/a")),
+                 QStringLiteral("/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/a/.local/bin"));
+        QCOMPARE(pathWithToolFolders(QStringLiteral("/opt/homebrew/bin:/usr/bin"), QStringLiteral("/Users/a")),
+                 QStringLiteral("/opt/homebrew/bin:/usr/bin:/opt/homebrew/sbin:/usr/local/bin:/Users/a/.local/bin"));
         QCOMPARE(prettyTime(59.996), QStringLiteral("01:00.00"));
         QCOMPARE(prettyTime(8.0), QStringLiteral("00:08.00"));
         QCOMPARE(prettyTime(61.25), QStringLiteral("01:01.25"));

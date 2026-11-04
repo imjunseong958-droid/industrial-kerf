@@ -28,20 +28,20 @@ constexpr int kTimelineTail = 8;
 // sequence markers over the ticks and their labels.
 constexpr int kRulerHeight = 32;
 constexpr int kRulerMarkerRow = 12;
-// Track heights. M, each kind's default beside a vertical picture, is 36 for
-// picture and 32 for sound; S is 24 and L 48 for both. Fit shares the panel's
-// height. Under a wide picture the defaults fit the shorter lanes: V1 40, V2 28,
-// each track above them 20, and sound 24 (the design's nine fill 225 of them).
-constexpr int kVideoTrackHeight = 36;
-constexpr int kTrackHeight = 32;
-constexpr int kSmallTrackHeight = 24;
+// Track heights, small so a big edit shows at once. M, each kind's default
+// beside a vertical picture, is 28 for picture and 24 for sound; S is 20 and
+// L 48 for both. Fit shares the panel's height. Under a wide picture the
+// defaults are V1 28, V2 24, and 20 for each track above them and for sound.
+constexpr int kVideoTrackHeight = 28;
+constexpr int kTrackHeight = 24;
+constexpr int kSmallTrackHeight = 20;
 constexpr int kLargeTrackHeight = 48;
 // The add-track row under the last track, shown under the pointer.
 constexpr int kAddLaneHeight = 32;
-constexpr int kWideV1Height = 40;
-constexpr int kWideV2Height = 28;
+constexpr int kWideV1Height = 28;
+constexpr int kWideV2Height = 24;
 constexpr int kWideVideoHeight = 20;
-constexpr int kWideAudioHeight = 24;
+constexpr int kWideAudioHeight = 20;
 // The shortest: a head's 20 pt target and toggles fit it.
 constexpr int kMinTrackHeight = kWideVideoHeight;
 constexpr int kMaxTrackHeight = 160;
@@ -63,6 +63,8 @@ constexpr int kTrackHeightSteps[] = {20, 24, 28, 32, 36, 42, 48, 56, 64, 72, 86,
 // A fitted scale keeps a pixel to half a second at the least, so the pointer
 // time cannot step in longer jumps on a long program.
 constexpr double kMinPixelsPerSecond = 2.0;
+// What the ruler spans with nothing on the sequence, so it has labels to read.
+constexpr double kEmptySequenceSeconds = 30.0;
 
 // While the pointer is driving the viewer, keep a frame when it is closer to
 // the target than the one already on screen. Equal distance still replaces so
@@ -74,6 +76,11 @@ QString validateInboundMcpConfig(const QByteArray &raw);
 QString mcpExecutable(const QString &projectDirectory);
 
 QString prettyTime(double seconds);
+
+// `path` with the folders package managers install tools into after it, those
+// it lacks. Finder and the Dock give an app no shell PATH, so without them it
+// finds neither Homebrew's gh and git-lfs nor what ~/.local holds.
+QString pathWithToolFolders(const QString &path, const QString &home);
 
 QString timelineTimecode(double seconds, double fps);
 

@@ -193,7 +193,7 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
     const double scaleBefore = pixelsPerSecond();
     const double leastBefore = minScale();
     m_project = project;
-    m_duration = std::max(duration, 1.0);
+    m_duration = duration > 0.0 ? std::max(duration, 1.0) : kEmptySequenceSeconds;
     // A zoomed view stays in reach of a sequence that got shorter.
     if (m_fitWidth <= 0) m_zoom = std::max(m_zoom, minScale() / 72.0);
     m_fps = fps > 0.0 ? fps : 24.0;

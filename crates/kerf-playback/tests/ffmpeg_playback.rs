@@ -168,6 +168,82 @@ fn small_forward_seek_still_delivers_a_later_frame() {
     assert!(second.has_valid_pixels());
 }
 
+/// Leaving a skim sends the playhead's seek, and the editor sends it again
+/// when the pointer settles: however they land, its frame must come back.
+#[test]
+fn seeking_back_after_a_skim_shows_the_playheads_frame() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("source.mp4");
+    let status = Command::new(&binary)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=10",
+            "-t",
+            "30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            source.to_str().expect("utf8 source path"),
+        ])
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+
+    let session = PlaybackSession::open(
+        project(&source, "Skim back", 300),
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36),
+    )
+    .expect("open playback session");
+    let frame_near = |target: f64, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(PlaybackEvent::Frame(frame)) =
+                session.next_event_timeout(Duration::from_millis(100))
+            {
+                if (frame.timeline_time - target).abs() < 0.15 {
+                    return;
+                }
+            }
+        }
+        panic!("no frame near {target} after {what}");
+    };
+
+    session.seek(2.0).expect("seek to the playhead");
+    frame_near(2.0, "the first seek");
+    // The pointer gone before its skim drew anything.
+    session.scrub(18.0).expect("skim");
+    session.seek(2.0).expect("seek back");
+    frame_near(2.0, "leaving the skim at once");
+    // The pointer settled, then gone: the seek back, and the same seek again.
+    for apart in [0, 2, 4, 8, 16, 32] {
+        session.scrub(25.0).expect("skim");
+        std::thread::sleep(Duration::from_millis(50));
+        session.seek(25.0).expect("settle the skim");
+        frame_near(25.0, "settling the skim");
+        session.seek(2.0).expect("seek back");
+        std::thread::sleep(Duration::from_millis(apart));
+        session.seek(2.0).expect("the same seek again");
+        frame_near(2.0, &format!("two seeks back {apart} ms apart"));
+        while session
+            .next_event_timeout(Duration::from_millis(100))
+            .is_some()
+        {}
+    }
+}
+
 #[test]
 fn raster_effects_play_live_inside_the_letterbox() {
     let binary = ffmpeg_binary();

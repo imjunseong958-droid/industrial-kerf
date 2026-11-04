@@ -123,6 +123,14 @@ QString prettyTime(double seconds) {
         .arg(hundredths % 100, 2, 10, QLatin1Char('0'));
 }
 
+QString pathWithToolFolders(const QString &path, const QString &home) {
+    QStringList folders = path.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+    for (const QString &folder : {QStringLiteral("/opt/homebrew/bin"), QStringLiteral("/opt/homebrew/sbin"),
+                                  QStringLiteral("/usr/local/bin"), home + QStringLiteral("/.local/bin")})
+        if (!folders.contains(folder)) folders.append(folder);
+    return folders.join(QLatin1Char(':'));
+}
+
 QString timelineTimecode(double seconds, double fps) {
     const double rate = std::max(1.0, fps);
     const int frameRate = std::max(1, static_cast<int>(std::lround(rate)));

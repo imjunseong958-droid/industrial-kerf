@@ -112,8 +112,8 @@ eye turns a picture track's output on and off (M mutes a sound track), and
 the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
-Tracks start dense (28 pt picture tracks, 22 pt sound tracks), for edits with
-many layers. The timeline's strip holds the transport, the Selection and
+Tracks start dense, for edits with many layers: under a wide picture V1 is
+28 pt, V2 24 pt, and every other track 20 pt. The timeline's strip holds the transport, the Selection and
 Razor tools, Snap and a zoom (− slider +). The sequence starts fitted to the
 lanes, and stays fitted as it and the window change; the fit has a place on the
 slider, and − stops there on its way back: at a long sequence's fit, the
