@@ -176,7 +176,12 @@ fn protocol_markdown(metadata: &Value, tools: &[ToolDefinition]) -> Result<Strin
     output.push_str("# Kerf agent protocol\n\n");
     write_metadata_markdown(&mut output, metadata);
     output.push_str(
-        "All project state is owned by `kerfd`. Agents read the annotated `.kerf` document with `look`, change it with `edit` scripts, and render with `render`. Every edit is a proposal until a person accepts it. The resource `kerf://reference` holds the edit language and every property, effect, transition, and generator. Generated files are documentation only.\n\n",
+        "All project state is owned by `kerfd`. Agents read the annotated `.kerf` document with `look`, change it with `edit` scripts, render with `render`, and leave notes for the people reviewing with `note`. Every edit is a proposal until a person accepts it. The resource `kerf://reference` holds the edit language and every property, effect, transition, and generator. Generated files are documentation only.\n\n",
+    );
+    output.push_str("## Proposals and notes\n\n");
+    output.push_str(
+        "Proposals and notes carry their author: the MCP client's `clientInfo.name` from `initialize` (Claude Code, Cursor, and Codex by those names, any other client as it named itself), with the role `MCP`. Several proposals can wait for review at once. `edit` with `revise` (or `extend`) and a pending proposal's id makes that proposal's next version, v2, v3, and so on; the earlier versions stay visible and can still be accepted in its place. Its result gives `version` and `supersedes`.\n\n\
+A note is a comment in the project's review log (`review/comments.jsonl`), not the document: it never makes a proposal stale and is not in the undo history. It can sit at a time or range of the program sequence (`at`, `duration`), reply to a comment (`parent`, a reply to a reply joins its thread), be about a proposal (`proposal`), and carry `tags` and `blocking`. People see it in the editor's review panel beside the timeline.\n\n",
     );
     output.push_str("## Tools\n\n");
     for tool in tools {

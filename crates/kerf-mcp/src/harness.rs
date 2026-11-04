@@ -1,10 +1,12 @@
-//! The agent harness on the kernel: `look`, `edit`, and `render`.
+//! The agent harness on the kernel: `look`, `edit`, `render`, and `note`.
 //!
 //! An agent works from two pieces of context: the annotated `.kerf` document
 //! and the language reference. It looks at media and frames, changes the
-//! project with one edit script, and renders. Each edit becomes a proposal
-//! for the user, returned with its document diff, the check findings, and a
-//! before/after preview of the range it changed.
+//! project with one edit script, renders, and leaves notes for the people
+//! reviewing. Each edit becomes a proposal for the user, returned with its
+//! document diff, the check findings, and a before/after preview of the
+//! range it changed. Proposals and notes are by the router's author: Kerf,
+//! or the MCP client that made them.
 
 use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;
@@ -15,13 +17,14 @@ use kerf_lang::{
 };
 use kerf_model::{Catalog, Content, Media, Project, Sequence, Time};
 use kerf_runtime::{
-    CachedFacts, PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeClient,
-    RuntimeError,
+    CachedFacts, NewComment, PendingProposal, ProposalEntry, ProposalFreshness, RenderJob,
+    RenderRange, RuntimeClient, RuntimeError, StateSnapshot,
 };
 use kerf_skills::Skill;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,7 +36,7 @@ static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// The tools every agent and MCP client uses.
-pub const TOOL_NAMES: &[&str] = &["look", "edit", "render"];
+pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "note"];
 
 /// As many frames as one tool result carries to a model.
 const MAX_LOOK_FRAMES: usize = kerf_agent::MAX_TOOL_RESULT_IMAGES;
@@ -68,11 +71,18 @@ its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview: the frames \
 either side of each cut it made or moved, and the middle of a clip it changed \
-in place. The project does not change until the user accepts it. Pass a \
-pending proposal's id as `extend` to run more lines on top of it, or as \
-`revise` to replace it.
+in place. The project does not change until the user accepts it. Several \
+proposals can wait side by side. Pass a pending proposal's id as `extend` to \
+run more lines on top of it, or as `revise` to replace it: either way it \
+becomes that proposal's next version (v2, v3), and the user can still see \
+the versions before it.
 - `render` renders the sequence, or a range of it, to a file; with \
   `proposal`, what that proposal would make.
+- `note` leaves a comment in the project's review thread, where the people \
+  reviewing the cut read it: at a time or range of the sequence, as a reply \
+  to a comment with `parent`, or about a proposal with `proposal` (say what \
+  changed in a new version there). Use it for what is worth keeping beside \
+  the cut, not to answer the person you are talking with.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
@@ -92,8 +102,11 @@ earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, a frame or two of another shot at \
-a clip's edge (from the media's index), and sound cut inside a word (known once \
-a transcript of that media has been made).
+a clip's edge (from the media's index), sound cut inside a word (known once \
+a transcript of that media has been made), titles and captions outside 90% \
+title safe or over each other (with the overlap's rect and depth in pixels), \
+and captions faster than 17 characters a second, up for less than 5/6 of a \
+second, or less than 2 frames after the one before.
 
 Work like an editor. Look at the footage before choosing ranges, and look at \
 the proposal before saying it is done: its preview, its findings, and with \
@@ -124,11 +137,55 @@ pub fn context(runtime: &RuntimeClient) -> Result<String, String> {
             "# … the document continues; `look` returns all of it"
         )
     );
-    if let Some(status) = proposal_status(state.pending_proposal.as_ref()) {
+    if let Some(status) = proposals_status(&state) {
         text.push('\n');
         text.push_str(&status);
     }
     Ok(text)
+}
+
+/// The proposals waiting for review, each with who made it, its version,
+/// and its diff; with none waiting, what became of the last one.
+fn proposals_status(state: &StateSnapshot) -> Option<String> {
+    let open: Vec<&ProposalEntry> = state
+        .proposals
+        .iter()
+        .filter(|entry| entry.status == "pending")
+        .collect();
+    if open.is_empty() {
+        return proposal_status(state.pending_proposal.as_ref());
+    }
+    let budget = (MAX_CONTEXT_DIFF_BYTES / open.len()).max(1024);
+    let mut text = String::new();
+    for entry in open {
+        let stale = if entry.freshness == ProposalFreshness::Stale {
+            " The project has changed since; revise it before the user can accept it."
+        } else {
+            ""
+        };
+        let earlier: Vec<String> = entry
+            .versions
+            .iter()
+            .filter(|version| version.proposal_id != entry.proposal_id)
+            .map(|version| format!("v{} {}", version.version, version.proposal_id))
+            .collect();
+        let earlier = if earlier.is_empty() {
+            String::new()
+        } else {
+            format!(" Earlier versions: {}.", earlier.join(", "))
+        };
+        let _ = write!(
+            text,
+            "Proposal {} (v{}, by {}, from revision {}) is waiting for the user's \
+             review.{stale}{earlier}\n\n```diff\n{}```\n",
+            entry.proposal_id,
+            entry.version,
+            entry.author.name,
+            entry.base_revision,
+            bounded_lines(&entry.document_diff, budget, "… diff continues")
+        );
+    }
+    Some(text)
 }
 
 fn proposal_status(proposal: Option<&PendingProposal>) -> Option<String> {
@@ -276,6 +333,31 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                 idempotent_hint: Some(false),
             },
         ),
+        "note" => (
+            "Leave a note in the project's review thread, where the people reviewing the cut \
+             read it beside the timeline: at `at` (for `duration`) on the program sequence, as \
+             a reply to the comment `parent`, or about the proposal `proposal`. It changes \
+             nothing in the project. Returns the comment as the review log keeps it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "body": {"type": "string", "minLength": 1, "description": "What the note says."},
+                    "at": {"type": "string", "description": format!("Where on the program sequence (the first). {time}")},
+                    "duration": {"type": "string", "description": "How long a range it is about, from `at`: frames (`60f`), seconds (`2.5s`), or a timecode length (`00:00:02:12`)."},
+                    "parent": {"type": "string", "description": "The id of the comment this replies to; a reply to a reply joins its thread."},
+                    "proposal": {"type": "string", "description": "The id of a proposal (any version) the note is about."},
+                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 32, "description": "Short topic tags without `#`, such as `captions` or `audio`."},
+                    "blocking": {"type": "boolean", "description": "The cut should not be delivered until this is resolved."}
+                },
+                "required": ["body"],
+                "additionalProperties": false
+            }),
+            ToolAnnotations {
+                read_only_hint: Some(false),
+                destructive_hint: Some(false),
+                idempotent_hint: Some(false),
+            },
+        ),
         _ => return None,
     })
 }
@@ -331,6 +413,20 @@ struct RenderInput {
     job: Option<String>,
     #[serde(default)]
     cancel: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteInput {
+    body: String,
+    at: Option<String>,
+    duration: Option<String>,
+    parent: Option<String>,
+    proposal: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    blocking: bool,
 }
 
 fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
@@ -422,7 +518,40 @@ impl KerfMcpRouter {
     /// The proposal `id` waiting for review: the operations it runs, the
     /// script as it was written, and its base revision.
     fn pending(&self, id: &str) -> Result<(String, String, u64), McpError> {
-        match self.runtime.get_state()?.pending_proposal {
+        let state = self.runtime.get_state()?;
+        // Proposals staged before they kept their source wrote none.
+        let written =
+            |source: &str, script: &str| if source.is_empty() { script } else { source }.to_owned();
+        // Any version of an open proposal: the current one, or one the
+        // user can still accept in its place.
+        for entry in state
+            .proposals
+            .iter()
+            .filter(|entry| entry.status == "pending")
+        {
+            if entry.proposal_id == id {
+                return Ok((
+                    entry.script.clone(),
+                    written(&entry.source, &entry.script),
+                    entry.base_revision,
+                ));
+            }
+            if let Some(version) = entry
+                .versions
+                .iter()
+                .find(|version| version.proposal_id == id)
+            {
+                return Ok((
+                    version.script.clone(),
+                    written(&version.source, &version.script),
+                    version.base_revision,
+                ));
+            }
+        }
+        if !state.proposals.is_empty() {
+            return Err(not_pending(id));
+        }
+        match state.pending_proposal {
             Some(PendingProposal::Pending {
                 proposal_id,
                 script,
@@ -438,11 +567,111 @@ impl KerfMcpRouter {
                 };
                 Ok((script, source, base_revision))
             }
-            _ => Err(McpError::new(
-                "NOT_PENDING",
-                format!("proposal {id} is not waiting for review"),
-            )),
+            _ => Err(not_pending(id)),
         }
+    }
+
+    /// Post a note to the review log, by this router's author.
+    pub(super) fn note(&self, arguments: Value) -> Result<Value, McpError> {
+        let input: NoteInput = input(arguments)?;
+        let body = input.body.trim();
+        if body.is_empty() {
+            return Err(McpError::new("INVALID_ARGUMENTS", "a note needs a body"));
+        }
+        if input.duration.is_some() && input.at.is_none() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "duration is a range from `at`; pass at too",
+            ));
+        }
+        let tags = input
+            .tags
+            .iter()
+            .map(|tag| tag.trim().trim_start_matches('#').trim().to_owned())
+            .filter(|tag| !tag.is_empty())
+            .collect::<Vec<_>>();
+        let mut timecode = None;
+        let (mut at, mut duration) = (None, None);
+        if let Some(text) = &input.at {
+            let (_, project) = self.project_at(None)?;
+            let sequence = program(&project, None)?;
+            let clock = Clock::of_sequence(sequence);
+            let start = position(&clock, text)?;
+            if start.is_negative() || start > sequence.duration() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "at {text} is outside sequence `{}`, which ends at {}",
+                        sequence.id,
+                        clock.print_position(sequence.duration())
+                    ),
+                ));
+            }
+            if let Some(length) = &input.duration {
+                let length = clock
+                    .duration(length)
+                    .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))?;
+                if !length.is_positive() {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        "a duration must be longer than 0",
+                    ));
+                }
+                duration = Some(length.min(sequence.duration() - start).seconds());
+            }
+            at = Some(start.seconds());
+            timecode = Some(clock.print_position(clock.rate.round(start)));
+        }
+        let state = self.runtime.get_state()?;
+        if let Some(id) = &input.proposal {
+            let known = state.proposals.iter().any(|entry| {
+                entry.proposal_id == *id
+                    || entry
+                        .versions
+                        .iter()
+                        .any(|version| version.proposal_id == *id)
+            });
+            if !known {
+                return Err(McpError::new(
+                    "UNKNOWN_PROPOSAL",
+                    format!("no proposal {id} in the project"),
+                ));
+            }
+        }
+        // Threads are a comment and its replies: a reply to a reply joins
+        // the thread of the comment it answers.
+        let parent = match &input.parent {
+            None => None,
+            Some(id) => {
+                let log = self.runtime.comments()?;
+                let comment = log
+                    .items
+                    .iter()
+                    .find(|comment| comment.id == *id)
+                    .ok_or_else(|| {
+                        McpError::new("UNKNOWN_COMMENT", format!("no comment {id} in the review"))
+                    })?;
+                Some(comment.parent.clone().unwrap_or_else(|| comment.id.clone()))
+            }
+        };
+        let author = self.author();
+        let actor = if author.kind == "mcp" { "mcp" } else { "agent" };
+        let mut comment = NewComment::new(author, body);
+        comment.parent = parent;
+        comment.at = at;
+        comment.duration = duration;
+        comment.proposal = input.proposal;
+        comment.tags = tags;
+        comment.blocking = input.blocking;
+        let (comment, log) = self.runtime.add_comment(actor, comment)?;
+        let mut result = json!({
+            "comment": comment,
+            "reviewRevision": log.review_revision,
+        });
+        if let Some(timecode) = timecode {
+            result["timecode"] = json!(timecode);
+        }
+        Ok(result)
     }
 
     /// The current revision and the project, or what the pending
@@ -564,7 +793,7 @@ impl KerfMcpRouter {
             return Ok(json!({
                 "revision": revision,
                 "document": document,
-                "proposal": proposal_status(state.pending_proposal.as_ref()),
+                "proposal": proposals_status(&state),
             }));
         }
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
@@ -980,7 +1209,7 @@ impl KerfMcpRouter {
         kerf_engine::render::renderable(project, Some(sequence), &RenderOptions::default())
             .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
-        let identities = used_media(project)
+        let identities = crate::qc::used_media(project)
             .map(|media| {
                 SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
                     McpError::new(
@@ -1274,42 +1503,52 @@ impl KerfMcpRouter {
             }
             None => (source_script, None),
         };
-        if let Some(id) = replaced {
-            self.runtime.reject_proposal(id)?;
-        }
+        // A revised or extended proposal becomes its next version, which
+        // keeps the versions before it for the user to see.
+        let author = self.author();
         let snapshot = self
             .runtime
-            .stage_script_proposal(
+            .stage_script_proposal_by(
                 &operation_key("agent-edit"),
                 revision,
                 &script,
                 written.as_deref(),
+                &author,
+                replaced,
             )
             .map_err(|error| match error.code.as_str() {
                 "PROPOSAL_PENDING" => McpError::new(
                     "PROPOSAL_PENDING",
-                    "another proposal is waiting for the user's review; pass its id as \
-                     `extend` to build on it or as `revise` to replace it",
+                    format!(
+                        "{}; pass one's id as `revise` to replace it, or `extend` to build on it",
+                        error.message
+                    ),
                 ),
+                "PROPOSAL_NOT_PENDING" | "PROPOSAL_NOT_FOUND" => {
+                    not_pending(replaced.unwrap_or_default())
+                }
                 _ => McpError::from(error),
             })?;
-        let Some(PendingProposal::Pending {
-            proposal_id,
-            script,
-            document_diff,
-            ..
-        }) = snapshot.pending_proposal
+        // The runtime lists the proposal it staged first.
+        let Some(staged) = snapshot
+            .proposals
+            .first()
+            .filter(|entry| entry.status == "pending")
         else {
             return Err(McpError::new(
                 "RUNTIME_ERROR",
                 "the runtime did not keep the proposal",
             ));
         };
+        let proposal_id = staged.proposal_id.clone();
+        let script = staged.script.clone();
+        let document_diff = staged.document_diff.clone();
+        let (version, supersedes) = (staged.version, staged.supersedes.clone());
         let (_, after_document) = self.runtime.proposal_documents(&proposal_id)?;
         let after_program = parse(&after_document)?;
         let mut before_program = before.clone();
         kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
-        let check = check(&after_program, &self.dir);
+        let check = crate::qc::check(&after_program, &self.dir).to_json();
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
@@ -1318,6 +1557,9 @@ impl KerfMcpRouter {
         };
         Ok(json!({
             "proposal": proposal_id,
+            "version": version,
+            "supersedes": supersedes,
+            "author": author.name,
             "baseRevision": revision,
             "status": "awaiting_review",
             "script": script,
@@ -1569,63 +1811,6 @@ fn after(mut errors: Vec<kerf_model::Diagnostic>, lines: usize) -> Vec<kerf_mode
     errors
 }
 
-/// Media that some clip uses.
-fn used_media(project: &Project) -> impl Iterator<Item = &Media> {
-    project.media.iter().filter(|media| {
-        project.sequences.iter().any(|sequence| {
-            sequence.tracks.iter().any(|track| {
-                track.clips.iter().any(|clip| {
-                    matches!(&clip.content, Content::Media { media: id, .. } if *id == media.id)
-                })
-            })
-        })
-    })
-}
-
-/// What stands between a project and its render: media that cannot be
-/// read, features the renderer cannot lower, and the model's warnings;
-/// and what an editor would catch in the cut. `project` has its media paths
-/// resolved; `dir` is the project, whose transcripts show where words are.
-fn check(project: &Project, dir: &Path) -> Value {
-    let mut findings = Vec::new();
-    for media in used_media(project) {
-        if !std::path::Path::new(&media.path).is_file() {
-            findings.push(json!({
-                "severity": "error",
-                "code": "missing_media",
-                "entity": media.id.as_str(),
-                "message": format!("media `{}` is missing: {}", media.id, media.path),
-            }));
-        }
-    }
-    for sequence in &project.sequences {
-        let id = sequence.id.as_str();
-        if let Err(error) =
-            kerf_engine::render::renderable(project, Some(id), &RenderOptions::default())
-        {
-            findings.push(json!({
-                "severity": "error",
-                "code": "unrenderable",
-                "entity": error.entity().unwrap_or(id),
-                "message": error.to_string(),
-            }));
-        }
-    }
-    for warning in kerf_model::validate(project, catalog()) {
-        findings.push(json!({
-            "severity": if warning.is_error() { "error" } else { "warning" },
-            "code": warning.code,
-            "entity": warning.entity.as_ref().map(|id| id.as_str()),
-            "message": warning.message,
-        }));
-    }
-    findings.extend(crate::lint::findings(project, &CachedFacts::new(dir)));
-    let valid = !findings
-        .iter()
-        .any(|finding| finding["severity"] == "error");
-    json!({"valid": valid, "findings": findings})
-}
-
 /// The first sequence that differs between two projects, and the span of
 /// it that differs: every clip added, removed, or changed, and the
 /// transitions around them. A change to a track itself (enabled, muted)
@@ -1800,6 +1985,13 @@ fn inline_image(object: &mut Value) -> Result<(), McpError> {
 
 fn io_error(error: io::Error) -> McpError {
     McpError::new("HANDLER_FAILED", error.to_string())
+}
+
+fn not_pending(id: &str) -> McpError {
+    McpError::new(
+        "NOT_PENDING",
+        format!("proposal {id} is not waiting for review"),
+    )
 }
 
 fn operation_key(kind: &str) -> String {

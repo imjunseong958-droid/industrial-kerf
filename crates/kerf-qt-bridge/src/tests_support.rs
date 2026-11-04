@@ -18,7 +18,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
-        export_busy: AtomicBool::new(false),
+        preview_busy: AtomicBool::new(false),
         abort: Mutex::new(None),
         frame: Mutex::new(None),
         seek: Mutex::new(None),
@@ -26,8 +26,15 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
         preview_cancel: Mutex::new(None),
+        preview_running: AtomicBool::new(false),
+        preview_stopped: AtomicBool::new(false),
         stale_previews: Mutex::new(Vec::new()),
         shown_preview: Mutex::new(None),
+        review_seen: Mutex::new(None),
+        check_busy: AtomicBool::new(false),
+        check_cancel: Mutex::new(None),
+        renders: Default::default(),
+        analysis: Default::default(),
     }
 }
 

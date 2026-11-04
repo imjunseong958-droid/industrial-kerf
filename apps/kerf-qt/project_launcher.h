@@ -2,6 +2,7 @@
 
 #include "editor_theme.h"
 #include "launcher_style.h"
+#include "test_friends.h"
 
 #include <QDialog>
 #include <QFocusFrame>
@@ -35,23 +36,16 @@ namespace kerf {
 // folder in chosenPath().
 class ProjectLauncher final : public QDialog {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };
-    // System follows macOS's appearance as it changes; KERF_COLOR_SCHEME=light
-    // or dark picks one for the whole run. A launcher starts in the editor's
-    // scheme (editorColorScheme()).
-    using ColorScheme = kerf::ColorScheme;
-
     // `kerfdBinary` makes the first edit of a project made from a preset.
     explicit ProjectLauncher(const QString &kerfdBinary = QString(), QWidget *parent = nullptr);
     ~ProjectLauncher() override;
 
     QString chosenPath() const { return m_chosen; }
     void showPage(Page page);
-    void setColorScheme(ColorScheme scheme);
-    ColorScheme colorScheme() const { return m_scheme; }
     const LauncherTheme &theme() const { return m_theme; }
 
     // Recent projects (QSettings `projects/recent`), most recent first.
@@ -61,13 +55,11 @@ public:
     static constexpr int kRecentLimit = 12;
 
 protected:
-    void changeEvent(QEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
-    // Restyle for the current appearance and accent; does nothing when
-    // neither changed unless `force`.
-    void applyTheme(bool force = false);
+    // Style the launcher with its one theme, once.
+    void applyTheme();
     void setDetailsOpen(bool open);
     // Fit the sidebar's top and the title band to the title bar macOS
     // draws over them.
@@ -117,10 +109,7 @@ private:
 
     QString m_kerfd;
     QString m_chosen;
-    ColorScheme m_scheme = ColorScheme::System;
     LauncherTheme m_theme;
-    bool m_themed = false;
-    bool m_theming = false;
     QPointer<QFocusFrame> m_focusRing;
     QJsonObject m_tools;
     bool m_busy = false;

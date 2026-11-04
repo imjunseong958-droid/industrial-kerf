@@ -12,12 +12,12 @@ sequence s1 name="Edit" rate=30 size=1080x1920 start=01:00:00:00
       fx color.basic@1 saturation=0.8 enabled=false
     clip c2 media=m1 src=01:00:30:00 at=01:00:02:00 dur=2s speed=2 link=L2 name="Detail"
     transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f
-  track A1 audio muted=true
+  track A1 audio muted=true role=music sync=off
     clip a1 media=m1 src=01:00:10:00 at=01:00:00:00 dur=2s link=L1
       set gain=-3
     clip a2 media=m1 src=01:00:30:00 at=01:00:02:00 dur=2s speed=2 link=L2
     transition t2 from=a1 to=a2 fx=crossfade@1 dur=12f
-  track V2 video locked=true
+  track V2 video locked=true role=titles
     clip title1 gen=title@1 at=01:00:00:00 dur=4s
       set text="Original title"
   track S1 subtitle
@@ -157,12 +157,21 @@ fn applies_pattern_with_new_media_exact_times_effects_links_and_text() {
     );
     for (track, source_track) in sequence.tracks.iter().zip(&source.tracks) {
         assert_eq!(
-            (track.kind, track.enabled, track.locked, track.muted),
+            (
+                track.kind,
+                track.enabled,
+                track.locked,
+                track.muted,
+                &track.role,
+                track.sync_locked
+            ),
             (
                 source_track.kind,
                 source_track.enabled,
                 source_track.locked,
-                source_track.muted
+                source_track.muted,
+                &source_track.role,
+                source_track.sync_locked
             )
         );
         for (clip, source_clip) in track.clips.iter().zip(&source_track.clips) {

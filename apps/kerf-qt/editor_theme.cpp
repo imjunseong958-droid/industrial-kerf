@@ -1,12 +1,17 @@
 #include "editor_theme.h"
+#include "design_tokens.h"
 #include "editor_style.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QDirIterator>
 #include <QEvent>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHash>
 #include <QJsonArray>
 #include <QPointer>
+#include <QScreen>
 #include <QStyleHints>
 #include <QWidget>
 
@@ -17,21 +22,35 @@ namespace kerf {
 
 namespace {
 
-// The light or dark value of a token.
-QColor tone(bool dark, const char *light, const char *darkValue) { return cssColor(dark ? darkValue : light); }
-QColor hex(const char *css) { return cssColor(css); }
+namespace tk = tokens;
 
+// A design token as a QColor.
+QColor token(QRgb rgba) { return tk::color(rgba); }
+// A token at `fraction` opacity (0 to 1), as the design writes rgba().
+QColor alphaOf(QRgb rgb, double fraction) {
+    QColor color = tk::color(rgb);
+    color.setAlpha(tk::alpha(fraction));
+    return color;
+}
+// The translucent `top` as it shows on the opaque `under`: what a seam, a
+// wash or a shade drawn on that surface looks like, for roles that are
+// filled solid.
+QColor laid(QRgb under, QColor top) {
+    const qreal amount = top.alphaF();
+    top.setAlpha(255);
+    return QColor::fromRgba(mixColor(token(under), top, amount).rgba());
+}
+QColor laid(QRgb under, QRgb top) { return laid(under, token(top)); }
 // The same in 1% steps, for a colour that should move no further than it must.
 QColor justReadableOn(const QColor &color, const QColor &background, qreal ratio) {
     return readableOn(color, background, ratio, 100);
 }
 
-ClipStyle clipStyle(const char *fill, const char *header, const char *border, const char *label, const char *wave) {
-    return {QColor(fill), QColor(header), QColor(border), QColor(label), QColor(wave)};
+ClipStyle clipStyle(const QColor &fill, const QColor &header, const QColor &border, const QColor &label, const QColor &wave) {
+    return {fill, header, border, label, wave};
 }
 
 struct AppearanceState {
-    ColorScheme scheme = environmentColorScheme();
     EditorTheme theme;
     bool computed = false;
     bool applied = false;
@@ -43,45 +62,46 @@ AppearanceState &state() {
     return s;
 }
 
-// Re-applies on palette changes, which is how an appearance change arrives
-// where Qt has no colour scheme to report.
-class PaletteWatcher final : public QObject {
+// Applies the theme again when the application font or a screen's density
+// changes, so widgets that cache pixmaps (EditorAppearance::changed) redraw
+// them at the new size. The theme itself never changes.
+class MetricsWatcher final : public QObject {
 public:
     using QObject::QObject;
 
+    void reapply() {
+        state().applied = false;
+        applyEditorAppearance();
+    }
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override {
-        if (watched == qApp && event->type() == QEvent::ApplicationPaletteChange) applyEditorAppearance();
+        if (watched == qApp && event->type() == QEvent::ApplicationFontChange) reapply();
         return QObject::eventFilter(watched, event);
     }
 };
 
+void watchMetrics() {
+    static QPointer<MetricsWatcher> watcher;
+    if (watcher || !qApp) return;
+    watcher = new MetricsWatcher(qApp);
+    qApp->installEventFilter(watcher);
+    const auto watchScreen = [](QScreen *screen) {
+        QObject::connect(screen, &QScreen::logicalDotsPerInchChanged, watcher, [] { watcher->reapply(); });
+    };
+    for (QScreen *screen : QGuiApplication::screens()) watchScreen(screen);
+    QObject::connect(qApp, &QGuiApplication::screenAdded, watcher, watchScreen);
+}
+
 } // namespace
-
-bool systemIsDark() {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    const Qt::ColorScheme scheme = QGuiApplication::styleHints()->colorScheme();
-    if (scheme != Qt::ColorScheme::Unknown) return scheme == Qt::ColorScheme::Dark;
-#endif
-    return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
-}
-
-ColorScheme environmentColorScheme() {
-    const QByteArray forced = qgetenv("KERF_COLOR_SCHEME").trimmed().toLower();
-    if (forced == "light") return ColorScheme::Light;
-    if (forced == "dark") return ColorScheme::Dark;
-    return ColorScheme::System;
-}
-
-bool schemeIsDark(ColorScheme scheme) {
-    return scheme == ColorScheme::Dark || (scheme == ColorScheme::System && systemIsDark());
-}
 
 QColor readableOn(const QColor &color, const QColor &background, qreal ratio, int steps) {
     const QColor target = background.lightness() < 128 ? QColor(Qt::white) : QColor(Qt::black);
     QColor result = color;
+    // Each step is rounded to 8 bits before it is measured, so the colour
+    // returned is one a pixel can hold and still reads at `ratio`.
     for (int step = 1; step <= steps && contrastRatio(result, background) < ratio; ++step)
-        result = mixColor(color, target, qreal(step) / steps);
+        result = QColor::fromRgba(mixColor(color, target, qreal(step) / steps).rgba());
     return result;
 }
 
@@ -166,390 +186,267 @@ QColor EditorTheme::marker(const QString &name) const {
     return markerGreen;
 }
 
-QColor kerfAccent(bool dark) { return dark ? QColor("#c39acb") : QColor("#6a3471"); }
-
-EditorTheme makeEditorTheme(bool dark) {
+EditorTheme makeEditorTheme() {
     EditorTheme t;
-    t.dark = dark;
 
-    // Kerf's own accent: an aubergine ink on cream, its mauve by lamplight.
-    // The mauve is light, so it carries dark ink, as dark-mode pills do.
-    t.accent = tone(dark, "#6a3471", "#c39acb");
-    t.accentTop = tone(dark, "#7a4381", "#cfa9d6");
-    t.accentPressed = tone(dark, "#562a5c", "#a882b1");
-    t.accentText = t.accent;
-    t.accentTint = tone(dark, "#e2d6d3", "#382d32");
-    t.accentTintPressed = tone(dark, "#d2c7c4", "#2a2226");
-    t.onAccent = tone(dark, "#fbf6ec", "#21161f");
-    t.onAccentSecondary = tone(dark, "#fbf6eca5", "#f4ecdea6");
+    t.card = token(tk::card);
+    t.on = token(tk::on);
+    t.hover2 = token(tk::hover2);
+    t.ink = token(tk::ink);
+    t.ink2 = token(tk::ink2);
+    t.ink3 = token(tk::ink3);
+    t.track = token(tk::track);
+    t.track2 = token(tk::track2);
+    t.line = token(tk::line);
+    t.line2 = token(tk::line2);
+    t.lineh = token(tk::lineh);
+    t.accentHover = token(tk::accentHover);
+    t.accentInk = token(tk::accentInk);
+    t.pos = token(tk::pos);
 
-    // Surfaces: book paper in light (the desk a step deeper than the page),
-    // espresso in dark, never pure white or black.
-    t.window = tone(dark, "#e6dece", "#15110e");
-    t.chrome = tone(dark, "#eee7d8", "#241e19");
-    t.panel = tone(dark, "#f4eee2", "#1c1713");
-    t.panelTitle = tone(dark, "#e9e1d1", "#17130f");
-    t.panelTitleActive = t.panel;
-    t.raised = tone(dark, "#faf6ee", "#2a231d");
-    t.group = tone(dark, "#ede6d7", "#231d18");
-    t.groupBorder = tone(dark, "#ddd3c0", "#3a3029");
-    t.well = tone(dark, "#f4eee2", "#19140f");
-    t.dialog = tone(dark, "#f0e9db", "#1f1a15");
+    // Accent: the one blue. Text on it is white; as text and thin marks on
+    // the ramp it is the light accent ink.
+    t.accent = token(tk::accent);
+    t.accentPressed = token(tk::accentHover);
+    t.accentText = token(tk::accentInk);
+    // A chosen tool or mode is the `on` fill (mockup .ib.on), darkening to
+    // `raised` while held.
+    t.accentTint = token(tk::on);
+    t.accentTintPressed = token(tk::raised);
+    t.onAccent = token(tk::accentText);
+    t.onAccentSecondary = alphaOf(tk::accentText, 0.78);
 
-    // Lines: warm and low-contrast.
-    t.dockSeparator = tone(dark, "#d6ccb9", "#3a3029");
-    t.dockSeparatorHover = tone(dark, "#ab9f8b", "#5f5246");
-    t.divider = tone(dark, "#dcd2bf", "#342b24");
-    t.borderSubtle = tone(dark, "#e4dbcb", "#2e2620");
-    t.border = tone(dark, "#d2c7b3", "#463b32");
-    t.borderStrong = tone(dark, "#a99c87", "#66594c");
+    // Surfaces, from the back of the window forwards.
+    t.window = token(tk::surroundDim);
+    t.chrome = token(tk::chrome);
+    t.panel = token(tk::chrome);
+    t.panelTitle = token(tk::chrome);
+    t.panelTitleActive = token(tk::chrome);
+    t.raised = token(tk::raised);
+    t.group = token(tk::card);
+    t.groupBorder = token(tk::line);
+    t.well = token(tk::well);
+    t.dialog = token(tk::card);
 
-    // Text: warm near-black on cream, cream on espresso.
-    t.text = tone(dark, "#2a231d", "#e6dccb");
-    t.textStrong = tone(dark, "#1b1612", "#f4ecde");
-    t.textSecondary = tone(dark, "#675b4f", "#a89a8a");
-    t.placeholderText = tone(dark, "#6c6054", "#a09282");
-    t.textDisabled = tone(dark, "#a89c8c", "#6d6156");
-    t.tabInactiveText = tone(dark, "#62564a", "#a3958a");
+    // Lines: the seams are a 1 pt line drawn inside the panel, so the solid
+    // roles are that line as it shows on chrome; control outlines stay
+    // translucent so they read on any surface.
+    t.divider = laid(tk::chrome, tk::line);
+    t.borderSubtle = token(tk::line);
+    t.border = token(tk::line2);
+    t.borderStrong = token(tk::lineh);
 
-    // Selection. In dark it is a quiet deep plum, so dense lists do not glow.
-    t.selection = tone(dark, "#6a3471", "#583863");
-    t.selectionText = tone(dark, "#fbf6ec", "#f4ecde");
-    t.selectionInactive = tone(dark, "#e0d6c3", "#3a3029");
-    t.selectionInactiveText = tone(dark, "#2a231d", "#f4ecde");
-    t.textSelection = tone(dark, "#d8c9d2", "#675363");
-    t.hover = tone(dark, "#4a341e0f", "#ffecd212");
-    t.pressed = tone(dark, "#4a341e1c", "#ffecd220");
+    // Text.
+    t.text = token(tk::ink);
+    t.textStrong = token(tk::ink);
+    t.textSecondary = token(tk::ink2);
+    t.placeholderText = token(tk::ink3);
+    t.textDisabled = token(tk::dis);
+    t.tabInactiveText = token(tk::ink2);
 
-    t.field = tone(dark, "#fbf8f1", "#2a231d");
-    t.fieldBorder = tone(dark, "#8b7e6d", "#7a6c5e");
-    t.fieldDisabled = tone(dark, "#f1ebdf", "#221c17");
+    // Selection: a focused list's chosen row is the accent; without focus
+    // it is the `on` fill.
+    t.selection = token(tk::accent);
+    t.selectionText = token(tk::accentText);
+    t.selectionInactive = token(tk::on);
+    t.selectionInactiveText = token(tk::ink);
+    t.textSelection = laid(tk::raised, alphaOf(tk::accent, 0.45));
+    t.hover = alphaOf(0xffffffff, 0.06);
+
+    // Fields: inputs on `raised` with a line2 inset, the accent in focus.
+    t.field = token(tk::raised);
+    t.fieldBorder = token(tk::line2);
+    t.fieldDisabled = token(tk::card);
     t.focusRing = t.accent;
-    t.focusHalo = t.accent;
-    t.focusHalo.setAlpha(89); // 35%
-    t.checkFill = tone(dark, "#fbf8f1", "#2a231d");
-    t.checkBorder = tone(dark, "#8c7f6e", "#85776a");
+    t.focusHalo = t.accent; // The 2 pt outline, solid (mockup: outline 2px accent).
+    // Check boxes: no fill, a 1 pt outline at 16% white; checked, `on`.
+    t.checkBorder = laid(tk::chrome, tk::checkboxOutline);
 
-    t.button = tone(dark, "#fbf8f1", "#3a3029");
-    t.buttonEdge = tone(dark, "#3c28142e", "#3a3029");
-    t.buttonTop = tone(dark, "#3c28141a", "#4a3f36");
-    t.buttonBottom = tone(dark, "#3c28144c", "#2e2620");
-    t.buttonHover = tone(dark, "#fdfbf6", "#43382f");
-    t.buttonPressed = tone(dark, "#ebe3d4", "#4a3f36");
-    t.buttonText = tone(dark, "#2a231d", "#f4ecde");
-    t.buttonDisabled = tone(dark, "#f5f0e6", "#2a231d");
-    t.buttonDisabledEdge = tone(dark, "#3c28141e", "#322a23");
-    t.buttonDisabledText = tone(dark, "#a89c8c", "#7d7064");
+    // Buttons: the secondary button is the raised fill with a line2 edge,
+    // flat (top and bottom edges the same); hover2 under the pointer, `on`
+    // while held.
+    t.button = token(tk::raised);
+    t.buttonEdge = token(tk::line2);
+    t.buttonTop = token(tk::line2);
+    t.buttonBottom = token(tk::line2);
+    t.buttonHover = token(tk::hover2);
+    t.buttonPressed = token(tk::on);
+    t.buttonText = token(tk::ink);
+    t.buttonDisabled = token(tk::chrome);
+    t.buttonDisabledEdge = token(tk::line);
+    t.buttonDisabledText = token(tk::dis);
 
-    t.menu = tone(dark, "#faf6ee", "#2a231d");
-    t.menuBorder = tone(dark, "#cdc1ac", "#463b32");
-    t.menuText = tone(dark, "#2a231d", "#f4ecde");
-    t.menuSelection = t.selection;
-    t.menuSelectionText = t.selectionText;
-    t.menuSeparator = tone(dark, "#e4dbcb", "#3a3029");
-    t.tooltip = hex("#2f2721");
-    t.tooltipBorder = tone(dark, "#2f2721", "#463b32");
-    t.tooltipText = tone(dark, "#f3ebdd", "#f4ecde");
-    t.scrollHandle = tone(dark, "#3c2a1a8e", "#ffecd26e");
-    t.scrollHandleHover = tone(dark, "#3c2a1abe", "#ffecd2a0");
+    // Menus and tooltips (0.5): cards with a line2 inset; the row under the
+    // pointer is `raised` with the same ink.
+    t.menu = token(tk::card);
+    t.menuBorder = token(tk::line2);
+    t.menuText = token(tk::ink);
+    t.menuSelection = token(tk::raised);
+    t.menuSelectionText = token(tk::ink);
+    t.menuSeparator = laid(tk::card, tk::line);
+    t.tooltip = token(tk::card);
+    t.tooltipBorder = token(tk::line2);
+    t.tooltipText = token(tk::ink);
+    // Scroll bars are hidden (the style sheet gives them no width); a
+    // widget that shows one of its own uses these.
+    t.scrollHandle = alphaOf(0xffffffff, 0.40);
+    t.scrollHandleHover = alphaOf(0xffffffff, 0.70);
 
-    t.tabText = tone(dark, "#62564a", "#a3958a");
-    t.tabSelected = tone(dark, "#faf6ee", "#3a3029");
-    t.tabSelectedBorder = tone(dark, "#d2c7b3", "#463b32");
-    t.tabSelectedText = tone(dark, "#1b1612", "#f4ecde");
-    t.sliderGroove = tone(dark, "#e2d9c8", "#3a3029");
-    t.sliderGrooveBorder = tone(dark, "#d2c7b3", "#463b32");
-    t.sliderHandle = tone(dark, "#fbf8f1", "#e6dccb");
-    t.sliderHandleBorder = tone(dark, "#8c7f6e", "#8e8072");
-    t.statusBar = tone(dark, "#eee7d8", "#241e19");
-    t.statusText = tone(dark, "#62564a", "#a3958a");
-    t.statusDivider = tone(dark, "#dcd2bf", "#3a3029");
+    t.tabText = token(tk::ink2);
+    t.tabSelected = token(tk::on);
+    t.tabSelectedBorder = token(tk::line2);
+    t.tabSelectedText = token(tk::ink);
 
-    // Status: oxblood, sienna and moss, inks rather than signal lights.
-    t.error = tone(dark, "#a3302b", "#e8877b");
-    t.errorSurface = tone(dark, "#f5e2d9", "#3a221d");
-    t.errorBorder = tone(dark, "#e2b8aa", "#6c3a31");
-    t.errorText = tone(dark, "#86241f", "#f4bbb0");
-    t.warning = tone(dark, "#9a4a0e", "#e2a062");
-    t.warningSurface = tone(dark, "#f4e6c9", "#2e2620");
-    t.warningBorder = tone(dark, "#e2cc9c", "#3e342c");
-    t.warningText = tone(dark, "#2a231d", "#f4ecded2");
-    t.warningTitle = tone(dark, "#1b1612", "#f4ecde");
-    t.warningGlyph = tone(dark, "#9a4a0e", "#e59a4a");
-    t.success = tone(dark, "#3d6a2e", "#93bf78");
+    // Sliders (.sl): a 2 pt track, a track2 fill and an ink knob.
+    t.sliderGroove = token(tk::track);
+    t.sliderHandle = token(tk::ink);
 
-    // Kerf's own surfaces: the chat is a page laid on the desk; its rows have
-    // no boxes (their fills and edges are the page), its marks are the accent.
+    // Status: neg, warn and pos; a banner is its colour washed into chrome.
+    t.error = token(tk::neg);
+    t.errorSurface = laid(tk::chrome, alphaOf(tk::neg, 0.12));
+    t.errorBorder = laid(tk::chrome, alphaOf(tk::neg, 0.35));
+    t.errorText = token(tk::neg);
+    t.warning = token(tk::warn);
+    t.warningSurface = laid(tk::chrome, alphaOf(tk::warn, 0.10));
+    t.warningBorder = laid(tk::chrome, alphaOf(tk::warn, 0.30));
+    t.warningText = token(tk::ink2);
+    t.warningTitle = token(tk::ink);
+    t.warningGlyph = token(tk::warn);
+    t.success = token(tk::pos);
+
+    // Kerf's work: proposals and Kerf's marks are the accent family; the
+    // proposal card is `raised`.
     t.assistant = t.accent;
-    t.assistantSurface = tone(dark, "#e9dfd9", "#302729");
-    t.assistantBorder = tone(dark, "#cbb6c0", "#584655");
-    t.assistantText = tone(dark, "#5e2c65", "#d6b6dc");
-    t.assistantHover = tone(dark, "#dacacd", "#42353c");
-    t.chatSurface = tone(dark, "#f6f1e6", "#231d18");
-    t.chatText = t.text;
-    t.chatSecondary = t.textSecondary;
-    t.chatChip = tone(dark, "#4a341e12", "#ffecd216");
-    t.chatChipHover = tone(dark, "#4a341e1e", "#ffecd224");
-    t.chatChipText = t.text;
-    t.chatAvatarUser = tone(dark, "#e0d6c3", "#4a3f36");
-    t.chatAvatarUserText = tone(dark, "#3d342c", "#efe6d6");
+    t.assistantSurface = token(tk::raised);
+    t.assistantText = token(tk::accentInk);
+    t.assistantHover = token(tk::hover2);
+
+    // The comments panel (4): a card; chips and pills on `raised`.
+    t.chatSurface = token(tk::chrome);
+    t.chatText = token(tk::ink);
+    t.chatSecondary = token(tk::ink2);
+    t.chatChip = token(tk::raised);
+    t.chatChipHover = token(tk::hover2);
+    t.chatChipText = token(tk::ink);
+    t.chatAvatarUser = token(tk::on);
+    t.chatAvatarUserText = token(tk::ink2);
     t.chatAvatarKerf = t.accent;
-    t.chatAvatarKerfText = t.onAccent;
-    t.chatExpander = t.accentText;
-    t.chatComposerRule = tone(dark, "#cdc1ac", "#4a3f36");
+    t.chatAvatarKerfText = token(tk::accentText);
+    t.chatExpander = token(tk::accentInk);
     t.chatComposerRuleFocus = t.accent;
-    // The secondary ink at 35%, and 60% under the pointer.
-    t.chatScrollHandle = tone(dark, "#675b4f59", "#a89a8a59");
-    t.chatScrollHandleHover = tone(dark, "#675b4f99", "#a89a8a99");
+    t.chatScrollHandle = alphaOf(0xffffffff, 0.40);
+    t.chatScrollHandleHover = alphaOf(0xffffffff, 0.70);
     t.messageUser = t.chatSurface;
-    t.messageUserBorder = t.messageUser;
     t.messageAgent = t.chatSurface;
-    t.messageAgentBorder = t.messageAgent;
-    t.messageText = t.chatText;
     t.messageUserRole = t.chatText;
-    t.railButton = tone(dark, "#4a341e14", "#ffecd218");
-    t.railButtonHover = tone(dark, "#4a341e22", "#ffecd226");
-    t.railButtonActive = t.railButton;
-    t.railGlyph = tone(dark, "#2a231d", "#efe6d6");
-    t.railGlyphActive = t.accentText;
-    t.railLabel = tone(dark, "#3d342c", "#ddd2c1");
-    t.pillTonal = tone(dark, "#4a341e14", "#ffecd218");
-    t.pillTonalText = t.text;
+    t.pillTonal = token(tk::raised);
+    t.pillTonalText = token(tk::ink);
 
-    t.glyph = tone(dark, "#3d342c", "#ddd2c1");
-    t.glyphDisabled = tone(dark, "#b3a796", "#64584d");
-    t.toolSelected = tone(dark, "#e2d9c8", "#3a3029");
+    t.glyph = token(tk::ink2);
+    t.glyphDisabled = token(tk::dis);
+    // The chosen tool in the tool palette: `raised`, where the accent glyph
+    // the palette draws on it still reads at 3:1 (on `on` it would not).
+    // W2's segmented tools use the on fill with an ink glyph instead.
+    t.toolSelected = token(tk::raised);
 
-    // Timeline. Track toggles that are on are a neutral ink plate, not the
-    // accent, so purple stays on Kerf, the playhead, focus and the default action.
-    t.timelineBackground = tone(dark, "#e6dece", "#15110e");
-    t.ruler = tone(dark, "#f8f3ea", "#27211b");
-    t.rulerBottom = tone(dark, "#efe8db", "#231d18");
-    t.rulerTick = tone(dark, "#8a7d6c", "#75685b");
-    t.rulerTickHalf = tone(dark, "#aa9e8c", "#5f5347");
-    t.rulerTickMinor = tone(dark, "#c8bdab", "#4a3f36");
-    t.rulerText = tone(dark, "#62564a", "#ab9e8e");
-    t.rulerCorner = tone(dark, "#f4eee2", "#201a16");
-    t.trackHeader = tone(dark, "#f1eadd", "#251f1a");
-    t.trackHeaderEdge = tone(dark, "#faf6ee", "#2e2620");
-    t.trackHeaderColumn = tone(dark, "#ebe3d4", "#1f1a15");
-    t.trackHeaderText = tone(dark, "#2a231d", "#e6dccb");
-    t.trackHeaderTextDisabled = tone(dark, "#a89c8c", "#75685b");
-    t.trackHeaderDetail = tone(dark, "#62564a", "#a3958a");
-    t.trackResizeGrip = tone(dark, "#8a7d6c", "#8e8072");
-    t.trackBadgeText = tone(dark, "#675b4f", "#a89a8a");
-    t.trackToggleOn = tone(dark, "#675b4f", "#a89a8a");
-    t.trackToggle = tone(dark, "#675b4f66", "#a89a8a66"); // The same ink at 40%.
-    t.trackToggleHover = tone(dark, "#4a341e17", "#ffecd21c");
-    t.trackLane = tone(dark, "#efe8db", "#201a16");
-    t.laneGrid = tone(dark, "#3c281416", "#fff0dc12");
-    t.trackLaneAlt = tone(dark, "#ebe4d6", "#231d18");
-    t.trackLaneLocked = tone(dark, "#4a341e16", "#ffecd20e");
-    t.trackDivider = tone(dark, "#ddd3c1", "#14100d");
-    t.trackBankDivider = tone(dark, "#b9ad98", "#0c0907");
-    t.headerPreview = tone(dark, "#e2d9c8", "#2a231d");
-    t.headerPreviewBorder = tone(dark, "#c8bdab", "#14100d");
-    t.addLane = tone(dark, "#ebe4d6", "#201a16");
-    t.addLaneButton = tone(dark, "#fbf8f1", "#3a3029");
-    t.addLaneButtonBorder = tone(dark, "#c8bdab", "#463b32");
-    t.addLaneText = tone(dark, "#2a231d", "#f4ecde");
+    // Timeline (7): the ruler's chrome, which the playhead and markers
+    // must read on (the guards below). The timeline paints the rest from
+    // design_tokens.h.
+    t.ruler = token(tk::chrome);
+    t.rulerBottom = token(tk::chrome);
+    t.rulerCorner = token(tk::chrome);
 
-    // Clips: muted inks from an old atlas (slate, verdigris, olive, ochre,
-    // umber), each label on its header at 5.5:1 or more. The selected ring is
-    // cream over ink, not a second loud hue.
-    // Picture clips are a greyed heather: Kerf's purple family, far duller
-    // than its accent, and well away from blue.
-    // Picture, sound and music clips are the same in either appearance, as
-    // a Logic region or a Final Cut clip is: a clip is its colour, and its
-    // waveform white on it (waveformPeak, waveformBody), never a deeper ink
-    // of the clip's own hue.
-    t.clipVideo = clipStyle("#4a4055", "#584c64", "#3d3348", "#fbf6ec", "#ffffff");
-    t.clipAudio = clipStyle("#3e7468", "#2f5c52", "#22463e", "#fbf6ec", "#ffffff");
-    t.clipMusic = clipStyle("#66712f", "#4f5924", "#3a421a", "#fbf6ec", "#ffffff");
-    t.clipGenerator = dark ? clipStyle("#3b2b1a","#7a5222","#432d13","#f4ecde","#b69b7a") : clipStyle("#d6c6ad","#875a1d","#614115","#fbf6ec","#654416");
-    t.clipCaption = dark ? clipStyle("#322b25","#5c5248","#332d28","#f4ecde","#a59b8f") : clipStyle("#cec7ba","#675d53","#4a433c","#fbf6ec","#4d463e");
-    t.clipSelectedRing = tone(dark, "#fffbf3", "#fbf4e8");
-    t.clipSelectedRingOuter = tone(dark, "#1b1612", "#0c0907");
-    t.clipTrim = tone(dark, "#1b1612", "#fbf4e8");
-    t.clipHighlight = tone(dark, "#fffaf046", "#fff0dc22");
-    t.clipFxBadge = tone(dark, "#140c0660", "#0000006e");
-    t.clipFxBadgeText = tone(dark, "#fbf6ec", "#f4ecde");
-    t.filmstripSeam = tone(dark, "#140c065a", "#00000078");
-    t.waveCenter = hex("#ffffff2e");
-    t.waveformPeak = hex("#ffffff70");
-    t.waveformBody = hex("#ffffffe6");
-    t.playhead = t.accent;
-    t.playheadHalo = tone(dark, "#fbf8f1", "#0c0907");
-    t.playheadIdle = tone(dark, "#8a7d6c", "#766a5d");
-    t.skimmer = tone(dark, "#2a231dbe", "#f4ecded7");
-    t.skimmerText = tone(dark, "#2a231d", "#f4ecde");
-    t.scrubTrack = tone(dark, "#e2d9c8", "#3a3029");
-    t.inOutRange = tone(dark, "#885d87", "#a180a2");
-    t.snapLine = tone(dark, "#1b1612be", "#fff6e8dc");
-    t.readout = tone(dark, "#faf6eef5", "#241e19f2");
-    t.readoutBorder = tone(dark, "#cdc1ac", "#463b32");
-    t.readoutText = tone(dark, "#2a231d", "#f4ecde");
-    t.dragShadow = hex("#140c0659");
+    // Clips (7.4): a card with a line2 inset and an ink name; a picture's
+    // name bar is black at 55% over its filmstrip; titles and captions are
+    // `raised`. Sound draws its waveform in the literal greys.
+    const QColor cardLine = laid(tk::card, tk::line2);
+    const QColor raisedLine = laid(tk::raised, tk::line2);
+    const QColor wave = token(tk::overlay::waveformRms);
+    t.clipVideo = clipStyle(token(tk::card), laid(tk::card, alphaOf(0xff000000, 0.55)), cardLine, token(tk::ink), wave);
+    t.clipAudio = clipStyle(token(tk::card), token(tk::card), cardLine, token(tk::ink), wave);
+    t.clipMusic = clipStyle(token(tk::card), token(tk::card), cardLine, token(tk::ink), wave);
+    t.clipGenerator = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink), token(tk::ink2));
+    t.clipCaption = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink2), token(tk::ink2));
+    // The playhead is its own red, stroked in the stage's dark.
+    t.playhead = token(tk::playhead);
+    t.playheadHalo = token(tk::surround);
+    // The skimmed playhead: track2, which reads at 3:1 on the ruler and its
+    // halo but clearly under the playhead.
+    t.playheadIdle = token(tk::track2);
+    t.inOutRange = t.accent; // The selected range.
 
-    t.markerRed = tone(dark, "#b23a2e", "#e0675a");
-    t.markerOrange = tone(dark, "#b4561a", "#e0904a");
-    t.markerYellow = tone(dark, "#8a6d0c", "#d8bb58");
-    t.markerGreen = tone(dark, "#4b7a34", "#86b06a");
-    t.markerCyan = tone(dark, "#2f7a7c", "#6db3ad");
-    t.markerBlue = tone(dark, "#3e5f8f", "#7f9cc6");
-    t.markerPurple = tone(dark, "#7a3f86", "#b98bc4");
-    t.markerPink = tone(dark, "#a8406e", "#d986a8");
-    t.markerWhite = tone(dark, "#7f7365", "#e6dccb");
+    // Marker colours are the document's names; each is lifted to read on
+    // the ruler (the guard below).
+    t.markerRed = token(tk::neg);
+    t.markerOrange = cssColor("#e0904a");
+    t.markerYellow = token(tk::warn);
+    t.markerGreen = token(tk::pos);
+    t.markerCyan = cssColor("#5cb8c4");
+    t.markerBlue = token(tk::accentInk);
+    t.markerPurple = cssColor("#b48ce6");
+    t.markerPink = cssColor("#e07ab0");
+    t.markerWhite = token(tk::ink);
 
-    // Proposals are drawn in Kerf's ink.
-    t.proposalAdd = t.accent;
-    t.proposalAddFill = tone(dark, "#6a347126", "#c39acb2e");
-    t.proposalChange = tone(dark, "#5a2c60", "#ceadd5");
-    t.proposalChangeFill = tone(dark, "#5a2c601e", "#ceadd524");
-    t.proposalRemove = tone(dark, "#a3302b", "#e8877b");
-    t.proposalRemoveHatch = tone(dark, "#a3302b6e", "#e8877b96");
-    t.proposalUnderlay = tone(dark, "#fbf8f1d2", "#0c090796");
+    // A pending proposal's changed clip: the accent ink.
+    t.proposalChange = token(tk::accentInk);
 
-    // Viewers: the stage follows the appearance, as a video site's page does;
-    // the picture card is warm black in both.
-    t.viewerSurround = tone(dark, "#e6dece", "#120e0b");
-    t.viewerCanvas = hex("#0a0807");
-    t.viewerText = hex("#ab9e8e");
-    t.viewerTextDim = hex("#958877");
-    t.viewerCaption = hex("#0e0b09e1");
+    // Viewers (3): the surround, a black canvas, the literal caption.
+    t.viewerSurround = token(tk::surround);
+    t.viewerCanvas = token(tk::overlay::deviceScreen);
+    t.viewerText = token(tk::ink2);
+    t.viewerTextDim = token(tk::ink3);
+    t.viewerCaption = token(tk::overlay::captionBackground);
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
-    t.viewerCaptionText = hex("#f4ecde");
-    t.deviceFrame = hex("#1e1d1f");
-    t.deviceEdge = hex("#3a383c");
-    t.deviceShadow = hex("#0000002e");
-    t.deviceScreen = hex("#000000");
-    t.deviceInk = hex("#ffffff");
-    t.laptopShell = hex("#9a8e81");
-    t.laptopShellShade = hex("#6e645a");
-    t.laptopDeck = hex("#bdb1a3");
-    t.laptopHighlight = hex("#d8cdbf");
-    t.laptopBezel = hex("#0c0b0a");
-    t.laptopCamera = hex("#24262b");
-    t.laptopHinge = hex("#3a332d");
-    t.safeZoneFill = hex("#ffffff1f");
-    t.safeZoneLine = hex("#ffffffa6");
-    t.safeZoneText = hex("#ffffff");
-    t.safeZoneLabel = hex("#000000a0");
-    t.playerInk = hex("#ffffffe6");
-    t.playerInkDisabled = hex("#ffffff66");
-    t.playerShade = hex("#00000099");
-    t.playerTopShade = hex("#00000080");
-    t.playerHover = hex("#ffffff1f");
-    t.playerTrack = hex("#ffffff4d");
-    // The bar always lies on the picture's dark gradient, so it takes the
-    // accent the dark appearance uses, in either.
-    t.playerPlayed = kerfAccent(true);
-    t.playerTipFill = hex("#000000b3");
-    t.maskOutline = hex("#fffbf3");
-    t.maskOutlineIdle = hex("#fffbf3b3");
-    t.maskShadow = hex("#0000008c");
-    t.maskFill = hex("#fffbf31e");
+    t.deviceScreen = token(tk::overlay::deviceScreen);
+    // Masks over the picture: white over a dark rule; handles the accent.
+    t.maskOutline = token(0xffffffff);
+    t.maskOutlineIdle = alphaOf(0xffffffff, 0.70);
+    t.maskShadow = alphaOf(0xff000000, 0.55);
+    t.maskFill = alphaOf(0xffffffff, 0.12);
     t.maskHandleFill = t.accent;
-    t.maskHandleBorder = hex("#fffbf3");
-    t.maskTag = hex("#00000099");
-    t.maskTagSelected = t.selection;
-    t.maskText = hex("#fffbf3");
+    t.maskHandleBorder = token(0xffffffff);
+    t.maskTag = alphaOf(0xff000000, 0.60);
+    t.maskTagSelected = t.accent;
+    t.maskText = token(0xffffffff);
 
-    t.thumbnail = tone(dark, "#2a231d", "#0e0b09");
-    t.tileEmpty = tone(dark, "#e2d9c8", "#2a231d");
-    t.tileEmptyBorder = tone(dark, "#e2d9c8", "#3a3029");
-    t.tileEmptyText = tone(dark, "#5a4e43", "#a89a8a");
-    t.audioTile = t.clipAudio.fill;
-    t.audioTileGlyph = t.clipAudio.wave;
-    t.cardPlaceholder = tone(dark, "#ebe4d6", "#2a231d");
-    t.cardPlaceholderText = tone(dark, "#5a4e43", "#a89a8a");
-    t.badgeError = hex("#a3302b");
-    t.badgeErrorText = hex("#fbf6ec");
-    t.badgeInfo = hex("#6a3471");
-    t.badgeInfoText = hex("#fbf6ec");
-    t.badgeNeutral = tone(dark, "#140c06a0", "#000000a0");
-    t.badgeNeutralText = tone(dark, "#fbf6ec", "#f4ecde");
+    // The bin and the browser (6, 8): tiles on the well.
+    t.tileEmpty = token(tk::card);
+    t.tileEmptyText = token(tk::ink2);
+    t.cardPlaceholder = token(tk::raised);
+    t.cardPlaceholderText = token(tk::ink2);
+    t.badgeError = token(tk::neg);
+    t.badgeErrorText = token(tk::surroundDim);
+    t.badgeInfo = t.accent;
+    t.badgeInfoText = token(tk::accentText);
 
-    // The hardware finish. Light is the faceplate as the owner chose it:
-    // cream plates and keys, wells pressed into them, shadows the warm umber
-    // of the launcher's bezels. Dark is the same hardware in espresso, its
-    // light a faint cream rather than white, its shadows black.
-    t.faceplateTop = tone(dark, "#f4eee3", "#2c251f");
-    t.faceplateBottom = tone(dark, "#e8e0d0", "#241e19");
-    t.faceplateHighlight = tone(dark, "#ffffffcc", "#ffecd214");
-    t.faceplateEdge = tone(dark, "#d2c7b3", "#100c0a");
-    t.keyTop = tone(dark, "#fbf8f1", "#40362d");
-    t.keyBottom = tone(dark, "#efe8db", "#342b24");
-    t.keyRing = tone(dark, "#3c281429", "#0000008c");
-    t.keyDrop = tone(dark, "#3c28141f", "#00000066");
-    t.keyHighlight = tone(dark, "#ffffff", "#ffecd224");
-    t.keyLatched = tone(dark, "#d8ccb6", "#1d1814");
-    t.keyLatchedShadow = tone(dark, "#3c281459", "#000000b3");
-    t.keyLed = tone(dark, "#d4882a", "#e59a4a");
-    t.bankWell = tone(dark, "#e3d9c6", "#181310");
-    t.bankShadow = tone(dark, "#3c281438", "#00000099");
-    t.bankLip = tone(dark, "#ffffffb3", "#ffecd214");
-    t.wellFill = tone(dark, "#e8dfcc", "#1a1511");
-    t.wellShadow = tone(dark, "#3c281433", "#0000008c");
-    t.wellLip = tone(dark, "#ffffffa6", "#ffecd212");
-    t.modulePlate = tone(dark, "#f9f4eb", "#2a231d");
-    t.moduleEdge = tone(dark, "#ddd2bf", "#3a3029");
-    t.moduleHighlight = tone(dark, "#ffffff", "#ffecd214");
-    t.engravedInk = tone(dark, "#4d4237", "#b8a994");
-    t.engravedHighlight = tone(dark, "#ffffffbf", "#0000008c");
-    // Lamps: amber and green are the only colours besides Kerf's own.
-    t.lampOff = tone(dark, "#d2c7b3", "#4a3f36");
-    t.lampChanged = t.keyLed;
-    t.lampKerf = t.accent;
-    t.lampOk = tone(dark, "#5a8a3e", "#8ab56c");
-    // The display glass is dark in both appearances, a step deeper in dark
-    // so it still reads as glass set into the plate.
-    t.glassTop = tone(dark, "#1a1613", "#0d0a08");
-    t.glassBottom = tone(dark, "#26201b", "#16120e");
-    t.glassShadow = tone(dark, "#00000080", "#000000b3");
-    t.glassLip = tone(dark, "#ffffffb3", "#ffecd21a");
-    t.glassText = hex("#f1e4c8");
-    t.glassLabel = hex("#a8977e");
-    // Knobs are bakelite in both; in dark the skirt is deeper and the ticks
-    // lighter, so both still part from the espresso plate.
-    t.knobRing = tone(dark, "#24201c", "#0c0a08");
-    t.knobFaceLight = hex("#4a433c");
-    t.knobFaceDark = hex("#191613");
-    t.knobTick = tone(dark, "#8a7d6c", "#8e8072");
-    t.knobPointer = hex("#f1e4c8");
-    // The VU meter is an instrument: the same in both, its face a little
-    // dimmer by lamplight.
-    t.vuBezelTop = hex("#2a241f");
-    t.vuBezelBottom = hex("#15110e");
-    t.vuFace = tone(dark, "#efe3c6", "#e4d6b6");
-    t.vuInk = hex("#4d4237");
-    t.vuRedZone = hex("#b23a2e");
-    t.vuNeedle = hex("#1b1612");
+    // The Inspector's controls: aliases.
+    t.inspectorField = t.field;
+    t.switchOff = token(tk::track);
+    t.switchOffStroke = token(tk::line2);
+    t.knob = token(tk::ink);
 
-    // Guards on the palette above: each holds already, and keeps holding if a
-    // value is retuned. Text and glyphs on the filled accent read at 4.5:1
-    // (no exemption)...
+    // Guards: each holds for the values above, and keeps holding if a token
+    // is retuned. Text reads at 4.5:1 where it is drawn...
     t.onAccent = readableOn(t.onAccent, t.accent, 4.5);
     t.onAccentSecondary = readableAlphaOn(t.onAccentSecondary, t.selection, 4.5);
     t.selectionText = readableOn(t.selectionText, t.selection, 4.5);
     t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
-    t.trackBadgeText = readableOn(t.trackBadgeText, t.trackHeader, 4.5);
-    // ...the accent as text reads on every surface it is drawn on (the
-    // transports' timecodes, the timeline's corner time, the sync chip,
-    // cards, fields and dialogs), all light or all dark, so reading on one
-    // never costs another...
-    for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar, t.raised, t.window, t.chrome, t.well, t.field,
-                                  t.dialog, t.group})
+    for (const QColor &surface : {t.field, t.chatSurface, t.dialog})
+        t.placeholderText = justReadableOn(t.placeholderText, surface, 4.5);
+    t.viewerTextDim = justReadableOn(t.viewerTextDim, t.viewerCanvas, 4.5);
+    t.errorText = justReadableOn(t.errorText, t.errorSurface, 4.5);
+    t.errorText = justReadableOn(t.errorText, t.chatSurface, 4.5);
+    t.badgeErrorText = readableOn(t.badgeErrorText, t.badgeError, 4.5);
+    // ...the accent as text on every surface it is drawn on...
+    for (const QColor &surface : {t.panel, t.rulerCorner, t.raised, t.window, t.chrome, t.well, t.field,
+                                  t.dialog, t.group, t.chatSurface, t.accentTint, t.accentTintPressed})
         t.accentText = readableOn(t.accentText, surface, 4.5);
-    t.railGlyphActive = t.accentText;
     t.chatExpander = t.accentText;
-    // ...the marked range is information, 3:1 on the panel around the bar...
+    t.assistantText = t.accentText;
+    // ...the marked range is information, 3:1 on the panel round the bar...
     t.inOutRange = readableOn(t.inOutRange, t.panel, 3.0);
-    // ...the playhead's line always has its halo either side, so it is read
-    // against the halo wherever it crosses (a picture, a clip, a bare lane),
-    // and its head against the ruler from top to foot. The skimmed playhead
-    // reads at 3:1 on each, no more than it must; the playhead clearly more,
-    // so it stays the louder of the two...
+    // ...the skimmed playhead reads at 3:1 on the ruler and on its halo, no
+    // more than it must; the playhead clearly more...
     for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
         t.playheadIdle = justReadableOn(t.playheadIdle, surface, 3.0);
     for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
@@ -558,50 +455,35 @@ EditorTheme makeEditorTheme(bool dark) {
     for (QColor *marker : {&t.markerRed, &t.markerOrange, &t.markerYellow, &t.markerGreen, &t.markerCyan, &t.markerBlue,
                            &t.markerPurple, &t.markerPink, &t.markerWhite})
         for (const QColor &surface : {t.ruler, t.rulerBottom}) *marker = readableOn(*marker, surface, 3.0);
-    // ...and every clip's name reads on its header at 4.5:1.
+    // ...every clip's name reads on its header at 4.5:1...
     for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
         style->label = readableOn(style->label, style->header, 4.5);
-    // The hardware's text reads at 4.5:1 on whatever it is printed on: an
-    // engraved label on a module or the faceplate, figures and labels on the
-    // whole glass, the scale on the VU's face.
-    for (const QColor &surface : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
-        t.engravedInk = readableOn(t.engravedInk, surface, 4.5);
-    for (const QColor &surface : {t.glassTop, t.glassBottom}) {
-        t.glassText = readableOn(t.glassText, surface, 4.5);
-        t.glassLabel = readableOn(t.glassLabel, surface, 4.5);
-    }
-    t.vuInk = readableOn(t.vuInk, t.vuFace, 4.5);
-    // The Inspector's controls: aliases (the launcher's switch and knob).
-    t.inspectorField = dark ? t.field : t.group;
-    t.switchOn = t.trackToggleOn;
-    t.switchOnKnob = tone(dark, "#fffcf6", "#21161f");
-    t.switchOff = tone(dark, "#e2d9c8", "#3a3029");
-    t.switchOffStroke = tone(dark, "#8b7e6d", "#85776a");
-    t.knob = tone(dark, "#fffcf6", "#efe6d6");
-    t.inspectorDetent = t.rulerTickHalf;
-    t.sliderHandleChanged = dark ? t.textSecondary : t.text;
-    t.sliderHandleAtDefault = dark ? t.borderStrong : t.sliderHandleBorder;
     return t;
 }
 
 QPalette editorPalette(const EditorTheme &t) {
     QPalette palette;
     for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive}) {
+        palette.setColor(group, QPalette::Window, t.chrome);
         palette.setColor(group, QPalette::WindowText, t.text);
         palette.setColor(group, QPalette::Base, t.field);
         palette.setColor(group, QPalette::AlternateBase, t.well);
         palette.setColor(group, QPalette::Text, t.text);
-        palette.setColor(group, QPalette::Button, t.button.alpha() == 255 ? t.button : t.raised);
+        palette.setColor(group, QPalette::Button, t.button);
         palette.setColor(group, QPalette::ButtonText, t.buttonText);
         palette.setColor(group, QPalette::BrightText, t.textStrong);
         palette.setColor(group, QPalette::ToolTipBase, t.tooltip);
         palette.setColor(group, QPalette::ToolTipText, t.tooltipText);
         palette.setColor(group, QPalette::PlaceholderText, t.placeholderText);
         palette.setColor(group, QPalette::Link, t.accentText);
-        palette.setColor(group, QPalette::Light, t.dark ? t.borderStrong : QColor("#ffffff"));
-        palette.setColor(group, QPalette::Midlight, t.border);
-        palette.setColor(group, QPalette::Mid, t.borderStrong);
-        palette.setColor(group, QPalette::Dark, t.dark ? t.divider : t.borderStrong);
+        palette.setColor(group, QPalette::Light, t.buttonHover);
+        palette.setColor(group, QPalette::Midlight, t.raised);
+        palette.setColor(group, QPalette::Mid, t.divider);
+        palette.setColor(group, QPalette::Dark, t.well);
+        palette.setColor(group, QPalette::Shadow, QColor(Qt::black));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+        palette.setColor(group, QPalette::Accent, t.accent);
+#endif
     }
     palette.setColor(QPalette::Active, QPalette::Highlight, t.selection);
     palette.setColor(QPalette::Active, QPalette::HighlightedText, t.selectionText);
@@ -609,68 +491,48 @@ QPalette editorPalette(const EditorTheme &t) {
     palette.setColor(QPalette::Inactive, QPalette::HighlightedText, t.selectionInactiveText);
     for (const QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText})
         palette.setColor(QPalette::Disabled, role, t.textDisabled);
+    palette.setColor(QPalette::Disabled, QPalette::Window, t.chrome);
     palette.setColor(QPalette::Disabled, QPalette::Base, t.fieldDisabled);
-    palette.setColor(QPalette::Disabled, QPalette::Button, t.buttonDisabled.alpha() == 255 ? t.buttonDisabled : t.raised);
+    palette.setColor(QPalette::Disabled, QPalette::Button, t.buttonDisabled);
     palette.setColor(QPalette::Disabled, QPalette::Highlight, t.selectionInactive);
     palette.setColor(QPalette::Disabled, QPalette::HighlightedText, t.textDisabled);
     return palette;
 }
 
-ColorScheme editorColorScheme() { return state().scheme; }
-
-void setEditorColorScheme(ColorScheme scheme) {
-    AppearanceState &s = state();
-    s.scheme = scheme;
-    s.computed = false;
-#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
-    // Native parts (title bars, file and colour dialogs) follow a forced
-    // appearance too; System hands the choice back to the platform.
-    if (qGuiApp) {
-        QGuiApplication::styleHints()->setColorScheme(scheme == ColorScheme::Dark ? Qt::ColorScheme::Dark
-                                                      : scheme == ColorScheme::Light ? Qt::ColorScheme::Light
-                                                                                     : Qt::ColorScheme::Unknown);
-    }
-#endif
-    if (qApp) applyEditorAppearance();
-}
-
 const EditorTheme &editorTheme() {
     AppearanceState &s = state();
     if (!s.computed) {
-        const bool dark = schemeIsDark(s.scheme);
-        s.theme = makeEditorTheme(dark);
+        s.theme = makeEditorTheme();
         s.computed = true;
     }
     return s.theme;
 }
 
+void loadBundledFonts() {
+    QDirIterator files(QStringLiteral(":/fonts"), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files);
+    while (files.hasNext()) QFontDatabase::addApplicationFont(files.next());
+}
+
 void applyEditorAppearance() {
     AppearanceState &s = state();
-    if (s.applying || !qApp) return;
-    const bool dark = schemeIsDark(s.scheme);
-    if (s.applied && s.computed && s.theme.dark == dark) return;
+    if (s.applying || !qApp || s.applied) return;
     s.applying = true;
-    s.theme = makeEditorTheme(dark);
-    s.computed = true;
+    editorTheme();
     s.applied = true;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Native parts (title bars, file and colour dialogs) draw dark too.
+    QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+#endif
     QApplication::setPalette(editorPalette(s.theme));
+    // Controls are 12/16 unless a widget says otherwise.
+    QApplication::setFont(tokens::font(tokens::control));
     qApp->setStyleSheet(editorStyleSheet(s.theme));
     // The style sheet repolishes every widget; painted ones read the theme
     // as they paint.
     for (QWidget *widget : QApplication::allWidgets()) widget->update();
+    watchMetrics();
     emit EditorAppearance::instance()->changed();
     s.applying = false;
-}
-
-void followSystemAppearance() {
-    static PaletteWatcher *watcher = nullptr;
-    if (watcher || !qApp) return;
-    watcher = new PaletteWatcher(qApp);
-    qApp->installEventFilter(watcher);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, watcher,
-                     [] { applyEditorAppearance(); });
-#endif
 }
 
 EditorAppearance *EditorAppearance::instance() {

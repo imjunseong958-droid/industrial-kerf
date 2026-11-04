@@ -126,6 +126,14 @@ from the checkout, it tries the checkout's build before the app.
 `scripts/run-kerf-qt.sh [project]` builds the debug editor and opens it the
 same way.
 
+The editor is dark only (one graphite ramp and one blue accent) and fills the
+screen edge to edge. It has four workspaces (Review, Edit, Finish, Deliver),
+shows a 16:9 picture in an exact MacBook Pro 14" frame and 9:16, 1:1 and 4:5 in
+an exact iPhone 16 Pro frame, and keeps the review as comment threads (from
+people, Kerf, agents over MCP and QC) in the project's review log. On macOS it
+opens `kerf://<project>/rev<N>@HH:MM:SS:FF` review links. See
+[the editor's README](apps/kerf-qt/README.md).
+
 Make a project and share it from a terminal (see
 [shared projects](docs/collaboration.md)):
 
@@ -177,7 +185,7 @@ Agents edit the same `.kerf` document people do (see
 reference, generated from the feature catalog, and the current document,
 annotated with each clip's end and source out. The built-in agent reads the
 document again before every model request, so it always sees the current
-revision and the state of its proposal. There is no tool discovery; three
+revision and the state of its proposal. There is no tool discovery; four
 tools cover the work:
 
 | Tool | Purpose |
@@ -185,6 +193,7 @@ tools cover the work:
 | `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, loudest moments, sound onsets, and tempo, and with `transcript: true` what is said (`words: true` times each word). `sheet: N`: a contact sheet of N frames over `from`–`to`, of `media` or the sequence, as one image. `at`: up to eight full-size frames — source frames of `media`, or program frames of the sequence. `transcript: true` without `media`: what the sequence says as it plays. `sequence` picks a sequence other than the first. `proposal`: the same, as a pending proposal would make the project. `effects`: the catalog entries for a look or moment ("neon glow", "zoom hit"), best first, each with when to use it; `effect`: one entry's parameters |
 | `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview: the frames either side of each cut it made or moved, and the middle of a clip it changed in place. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
 | `render` | Render the sequence (or another `sequence`), or `from`–`to`, as a draft or full-quality file — of the project, or of a pending `proposal`; `job` reads progress, `cancel` stops it |
+| `note` | Post a comment to the project's review log (`review/comments.jsonl`, beside the document): `body`, optionally `at`/`duration` on the program, `parent` to reply in a thread, `proposal` to link it to one, `tags`, and `blocking`. It shows in the editor's comments panel authored by the client (Claude Code, Cursor, Codex, or Kerf itself), never makes a pending proposal stale, and never enters undo |
 
 An edit's check findings include what an editor would catch, as warnings:
 black stretches with nothing on screen, picture that leaves the frame's

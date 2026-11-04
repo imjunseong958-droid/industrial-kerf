@@ -1,4 +1,6 @@
 #include "main_window.h"
+#include "comment_row.h"
+#include "review_link.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
@@ -9,15 +11,27 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
-#include "workspace.h"
+#include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
+#include "browser_panel.h"
+#include "deliver_tray.h"
+#include "editor_bus.h"
+#include "finish_tray.h"
+#include "deliver_pane.h"
+#include "inspector_column.h"
+#include "wiring/main_window_shared.h"
+#include "wiring/bin_wiring.h"
+#include "wiring/inspector_wiring.h"
+#include "wiring/review_wiring.h"
+#include "wiring/source_wiring.h"
+#include "wiring/stage_wiring.h"
+#include "wiring/timeline_wiring.h"
+#include "wiring/toolbar_wiring.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
 #endif
@@ -56,6 +70,9 @@
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPlainTextEdit>
+#include <QTextEdit>
+#include <QLineEdit>
+#include <QAbstractSpinBox>
 #include <QPushButton>
 #include <QProcess>
 #include <QRegularExpression>
@@ -66,7 +83,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -75,9 +91,6 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-#include <DockManager.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <numeric>
@@ -86,242 +99,7 @@
 
 namespace kerf {
 
-namespace {
-
-// On macOS the toolbar is the window's title bar, as in Logic and Final
-// Cut: the window runs up under a transparent title bar, the window buttons
-// sit at the toolbar's leading end, and the project's name is the title.
-// Elsewhere the native title bar stays.
-#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-#define KERF_EDITOR_OWN_TITLE_BAR 1
-// The room the window buttons take at the toolbar's leading end (after its
-// 6 points of padding) where the platform does not report them.
-constexpr int kWindowButtonsSpace = 72;
-#else
-#define KERF_EDITOR_OWN_TITLE_BAR 0
-#endif
-constexpr int kToolbarHeight = 30;
-// The toolbar's symbols, in points; toolbarIcon() draws them at this size.
-constexpr int kToolbarIconSize = 15;
-// The style sheet's QToolBar spacing, between every pair of its items,
-// and its padding, at either end.
-constexpr int kToolbarSpacing = 2;
-constexpr int kToolbarPadding = 6;
-// The rows of the window's chrome (the toolbar, the banners under it and
-// the agent's bar) end their last control this far in from the window's
-// edge, so their trailing buttons line up.
-constexpr int kTrailingInset = 8;
-// How far the title keeps from the toolbar's groups; nearer, it gives way.
-constexpr int kTitleClearance = 20;
-
-// A script line's words, a quoted phrase ("A lower third") one word.
-QStringList scriptWords(const QString &line) {
-    QStringList words;
-    QString word;
-    bool quoted = false;
-    for (const QChar c : line) {
-        if (c == QLatin1Char('"')) quoted = !quoted;
-        if (c.isSpace() && !quoted) {
-            if (!word.isEmpty()) words << std::exchange(word, QString());
-            continue;
-        }
-        word += c;
-    }
-    if (!word.isEmpty()) words << word;
-    return words;
-}
-
-// Seconds in a script's amount or position ("-36f", "+1.5s", "96f",
-// "00:00:12:00"), or NaN when it is something else (an anchor).
-double scriptSeconds(QString text, double fps) {
-    text = text.trimmed();
-    double sign = 1.0;
-    if (text.startsWith(QLatin1Char('-')) || text.startsWith(QLatin1Char('+'))) {
-        sign = text.startsWith(QLatin1Char('-')) ? -1.0 : 1.0;
-        text = text.mid(1);
-    }
-    bool ok = false;
-    double value = 0.0;
-    if (text.endsWith(QLatin1Char('f'))) value = text.chopped(1).toDouble(&ok) / std::max(1.0, fps);
-    else if (text.endsWith(QLatin1Char('s'))) value = text.chopped(1).toDouble(&ok);
-    else {
-        const QStringList parts = text.split(QRegularExpression(QStringLiteral("[:;]")));
-        if (parts.size() == 4) {
-            ok = true;
-            double fields[4];
-            for (int index = 0; index < 4; ++index) {
-                bool part = false;
-                fields[index] = parts.at(index).toDouble(&part);
-                ok = ok && part;
-            }
-            value = fields[0] * 3600 + fields[1] * 60 + fields[2] + fields[3] / std::max(1.0, fps);
-        }
-    }
-    return ok ? sign * value : std::numeric_limits<double>::quiet_NaN();
-}
-
-// "0:12", "1:04:30": a position as a reader says it.
-QString clockTime(double seconds) {
-    const qint64 whole = std::llround(std::max(0.0, seconds));
-    const qint64 hours = whole / 3600;
-    const QString rest = QStringLiteral("%1:%2").arg((whole / 60) % 60).arg(whole % 60, 2, 10, QLatin1Char('0'));
-    return hours ? QStringLiteral("%1:%2").arg(hours).arg(rest.rightJustified(5, QLatin1Char('0'))) : rest;
-}
-
-// "−1.5 s", "+12 s": an amount, its sign always shown (a true minus).
-QString signedSeconds(double seconds) {
-    const QString magnitude = QString::number(std::abs(seconds), 'f', std::abs(seconds) < 10 ? 1 : 0);
-    const QString trimmed = magnitude.endsWith(QStringLiteral(".0")) ? magnitude.chopped(2) : magnitude;
-    return QStringLiteral("%1%2 s").arg(seconds < 0 ? QStringLiteral("−") : QStringLiteral("+"), trimmed);
-}
-
-// The value of `key=` among a line's words, unquoted.
-QString scriptValue(const QStringList &words, const QString &key) {
-    const QString prefix = key + QLatin1Char('=');
-    for (const QString &word : words)
-        if (word.startsWith(prefix)) {
-            QString value = word.mid(prefix.size());
-            if (value.size() >= 2 && value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"'))) value = value.mid(1, value.size() - 2);
-            return value;
-        }
-    return {};
-}
-
-// SF Symbols' scissors on a 20-point grid, in the painter's pen: the
-// toolbar's Split and the tool palette's Razor.
-void drawScissors(QPainter &painter) {
-    painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
-    painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
-    QPainterPath blades;
-    blades.moveTo(7, 6.5); blades.lineTo(16, 16);
-    blades.moveTo(7, 13.5); blades.lineTo(16, 4);
-    painter.drawPath(blades);
-}
-
-// Toolbar symbols drawn on a shared grid so their weight and optical size
-// match; an unavailable command's symbol is dimmed in both appearances, and
-// a switch that is on (the conversation's column) has its symbol in the
-// accent, as a chosen mode in a title strip does.
-QIcon toolbarIcon(const QString &glyph) {
-    const auto draw = [glyph](QPainter &painter, const QColor &color) {
-        painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        QPainterPath path;
-        if (glyph == QStringLiteral("bubble")) {
-            // SF Symbols' bubble.left: a rounded speech bubble, its tail at
-            // the lower left, as the comments button beside a Short.
-            path.moveTo(6.5, 3.5); path.lineTo(13.5, 3.5);
-            path.quadTo(17, 3.5, 17, 7); path.lineTo(17, 10);
-            path.quadTo(17, 13.5, 13.5, 13.5); path.lineTo(9.5, 13.5);
-            path.lineTo(5.5, 16.5); path.lineTo(6.2, 13.5);
-            path.quadTo(3, 13.3, 3, 10); path.lineTo(3, 7);
-            path.quadTo(3, 3.5, 6.5, 3.5);
-            path.closeSubpath();
-        } else if (glyph == QStringLiteral("↓")) {
-            path.moveTo(10, 3); path.lineTo(10, 12);
-            path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
-            path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
-        } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
-            if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
-            path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
-            path.moveTo(4, 7.5); path.lineTo(11, 7.5);
-            path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
-        } else if (glyph == QStringLiteral("✂")) {
-            drawScissors(painter);
-        } else if (glyph == QStringLiteral("trash")) {
-            // SF Symbols' trash: a lid with its handle over a can.
-            path.moveTo(4, 5); path.lineTo(16, 5);
-            path.moveTo(8, 5); path.lineTo(8, 3); path.lineTo(12, 3); path.lineTo(12, 5);
-            path.moveTo(5.5, 6); path.lineTo(5.5, 14.5);
-            path.quadTo(5.5, 16, 7, 16); path.lineTo(13, 16);
-            path.quadTo(14.5, 16, 14.5, 14.5); path.lineTo(14.5, 6);
-            path.moveTo(8.5, 8.5); path.lineTo(8.5, 13.5);
-            path.moveTo(11.5, 8.5); path.lineTo(11.5, 13.5);
-        } else {
-            path.moveTo(5, 5); path.lineTo(15, 15);
-            path.moveTo(15, 5); path.lineTo(5, 15);
-        }
-        painter.drawPath(path);
-    };
-    // Drawn at the size the toolbar shows them (kToolbarIconSize), the
-    // 20-point grid scaled down as vectors: a 20-point picture shrunk to 15
-    // by the icon engine blurred every stroke.
-    const auto shown = [draw](QPainter &painter, const QColor &color) {
-        painter.scale(kToolbarIconSize / 20.0, kToolbarIconSize / 20.0);
-        draw(painter, color);
-    };
-    const QSize size(kToolbarIconSize, kToolbarIconSize);
-    QIcon icon = glyphIcon(size, shown);
-    const QPixmap chosen = glyphPixmap(size, shown, editorTheme().accentText);
-    icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
-    icon.addPixmap(chosen, QIcon::Active, QIcon::On);
-    return icon;
-}
-
-// A tool palette symbol on an 18-point grid, in `color`: the pointer for
-// Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
-// drawn with the toolbar's pen so they share its weight.
-QPixmap toolGlyph(const QString &id, const QColor &color) {
-    QPixmap pixmap(36, 36);
-    pixmap.setDevicePixelRatio(2);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    if (id == QStringLiteral("tool.selection")) {
-        const QPolygonF arrow{{5.5, 2.0}, {5.5, 15.0}, {8.6, 12.0}, {10.7, 16.6}, {12.7, 15.7}, {10.6, 11.2}, {14.8, 11.2}};
-        painter.setPen(QPen(color, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.setBrush(color);
-        painter.drawPolygon(arrow);
-        return pixmap;
-    }
-    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    if (id == QStringLiteral("tool.razor")) {
-        // The toolbar's scissors, brought onto this grid.
-        painter.scale(0.9, 0.9);
-        drawScissors(painter);
-        return pixmap;
-    }
-    // An arrow along y from x0 to x1, its head at x1.
-    const auto arrow = [](QPainterPath &path, qreal y, qreal x0, qreal x1) {
-        const qreal back = x1 > x0 ? -2.5 : 2.5;
-        path.moveTo(x0, y); path.lineTo(x1, y);
-        path.moveTo(x1 + back, y - 2.5); path.lineTo(x1, y); path.lineTo(x1 + back, y + 2.5);
-    };
-    QPainterPath path;
-    if (id == QStringLiteral("tool.ripple")) {
-        // An edit point, and the cut closing up on it.
-        path.moveTo(4, 3.5); path.lineTo(4, 14.5);
-        arrow(path, 9, 15, 7);
-    } else if (id == QStringLiteral("tool.roll")) {
-        // An edit point, moving either way.
-        path.moveTo(9, 3.5); path.lineTo(9, 14.5);
-        path.moveTo(5.5, 6.5); path.lineTo(3, 9); path.lineTo(5.5, 11.5);
-        path.moveTo(12.5, 6.5); path.lineTo(15, 9); path.lineTo(12.5, 11.5);
-    } else if (id == QStringLiteral("tool.slip")) {
-        // The clip's content, slid either way inside it.
-        arrow(path, 9, 9, 3);
-        arrow(path, 9, 9, 15);
-    } else if (id == QStringLiteral("tool.slide")) {
-        // The clip, and its neighbours giving way.
-        arrow(path, 6, 3.5, 14.5);
-        arrow(path, 12, 14.5, 3.5);
-    }
-    painter.drawPath(path);
-    return pixmap;
-}
-
-// A tool's icon: secondary text when not chosen, the accent when chosen.
-QIcon toolIcon(const QString &id) {
-    const EditorTheme &theme = editorTheme();
-    QIcon icon;
-    icon.addPixmap(toolGlyph(id, theme.textSecondary), QIcon::Normal, QIcon::Off);
-    icon.addPixmap(toolGlyph(id, theme.textStrong), QIcon::Active, QIcon::Off);
-    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Normal, QIcon::On);
-    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Active, QIcon::On);
-    icon.addPixmap(toolGlyph(id, theme.glyphDisabled), QIcon::Disabled, QIcon::Off);
-    return icon;
-}
-
-} // namespace
+using namespace window_parts;
 
 MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent)
     : QMainWindow(parent), m_projectDirectory(projectDirectory), m_kerfdBinary(kerfdBinary) {
@@ -334,9 +112,20 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     // commands clear of the window buttons.
     setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
 #endif
+    // The regions' bus: requests go out as the window's own do.
+    m_bus = new EditorBus(this);
+    m_bus->setSender([this](const QJsonObject &command) { return sendSimple(command); });
+    m_bus->setRunner([this](const QString &id, const QJsonObject &params) { return runCommand(id, params); });
+    m_reviewWiring = std::make_unique<ReviewWiring>(this, m_bus);
+    m_stageWiring = std::make_unique<StageWiring>(this, m_bus);
+    m_toolbarWiring = std::make_unique<ToolbarWiring>(this, m_bus);
+    m_inspectorWiring = std::make_unique<InspectorWiring>(this, m_bus);
+    m_timelineWiring = std::make_unique<TimelineWiring>(this, m_bus);
+    m_binWiring = std::make_unique<BinWiring>(this, m_bus);
+    m_sourceWiring = std::make_unique<SourceWiring>(this, m_bus);
     buildUi();
     setupActions();
-    setupStatusBar();
+    updateCloudStatus();
     // The folder's name until the first snapshot names the project.
     setProjectTitle(m_projectDirectory.isEmpty() ? QStringLiteral("Industrial Kerf") : QFileInfo(m_projectDirectory).fileName());
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &MainWindow::applyAppearance);
@@ -372,24 +161,27 @@ void MainWindow::pollBridge() {
         if (doc.isObject()) handleEvent(doc.object());
     }
     KerfFrame frame{};
-    if (kerf_bridge_frame(m_bridge, &frame) && m_connected && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
-        const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
-        if (expected > 0 && frame.length >= static_cast<size_t>(expected)) {
-            const double target = m_hoverSkimming ? m_pendingHoverSeek : m_playhead;
-            if ((m_hoverSkimming || m_pointerOwnsPlayhead) &&
-                !nearerScrubFrame(m_shownFrameTime, m_hasShownFrame, frame.time, target, m_fps)) {
-                return;
-            }
-            QImage image(frame.pixels, static_cast<int>(frame.width), static_cast<int>(frame.height),
-                         static_cast<int>(frame.width * 4), QImage::Format_RGBA8888);
-            m_shownFrameTime = frame.time;
-            m_hasShownFrame = true;
-            const QImage shown = image.copy();
-            m_viewer->setFrame(shown, frame.time);
-            // The sequence's thumbnail in the Inspector, with nothing selected.
-            if (m_selectedClip.isEmpty()) m_inspector->setProgramFrame(shown);
-        }
-    }
+    if (kerf_bridge_frame(m_bridge, &frame)) showProgramFrame(frame);
+}
+
+bool MainWindow::showProgramFrame(const KerfFrame &frame) {
+    if (!m_connected || !frame.pixels || frame.length == 0 || frame.width == 0 || frame.height == 0) return false;
+    const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
+    if (expected <= 0 || frame.length < static_cast<size_t>(expected)) return false;
+    const double target = m_hoverSkimming ? m_pendingHoverSeek : m_playhead;
+    if ((m_hoverSkimming || m_pointerOwnsPlayhead) && !nearerScrubFrame(m_shownFrameTime, m_hasShownFrame, frame.time, target, m_fps))
+        return false;
+    QImage image(frame.pixels, static_cast<int>(frame.width), static_cast<int>(frame.height), static_cast<int>(frame.width * 4),
+                 QImage::Format_RGBA8888);
+    m_shownFrameTime = frame.time;
+    m_hasShownFrame = true;
+    const QImage shown = image.copy();
+    m_viewer->setFrame(shown, frame.time);
+    // The sequence's thumbnail in the Inspector, with nothing selected.
+    if (m_selectedClip.isEmpty()) m_inspector->setProgramFrame(shown);
+    // The frame the viewer got, for the scopes and the regions.
+    m_bus->setProgramFrame(shown);
+    return true;
 }
 
 void MainWindow::importMedia() {
@@ -407,231 +199,11 @@ void MainWindow::exportProject() {
     addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_exportButton->qualityName()));
 }
 
-void MainWindow::exportEditingPreset() {
-    QFileDialog dialog(this, QStringLiteral("Export editing preset"),
-        QDir(m_projectDirectory).filePath(QStringLiteral("editing.kerfpreset")), QStringLiteral("Kerf editing preset (*.kerfpreset)"));
-    dialog.setAcceptMode(QFileDialog::AcceptSave);
-    dialog.setDefaultSuffix(QStringLiteral("kerfpreset"));
-    if (dialog.exec() != QDialog::Accepted) return;
-    const QString path = dialog.selectedFiles().value(0);
-    if (QFileInfo(path).suffix() != QStringLiteral("kerfpreset")) {
-        showError(QStringLiteral("Save editing presets with the .kerfpreset extension."));
-        return;
-    }
-    execute(QStringLiteral("file.exportPreset"), QJsonObject{{QStringLiteral("path"), path}});
-}
-
-void MainWindow::importEditingPreset() {
-    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import editing preset"),
-        m_projectDirectory, QStringLiteral("Kerf editing preset (*.kerfpreset)"));
-    if (!path.isEmpty()) sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")},
-                                               {QStringLiteral("path"), path}});
-}
-
-void MainWindow::showPresetBindings(const QString &path, const QJsonObject &preset) {
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("presetBindingsDialog"));
-    dialog.setWindowTitle(QStringLiteral("Apply preset — %1").arg(preset.value(QStringLiteral("name")).toString()));
-    dialog.setMinimumWidth(560);
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(12);
-    auto *intro = new QLabel(QStringLiteral("Choose media for each slot. Kerf keeps the preset's timing, effects and animation. "
-        "Applying replaces this sequence as a proposal for you to review."));
-    intro->setWordWrap(true);
-    layout->addWidget(intro);
-    auto *scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    auto *contents = new QWidget;
-    auto *form = new QFormLayout(contents);
-    form->setContentsMargins(0, 0, 0, 0);
-    form->setVerticalSpacing(8);
-    form->setHorizontalSpacing(12);
-    form->setLabelAlignment(Qt::AlignRight | Qt::AlignTop);
-    QHash<QString, QComboBox *> media;
-    QHash<QString, QDoubleSpinBox *> starts;
-    QHash<QString, QLineEdit *> texts;
-    QHash<QString, QJsonObject> sources;
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
-        sources.insert(value.toObject().value(QStringLiteral("id")).toString(), value.toObject());
-    // Kerf lists the media able to fill each slot and the latest frame each can
-    // start from. Starts are shown in seconds but sent as whole frames.
-    constexpr int latestFrameRole = Qt::UserRole + 1;
-    constexpr int fpsRole = Qt::UserRole + 2;
-    const QString root = preset.value(QStringLiteral("sequence")).toString();
-    for (const QJsonValue &value : preset.value(QStringLiteral("slots")).toArray()) {
-        const QJsonObject slot = value.toObject();
-        const QString id = slot.value(QStringLiteral("id")).toString();
-        auto *choice = new QComboBox;
-        choice->setObjectName(QStringLiteral("presetMedia_%1").arg(id));
-        choice->addItem(QStringLiteral("Choose imported media…"), QString());
-        for (const QJsonValue &fitValue : slot.value(QStringLiteral("fits")).toArray()) {
-            const QJsonObject fit = fitValue.toObject();
-            const QJsonObject source = sources.value(fit.value(QStringLiteral("media")).toString());
-            if (source.isEmpty()) continue;
-            const QString sourceId = source.value(QStringLiteral("id")).toString();
-            choice->addItem(QStringLiteral("%1 — %2").arg(sourceId,
-                QFileInfo(source.value(QStringLiteral("path")).toString()).fileName()), sourceId);
-            choice->setItemData(choice->count() - 1, fit.value(QStringLiteral("latestFrame")).toInteger(), latestFrameRole);
-            choice->setItemData(choice->count() - 1, source.value(QStringLiteral("fps")).toDouble(), fpsRole);
-        }
-        if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
-        auto *from = new StepperSpinBox;
-        from->setObjectName(QStringLiteral("presetFrom_%1").arg(id));
-        // One width for every slot, so the steppers line up down the column.
-        from->setFixedWidth(106);
-        from->setDecimals(3);
-        from->setSuffix(QStringLiteral(" s"));
-        from->setRange(0, 0);
-        from->setToolTip(QStringLiteral("Start in the replacement media, including the preset's transition handles"));
-        connect(choice, &QComboBox::currentIndexChanged, from, [choice, from] {
-            const double fps = choice->currentData(fpsRole).toDouble();
-            from->setSingleStep(fps > 0 ? 1 / fps : 1);
-            from->setMaximum(fps > 0 ? choice->currentData(latestFrameRole).toDouble() / fps : 0);
-        });
-        QStringList uses;
-        for (const QJsonValue &clipValue : slot.value(QStringLiteral("clips")).toArray()) {
-            const QJsonObject clip = clipValue.toObject();
-            QString use = QStringLiteral("%1 %2").arg(clip.value(QStringLiteral("track")).toString(),
-                                                      clip.value(QStringLiteral("at")).toString());
-            const QString sequence = clip.value(QStringLiteral("sequence")).toString();
-            if (sequence != root) use = QStringLiteral("%1 › %2").arg(sequence, use);
-            const QString name = clip.value(QStringLiteral("name")).toString();
-            if (!name.isEmpty()) use += QStringLiteral(" “%1”").arg(name);
-            uses << use;
-        }
-        auto *usedBy = new QLabel(uses.join(QStringLiteral(" · ")));
-        usedBy->setObjectName(QStringLiteral("muted"));
-        usedBy->setWordWrap(true);
-        auto *row = new QWidget;
-        auto *rowLayout = new QGridLayout(row);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setHorizontalSpacing(8);
-        rowLayout->setVerticalSpacing(4);
-        rowLayout->addWidget(choice, 0, 0);
-        rowLayout->addWidget(from, 0, 1);
-        rowLayout->addWidget(usedBy, 1, 0, 1, 2);
-        rowLayout->setColumnStretch(0, 1);
-        rowLayout->setColumnStretch(1, 0);
-        form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
-        media.insert(id, choice);
-        starts.insert(id, from);
-    }
-    // Text slots by number, as the launcher shows them; their clip ids are
-    // the document's names, in the tooltip.
-    const QJsonObject textSlots = preset.value(QStringLiteral("textSlots")).toObject();
-    int textNumber = 0;
-    for (auto it = textSlots.begin(); it != textSlots.end(); ++it) {
-        auto *text = new QLineEdit(it.value().toString());
-        text->setObjectName(QStringLiteral("presetText_%1").arg(it.key()));
-        text->setToolTip(it.key());
-        form->addRow(QStringLiteral("Text %1").arg(++textNumber), text);
-        texts.insert(it.key(), text);
-    }
-    scroll->setWidget(contents);
-    layout->addWidget(scroll, 1);
-    // The preset's source, for those who want it, behind a disclosure.
-    auto *details = new QToolButton;
-    details->setObjectName(QStringLiteral("disclosure"));
-    details->setText(QStringLiteral("Details"));
-    details->setCheckable(true);
-    details->setAutoRaise(true);
-    details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    details->setIconSize(QSize(11, 11));
-    details->setIcon(disclosureIcon(false, editorTheme().textSecondary));
-    layout->addWidget(details, 0, Qt::AlignLeft);
-    auto *code = new QPlainTextEdit(preset.value(QStringLiteral("document")).toString());
-    code->setObjectName(QStringLiteral("presetCode"));
-    code->setReadOnly(true);
-    code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    code->setMaximumHeight(150);
-    code->hide();
-    layout->addWidget(code);
-    // As tall as what it shows, as macOS dialogs are: the slots up to most
-    // of the screen (they scroll past that), and the source when Details
-    // is open.
-    const auto fit = [&dialog, layout] {
-        layout->activate();
-        dialog.resize(dialog.width(), layout->hasHeightForWidth() ? layout->totalHeightForWidth(dialog.width())
-                                                                  : layout->totalSizeHint().height());
-    };
-    connect(details, &QToolButton::toggled, code, [details, code, fit](bool open) {
-        code->setVisible(open);
-        details->setIcon(disclosureIcon(open, editorTheme().textSecondary));
-        fit();
-    });
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create Proposal"));
-    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
-    const auto updateReady = [buttons, media] {
-        bool ready = true;
-        for (auto *choice : media) ready = ready && !choice->currentData().toString().isEmpty();
-        buttons->button(QDialogButtonBox::Ok)->setEnabled(ready);
-    };
-    for (auto *choice : media) connect(choice, &QComboBox::currentIndexChanged, buttons, updateReady);
-    updateReady();
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-    dialog.ensurePolished();
-    dialog.resize(600, dialog.height());
-    const QMargins margins = layout->contentsMargins();
-    const int inner = dialog.width() - margins.left() - margins.right();
-    const int formHeight = form->hasHeightForWidth() ? form->totalHeightForWidth(inner) : form->totalSizeHint().height();
-    const QScreen *screen = dialog.screen();
-    scroll->setFixedHeight(std::min(formHeight, screen ? screen->availableGeometry().height() * 6 / 10 : 520));
-    fit();
-    const QJsonValue revision = revisionValue();
-    if (dialog.exec() != QDialog::Accepted) return;
-    if (revision != revisionValue()) {
-        showError(QStringLiteral("The project changed while choosing preset media. Import the preset again."));
-        return;
-    }
-    QJsonObject bindings;
-    for (auto it = media.begin(); it != media.end(); ++it) {
-        // Clamp: the shown maximum is rounded to the spin box's decimals.
-        const qint64 frame = std::clamp<qint64>(
-            qRound64(starts.value(it.key())->value() * it.value()->currentData(fpsRole).toDouble()),
-            0, it.value()->currentData(latestFrameRole).toLongLong());
-        bindings.insert(it.key(), QJsonObject{{QStringLiteral("media"), it.value()->currentData().toString()},
-            {QStringLiteral("from"), QStringLiteral("%1f").arg(frame)}});
-    }
-    QJsonObject overrides;
-    for (auto it = texts.begin(); it != texts.end(); ++it) {
-        if (it.value()->isModified()) overrides.insert(it.key(), it.value()->text());
-    }
-    execute(QStringLiteral("file.applyPreset"), QJsonObject{{QStringLiteral("path"), path},
-        {QStringLiteral("bindings"), bindings}, {QStringLiteral("texts"), overrides}});
-}
-
 void MainWindow::renderPreview() {
     if (!execute(QStringLiteral("sequence.renderPreview"))) return;
     addActivity(QStringLiteral("preview"), QStringLiteral("Rendering preview"));
     m_previewStatus = QStringLiteral("running");
     updateCommandStates();
-}
-
-void MainWindow::canvasPresetChanged(const QSize &size) {
-    if (m_updatingCanvasPreset) return;
-    // The bank latched the key already; anything that cannot become the
-    // project's format lets it go back to the format the project has.
-    if (!m_connected || size.width() < 2 || size.height() < 2) {
-        syncCanvasPreset(m_canvasSize);
-        return;
-    }
-    if (!execute(QStringLiteral("sequence.setFormat"),
-                 QJsonObject{{QStringLiteral("width"), size.width()}, {QStringLiteral("height"), size.height()}}))
-        syncCanvasPreset(m_canvasSize);
-}
-
-void MainWindow::addTrack() {
-    QMenu menu(this);
-    auto *video = menu.addAction(QStringLiteral("Add video track"));
-    auto *audio = menu.addAction(QStringLiteral("Add audio track"));
-    const QAction *choice = menu.exec(m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter()));
-    if (choice != video && choice != audio) return;
-    execute(choice == audio ? QStringLiteral("sequence.addAudioTrack") : QStringLiteral("sequence.addVideoTrack"));
 }
 
 void MainWindow::togglePlayback() {
@@ -659,7 +231,7 @@ void MainWindow::queueSeek(double time) {
     m_pointerOwnsPlayhead = true;
     m_playhead = m_pendingSeek;
     m_timeline->setPlayhead(m_playhead);
-    updateTransport();
+    m_bus->setPlayhead(m_playhead);
     updateCommandStates();
     m_viewer->setLiveScrub(true);
     if (m_pendingSeekScrub) m_exactSeekTimer.start(50);
@@ -731,7 +303,7 @@ void MainWindow::selectClip(const QString &id) {
     updateInspector();
     updateCommandStates();
     updateChatControls();
-    updateSelectionStatus();
+    m_bus->setSelection(m_selectedClips);
 }
 
 void MainWindow::extendClipSelection(const QString &id, bool toggle) {
@@ -743,7 +315,7 @@ void MainWindow::extendClipSelection(const QString &id, bool toggle) {
     else if (toggle) clips.removeAll(id);
     else clips.move(clips.indexOf(id), clips.size() - 1);
     if (clips.isEmpty()) {
-        clickSelectClip(QString());
+        selectClip(QString());
         return;
     }
     m_selectedClip = clips.constLast();
@@ -752,49 +324,7 @@ void MainWindow::extendClipSelection(const QString &id, bool toggle) {
     updateInspector();
     updateCommandStates();
     updateChatControls();
-    updateSelectionStatus();
-    m_workspace->raiseInspector(Workspace::InspectorOrigin::Click, false, m_selectedClip);
-}
-
-void MainWindow::updateSelectionStatus() {
-    // "3 clips selected · 00:00:04:18": how many, and the span from the
-    // first one's start to the last one's end.
-    if (!m_selectionStatus) return;
-    double start = 0.0;
-    double end = 0.0;
-    int count = 0;
-    for (const QString &id : std::as_const(m_selectedClips)) {
-        const QJsonObject clip = clipObject(id);
-        if (clip.isEmpty()) continue;
-        const double from = clip.value(QStringLiteral("timelineStart")).toDouble();
-        const double to = from + clip.value(QStringLiteral("duration")).toDouble();
-        start = count ? std::min(start, from) : from;
-        end = count ? std::max(end, to) : to;
-        ++count;
-    }
-    m_selectionStatus->setText(count == 0 ? QString()
-                                          : QStringLiteral("%1 selected  ·  %2")
-                                                .arg(count == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(count),
-                                                     timelineTimecode(end - start, m_fps)));
-}
-
-void MainWindow::clickSelectClip(const QString &id) {
-    selectClip(id);
-    if (id.isEmpty()) m_workspace->inspectorDeselected();
-    else m_workspace->raiseInspector(Workspace::InspectorOrigin::Click, false, id);
-}
-
-void MainWindow::askAboutInChat(const QString &subject) {
-    // The conversation, open, with the subject in the composer.
-    if (!chatOpen()) setChatOpen(true);
-    QString text = m_chatInput->toPlainText().trimmed();
-    if (!text.startsWith(subject)) text = subject + QLatin1Char(' ') + text;
-    else text += QLatin1Char(' ');
-    m_chatInput->setPlainText(text.endsWith(QLatin1Char(' ')) ? text : text + QLatin1Char(' '));
-    QTextCursor cursor = m_chatInput->textCursor();
-    cursor.movePosition(QTextCursor::End);
-    m_chatInput->setTextCursor(cursor);
-    m_chatInput->setFocus(Qt::OtherFocusReason);
+    m_bus->setSelection(m_selectedClips);
 }
 
 bool MainWindow::sendEdit(const QJsonArray &ops) {
@@ -816,455 +346,6 @@ QJsonObject MainWindow::clipObject(const QString &id) const {
 
 qint64 MainWindow::clipFrames(const QJsonObject &clip, const QString &key) {
     return static_cast<qint64>(clip.value(key).toDouble());
-}
-
-void MainWindow::moveClip(const QString &id, double start) {
-    const QJsonObject clip = clipObject(id);
-    if (clip.isEmpty()) return;
-    const qint64 frames = frameAt(start) - clipFrames(clip, QStringLiteral("startFrame"));
-    if (frames == 0) return;
-    // Slipping right shows earlier media; sliding moves the clip between its neighbours.
-    const TimelineTool tool = m_timeline->tool();
-    const QString command = tool == TimelineTool::Slip ? QStringLiteral("clip.slip")
-        : tool == TimelineTool::Slide ? QStringLiteral("clip.slide") : QStringLiteral("clip.move");
-    execute(command, QJsonObject{{QStringLiteral("clip"), id},
-                                 {QStringLiteral("frames"), tool == TimelineTool::Slip ? -frames : frames}});
-}
-
-void MainWindow::trimClip(const QString &id, bool leading, double frame) {
-    const QJsonObject clip = clipObject(id);
-    if (clip.isEmpty()) return;
-    const qint64 start = clipFrames(clip, QStringLiteral("startFrame"));
-    const qint64 edge = leading ? start : start + clipFrames(clip, QStringLiteral("durationFrames"));
-    const qint64 frames = std::llround(frame) - edge;
-    if (frames == 0) return;
-    if (m_timeline->tool() == TimelineTool::Roll) {
-        // A roll moves the cut after a clip: this one's, or its neighbour's
-        // when the in point is dragged.
-        QString before = id;
-        if (leading) {
-            before.clear();
-            for (const QJsonValue &value : clipTrack(id).value(QStringLiteral("clips")).toArray()) {
-                const QJsonObject other = value.toObject();
-                if (clipFrames(other, QStringLiteral("startFrame")) + clipFrames(other, QStringLiteral("durationFrames")) == start)
-                    before = other.value(QStringLiteral("id")).toString();
-            }
-            if (before.isEmpty()) {
-                statusBar()->showMessage(QStringLiteral("A roll needs a clip on the other side of the cut"), 4000);
-                return;
-            }
-        }
-        execute(QStringLiteral("clip.roll"), QJsonObject{{QStringLiteral("clip"), before}, {QStringLiteral("frames"), frames}});
-        return;
-    }
-    execute(QStringLiteral("clip.trim"), QJsonObject{{QStringLiteral("clip"), id},
-                                                     {QStringLiteral("edge"), leading ? QStringLiteral("in") : QStringLiteral("out")},
-                                                     {QStringLiteral("frames"), frames},
-                                                     {QStringLiteral("ripple"), m_timeline->tool() == TimelineTool::Ripple}});
-}
-
-QJsonObject MainWindow::clipTrack(const QString &id) const {
-    for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
-        const QJsonObject track = trackValue.toObject();
-        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray())
-            if (clipValue.toObject().value(QStringLiteral("id")).toString() == id) return track;
-    }
-    return {};
-}
-
-void MainWindow::openSource(const QString &mediaId) {
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() != mediaId) continue;
-        m_sourceMonitor->open(source, QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString()));
-        if (ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("source"))) {
-            panel->toggleView(true);
-            panel->setAsCurrentTab();
-        }
-        m_sourceMonitor->setFocus();
-        return;
-    }
-}
-
-QStringList MainWindow::sourceTargets() const {
-    // The first unlocked track of each kind the source media has.
-    const QJsonObject source = m_sourceMonitor->source();
-    QStringList targets;
-    for (const QString &kind : {QStringLiteral("video"), QStringLiteral("audio")}) {
-        const bool has = kind == QStringLiteral("video") ? source.contains(QStringLiteral("width"))
-                                                         : source.value(QStringLiteral("hasAudio")).toBool();
-        if (!has) continue;
-        for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
-            const QJsonObject track = value.toObject();
-            if (track.value(QStringLiteral("type")).toString() == kind && !track.value(QStringLiteral("locked")).toBool()) {
-                targets.append(track.value(QStringLiteral("id")).toString());
-                break;
-            }
-        }
-    }
-    return targets;
-}
-
-void MainWindow::splitClip() {
-    execute(QStringLiteral("clip.split"));
-}
-
-QJsonObject MainWindow::cropProps(const QJsonObject &box) {
-    if (box.isEmpty())
-        return QJsonObject{{QStringLiteral("crop_l"), QJsonValue()}, {QStringLiteral("crop_t"), QJsonValue()},
-                           {QStringLiteral("crop_r"), QJsonValue()}, {QStringLiteral("crop_b"), QJsonValue()}};
-    const double x = box.value(QStringLiteral("x")).toDouble();
-    const double y = box.value(QStringLiteral("y")).toDouble();
-    const double width = box.value(QStringLiteral("width")).toDouble(1.0);
-    const double height = box.value(QStringLiteral("height")).toDouble(1.0);
-    return QJsonObject{{QStringLiteral("crop_l"), x}, {QStringLiteral("crop_t"), y},
-                       {QStringLiteral("crop_r"), std::max(0.0, 1.0 - x - width)},
-                       {QStringLiteral("crop_b"), std::max(0.0, 1.0 - y - height)}};
-}
-
-QJsonObject MainWindow::cropBox(const QJsonObject &clip) {
-    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    const auto edge = [&props](const char *name) { return props.value(QLatin1String(name)).toDouble(); };
-    const double l = edge("crop_l"), t = edge("crop_t"), r = edge("crop_r"), b = edge("crop_b");
-    if (l == 0.0 && t == 0.0 && r == 0.0 && b == 0.0) return {};
-    return QJsonObject{{QStringLiteral("x"), l}, {QStringLiteral("y"), t},
-                       {QStringLiteral("width"), 1.0 - l - r}, {QStringLiteral("height"), 1.0 - t - b}};
-}
-
-QImage MainWindow::sourceFrame(const QJsonObject &clip, double timelineTime) const {
-    const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
-    QString path;
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() == sourceId) {
-            path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
-            break;
-        }
-    }
-    if (path.isEmpty()) return {};
-    const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
-    const double sourceTime = clip.value(QStringLiteral("in")).toDouble() +
-                              (timelineTime - clipStart) * clip.value(QStringLiteral("speed")).toDouble(1.0);
-    QProcess process;
-    process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-v"), QStringLiteral("error"),
-                                             QStringLiteral("-ss"), QString::number(std::max(0.0, sourceTime), 'f', 6),
-                                             QStringLiteral("-i"), path, QStringLiteral("-frames:v"), QStringLiteral("1"),
-                                             QStringLiteral("-vf"), QStringLiteral("scale=960:-2"),
-                                             QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-vcodec"),
-                                             QStringLiteral("png"), QStringLiteral("pipe:1")});
-    if (!process.waitForStarted(3000) || !process.waitForFinished(15000)) {
-        process.kill();
-        process.waitForFinished();
-        return {};
-    }
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0
-               ? QImage::fromData(process.readAllStandardOutput(), "PNG") : QImage();
-}
-
-double MainWindow::firstSceneCut(const QJsonObject &clip, double start, double end) const {
-    QString path;
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() == clip.value(QStringLiteral("sourceId")).toString()) {
-            path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
-            break;
-        }
-    }
-    if (path.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
-    const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
-    const double sourceStart = clip.value(QStringLiteral("in")).toDouble() +
-                               (start - clip.value(QStringLiteral("timelineStart")).toDouble()) * speed;
-    QProcess process;
-    process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
-                                             QStringLiteral("-nostats"), QStringLiteral("-ss"),
-                                             QString::number(sourceStart, 'f', 6), QStringLiteral("-t"),
-                                             QString::number((end - start) * speed, 'f', 6),
-                                             QStringLiteral("-i"), path, QStringLiteral("-vf"),
-                                             QStringLiteral("select='gt(scene,0.08)',metadata=print"),
-                                             QStringLiteral("-an"), QStringLiteral("-f"), QStringLiteral("null"),
-                                             QStringLiteral("-")});
-    if (!process.waitForStarted(3000) || !process.waitForFinished(30000)) {
-        process.kill();
-        process.waitForFinished();
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
-        return std::numeric_limits<double>::quiet_NaN();
-    const QString output = QString::fromUtf8(process.readAllStandardError());
-    const QRegularExpression times(QStringLiteral(R"(pts_time:([0-9]+(?:\.[0-9]+)?))"));
-    auto match = times.globalMatch(output);
-    while (match.hasNext()) {
-        const double cut = start + match.next().captured(1).toDouble() / speed;
-        if (cut > start + 1.0 / m_fps && cut < end - 1.0 / m_fps) return cut;
-    }
-    return -1.0;
-}
-
-QVector<QPair<qint64, QRectF>> MainWindow::trackRegion(const QJsonObject &clip, double start, double end,
-                                                    const QRectF &seed, double *reliableEnd) const {
-    constexpr int width = 160;
-    constexpr int height = 90;
-    constexpr int samplesPerSecond = 2;
-    QVector<QPair<qint64, QRectF>> boxes;
-    QString path;
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() == clip.value(QStringLiteral("sourceId")).toString()) {
-            path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
-            break;
-        }
-    }
-    if (path.isEmpty() || end - start > 120.0) return boxes;
-    const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
-    const double sourceStart = clip.value(QStringLiteral("in")).toDouble() +
-                               (start - clip.value(QStringLiteral("timelineStart")).toDouble()) * speed;
-    QProcess process;
-    process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-v"), QStringLiteral("error"),
-                                             QStringLiteral("-ss"), QString::number(sourceStart, 'f', 6),
-                                             QStringLiteral("-t"), QString::number((end - start) * speed, 'f', 6),
-                                             QStringLiteral("-i"), path, QStringLiteral("-vf"),
-                                             QStringLiteral("fps=%1,scale=160:90,format=gray").arg(samplesPerSecond * speed),
-                                             QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("-pix_fmt"),
-                                             QStringLiteral("gray"), QStringLiteral("pipe:1")});
-    if (!process.waitForStarted(3000) || !process.waitForFinished(30000)) {
-        process.kill();
-        process.waitForFinished();
-        return boxes;
-    }
-    const QByteArray frames = process.readAllStandardOutput();
-    constexpr qsizetype frameBytes = width * height;
-    const qsizetype count = frames.size() / frameBytes;
-    if (process.exitCode() != 0 || count < 2) return boxes;
-    const int boxWidth = std::clamp(static_cast<int>(std::round(seed.width() * width)), 1, width);
-    const int boxHeight = std::clamp(static_cast<int>(std::round(seed.height() * height)), 1, height);
-    if (boxWidth < 6 || boxHeight < 6) return boxes;
-    int x = std::clamp(static_cast<int>(std::round(seed.x() * width)), 0, width - boxWidth);
-    int y = std::clamp(static_cast<int>(std::round(seed.y() * height)), 0, height - boxHeight);
-    const auto *reference = reinterpret_cast<const uchar *>(frames.constData());
-    int darkest = 255;
-    int brightest = 0;
-    for (int row = 0; row < boxHeight; row += 2) {
-        for (int column = 0; column < boxWidth; column += 2) {
-            const int pixel = reference[(y + row) * width + x + column];
-            darkest = std::min(darkest, pixel);
-            brightest = std::max(brightest, pixel);
-        }
-    }
-    if (brightest - darkest < 20) return boxes;
-    auto difference = [&](const uchar *image, int candidateX, int candidateY) {
-        int sum = 0;
-        int pixels = 0;
-        for (int row = 0; row < boxHeight; row += 2) {
-            for (int column = 0; column < boxWidth; column += 2) {
-                sum += std::abs(int(reference[(y + row) * width + x + column]) -
-                                int(image[(candidateY + row) * width + candidateX + column]));
-                ++pixels;
-            }
-        }
-        return double(sum) / pixels;
-    };
-    const qint64 firstFrame = std::llround(start * m_fps);
-    boxes.append({firstFrame, seed});
-    *reliableEnd = end;
-    int previousX = x;
-    int previousY = y;
-    for (qsizetype index = 1; index < count; ++index) {
-        const auto *image = reinterpret_cast<const uchar *>(frames.constData() + index * frameBytes);
-        double best = std::numeric_limits<double>::infinity();
-        int bestX = previousX;
-        int bestY = previousY;
-        const int radius = std::max(8, std::min(boxWidth, boxHeight) / 2);
-        for (int candidateY = std::max(0, previousY - radius);
-             candidateY <= std::min(height - boxHeight, previousY + radius); ++candidateY) {
-            for (int candidateX = std::max(0, previousX - radius);
-                 candidateX <= std::min(width - boxWidth, previousX + radius); ++candidateX) {
-                const double score = difference(image, candidateX, candidateY);
-                if (score < best) { best = score; bestX = candidateX; bestY = candidateY; }
-            }
-        }
-        const double time = start + double(index) / samplesPerSecond;
-        if (best > 28.0) {
-            *reliableEnd = std::min(end, time);
-            break;
-        }
-        const qint64 frame = std::llround(time * m_fps);
-        if (frame >= std::llround(end * m_fps)) break;
-        if (frame > boxes.last().first && (std::abs(bestX - previousX) > 1 || std::abs(bestY - previousY) > 1))
-            boxes.append({frame, QRectF(std::min(double(bestX) / width, 1.0 - seed.width()),
-                                        std::min(double(bestY) / height, 1.0 - seed.height()),
-                                        seed.width(), seed.height())});
-        previousX = bestX;
-        previousY = bestY;
-    }
-    return boxes;
-}
-
-void MainWindow::focusRegion() {
-    if (!m_proposalId.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("Review the pending suggestion before changing the crop."));
-        return;
-    }
-    const QJsonObject clip = selectedClipObject();
-    if (clip.isEmpty()) return;
-    if (selectedTrackType() != QStringLiteral("video")) return;
-    const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
-    const double clipDuration = clip.value(QStringLiteral("duration")).toDouble();
-    const double clipEnd = clipStart + clipDuration;
-    if (!(clipDuration > 1.0 / m_fps)) return;
-
-    const QJsonObject crop = cropBox(clip);
-    const double representativeTime = std::clamp(m_playhead, clipStart, clipEnd - 1.0 / m_fps);
-    const QImage frame = sourceFrame(clip, representativeTime);
-    if (frame.isNull()) {
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("Could not read a source frame from this clip."));
-        return;
-    }
-
-    const QRectF current(crop.value(QStringLiteral("x")).toDouble(), crop.value(QStringLiteral("y")).toDouble(),
-                         crop.value(QStringLiteral("width")).toDouble(), crop.value(QStringLiteral("height")).toDouble());
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Focus region"));
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(QStringLiteral("Drag a box over the area to enlarge.")));
-    auto *picker = new RegionPicker(frame, current, &dialog);
-    layout->addWidget(picker);
-    auto *form = new QFormLayout;
-    auto *start = new StepperSpinBox(&dialog);
-    auto *end = new StepperSpinBox(&dialog);
-    for (QDoubleSpinBox *spin : {start, end}) {
-        spin->setDecimals(3);
-        spin->setSingleStep(1.0 / m_fps);
-        spin->setSuffix(QStringLiteral(" s"));
-    }
-    start->setRange(clipStart, clipEnd - 1.0 / m_fps);
-    end->setRange(clipStart + 1.0 / m_fps, clipEnd);
-    const double suggestedStart = crop.isEmpty() ? representativeTime : clipStart;
-    start->setValue(suggestedStart);
-    end->setValue(crop.isEmpty() ? std::min(clipEnd, suggestedStart + 5.0) : clipEnd);
-    form->addRow(QStringLiteral("Start"), start);
-    form->addRow(QStringLiteral("End"), end);
-    layout->addLayout(form);
-    auto *follow = new QCheckBox(QStringLiteral("Follow a moving subject (up to 2 minutes)"), &dialog);
-    layout->addWidget(follow);
-    connect(follow, &QCheckBox::toggled, &dialog, [start, representativeTime](bool enabled) {
-        if (enabled) start->setValue(representativeTime);
-        start->setEnabled(!enabled);
-    });
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-    if (dialog.exec() != QDialog::Accepted) return;
-    const QRectF region = picker->region();
-    const qint64 clipStartFrame = std::llround(clipStart * m_fps);
-    const qint64 clipEndFrame = std::llround(clipEnd * m_fps);
-    const qint64 startFrame = std::llround(start->value() * m_fps);
-    qint64 endFrame = std::llround(end->value() * m_fps);
-    if (region.isEmpty() || startFrame < clipStartFrame || endFrame > clipEndFrame || startFrame >= endFrame) {
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("Select a box and a valid time range within the clip."));
-        return;
-    }
-    const double cut = firstSceneCut(clip, start->value(), end->value());
-    if (!std::isfinite(cut)) {
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("Could not check this range for scene cuts. Choose a shorter range and try again."));
-        return;
-    }
-    if (cut > 0.0) {
-        endFrame = std::llround(cut * m_fps);
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("A scene cut was found. This box ends at the cut; select a new box for the next scene."));
-    }
-
-    double reliableEnd = double(endFrame) / m_fps;
-    const QVector<QPair<qint64, QRectF>> tracked = follow->isChecked()
-        ? trackRegion(clip, double(startFrame) / m_fps, reliableEnd, region, &reliableEnd)
-        : QVector<QPair<qint64, QRectF>>{};
-    if (follow->isChecked() && tracked.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("Tracking could not start. Choose a larger box or a range under two minutes."));
-        return;
-    }
-    if (reliableEnd < double(endFrame) / m_fps) {
-        endFrame = std::llround(reliableEnd * m_fps);
-        QMessageBox::information(this, QStringLiteral("Focus region"),
-                                 QStringLiteral("The subject could no longer be tracked. The crop ends at the last reliable frame."));
-    }
-
-    const QString suffix = QString::number(QDateTime::currentMSecsSinceEpoch());
-    QString focusId = m_selectedClip;
-    QJsonArray ops;
-    auto split = [&ops](const QString &id, qint64 at, const QString &tail) {
-        ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("split")}, {QStringLiteral("clip"), id},
-                               {QStringLiteral("at"), at}, {QStringLiteral("tail"), tail}});
-    };
-    auto setCrop = [&ops](const QString &id, const QJsonObject &box) {
-        ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), id},
-                               {QStringLiteral("props"), cropProps(box)}});
-    };
-    auto boxOf = [](const QRectF &rect) {
-        return QJsonObject{{QStringLiteral("x"), rect.x()}, {QStringLiteral("y"), rect.y()},
-                           {QStringLiteral("width"), rect.width()}, {QStringLiteral("height"), rect.height()}};
-    };
-    if (startFrame > clipStartFrame) {
-        focusId = m_selectedClip + QStringLiteral("-focus-") + suffix;
-        split(m_selectedClip, startFrame, focusId);
-    }
-    setCrop(focusId, boxOf(region));
-    for (int index = 1; index < tracked.size(); ++index) {
-        const auto &step = tracked.at(index);
-        if (step.first >= endFrame) break;
-        const QString nextId = m_selectedClip + QStringLiteral("-track-%1-").arg(index) + suffix;
-        split(focusId, step.first, nextId);
-        focusId = nextId;
-        setCrop(focusId, boxOf(step.second));
-    }
-    if (endFrame < clipEndFrame) {
-        const QString afterId = m_selectedClip + QStringLiteral("-after-") + suffix;
-        split(focusId, endFrame, afterId);
-        setCrop(afterId, crop);
-    }
-    if (sendEdit(ops)) m_selectedClip = focusId;
-}
-
-void MainWindow::deleteSelected() {
-    execute(QStringLiteral("clip.delete"));
-}
-
-void MainWindow::sendChat() {
-    const QString text = m_chatInput->toPlainText().trimmed();
-    if (text.isEmpty() || !sendAgent(text, QJsonObject{}, QString())) return;
-    m_chatInput->clear();
-}
-
-bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel) {
-    QJsonObject request = agentSettingsPayload();
-    request.insert(QStringLiteral("type"), QStringLiteral("agent"));
-    request.insert(QStringLiteral("text"), text);
-    if (!focus.isEmpty()) request.insert(QStringLiteral("focus"), focus);
-    // The AI bar names what Kerf works on once the bridge reports it busy.
-    m_agentFocusLabel = focusLabel;
-    if (!sendSimple(request)) return false;
-    m_lastFocus = focus;
-    m_lastFocusLabel = focusLabel;
-    showNextSteps(QJsonArray{});
-    m_agentBusy = true;
-    m_agentText.clear();
-    m_agentStatus->setText(QStringLiteral("Working"));
-    m_chatInput->setEnabled(false);
-    m_abortButton->setEnabled(true);
-    updateChatControls();
-    if (!focusLabel.isEmpty()) appendConversationNote(QStringLiteral("Focus"), focusLabel);
-    appendConversation(QStringLiteral("You"), text);
-    appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Request sent"));
-    addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
-    updateAiBar();
-    updateCommandStates();
-    return true;
 }
 
 bool MainWindow::usesCloud() const {
@@ -1311,137 +392,7 @@ void MainWindow::updateCloudStatus() {
     m_cloudToken->setVisible(available && !signedIn);
     m_cloudSignIn->setVisible(available && !signedIn);
     m_cloudSignOut->setVisible(available && signedIn);
-    if (m_statusAccount) {
-        m_statusAccount->setText(!usesCloud() ? QStringLiteral("Own API key")
-            : signedIn ? QStringLiteral("Kerf Cloud · %1").arg(m_cloudAccount.value(QStringLiteral("plan")).toString())
-            : QStringLiteral("Kerf Cloud · signed out"));
-    }
     updateCommandStates();
-}
-
-void MainWindow::askAi() {
-    // Anchor to the selected clip, or to the timeline at the playhead.
-    const QJsonObject clip = selectedClipObject();
-    const QRect bounds = clip.isEmpty() ? QRect() : m_timeline->clipBounds(m_selectedClip);
-    const QRect visible = m_timelineScroll->viewport()->rect();
-    QPoint anchor = m_timelineScroll->viewport()->mapToGlobal(QPoint(visible.center().x(), 48));
-    if (!bounds.isEmpty()) {
-        const QPoint top = m_timeline->mapTo(m_timelineScroll->viewport(), bounds.topLeft() + QPoint(bounds.width() / 2, 0));
-        if (visible.contains(QPoint(std::clamp(top.x(), 0, visible.width() - 1), std::clamp(top.y(), 0, visible.height() - 1))))
-            anchor = m_timelineScroll->viewport()->mapToGlobal(QPoint(std::clamp(top.x(), 24, visible.width() - 24), std::max(top.y(), 24)));
-    }
-    if (clip.isEmpty()) {
-        m_askPrompt->open(anchor, QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps)), false);
-        return;
-    }
-    const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-    const double end = start + clip.value(QStringLiteral("duration")).toDouble();
-    m_askPrompt->open(anchor, QStringLiteral("%1  ·  %2–%3").arg(clipName(clip), timelineTimecode(start, m_fps), timelineTimecode(end, m_fps)), true);
-}
-
-void MainWindow::askSubmitted(const QString &text, const QString &scope) {
-    const QJsonObject clip = selectedClipObject();
-    QJsonObject focus{{QStringLiteral("scope"), scope}};
-    QString label;
-    if (!clip.isEmpty()) {
-        const qint64 start = clipFrames(clip, QStringLiteral("startFrame"));
-        focus.insert(QStringLiteral("clip"), m_selectedClip);
-        focus.insert(QStringLiteral("fromFrame"), start);
-        focus.insert(QStringLiteral("toFrame"), start + clipFrames(clip, QStringLiteral("durationFrames")));
-        label = scope == QStringLiteral("clip") ? clipName(clip) : QStringLiteral("Sequence around %1").arg(clipName(clip));
-    } else {
-        focus.insert(QStringLiteral("fromFrame"), frameAt(m_playhead));
-        focus.insert(QStringLiteral("toFrame"), frameAt(m_playhead));
-        label = QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps));
-    }
-    sendAgent(text, focus, label);
-}
-
-void MainWindow::updateAiBar() {
-    if (!m_aiBar) return;
-    const bool pending = !m_proposalId.isEmpty();
-    const bool next = !m_steps.isEmpty() && !m_agentBusy;
-    // The bar stands in for Kerf's conversation while it is closed, as a
-    // Short's comment count does: open beside the picture, the conversation
-    // already shows the work, the proposal and the next steps, and the
-    // timeline keeps the row.
-    const bool chatOpen = this->chatOpen();
-    m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending || next));
-    m_nextSteps->setVisible(next);
-    if (m_agentBusy) {
-        m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
-                                                         : QStringLiteral("Kerf is working on %1…").arg(m_agentFocusLabel));
-    } else if (pending) {
-        // The whole summary (a narrow chat panel shows it without its count).
-        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_chat->proposalBarSummary()->toolTip()));
-    } else if (next) {
-        m_aiBarText->setText(QStringLiteral("Next with Kerf"));
-    }
-    for (QToolButton *button : m_aiBar->findChildren<QToolButton *>()) {
-        const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
-        button->setVisible(id == QStringLiteral("ai.stop") ? m_agentBusy : id.startsWith(QStringLiteral("proposal.")) ? pending && !m_agentBusy : true);
-    }
-}
-
-void MainWindow::showNextSteps(const QJsonArray &steps) {
-    m_steps = steps;
-    for (QWidget *row : {m_nextSteps, m_chatNextSteps}) {
-        while (QLayoutItem *item = row->layout()->takeAt(0)) {
-            // A pressed button sends the request that clears it.
-            if (item->widget()) item->widget()->deleteLater();
-            delete item;
-        }
-        for (const QJsonValue &value : steps) {
-            const QJsonObject step = value.toObject();
-            const QString request = step.value(QStringLiteral("request")).toString();
-            auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
-            button->setObjectName(QStringLiteral("nextStep"));
-            // A pill: its focus ring follows its round ends.
-            button->setProperty("bezelRadius", 11);
-            button->setToolTip(request);
-            button->setCursor(Qt::PointingHandCursor);
-            connect(button, &QPushButton::clicked, this, [this, request] {
-                if (!m_agentBusy) sendAgent(request, m_lastFocus, m_lastFocusLabel);
-            });
-            row->layout()->addWidget(button);
-        }
-    }
-    m_chatNextSteps->setVisible(!steps.isEmpty());
-    updateAiBar();
-}
-
-void MainWindow::updateChatControls() {
-    const bool hasText = !m_chatInput->toPlainText().trimmed().isEmpty();
-    m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
-    m_abortButton->setEnabled(m_agentBusy);
-    m_abortButton->setVisible(m_agentBusy);
-    m_sendButton->setVisible(!m_agentBusy);
-    // The composer's underline shows the focus of any field in it (the
-    // message, the model), in place of a ring; a button in it rings itself.
-    const QWidget *focus = QApplication::focusWidget();
-    const bool focused = focus && m_chatComposer->isAncestorOf(focus) && !qobject_cast<const QAbstractButton *>(focus);
-    const QString state = !m_connected ? QStringLiteral("offline")
-                          : m_agentBusy ? QStringLiteral("sending")
-                          : focused ? QStringLiteral("focused") : QStringLiteral("ready");
-    if (m_chatComposer->property("state").toString() != state) {
-        m_chatComposer->setProperty("state", state);
-        m_chatComposer->style()->unpolish(m_chatComposer);
-        m_chatComposer->style()->polish(m_chatComposer);
-        for (QWidget *part : m_chatComposer->findChildren<QWidget *>()) part->update();
-        m_chatComposer->update();
-    }
-    m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
-                            : m_agentBusy ? QStringLiteral("Kerf is working…")
-                                          : QStringLiteral("Return sends · Shift-Return starts a new line"));
-    // With a clip selected the request goes with it (the bridge sends the
-    // selection), so the composer says so.
-    const QJsonObject selected = selectedClipObject();
-    m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
-                                   : m_agentBusy ? QStringLiteral("Working on your edit…")
-                                   : !selected.isEmpty() ? QStringLiteral("Ask Kerf about %1…").arg(clipName(selected))
-                                                         : QStringLiteral("Describe your next edit…"));
-    m_chat->updateComposer(m_agentBusy);
-    updateChatStatus();
 }
 
 QString MainWindow::activeProviderId() const {
@@ -1463,7 +414,7 @@ QJsonObject MainWindow::agentSettingsPayload() const {
                        {QStringLiteral("apiMode"), m_openaiMode->currentData().toString()},
                        {QStringLiteral("apiKey"), key ? key->text().trimmed() : QString()},
                        {QStringLiteral("baseUrl"), baseUrl ? baseUrl->text().trimmed() : QString()},
-                       {QStringLiteral("model"), m_modelSelect->currentText().trimmed()},
+                       {QStringLiteral("model"), m_agentModel.trimmed()},
                        {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
                        {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
 }
@@ -1509,27 +460,23 @@ void MainWindow::saveInboundMcpConfig() {
 }
 
 void MainWindow::updateAgentModelChoices() {
-    if (!m_modelSelect) return;
-    m_modelSelect->setEnabled(!usesCloud());
+    static const QString cloudModel = QStringLiteral("Kerf Cloud");
     if (usesCloud()) {
-        const QSignalBlocker blocker(m_modelSelect);
-        m_modelSelect->clear();
-        m_modelSelect->addItem(QStringLiteral("Kerf Cloud"));
-        m_modelSelect->setToolTip(QStringLiteral("Kerf Cloud picks the model"));
+        // The service picks the model: nothing to choose.
+        m_agentModels = {cloudModel};
+        m_agentModel = cloudModel;
+        if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, false);
         return;
     }
-    m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
+    // The active connection's model, else the one chosen, else its first.
     const bool openai = activeProviderId() == QStringLiteral("openai");
-    const QString current = m_modelSelect->currentText();
+    const QString current = m_agentModel == cloudModel ? QString() : m_agentModel;
     const QString configured = openai ? m_openaiModel->text().trimmed() : m_anthropicModel->text().trimmed();
-    const QStringList models = openai
-                                    ? QStringList{QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini")}
-                                    : QStringList{QStringLiteral("claude-sonnet-4-20250514"), QStringLiteral("claude-3-5-sonnet-latest")};
-    const QSignalBlocker blocker(m_modelSelect);
-    m_modelSelect->clear();
-    m_modelSelect->addItems(models);
+    m_agentModels = openai ? QStringList{QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini")}
+                           : QStringList{QStringLiteral("claude-sonnet-4-20250514"), QStringLiteral("claude-3-5-sonnet-latest")};
     const QString model = configured.isEmpty() ? current : configured;
-    m_modelSelect->setEditText(model.isEmpty() ? models.constFirst() : model);
+    m_agentModel = model.isEmpty() ? m_agentModels.constFirst() : model;
+    if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, true);
 }
 
 void MainWindow::loadAgentSettings() {
@@ -1576,21 +523,14 @@ void MainWindow::saveAgentSettings() {
     settings.setValue(QStringLiteral("agent/activeProvider"), activeProviderId());
     settings.sync();
     updateAgentModelChoices();
-    statusBar()->showMessage(QStringLiteral("Agent settings saved"), 3000);
-}
-
-void MainWindow::acceptProposal() {
-    execute(QStringLiteral("proposal.accept"));
-}
-
-void MainWindow::rejectProposal() {
-    execute(QStringLiteral("proposal.reject"));
+    showStatus(QStringLiteral("Agent settings saved"), 3000);
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
+    if (object == m_errorBanner && (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)) layoutProjectTitle();
     // The title stays centred as the toolbar, or a group beside it, changes.
-    if ((object == m_toolbar || object == m_toolbarLeftEnd || object == m_formatBank) &&
+    if ((object == m_toolbar || object == m_formatBank) &&
         (event->type() == QEvent::Resize || event->type() == QEvent::Move))
         layoutProjectTitle();
 #if KERF_EDITOR_OWN_TITLE_BAR
@@ -1617,20 +557,15 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
             return true;
         }
     }
-    if (m_timelineScroll && object == m_timelineScroll->viewport() && event->type() == QEvent::Resize && m_timeline->isFitToWidth()) {
-        m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
-    }
+    if (m_timelineScroll && object == m_timelineScroll->viewport() && event->type() == QEvent::Resize)
+        m_timeline->followViewportWidth(m_timelineScroll->viewport()->width());
     return QMainWindow::eventFilter(object, event);
 }
 
 void MainWindow::buildUi() {
-    auto *central = new QWidget(this);
-    central->setObjectName(QStringLiteral("workspaceRoot"));
-    auto *root = new QVBoxLayout(central);
-    // Banners and panels run edge to edge under the toolbar, as in macOS
-    // pro apps; hairlines and the dock splitters separate them.
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    // The three regions run edge to edge under the toolbar; the sheets, the
+    // trays and the bars lie over them (StageShell).
+    m_shell = new StageShell(this);
     m_artwork = new MediaArtwork(this);
 
     m_connectionBanner = new QFrame;
@@ -1651,7 +586,6 @@ void MainWindow::buildUi() {
         }
     });
     connectionLayout->addWidget(m_reconnectButton);
-    root->addWidget(m_connectionBanner);
 
     m_errorBanner = new QFrame;
     m_errorBanner->setObjectName(QStringLiteral("errorBanner"));
@@ -1664,7 +598,6 @@ void MainWindow::buildUi() {
     connect(dismissError, &QPushButton::clicked, m_errorBanner, &QWidget::hide);
     errorLayout->addWidget(dismissError);
     m_errorBanner->hide();
-    root->addWidget(m_errorBanner);
 
     // A git pull in a terminal or a text editor changed project.kerf; kerfd
     // keeps the editor's version until one of them is chosen.
@@ -1697,300 +630,24 @@ void MainWindow::buildUi() {
     connect(m_loadFromDisk, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.import")); });
     divergedLayout->addWidget(m_loadFromDisk);
     m_divergedBanner->hide();
-    root->addWidget(m_divergedBanner);
 
-    m_workspace = new Workspace(central);
-    root->addWidget(m_workspace->manager(), 1);
+    // The regions, each in its own file; the order is the order they need
+    // each other in.
+    buildReview();
+    buildStage();
+    buildTimeline();
+    buildSource();
+    buildInspector();
+    buildBin();
+    buildPreferences();
+    buildShell();
+    setCentralWidget(m_shell);
+    wireTimeline();
+    updateProposal(QJsonValue());
+    updateInspector();
+}
 
-    auto *viewerFrame = new QFrame;
-    viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
-    auto *viewerLayout = new QVBoxLayout(viewerFrame);
-    viewerLayout->setContentsMargins(0, 0, 0, 0);
-    viewerLayout->setSpacing(0);
-    m_viewer = new ViewerWidget;
-    viewerLayout->addWidget(m_viewer, 1);
-    setupPlayerOverlay();
-
-    auto *timelinePanel = new QWidget;
-    timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
-    timelinePanel->setAttribute(Qt::WA_StyledBackground);
-    auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
-    timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
-    timelinePanelLayout->setSpacing(0);
-
-    auto *timelineFrame = new QFrame;
-    timelineFrame->setObjectName(QStringLiteral("timelineFrame"));
-    auto *timelineLayout = new QVBoxLayout(timelineFrame);
-    timelineLayout->setContentsMargins(0, 0, 0, 0);
-    m_timeline = new TimelineWidget;
-    m_timeline->setArtwork(m_artwork);
-    // Track heights are remembered per project, on this Mac only.
-    m_timeline->setHeightsKey(m_projectDirectory);
-    auto *timelineScroll = new TimelineScrollArea;
-    m_timelineScroll = timelineScroll;
-    timelineScroll->setWidgetResizable(true);
-    timelineScroll->setFrameShape(QFrame::NoFrame);
-    timelineScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    timelineScroll->setWidget(m_timeline);
-    timelineScroll->viewport()->installEventFilter(this);
-    timelineLayout->addWidget(timelineScroll);
-    auto *timelineRow = new QHBoxLayout;
-    timelineRow->setContentsMargins(0, 0, 0, 0);
-    timelineRow->setSpacing(0);
-    // The editing tools, filled in from the command registry.
-    m_toolPalette = new QToolBar(QStringLiteral("Tools"));
-    m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
-    m_toolPalette->setOrientation(Qt::Vertical);
-    m_toolPalette->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_toolPalette->setIconSize(QSize(18, 18));
-    timelineRow->addWidget(m_toolPalette);
-    timelineRow->addWidget(timelineFrame, 1);
-    // What Kerf is doing, and the proposal to review, where the edit happens.
-    m_aiBar = new QFrame;
-    m_aiBar->setObjectName(QStringLiteral("aiBar"));
-    auto *aiLayout = new QHBoxLayout(m_aiBar);
-    aiLayout->setContentsMargins(10, 3, kTrailingInset, 3);
-    aiLayout->setSpacing(8);
-    m_aiBarText = new QLabel;
-    m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
-    aiLayout->addWidget(m_aiBarText, 1);
-    m_nextSteps = new QWidget;
-    m_nextSteps->setObjectName(QStringLiteral("nextSteps"));
-    auto *nextLayout = new QHBoxLayout(m_nextSteps);
-    nextLayout->setContentsMargins(0, 0, 0, 0);
-    nextLayout->setSpacing(6);
-    m_nextSteps->hide();
-    aiLayout->addWidget(m_nextSteps);
-    m_aiBar->hide();
-    timelinePanelLayout->addWidget(m_aiBar);
-    timelinePanelLayout->addLayout(timelineRow, 1);
-    m_askPrompt = new AskPrompt(this);
-    connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
-    // Dragging the split down for a larger picture never squeezes the
-    // timeline under a few tracks and its ruler (its dock area takes this
-    // and its tab strip as its least height, which the Editing
-    // arrangement's 290 points hold).
-    timelinePanel->setMinimumHeight(240);
-
-    m_projectPanel = new ProjectPanel(m_artwork);
-    connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
-    connect(m_projectPanel, &ProjectPanel::menuRequested, this, [this](const QString &media, const QPoint &at) {
-        QMenu *menu = binMenu(media);
-        menu->exec(at);
-        menu->deleteLater();
-    });
-    m_presets = new PresetsPanel;
-    connect(m_presets, &PresetsPanel::applyRequested, this, &MainWindow::applyLibraryPreset);
-    m_sourceMonitor = new SourceMonitorPanel;
-    connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
-
-    // Kerf's conversation lives in the Program monitor's stage beside the
-    // picture, as a Short's comments open beside it: the rail's chat button
-    // between them, and the panel as tall as the picture (see
-    // ViewerWidget::stageLayout).
-    m_chat = new ChatPanel;
-    m_rail = new StageRail;
-    m_chatScroll = m_chat->scroll();
-    m_chatActivity = m_chat->activityLabel();
-    m_agentStatus = m_chat->statusLabel();
-    m_chatComposer = m_chat->composer();
-    m_chatInput = m_chat->input();
-    m_modelSelect = m_chat->modelSelect();
-    m_sendButton = m_chat->sendButton();
-    m_abortButton = m_chat->stopButton();
-    m_proposalBox = m_chat->proposal();
-    m_proposalSummary = m_chat->proposalSummary();
-    m_proposalDiff = m_chat->proposalDiff();
-    m_acceptButton = m_chat->acceptButton();
-    m_rejectButton = m_chat->rejectButton();
-    m_chatNextSteps = m_chat->chips();
-    m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
-    m_chatInput->installEventFilter(this);
-    connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
-    connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
-    m_abortButton->setEnabled(false);
-    connect(m_abortButton, &QPushButton::clicked, this, [this] {
-        if (!execute(QStringLiteral("ai.stop"))) return;
-        m_abortButton->setEnabled(false);
-        m_agentStatus->setText(QStringLiteral("Stopping"));
-        appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
-    });
-    // The composer follows the focus into and out of it (see updateChatControls).
-    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *from, QWidget *to) {
-        if ((from && m_chatComposer->isAncestorOf(from)) || (to && m_chatComposer->isAncestorOf(to))) updateChatControls();
-    });
-    connect(m_chat, &ChatPanel::askAgain, this, [this](const QString &text) {
-        if (!m_agentBusy && m_connected) sendAgent(text, QJsonObject{}, QString());
-    });
-    m_chat->moreButton()->setToolTip(QStringLiteral("Agent settings and activity"));
-    connect(m_chat->moreButton(), &QAbstractButton::clicked, this, [this] {
-        QMenu menu(this);
-        menu.addAction(QStringLiteral("Agent Settings…"), this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
-        menu.addAction(QStringLiteral("Activity"), this, [this] { showActivity(); });
-        QWidget *more = m_chat->moreButton();
-        menu.exec(more->mapToGlobal(QPoint(more->width() - menu.sizeHint().width(), more->height() + 4)));
-    });
-    connect(m_chat->closeButton(), &QAbstractButton::clicked, this, [this] { setChatOpen(false); });
-    // What the agent and the project did, one line each, from the ⋯ menu.
-    m_activityPopup = new QFrame(this, Qt::Popup);
-    m_activityPopup->setObjectName(QStringLiteral("activityPopup"));
-    {
-        auto *layout = new QVBoxLayout(m_activityPopup);
-        layout->setContentsMargins(12, 10, 12, 10);
-        layout->setSpacing(6);
-        auto *title = new QLabel(QStringLiteral("Activity"));
-        title->setObjectName(QStringLiteral("eyebrow"));
-        layout->addWidget(title);
-        m_activityList = new QListWidget;
-        m_activityList->setObjectName(QStringLiteral("activityList"));
-        m_activityList->setMinimumSize(320, 160);
-        layout->addWidget(m_activityList);
-    }
-    m_viewer->setStage(m_rail, m_chat);
-    {
-        const QSettings settings;
-        // The first time, the width this Mac's conversation had as a docked column.
-        const int width = settings.value(QStringLiteral("viewer/chatWidth"),
-                                         settings.value(QStringLiteral("workspace/assistantWidth"), ViewerWidget::kDefaultChatWidth))
-                              .toInt();
-        m_viewer->setChatWidth(width);
-        m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
-        m_viewer->setDevicePreview(devicePreviewFromKey(settings.value(QStringLiteral("viewer/devicePreview")).toString()));
-        m_viewer->setLaptopPreview(laptopPreviewFromKey(settings.value(QStringLiteral("viewer/laptopPreview")).toString()));
-        m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), false).toBool());
-    }
-    {
-        auto *devices = new QActionGroup(this);
-        for (const DevicePreview preview : {DevicePreview::Island, DevicePreview::PunchHole, DevicePreview::Off}) {
-            auto *action = new QAction(devicePreviewLabel(preview), devices);
-            action->setObjectName(QStringLiteral("viewer.device.%1").arg(devicePreviewKey(preview)));
-            action->setCheckable(true);
-            action->setData(static_cast<int>(preview));
-            action->setToolTip(QStringLiteral("Show a portrait picture in a phone, or on a plain card"));
-            connect(action, &QAction::triggered, this, [this, preview] { setDevicePreview(preview); });
-            m_deviceActions.append(action);
-        }
-        auto *laptops = new QActionGroup(this);
-        for (const LaptopPreview preview : {LaptopPreview::Laptop, LaptopPreview::Off}) {
-            auto *action = new QAction(preview == LaptopPreview::Off ? QStringLiteral("Laptop · Off") : laptopPreviewLabel(preview), laptops);
-            action->setObjectName(QStringLiteral("viewer.laptop.%1").arg(laptopPreviewKey(preview)));
-            action->setCheckable(true);
-            action->setData(static_cast<int>(preview));
-            action->setToolTip(QStringLiteral("Show a wide picture in a laptop, or on a plain card"));
-            connect(action, &QAction::triggered, this, [this, preview] { setLaptopPreview(preview); });
-            m_laptopActions.append(action);
-        }
-        m_safeZonesAction = new QAction(QStringLiteral("Safe Zones"), this);
-        m_safeZonesAction->setObjectName(QStringLiteral("viewer.safeZones"));
-        m_safeZonesAction->setCheckable(true);
-        m_safeZonesAction->setToolTip(QStringLiteral("Outline where a vertical-video app's buttons and captions cover the picture"));
-        connect(m_safeZonesAction, &QAction::toggled, this, &MainWindow::setSafeZones);
-        connect(m_rail->deviceButton(), &QAbstractButton::clicked, this, &MainWindow::showDeviceMenu);
-        connect(m_rail->safeZonesButton(), &QAbstractButton::toggled, this, &MainWindow::setSafeZones);
-        updateViewerRail();
-    }
-    connect(m_chat, &ChatPanel::widthDragged, m_viewer, &ViewerWidget::setChatWidth);
-    connect(m_chat, &ChatPanel::widthDragFinished, this,
-            [this] { QSettings().setValue(QStringLiteral("viewer/chatWidth"), m_viewer->chatWidth()); });
-    connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
-    connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
-
-    // Export and preview progress, in the status bar (see setupStatusBar).
-    m_exportProgress = new QProgressBar;
-    m_exportProgress->setObjectName(QStringLiteral("exportProgress"));
-    m_exportProgress->setRange(0, 100);
-    m_exportProgress->setValue(0);
-    m_exportProgress->setTextVisible(false);
-    m_exportProgress->setFixedWidth(120);
-    m_exportProgress->setToolTip(QStringLiteral("Export and preview progress"));
-    m_exportProgress->hide();
-    m_inspector = new InspectorPanel;
-    m_inspector->setArtwork(m_artwork);
-    connect(m_inspector, &InspectorPanel::editRequested, this, &MainWindow::sendEdit);
-    // Done typing in the Inspector (or Esc there): the timeline's keys again.
-    connect(m_inspector, &InspectorPanel::focusReturnRequested, this, [this] { m_timeline->setFocus(Qt::OtherFocusReason); });
-    connect(m_inspector, &InspectorPanel::askRequested, this, &MainWindow::askAboutInChat);
-    connect(m_inspector, &InspectorPanel::revealRequested, this, [this](const QString &) {
-        if (ads::CDockWidget *project = m_workspace->panel(QStringLiteral("project"))) {
-            if (project->isClosed()) project->toggleView(true);
-            project->setAsCurrentTab();
-        }
-    });
-    connect(m_inspector, &InspectorPanel::addEffectRequested, this, [this](bool) {
-        // The Effects browser, its search ready; adding brings the
-        // Inspector back with the new effect open.
-        m_workspace->showBrowserForInspector(QStringLiteral("effects"));
-        m_effects->focusSearch();
-        m_effectsFromInspector = true;
-    });
-    // Mask tools draw a new mask on the selected picture clip over the
-    // Program monitor; the Program panel's title bar and Effect Controls
-    // both carry them.
-    auto *maskTools = new QActionGroup(this);
-    maskTools->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
-    struct MaskToolAction {
-        MaskTool tool;
-        const char *id;
-        QString label;
-    };
-    for (const MaskToolAction &entry : {
-             MaskToolAction{MaskTool::Rectangle, "maskRectangle", tr("Rectangle mask")},
-             MaskToolAction{MaskTool::Ellipse, "maskEllipse", tr("Ellipse mask")},
-             MaskToolAction{MaskTool::Pen, "maskPen",
-                            tr("Pen mask: click its corners, then the first again to close it (Return leaves it open)")}}) {
-        const MaskTool tool = entry.tool;
-        auto *action = new QAction(maskToolIcon(tool), entry.label, maskTools);
-        action->setObjectName(QString::fromLatin1(entry.id));
-        action->setCheckable(true);
-        action->setEnabled(false);
-        action->setData(static_cast<int>(tool));
-        connect(action, &QAction::toggled, this, [this, tool](bool on) {
-            if (on) m_viewer->setMaskTool(tool);
-            else if (m_viewer->maskTool() == tool) m_viewer->setMaskTool(MaskTool::None);
-        });
-        m_maskTools.append(action);
-    }
-    m_inspector->setMaskTools(m_maskTools);
-    connect(m_viewer, &ViewerWidget::maskToolChanged, this, [this](MaskTool tool) {
-        for (QAction *action : m_maskTools) action->setChecked(action->data().toInt() == static_cast<int>(tool));
-    });
-    connect(m_viewer, &ViewerWidget::editRequested, this, &MainWindow::sendEdit);
-    connect(m_viewer, &ViewerWidget::maskSelected, m_inspector, &InspectorPanel::selectMask);
-    connect(m_inspector, &InspectorPanel::maskSelected, m_viewer, &ViewerWidget::selectMask);
-    // The effects offered: cards on the selected clip, and the parameters
-    // the inspector edits.
-    m_effects = new EffectsPanel;
-    if (char *catalog = kerf_fx_catalog()) {
-        const QJsonArray effects = QJsonDocument::fromJson(QByteArray(catalog)).array();
-        kerf_bridge_string_free(catalog);
-        m_effects->setCatalog(effects);
-        m_inspector->setEffectCatalog(effects);
-    }
-    connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
-        const QStringList clips = m_inspector->selection();
-        if (clips.isEmpty()) return;
-        QJsonArray ops;
-        for (const QString &clip : clips)
-            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")}, {QStringLiteral("clip"), clip}, {QStringLiteral("fx"), fx}});
-        sendEdit(ops);
-        // Adding selects nothing new: back to the Inspector, the new effect
-        // open and in view.
-        if (m_effectsFromInspector && clips.size() == 1) {
-            m_effectsFromInspector = false;
-            m_inspector->revealEffect(int(selectedClipObject().value(QStringLiteral("effects")).toArray().size()));
-            // The clip it shows, so a later click on the same clip after
-            // choosing Project by hand leaves Project in front.
-            m_workspace->raiseInspector(Workspace::InspectorOrigin::Edit, true, clips.constFirst());
-        }
-    });
-    connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
-                               {QStringLiteral("clip"), clip},
-                               {QStringLiteral("at"), m_playhead},
-                               {QStringLiteral("effects"), QJsonArray::fromStringList(effects)},
-                               {QStringLiteral("width"), 160}});
-    });
-
+void MainWindow::buildPreferences() {
     // Agent settings live in the Settings dialog, out of the editing surface.
     m_preferences = new QDialog(this);
     m_preferences->setObjectName(QStringLiteral("preferencesDialog"));
@@ -2262,111 +919,41 @@ void MainWindow::buildUi() {
     connect(m_openaiBaseUrl, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
     connect(m_openaiModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
     connect(m_openaiMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::saveAgentSettings);
-
-    // Panels; the workspace arranges them once the window's actions exist.
-    m_viewerDetail = new QAction(this);
-    m_viewerDetail->setObjectName(QStringLiteral("viewerDetail"));
-    m_viewerDetail->setEnabled(false);
-    m_viewerDetail->setVisible(false);
-    m_workspace->addPanel(QStringLiteral("program"), QStringLiteral("Program"), viewerFrame)
-        ->setTitleBarActions(QList<QAction *>(m_maskTools) << m_viewerDetail);
-    // The timeline's tab row: after its name, how many tracks and how long
-    // ("9 tracks · 00:00:18:00"); on the right, its zoom (− slider +) and
-    // its track heights.
-    m_timelineDetail = new QLabel;
-    m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
-    m_timelineZoom = new TimelineZoomControl(m_timeline);
-    ads::CDockWidget *timelineDock = m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel);
-    timelineDock->setTitleBarActions(m_timeline->trackHeightActions());
-    // Its least height is the one set on the panel, not its layout's.
-    timelineDock->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
-    m_workspace->setTitleWidgets(QStringLiteral("timeline"), m_timelineDetail, m_timelineZoom);
-    // A click in the Inspector does not take the keys from the timeline
-    // (its dock would, for the focus highlight): Space and J/K/L keep
-    // working while values are nudged.
-    m_workspace->addPanel(QStringLiteral("inspector"), QStringLiteral("Inspector"), m_inspector)->setFocusPolicy(Qt::NoFocus);
-    m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
-    m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
-    m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
-    m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
-    // Leaving Effects without adding: a later add made there stays there.
-    if (ads::CDockWidget *effects = m_workspace->panel(QStringLiteral("effects")))
-        connect(effects, &ads::CDockWidget::visibilityChanged, this, [this](bool visible) {
-            if (!visible) m_effectsFromInspector = false;
-        });
-    // The timeline's AI bar stands in for the conversation while the
-    // Program monitor, which holds it, is closed.
-    // The conversation is in sight only while the Program monitor is open
-    // and in front; its switches and the timeline's bar follow.
-    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::viewToggled, this, &MainWindow::syncChatSwitches);
-    // (Once the tab switch has settled: it hides the panel before it changes
-    // which tab is current.)
-    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::visibilityChanged, this, [this] {
-        QTimer::singleShot(0, this, &MainWindow::syncChatSwitches);
-        QTimer::singleShot(0, this, &MainWindow::fitPanelDetails);
-    });
-    connect(m_workspace, &Workspace::changed, this, &MainWindow::syncChatSwitches);
-    setCentralWidget(central);
-
-    connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
-    connect(m_timeline, &TimelineWidget::addLaneRequested, this, &MainWindow::addTrack);
-    connect(m_timeline, &TimelineWidget::hoverSeekRequested, this, &MainWindow::queueHoverSeek);
-    connect(m_timeline, &TimelineWidget::hoverSeekEnded, this, &MainWindow::endHoverSeek);
-    connect(m_viewer, &ViewerWidget::scrubbed, this, [this](double fraction) {
-        if (m_duration <= 0.0) return;
-        const double time = fraction * m_duration;
-        m_timeline->showSkimmer(time);
-        queueHoverSeek(time);
-    });
-    connect(m_viewer, &ViewerWidget::scrubEnded, this, [this] {
-        m_timeline->clearSkimmer();
-        endHoverSeek();
-    });
-    connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::clickSelectClip);
-    connect(m_timeline, &TimelineWidget::clipSelectionExtended, this, &MainWindow::extendClipSelection);
-    connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { clickSelectClip(QString()); });
-    connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
-    connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
-    connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
-        // Double-click opens the clip's media in the source monitor at its in point.
-        const QJsonObject clip = clipObject(id);
-        const QString media = clip.value(QStringLiteral("sourceId")).toString();
-        if (media.isEmpty()) return;
-        openSource(media);
-        m_sourceMonitor->seek(clip.value(QStringLiteral("in")).toDouble());
-    });
-    connect(m_timeline, &TimelineWidget::askRequested, this, [this](const QString &id) {
-        selectClip(id);
-        triggerCommand(QStringLiteral("ai.ask"));
-    });
-    connect(m_timeline, &TimelineWidget::clipMenuRequested, this, [this](const QString &, const QPoint &at) {
-        QMenu menu(this);
-        for (const QString &id : {QStringLiteral("ai.ask"), QString(), QStringLiteral("clip.split"), QStringLiteral("clip.delete"),
-                                  QStringLiteral("clip.rippleDelete"), QString(), QStringLiteral("clip.focusRegion")}) {
-            if (id.isEmpty()) menu.addSeparator();
-            else menu.addAction(m_commands->action(id));
-        }
-        menu.exec(at);
-    });
-    connect(m_timeline, &TimelineWidget::razorRequested, this, [this](const QString &id, double frame) {
-        execute(QStringLiteral("clip.split"), QJsonObject{{QStringLiteral("clip"), id}, {QStringLiteral("at"), std::llround(frame)}});
-    });
-    connect(m_timeline, &TimelineWidget::trackToggleRequested, this, [this](const QString &track, const QString &field, bool value) {
-        execute(QStringLiteral("track.set"), QJsonObject{{QStringLiteral("track"), track}, {field, value}});
-    });
-    updateProposal(QJsonValue());
-    updateInspector();
 }
 
-void MainWindow::syncCanvasPreset(const QSize &size) {
-    if (!m_formatBank || !size.isValid()) return;
-    m_canvasSize = size;
-    layoutProjectTitle();
-    // The bank latches the preset's key, or none for a custom size, and
-    // names the format in its tooltip; it does not ask for a change.
-    m_updatingCanvasPreset = true;
-    m_formatBank->setCanvasSize(size);
-    m_updatingCanvasPreset = false;
+void MainWindow::buildShell() {
+    m_finishTray = new FinishTray(nullptr, m_bus);
+    m_deliverTray = new DeliverTray(nullptr, m_bus);
+    m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
+    m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
+    m_shell->setTrays(m_finishTray, m_deliverTray);
+    m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
+    // Each sheet closes from the end of its strip.
+    const auto closeButton = [this](StageShell::Sheet sheet) {
+        auto *button = new ui::IconButton(QStringLiteral("g-close"));
+        button->setObjectName(QStringLiteral("sheetClose.%1").arg(StageShell::sheetId(sheet)));
+        button->setAccessibleName(QStringLiteral("Close"));
+        button->setTip(QStringLiteral("Close"), QStringLiteral("Esc"));
+        button->setFocusPolicy(Qt::NoFocus);
+        connect(button, &QAbstractButton::clicked, m_shell, [this] { m_shell->setSheet(StageShell::Sheet::None); });
+        return button;
+    };
+    m_projectPanel->addToStrip(closeButton(StageShell::Sheet::Media));
+    m_browserPanel->addToStrip(closeButton(StageShell::Sheet::Browser));
+    m_inspectorColumn->addToStrip(closeButton(StageShell::Sheet::Inspector));
+    connect(m_shell, &StageShell::sheetChanged, this, [this](StageShell::Sheet sheet) {
+        // Closing Effects without adding: a later add made there stays there.
+        if (sheet != StageShell::Sheet::Browser) m_effectsFromInspector = false;
+        syncPanelCommands();
+        if (sheet == StageShell::Sheet::None) settleFocus();
+    });
+    connect(m_shell, &StageShell::trayChanged, this, &MainWindow::applyTray);
+    // A page chosen in a sheet's own strip keeps its commands in step.
+    connect(m_browserPanel, &BrowserPanel::pageChanged, this, &MainWindow::syncPanelCommands);
+    // The error bar shown or dismissed, the toolbar's subtitle follows it.
+    m_errorBanner->installEventFilter(this);
+    // Esc in an empty composer, with nothing of its own to stop or cancel.
+    connect(m_chat, &ChatPanel::escapeUnused, m_shell, [this] { m_shell->dismiss(); });
 }
 
 void MainWindow::setupActions() {
@@ -2389,7 +976,6 @@ void MainWindow::setupActions() {
         {QStringLiteral("file.export"), [this] { exportProject(); }},
         {QStringLiteral("file.exportPreset"), [this] { exportEditingPreset(); }},
         {QStringLiteral("file.applyPreset"), [this] { importEditingPreset(); }},
-        // Closing first keeps the workspace layout for the next launch.
         {QStringLiteral("app.quit"), [this] { if (close()) QApplication::quit(); }},
         {QStringLiteral("clip.focusRegion"), [this] { focusRegion(); }},
         {QStringLiteral("sequence.renderPreview"), [this] { renderPreview(); }},
@@ -2405,17 +991,12 @@ void MainWindow::setupActions() {
             m_preferences->raise();
             m_preferences->activateWindow();
         }},
-        {QStringLiteral("window.saveWorkspace"), [this] {
-            m_workspace->saveCurrent();
-            statusBar()->showMessage(QStringLiteral("Saved the %1 workspace").arg(m_workspace->current()), 4000);
+        // The conversation is always open: its key puts the keys in its composer.
+        {QStringLiteral("window.assistant"), [this] {
+            uncoverComposer();
+            m_chat->focusComposer();
         }},
-        {QStringLiteral("window.saveWorkspaceAs"), [this] {
-            const QString name = QInputDialog::getText(this, QStringLiteral("New Workspace"), QStringLiteral("Name"));
-            if (name.trimmed().isEmpty()) return;
-            if (!m_workspace->saveAs(name))
-                statusBar()->showMessage(QStringLiteral("A workspace called %1 already exists").arg(name.trimmed()), 4000);
-        }},
-        {QStringLiteral("window.resetWorkspace"), [this] { m_workspace->resetCurrent(); }},
+        {QStringLiteral("timeline.addTrack"), [this] { addTrack(); }},
         {QStringLiteral("ai.ask"), [this] { askAi(); }},
         {QStringLiteral("source.markIn"), [this] { m_sourceMonitor->markIn(); }},
         {QStringLiteral("source.markOut"), [this] { m_sourceMonitor->markOut(); }},
@@ -2424,36 +1005,58 @@ void MainWindow::setupActions() {
         {QStringLiteral("source.nextFrame"), [this] { m_sourceMonitor->step(1); }},
     };
     connect(m_commands, &CommandRegistry::triggered, this, &MainWindow::triggerCommand);
-    // Window ▸ panel commands show and hide docked panels, and follow
-    // panels closed from their tabs.
-    const QHash<QString, QString> panelCommands{
-        {QStringLiteral("window.project"), QStringLiteral("project")},
-        {QStringLiteral("window.source"), QStringLiteral("source")},
-        {QStringLiteral("window.program"), QStringLiteral("program")},
-        {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
-        {QStringLiteral("window.inspector"), QStringLiteral("inspector")},
-        {QStringLiteral("window.effects"), QStringLiteral("effects")},
-        {QStringLiteral("window.presets"), QStringLiteral("presets")},
-    };
     // Tools are one exclusive choice; snapping is a switch.
     const QHash<QString, TimelineTool> tools{
         {QStringLiteral("tool.selection"), TimelineTool::Selection}, {QStringLiteral("tool.razor"), TimelineTool::Razor},
         {QStringLiteral("tool.ripple"), TimelineTool::Ripple}, {QStringLiteral("tool.roll"), TimelineTool::Roll},
         {QStringLiteral("tool.slip"), TimelineTool::Slip}, {QStringLiteral("tool.slide"), TimelineTool::Slide},
     };
-    connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands, tools](const QString &id, bool checked) {
-        if (id == QStringLiteral("window.assistant")) setChatOpen(checked);
-        else if (id == QStringLiteral("window.inspector")) {
-            // ⌘4 shows the Inspector, or goes back to the tab before it; it
-            // never closes it (its tab's close button does).
-            m_workspace->toggleInspector();
-            QAction *action = m_commands->action(id);
-            const QSignalBlocker blocker(action);
-            action->setChecked(true);
-        } else if (id == QStringLiteral("window.inspectorFollows")) {
-            Workspace::setInspectorFollowsSelection(checked);
-        } else if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
-            if (panel->isClosed() == checked) panel->toggleView(checked);
+    connect(m_commands, &CommandRegistry::toggled, this, [this, tools](const QString &id, bool checked) {
+        if (id.startsWith(QStringLiteral("workspace."))) {
+            // The base state, or a tray over it; choosing an open tray again
+            // goes back, and choosing the base state again leaves it chosen.
+            if (id == QStringLiteral("workspace.finish")) m_shell->setTray(checked ? StageShell::Tray::Finish : StageShell::Tray::None);
+            else if (id == QStringLiteral("workspace.deliver")) m_shell->setTray(checked ? StageShell::Tray::Deliver : StageShell::Tray::None);
+            else m_shell->setTray(StageShell::Tray::None);
+            syncPanelCommands();
+        } else if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
+        else if (id == QStringLiteral("inspector.video")) {
+            m_shell->setSheet(StageShell::Sheet::Inspector);
+            m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
+            m_inspectorColumn->setKind(InspectorColumn::Kind::Video);
+            syncPanelCommands();
+        } else if (id == QStringLiteral("window.source")) {
+            // The Inspector sheet's Source page.
+            if (checked) {
+                m_shell->setSheet(StageShell::Sheet::Inspector);
+                m_inspectorColumn->setPage(InspectorColumn::Page::Source);
+            } else {
+                m_shell->setSheet(StageShell::Sheet::None);
+            }
+            syncPanelCommands();
+        } else if (id == QStringLiteral("window.effects") || id == QStringLiteral("window.presets")) {
+            // The browser, on that page; unchecked, the sheet closes.
+            if (checked) {
+                m_shell->setSheet(StageShell::Sheet::Browser);
+                m_browserPanel->setPage(id == QStringLiteral("window.effects") ? BrowserPanel::Page::Effects : BrowserPanel::Page::Presets);
+            } else {
+                m_shell->setSheet(StageShell::Sheet::None);
+            }
+            syncPanelCommands();
+        } else if (id == QStringLiteral("window.inspector")) {
+            // Open on Source, the sheet turns to the Inspector; only on its
+            // own page does the command close it.
+            if (m_shell->sheet() == StageShell::Sheet::Inspector && m_inspectorColumn->page() == InspectorColumn::Page::Source) {
+                m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
+            } else {
+                m_shell->toggleSheet(StageShell::Sheet::Inspector);
+                if (m_shell->sheet() == StageShell::Sheet::Inspector) m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
+            }
+            syncPanelCommands();
+        } else if (id == QStringLiteral("window.project")) {
+            m_shell->toggleSheet(StageShell::Sheet::Media);
+            syncPanelCommands();
+        }
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
         if (id == QStringLiteral("collab.live")) {
@@ -2466,11 +1069,6 @@ void MainWindow::setupActions() {
         QAction *live = m_commands->action(QStringLiteral("collab.live"));
         const QSignalBlocker blocker(live);
         live->setChecked(liveSyncRemembered());
-    }
-    {
-        QAction *follows = m_commands->action(QStringLiteral("window.inspectorFollows"));
-        const QSignalBlocker blocker(follows);
-        follows->setChecked(Workspace::inspectorFollowsSelection());
     }
     m_branchMenu = new QMenu(QStringLiteral("Switch Branch"), this);
     m_branchMenu->setObjectName(QStringLiteral("switchBranchMenu"));
@@ -2486,7 +1084,6 @@ void MainWindow::setupActions() {
         // Tool symbols, the way edit suites label their palettes.
         action->setIcon(toolIcon(id));
         m_toolGlyphs.append(action);
-        m_toolPalette->addAction(action);
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
     m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
@@ -2503,45 +1100,8 @@ void MainWindow::setupActions() {
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
     m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
     m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
-    auto *details = new QToolButton;
-    details->setObjectName(QStringLiteral("aiButton"));
-    details->setText(QStringLiteral("Details"));
-    details->setToolTip(QStringLiteral("Show the conversation and the proposed script"));
-    connect(details, &QToolButton::clicked, this, [this] { setChatOpen(true); });
-    m_aiBar->layout()->addWidget(details);
-    // Accept trails, as it does on the Assistant's card and in macOS's rows
-    // of buttons; Stop shows only while Kerf works, when the proposal's don't.
-    for (const QString &id : {QStringLiteral("ai.stop"), QStringLiteral("proposal.reject"), QStringLiteral("proposal.accept")}) {
-        auto *button = new QToolButton;
-        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
-        button->setDefaultAction(m_commands->action(id));
-        m_aiBar->layout()->addWidget(button);
-    }
     m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
                                  m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
-    for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
-        QAction *action = m_commands->action(it.key());
-        ads::CDockWidget *panel = m_workspace->panel(it.value());
-        connect(panel, &ads::CDockWidget::viewToggled, action, [action](bool open) {
-            const QSignalBlocker blocker(action);
-            action->setChecked(open);
-        });
-    }
-    connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateTransport);
-    // The conversation opens and closes from the toolbar, Window, ⇧⌘J, the
-    // rail's chat button beside the picture, and its header's close button.
-    {
-        QAction *chat = m_commands->action(QStringLiteral("window.assistant"));
-        const QSignalBlocker blocker(chat);
-        chat->setChecked(m_viewer->chatOpen());
-        RailButton *rail = m_rail->chatButton();
-        rail->setChecked(chat->isChecked());
-        connect(rail, &QAbstractButton::clicked, chat, [chat] { chat->trigger(); });
-        connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateChatTips);
-        updateChatTips();
-        updateChatCount();
-    }
-
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
     if (QMenu *file = menus.value(QStringLiteral("File"))) {
@@ -2571,164 +1131,42 @@ void MainWindow::setupActions() {
             });
         }
     }
-    if (QMenu *window = menus.value(QStringLiteral("Window"))) {
-        auto *workspaces = new QMenu(QStringLiteral("Workspaces"), window);
-        workspaces->setObjectName(QStringLiteral("workspacesMenu"));
-        window->insertMenu(window->actions().value(0), workspaces);
-        window->insertSeparator(window->actions().value(1));
-        connect(workspaces, &QMenu::aboutToShow, this, [this, workspaces] { buildWorkspaceMenu(workspaces); });
-        buildWorkspaceMenu(workspaces);
-        // The viewer's options: the phone a portrait picture shows in, its
-        // safe zones, and the laptop a wide one shows in (the stage's rail
-        // has them too).
-        auto *viewer = new QMenu(QStringLiteral("Viewer"), window);
-        viewer->setObjectName(QStringLiteral("viewerMenu"));
-        viewer->addActions(m_deviceActions);
-        viewer->addSeparator();
-        viewer->addAction(m_safeZonesAction);
-        viewer->addSeparator();
-        viewer->addActions(m_laptopActions);
-        window->insertMenu(window->actions().value(1), viewer);
-    }
-    m_workspace->start();
-    updateAiBar();
-    for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
-        const QSignalBlocker blocker(m_commands->action(it.key()));
-        m_commands->action(it.key())->setChecked(!m_workspace->panel(it.value())->isClosed());
-    }
-
-    // The faceplate: the plate the toolbar's controls are set into.
-    auto *toolbar = new FaceplateToolBar(QStringLiteral("Main"), this);
-    addToolBar(toolbar);
-    m_toolbar = toolbar;
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(kToolbarIconSize, kToolbarIconSize));
-    toolbar->setFixedHeight(kToolbarHeight);
-#if KERF_EDITOR_OWN_TITLE_BAR
-    m_windowButtons = new QWidget;
-    m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
-    m_windowButtons->setFixedWidth(kWindowButtonsSpace);
-    toolbar->addWidget(m_windowButtons);
-#endif
-    // Its empty stretches move and zoom the window (on macOS, where it is
-    // the title bar), and its size places the title.
-    toolbar->installEventFilter(this);
-    if (!menuBar()->isNativeMenuBar()) {
-        // Keep menus accessible without dedicating a full row to them.
-        auto *menuButton = new QToolButton(toolbar);
-        menuButton->setText(QStringLiteral("☰"));
-        menuButton->setToolTip(QStringLiteral("Application menu"));
-        menuButton->setAccessibleName(QStringLiteral("Application menu"));
-        menuButton->setPopupMode(QToolButton::InstantPopup);
-        auto *applicationMenu = new QMenu(menuButton);
-        for (const QString &name : m_commands->menuNames()) {
-            QMenu *menu = menus.value(name);
-            if (!menu) continue;
-            applicationMenu->addMenu(menu);
-            for (auto *action : menu->actions()) {
-                if (action->shortcutContext() != Qt::WidgetShortcut)
-                    addAction(action);
-            }
-        }
-        menuButton->setMenu(applicationMenu);
-        toolbar->addWidget(menuButton);
-        menuBar()->hide();
-    }
-    const auto toolbarCommand = [&](const QString &id, const QString &text, const QString &glyph = QString()) {
-        QAction *action = m_commands->action(id);
-        action->setIconText(text);
-        if (!glyph.isEmpty()) {
-            action->setIcon(toolbarIcon(glyph));
-            m_toolbarGlyphs.append({action, glyph});
-        }
-        toolbar->addAction(action);
-        return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
-    };
-    // Groups are set apart by space, as in macOS toolbars, not by rules, and
-    // separate controls by 8 points, as macOS toolbars and the launcher's
-    // footer space them; the toolbar's own spacing comes on either side.
-    const auto space = [toolbar](int width) {
-        auto *gap = new QWidget;
-        gap->setFixedWidth(width);
-        toolbar->addWidget(gap);
-    };
-    const auto groupSpace = [&space] { space(10); };
-    const auto controlSpace = [&space] { space(8 - 2 * kToolbarSpacing); };
-    toolbarCommand(QStringLiteral("file.import"), QStringLiteral("Import"), QStringLiteral("↓"));
-    groupSpace();
-    toolbarCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), QStringLiteral("↶"));
-    toolbarCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), QStringLiteral("↷"));
-    groupSpace();
-    toolbarCommand(QStringLiteral("clip.split"), QStringLiteral("Split"), QStringLiteral("✂"));
-    m_toolbarLeftEnd = toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("trash"));
-    auto *spacer = new QWidget;
-    spacer->setStyleSheet(QStringLiteral("background: transparent"));
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbar->addWidget(spacer);
-    // The project's format as a bank of latching keys, one per preset, the
-    // shape of each drawn on it; the current one is held in, its LED lit.
-    m_formatBank = new FormatBank;
-    connect(m_formatBank, &FormatBank::formatChosen, this, &MainWindow::canvasPresetChanged);
-    toolbar->addWidget(m_formatBank);
-    controlSpace();
-    // Export, the one key in the accent. Its chip names the quality it
-    // makes; its menu picks Master (the finished file, first and by
-    // default) or Draft, and holds Render Preview, which had a button of
-    // its own beside it. The menu's Master names the size and rate it makes.
-    m_exportButton = new ExportButton(m_commands->action(QStringLiteral("file.export")),
-                                      m_commands->action(QStringLiteral("sequence.renderPreview")));
-    connect(m_exportButton, &ExportButton::menuAboutToShow, this, [this] {
-        const QString rate = QStringLiteral("%1 fps").arg(QString::number(m_fps, 'g', 5));
-        m_exportButton->setMasterDetail(m_canvasSize.isValid()
-            ? QStringLiteral("%1\u2009×\u2009%2 · %3").arg(m_canvasSize.width()).arg(m_canvasSize.height()).arg(rate)
-            : rate);
-    });
-    toolbar->addWidget(m_exportButton);
-    // Last, over the column it opens, as the comments button beside a Short
-    // and the inspector switch at the end of a macOS toolbar: Kerf's
-    // conversation. It ends where the banners' and the agent's bar's
-    // buttons do.
-    groupSpace();
-    m_chatToggle = toolbarCommand(QStringLiteral("window.assistant"), QStringLiteral("Kerf Assistant"), QStringLiteral("bubble"));
-    m_chatToggle->setObjectName(QStringLiteral("chatToggle"));
-    space(kTrailingInset - kToolbarPadding - kToolbarSpacing);
-    // The title is centred on the window, as macOS centres it, not between
-    // the groups, so it sits over the toolbar outside its layout;
-    // layoutProjectTitle() places it as the toolbar and its groups move.
-    m_projectTitle = new QLabel(toolbar);
-    m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    m_projectTitle->setAlignment(Qt::AlignCenter);
-    // Under it, quietly, the project's state: saved or edited, its shape
-    // and its frame rate ("Edited · 9:16 · 24 fps").
-    m_projectSubtitle = new QLabel(toolbar);
-    m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
-    m_projectSubtitle->setAlignment(Qt::AlignCenter);
-    for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_formatBank)})
-        if (edge) edge->installEventFilter(this);
-    updateCommandStates();
+    setupToolbar(menus);
+    setupPictureCommands();
+    m_finishTray->setActions(m_commands->action(QStringLiteral("ai.ask")), m_commands->action(QStringLiteral("qc.run")));
+    m_deliverTray->setRenderAction(m_commands->action(QStringLiteral("export.master")));
+    // Deliver keys its outputs and paperwork by the project (not through the
+    // window's file path).
+    m_deliverTray->setProjectDirectory(m_projectDirectory);
+    if (DeliverPane *pane = m_inspectorColumn ? m_inspectorColumn->deliverPane() : nullptr) pane->setProjectDirectory(m_projectDirectory);
+    // The base state, for every region.
+    applyTray();
+    // The keys start on the timeline, so activating the window gives them to no button.
+    m_timeline->setFocus(Qt::OtherFocusReason);
 }
 
-void MainWindow::buildWorkspaceMenu(QMenu *menu) {
-    menu->clear();
-    qDeleteAll(menu->findChildren<QActionGroup *>(Qt::FindDirectChildrenOnly));
-    auto *group = new QActionGroup(menu);
-    for (const QString &name : m_workspace->names()) {
-        QAction *choice = menu->addAction(name);
-        choice->setObjectName(QStringLiteral("workspace.%1").arg(name));
-        choice->setCheckable(true);
-        choice->setChecked(name == m_workspace->current());
-        group->addAction(choice);
-        connect(choice, &QAction::triggered, this, [this, name] { m_workspace->activate(name); });
+void MainWindow::closeEvent(QCloseEvent *event) { QMainWindow::closeEvent(event); }
+
+void MainWindow::keyPressEvent(QKeyEvent *event) {
+    // An Esc no widget under the focus took: the sheet closes, else the tray.
+    if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && m_shell && m_shell->dismiss()) {
+        event->accept();
+        return;
     }
+    QMainWindow::keyPressEvent(event);
 }
 
-void MainWindow::closeEvent(QCloseEvent *event) {
-    m_workspace->persist();
-    QMainWindow::closeEvent(event);
+void MainWindow::openTray(const QString &name) {
+    m_shell->setTray(name.compare(QLatin1String("Finish"), Qt::CaseInsensitive) == 0 ? StageShell::Tray::Finish
+                     : name.compare(QLatin1String("Deliver"), Qt::CaseInsensitive) == 0 ? StageShell::Tray::Deliver
+                                                                                        : StageShell::Tray::None);
 }
 
 void MainWindow::showEvent(QShowEvent *event) {
     QMainWindow::showEvent(event);
+    // Shown the first time, the keys start where they belong (see
+    // settleFocus); later shows keep the reader's place.
+    if (!m_focusSettled) QTimer::singleShot(0, this, &MainWindow::settleFocus);
 #if KERF_EDITOR_OWN_TITLE_BAR
     hideNativeWindowTitle(this);
     if (QWindow *handle = windowHandle()) {
@@ -2742,75 +1180,13 @@ void MainWindow::showEvent(QShowEvent *event) {
 void MainWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) fitTitleBar();
-}
-
-void MainWindow::fitTitleBar() {
-#if KERF_EDITOR_OWN_TITLE_BAR
-    if (!m_toolbar) return;
-    // The safe area's top is the title bar the window buttons sit in. Its
-    // commands start 12 points past the zoom button; in full screen there
-    // are no buttons beside them.
-    const QWindow *handle = windowHandle();
-    m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
-    const int buttons = windowButtonsWidth(this);
-    m_windowButtons->setFixedWidth(buttons > 0 ? buttons + 12 - kToolbarPadding : kWindowButtonsSpace);
-    m_windowButtons->setVisible(!isFullScreen());
-#endif
-}
-
-void MainWindow::layoutProjectTitle() {
-    if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_formatBank) return;
-    m_projectTitle->ensurePolished();
-    m_projectSubtitle->ensurePolished();
-    const QFontMetrics metrics(m_projectTitle->font());
-    const QFontMetrics subMetrics(m_projectSubtitle->font());
-    const QString subtitle = projectSubtitle();
-    // The room between the groups, and the title's own width.
-    const int left = m_toolbarLeftEnd->geometry().right() + 1 + kTitleClearance;
-    const int right = m_formatBank->geometry().left() - kTitleClearance;
-    const int natural = std::max(metrics.horizontalAdvance(m_projectName), subMetrics.horizontalAdvance(subtitle)) + 2;
-    const int width = std::min(natural, std::max(0, right - left));
-    // Centred on the window (the toolbar spans it); moved aside when a group
-    // is in the way, and shortened when there is no room for all of it.
-    const int x = std::clamp((m_toolbar->width() - width) / 2, left, std::max(left, right - width));
-    const QString shown = metrics.horizontalAdvance(m_projectName) + 2 > width ? metrics.elidedText(m_projectName, Qt::ElideRight, width) : m_projectName;
-    m_projectTitle->setText(shown);
-    m_projectTitle->setToolTip(shown == m_projectName ? QString() : m_projectName);
-    m_projectSubtitle->setText(subMetrics.elidedText(subtitle, Qt::ElideRight, width));
-    // Two lines centred on the toolbar's height, as macOS stacks a document's
-    // title over its subtitle.
-    const int titleHeight = metrics.height();
-    const int subHeight = subMetrics.height();
-    const int top = std::max(0, (m_toolbar->height() - titleHeight - subHeight) / 2);
-    m_projectTitle->setGeometry(x, top, width, titleHeight);
-    m_projectSubtitle->setGeometry(x, top + titleHeight, width, subHeight);
-    m_projectTitle->raise();
-    m_projectSubtitle->raise();
-}
-
-QString MainWindow::projectSubtitle() const {
-    // Saved, or edited since the project's last version (Git's own say);
-    // its shape as the format picker names it; its frame rate.
-    const bool edited = m_collabStatus.value(QStringLiteral("changed")).toBool();
-    QStringList parts{edited ? QStringLiteral("Edited") : QStringLiteral("Saved")};
-    if (m_canvasSize.isValid()) {
-        const int w = m_canvasSize.width();
-        const int h = m_canvasSize.height();
-        const int common = std::gcd(w, h);
-        const QSize ratio(w / std::max(1, common), h / std::max(1, common));
-        parts << (ratio.width() <= 32 && ratio.height() <= 32 ? QStringLiteral("%1:%2").arg(ratio.width()).arg(ratio.height())
-                                                               : QStringLiteral("%1 × %2").arg(w).arg(h));
+    // Only the first activation: Qt then hands the keys to the first button
+    // in the chain. Coming back to the window later keeps the button a
+    // keyboard user tabbed to.
+    if (event->type() == QEvent::ActivationChange && isActiveWindow() && !m_focusSettled) {
+        m_focusSettled = true;
+        settleFocus();
     }
-    parts << QStringLiteral("%1 fps").arg(QString::number(m_fps, 'g', 5));
-    return parts.join(QStringLiteral(" · "));
-}
-
-void MainWindow::setProjectTitle(const QString &name) {
-    m_projectName = name;
-    layoutProjectTitle();
-    // The Window menu, Mission Control and the Dock list the project.
-    setWindowTitle(name);
-    if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
 }
 
 void MainWindow::newProject() {
@@ -2916,7 +1292,6 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
     const QString type = event.value(QStringLiteral("type")).toString();
     if (type == QStringLiteral("collab")) {
         m_collabStatus = event.value(QStringLiteral("status")).toObject();
-        layoutProjectTitle();
         QAction *live = m_commands->action(QStringLiteral("collab.live"));
         const QSignalBlocker blocker(live);
         live->setChecked(m_collabStatus.value(QStringLiteral("live")).toBool());
@@ -2961,9 +1336,9 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
             if (keptTheirs > 0)
                 summary << (keptTheirs == 1 ? QStringLiteral("1 change kept theirs") : QStringLiteral("%1 changes kept theirs").arg(keptTheirs));
             if (!summary.isEmpty() || m_syncRequested)
-                statusBar()->showMessage(summary.isEmpty() ? QStringLiteral("Synced: up to date")
-                                                           : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
-                                         8000);
+                showStatus(summary.isEmpty() ? QStringLiteral("Synced: up to date")
+                                             : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
+                           8000);
             // A pull or branch switch changes presets/, and a commit who
             // last changed each preset.
             execute(QStringLiteral("preset.library"));
@@ -2983,81 +1358,17 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
         const bool created = event.value(QStringLiteral("created")).toBool();
         // Without gh, the bridge gives GitHub's page for starting one.
         const bool compare = QUrl(url).path().section(QLatin1Char('/'), 3, 3) == QStringLiteral("compare");
-        statusBar()->showMessage(created ? QStringLiteral("Opened a pull request: %1").arg(url)
-                                 : compare ? QStringLiteral("Opened GitHub's page for a new pull request: %1").arg(url)
-                                           : QStringLiteral("This branch already has a pull request: %1").arg(url),
-                                 8000);
+        showStatus(created ? QStringLiteral("Opened a pull request: %1").arg(url)
+                   : compare ? QStringLiteral("Opened GitHub's page for a new pull request: %1").arg(url)
+                             : QStringLiteral("This branch already has a pull request: %1").arg(url),
+                   8000);
         addActivity(QStringLiteral("sync"), url);
 #ifndef KERF_QT_TESTING
         if (!url.isEmpty()) QDesktopServices::openUrl(QUrl(url));
 #endif
     }
-    updateSyncChip();
+    layoutProjectTitle();
     updateCommandStates();
-}
-
-void MainWindow::updateSyncChip() {
-    if (!m_syncChip) return;
-    if (m_collabStatus.isEmpty()) {
-        m_syncChip->hide();
-        return;
-    }
-    const auto field = [this](const char *key) { return m_collabStatus.value(QLatin1String(key)); };
-    QString text;
-    QString state;
-    QStringList tips;
-    if (!field("repository").toBool()) {
-        text = QStringLiteral("⎇ Not shared");
-        state = QStringLiteral("local");
-        tips << QStringLiteral("This project is not a Git repository yet.")
-             << QStringLiteral("Click, or choose Collaborate → Publish to GitHub…, to share it.");
-    } else {
-        const QString branch = field("branch").toString();
-        const int ahead = field("ahead").toInt();
-        const int behind = field("behind").toInt();
-        text = QStringLiteral("⎇ %1").arg(branch.isEmpty() ? QStringLiteral("detached") : branch);
-        if (ahead > 0) text += QStringLiteral(" ↑%1").arg(ahead);
-        if (behind > 0) text += QStringLiteral(" ↓%1").arg(behind);
-        const QString remote = field("remote").toString();
-        const QString upstream = field("upstream").toString();
-        tips << (remote.isEmpty() ? QStringLiteral("No remote yet: Publish to GitHub… shares the project.")
-                 : upstream.isEmpty() ? QStringLiteral("%1, not pushed yet").arg(remote)
-                                      : QStringLiteral("Syncs with %1").arg(upstream));
-        if (ahead > 0) tips << (ahead == 1 ? QStringLiteral("1 commit to push") : QStringLiteral("%1 commits to push").arg(ahead));
-        if (behind > 0) tips << (behind == 1 ? QStringLiteral("1 commit to pull") : QStringLiteral("%1 commits to pull").arg(behind));
-        if (field("changed").toBool()) tips << QStringLiteral("Edits not committed yet");
-        static const QHash<QString, QString> stages{
-            {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
-            {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
-            {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
-        if (!m_syncStage.isEmpty() || field("busy").toBool()) {
-            text = QStringLiteral("⟳ %1…").arg(stages.value(m_syncStage, QStringLiteral("Syncing")));
-            state = QStringLiteral("syncing");
-        } else if (field("conflicted").toBool()) {
-            text += QStringLiteral(" · merge unfinished");
-            state = QStringLiteral("conflict");
-            tips.prepend(QStringLiteral("A merge is in progress with unresolved files; finish it with git."));
-        } else if (!m_syncFailure.isEmpty()) {
-            text += QStringLiteral(" · sync failed");
-            state = QStringLiteral("failed");
-            tips.prepend(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
-        } else if (field("live").toBool()) {
-            text += QStringLiteral(" · live");
-            state = QStringLiteral("live");
-            tips << QStringLiteral("Live sync is on");
-        } else {
-            state = QStringLiteral("idle");
-        }
-        if (!m_syncLines.isEmpty()) tips << QString() << QStringLiteral("Last sync:") << m_syncLines;
-        tips << QString() << QStringLiteral("Click to sync now");
-    }
-    m_syncChip->setText(text);
-    m_syncChip->setToolTip(tips.join(QLatin1Char('\n')));
-    m_syncChip->setAccessibleName(text);
-    m_syncChip->setProperty("state", state);
-    m_syncChip->style()->unpolish(m_syncChip);
-    m_syncChip->style()->polish(m_syncChip);
-    m_syncChip->show();
 }
 
 void MainWindow::buildBranchMenu(QMenu *menu) {
@@ -3208,88 +1519,6 @@ void MainWindow::publishProject() {
     else execute(QStringLiteral("collab.publish"), params);
 }
 
-void MainWindow::savePreset() {
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, QStringLiteral("Save Current as Preset"),
-                                               QStringLiteral("Saves the program sequence in presets/, shared with the project.\nName"),
-                                               QLineEdit::Normal, QString(), &ok)
-                             .trimmed();
-    if (!ok || name.isEmpty()) return;
-    // The bridge names the file, cleaning the name up, and refuses one that
-    // exists; replacing it is asked then.
-    m_savingPreset = name;
-    execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), false}});
-}
-
-void MainWindow::replaceSavedPreset(const QString &path) {
-    const QString name = std::exchange(m_savingPreset, QString());
-    if (QMessageBox::question(this, QStringLiteral("Save Current as Preset"),
-                              QStringLiteral("%1 already exists. Replace it?").arg(path)) == QMessageBox::Yes)
-        execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), true}});
-}
-
-void MainWindow::applyLibraryPreset(const QString &path) {
-    // The preset's slots and the media able to fill them come back as
-    // preset_inspect, which opens the bindings dialog.
-    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")}, {QStringLiteral("path"), path}});
-}
-
-QString MainWindow::mediaPath(const QString &mediaId) const {
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() == mediaId)
-            return QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
-    }
-    return {};
-}
-
-void MainWindow::replaceMedia(const QString &mediaId, const QString &path) {
-    QString file = path;
-    if (file.isEmpty()) {
-        file = QFileDialog::getOpenFileName(this, QStringLiteral("Replace %1").arg(mediaId), QFileInfo(mediaPath(mediaId)).absolutePath(),
-                                            QStringLiteral("Media files (*.mov *.mp4 *.m4v *.mkv *.webm *.wav *.mp3);;All files (*)"));
-        if (file.isEmpty()) return;
-    }
-    if (execute(QStringLiteral("media.replace"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("path"), file}}))
-        addActivity(QStringLiteral("import"), QStringLiteral("Replacing %1 with %2").arg(mediaId, QFileInfo(file).fileName()));
-}
-
-void MainWindow::revealMedia(const QString &mediaId) {
-    const QString path = mediaPath(mediaId);
-    if (path.isEmpty()) return;
-#if defined(Q_OS_MACOS)
-    QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), path});
-#else
-    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
-#endif
-}
-
-QMenu *MainWindow::binMenu(const QString &mediaId) {
-    auto *menu = new QMenu(this);
-    menu->setObjectName(QStringLiteral("binMenu"));
-    menu->setToolTipsVisible(true);
-    if (!mediaId.isEmpty()) {
-        QAction *open = menu->addAction(QStringLiteral("Open in Source Monitor"));
-        open->setObjectName(QStringLiteral("binOpen"));
-        connect(open, &QAction::triggered, this, [this, mediaId] { openSource(mediaId); });
-        menu->addSeparator();
-        QAction *replace = menu->addAction(QStringLiteral("Replace Media…"));
-        replace->setObjectName(QStringLiteral("binReplace"));
-        replace->setEnabled(m_commands->isEnabled(QStringLiteral("media.replace")));
-        replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
-                                                 : m_commands->reason(QStringLiteral("media.replace")));
-        connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
-        QAction *reveal = menu->addAction(QStringLiteral("Reveal in Finder"));
-        reveal->setObjectName(QStringLiteral("binReveal"));
-        reveal->setEnabled(QFileInfo::exists(mediaPath(mediaId)));
-        connect(reveal, &QAction::triggered, this, [this, mediaId] { revealMedia(mediaId); });
-        menu->addSeparator();
-    }
-    menu->addAction(m_commands->action(QStringLiteral("file.import")));
-    menu->addAction(m_commands->action(QStringLiteral("collab.consolidate")));
-    return menu;
-}
-
 void MainWindow::triggerCommand(const QString &requested) {
     const QString id = CommandRegistry::resolve(requested);
     if (!m_commands->isEnabled(id)) return;
@@ -3306,7 +1535,7 @@ void MainWindow::triggerCommand(const QString &requested) {
 bool MainWindow::execute(const QString &id, const QJsonObject &params) {
     const QJsonObject result = CommandRegistry::run(id, params, commandContext());
     if (result.contains(QStringLiteral("error"))) {
-        statusBar()->showMessage(result.value(QStringLiteral("error")).toString(), 4000);
+        showStatus(result.value(QStringLiteral("error")).toString(), 4000);
         return false;
     }
     return sendSimple(result.value(QStringLiteral("request")).toObject());
@@ -3363,101 +1592,9 @@ QJsonObject MainWindow::commandContext() const {
 void MainWindow::updateCommandStates() {
     if (!m_commands) return;
     m_commands->update(commandContext());
-    PlayerOverlay *overlay = m_viewer->overlay();
-    overlay->setControlEnabled(PlayerOverlay::Control::Play, m_commands->isEnabled(QStringLiteral("playback.toggle")));
-    overlay->setControlEnabled(PlayerOverlay::Control::StepBack, m_commands->isEnabled(QStringLiteral("playback.previousFrame")));
-    overlay->setControlEnabled(PlayerOverlay::Control::StepForward, m_commands->isEnabled(QStringLiteral("playback.nextFrame")));
-}
-
-namespace {
-
-QString overlayCommand(PlayerOverlay::Control control) {
-    switch (control) {
-    case PlayerOverlay::Control::StepBack: return QStringLiteral("playback.previousFrame");
-    case PlayerOverlay::Control::StepForward: return QStringLiteral("playback.nextFrame");
-    case PlayerOverlay::Control::Play: break;
-    }
-    return QStringLiteral("playback.toggle");
-}
-
-} // namespace
-
-void MainWindow::setupPlayerOverlay() {
-    // Each control runs a playback command, as the keys do; updateTransport
-    // names it with the command's shortcut.
-    PlayerOverlay *overlay = m_viewer->overlay();
-    connect(overlay, &PlayerOverlay::controlTriggered, this,
-            [this](PlayerOverlay::Control control) { triggerCommand(overlayCommand(control)); });
-    connect(overlay, &PlayerOverlay::seekRequested, this, [this](double fraction) {
-        if (m_duration <= 0.0) return;
-        queueSeek(fraction * m_duration);
-    });
-}
-
-void MainWindow::updateProgramLevel() {
-    VuMeter *meter = m_rail ? m_rail->meter() : nullptr;
-    if (!meter) return;
-    // Paused, nothing sounds, whatever lies under the playhead.
-    meter->setPlaying(m_playing);
-    meter->setTarget(m_playing ? vuNeedle(programPeak(m_project, m_artwork, m_playhead)) : 0.0);
-}
-
-void MainWindow::updateTransport() {
-    // Every clock tick, play and pause, seek and new snapshot comes here.
-    updateProgramLevel();
-    PlayerOverlay *overlay = m_viewer ? m_viewer->overlay() : nullptr;
-    if (!overlay) return;
-    overlay->setTime(m_playhead, m_duration, m_fps);
-    overlay->setPlaying(m_playing);
-    if (!m_commands) return;
-    for (const PlayerOverlay::Control control :
-         {PlayerOverlay::Control::Play, PlayerOverlay::Control::StepBack, PlayerOverlay::Control::StepForward}) {
-        const QString command = overlayCommand(control);
-        overlay->setControlTip(control, control == PlayerOverlay::Control::Play
-                                            ? m_commands->labelWithShortcut(command, m_playing ? QStringLiteral("Pause") : QStringLiteral("Play"))
-                                            : m_commands->labelWithShortcut(command));
-    }
-}
-
-void MainWindow::stepFrames(int frames) {
-    const double rate = std::max(1.0, m_fps);
-    queueSeek((std::round(m_playhead * rate) + frames) / rate);
-}
-
-void MainWindow::setupStatusBar() {
-    statusBar()->setSizeGripEnabled(false);
-    // On the left, the selection ("3 clips selected · 00:00:04:18"), or nothing.
-    m_selectionStatus = new QLabel;
-    m_selectionStatus->setObjectName(QStringLiteral("statusSelection"));
-    statusBar()->addWidget(m_selectionStatus, 1);
-    statusBar()->addPermanentWidget(m_exportProgress);
-    m_syncChip = new QToolButton;
-    m_syncChip->setObjectName(QStringLiteral("syncChip"));
-    m_syncChip->setCursor(Qt::PointingHandCursor);
-    m_syncChip->hide();
-    connect(m_syncChip, &QToolButton::clicked, this, [this] {
-        if (m_commands->isEnabled(QStringLiteral("collab.sync"))) triggerCommand(QStringLiteral("collab.sync"));
-        else if (!m_collabStatus.value(QStringLiteral("repository")).toBool()) triggerCommand(QStringLiteral("collab.publish"));
-        else statusBar()->showMessage(m_commands->reason(QStringLiteral("collab.sync")), 4000);
-    });
-    statusBar()->addPermanentWidget(m_syncChip);
-    m_statusRevision = new QLabel;
-    m_statusRevision->setObjectName(QStringLiteral("statusRevision"));
-    m_statusRevision->hide();
-    m_statusConnection = new QLabel;
-    m_statusConnection->setObjectName(QStringLiteral("statusConnection"));
-    m_statusDevice = new QLabel;
-    m_statusDevice->setObjectName(QStringLiteral("statusDevice"));
-    m_statusDevice->setToolTip(QStringLiteral("The live preview is drawn as it plays"));
-    m_statusDevice->hide();
-    statusBar()->addPermanentWidget(m_statusDevice);
-    m_statusAccount = new QLabel;
-    m_statusAccount->setObjectName(QStringLiteral("statusAccount"));
-    m_statusAccount->setToolTip(QStringLiteral("The agent's connection (Settings)"));
-    statusBar()->addPermanentWidget(m_statusAccount);
-    statusBar()->addPermanentWidget(m_statusRevision);
-    statusBar()->addPermanentWidget(m_statusConnection);
-    updateCloudStatus();
+    // A click on the picture is Play.
+    m_viewer->setPlayEnabled(m_commands->isEnabled(QStringLiteral("playback.toggle")));
+    updateComposerHint();
 }
 
 bool MainWindow::sendSimple(const QJsonObject &value) {
@@ -3500,8 +1637,15 @@ void MainWindow::flushSeek() {
 }
 
 void MainWindow::handleEvent(QJsonObject event) {
+    routeEvent(event);
+    m_bus->dispatch(event);
+}
+
+void MainWindow::routeEvent(const QJsonObject &event) {
     const QString type = event.value(QStringLiteral("type")).toString();
-    if (type == QStringLiteral("connection")) {
+    if (handleAgentEvent(event)) {
+        // Kerf's turn, in the comments panel (main_window_review.cpp).
+    } else if (type == QStringLiteral("connection")) {
         setConnection(event.value(QStringLiteral("status")).toString(), event.value(QStringLiteral("message")).toString());
     } else if (type == QStringLiteral("state")) {
         const QJsonObject snapshot = event.value(QStringLiteral("snapshot")).toObject().isEmpty()
@@ -3531,18 +1675,18 @@ void MainWindow::handleEvent(QJsonObject event) {
             showError(QStringLiteral("Could not export preset: %1").arg(file.errorString()));
             return;
         }
-        statusBar()->showMessage(QStringLiteral("Preset exported: %1").arg(QFileInfo(path).fileName()), 6000);
+        showStatus(QStringLiteral("Preset exported: %1").arg(QFileInfo(path).fileName()), 6000);
         addActivity(QStringLiteral("preset"), path);
     } else if (type == QStringLiteral("preset_inspect")) {
         showPresetBindings(event.value(QStringLiteral("path")).toString(), event.value(QStringLiteral("preset")).toObject());
     } else if (type == QStringLiteral("preset_applied")) {
-        statusBar()->showMessage(QStringLiteral("Preset proposal ready for review"), 6000);
+        showStatus(QStringLiteral("Preset proposal ready for review"), 6000);
     } else if (type == QStringLiteral("preset_library")) {
         m_presets->setLibrary(event, m_projectDirectory);
     } else if (type == QStringLiteral("preset_saved")) {
         m_savingPreset.clear();
         const QString path = event.value(QStringLiteral("path")).toString();
-        statusBar()->showMessage(QStringLiteral("Saved preset %1").arg(path), 6000);
+        showStatus(QStringLiteral("Saved preset %1").arg(path), 6000);
         addActivity(QStringLiteral("preset"), path);
         execute(QStringLiteral("preset.library"));
     } else if (type == QStringLiteral("collab") || type == QStringLiteral("collab_sync") ||
@@ -3552,60 +1696,14 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_mediaStatus = event;
         m_projectPanel->setMediaStatus(event);
         updateCommandStates();
-    } else if (type == QStringLiteral("agent")) {
-        const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
-        const QString text = event.value(QStringLiteral("text")).toString();
-        if (kind == QStringLiteral("delta")) {
-            if (m_agentText.isEmpty() || !m_agentRow) appendConversation(QStringLiteral("Kerf"), text);
-            else m_agentRow->appendText(text);
-            m_agentText += text;
-        } else if (kind == QStringLiteral("done")) {
-            if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
-            m_agentText.clear();
-            appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Response complete"));
-        } else if (kind == QStringLiteral("tool")) {
-            appendConversationNote(QStringLiteral("Tool"), text);
-            addActivity(QStringLiteral("tool"), text.left(120));
-        } else if (kind == QStringLiteral("status")) {
-            appendConversationNote(QStringLiteral("Progress"), text);
-            addActivity(QStringLiteral("status"), text.left(120));
-        } else {
-            appendConversationNote(QStringLiteral("Agent"), text);
-            addActivity(kind, text.left(120));
-        }
-    } else if (type == QStringLiteral("agent_busy")) {
-        const bool busy = event.value(QStringLiteral("busy")).toBool();
-        m_agentBusy = busy;
-        if (!m_connected) m_agentStatus->setText(QStringLiteral("Offline"));
-        else if (busy) m_agentStatus->setText(QStringLiteral("Thinking"));
-        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("Failed"));
-        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("Stopped"));
-        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("Review"));
-        else m_agentStatus->setText(QStringLiteral("Ready"));
-        m_chatInput->setEnabled(m_connected && !busy);
-        updateChatControls();
-        updateAiBar();
-        updateCommandStates();
-    } else if (type == QStringLiteral("agent_state")) {
-        const QString state = event.value(QStringLiteral("state")).toString();
-        m_agentRunState = state;
-        const QString label = state == QStringLiteral("running") ? QStringLiteral("Thinking")
-                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("Review")
-                              : state == QStringLiteral("failed") ? QStringLiteral("Failed")
-                              : state == QStringLiteral("aborted") ? QStringLiteral("Stopped")
-                              : QStringLiteral("Ready");
-        m_agentStatus->setText(m_connected ? label : QStringLiteral("Offline"));
-        updateChatStatus();
-        if (state == QStringLiteral("failed")) {
-            appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
-        }
     } else if (type == QStringLiteral("clock")) {
         if (event.value(QStringLiteral("duration")).isDouble()) m_duration = std::max(0.0, event.value(QStringLiteral("duration")).toDouble());
         if (!m_hoverSkimming && !m_pointerOwnsPlayhead) {
             m_playhead = std::clamp(event.value(QStringLiteral("position")).toDouble(), 0.0, m_duration);
             m_timeline->setPlayhead(m_playhead);
         }
-        updateTransport();
+        m_bus->setDuration(m_duration);
+        m_bus->setPlayhead(m_playhead);
         updateCommandStates();
         // An animated clip's picture moves with the playhead, and its masks
         // with it; so do the Inspector's animated values.
@@ -3613,7 +1711,7 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_inspector->setPlayhead(m_playhead);
     } else if (type == QStringLiteral("playback")) {
         m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
-        updateTransport();
+        m_bus->setPlaying(m_playing);
         if (m_playing) {
             m_hasPendingHoverSeek = false;
             m_hoverSkimming = false;
@@ -3621,74 +1719,48 @@ void MainWindow::handleEvent(QJsonObject event) {
         }
         updateCommandStates();
     } else if (type == QStringLiteral("export")) {
-        const double progress = event.value(QStringLiteral("progress")).toDouble();
-        m_exportProgress->setValue(static_cast<int>(std::clamp(progress, 0.0, 1.0) * 100.0));
+        // A job running shows its progress in the toolbar (ToolbarWiring); how
+        // it ended, for a moment.
         const QString status = event.value(QStringLiteral("status")).toString();
         const bool finished = status == QStringLiteral("ready") || status == QStringLiteral("complete") ||
                               status == QStringLiteral("completed") || status == QStringLiteral("failed") ||
                               status == QStringLiteral("cancelled") || status == QStringLiteral("canceled");
-        m_exportProgress->setVisible(!finished);
-        if (!status.isEmpty()) statusBar()->showMessage(QStringLiteral("Export %1").arg(status));
+        if (finished) showStatus(QStringLiteral("Export %1").arg(status), 6000);
         if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
     } else if (type == QStringLiteral("analysis")) {
         // Analyses effects draw from, made in the background.
         const QString message = event.value(QStringLiteral("message")).toString();
-        statusBar()->showMessage(message, 6000);
+        showStatus(message, 6000);
         addActivity(QStringLiteral("analysis"), message);
     } else if (type == QStringLiteral("preview")) {
         const QString status = event.value(QStringLiteral("status")).toString();
         const QString message = event.value(QStringLiteral("message")).toString();
         if (!status.isEmpty()) m_previewStatus = status;
-        if (m_statusDevice && !status.isEmpty()) {
-            m_statusDevice->setText(QStringLiteral("Live"));
-            m_statusDevice->setVisible(status == QStringLiteral("live"));
-        }
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
             m_previewRequired = true;
             m_viewer->clearFrame();
             const QString detail = message.isEmpty() ? QStringLiteral("Rendered preview required") : message;
-            statusBar()->setToolTip(detail);
-            statusBar()->showMessage(detail.left(112) + (detail.size() > 112 ? QStringLiteral("…") : QString()), 6000);
+            showStatus(detail, 6000);
             addActivity(QStringLiteral("preview"), message.isEmpty() ? QStringLiteral("Native preview unavailable") : message);
         } else if (status == QStringLiteral("running")) {
             m_previewRequired = true;
-            m_exportProgress->setValue(static_cast<int>(std::clamp(event.value(QStringLiteral("progress")).toDouble(), 0.0, 1.0) * 100.0));
-            m_exportProgress->show();
         } else if (status == QStringLiteral("ready")) {
             m_previewRequired = false;
-            m_exportProgress->setValue(0);
-            m_exportProgress->hide();
-            statusBar()->setToolTip(QString());
-            statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
+            showStatus(QStringLiteral("Preview ready"), 4000);
         } else if (status == QStringLiteral("live")) {
             // The compositor draws the picture as it plays; a render still
             // gives the exact preview.
             m_previewRequired = false;
-            m_exportProgress->setValue(0);
-            m_exportProgress->hide();
-            statusBar()->setToolTip(message);
-            const QString note = message.isEmpty() ? QStringLiteral("Live preview")
-                                                   : QStringLiteral("Live preview: ") + message;
-            statusBar()->showMessage(note.left(112) + (note.size() > 112 ? QStringLiteral("…") : QString()), 4000);
+            showStatus(message.isEmpty() ? QStringLiteral("Live preview") : QStringLiteral("Live preview: ") + message, 4000);
         }
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
         m_cloudMessage = event.value(QStringLiteral("message")).toString();
         updateCloudStatus();
-    } else if (type == QStringLiteral("agent_next")) {
-        showNextSteps(event.value(QStringLiteral("steps")).toArray());
-    } else if (type == QStringLiteral("effect_preview")) {
-        const int width = event.value(QStringLiteral("width")).toInt();
-        const int height = event.value(QStringLiteral("height")).toInt();
-        const QByteArray rgba = QByteArray::fromBase64(event.value(QStringLiteral("rgba")).toString().toLatin1());
-        if (width > 0 && height > 0 && rgba.size() >= qsizetype(width) * height * 4) {
-            const QImage image(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4,
-                               QImage::Format_RGBA8888);
-            m_effects->setPreview(event.value(QStringLiteral("clip")).toString(),
-                                  event.value(QStringLiteral("fx")).toString(), image.copy());
-        }
     } else if (type == QStringLiteral("caption")) {
+        // (effect_preview answers reach their regions keyed, through the bus:
+        // BinWiring for the browser, ReviewWiring for the colour chip.)
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }
     if (type == QStringLiteral("preview")) updateCommandStates();
@@ -3737,25 +1809,13 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     else if (!m_selectedClips.contains(m_selectedClip)) m_selectedClips = {m_selectedClip};
     m_timeline->setProject(m_project, m_duration, m_fps);
     m_timeline->setSelectedClips(m_selectedClips);
-    updateSelectionStatus();
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     const QSize canvasSize = resolvedCanvasSize(m_project, sources);
     m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
-    updateViewerRail();
+    // A format change lays out again at once.
+    m_shell->setAspect(m_viewer->pictureAspect());
+    m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
     syncCanvasPreset(canvasSize);
-    // The picture is always fitted to the stage: the row says so.
-    m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps  ·  Fit")
-                                .arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(m_fps, 'g', 5)));
-    m_timelineDetail->setText(QStringLiteral("%1  ·  %2")
-                                  .arg(m_trackCount == 1 ? QStringLiteral("1 track") : QStringLiteral("%1 tracks").arg(m_trackCount),
-                                       timelineTimecode(m_duration, m_fps)));
-    m_viewerDetail->setVisible(true);
-    fitPanelDetails();
-    if (m_statusRevision) {
-        m_statusRevision->setText(QStringLiteral("Revision %1").arg(m_revision));
-        m_statusRevision->show();
-    }
-    updateTransport();
     m_artwork->request(sources, m_projectDirectory);
     m_projectPanel->setSources(sources);
     if (m_sourceMonitor->isOpen()) {
@@ -3765,11 +1825,44 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
         if (!present) m_sourceMonitor->close();
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
-    m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
+    // The pinned proposal's (the version its card shows), not just the first open one.
+    m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
     m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();
+    m_bus->setDuration(m_duration);
+    m_bus->setSelection(m_selectedClips);
+    m_bus->setSnapshot(snapshot, m_project, m_fps, canvasSize);
     if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
+    applyPendingLink();
+}
+
+QStringList MainWindow::projectSlugs() const {
+    QStringList slugs;
+    for (const QString &name : {QFileInfo(m_projectDirectory).fileName(), m_projectName,
+                                m_project.value(QStringLiteral("name")).toString()})
+        if (const QString slug = links::slug(name); !slug.isEmpty() && !slugs.contains(slug)) slugs << slug;
+    return slugs;
+}
+
+void MainWindow::followLink(qint64 revision, const QString &timecode) {
+    m_linkPending = true;
+    m_linkRevision = revision;
+    m_linkTimecode = timecode;
+    applyPendingLink();
+}
+
+void MainWindow::applyPendingLink() {
+    // Only once the project is connected and its programme known (the seek
+    // is clamped to the duration).
+    if (!m_linkPending || !m_connected || m_snapshot.isEmpty()) return;
+    m_linkPending = false;
+    if (!m_linkTimecode.isEmpty()) {
+        const double seconds = review::parseTimecode(m_linkTimecode, m_fps);
+        if (std::isfinite(seconds)) queueSeek(seconds);
+    }
+    if (m_linkRevision >= 0 && quint64(m_linkRevision) != m_revision)
+        addActivity(QStringLiteral("link"), QStringLiteral("The review link is for rev %1; the project is at rev %2").arg(m_linkRevision).arg(m_revision));
 }
 
 QString MainWindow::selectedTrackType() const {
@@ -3813,435 +1906,6 @@ QSizeF MainWindow::selectedPictureSize(bool *fit) const {
     return QSizeF(resolvedCanvasSize(m_project, sources));
 }
 
-void MainWindow::updateViewerMasks() {
-    bool fit = false;
-    const QSizeF picture = m_connected ? selectedPictureSize(&fit) : QSizeF();
-    for (QAction *action : m_maskTools) action->setEnabled(!picture.isEmpty());
-    if (picture.isEmpty()) {
-        m_viewer->setMasks(QString(), QJsonArray{}, QTransform{});
-        return;
-    }
-    const QJsonObject clip = selectedClipObject();
-    const double clipTime = std::clamp(m_playhead - clip.value(QStringLiteral("timelineStart")).toDouble(), 0.0,
-                                       clip.value(QStringLiteral("duration")).toDouble());
-    const QSizeF canvas(resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray()));
-    m_viewer->setMasks(m_selectedClip, clip.value(QStringLiteral("masks")).toArray(),
-                       picturePlacement(clip, picture, fit, canvas, clipTime));
-}
-
-void MainWindow::updateInspector() {
-    const QJsonObject clip = selectedClipObject();
-    updateViewerMasks();
-    m_inspector->setPlayhead(m_playhead);
-    if (!m_connected || clip.isEmpty()) {
-        m_effects->setClip(QString(), false);
-        m_inspector->setMaskable(false);
-        m_inspector->setState(m_connected ? m_project : QJsonObject{}, {});
-        return;
-    }
-    m_effects->setClip(m_selectedClip, selectedTrackType() == QStringLiteral("video") &&
-                                           clip.value(QStringLiteral("kind")).toString() == QStringLiteral("media"));
-    // Effects on the clip may read the other picture tracks and draw the
-    // sound tracks.
-    QStringList pictureTracks;
-    QStringList soundTracks;
-    for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
-        const QJsonObject track = trackValue.toObject();
-        bool holdsClip = false;
-        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray())
-            holdsClip |= clipValue.toObject().value(QStringLiteral("id")).toString() == m_selectedClip;
-        if (track.value(QStringLiteral("type")).toString() == QStringLiteral("video") && !holdsClip)
-            pictureTracks << track.value(QStringLiteral("id")).toString();
-        if (track.value(QStringLiteral("type")).toString() == QStringLiteral("audio"))
-            soundTracks << track.value(QStringLiteral("id")).toString();
-    }
-    m_inspector->setPictureTracks(pictureTracks);
-    m_inspector->setSoundTracks(soundTracks);
-    bool fit = false;
-    m_inspector->setMaskable(!selectedPictureSize(&fit).isEmpty());
-    QStringList maskModes;
-    for (const QJsonValue &mode : m_project.value(QStringLiteral("maskModes")).toArray()) maskModes << mode.toString();
-    m_inspector->setMaskCatalog(m_project.value(QStringLiteral("maskProperties")).toArray(), maskModes);
-    m_inspector->selectMask(m_viewer->selectedMask());
-    m_inspector->setState(m_project, m_selectedClips.size() > 1 ? m_selectedClips : QStringList{m_selectedClip});
-}
-
-void MainWindow::updateProposal(const QJsonValue &value) {
-    m_proposalId.clear();
-    m_proposalBlocked = false;
-    bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
-    m_acceptButton->setEnabled(m_connected && pending);
-    m_rejectButton->setEnabled(m_connected && pending);
-    m_chat->setProposalShown(pending, pending ? value.toObject().value(QStringLiteral("proposalId")).toString() : QString());
-    if (!pending) {
-        m_chat->setProposalChanges({});
-        m_chat->setProposalSummary(QStringLiteral("No pending changes"));
-        m_proposalText.clear();
-        m_proposalDiff->clear();
-        updateAiBar();
-        return;
-    }
-    const QJsonObject proposal = value.toObject();
-    m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
-    const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
-    const QString diff = proposal.value(QStringLiteral("documentDiff")).toString();
-    // What it changes, one row each, from its script; the summary counts
-    // those rows ("Trim, remove, add a title · 3 changes"); the compact
-    // bar keeps the verbs ("Trim, remove, add a title"), and only the count
-    // where it is too narrow for them.
-    QList<ProposalChange> changes;
-    QStringList verbs;
-    for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
-        const QString text = line.trimmed();
-        if (text.isEmpty() || text.startsWith(QLatin1Char('#'))) continue;
-        const ProposalChange change = describeScriptLine(text);
-        changes.append(change);
-        const QString verb = change.description.section(QLatin1Char(' '), 0, 0).toLower();
-        const QString phrase = change.glyph == ProposalChange::Glyph::Title && verb == QStringLiteral("add") ? QStringLiteral("add a title") : verb;
-        if (!verbs.contains(phrase)) verbs << phrase;
-    }
-    const QString count = changes.size() == 1 ? QStringLiteral("1 change") : QStringLiteral("%1 changes").arg(changes.size());
-    QString verbsLine = verbs.size() <= 3 ? verbs.join(QStringLiteral(", ")) : QString();
-    if (!verbsLine.isEmpty()) verbsLine = verbsLine.left(1).toUpper() + verbsLine.mid(1);
-    const QString sentence = verbsLine.isEmpty() ? QString() : verbsLine + QStringLiteral(" · ");
-    const QString stalePart = stale ? QStringLiteral(" · stale") : QString();
-    m_chat->setProposalSummary(sentence + count + stalePart, verbsLine.isEmpty() ? count + stalePart : verbsLine + stalePart,
-                               count + stalePart);
-    m_chat->setProposalChanges(changes);
-    QString text;
-    if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
-    text += proposal.value(QStringLiteral("script")).toString();
-    text += QStringLiteral("\n") + diff;
-    m_proposalText = text;
-    showProposalText();
-    m_acceptButton->setEnabled(m_connected && !stale);
-    m_proposalBlocked = stale;
-    updateAiBar();
-}
-
-ProposalChange MainWindow::describeScriptLine(const QString &line) const {
-    // A script line as a change a reader follows: what it does, to which
-    // clip (by its name), and how much or where. Anything not known here
-    // reads as the line itself.
-    const QStringList words = scriptWords(line);
-    ProposalChange change;
-    change.description = line.left(1).toUpper() + line.mid(1);
-    if (words.isEmpty()) return change;
-    const QString verb = words.at(0);
-    // The names said, so the short description can drop their extensions.
-    QStringList names;
-    const auto clipName = [this, &names](const QString &id) {
-        const QJsonObject clip = clipObject(id);
-        const QString name = clip.value(QStringLiteral("name")).toString();
-        names << (name.isEmpty() ? id : name);
-        return names.constLast();
-    };
-    const auto clipSpan = [this](const QString &id) {
-        const QJsonObject clip = clipObject(id);
-        if (clip.isEmpty()) return QString();
-        const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-        return QStringLiteral("%1\u2009\u2013\u2009%2").arg(clockTime(start), clockTime(start + clip.value(QStringLiteral("duration")).toDouble()));
-    };
-    const auto at = [this, &words](const QString &key, int position = -1) {
-        QString value = scriptValue(words, key);
-        if (value.isEmpty() && position >= 0 && position < words.size()) value = words.at(position);
-        const double seconds = scriptSeconds(value, m_fps);
-        return std::isnan(seconds) ? value : clockTime(seconds);
-    };
-    const QString subject = words.value(1);
-    if (verb == QStringLiteral("trim") && words.size() >= 3) {
-        const bool end = words.at(2) == QStringLiteral("out");
-        change.glyph = ProposalChange::Glyph::Trim;
-        change.description = QStringLiteral("Trim %1").arg(clipName(subject));
-        // Which edge, and by how much: "end −1.5 s", "start to 0:04".
-        const QString edge = end ? QStringLiteral("end") : QStringLiteral("start");
-        const double amount = scriptSeconds(words.value(3), m_fps);
-        if (!std::isnan(amount)) change.detail = QStringLiteral("%1 %2").arg(edge, signedSeconds(amount));
-        else if (!scriptValue(words, QStringLiteral("to")).isEmpty()) change.detail = QStringLiteral("%1 to %2").arg(edge, at(QStringLiteral("to")));
-        else change.detail = edge;
-    } else if (verb == QStringLiteral("remove") || verb == QStringLiteral("delete") || verb == QStringLiteral("ripple-delete") ||
-               verb == QStringLiteral("extract")) {
-        change.glyph = ProposalChange::Glyph::Remove;
-        change.description = QStringLiteral("Remove %1").arg(clipName(subject));
-        change.detail = clipSpan(subject);
-    } else if (verb == QStringLiteral("add") && words.size() >= 2) {
-        const QString kind = words.at(1);
-        QString text = scriptValue(words, QStringLiteral("text"));
-        // Without its words in the line, the name the proposal gives it.
-        for (const QJsonValue &track : m_snapshot.value(QStringLiteral("proposalTimeline")).toObject().value(QStringLiteral("tracks")).toArray())
-            for (const QJsonValue &clip : track.toObject().value(QStringLiteral("clips")).toArray())
-                if (text.isEmpty() && clip.toObject().value(QStringLiteral("id")).toString() == words.value(2))
-                    text = clip.toObject().value(QStringLiteral("name")).toString();
-        change.glyph = kind == QStringLiteral("title") ? ProposalChange::Glyph::Title : ProposalChange::Glyph::Add;
-        change.description = !text.isEmpty() ? QStringLiteral("Add %1 “%2”").arg(kind, text) : QStringLiteral("Add a %1").arg(kind);
-        const int atWord = int(words.indexOf(QStringLiteral("at")));
-        const QString where = atWord >= 0 ? at(QString(), atWord + 1) : at(QStringLiteral("at"));
-        if (!where.isEmpty()) change.detail = QStringLiteral("at %1").arg(where);
-    } else if (verb == QStringLiteral("insert") || verb == QStringLiteral("overwrite")) {
-        change.glyph = ProposalChange::Glyph::Add;
-        const QString media = scriptValue(words, QStringLiteral("media"));
-        QString name = media;
-        for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
-            if (value.toObject().value(QStringLiteral("id")).toString() == media) name = sourceName(value.toObject());
-        names << name;
-        change.description = QStringLiteral("%1 %2").arg(verb == QStringLiteral("insert") ? QStringLiteral("Insert") : QStringLiteral("Overwrite with"), name);
-        if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("at %1").arg(at(QStringLiteral("at")));
-    } else if ((verb == QStringLiteral("move") || verb == QStringLiteral("roll") || verb == QStringLiteral("slide") ||
-                verb == QStringLiteral("slip")) && words.size() >= 2) {
-        change.glyph = ProposalChange::Glyph::Move;
-        change.description = QStringLiteral("%1 %2").arg(verb.left(1).toUpper() + verb.mid(1), clipName(subject));
-        const double amount = scriptSeconds(words.value(2), m_fps);
-        if (!std::isnan(amount)) change.detail = signedSeconds(amount);
-        else if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("to %1").arg(at(QStringLiteral("at")));
-        else if (!scriptValue(words, QStringLiteral("to")).isEmpty()) change.detail = QStringLiteral("to %1").arg(at(QStringLiteral("to")));
-    } else if (verb == QStringLiteral("split") && words.size() >= 2) {
-        change.glyph = ProposalChange::Glyph::Split;
-        change.description = QStringLiteral("Split %1").arg(clipName(subject));
-        if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("at %1").arg(at(QStringLiteral("at")));
-    } else if (verb == QStringLiteral("set") && words.size() >= 3) {
-        QStringList keys;
-        for (const QString &word : words.mid(2)) keys << word.section(QLatin1Char('='), 0, 0);
-        const QString gain = scriptValue(words, QStringLiteral("gain"));
-        if (!gain.isEmpty() || keys.contains(QStringLiteral("volume"))) {
-            change.glyph = ProposalChange::Glyph::Level;
-            change.description = QStringLiteral("Change %1’s level").arg(clipName(subject));
-            bool ok = false;
-            const double db = gain.toDouble(&ok);
-            if (ok) change.detail = QStringLiteral("%1%2 dB").arg(db < 0 ? QStringLiteral("\u2212") : QString(), QString::number(std::abs(db), 'g', 3));
-        } else {
-            change.glyph = ProposalChange::Glyph::Other;
-            change.description = QStringLiteral("Change %1’s %2").arg(clipName(subject), keys.join(QStringLiteral(", ")));
-        }
-    } else if (verb == QStringLiteral("fx") && words.size() >= 3) {
-        change.glyph = ProposalChange::Glyph::Effect;
-        const QString effect = words.value(3).section(QLatin1Char('.'), -1);
-        change.description = words.at(2) == QStringLiteral("add") ? QStringLiteral("Add %1 to %2").arg(effect, clipName(subject))
-                           : words.at(2) == QStringLiteral("remove") ? QStringLiteral("Remove an effect from %1").arg(clipName(subject))
-                                                                       : QStringLiteral("Change the effects on %1").arg(clipName(subject));
-    } else if (verb == QStringLiteral("mask") && words.size() >= 3) {
-        change.glyph = ProposalChange::Glyph::Effect;
-        change.description = words.at(2) == QStringLiteral("add") ? QStringLiteral("Add a mask to %1").arg(clipName(subject))
-                                                                   : QStringLiteral("Change the masks on %1").arg(clipName(subject));
-    } else if (verb == QStringLiteral("transition")) {
-        change.glyph = ProposalChange::Glyph::Add;
-        const QString kind = scriptValue(words, QStringLiteral("fx"));
-        change.description = QStringLiteral("Add a %1").arg(kind.isEmpty() ? QStringLiteral("transition") : kind.section(QLatin1Char('.'), -1));
-        const double length = scriptSeconds(scriptValue(words, QStringLiteral("dur")), m_fps);
-        if (!std::isnan(length)) change.detail = signedSeconds(length).mid(1);
-    } else if (verb == QStringLiteral("captions") && words.size() >= 2) {
-        change.glyph = ProposalChange::Glyph::Title;
-        change.description = QStringLiteral("Caption %1").arg(clipName(subject));
-    }
-    // For a narrow row: "Trim fisher-close" (the tooltip keeps the full name).
-    change.shortDescription = change.description;
-    // Only a media file's own extension goes: names from media come without
-    // one already (see sourceName), and "clip.v2" keeps its ".v2".
-    static const QStringList mediaSuffixes{
-        QStringLiteral("mov"), QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("mkv"), QStringLiteral("webm"),
-        QStringLiteral("avi"), QStringLiteral("mxf"), QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("m4a"),
-        QStringLiteral("aac"), QStringLiteral("aif"), QStringLiteral("aiff"), QStringLiteral("flac"), QStringLiteral("png"),
-        QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("gif"), QStringLiteral("tif"), QStringLiteral("tiff")};
-    for (const QString &name : std::as_const(names)) {
-        const QFileInfo file(name);
-        const QString base = file.completeBaseName();
-        if (base.isEmpty() || !mediaSuffixes.contains(file.suffix(), Qt::CaseInsensitive)) continue;
-        change.shortDescription.replace(name, base);
-    }
-    return change;
-}
-
-void MainWindow::showProposalText() {
-    // Added lines in the success green, removed ones in the error red, and
-    // the script and diff headers in secondary text.
-    const EditorTheme &theme = editorTheme();
-    m_proposalDiff->clear();
-    QTextCursor cursor(m_proposalDiff->document());
-    const QStringList lines = m_proposalText.split(QLatin1Char('\n'));
-    for (qsizetype index = 0; index < lines.size(); ++index) {
-        const QString &line = lines.at(index);
-        const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
-        QTextCharFormat format;
-        format.setForeground(!header && line.startsWith(QLatin1Char('+')) ? theme.success
-                             : !header && line.startsWith(QLatin1Char('-')) ? theme.error
-                                                                             : theme.textSecondary);
-        if (index > 0) cursor.insertBlock();
-        cursor.insertText(line, format);
-    }
-    m_proposalDiff->moveCursor(QTextCursor::Start);
-}
-
-void MainWindow::appendConversation(const QString &speaker, const QString &text) {
-    if (text.isEmpty()) return;
-    const bool user = speaker == QStringLiteral("You");
-    const bool error = speaker == QStringLiteral("Error");
-    CommentRow *row = m_chat->addComment(user ? CommentRow::Kind::User : error ? CommentRow::Kind::Error : CommentRow::Kind::Kerf, text);
-    if (user) {
-        // A new turn: Kerf's steps from now on belong to its next reply.
-        m_agentRow = nullptr;
-        m_pendingReplies.clear();
-    } else if (speaker == QStringLiteral("Kerf")) {
-        m_agentRow = row;
-        for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
-        m_pendingReplies.clear();
-    }
-    updateChatCount();
-}
-
-void MainWindow::updateChatCount() {
-    const qsizetype count = m_chat->rows().size();
-    m_rail->chatButton()->setLabel(count ? QString::number(count) : QStringLiteral("Chat"));
-}
-
-void MainWindow::updateChatTips() {
-    if (!m_commands) return;
-    const QString close = m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close Kerf Assistant"));
-    m_chat->closeButton()->setToolTip(close);
-    RailButton *rail = m_rail->chatButton();
-    rail->setToolTip(rail->isChecked() ? close
-                                       : m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Open Kerf Assistant")));
-    rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close Kerf Assistant") : QStringLiteral("Open Kerf Assistant"));
-}
-
-bool MainWindow::chatOpen() const {
-    // Open and in sight: with the Source monitor in front of the Program
-    // monitor, the conversation in its stage is out of sight, so the
-    // timeline's bar stands in for it and its switches read as closed.
-    const ads::CDockWidget *program = m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr;
-    return m_viewer && m_viewer->chatOpen() && program && !program->isClosed() && program->isCurrentTab();
-}
-
-void MainWindow::setChatOpen(bool open) {
-    m_viewer->setChatOpen(open);
-    QSettings().setValue(QStringLiteral("viewer/chatOpen"), open);
-    // It lives in the Program monitor's stage, so that comes forward with it.
-    if (ads::CDockWidget *program = open && m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr) {
-        if (program->isClosed()) program->toggleView(true);
-        program->setAsCurrentTab();
-    }
-    syncChatSwitches();
-}
-
-void MainWindow::syncChatSwitches() {
-    // The toolbar's bubble, Window ▸ Kerf Assistant and the rail's button
-    // read open only while the conversation is open and in sight.
-    const bool open = chatOpen();
-    if (m_commands) {
-        QAction *chat = m_commands->action(QStringLiteral("window.assistant"));
-        const QSignalBlocker blocker(chat);
-        chat->setChecked(open);
-    }
-    {
-        const QSignalBlocker blocker(m_rail->chatButton());
-        m_rail->chatButton()->setChecked(m_viewer->chatOpen());
-    }
-    updateChatTips();
-    updateAiBar();
-}
-
-void MainWindow::fitPanelDetails() {
-    // A title strip's details keep the width of their text when it changes
-    // after the strip was laid out (as the first snapshot's does), rather
-    // than shrinking to an ellipsis; the tabs beside them give way first.
-    for (QToolButton *button : findChildren<QToolButton *>(m_viewerDetail->objectName())) {
-        button->setMinimumWidth(button->sizeHint().width());
-        button->updateGeometry();
-    }
-}
-
-void MainWindow::setDevicePreview(DevicePreview preview) {
-    m_viewer->setDevicePreview(preview);
-    QSettings().setValue(QStringLiteral("viewer/devicePreview"), devicePreviewKey(preview));
-    updateViewerRail();
-}
-
-void MainWindow::setLaptopPreview(LaptopPreview preview) {
-    m_viewer->setLaptopPreview(preview);
-    QSettings().setValue(QStringLiteral("viewer/laptopPreview"), laptopPreviewKey(preview));
-    updateViewerRail();
-}
-
-void MainWindow::setSafeZones(bool shown) {
-    m_viewer->setSafeZones(shown);
-    QSettings().setValue(QStringLiteral("viewer/safeZones"), shown);
-    updateViewerRail();
-}
-
-void MainWindow::showDeviceMenu() {
-    // The phone's choices for a portrait picture, the laptop's for a wide one.
-    RailButton *button = m_rail->deviceButton();
-    QMenu menu(this);
-    if (m_viewer->landscape()) {
-        menu.addAction(m_laptopActions.at(0));
-        // In the rail's own menu, the plain card is plainly "Off".
-        QAction *off = menu.addAction(laptopPreviewLabel(LaptopPreview::Off));
-        off->setCheckable(true);
-        off->setChecked(m_viewer->laptopPreview() == LaptopPreview::Off);
-        connect(off, &QAction::triggered, this, [this] { setLaptopPreview(LaptopPreview::Off); });
-    } else {
-        menu.addActions(m_deviceActions);
-    }
-    menu.exec(button->mapToGlobal(QPoint(button->width() + 4, 0)));
-    updateViewerRail();
-}
-
-void MainWindow::updateViewerRail() {
-    // The phone and safe zones are a portrait picture's, the laptop a wide
-    // one's: the rail offers each only for its own.
-    const bool portrait = m_viewer->portrait();
-    const bool landscape = m_viewer->landscape();
-    const DevicePreview preview = m_viewer->devicePreview();
-    const LaptopPreview laptop = m_viewer->laptopPreview();
-    RailButton *device = m_rail->deviceButton();
-    RailButton *safe = m_rail->safeZonesButton();
-    device->setVisible(portrait || landscape);
-    safe->setVisible(portrait);
-    const bool shown = landscape ? laptop != LaptopPreview::Off : preview != DevicePreview::Off;
-    {
-        const QSignalBlocker blocker(device);
-        device->setChecked(shown);
-    }
-    device->setGlyph(landscape ? RailButton::Glyph::Laptop : RailButton::Glyph::Phone);
-    // Its name either way; off, its glyph is slashed (see RailButton).
-    device->setLabel(landscape ? QStringLiteral("Laptop") : QStringLiteral("Phone"));
-    device->setToolTip(QStringLiteral("Device preview: %1").arg(landscape ? laptopPreviewLabel(laptop) : devicePreviewLabel(preview)));
-    device->setAccessibleName(device->toolTip());
-    {
-        const QSignalBlocker blocker(safe);
-        safe->setChecked(m_viewer->safeZonesShown());
-    }
-    safe->setToolTip(m_viewer->safeZonesShown() ? QStringLiteral("Hide Safe Zones") : QStringLiteral("Show Safe Zones"));
-    safe->setAccessibleName(safe->toolTip());
-    for (QAction *action : std::as_const(m_deviceActions)) {
-        const QSignalBlocker blocker(action);
-        action->setChecked(static_cast<DevicePreview>(action->data().toInt()) == preview);
-    }
-    for (QAction *action : std::as_const(m_laptopActions)) {
-        const QSignalBlocker blocker(action);
-        action->setChecked(static_cast<LaptopPreview>(action->data().toInt()) == laptop);
-    }
-    if (m_safeZonesAction) {
-        const QSignalBlocker blocker(m_safeZonesAction);
-        m_safeZonesAction->setChecked(m_viewer->safeZonesShown());
-    }
-}
-
-void MainWindow::showActivity() {
-    QWidget *more = m_chat->moreButton();
-    m_activityPopup->adjustSize();
-    m_activityPopup->move(more->mapToGlobal(QPoint(more->width() - m_activityPopup->width(), more->height() + 4)));
-    m_activityPopup->show();
-}
-
-void MainWindow::updateChatStatus() {
-    // A quiet line after the latest comment while there is something to
-    // say: Kerf at work (its three dots and its latest step), connecting,
-    // offline, stopped or failed. Ready and in review say nothing; the
-    // pinned proposal speaks for review.
-    const QString state = m_agentStatus->text();
-    m_chat->statusRow()->setVisible(state != QStringLiteral("Ready") && state != QStringLiteral("Review"));
-    m_chatActivity->setVisible(m_agentBusy && !m_chatActivity->text().isEmpty());
-}
-
 void MainWindow::fitPreferences() {
     if (!m_preferences || !m_preferencesContent) return;
     m_preferences->ensurePolished();
@@ -4264,25 +1928,6 @@ void MainWindow::applyAppearance() {
         disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
     for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
-    if (!m_proposalText.isEmpty()) showProposalText();
-}
-
-void MainWindow::appendConversationNote(const QString &kind, const QString &text) {
-    if (text.isEmpty()) return;
-    if (kind == QStringLiteral("Agent error")) {
-        appendConversation(QStringLiteral("Error"), text);
-        return;
-    }
-    const QString detail = text.simplified();
-    // A tool's work is a reply under Kerf's comment for this turn, folded
-    // behind "▸ 2 steps"; until Kerf writes, it waits for that comment.
-    if (kind == QStringLiteral("Tool")) {
-        if (m_agentRow) m_agentRow->addReply(detail);
-        else m_pendingReplies.append(detail);
-    }
-    m_chatActivity->setText(detail);
-    m_chatActivity->setToolTip(QStringLiteral("%1 · %2").arg(kind, detail));
-    updateChatStatus();
 }
 
 void MainWindow::addActivity(const QString &kind, const QString &text) {
@@ -4299,56 +1944,87 @@ void MainWindow::addActivity(const QString &kind, const QString &text) {
 void MainWindow::showError(const QString &message) {
     m_errorMessage->setText(message);
     m_errorBanner->show();
+    // The toolbar's subtitle says so too, until it is dismissed.
+    if (!m_errorBanner->isHidden()) layoutProjectTitle();
 }
 
-void MainWindow::setConnection(const QString &status, const QString &message) {
-    const bool wasConnected = m_connected;
-    m_connected = status == QStringLiteral("ready");
-    m_connectionBanner->setVisible(!m_connected);
-    m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
-    m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
-        : QStringLiteral("Project disconnected. %1").arg(message));
-    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("Thinking") : QStringLiteral("Ready"))
-        : status == QStringLiteral("connecting") ? QStringLiteral("Connecting") : QStringLiteral("Offline"));
-    m_timeline->setEnabled(m_connected);
-    if (m_formatBank) m_formatBank->setEnabled(m_connected);
-    m_chatInput->setEnabled(m_connected && !m_agentBusy);
-    if (m_statusConnection) {
-        const QString state = m_connected ? QStringLiteral("ready")
-            : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
-        m_statusConnection->setText(state == QStringLiteral("ready") ? QStringLiteral("● Connected")
-            : state == QStringLiteral("connecting") ? QStringLiteral("● Connecting…") : QStringLiteral("● Offline"));
-        m_statusConnection->setProperty("state", state);
-        m_statusConnection->style()->unpolish(m_statusConnection);
-        m_statusConnection->style()->polish(m_statusConnection);
+bool MainWindow::runCommand(const QString &id, const QJsonObject &params) {
+    const QString command = CommandRegistry::resolve(id);
+    QAction *action = m_commands ? m_commands->action(command) : nullptr;
+    // A frontend command (a dialog, a switch, Ask) runs as its menu item does.
+    if (params.isEmpty() && action && (m_commandHandlers.contains(command) || action->isCheckable())) {
+        if (!m_commands->isEnabled(command)) return false;
+        triggerCommand(command);
+        return true;
     }
-    if (!m_connected) {
-        m_playing = false;
-        updateTransport();
-        m_hasPendingSeek = false;
-        m_hasPendingHoverSeek = false;
-        m_hoverSkimming = false;
-        m_pointerOwnsPlayhead = false;
-        m_hasShownFrame = false;
-        m_exactSeekTimer.stop();
-        m_timeline->clearSkimmer();
-        m_viewer->clearFrame();
-        m_viewer->setCaption(QString());
-    } else if (!wasConnected) {
-        addActivity(QStringLiteral("system"), QStringLiteral("Project connected"));
+    return execute(command, params);
+}
+
+void MainWindow::applyTray() {
+    // The regions hear it and apply theirs: the Inspector's wheels in Finish,
+    // the Inspector column's page.
+    const StageShell::Tray tray = m_shell->tray();
+    m_bus->setWorkspace(tray == StageShell::Tray::Finish ? QStringLiteral("Finish")
+                        : tray == StageShell::Tray::Deliver ? QStringLiteral("Deliver")
+                                                            : QStringLiteral("Review"),
+                        /*reapplied=*/true);
+    syncPanelCommands();
+    settleFocus();
+}
+
+void MainWindow::settleFocus() {
+    // A sheet or tray that held the keys may have closed, the timeline may
+    // just have come back from being disabled, or none held them yet; Qt hands
+    // the keys on as if Tab were pressed, to whichever control comes next. The
+    // timeline's keys only work from the timeline, so they go there, unless
+    // someone is typing or working in a sheet or tray. This window's own focus
+    // child: a menu or dialog over it keeps its own.
+    if (!m_timeline || !m_timeline->isEnabled()) return;
+    QWidget *holder = focusWidget();
+    if (holder) {
+        if (holder == m_timeline || qobject_cast<QAbstractSpinBox *>(holder) || qobject_cast<QLineEdit *>(holder)) return;
+        if (const auto *text = qobject_cast<QPlainTextEdit *>(holder); text && !text->isReadOnly()) return;
+        if (const auto *text = qobject_cast<QTextEdit *>(holder); text && !text->isReadOnly()) return;
+        if (m_shell && m_shell->holdsOpen(holder)) return;
     }
-    updateInspector();
-    updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
-    updateChatControls();
-    if (m_presets) m_presets->setConnected(m_connected);
-    updateCommandStates();
-    if (m_connected && !wasConnected) startSession();
-    QTimer::singleShot(0, this, [this] {
-        if (m_timelineScroll && m_timeline && m_timelineScroll->viewport()->width() > 0) {
-            m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
-            m_timelineScroll->horizontalScrollBar()->setValue(0);
+    m_timeline->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::uncoverComposer() {
+    // At wide formats a sheet and a tray lie over the composer.
+    const QWidget *composer = m_chat->composer();
+    const QRect rect(composer->mapTo(m_shell, QPoint(0, 0)), composer->size());
+    const auto covers = [&rect](const QWidget *over) { return over && over->isVisible() && over->geometry().intersects(rect); };
+    if (covers(m_shell->widgetOf(m_shell->sheet()))) m_shell->setSheet(StageShell::Sheet::None);
+    if (covers(m_shell->widgetOf(m_shell->tray()))) m_shell->setTray(StageShell::Tray::None);
+}
+
+void MainWindow::syncPanelCommands() {
+    if (!m_commands || !m_shell) return;
+    const StageShell::Sheet sheet = m_shell->sheet();
+    const StageShell::Tray tray = m_shell->tray();
+    const bool inspector = sheet == StageShell::Sheet::Inspector;
+    const bool browser = sheet == StageShell::Sheet::Browser;
+    const bool presets = browser && m_browserPanel->page() == BrowserPanel::Page::Presets;
+    const bool source = inspector && m_inspectorColumn->page() == InspectorColumn::Page::Source;
+    const QList<QPair<QString, bool>> states{
+        {QStringLiteral("window.project"), sheet == StageShell::Sheet::Media},
+        {QStringLiteral("window.inspector"), inspector && !source},
+        {QStringLiteral("window.source"), source},
+        {QStringLiteral("window.effects"), browser && !presets},
+        {QStringLiteral("window.presets"), presets},
+        {QStringLiteral("inspector.video"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Video},
+        {QStringLiteral("inspector.audio"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Audio},
+        {QStringLiteral("inspector.info"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Info},
+        {QStringLiteral("workspace.review"), tray == StageShell::Tray::None},
+        {QStringLiteral("workspace.finish"), tray == StageShell::Tray::Finish},
+        {QStringLiteral("workspace.deliver"), tray == StageShell::Tray::Deliver},
+    };
+    for (const auto &[id, checked] : states)
+        if (QAction *action = m_commands->action(id)) {
+            const QSignalBlocker blocker(action);
+            action->setChecked(checked);
         }
-    });
 }
 
 } // namespace kerf

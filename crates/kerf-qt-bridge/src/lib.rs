@@ -1,8 +1,16 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in kerfd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
+mod analysis;
 mod collab;
+mod looks;
 mod media;
+mod meter;
+mod paperwork;
 mod presets;
+mod previews;
+mod qc;
+mod queue;
+mod review;
 mod tasks;
 #[cfg(test)]
 mod tests_support;
@@ -14,8 +22,8 @@ use kerf_agent::{
 use kerf_mcp::inbound;
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::{
-    AudioInfo, Catalog, Clip, Content, Effect, Engine, FxKind, Id, Media, Project, Ratio, Sequence,
-    Time, Track, TrackKind, VideoInfo,
+    AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
+    VideoInfo,
 };
 use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
@@ -55,7 +63,22 @@ struct AgentSettings {
 enum Command {
     Refresh,
     Reconnect,
-    Preview,
+    /// Render a preview of the program, or of what the pending proposal
+    /// `proposalId` would make of it, over `start`..`start + duration` when
+    /// given, and play it in place of the program.
+    Preview {
+        #[serde(rename = "proposalId", default)]
+        proposal_id: Option<String>,
+        #[serde(default)]
+        start: Option<f64>,
+        #[serde(default)]
+        duration: Option<f64>,
+    },
+    /// Stop the preview render running: `preview{status:"stopped"}`.
+    PreviewStop,
+    /// Stop any preview render and play the program again:
+    /// `preview{status:"exited"}`, then `viewer_reset`.
+    PreviewExit,
     Import {
         path: String,
     },
@@ -85,6 +108,10 @@ enum Command {
         /// The clip, range, or playhead the request is about.
         #[serde(default)]
         focus: Option<kerf_agent::Focus>,
+        /// Keep the turn in the review log: the request as the person's
+        /// comment, and Kerf's answer as a reply.
+        #[serde(default)]
+        comment: Option<review::TurnComment>,
         #[serde(flatten)]
         settings: AgentSettings,
     },
@@ -101,8 +128,45 @@ enum Command {
     Volume {
         value: f32,
     },
-    Export {
-        quality: String,
+    /// Queue a render: `export {status: queued, jobId, …}`, then its
+    /// turn on the render queue's thread.
+    Export(queue::ExportRequest),
+    /// Take a queued render out of the queue, or stop the one rendering.
+    ExportCancel {
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    /// The render jobs kerfd keeps: `render_queue`.
+    RenderQueue,
+    /// The review log as a CSV sheet, EDL locators, or sequence markers.
+    ExportComments(paperwork::CommentsRequest),
+    /// The captions as SRT or WebVTT.
+    ExportCaptions(paperwork::CaptionsRequest),
+    /// The programme measured to EBU R128: `loudness`.
+    Loudness {
+        #[serde(default)]
+        sequence: Option<String>,
+    },
+    /// What the media files say of themselves: `media_info`.
+    MediaInfo {
+        #[serde(default)]
+        media: Option<String>,
+    },
+    /// Where a media file cuts, pauses and is loudest: `media_index`.
+    MediaIndex {
+        media: String,
+    },
+    /// Keep a clip's picture effects as an effects preset: `look_saved`.
+    LookSave {
+        clip: String,
+        name: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Put an effects preset on a clip, as one edit.
+    LookApply {
+        clip: String,
+        path: String,
     },
     PresetExport {
         path: String,
@@ -172,14 +236,28 @@ enum Command {
     /// workers only.
     #[serde(skip)]
     Reload,
-    /// How `effects` would look added to `clip`, on its picture at sequence
-    /// time `at`: an `effect_preview` event per raster effect, `width`
-    /// pixels wide. A newer request supersedes it.
-    EffectPreviews {
-        clip: String,
-        at: f64,
-        effects: Vec<String>,
-        width: u32,
+    /// How `effects` would look on `clip`, on its picture at sequence time
+    /// `at`, or a generator alone on black: an `effect_preview` event per
+    /// entry that has a picture, `width` pixels wide. A newer request
+    /// supersedes it.
+    EffectPreviews(previews::Request),
+    /// The review log's comments: `comments`.
+    CommentList,
+    /// Add a note by the person using the editor: `comments`.
+    CommentAdd(review::AddRequest),
+    /// Resolve, reopen, edit, tag or delete a note: `comments`.
+    CommentSet(review::SetRequest),
+    /// Kerf's QC pass, its failing findings kept as `qc` comments:
+    /// `check`.
+    Check {
+        #[serde(default)]
+        sequence: Option<String>,
+    },
+    /// Hear only these audio tracks; empty hears them all. Monitoring
+    /// only: the project never changes.
+    Solo {
+        #[serde(default)]
+        tracks: Vec<String>,
     },
     /// Keep a Kerf Cloud token and read its account.
     CloudSignIn {
@@ -189,12 +267,37 @@ enum Command {
     CloudRefresh,
 }
 
-/// What the viewer plays: the project itself, or a rendered preview of it
-/// and the file that preview plays. Both have their media paths resolved.
+/// What the viewer plays: the project itself, or a rendered preview of it,
+/// the file that preview plays, and the proposal it previews. Both have
+/// their media paths resolved.
 #[derive(Clone)]
 enum MediaProject {
     Native(Project),
-    Rendered(Project, PathBuf),
+    Rendered(Project, PathBuf, Option<String>),
+}
+
+/// One render the runtime worker hands to an export thread.
+struct RenderRequest {
+    quality: String,
+    /// Played in place of the program once rendered.
+    preview: bool,
+    proposal: Option<String>,
+    range: Option<kerf_runtime::RenderRange>,
+    sequence: Option<String>,
+}
+
+impl RenderRequest {
+    /// A `preview` or `export` event about this render.
+    fn event(&self, status: &str) -> Value {
+        let mut event = json!({
+            "type": if self.preview { "preview" } else { "export" },
+            "status": status,
+        });
+        if let Some(proposal) = &self.proposal {
+            event["proposalId"] = json!(proposal);
+        }
+        event
+    }
 }
 
 struct PendingSeek {
@@ -206,7 +309,8 @@ struct Shared {
     closed: AtomicBool,
     revision: AtomicU64,
     agent_busy: AtomicBool,
-    export_busy: AtomicBool,
+    /// A viewer preview is rendering; exports go through `renders`.
+    preview_busy: AtomicBool,
     abort: Mutex<Option<Arc<AtomicBool>>>,
     frame: Mutex<Option<PlaybackFrame>>,
     seek: Mutex<Option<PendingSeek>>,
@@ -225,6 +329,10 @@ struct Shared {
     /// The cancel marker of the preview render running, so closing the
     /// bridge stops it.
     preview_cancel: Mutex<Option<PathBuf>>,
+    /// A preview render is running, from its request to its end.
+    preview_running: AtomicBool,
+    /// `preview_stop` or `preview_exit` asked the running preview to stop.
+    preview_stopped: AtomicBool,
     /// Preview renders nothing shows any more whose files could not be
     /// removed yet: on Windows a playback worker still shutting down keeps
     /// its file open. The media worker tries them again.
@@ -232,6 +340,16 @@ struct Shared {
     /// The preview file the media worker plays, so closing the bridge can
     /// remove it even when the process exits before that worker stops.
     shown_preview: Mutex<Option<PathBuf>>,
+    /// The review log revision of the comments last sent to the editor.
+    review_seen: Mutex<Option<u64>>,
+    /// A QC check is running.
+    check_busy: AtomicBool,
+    /// Cancels the QC check running, so closing the bridge stops it.
+    check_cancel: Mutex<Option<kerf_engine::CancellationToken>>,
+    /// The render queue the export thread works through.
+    renders: queue::Queue,
+    /// Loudness, media info and media index work.
+    analysis: analysis::Analysis,
 }
 
 struct Bridge {
@@ -248,6 +366,9 @@ struct Bridge {
 struct AgentRequest {
     text: String,
     settings: AgentSettings,
+    /// The person's own words and where the turn goes in the review log,
+    /// when it is kept there.
+    note: Option<(String, review::TurnComment)>,
 }
 
 fn emit(tx: &SyncSender<Value>, value: Value) {
@@ -314,6 +435,8 @@ fn publish_snapshot(
             Ok(mut project) => {
                 media::publish_status(shared, tx, &project);
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
+                // What new media are, for the bin and the inspector.
+                analysis::media_changed(shared, tx, &project);
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
                 }
@@ -332,12 +455,39 @@ fn publish_snapshot(
     );
 }
 
-/// A pending proposal's timeline beside the current one, so the editor can
-/// show the proposal on the timeline before it is accepted.
+/// Each open proposal's timeline beside the current one, so the editor can
+/// show proposals on the timeline before they are accepted:
+/// `proposalTimelines` by proposal id (an open proposal's earlier versions
+/// too, while they were made on this revision), and `proposalTimeline` for
+/// the pending proposal. The list fields a snapshot leaves out while empty
+/// are filled in, so the editor always reads the same shape.
 fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
     if let Some(kerf_runtime::PendingProposal::Pending { script, .. }) = &state.pending_proposal {
         if let Ok(timeline) = kerf_runtime::proposal_timeline(&state.document, script) {
             snapshot["proposalTimeline"] = timeline;
+        }
+    }
+    let mut timelines = serde_json::Map::new();
+    for entry in state
+        .proposals
+        .iter()
+        .filter(|entry| entry.status == "pending")
+    {
+        let earlier = entry.versions.iter().filter(|version| {
+            version.proposal_id != entry.proposal_id && version.base_revision == state.revision
+        });
+        let scripts = std::iter::once((&entry.proposal_id, &entry.script))
+            .chain(earlier.map(|version| (&version.proposal_id, &version.script)));
+        for (id, script) in scripts {
+            if let Ok(timeline) = kerf_runtime::proposal_timeline(&state.document, script) {
+                timelines.insert(id.clone(), timeline);
+            }
+        }
+    }
+    snapshot["proposalTimelines"] = Value::Object(timelines);
+    for (field, empty) in [("proposals", json!([])), ("reviewRevision", json!(0))] {
+        if snapshot.get(field).is_none() {
+            snapshot[field] = empty;
         }
     }
     snapshot
@@ -385,8 +535,12 @@ fn connect_runtime(
     // Rebuild the viewer after a reconnect even when the canonical snapshot
     // did not change while the transport was down.
     *previous = None;
+    let review_revision = state.review_revision;
     publish(state, shared, tx, previous);
     connection_event(tx, "ready", None);
+    // The daemon may be a new one whose review counter starts again.
+    review::reset(shared);
+    let _ = review::follow(&client, review_revision, shared, tx);
     Some(client)
 }
 
@@ -412,7 +566,12 @@ fn runtime_worker(
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(active_client) = client.as_ref() {
                     match active_client.get_state() {
-                        Ok(state) => publish(state, &shared, &tx, &mut previous),
+                        Ok(state) => {
+                            let review_revision = state.review_revision;
+                            publish(state, &shared, &tx, &mut previous);
+                            // Notes MCP agents and merges write show up here.
+                            let _ = review::follow(active_client, review_revision, &shared, &tx);
+                        }
                         Err(error) if error.is_transport() => {
                             let _ = media.try_send(Command::Pause);
                             connection_event(&tx, "disconnected", Some(&error.message));
@@ -441,6 +600,76 @@ fn runtime_worker(
         };
         let operation = key();
         let force_refresh = matches!(&command, Command::Refresh);
+        // Comment commands answer with `comments`, never a state.
+        let command = match command {
+            Command::CommentList | Command::CommentAdd(_) | Command::CommentSet(_) => {
+                let (name, id, result) =
+                    review::command(command, &active_client, &directory, &shared, &tx);
+                match result {
+                    Ok(()) => {}
+                    Err(error) if error.is_transport() => {
+                        let _ = media.try_send(Command::Pause);
+                        connection_event(&tx, "disconnected", Some(&error.message));
+                        client = None;
+                    }
+                    Err(error) => review::refused(&tx, name, id.as_deref(), &error),
+                }
+                continue;
+            }
+            command => command,
+        };
+        // Render queue, paperwork files and saved looks answer with their
+        // own events, never a state.
+        let side = match command {
+            Command::Export(request) => {
+                let renders: Arc<dyn queue::Renders> = Arc::new(active_client.clone());
+                Err(("export", queue::submit(&shared, renders, &request, &tx)))
+            }
+            Command::ExportCancel { job_id } => Err((
+                "export_cancel",
+                queue::cancel(&shared, &active_client, &job_id, &tx),
+            )),
+            Command::RenderQueue => {
+                Err(("render_queue", queue::publish(&shared, &active_client, &tx)))
+            }
+            Command::ExportComments(request) if request.format != "markers" => Err((
+                "export_comments",
+                paperwork::export_comments(&active_client, &directory, &request, &tx),
+            )),
+            Command::ExportCaptions(request) => Err((
+                "export_captions",
+                paperwork::export_captions(&active_client, &directory, &request, &tx),
+            )),
+            Command::LookSave {
+                clip,
+                name,
+                replace,
+            } => Err((
+                "look_save",
+                looks::save_from(&active_client, &directory, &clip, &name, replace, &tx),
+            )),
+            command => Ok(command),
+        };
+        let command = match side {
+            Ok(command) => command,
+            Err((name, result)) => {
+                match result {
+                    Ok(()) => {}
+                    Err(error) if error.is_transport() => {
+                        let _ = media.try_send(Command::Pause);
+                        connection_event(&tx, "disconnected", Some(&error.message));
+                        client = None;
+                    }
+                    Err(error) => {
+                        queue::refused(&tx, name, &error);
+                    }
+                }
+                continue;
+            }
+        };
+        // What follows a command's state, and the command a refusal names.
+        let mut then: Option<Value> = None;
+        let mut refusal: Option<&'static str> = None;
         let result = match command {
             Command::Refresh => active_client.get_state(),
             Command::Reload => {
@@ -475,6 +704,40 @@ fn runtime_worker(
                 active_client.import_projection_request("ui", &operation, state.revision)
             }),
             Command::ProjectionRepair => active_client.repair_projection(),
+            Command::ExportComments(request) => {
+                match paperwork::markers(&active_client, &request, &tx) {
+                    Ok(Some((ops, revision, count))) => {
+                        then = Some(paperwork::markers_done(count));
+                        refusal = Some("markers");
+                        active_client.apply_ops_request("ui", &operation, ops, revision)
+                    }
+                    Ok(None) => continue,
+                    Err(error) => Err(error),
+                }
+            }
+            Command::LookApply { clip, path } => {
+                let opened = active_client
+                    .get_document(false)
+                    .and_then(|(revision, text)| {
+                        kerf_runtime::parse_document(&text).map(|project| (revision, project))
+                    });
+                match opened {
+                    Ok((revision, project)) => {
+                        match looks::apply(&directory, &project, &clip, &path) {
+                            Ok((ops, event)) => {
+                                then = Some(event);
+                                refusal = Some("look_apply");
+                                active_client.apply_ops_request("ui", &operation, ops, revision)
+                            }
+                            Err(message) => {
+                                looks::refused(&tx, "look_apply", &message);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             Command::PresetSave { name, replace } => {
                 let saved = active_client
                     .get_document(false)
@@ -579,72 +842,69 @@ fn runtime_worker(
                 // Publish the same proposal state used by the native review UI.
                 active_client.get_state()
             }
-            Command::Preview | Command::Export { .. } => {
-                let preview = matches!(command, Command::Preview);
-                let quality = match command {
-                    Command::Export { quality } => quality,
-                    _ => "preview".into(),
-                };
-                if shared.export_busy.swap(true, Ordering::SeqCst) {
-                    error(&tx, "An export is already running");
-                    continue;
-                }
-                let client = active_client.clone();
-                let tx = tx.clone();
-                let shared = shared.clone();
-                thread::spawn(move || {
-                    let revision = shared.revision.load(Ordering::SeqCst);
-                    let result = export(&client, &quality, preview, &tx, &shared);
-                    match result {
-                        Ok((output, document)) if preview => {
-                            let rendered = kerf_runtime::parse_document(&document)
-                                .ok()
-                                .and_then(|program| rendered_preview(&program, &output));
-                            let file = PathBuf::from(output);
-                            // A preview of a program edited since, or for a
-                            // closed bridge, is never shown.
-                            let shown = match (rendered, shared.project.lock()) {
-                                (Some(rendered), Ok(mut slot))
-                                    if !shared.closed.load(Ordering::SeqCst)
-                                        && shared.revision.load(Ordering::SeqCst) == revision =>
-                                {
-                                    let project = MediaProject::Rendered(rendered, file.clone());
-                                    install_project(&shared, &mut slot, project);
-                                    true
-                                }
-                                _ => false,
-                            };
-                            if !shown {
-                                discard_preview(&shared, file);
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(err) => {
-                            error(&tx, err.message);
-                            if preview {
-                                emit(
-                                    &tx,
-                                    json!({"type":"preview","status":"required","message":"Preview render failed. Retry after fixing the reported error."}),
-                                );
+            Command::Preview {
+                proposal_id,
+                start,
+                duration,
+            } => {
+                let range = match (start, duration) {
+                    (None, None) => None,
+                    (Some(start), Some(duration)) => {
+                        match kerf_runtime::RenderRange::new(start, duration) {
+                            Ok(range) => Some(range),
+                            Err(err) => {
+                                error(&tx, err.message);
+                                continue;
                             }
                         }
                     }
-                    shared.export_busy.store(false, Ordering::SeqCst);
-                });
+                    _ => {
+                        error(&tx, "A preview range needs both start and duration");
+                        continue;
+                    }
+                };
+                spawn_render(
+                    RenderRequest {
+                        quality: "preview".into(),
+                        preview: true,
+                        proposal: proposal_id,
+                        range,
+                        sequence: None,
+                    },
+                    &active_client,
+                    &tx,
+                    &shared,
+                );
                 continue;
             }
             _ => continue,
         };
         match result {
-            Ok(state) if force_refresh => publish_force(state, &shared, &tx, &mut previous),
-            Ok(state) => publish(state, &shared, &tx, &mut previous),
+            Ok(state) => {
+                let review_revision = state.review_revision;
+                if force_refresh {
+                    publish_force(state, &shared, &tx, &mut previous);
+                } else {
+                    publish(state, &shared, &tx, &mut previous);
+                }
+                if let Some(event) = then.take() {
+                    emit(&tx, event);
+                }
+                let _ = review::follow(&active_client, review_revision, &shared, &tx);
+            }
             Err(error) if error.is_transport() => {
                 let _ = media.try_send(Command::Pause);
                 connection_event(&tx, "disconnected", Some(&error.message));
                 client = None;
             }
             Err(runtime_error) => {
-                error(&tx, runtime_error.message);
+                match refusal {
+                    Some("markers") => paperwork::markers_failed(&tx, &runtime_error.message),
+                    Some(name) => {
+                        queue::refused(&tx, name, &runtime_error);
+                    }
+                    None => error(&tx, runtime_error.message),
+                }
                 if let Ok(state) = active_client.get_state() {
                     publish_force(state, &shared, &tx, &mut previous);
                 } else {
@@ -657,41 +917,124 @@ fn runtime_worker(
     }
 }
 
+/// Run the preview `request` on its own thread, one at a time. It plays
+/// once rendered, unless the program was edited, the preview stopped, or
+/// the bridge closed meanwhile.
+fn spawn_render(
+    request: RenderRequest,
+    client: &RuntimeClient,
+    tx: &SyncSender<Value>,
+    shared: &Arc<Shared>,
+) {
+    if shared.preview_busy.swap(true, Ordering::SeqCst) {
+        error(tx, "A preview is already rendering");
+        return;
+    }
+    if request.preview {
+        shared.preview_stopped.store(false, Ordering::SeqCst);
+        shared.preview_running.store(true, Ordering::SeqCst);
+    }
+    let client = client.clone();
+    let tx = tx.clone();
+    let shared = shared.clone();
+    thread::spawn(move || {
+        let revision = shared.revision.load(Ordering::SeqCst);
+        let result = export(&client, &request, &tx, &shared);
+        let stopped = request.preview && shared.preview_stopped.swap(false, Ordering::SeqCst);
+        match result {
+            Ok((output, document)) if request.preview => {
+                let rendered = kerf_runtime::parse_document(&document)
+                    .ok()
+                    .and_then(|program| {
+                        rendered_preview(&program, &output, request.range.as_ref())
+                    });
+                let file = PathBuf::from(output);
+                // A preview of a program edited since, one stopped, or one
+                // for a closed bridge, is never shown.
+                let shown = match (rendered, shared.project.lock()) {
+                    (Some(rendered), Ok(mut slot))
+                        if !stopped
+                            && !shared.closed.load(Ordering::SeqCst)
+                            && shared.revision.load(Ordering::SeqCst) == revision =>
+                    {
+                        let project = MediaProject::Rendered(
+                            rendered,
+                            file.clone(),
+                            request.proposal.clone(),
+                        );
+                        install_project(&shared, &mut slot, project);
+                        true
+                    }
+                    _ => false,
+                };
+                if !shown {
+                    discard_preview(&shared, file);
+                }
+                if stopped {
+                    emit(&tx, request.event("stopped"));
+                }
+            }
+            Ok(_) => {}
+            Err(err) if stopped && err.code == "CANCELLED" => emit(&tx, request.event("stopped")),
+            Err(err) => {
+                error(&tx, err.message);
+                if request.preview {
+                    let mut event = request.event("required");
+                    event["message"] =
+                        json!("Preview render failed. Retry after fixing the reported error.");
+                    emit(&tx, event);
+                }
+            }
+        }
+        if request.preview {
+            shared.preview_running.store(false, Ordering::SeqCst);
+        }
+        shared.preview_busy.store(false, Ordering::SeqCst);
+    });
+}
+
 /// Render the program. Returns the output path and the document rendered.
-/// Closing the bridge cancels a preview, and a preview that fails leaves no
-/// file behind.
+/// Closing the bridge or stopping the preview cancels a preview, and a
+/// preview that fails leaves no file behind.
 fn export(
     client: &RuntimeClient,
-    quality: &str,
-    preview: bool,
+    request: &RenderRequest,
     tx: &SyncSender<Value>,
     shared: &Shared,
 ) -> Result<(String, String), kerf_runtime::RuntimeError> {
-    let event_type = if preview { "preview" } else { "export" };
-    let (job, document, output) = client.start_render(quality)?;
+    let preview = request.preview;
+    let (job, document, output) = client.start_render_range(
+        &request.quality,
+        request.range.clone(),
+        request.proposal.as_deref(),
+        request.sequence.as_deref(),
+    )?;
     let cancel = kerf_runtime::render_cancel_path(client.directory(), &job.job_id);
     if preview {
+        // The viewer's render, not an output.
+        shared.renders.mark_viewer(&job.job_id);
         if let Ok(mut running) = shared.preview_cancel.lock() {
             *running = Some(cancel.clone());
         }
-        // The bridge may have closed before it could see this render.
-        if shared.closed.load(Ordering::SeqCst) {
+        // The bridge may have closed, or the preview stopped, before it
+        // could see this render.
+        if shared.closed.load(Ordering::SeqCst) || shared.preview_stopped.load(Ordering::SeqCst) {
             cancel_preview(shared);
         }
     }
-    emit(
-        tx,
-        json!({"type":event_type,"status":"running","progress":0.0}),
-    );
+    let mut running = request.event("running");
+    running["progress"] = json!(0.0);
+    emit(tx, running.clone());
     let result = kerf_runtime::run_render_job(
         client,
         &job,
         &document,
         &output,
-        quality == "preview",
+        request.quality == "preview",
         |progress| {
             // Progress is replaceable; never stall rendering behind a busy GUI.
-            let _ = tx.try_send(json!({"type":event_type,"status":"running","progress":progress}));
+            running["progress"] = json!(progress);
+            let _ = tx.try_send(running.clone());
         },
     );
     if preview {
@@ -705,10 +1048,10 @@ fn export(
         Ok(()) => {
             let path = output.to_string_lossy().into_owned();
             if !preview {
-                emit(
-                    tx,
-                    json!({"type":event_type,"status":"completed","path":path,"progress":1.0}),
-                );
+                let mut event = request.event("completed");
+                event["path"] = json!(path);
+                event["progress"] = json!(1.0);
+                emit(tx, event);
             }
             Ok((path, document))
         }
@@ -716,10 +1059,47 @@ fn export(
             if preview {
                 discard_preview(shared, output);
             }
-            emit(tx, json!({"type":event_type,"status":"failed"}));
+            if !(err.code == "CANCELLED" && shared.preview_stopped.load(Ordering::SeqCst)) {
+                emit(tx, request.event("failed"));
+            }
             Err(err)
         }
     }
+}
+
+/// `preview_stop`: stop the preview render running. With none running the
+/// answer comes at once.
+fn stop_preview(shared: &Shared, tx: &SyncSender<Value>) {
+    shared.preview_stopped.store(true, Ordering::SeqCst);
+    cancel_preview(shared);
+    if !shared.preview_running.load(Ordering::SeqCst) {
+        shared.preview_stopped.store(false, Ordering::SeqCst);
+        emit(tx, json!({"type":"preview","status":"stopped"}));
+    }
+}
+
+/// `preview_exit`: stop any preview render, and play the program again in
+/// place of a rendered preview, which the media worker announces with
+/// `viewer_reset`.
+fn exit_preview(shared: &Shared, tx: &SyncSender<Value>) {
+    if shared.preview_running.load(Ordering::SeqCst) {
+        shared.preview_stopped.store(true, Ordering::SeqCst);
+        cancel_preview(shared);
+    }
+    let showing = shared
+        .shown_preview
+        .lock()
+        .is_ok_and(|shown| shown.is_some());
+    let model = shared.model.lock().ok().and_then(|model| model.clone());
+    if let (Some(model), Ok(mut slot)) = (model, shared.project.lock()) {
+        let waiting = matches!(*slot, Some(MediaProject::Rendered(..)));
+        if showing || waiting {
+            // A preview finishing now is of the program as it was.
+            shared.revision.fetch_add(1, Ordering::SeqCst);
+            install_project(shared, &mut slot, MediaProject::Native(model));
+        }
+    }
+    emit(tx, json!({"type":"preview","status":"exited"}));
 }
 
 /// Stop the preview render running, if there is one.
@@ -734,7 +1114,7 @@ fn cancel_preview(shared: &Shared) {
 /// Put `project` in the media slot. A rendered preview it replaces there was
 /// never opened, so its file goes now.
 fn install_project(shared: &Shared, slot: &mut Option<MediaProject>, project: MediaProject) {
-    if let Some(MediaProject::Rendered(_, file)) = slot.replace(project) {
+    if let Some(MediaProject::Rendered(_, file, _)) = slot.replace(project) {
         discard_preview(shared, file);
     }
 }
@@ -757,7 +1137,7 @@ fn discard_previews(shared: &Shared) {
             None
         }
     });
-    if let Some(MediaProject::Rendered(_, file)) = waiting {
+    if let Some(MediaProject::Rendered(_, file, _)) = waiting {
         discard_preview(shared, file);
     }
 }
@@ -789,10 +1169,21 @@ fn remove_preview(file: &Path) -> bool {
     }
 }
 
-/// A project that plays a rendered preview of `program` in its place.
-fn rendered_preview(program: &Project, output: &str) -> Option<Project> {
+/// A project that plays a rendered preview of `program` in its place: all
+/// of it, or the `range` rendered, at its own place on the program.
+fn rendered_preview(
+    program: &Project,
+    output: &str,
+    range: Option<&kerf_runtime::RenderRange>,
+) -> Option<Project> {
     let sequence = program.sequences.first()?;
-    let duration = sequence.duration();
+    let (start, duration) = match range {
+        Some(range) => (
+            Time::from_seconds(range.start)?,
+            Time::from_seconds(range.duration)?,
+        ),
+        None => (Time::ZERO, sequence.duration()),
+    };
     let id = |text: &str| Id::new(text).ok();
     let media = id("preview")?;
     let clip = |name: &str| {
@@ -803,7 +1194,7 @@ fn rendered_preview(program: &Project, output: &str) -> Option<Project> {
                 source_in: Time::ZERO,
                 speed: Ratio::ONE,
             },
-            Time::ZERO,
+            start,
             duration,
         ))
     };
@@ -866,10 +1257,24 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
     let mut playing = false;
     let mut volume = 1.0_f32;
     let mut swept = Instant::now();
+    // The tracks heard alone, kept across sessions; the program's own
+    // sessions only, as a rendered preview has none of its tracks.
+    let mut solo: Vec<Id> = Vec::new();
+    let mut native = false;
+    let mut meter = meter::Meter::default();
     while !shared.closed.load(Ordering::Relaxed) {
         for command in rx.try_iter() {
             let handle = session.as_ref().map(PlaybackSession::handle);
             let result = match command {
+                Command::Solo { tracks } => {
+                    solo = tracks
+                        .iter()
+                        .filter_map(|track| Id::new(track).ok())
+                        .collect();
+                    handle
+                        .filter(|_| native)
+                        .map(|handle| handle.set_solo(solo.clone()))
+                }
                 Command::Play => {
                     playing = true;
                     handle.map(|handle| handle.play())
@@ -890,11 +1295,13 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
         }
         let project = shared.project.lock().ok().and_then(|mut slot| slot.take());
         if let Some(project) = project {
-            let (project, file) = match project {
-                MediaProject::Native(project) => (project, None),
-                MediaProject::Rendered(project, file) => (project, Some(file)),
+            // The proposal a rendered preview shows.
+            let (project, file, shown_proposal) = match project {
+                MediaProject::Native(project) => (project, None, None),
+                MediaProject::Rendered(project, file, proposal) => (project, Some(file), proposal),
             };
             let rendered = file.is_some();
+            native = !rendered;
             // Close the old session before the preview it played goes.
             drop(session.take());
             let old = shared
@@ -935,6 +1342,8 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 &tx,
                 if composited {
                     json!({"type":"preview","status":"live","message":message})
+                } else if let Some(proposal) = &shown_proposal {
+                    json!({"type":"preview","status":"ready","proposalId":proposal})
                 } else {
                     json!({"type":"preview","status":"ready"})
                 },
@@ -949,6 +1358,9 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             ) {
                 Ok(session) => {
                     let _ = session.handle().set_volume(volume);
+                    if native && !solo.is_empty() {
+                        let _ = session.handle().set_solo(solo.clone());
+                    }
                     let _ = session.handle().seek(position);
                     if playing {
                         let _ = session.handle().play();
@@ -994,7 +1406,12 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                     }
                     PlaybackEvent::Clock(clock) => {
                         position = clock.position;
-                        let _ = tx.try_send(json!({"type":"clock","position":clock.position,"duration":clock.duration}));
+                        let _ = tx.try_send(json!({
+                            "type": "clock",
+                            "position": clock.position,
+                            "duration": clock.duration,
+                            "dropped": clock.dropped,
+                        }));
                     }
                     PlaybackEvent::StateChanged(state) => {
                         playing = state == PlaybackState::Playing;
@@ -1006,12 +1423,18 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                         position = position.min(duration);
                         emit(
                             &tx,
-                            json!({"type":"clock","position":position,"duration":duration}),
+                            json!({"type":"clock","position":position,"duration":duration,"dropped":0}),
                         );
                     }
                 }
             }
         }
+        meter.tick(
+            Instant::now(),
+            playing && session.is_some(),
+            || session.as_ref().and_then(PlaybackSession::levels),
+            &tx,
+        );
         if swept.elapsed() >= Duration::from_millis(250) {
             sweep_previews(&shared);
             swept = Instant::now();
@@ -1281,6 +1704,32 @@ fn agent_worker(
         }
         emit(&tx, json!({"type":"agent_busy","busy":true}));
         emit(&tx, json!({"type":"agent_state","state":"running"}));
+        // A turn kept in the review log: the person's comment first, and
+        // the open proposals, to find the one this turn stages.
+        let mut kept = request.note.as_ref().and_then(|(prompt, comment)| {
+            let client = RuntimeClient::new(&directory).ok()?;
+            let before = client
+                .get_state()
+                .map(|state| review::open_proposals(&state))
+                .unwrap_or_default();
+            match review::Turn::begin(
+                &client,
+                review::person(&directory),
+                prompt,
+                comment.clone(),
+                &shared,
+                &tx,
+            ) {
+                Ok(turn) => Some((client, turn, before)),
+                Err(err) => {
+                    error(
+                        &tx,
+                        format!("The request was not kept as a note: {}", err.message),
+                    );
+                    None
+                }
+            }
+        });
         let result = (|| {
             if session
                 .as_ref()
@@ -1302,6 +1751,12 @@ fn agent_worker(
                             emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
                         }
                     }
+                    // The reply keeps finished tool calls and statuses as
+                    // its steps, not the planning line every turn opens.
+                    let step = matches!(
+                        event,
+                        AgentEvent::ToolCallFinished { .. } | AgentEvent::Aborted
+                    );
                     let (kind, text) = match event {
                         AgentEvent::TextDelta(text) => ("delta", text),
                         AgentEvent::ToolCallStarted { name, targets, .. } => {
@@ -1327,18 +1782,44 @@ fn agent_worker(
                             ("status", "Stopped".into())
                         }
                     };
+                    if let Some((_, turn, _)) = kept.as_mut() {
+                        if step {
+                            turn.step(&text);
+                        }
+                        match kind {
+                            "done" => turn.done(&text),
+                            "status" if text == "Stopped" => turn.stopped(),
+                            _ => {}
+                        }
+                    }
                     emit(&tx, json!({"type":"agent","kind":kind,"text":text}));
                 })
                 .map_err(|error| error.to_string())?;
             emit(&tx, json!({"type":"agent_state","state":"completed"}));
             Ok::<_, String>(())
         })();
+        let outcome = match &result {
+            Ok(()) => review::Outcome::Done(String::new()),
+            Err(err) => review::Outcome::Failed(err.clone()),
+        };
         if let Err(err) = result {
             emit(
                 &tx,
                 json!({"type":"agent_state","state":"failed","message":err}),
             );
             error(&tx, err);
+        }
+        if let Some((client, turn, before)) = kept {
+            let proposal = client
+                .get_state()
+                .ok()
+                .and_then(|state| review::staged_proposal(&before, &state));
+            if let Err(err) = turn.finish(&client, outcome, proposal, &shared, &tx) {
+                error(
+                    &tx,
+                    format!("Kerf's reply was not kept as a note: {}", err.message),
+                );
+            }
         }
         if let Ok(mut abort) = shared.abort.lock() {
             *abort = None;
@@ -1347,143 +1828,6 @@ fn agent_worker(
         emit(&tx, json!({"type":"agent_busy","busy":false}));
         let _ = commands.send(Command::Refresh);
     }
-}
-
-/// Emit how each of `effects` would look added to `clip`: its picture at
-/// sequence time `at`, `width` pixels wide, through the clip's own raster
-/// effects and then the effect, as RGBA. Graph effects have no preview.
-/// Stops when a newer request than `request` arrives.
-fn effect_previews(
-    shared: &Shared,
-    request: u64,
-    clip: &str,
-    at: f64,
-    effects: &[String],
-    width: u32,
-    tx: &SyncSender<Value>,
-) -> Result<(), String> {
-    use base64::Engine as _;
-    let project = shared
-        .model
-        .lock()
-        .map_err(|_| "the project is unavailable".to_owned())?
-        .clone()
-        .ok_or_else(|| "no project is open".to_owned())?;
-    let found = project
-        .clip(clip)
-        .ok_or_else(|| format!("no clip `{clip}`"))?;
-    let Content::Media {
-        media,
-        source_in,
-        speed,
-    } = &found.content
-    else {
-        return Ok(());
-    };
-    let Some(media) = project.media(media.as_str()) else {
-        return Ok(());
-    };
-    let Some(video) = media.video else {
-        return Ok(());
-    };
-    let at = Time::from_seconds(at)
-        .unwrap_or(Time::ZERO)
-        .clamp(found.start, found.end() - media.rate.frame_duration());
-    let clip_time = at - found.start;
-    let source = if speed.is_reverse() {
-        *source_in + speed.source_span(found.duration - clip_time)
-    } else {
-        *source_in + speed.source_span(clip_time)
-    };
-    let width = width.clamp(16, 640) & !1;
-    let height = ((u64::from(width) * u64::from(video.height) / u64::from(video.width.max(1)))
-        as u32)
-        .max(2)
-        & !1;
-    let output = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-ss"])
-        .arg(kerf_engine::program::secs(source))
-        .arg("-i")
-        .arg(&media.path)
-        .args(["-frames:v", "1", "-vf"])
-        .arg(format!("scale={width}:{height},format=rgba"))
-        .args(["-f", "rawvideo", "-"])
-        .output()
-        .map_err(|err| err.to_string())?;
-    let size = width as usize * height as usize * 4;
-    if !output.status.success() || output.stdout.len() < size {
-        return Err(format!("no picture of `{clip}` at that time"));
-    }
-    let picture = &output.stdout[..size];
-    // The clip's own raster effects, then FilmCraft's, which Kerf's
-    // renderer draws.
-    let own = |engine: Engine| -> Vec<Effect> {
-        found
-            .effects
-            .iter()
-            .filter(|effect| {
-                effect.enabled
-                    && Catalog::builtin()
-                        .fx(effect.fx.as_str())
-                        .is_some_and(|fx| fx.engine == engine)
-            })
-            .cloned()
-            .collect()
-    };
-    let (raster, kerf) = (own(Engine::Raster), own(Engine::Kerf));
-    let seed = kerf_core::raster::seed(clip);
-    for id in effects {
-        if shared.previews.load(Ordering::SeqCst) != request {
-            return Ok(());
-        }
-        let Some(fx) = Catalog::builtin().fx(id).filter(|fx| {
-            fx.kind == FxKind::Effect && matches!(fx.engine, Engine::Raster | Engine::Kerf)
-        }) else {
-            continue;
-        };
-        let previewed = Effect {
-            fx: fx.id.clone(),
-            version: fx.version,
-            enabled: true,
-            params: Default::default(),
-        };
-        let (mut stack, mut filmcraft) = (raster.clone(), kerf.clone());
-        if fx.engine == Engine::Raster {
-            stack.push(previewed);
-        } else {
-            filmcraft.push(previewed);
-        }
-        let Ok(stack) = kerf_fx::RasterStack::new(&stack, video.width, video.height, seed) else {
-            continue;
-        };
-        let mut frame = picture.to_vec();
-        stack.apply(&mut frame, width, height, clip_time, media.rate.fps());
-        let per_source = width as f32 / video.width.max(1) as f32;
-        if kerf_fx::filmcraft::instance::apply_rgba(
-            &mut frame,
-            (width as usize, height as usize),
-            &filmcraft,
-            clip_time,
-            per_source,
-            media.rate.fps(),
-        )
-        .is_err()
-        {
-            continue;
-        }
-        emit(
-            tx,
-            json!({
-                "type": "effect_preview",
-                "clip": clip,
-                "fx": id,
-                "width": width,
-                "height": height,
-                "rgba": base64::engine::general_purpose::STANDARD.encode(&frame),
-            }),
-        );
-    }
-    Ok(())
 }
 
 /// Start workers without waiting for project I/O.
@@ -1521,7 +1865,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
-        export_busy: AtomicBool::new(false),
+        preview_busy: AtomicBool::new(false),
         abort: Mutex::new(None),
         frame: Mutex::new(None),
         seek: Mutex::new(None),
@@ -1529,8 +1873,15 @@ pub unsafe extern "C" fn kerf_bridge_new(
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
         preview_cancel: Mutex::new(None),
+        preview_running: AtomicBool::new(false),
+        preview_stopped: AtomicBool::new(false),
         stale_previews: Mutex::new(Vec::new()),
         shown_preview: Mutex::new(None),
+        review_seen: Mutex::new(None),
+        check_busy: AtomicBool::new(false),
+        check_cancel: Mutex::new(None),
+        renders: queue::Queue::default(),
+        analysis: analysis::Analysis::default(),
     });
     {
         let directory = directory.clone();
@@ -1553,6 +1904,11 @@ pub unsafe extern "C" fn kerf_bridge_new(
         let tx = emit.clone();
         let shared = shared.clone();
         thread::spawn(move || media_worker(media_rx, tx, shared));
+    }
+    {
+        let tx = emit.clone();
+        let shared = shared.clone();
+        thread::spawn(move || queue::worker(shared, tx));
     }
     {
         let tx = emit.clone();
@@ -1593,6 +1949,9 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
     // one a playback worker still holds open is left for the media worker.
     cancel_preview(&bridge.shared);
     discard_previews(&bridge.shared);
+    qc::cancel(&bridge.shared);
+    bridge.shared.renders.close(&bridge.shared.directory);
+    bridge.shared.analysis.close();
     if let Ok(abort) = bridge.shared.abort.lock() {
         if let Some(abort) = &*abort {
             abort.store(true, Ordering::SeqCst);
@@ -1624,7 +1983,9 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             if !position.is_finite() || position < 0.0 {
                 return false;
             }
-            if let Ok(mut slot) = bridge.shared.seek.try_lock() {
+            // The worker holds this only to take the seek out, and a seek
+            // refused for that moment would be lost.
+            if let Ok(mut slot) = bridge.shared.seek.lock() {
                 *slot = Some(PendingSeek {
                     position,
                     exact: !scrub,
@@ -1634,7 +1995,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                 false
             }
         }
-        Command::Play | Command::Pause | Command::Volume { .. } => {
+        Command::Play | Command::Pause | Command::Volume { .. } | Command::Solo { .. } => {
             bridge.media.try_send(command).is_ok()
         }
         Command::Abort => {
@@ -1647,27 +2008,48 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                 false
             }
         }
-        Command::EffectPreviews {
-            clip,
-            at,
-            effects,
-            width,
-        } => {
-            let request = bridge.shared.previews.fetch_add(1, Ordering::SeqCst) + 1;
+        Command::EffectPreviews(request) => {
+            let generation = bridge.shared.previews.fetch_add(1, Ordering::SeqCst) + 1;
             let shared = bridge.shared.clone();
             let tx = bridge.events_tx.clone();
             thread::spawn(move || {
-                if let Err(message) =
-                    effect_previews(&shared, request, &clip, at, &effects, width, &tx)
-                {
+                if let Err(message) = previews::run(&shared, generation, &request, &tx) {
                     error(&tx, message);
                 }
             });
             true
         }
+        Command::Check { sequence } => {
+            qc::spawn(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        Command::Loudness { sequence } => {
+            analysis::loudness(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        Command::MediaInfo { media } => {
+            analysis::media_info(bridge.shared.clone(), bridge.events_tx.clone(), media);
+            true
+        }
+        Command::MediaIndex { media } => {
+            analysis::media_index(bridge.shared.clone(), bridge.events_tx.clone(), media);
+            true
+        }
         Command::CloudSignIn { .. } | Command::CloudSignOut | Command::CloudRefresh => {
             let tx = bridge.events_tx.clone();
             thread::spawn(move || cloud_status(&tx, Some(command)));
+            true
+        }
+        Command::PreviewStop => {
+            let shared = bridge.shared.clone();
+            let tx = bridge.events_tx.clone();
+            thread::spawn(move || stop_preview(&shared, &tx));
+            true
+        }
+        Command::PreviewExit => {
+            let shared = bridge.shared.clone();
+            let tx = bridge.events_tx.clone();
+            thread::spawn(move || exit_preview(&shared, &tx));
             true
         }
         Command::PresetLibrary => {
@@ -1687,18 +2069,24 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
         Command::Agent {
             text,
             focus,
+            comment,
             settings,
         } => {
             if text.trim().is_empty() || bridge.shared.agent_busy.swap(true, Ordering::SeqCst) {
                 return false;
             }
+            let note = comment.map(|comment| (text.clone(), comment));
             let text = match &focus {
                 Some(focus) => kerf_agent::focused_request(&text, focus),
                 None => text,
             };
             if bridge
                 .prompts
-                .try_send(AgentRequest { text, settings })
+                .try_send(AgentRequest {
+                    text,
+                    settings,
+                    note,
+                })
                 .is_err()
             {
                 bridge.shared.agent_busy.store(false, Ordering::SeqCst);
@@ -1847,6 +2235,16 @@ pub extern "C" fn kerf_fx_catalog() -> *mut c_char {
     owned_json(kerf_runtime::fx_catalog_json())
 }
 
+/// Everything the catalog offers, as a JSON array of `{id, kind, domain,
+/// category, name, doc, engine, params}`: picture effects and transitions
+/// as `kerf_fx_catalog` lists them, plus generators (`kind: "generator"`,
+/// such as titles) and sound effects (`domain: "audio"`). Free the result
+/// with `kerf_bridge_string_free`.
+#[no_mangle]
+pub extern "C" fn kerf_fx_catalog_all() -> *mut c_char {
+    owned_json(kerf_runtime::fx_catalog_all_json())
+}
+
 /// Why each command is unavailable in a JSON context, or null when it is
 /// available. Free the result with `kerf_bridge_string_free`.
 /// # Safety
@@ -1931,10 +2329,10 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Ker
 mod tests {
     use super::{
         cancel_preview, discard_preview, discard_previews, media_worker, preview_frame_size,
-        publish, publish_force, rendered_preview, sweep_previews, AgentSettings, Command,
+        publish, publish_force, queue, rendered_preview, sweep_previews, AgentSettings, Command,
         MediaProject, Shared,
     };
-    use kerf_runtime::{EditOp, PendingProposal, ProposalFreshness, StateSnapshot};
+    use kerf_runtime::{EditOp, PendingProposal, ProposalEntry, ProposalFreshness, StateSnapshot};
     use serde_json::json;
     use std::path::Path;
     use std::sync::atomic::Ordering;
@@ -1957,7 +2355,10 @@ mod tests {
         .unwrap()
     }
 
-    fn snapshot(document: &str, pending_proposal: Option<PendingProposal>) -> StateSnapshot {
+    pub(crate) fn snapshot(
+        document: &str,
+        pending_proposal: Option<PendingProposal>,
+    ) -> StateSnapshot {
         StateSnapshot {
             document: document.to_owned(),
             timeline: json!({}),
@@ -1969,6 +2370,9 @@ mod tests {
             source_version: 3,
             projection_status: "current".into(),
             import_warnings: Vec::new(),
+            proposals: Vec::new(),
+            review_revision: 0,
+            revision_time: None,
         }
     }
 
@@ -2257,7 +2661,7 @@ mod tests {
             kerf_playback::preview_plan(&program).mode,
             kerf_core::preview::PreviewMode::Composited
         );
-        let rendered = rendered_preview(&program, "/renders/preview.mp4").unwrap();
+        let rendered = rendered_preview(&program, "/renders/preview.mp4", None).unwrap();
         assert!(kerf_model::validate::errors(&rendered, kerf_model::Catalog::builtin()).is_empty());
         assert_eq!(
             rendered.sequences[0].duration(),
@@ -2281,8 +2685,8 @@ mod tests {
              \x20   clip c1 media=m1 src=0f at=0f dur=60f\n",
         )
         .unwrap();
-        let project = rendered_preview(&program, file.to_str().unwrap()).unwrap();
-        MediaProject::Rendered(project, file.to_owned())
+        let project = rendered_preview(&program, file.to_str().unwrap(), None).unwrap();
+        MediaProject::Rendered(project, file.to_owned(), None)
     }
 
     #[test]
@@ -2379,5 +2783,218 @@ mod tests {
         shared.closed.store(true, Ordering::SeqCst);
         worker.join().unwrap();
         assert!(!second.exists(), "closing removes the preview it played");
+    }
+
+    #[test]
+    fn preview_and_export_commands_carry_their_new_fields() {
+        let Command::Preview {
+            proposal_id,
+            start,
+            duration,
+        } = serde_json::from_value(json!({
+            "type": "preview", "proposalId": "proposal-2", "start": 12.5, "duration": 4.0
+        }))
+        .unwrap()
+        else {
+            panic!("expected preview");
+        };
+        assert_eq!(proposal_id.as_deref(), Some("proposal-2"));
+        assert_eq!((start, duration), (Some(12.5), Some(4.0)));
+        // The plain preview the command registry sends still reads.
+        assert!(matches!(
+            serde_json::from_value(json!({"type": "preview"})).unwrap(),
+            Command::Preview {
+                proposal_id: None,
+                start: None,
+                duration: None
+            }
+        ));
+        assert!(matches!(
+            serde_json::from_value(json!({"type": "preview_stop"})).unwrap(),
+            Command::PreviewStop
+        ));
+        assert!(matches!(
+            serde_json::from_value(json!({"type": "preview_exit"})).unwrap(),
+            Command::PreviewExit
+        ));
+        let Command::Export(export) = serde_json::from_value(json!({
+            "type": "export", "quality": "full", "sequence": "vertical"
+        }))
+        .unwrap() else {
+            panic!("expected export");
+        };
+        assert_eq!(export.quality, "full");
+        assert_eq!(export.sequence.as_deref(), Some("vertical"));
+        assert!(matches!(
+            serde_json::from_value(json!({"type": "export", "quality": "preview"})).unwrap(),
+            Command::Export(queue::ExportRequest { sequence: None, .. })
+        ));
+    }
+
+    #[test]
+    fn render_events_name_the_proposal_they_preview() {
+        let request = super::RenderRequest {
+            quality: "preview".into(),
+            preview: true,
+            proposal: Some("proposal-7".into()),
+            range: None,
+            sequence: None,
+        };
+        assert_eq!(
+            request.event("running"),
+            json!({"type": "preview", "status": "running", "proposalId": "proposal-7"})
+        );
+        let export = super::RenderRequest {
+            quality: "full".into(),
+            preview: false,
+            proposal: None,
+            range: None,
+            sequence: Some("s2".into()),
+        };
+        assert_eq!(
+            export.event("completed"),
+            json!({"type": "export", "status": "completed"})
+        );
+    }
+
+    #[test]
+    fn every_open_proposal_carries_its_timeline() {
+        let entry = |id: &str, script: &str, status: &str| ProposalEntry {
+            proposal_id: id.into(),
+            status: status.into(),
+            freshness: ProposalFreshness::Current,
+            base_revision: 1,
+            applied_revision: None,
+            script: script.into(),
+            source: String::new(),
+            document_diff: String::new(),
+            author: kerf_runtime::Author::kerf(),
+            version: 1,
+            supersedes: None,
+            versions: vec![kerf_runtime::ProposalVersion {
+                version: 1,
+                proposal_id: id.into(),
+                base_revision: 1,
+                script: script.into(),
+                source: String::new(),
+                document_diff: String::new(),
+            }],
+            staged: None,
+        };
+        let mut revised = entry("p2", "track add T2 video\n", "pending");
+        revised.version = 2;
+        revised.versions.insert(
+            0,
+            kerf_runtime::ProposalVersion {
+                version: 1,
+                proposal_id: "p2-v1".into(),
+                base_revision: 1,
+                script: "track add T5 video\n".into(),
+                source: String::new(),
+                document_diff: String::new(),
+            },
+        );
+        revised.versions[1].version = 2;
+        let mut state = snapshot(DOCUMENT, None);
+        state.proposals = vec![
+            revised,
+            entry("p1", "track add T1 video\n", "pending"),
+            entry("p0", "track add T0 video\n", "accepted"),
+        ];
+        let value = super::with_proposal_timeline(serde_json::to_value(&state).unwrap(), &state);
+        let timelines = value["proposalTimelines"].as_object().unwrap();
+        let mut ids: Vec<&str> = timelines.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            ["p1", "p2", "p2-v1"],
+            "open proposals and their versions only"
+        );
+        let has_track = |id: &str, track: &str| {
+            timelines[id]["tracks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value["id"] == track)
+        };
+        assert!(has_track("p2", "T2") && has_track("p2-v1", "T5") && has_track("p1", "T1"));
+        assert_eq!(value["proposals"].as_array().unwrap().len(), 3);
+
+        // A snapshot without proposals or comments still has both fields.
+        let empty = snapshot(DOCUMENT, None);
+        let value = super::with_proposal_timeline(serde_json::to_value(&empty).unwrap(), &empty);
+        assert_eq!(value["proposals"], json!([]));
+        assert_eq!(value["reviewRevision"], json!(0));
+        assert_eq!(value["proposalTimelines"], json!({}));
+    }
+
+    #[test]
+    fn a_range_preview_plays_at_its_place_on_the_program() {
+        let program = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Bridge\"\n\
+             media m1 path=\"/media/a.mov\" rate=24 dur=10s video=1920x1080\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=0f at=0f dur=120f\n",
+        )
+        .unwrap();
+        let range = kerf_runtime::RenderRange::new(2.0, 1.5).unwrap();
+        let rendered = rendered_preview(&program, "/renders/range.mp4", Some(&range)).unwrap();
+        let clip = &rendered.sequences[0].tracks[0].clips[0];
+        assert_eq!(clip.start.seconds(), 2.0);
+        assert_eq!(clip.duration.seconds(), 1.5);
+        let timeline = kerf_playback::PlaybackTimeline::from_project(&rendered).unwrap();
+        assert!(timeline.video_at(1.0).is_none());
+        assert!(timeline.video_at(2.5).is_some());
+    }
+
+    #[test]
+    fn stopping_with_no_preview_running_answers_at_once() {
+        let shared = shared();
+        let (tx, rx) = mpsc::sync_channel(4);
+        super::stop_preview(&shared, &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            json!({"type": "preview", "status": "stopped"})
+        );
+        assert!(!shared.preview_stopped.load(Ordering::SeqCst));
+
+        // With one running, the render answers once it has stopped.
+        let directory = tempfile::tempdir().unwrap();
+        let marker = kerf_runtime::render_cancel_path(directory.path(), "job-1");
+        *shared.preview_cancel.lock().unwrap() = Some(marker.clone());
+        shared.preview_running.store(true, Ordering::SeqCst);
+        super::stop_preview(&shared, &tx);
+        assert!(marker.exists(), "the render was told to stop");
+        assert!(shared.preview_stopped.load(Ordering::SeqCst));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn exiting_a_preview_plays_the_program_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = crate::tests_support::shared(directory.path());
+        let (tx, rx) = mpsc::sync_channel(4);
+        // Nothing to leave: the program keeps playing as it is.
+        super::exit_preview(&shared, &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            json!({"type": "preview", "status": "exited"})
+        );
+        assert!(shared.project.lock().unwrap().is_none());
+
+        let file = directory.path().join("render-1.mp4");
+        std::fs::write(&file, b"preview").unwrap();
+        *shared.model.lock().unwrap() = Some(project(1920, 1080));
+        *shared.project.lock().unwrap() = Some(rendered(&file));
+        let generation = shared.revision.load(Ordering::SeqCst);
+        super::exit_preview(&shared, &tx);
+        assert!(matches!(
+            *shared.project.lock().unwrap(),
+            Some(MediaProject::Native(_))
+        ));
+        assert!(!file.exists(), "the preview never played, so it goes");
+        assert!(shared.revision.load(Ordering::SeqCst) > generation);
+        assert_eq!(rx.try_recv().unwrap()["status"], "exited");
     }
 }

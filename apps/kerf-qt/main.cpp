@@ -1,12 +1,15 @@
+#include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "main_window.h"
 #include "project_launcher.h"
+#include "review_link.h"
 
 #include <QApplication>
 #include <QDir>
-#include <QFontDatabase>
 #include <QPointer>
+#include <QSettings>
+#include <QSize>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -30,32 +33,38 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
 } // namespace
 
 int main(int argc, char **argv) {
+    // A smoke run may keep its settings in a folder of its own (INI files),
+    // so a capture neither reads nor changes the user's: set before the
+    // first QSettings is made.
+    for (int i = 1; i + 1 < argc; ++i)
+        if (QString::fromUtf8(argv[i]) == QStringLiteral("--settings-dir")) {
+            QSettings::setDefaultFormat(QSettings::IniFormat);
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
+        }
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     // Windows and Linux add it after the project's name in window titles;
     // macOS titles a window with its document alone.
     QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
-    // The system's interface font (SF Pro on macOS), as the launcher uses.
-    QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    interfaceFont.setPixelSize(13);
-    interfaceFont.setWeight(QFont::Normal);
-    app.setFont(interfaceFont);
-    // Fusion, with macOS's focus, pop-up buttons and menus.
+    // The design's faces: Inter for the interface and JetBrains Mono for
+    // figures, compiled into the app.
+    kerf::loadBundledFonts();
+    app.setFont(kerf::tokens::font(kerf::tokens::body));
+    // Fusion with the design's flat metrics and focus outline.
     kerf::useEditorStyle();
-    // KERF_COLOR_SCHEME=light or dark picks one appearance for the run;
-    // otherwise the editor follows the system's light or dark appearance and
-    // its accent, live: on a change of colour scheme, and on a new
-    // application palette, which is how an accent change arrives.
-    kerf::setEditorColorScheme(kerf::environmentColorScheme());
-    kerf::followSystemAppearance();
+    // The editor is dark only; this applies its one theme.
+    kerf::applyEditorAppearance();
 
     QString project;
     QString kerfd;
     QString screenshotPath;
     bool renderPreview = false;
     int quitAfterMs = 0;
+    QSize windowSize;
+    QString workspace;
     QStringList positional;
+    QStringList links;
     for (int i = 1; i < argc; ++i) {
         const QString argument = QString::fromUtf8(argv[i]);
         if (argument == QStringLiteral("--render-preview")) {
@@ -68,6 +77,19 @@ int main(int argc, char **argv) {
             quitAfterMs = QString::fromUtf8(argv[++i]).toInt();
         } else if (argument.startsWith(QStringLiteral("--quit-after-ms="))) {
             quitAfterMs = argument.mid(16).toInt();
+        } else if (argument == QStringLiteral("--settings-dir") && i + 1 < argc) {
+            ++i; // applied before the application was made
+        } else if (argument == QStringLiteral("--window-size") && i + 1 < argc) {
+            // WxH, e.g. 1600x1000 (the design's canvas).
+            const QStringList parts = QString::fromUtf8(argv[++i]).split(QLatin1Char('x'));
+            if (parts.size() == 2) windowSize = QSize(parts.at(0).toInt(), parts.at(1).toInt());
+        } else if (argument == QStringLiteral("--workspace") && i + 1 < argc) {
+            // Review (the base state), or the tray to open over it: Finish, Deliver.
+            workspace = QString::fromUtf8(argv[++i]);
+        } else if (kerf::links::isReviewLink(argument)) {
+            // kerf://<project>/rev<N>[@TC], from a shell (macOS hands a
+            // clicked link over as a QFileOpenEvent instead).
+            links << argument;
         } else {
             positional << argument;
         }
@@ -83,6 +105,27 @@ int main(int argc, char **argv) {
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
 
+    // kerf:// review links raise (or open) their project's editor and seek.
+    QPointer<kerf::ProjectLauncher> choosing;
+    kerf::links::Router router(
+        [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {
+            // A link followed while the launcher waits stands for its choice.
+            if (choosing) choosing->reject();
+            return openEditor(directory, kerfd);
+        },
+        [] {
+            QList<kerf::MainWindow *> windows;
+            for (QWidget *widget : QApplication::topLevelWidgets())
+                if (auto *window = qobject_cast<kerf::MainWindow *>(widget); window && !window->isHidden()) windows << window;
+            return windows;
+        });
+    app.installEventFilter(&router);
+    const auto anyEditor = [] {
+        for (QWidget *widget : QApplication::topLevelWidgets())
+            if (qobject_cast<kerf::MainWindow *>(widget) && !widget->isHidden()) return true;
+        return false;
+    };
+
     // Without a project, choose one first. A smoke run shows the launcher
     // and captures it instead of waiting for a choice.
     QPointer<QWidget> shown;
@@ -91,16 +134,26 @@ int main(int argc, char **argv) {
         launcher->setAttribute(Qt::WA_DeleteOnClose);
         launcher->show();
         shown = launcher;
-    } else if (project.isEmpty()) {
+    } else if (project.isEmpty() && !links.isEmpty()) {
+        // Opened for a link: its project is the one to show.
+        for (const QString &link : std::as_const(links))
+            if (kerf::MainWindow *window = router.follow(link)) shown = window;
+        links.clear();
+    }
+    if (!shown && project.isEmpty()) {
         kerf::ProjectLauncher launcher(kerfd);
+        choosing = &launcher;
         // Closing the launcher is not the last window closing.
         app.setQuitOnLastWindowClosed(false);
-        if (launcher.exec() != QDialog::Accepted) return 0;
+        const bool chosen = launcher.exec() == QDialog::Accepted;
         app.setQuitOnLastWindowClosed(true);
-        project = launcher.chosenPath();
+        if (!chosen && !anyEditor()) return 0;
+        if (chosen) project = launcher.chosenPath();
     }
-    if (!shown) {
+    if (!shown && !project.isEmpty()) {
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        if (!workspace.isEmpty()) window->openTray(workspace);
+        if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
         if (renderPreview) {
             QTimer::singleShot(1500, window.data(), [window] {
@@ -108,6 +161,8 @@ int main(int argc, char **argv) {
             });
         }
     }
+    // Links given beside a project: followed once its editor exists.
+    for (const QString &link : std::as_const(links)) router.follow(link);
     if (smoke) {
         const int delay = quitAfterMs > 0 ? quitAfterMs : 500;
         QTimer::singleShot(delay, &app, [shown, &app, screenshotPath] {

@@ -208,6 +208,47 @@ overwrite gen=title text="Day One" dur=48f at=01:00:00:00 on=V2 y=0.3
 }
 
 #[test]
+fn track_roles_and_sync_locks_set_print_and_replay() {
+    let project = base();
+    let applied = run(
+        &project,
+        "track add V2 video role=Titles sync=off\ntrack set A1 name=\"Dialogue\" role=\"Room tone\"\ntrack set V1 sync=off",
+    );
+    let printed = print_ops(&project, Catalog::builtin(), &applied.ops);
+    assert_eq!(
+        printed,
+        "track add V2 video\n\
+         track set V2 role=titles sync=off\n\
+         track set A1 name=\"Dialogue\"\n\
+         track set A1 role=\"Room tone\"\n\
+         track set V1 sync=off\n"
+    );
+    let replayed = run(&project, &printed);
+    assert_eq!(replayed.project, applied.project);
+    let tracks = &applied.project.sequences[0].tracks;
+    assert_eq!(
+        tracks
+            .iter()
+            .map(|t| (t.id.as_str(), t.role.as_deref(), t.sync_locked))
+            .collect::<Vec<_>>(),
+        [
+            ("V1", None, false),
+            ("A1", Some("Room tone"), true),
+            ("V2", Some("titles"), false)
+        ]
+    );
+
+    // An empty role clears it.
+    let cleared = run(&applied.project, "track set A1 role=\"\" sync=on");
+    let printed = print_ops(&applied.project, Catalog::builtin(), &cleared.ops);
+    assert_eq!(printed, "track set A1 role=\"\" sync=on\n");
+    assert_eq!(cleared.project.sequences[0].tracks[1].role, None);
+    assert!(fails(&project, "track set V1 sync=sometimes")
+        .message
+        .contains("on or off"));
+}
+
+#[test]
 fn masks_are_added_changed_and_removed() {
     let project = base();
     let applied = run(

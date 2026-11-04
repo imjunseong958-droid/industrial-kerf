@@ -1,2041 +1,1801 @@
 #include "chat_panel.h"
-#include "editor_common.h"
-#include "editor_theme.h"
-#include "program_level.h"
 
-#include <QAbstractTextDocumentLayout>
+#include "components.h"
+#include "composer.h"
+#include "design_tokens.h"
+#include "icons.h"
+#include "proposal_card.h"
+
 #include <QApplication>
 #include <QClipboard>
-#include <QComboBox>
-#include <QContextMenuEvent>
+#include <QCoreApplication>
 #include <QEnterEvent>
+#include <QFontMetricsF>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
-#include <QLinearGradient>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
-#include <QRegularExpression>
-#include <QScrollArea>
 #include <QScrollBar>
-#include <QStyle>
-#include <QTextBlock>
-#include <QTextLayout>
-#include <QTextDocument>
+#include <QShortcut>
+#include <QSignalBlocker>
 #include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
-#include <QWheelEvent>
+#include <QVariantAnimation>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace kerf {
 
+using namespace tokens;
+
 namespace {
 
-// Text a label can wrap anywhere it must: a run of more than 24 characters
-// with no space (a path, a URL) gets a zero-width break every 24, so it
-// wraps inside the column instead of widening it.
-QString wrappable(const QString &text) {
-    QString out;
-    out.reserve(text.size() + text.size() / 24);
-    int run = 0;
-    for (const QChar c : text) {
-        run = c.isSpace() ? 0 : run + 1;
-        if (run > 24) {
-            out += QChar(0x200B);
-            run = 1;
-        }
-        out += c;
-    }
-    return out;
+QLabel *makeLabel(const TypeStyle &style, QRgb ink, QWidget *parent = nullptr) {
+    auto *label = new QLabel(parent);
+    label->setFont(tokens::font(style));
+    QPalette palette = label->palette();
+    palette.setColor(QPalette::WindowText, color(ink));
+    label->setPalette(palette);
+    label->setFixedHeight(style.line);
+    return label;
 }
 
-// A file name ("fisher-close.mov") read as one word: a word joiner after
-// each of its hyphens, so a line never breaks there ("fisher-" / "close.mov"
-// reads as two words). The hyphen itself stays the same glyph.
-QString keepNamesWhole(const QString &text) {
-    static const QRegularExpression name(
-        QStringLiteral("[\\w.\\-]*\\w-[\\w.\\-]*\\.(?:mov|mp4|m4v|mxf|mkv|avi|webm|wav|aif|aiff|mp3|m4a|flac|png|jpe?g|tiff?|exr|cube|srt|vtt)\\b"),
-        QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
-    QString out;
-    out.reserve(text.size() + 4);
-    qsizetype from = 0;
-    for (QRegularExpressionMatchIterator it = name.globalMatch(text); it.hasNext();) {
-        const QRegularExpressionMatch match = it.next();
-        out += text.mid(from, match.capturedStart() - from);
-        out += match.captured().replace(QLatin1Char('-'), QStringLiteral("-\u2060"));
-        from = match.capturedEnd();
-    }
-    out += text.mid(from);
-    return out;
-}
-
-// The text without the invisible breaks wrappable() and keepNamesWhole()
-// put in, as it should land on the clipboard.
-QString withoutBreakHints(QString text) {
-    text.remove(QChar(0x200B));
-    text.remove(QChar(0x2060));
-    return text;
-}
-
-// Selected comment text copies as it was written: ⌘C and the context menu's
-// Copy take the selection without the break hints, so a file name pasted
-// into Search media, Finder or a terminal still matches.
-class CleanCopy final : public QObject {
-public:
-    using QObject::QObject;
-
-protected:
-    bool eventFilter(QObject *watched, QEvent *event) override {
-        auto *body = qobject_cast<QLabel *>(watched);
-        if (!body) return false;
-        if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) {
-            if (!static_cast<QKeyEvent *>(event)->matches(QKeySequence::Copy)) return false;
-            if (event->type() == QEvent::ShortcutOverride) {
-                event->accept();
-                return true;
-            }
-            copy(body);
-            return true;
-        }
-        if (event->type() == QEvent::ContextMenu) {
-            QMenu menu(body);
-            QAction *copyAction = menu.addAction(QObject::tr("Copy"));
-            copyAction->setEnabled(body->hasSelectedText());
-            QAction *all = menu.addAction(QObject::tr("Select All"));
-            QAction *chosen = menu.exec(static_cast<QContextMenuEvent *>(event)->globalPos());
-            if (chosen == copyAction) copy(body);
-            else if (chosen == all) selectAll(body);
-            return true;
-        }
-        return false;
-    }
-
-public:
-    // The whole text selected; rich text counts its shown characters, not
-    // its markup.
-    static void selectAll(QLabel *body) {
-        QTextDocument shown;
-        if (body->textFormat() == Qt::RichText) shown.setHtml(body->text());
-        else shown.setPlainText(body->text());
-        body->setSelection(0, int(shown.characterCount()) - 1);
-    }
-
-private:
-    static void copy(const QLabel *body) {
-        if (body->hasSelectedText()) QApplication::clipboard()->setText(withoutBreakHints(body->selectedText()));
-    }
-};
-
-void copiesCleanly(QLabel *body) {
-    body->setContextMenuPolicy(Qt::DefaultContextMenu);
-    body->installEventFilter(new CleanCopy(body));
-}
-
-// A comment's text as the row shows it: wrappable, file names kept whole, on
-// 20-point lines for 14-point type, as a comments panel sets its text.
-QString bodyMarkup(const QString &text) {
-    return QStringLiteral("<div style=\"line-height:120%\">%1</div>")
-        .arg(wrappable(keepNamesWhole(text)).toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
-}
-
-// The end of the chips' row fading into the panel's surface, while the row
-// has more chips that way: clear, then the surface over kChipFadeWidth,
-// then solid under the round button that pages the row. Clicks pass
-// through it.
-class ChipFade final : public QWidget {
-public:
-    ChipFade(bool leading, QWidget *parent) : QWidget(parent), m_leading(leading) {
-        setObjectName(leading ? QStringLiteral("chipFadeLeading") : QStringLiteral("chipFadeTrailing"));
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        hide();
-    }
-    // How far its ramp runs in from its open edge; 0 covers it all, so a
-    // chip that does not fit whole is hidden rather than half shown.
-    void setRamp(int ramp) {
-        if (ramp == m_ramp) return;
-        m_ramp = ramp;
-        update();
-    }
-    int ramp() const { return m_ramp; }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        const QColor surface = editorTheme().chatSurface;
-        QColor clear = surface;
-        clear.setAlpha(0);
-        if (m_ramp <= 0) {
-            QPainter(this).fillRect(rect(), surface);
-            return;
-        }
-        const double ramp = std::clamp(double(m_ramp) / std::max(1, width()), 0.0, 1.0);
-        QLinearGradient fade(0, 0, width(), 0);
-        if (m_leading) {
-            fade.setColorAt(0, surface);
-            fade.setColorAt(1.0 - ramp, surface);
-            fade.setColorAt(1, clear);
-        } else {
-            fade.setColorAt(0, clear);
-            fade.setColorAt(ramp, surface);
-            fade.setColorAt(1, surface);
-        }
-        QPainter(this).fillRect(rect(), fade);
-    }
-
-private:
-    bool m_leading;
-    int m_ramp = ChatPanel::kChipFadeWidth;
-};
-
-// The composer's underline: a hairline at rest, two points of the accent
-// while a field in the composer has focus, as a comment field's.
-class ComposerRule final : public QWidget {
-public:
-    explicit ComposerRule(QWidget *parent = nullptr) : QWidget(parent) {
-        setObjectName(QStringLiteral("chatComposerRule"));
-        setFixedHeight(2);
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        const EditorTheme &theme = editorTheme();
-        QWidget *composer = parentWidget();
-        while (composer && composer->objectName() != QLatin1String("chatComposer")) composer = composer->parentWidget();
-        const QString state = composer ? composer->property("state").toString() : QString();
-        QPainter painter(this);
-        if (state == QLatin1String("focused")) {
-            painter.fillRect(rect(), theme.chatComposerRuleFocus);
-        } else {
-            painter.fillRect(QRect(0, height() - 1, width(), 1), theme.chatComposerRule);
-        }
-    }
-};
-
-// A pin, drawn in code: the "Pinned by Kerf" line's symbol.
-// One line of text that ends in an ellipsis where its width cuts it, as
-// the compact proposal bar's summary does beside its pills.
+// A one-line label that ends in an ellipsis where it is cut (.pt0).
 class ElidedLabel final : public QLabel {
 public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setTextFormat(Qt::PlainText); }
-    // `fallback` (shorter, "3 changes") replaces the text whole wherever the
-    // text does not fit whole, so a list is never cut mid-way.
-    void setFullText(const QString &text, const QString &fallback = QString()) {
-        m_full = text;
-        m_fallback = fallback;
-        elide();
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        elide();
-    }
-
-private:
-    void elide() {
-        const int room = std::max(0, contentsRect().width());
-        const bool fits = fontMetrics().horizontalAdvance(m_full) <= room;
-        const QString full = !m_fallback.isEmpty() && !fits ? m_fallback : m_full;
-        const QString shown = fontMetrics().elidedText(full, Qt::ElideRight, room);
-        if (shown != text()) setText(shown);
-    }
-    QString m_full;
-    QString m_fallback;
-};
-
-class PinGlyph final : public QWidget {
-public:
-    explicit PinGlyph(QWidget *parent = nullptr) : QWidget(parent) {
-        setObjectName(QStringLiteral("chatPinGlyph"));
-        setFixedSize(12, 12);
-    }
+    using QLabel::QLabel;
 
 protected:
     void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        const QColor ink = editorTheme().chatSecondary;
-        painter.setPen(QPen(ink, 1.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.setBrush(ink);
-        // A head, a collar and a needle, leaning as a pin in a board.
-        painter.translate(6, 6);
-        painter.rotate(35);
-        painter.drawRoundedRect(QRectF(-2.2, -5.5, 4.4, 5.0), 1.0, 1.0);
-        painter.drawLine(QPointF(-3.6, -0.5), QPointF(3.6, -0.5));
-        painter.drawLine(QPointF(0, -0.5), QPointF(0, 5.5));
+        QPainter p(this);
+        p.setFont(font());
+        p.setPen(palette().color(QPalette::WindowText));
+        const QFontMetricsF metrics(font());
+        const QString shown = metrics.elidedText(text(), Qt::ElideRight, width());
+        p.drawText(QPointF(0, (height() - metrics.height()) / 2 + metrics.ascent()), shown);
     }
 };
 
-// Three dots after the latest comment while Kerf works, as a typing
-// indicator, in the avatars' column.
-class TypingDots final : public QWidget {
-public:
-    explicit TypingDots(QWidget *parent = nullptr) : QWidget(parent) {
-        setObjectName(QStringLiteral("chatTyping"));
-        setFixedSize(ChatPanel::kAvatar, 18);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        if (!property("active").toBool()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(editorTheme().chatSecondary);
-        for (int dot = 0; dot < 3; ++dot) painter.drawEllipse(QPointF(width() / 2.0 + (dot - 1) * 7.0, height() / 2.0), 2.0, 2.0);
-    }
-};
-
-QPushButton *pill(const QString &text, const char *objectName, int height) {
-    auto *button = new QPushButton(text);
-    button->setObjectName(QString::fromLatin1(objectName));
-    button->setCursor(Qt::PointingHandCursor);
-    // Its focus ring follows its round ends.
-    button->setProperty("bezelRadius", height / 2);
-    return button;
+QJsonObject findClip(const QJsonObject &timeline, const QString &clipId) {
+    for (const QJsonValue &track : timeline.value(QStringLiteral("tracks")).toArray())
+        for (const QJsonValue &clip : track.toObject().value(QStringLiteral("clips")).toArray())
+            if (clip.toObject().value(QStringLiteral("id")).toString() == clipId) return clip.toObject();
+    return {};
 }
 
-QLabel *label(const QString &text, const char *objectName) {
-    auto *out = new QLabel(text);
-    out->setObjectName(QString::fromLatin1(objectName));
-    out->setTextFormat(Qt::PlainText);
+// A colour effect: what the vectorscope chip can show.
+bool isColourEffect(const QString &fx) {
+    const QString id = fx.toLower();
+    return id.startsWith(QLatin1String("color.")) || id.startsWith(QLatin1String("colour.")) || id.contains(QLatin1String("hue")) ||
+           id.contains(QLatin1String("grade")) || id.contains(QLatin1String("lut")) || id.contains(QLatin1String("look")) ||
+           id.contains(QLatin1String("curve")) || id.contains(QLatin1String("balance")) || id.contains(QLatin1String("saturation"));
+}
+
+// "color.huehue" → "Huehue", "color.white_balance" → "White balance".
+QString effectLabel(const QString &fx) {
+    QString name = fx.section(QLatin1Char('.'), -1);
+    name.replace(QLatin1Char('_'), QLatin1Char(' '));
+    return name.isEmpty() ? fx : name.left(1).toUpper() + name.mid(1);
+}
+
+// A parameter's value as the card says it: "−9", "0.5"; empty for keyframes.
+QString paramValue(const QJsonValue &value) {
+    if (value.isDouble()) {
+        const double number = value.toDouble();
+        const QString magnitude = QString::number(std::abs(number), 'g', 4);
+        return number < 0 ? QStringLiteral("−") + magnitude : magnitude;
+    }
+    if (value.isBool()) return value.toBool() ? QStringLiteral("on") : QStringLiteral("off");
+    if (value.isString()) return value.toString();
+    return {};
+}
+
+// The static parameters only (keyframed ones cannot be previewed as one value).
+QJsonObject staticParams(const QJsonObject &params) {
+    QJsonObject out;
+    for (auto it = params.begin(); it != params.end(); ++it)
+        if (!it.value().isArray() && !it.value().isObject()) out.insert(it.key(), it.value());
     return out;
 }
 
-void repolish(QWidget *widget) {
-    widget->style()->unpolish(widget);
-    widget->style()->polish(widget);
-    widget->update();
-}
+QString firstName(const QString &name) { return name.section(QLatin1Char(' '), 0, 0, QString::SectionSkipEmpty); }
 
 } // namespace
 
-// Over the list's view, passing the pointer through: strips of the
-// panel's surface where a row's cut would leave only a sliver of it.
-class EdgeCover final : public QWidget {
-public:
-    explicit EdgeCover(QWidget *parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("chatEdgeCover"));
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        setAttribute(Qt::WA_NoSystemBackground);
-        setFocusPolicy(Qt::NoFocus);
-    }
-    void setStrips(const QList<QRect> &strips) {
-        if (strips == m_strips) return;
-        m_strips = strips;
-        update();
-    }
-    QList<QRect> strips() const { return m_strips; }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        if (m_strips.isEmpty()) return;
-        QPainter painter(this);
-        for (const QRect &strip : std::as_const(m_strips)) painter.fillRect(strip, editorTheme().chatSurface);
-    }
-
-private:
-    QList<QRect> m_strips;
-};
-
-
-QString relativeTime(const QDateTime &then, const QDateTime &now) {
-    const qint64 seconds = std::max<qint64>(0, then.secsTo(now));
-    if (seconds < 60) return QStringLiteral("now");
-    if (seconds < 3600) return QStringLiteral("%1 min ago").arg(seconds / 60);
-    if (seconds < 86400) return QStringLiteral("%1 h ago").arg(seconds / 3600);
-    return then.date().toString(QStringLiteral("d MMM"));
-}
-
-// ---- ProposalChangeRow ----------------------------------------------------
-
-namespace {
-
-// A change's 16px glyph, drawn in code with a 1.5px pen in `ink`: scissors
-// for a trim, a minus in a circle for a removal, a plus for an addition, a
-// T for a title, arrows for a move, a cut line for a split, a speaker for
-// a level, a dial for an effect, a dot for anything else.
-void drawChangeGlyph(QPainter &p, const QRectF &box, ProposalChange::Glyph glyph, const QColor &ink) {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    p.translate(box.topLeft());
-    p.scale(box.width() / 16.0, box.height() / 16.0);
-    p.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    p.setBrush(Qt::NoBrush);
-    switch (glyph) {
-    case ProposalChange::Glyph::Trim:
-        p.drawEllipse(QPointF(4.5, 11.5), 2.2, 2.2);
-        p.drawEllipse(QPointF(11.5, 11.5), 2.2, 2.2);
-        p.drawLine(QPointF(5.8, 9.8), QPointF(11.5, 2.5));
-        p.drawLine(QPointF(10.2, 9.8), QPointF(4.5, 2.5));
-        break;
-    case ProposalChange::Glyph::Remove:
-        p.drawEllipse(QPointF(8, 8), 6, 6);
-        p.drawLine(QPointF(5, 8), QPointF(11, 8));
-        break;
-    case ProposalChange::Glyph::Add:
-        p.drawEllipse(QPointF(8, 8), 6, 6);
-        p.drawLine(QPointF(5, 8), QPointF(11, 8));
-        p.drawLine(QPointF(8, 5), QPointF(8, 11));
-        break;
-    case ProposalChange::Glyph::Title:
-        p.drawLine(QPointF(3, 3.5), QPointF(13, 3.5));
-        p.drawLine(QPointF(8, 3.5), QPointF(8, 13));
-        break;
-    case ProposalChange::Glyph::Move:
-        p.drawLine(QPointF(2.5, 8), QPointF(13.5, 8));
-        p.drawPolyline(QPolygonF{QPointF(5, 5.5), QPointF(2.5, 8), QPointF(5, 10.5)});
-        p.drawPolyline(QPolygonF{QPointF(11, 5.5), QPointF(13.5, 8), QPointF(11, 10.5)});
-        break;
-    case ProposalChange::Glyph::Split:
-        p.drawRoundedRect(QRectF(2, 4.5, 12, 7), 1.5, 1.5);
-        p.drawLine(QPointF(8, 2), QPointF(8, 14));
-        break;
-    case ProposalChange::Glyph::Level:
-        p.drawPolygon(QPolygonF{QPointF(2.5, 6), QPointF(5, 6), QPointF(8.5, 3), QPointF(8.5, 13), QPointF(5, 10), QPointF(2.5, 10)});
-        p.drawArc(QRectF(7, 5, 6, 6), -60 * 16, 120 * 16);
-        break;
-    case ProposalChange::Glyph::Effect:
-        p.drawEllipse(QPointF(8, 8), 5.5, 5.5);
-        p.drawLine(QPointF(8, 8), QPointF(11, 5));
-        break;
-    case ProposalChange::Glyph::Other:
-        p.setPen(Qt::NoPen);
-        p.setBrush(ink);
-        p.drawEllipse(QPointF(8, 8), 2, 2);
-        break;
-    }
-    p.restore();
-}
-
-} // namespace
-
-ProposalChangeRow::ProposalChangeRow(const ProposalChange &change, QWidget *parent) : QWidget(parent), m_change(change) {
-    setObjectName(QStringLiteral("proposalChange"));
-    if (m_change.shortDescription.isEmpty()) m_change.shortDescription = m_change.description;
-    setFixedHeight(kHeight);
-    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    setAccessibleName(change.detail.isEmpty() ? change.description : change.description + QStringLiteral(", ") + change.detail);
-}
-
-QFont ProposalChangeRow::descriptionFont() const {
-    QFont font = this->font();
-    font.setPixelSize(13);
-    return font;
-}
-
-QFont ProposalChangeRow::detailFont() const {
-    QFont font = this->font();
-    font.setPixelSize(12);
-    font.setFeature(QFont::Tag("tnum"), 1);
-    return font;
-}
-
-ProposalChangeRow::Fit ProposalChangeRow::fit(int width) const {
-    // The detail (an amount, a time) is never cut. The description beside
-    // it, whole; else with its clips' extensions dropped; else the detail
-    // takes a line of its own, and the description has the whole width.
-    const QFontMetrics words(descriptionFont());
-    const QFontMetrics detail(detailFont());
-    const int room = std::max(0, width - kTextLeft);
-    const auto wide = [&](const QString &text) { return words.horizontalAdvance(text) + 1; };
-    Fit out;
-    const QString &full = m_change.description;
-    const QString &brief = m_change.shortDescription;
-    const auto alone = [&] { return wide(full) <= room ? full : wide(brief) <= room ? brief : words.elidedText(brief, Qt::ElideRight, room); };
-    if (m_change.detail.isEmpty()) {
-        out.description = alone();
-        return out;
-    }
-    out.detailWidth = detail.horizontalAdvance(m_change.detail) + 1;
-    if (wide(full) + kDetailGap + out.detailWidth <= room) {
-        out.description = full;
-    } else if (wide(brief) + kDetailGap + out.detailWidth <= room) {
-        out.description = brief;
-    } else {
-        out.twoLines = true;
-        out.description = alone();
-    }
-    // Cut only where the detail alone is wider than the whole row.
-    out.detail = out.detailWidth <= room ? m_change.detail : detail.elidedText(m_change.detail, Qt::ElideRight, room);
-    out.detailWidth = std::min(out.detailWidth, room);
-    return out;
-}
-
-void ProposalChangeRow::updateLines() {
-    const Fit shown = fit(width());
-    setFixedHeight(shown.twoLines ? kTwoLineHeight : kHeight);
-    const bool cut = shown.description != m_change.description || shown.detail != m_change.detail;
-    setToolTip(!cut ? QString() : m_change.detail.isEmpty() ? m_change.description : m_change.description + QStringLiteral(" · ") + m_change.detail);
-}
-
-void ProposalChangeRow::resizeEvent(QResizeEvent *event) {
-    QWidget::resizeEvent(event);
-    updateLines();
-}
-
-void ProposalChangeRow::changeEvent(QEvent *event) {
-    QWidget::changeEvent(event);
-    if (event->type() == QEvent::FontChange) updateLines();
-}
-
-QRect ProposalChangeRow::glyphRect() const {
-    // On two lines the glyph stands beside the description's line.
-    const int top = twoLines() ? (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2 : (height() - kDescriptionLine) / 2;
-    return QRect(0, top + (kDescriptionLine - 16) / 2, 16, 16);
-}
-
-QRect ProposalChangeRow::detailRect() const {
-    const Fit shown = fit(width());
-    if (m_change.detail.isEmpty()) return QRect(width(), 0, 0, height());
-    if (shown.twoLines) {
-        const int top = (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2 + kDescriptionLine;
-        return QRect(kTextLeft, top, std::max(0, width() - kTextLeft), kDetailLine);
-    }
-    return QRect(width() - shown.detailWidth, 0, shown.detailWidth, height());
-}
-
-QRect ProposalChangeRow::descriptionRect() const {
-    const int left = kTextLeft;
-    if (twoLines())
-        return QRect(left, (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2, std::max(0, width() - left), kDescriptionLine);
-    return QRect(left, 0, std::max(0, detailRect().left() - kDetailGap - left), height());
-}
-
-void ProposalChangeRow::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    const Fit shown = fit(width());
-    drawChangeGlyph(painter, glyphRect(), m_change.glyph, theme.chatSecondary);
-    painter.setFont(descriptionFont());
-    painter.setPen(theme.chatText);
-    painter.drawText(descriptionRect(), Qt::AlignLeft | Qt::AlignVCenter, shown.description);
-    if (!m_change.detail.isEmpty()) {
-        painter.setFont(detailFont());
-        painter.setPen(theme.chatSecondary);
-        painter.drawText(detailRect(), (shown.twoLines ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter, shown.detail);
-    }
-}
-
-// ---- SuggestionButton -----------------------------------------------------
-
-namespace {
-
-constexpr int kSuggestionGlyph = 16;
-constexpr int kSuggestionGap = 8;
-constexpr int kSuggestionPadding = 6;
-
-QFont suggestionFont(const QFont &base) {
-    QFont font = base;
-    font.setPixelSize(13);
-    return font;
-}
-
-} // namespace
-
-SuggestionButton::SuggestionButton(const QString &text, QWidget *parent) : QAbstractButton(parent) {
-    setText(text);
-    setCursor(Qt::PointingHandCursor);
-    setFocusPolicy(Qt::TabFocus);
-    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    QSizePolicy policy = sizePolicy();
-    policy.setHeightForWidth(true);
-    setSizePolicy(policy);
-}
-
-QRect SuggestionButton::textRect() const {
-    const int left = 8 + kSuggestionGlyph + kSuggestionGap;
-    return QRect(left, kSuggestionPadding, std::max(1, width() - left - 8), std::max(1, height() - 2 * kSuggestionPadding));
-}
-
-int SuggestionButton::heightForWidth(int width) const {
-    // Its words on at most two lines, and never under 32 points.
-    const QFontMetrics metrics(suggestionFont(font()));
-    const int room = std::max(1, width - (8 + kSuggestionGlyph + kSuggestionGap) - 8);
-    const int lines = std::min(2, std::max(1, metrics.boundingRect(QRect(0, 0, room, 10000), Qt::TextWordWrap, text()).height() /
-                                                  std::max(1, metrics.lineSpacing())));
-    return std::max(32, lines * metrics.lineSpacing() + 2 * kSuggestionPadding);
-}
-
-void SuggestionButton::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    if (underMouse() || isDown()) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(isDown() ? theme.chatChipHover : theme.chatChip);
-        painter.drawRoundedRect(QRectF(rect()), 8, 8);
-    }
-    // An arrow pointing on, in secondary ink, level with the first line.
-    const QFont font = suggestionFont(this->font());
-    const QFontMetrics metrics(font);
-    const QRect words = textRect();
-    const qreal mid = words.top() + metrics.lineSpacing() / 2.0;
-    painter.setPen(QPen(theme.chatSecondary, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    const qreal x = 8;
-    painter.drawLine(QPointF(x + 3, mid), QPointF(x + 13, mid));
-    painter.drawPolyline(QPolygonF{QPointF(x + 9, mid - 4), QPointF(x + 13, mid), QPointF(x + 9, mid + 4)});
-    // The words, two lines at most, the second ending in an ellipsis if
-    // they run on.
-    painter.setFont(font);
-    painter.setPen(theme.chatText);
-    QTextLayout layout(text(), font);
-    QTextOption option;
-    option.setWrapMode(QTextOption::WordWrap);
-    layout.setTextOption(option);
-    layout.beginLayout();
-    QStringList lines;
-    for (int line = 0; line < 2; ++line) {
-        QTextLine textLine = layout.createLine();
-        if (!textLine.isValid()) break;
-        textLine.setLineWidth(words.width());
-        lines << text().mid(textLine.textStart(), line == 1 ? -1 : textLine.textLength());
-    }
-    layout.endLayout();
-    for (int line = 0; line < lines.size(); ++line) {
-        const QString shown = line == lines.size() - 1 ? metrics.elidedText(lines.at(line).trimmed(), Qt::ElideRight, words.width())
-                                                        : lines.at(line).trimmed();
-        painter.drawText(QRect(words.left(), words.top() + line * metrics.lineSpacing(), words.width(), metrics.lineSpacing()),
-                         Qt::AlignLeft | Qt::AlignVCenter, shown);
-    }
-}
-
-// ---- FlowLayout -----------------------------------------------------------
-
-FlowLayout::FlowLayout(QWidget *parent, int spacing) : QLayout(parent), m_spacing(spacing) { setContentsMargins(0, 0, 0, 0); }
-
-FlowLayout::~FlowLayout() {
-    while (QLayoutItem *item = FlowLayout::takeAt(0)) delete item;
-}
-
-QLayoutItem *FlowLayout::takeAt(int index) { return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr; }
-
-void FlowLayout::setGeometry(const QRect &rect) {
-    QLayout::setGeometry(rect);
-    arrange(rect, true);
-}
-
-void FlowLayout::setScroll(int scroll) {
-    scroll = std::max(0, scroll);
-    if (scroll == m_scroll) return;
-    m_scroll = scroll;
-    if (!geometry().isNull()) arrange(geometry(), true);
-}
-
-int FlowLayout::contentWidth() const {
-    int width = 0;
-    for (const QLayoutItem *item : m_items)
-        if (!item->isEmpty()) width += (width ? m_spacing : 0) + item->sizeHint().width();
-    return width;
-}
-
-QSize FlowLayout::minimumSize() const {
-    if (m_singleLine) {
-        // As tall as its tallest chip, and as narrow as anything.
-        int height = 0;
-        for (const QLayoutItem *item : m_items)
-            if (!item->isEmpty()) height = std::max(height, item->sizeHint().height());
-        return QSize(0, height).grownBy(contentsMargins());
-    }
-    // As tall as its tallest chip, and as narrow as its column: a chip
-    // wider than the column is narrowed to it (and ends in an ellipsis),
-    // never widens it.
-    int height = 0;
-    for (const QLayoutItem *item : m_items)
-        if (!item->isEmpty()) height = std::max(height, item->sizeHint().height());
-    return QSize(0, height).grownBy(contentsMargins());
-}
-
-int FlowLayout::arrange(const QRect &rect, bool apply) const {
-    const QRect area = rect.marginsRemoved(contentsMargins());
-    if (m_singleLine) {
-        int x = area.x() - m_scroll;
-        int line = 0;
-        for (QLayoutItem *item : m_items) {
-            if (item->isEmpty()) continue;
-            const QSize hint = item->sizeHint();
-            if (apply) item->setGeometry(QRect(QPoint(x, area.y()), hint));
-            x += hint.width() + m_spacing;
-            line = std::max(line, hint.height());
-        }
-        return area.y() + line - rect.y() + contentsMargins().bottom();
-    }
-    int x = area.x();
-    int y = area.y();
-    int line = 0;
-    for (QLayoutItem *item : m_items) {
-        if (item->isEmpty()) continue;
-        QSize hint = item->sizeHint();
-        hint.setWidth(std::min(hint.width(), std::max(1, area.width())));
-        if (x > area.x() && x + hint.width() > area.x() + area.width()) {
-            x = area.x();
-            y += line + m_spacing;
-            line = 0;
-        }
-        if (apply) item->setGeometry(QRect(QPoint(x, y), hint));
-        x += hint.width() + m_spacing;
-        line = std::max(line, hint.height());
-    }
-    return y + line - rect.y() + contentsMargins().bottom();
-}
-
-// ---- ChatAvatar -----------------------------------------------------------
-
-ChatAvatar::ChatAvatar(Who who, int diameter, QWidget *parent) : QWidget(parent), m_who(who) {
-    setObjectName(who == Who::Kerf ? QStringLiteral("chatAvatarKerf") : QStringLiteral("chatAvatarUser"));
-    setFixedSize(diameter, diameter);
-    setAttribute(Qt::WA_TransparentForMouseEvents);
-}
-
-QString ChatAvatar::monogram() const {
-    if (m_who == Who::Kerf) return QStringLiteral("K");
-    // The reader's initial, from the account they are signed in to here.
-    QString name = qEnvironmentVariable("USER").trimmed();
-    if (name.isEmpty()) name = qEnvironmentVariable("USERNAME").trimmed();
-    return name.isEmpty() ? QStringLiteral("Y") : name.left(1).toUpper();
-}
-
-void ChatAvatar::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const bool kerf = m_who == Who::Kerf;
-    painter.setBrush(kerf ? theme.chatAvatarKerf : theme.chatAvatarUser);
-    painter.drawEllipse(QRectF(rect()));
-    QFont font = painter.font();
-    font.setPixelSize(std::max(10, int(std::round(width() * 0.46))));
-    font.setWeight(QFont::DemiBold);
-    painter.setFont(font);
-    painter.setPen(kerf ? theme.chatAvatarKerfText : theme.chatAvatarUserText);
-    painter.drawText(rect(), Qt::AlignCenter, monogram());
-}
-
-// ---- ChatIconButton -------------------------------------------------------
+// ------------------------------------------------------------------ ChatIconButton
 
 ChatIconButton::ChatIconButton(Glyph glyph, int diameter, QWidget *parent)
     : QAbstractButton(parent), m_glyph(glyph), m_diameter(diameter) {
     setFixedSize(diameter, diameter);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
-    setProperty("bezelRadius", diameter / 2);
 }
 
-QSize ChatIconButton::sizeHint() const { return {m_diameter, m_diameter}; }
+QSize ChatIconButton::sizeHint() const { return QSize(m_diameter, m_diameter); }
 
 void ChatIconButton::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    if (m_filled) {
-        painter.setBrush(theme.chatSurface);
-        painter.drawEllipse(QRectF(rect()));
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const bool hover = isEnabled() && (underMouse() || isDown());
+    if (hover) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color(raised));
+        p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     }
-    if (isDown() || underMouse()) {
-        painter.setBrush(isDown() ? theme.chatChipHover : theme.chatChip);
-        painter.drawEllipse(QRectF(rect()));
-    }
-    const QPointF c = QRectF(rect()).center();
-    const QColor ink = isEnabled() ? theme.chatText : theme.textDisabled;
-    if (m_glyph == Glyph::Close) {
-        painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(c + QPointF(-6, -6), c + QPointF(6, 6));
-        painter.drawLine(c + QPointF(6, -6), c + QPointF(-6, 6));
-    } else if (m_glyph == Glyph::Back || m_glyph == Glyph::Forward) {
-        const double turn = m_glyph == Glyph::Back ? -1.0 : 1.0;
-        painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(QPolygonF{c + QPointF(-2.25 * turn, -4.5), c + QPointF(2.25 * turn, 0), c + QPointF(-2.25 * turn, 4.5)});
-    } else {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(ink);
-        for (int dot = -1; dot <= 1; ++dot) painter.drawEllipse(c + QPointF(dot * 6.0, 0), 1.8, 1.8);
-    }
+    const QColor ink = !isEnabled() ? color(dis) : hover ? color(tokens::ink) : color(ink2);
+    const QString icon = m_glyph == Glyph::Close ? QStringLiteral("g-close") : QStringLiteral("g-more");
+    icons::paint(p, icon, QRectF(rect()), ink, m_diameter <= 20 ? 14 : 16);
+    if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::control);
 }
 
-// ---- ChatExpander ---------------------------------------------------------
-
-ChatExpander::ChatExpander(QWidget *parent) : QAbstractButton(parent) {
-    setObjectName(QStringLiteral("chatExpander"));
-    setCheckable(true);
-    setCursor(Qt::PointingHandCursor);
-    setFocusPolicy(Qt::TabFocus);
-    setProperty("bezelRadius", 14);
-    QFont bold = font();
-    bold.setPixelSize(13);
-    bold.setWeight(QFont::DemiBold);
-    setFont(bold);
-}
-
-QSize ChatExpander::sizeHint() const {
-    // A chevron, 6 points, then the label, in a 28-point pill; compact, the
-    // chevron at its leading edge, 4 points, the label, 4 points.
-    if (m_compact) return {12 + 4 + fontMetrics().horizontalAdvance(text()) + 4, 28};
-    return {10 + 12 + 6 + fontMetrics().horizontalAdvance(text()) + 12, 28};
-}
-
-QSize ChatExpander::minimumSizeHint() const { return m_compact ? QSize(20, 28) : sizeHint(); }
-
-void ChatExpander::setCompact(bool compact) {
-    if (m_compact == compact) return;
-    m_compact = compact;
-    QFont face = font();
-    face.setPixelSize(compact ? 12 : 13);
-    face.setWeight(compact ? QFont::Medium : QFont::DemiBold);
-    setFont(face);
-    setSizePolicy(compact ? QSizePolicy::Preferred : QSizePolicy::Minimum, QSizePolicy::Fixed);
-    updateGeometry();
-    update();
-}
-
-bool ChatExpander::labelShown() const { return !m_compact || width() >= sizeHint().width(); }
-
-void ChatExpander::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    if (isDown() || underMouse()) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(theme.chatChip);
-        painter.drawRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);
-    }
-    const QColor ink = theme.chatExpander;
-    // The chevron points down while folded and up while open.
-    const double lead = m_compact ? 0.0 : 10.0;
-    const QPointF c(lead + 6, height() / 2.0);
-    const qreal turn = isChecked() ? -1.0 : 1.0;
-    painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawPolyline(QPolygonF{c + QPointF(-4.5, -2.25 * turn), c + QPointF(0, 2.25 * turn), c + QPointF(4.5, -2.25 * turn)});
-    if (!labelShown()) return;
-    painter.setFont(font());
-    const double textLeft = lead + 12 + (m_compact ? 4 : 6);
-    painter.drawText(QRectF(textLeft, 0, width() - textLeft, height()), Qt::AlignLeft | Qt::AlignVCenter, text());
-}
-
-// ---- CommentRow -----------------------------------------------------------
-
-CommentRow::CommentRow(Kind kind, const QString &text, const QDateTime &time, QWidget *parent)
-    : QWidget(parent), m_kind(kind), m_text(text), m_time(time) {
-    setObjectName(QStringLiteral("commentRow"));
-    auto *row = new QHBoxLayout(this);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(12);
-    m_avatar = new ChatAvatar(kind == Kind::User ? ChatAvatar::Who::User : ChatAvatar::Who::Kerf, ChatPanel::kAvatar);
-    row->addWidget(m_avatar, 0, Qt::AlignTop);
-    auto *column = new QVBoxLayout;
-    column->setContentsMargins(0, 0, 0, 0);
-    column->setSpacing(0);
-    row->addLayout(column, 1);
-
-    // The name line, 18 points: the author, then the time.
-    auto *line = new QHBoxLayout;
-    line->setContentsMargins(0, 0, 0, 0);
-    line->setSpacing(4);
-    m_nameLabel = label(name(), "chatName");
-    m_timeLabel = label(QString(), "chatTime");
-    line->addWidget(m_nameLabel);
-    if (kind == Kind::Error) {
-        // Short, and able to give way, so the name line fits the panel at
-        // its narrowest.
-        QLabel *tag = label(QStringLiteral("· couldn’t edit"), "chatErrorTag");
-        tag->setMinimumWidth(1);
-        line->addWidget(tag);
-    }
-    line->addWidget(m_timeLabel);
-    line->addStretch(1);
-    column->addLayout(line);
-    column->addSpacing(2);
-    m_body = label(QString(), "chatBody");
-    m_body->setTextFormat(Qt::RichText);
-    m_body->setText(bodyMarkup(text));
-    m_body->setWordWrap(true);
-    m_body->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    copiesCleanly(m_body);
-    m_body->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_body->setVisible(!text.isEmpty());
-    column->addWidget(m_body);
-
-    // Kerf's steps for this turn, folded under "▸ 2 steps", as replies are.
-    m_expander = new ChatExpander;
-    m_expander->hide();
-    connect(m_expander, &QAbstractButton::toggled, this, [this](bool open) {
-        m_replyList->setVisible(open);
-        updateExpander();
-    });
-    m_replyList = new QWidget;
-    m_replyList->setObjectName(QStringLiteral("chatReplies"));
-    m_replyLayout = new QVBoxLayout(m_replyList);
-    m_replyLayout->setContentsMargins(0, 4, 0, 4);
-    m_replyLayout->setSpacing(8);
-    m_replyList->hide();
-
-    // The quiet actions under the text.
-    auto *actions = new QHBoxLayout;
-    actions->setContentsMargins(0, 2, 0, 0);
-    actions->setSpacing(2);
-    auto *copy = pill(QStringLiteral("Copy"), "chatAction", 24);
-    copy->setToolTip(QStringLiteral("Copy this message"));
-    connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(m_text); });
-    m_actions.append(copy);
-    if (kind == Kind::User) {
-        auto *again = pill(QStringLiteral("Ask again"), "chatAction", 24);
-        again->setToolTip(QStringLiteral("Send this request again"));
-        connect(again, &QPushButton::clicked, this, [this] { emit askAgain(m_text); });
-        m_actions.append(again);
-    }
-    for (QPushButton *action : std::as_const(m_actions)) actions->addWidget(action);
-    actions->addStretch(1);
-    column->addLayout(actions);
-    column->addWidget(m_expander, 0, Qt::AlignLeft);
-    column->addWidget(m_replyList);
-    refreshTime(time);
-}
-
-QString CommentRow::name() const {
-    return m_kind == Kind::User ? QStringLiteral("You") : QStringLiteral("Kerf");
-}
-
-void CommentRow::setText(const QString &text) {
-    m_text = text;
-    m_body->setText(bodyMarkup(text));
-    m_body->setVisible(!text.isEmpty());
-}
-
-void CommentRow::appendText(const QString &text) { setText(m_text + text); }
-
-void CommentRow::refreshTime(const QDateTime &now) { m_timeLabel->setText(relativeTime(m_time, now)); }
-
-void CommentRow::addReply(const QString &text) {
-    if (text.isEmpty()) return;
-    m_replies.append(text);
-    auto *reply = new QWidget;
-    reply->setObjectName(QStringLiteral("chatReply"));
-    auto *layout = new QHBoxLayout(reply);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
-    layout->addWidget(new ChatAvatar(ChatAvatar::Who::Kerf, 20), 0, Qt::AlignTop);
-    QLabel *body = label(wrappable(text.simplified()), "chatReplyText");
-    body->setWordWrap(true);
-    body->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    copiesCleanly(body);
-    body->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    layout->addWidget(body, 1);
-    m_replyLayout->addWidget(reply);
-    m_expander->show();
-    updateExpander();
-}
-
-bool CommentRow::repliesExpanded() const { return m_expander->isChecked(); }
-
-void CommentRow::setRepliesExpanded(bool expanded) { m_expander->setChecked(expanded); }
-
-void CommentRow::updateExpander() {
-    const qsizetype count = m_replies.size();
-    m_expander->setText(QStringLiteral("%1 step%2").arg(count).arg(count == 1 ? QString() : QStringLiteral("s")));
-    m_expander->setToolTip(m_expander->isChecked() ? QStringLiteral("Hide what Kerf did") : QStringLiteral("Show what Kerf did"));
-    m_expander->updateGeometry();
-    m_expander->update();
-}
-
-// ---- RailButton -----------------------------------------------------------
-
-namespace {
-
-// A rail button's disc as the hardware finish's raised key, round: its ring
-// over a 1px drop, a face shaded from the top with a line of light inside
-// its top edge; held in, it sits down where its drop was, its face darker
-// with the rim's shadow in it. Lit, a 10x2 amber LED glows at the face's
-// top. Returns the face, and what fills it, so a glyph's gap can be cut in
-// the same colour.
-struct RailDisc {
-    QRectF face;
-    QBrush fill;
-};
-
-// `rect` with its edges on device pixels' edges, so the LED's straight
-// sides land crisp at 1.25x as the keys' do.
-QRectF snapToDevicePixels(const QPainter &painter, const QRectF &rect) {
-    const QTransform t = painter.deviceTransform();
-    bool invertible = false;
-    const QTransform back = t.inverted(&invertible);
-    if (t.type() > QTransform::TxScale || !invertible) return rect;
-    const QRectF device = t.mapRect(rect);
-    return back.mapRect(QRectF(QPointF(std::round(device.left()), std::round(device.top())),
-                               QPointF(std::round(device.right()), std::round(device.bottom()))));
-}
-
-RailDisc paintRailDisc(QPainter &painter, const QRectF &disc, bool latched, bool hovered, bool lit) {
-    const EditorTheme &t = editorTheme();
-    // One device pixel at 1x and 1.25x, two at 2x, as the keys' lines are.
-    const QTransform device = painter.deviceTransform();
-    const qreal scale = std::hypot(device.m11(), device.m12());
-    const qreal line = scale > 0 ? std::max<qreal>(1.0, std::round(scale)) / scale : 1.0;
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    // The ring is a circle a line narrower than the disc, so its drop (or,
-    // held in, the ring itself) fits under it.
-    QRectF ring(disc.left() + line / 2, disc.top(), disc.width() - line, disc.height() - line);
-    if (latched) {
-        ring.translate(0, line);
-    } else {
-        painter.setBrush(t.keyDrop);
-        painter.drawEllipse(ring.translated(0, line));
-    }
-    painter.setBrush(t.keyRing);
-    painter.drawEllipse(ring);
-    RailDisc out;
-    out.face = ring.adjusted(line, line, -line, -line);
-    QPainterPath face;
-    face.addEllipse(out.face);
-    if (latched) {
-        out.fill = t.keyLatched;
-        painter.fillPath(face, out.fill);
-        QColor clear = t.keyLatchedShadow;
-        clear.setAlpha(0);
-        QLinearGradient shade(out.face.topLeft(), out.face.topLeft() + QPointF(0, 5));
-        shade.setColorAt(0, t.keyLatchedShadow);
-        shade.setColorAt(1, clear);
-        painter.fillPath(face, shade);
-    } else {
-        QLinearGradient bevel(out.face.topLeft(), out.face.bottomLeft());
-        bevel.setColorAt(0, t.keyTop);
-        bevel.setColorAt(1, t.keyBottom);
-        out.fill = bevel;
-        painter.fillPath(face, out.fill);
-        painter.fillPath(face.subtracted(face.translated(0, line)), t.keyHighlight);
-    }
-    if (hovered) painter.fillPath(face, t.hover);
-    if (lit) {
-        const QRectF led = snapToDevicePixels(painter, QRectF(out.face.center().x() - 5, out.face.top() + 4, 10, 2));
-        QColor halo = t.keyLed;
-        halo.setAlphaF(0.45);
-        QColor gone = halo;
-        gone.setAlpha(0);
-        QRadialGradient glow(led.center(), 8);
-        glow.setColorAt(0, halo);
-        glow.setColorAt(1, gone);
-        painter.fillPath(face, glow);
-        painter.setBrush(t.keyLed);
-        painter.drawRoundedRect(led, 1, 1);
-    }
-    painter.restore();
-    return out;
-}
-
-} // namespace
-
-RailButton::RailButton(Glyph glyph, QWidget *parent) : QAbstractButton(parent), m_glyph(glyph) {
-    setObjectName(QStringLiteral("railButton"));
-    setCursor(Qt::PointingHandCursor);
-    setFocusPolicy(Qt::TabFocus);
-    setProperty("bezelRadius", kDisc / 2);
-    QFont small = font();
-    small.setPixelSize(12);
-    small.setWeight(QFont::Medium);
-    setFont(small);
-}
-
-void RailButton::setGlyph(Glyph glyph) {
-    if (glyph == m_glyph) return;
-    m_glyph = glyph;
-    update();
-}
-
-void RailButton::setLabel(const QString &label) {
-    if (label == m_label) return;
-    m_label = label;
-    update();
-}
-
-QRect RailButton::discRect() const { return QRect((width() - kDisc) / 2, 0, kDisc, kDisc); }
-
-QSize RailButton::sizeHint() const { return {StageRail::kWidth, kDisc + 4 + 16}; }
-
-void RailButton::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    // On reads from across the stage: held in, with its LED lit. A press
-    // holds it in while the button is down.
-    const bool hovered = underMouse() && !isDown();
-    const RailDisc disc = paintRailDisc(painter, discRect(), isChecked() || isDown(), hovered, isChecked());
-    // A device switched off (the plain card) keeps its name and its
-    // glyph, in secondary ink with a slash through it, as the menu says
-    // "Laptop · Off".
-    const bool device = m_glyph == Glyph::Phone || m_glyph == Glyph::Laptop;
-    const bool off = device && isCheckable() && !isChecked();
-    const QColor ink = off ? theme.textSecondary : theme.railGlyph;
-    // The glyph sits on the face, so it goes down with the key.
-    const QPointF origin = disc.face.center() - QPointF(12, 12);
-    painter.save();
-    painter.translate(origin);
-    painter.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-    switch (m_glyph) {
-    case Glyph::Chat: {
-        // The speech bubble on a 24-point grid: a rounded bubble, its tail
-        // at the lower left; filled while the chat is open.
-        QPainterPath path;
-        path.moveTo(7.5, 4.5); path.lineTo(16.5, 4.5);
-        path.quadTo(20.5, 4.5, 20.5, 8.5); path.lineTo(20.5, 12.5);
-        path.quadTo(20.5, 16.5, 16.5, 16.5); path.lineTo(11.5, 16.5);
-        path.lineTo(6.5, 20); path.lineTo(7.3, 16.5);
-        path.quadTo(3.5, 16.3, 3.5, 12.5); path.lineTo(3.5, 8.5);
-        path.quadTo(3.5, 4.5, 7.5, 4.5);
-        path.closeSubpath();
-        painter.setBrush(isChecked() ? QBrush(ink) : QBrush(Qt::NoBrush));
-        painter.drawPath(path);
-        break;
-    }
-    case Glyph::Phone:
-        // A phone's outline and its camera.
-        painter.drawRoundedRect(QRectF(7, 3, 10, 18), 2.5, 2.5);
-        painter.drawLine(QPointF(10.8, 5.8), QPointF(13.2, 5.8));
-        break;
-    case Glyph::Laptop:
-        // A laptop's lid, and its wider base under it.
-        painter.drawRoundedRect(QRectF(5, 5.5, 14, 10), 1.5, 1.5);
-        painter.drawLine(QPointF(3, 18.5), QPointF(21, 18.5));
-        break;
-    case Glyph::SafeZones: {
-        // A frame's corners, and the dashed line inside them.
-        const auto corner = [&painter](QPointF at, double dx, double dy) {
-            painter.drawPolyline(QPolygonF{at + QPointF(0, 4 * dy), at, at + QPointF(4 * dx, 0)});
-        };
-        corner({4, 4}, 1, 1);
-        corner({20, 4}, -1, 1);
-        corner({4, 20}, 1, -1);
-        corner({20, 20}, -1, -1);
-        QPen dashed(ink, 1.4, Qt::CustomDashLine, Qt::FlatCap);
-        dashed.setDashPattern({2.0, 2.0});
-        painter.setPen(dashed);
-        painter.drawRect(QRectF(8, 8, 8, 8));
-        break;
-    }
-    }
-    if (off) {
-        // The slash, over a gap cut in the face's own shading (and its
-        // hover) so it reads across the glyph.
-        QBrush gap = disc.fill;
-        gap.setTransform(QTransform::fromTranslate(-origin.x(), -origin.y()));
-        const QLineF slash(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
-        painter.setPen(QPen(gap, 3.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(slash);
-        if (hovered) {
-            painter.setPen(QPen(theme.hover, 3.5, Qt::SolidLine, Qt::RoundCap));
-            painter.drawLine(slash);
-        }
-        painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(slash);
-    }
-    painter.restore();
-    if (!m_label.isEmpty()) {
-        painter.setPen(theme.railLabel);
-        painter.setFont(font());
-        painter.drawText(QRectF(0, discRect().bottom() + 4, width(), 16), Qt::AlignHCenter | Qt::AlignTop, m_label);
-    }
-}
-
-// ---- StageRail ------------------------------------------------------------
-
-StageRail::StageRail(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("stageRail"));
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(12);
-    m_meter = new VuMeter;
-    m_meter->setFixedSize(kWidth, kMeterHeight);
-    layout->addWidget(m_meter, 0, Qt::AlignHCenter);
-    layout->addStretch(1);
-    m_device = new RailButton(RailButton::Glyph::Phone);
-    m_device->setObjectName(QStringLiteral("railDevice"));
-    m_device->setCheckable(true);
-    m_device->setCheckedByOwner(true);
-    m_device->setLabel(QStringLiteral("Phone"));
-    m_safeZones = new RailButton(RailButton::Glyph::SafeZones);
-    m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
-    m_safeZones->setCheckable(true);
-    m_safeZones->setLabel(QStringLiteral("Safe"));
-    m_chat = new RailButton(RailButton::Glyph::Chat);
-    m_chat->setCheckable(true);
-    for (RailButton *button : {m_device, m_safeZones, m_chat}) {
-        button->setFixedSize(button->sizeHint());
-        layout->addWidget(button, 0, Qt::AlignHCenter);
-    }
-}
-
-bool StageRail::event(QEvent *event) {
-    const bool handled = QWidget::event(event);
-    if (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest) fitMeter();
-    return handled;
-}
-
-void StageRail::fitMeter() {
-    // The buttons shown, stacked with the layout's spacing; the meter only
-    // where it fits over them with kMeterGap to spare.
-    int buttons = 0;
-    int count = 0;
-    for (const RailButton *button : {m_device, m_safeZones, m_chat}) {
-        if (button->isHidden()) continue;
-        buttons += button->height();
-        ++count;
-    }
-    const int stack = buttons + std::max(0, count - 1) * layout()->spacing();
-    m_meter->setVisible(height() >= stack + kMeterGap + kMeterHeight);
-}
-
-// ---- ChatPanel ------------------------------------------------------------
+// ------------------------------------------------------------------ ChatPanel
 
 ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("chatPanel"));
-    setAccessibleName(QStringLiteral("Conversation with Kerf"));
-    // The composer and the proposal show their fields' focus themselves.
-    setProperty("ringsOwnFields", true);
-    auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-    outer->addWidget(buildHeader());
-    // While the pinned proposal's pills are scrolled out of view: a compact
-    // bar under the header with its summary, Reject and Accept.
-    m_proposalBar = buildProposalBar();
-    outer->addWidget(m_proposalBar);
+    setAttribute(Qt::WA_StyledBackground, false);
+    setAccessibleName(QStringLiteral("Comments"));
+    m_welcomeSince = QDateTime::currentDateTime();
 
-    // A hairline under the header (or the bar) while the view is scrolled
-    // away from its top, as a comments panel's header shows: the comments
-    // are cut cleanly at the view's edge under it.
-    m_scrollEdge = new QFrame;
-    m_scrollEdge->setObjectName(QStringLiteral("scrollEdge"));
-    m_scrollEdge->setFixedHeight(1);
-    outer->addWidget(m_scrollEdge);
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(buildHeader());
+    layout->addWidget(buildSearch());
+    layout->addWidget(buildPinBar());
 
-    m_scroll = new QScrollArea;
-    m_scroll->setObjectName(QStringLiteral("chatScroll"));
-    m_scroll->setFrameShape(QFrame::NoFrame);
-    m_scroll->setWidgetResizable(true);
-    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    // It gives way first when the panel is short, so the composer stays
-    // (a minimum of 0 would mean its own hint).
-    m_scroll->setMinimumHeight(1);
-    m_scroll->viewport()->setAutoFillBackground(false);
+    m_list = new ui::FadeScrollArea;
+    m_list->setObjectName(QStringLiteral("chatScroll"));
+    m_list->setWidgetResizable(true);
+    m_list->setFrameShape(QFrame::NoFrame);
+    m_list->setFadeColor(color(tokens::chrome));
+    m_list->setStyleSheet(QStringLiteral("QScrollArea#chatScroll { background: transparent; border: 0; }"));
+    m_list->viewport()->setAutoFillBackground(false);
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("chatContent"));
-    m_list = new QVBoxLayout(m_content);
-    // The first comment 16 points under the header, as a comments panel's.
-    // Its foot is the view's: the view stops kListBottom over the chips or
-    // the composer, so rows are cut there at every scroll position.
-    m_list->setContentsMargins(kSidePadding, 16, kSidePadding, 0);
-    m_list->setSpacing(16);
-    // The pinned proposal heads the list and scrolls away with it, as a
-    // pinned comment does.
-    m_proposal = buildProposal();
-    m_list->addWidget(m_proposal);
-    m_welcome = buildWelcome();
-    m_list->addWidget(m_welcome);
-    // While Kerf works: three dots in the avatars' column, its state and
-    // its latest step, quietly, after the latest comment.
-    m_statusRow = new QWidget;
-    m_statusRow->setObjectName(QStringLiteral("chatStatusRow"));
-    auto *status = new QHBoxLayout(m_statusRow);
-    status->setContentsMargins(0, 0, 0, 0);
-    status->setSpacing(12);
-    m_typing = new TypingDots;
-    status->addWidget(m_typing);
-    m_status = label(QStringLiteral("Ready"), "chatStatus");
-    status->addWidget(m_status);
-    m_activity = label(QString(), "chatActivity");
-    m_activity->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    status->addWidget(m_activity, 1);
-    m_statusRow->hide();
-    m_list->addWidget(m_statusRow);
-    m_list->addStretch(1);
-    m_scroll->setWidget(m_content);
-    m_content->installEventFilter(this);
-    outer->addWidget(m_scroll, 1);
-    outer->addSpacing(kListBottom);
-    // New output keeps the latest in view, unless the reader scrolled away.
-    QScrollBar *bar = m_scroll->verticalScrollBar();
-    connect(bar, &QScrollBar::rangeChanged, this, [this](int, int maximum) {
-        if (m_follow) m_scroll->verticalScrollBar()->setValue(maximum);
-        QTimer::singleShot(0, this, &ChatPanel::updateListEdge);
+    m_content->setAutoFillBackground(false);
+    m_listLayout = new QVBoxLayout(m_content);
+    // pad 12 0 16; a row's 6 bleed is part of the 12.
+    m_listLayout->setContentsMargins(0, kListTop - CommentRow::kBleedY, 0, kListBottom - CommentRow::kBleedY);
+    // A thread's line sits 12 under the content above it (6 of it the bleed).
+    m_listLayout->setSpacing(12 - CommentRow::kBleedY);
+    m_listLayout->addStretch(1);
+    m_list->setWidget(m_content);
+    layout->addWidget(m_list, 1);
+    connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        m_follow = value >= m_list->verticalScrollBar()->maximum() - 4;
+        updatePinBar();
     });
-    m_scroll->viewport()->installEventFilter(this);
-    connect(bar, &QScrollBar::valueChanged, this, [this](int value) {
-        m_follow = value >= m_scroll->verticalScrollBar()->maximum() - 4;
-        updateListEdge();
+    connect(m_list->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this] { updatePinBar(); });
+
+    m_replyBar = new ReplyBar;
+    connect(m_replyBar, &ReplyBar::cancelled, this, [this] {
+        m_replyTarget.clear();
+        if (!m_editing.isEmpty()) {
+            m_editing.clear();
+            m_composer->clear();
+        }
     });
-    m_edgeCover = new EdgeCover(m_scroll->viewport());
+    layout->addWidget(m_replyBar);
+    m_composer = new Composer;
+    m_composer->setOverlayParent(this);
+    connect(m_composer, &Composer::submitRequested, this, &ChatPanel::postRequested);
+    connect(m_composer, &Composer::stopRequested, this, &ChatPanel::stopRequested);
+    connect(m_composer, &Composer::drawClicked, this, [this] {
+        if (m_composer->drawState() == Composer::Draw::None) emit drawRequested();
+        else if (m_composer->drawState() == Composer::Draw::Drawing) emit drawCancelRequested();
+        else m_composer->setDraw(Composer::Draw::None);
+    });
+    connect(m_composer, &Composer::suggestionChosen, this, [this](int index) {
+        if (index < 0 || index >= m_suggestionList.size()) return;
+        const Suggestion suggestion = m_suggestionList.at(index);
+        if (suggestion.run) emit runRequested(suggestion.request);
+        else m_composer->fill(suggestion.request);
+    });
+    connect(m_composer, &Composer::escapePressed, this, [this] {
+        if (m_replyBar->isOpen()) {
+            m_replyBar->setTarget({}, {});
+            emit m_replyBar->cancelled();
+        } else if (m_composer->isBusy()) {
+            emit stopRequested();
+        } else if (m_composer->drawState() == Composer::Draw::Drawing) {
+            emit drawCancelRequested();
+        } else {
+            emit escapeUnused();
+        }
+    });
+    layout->addWidget(m_composer);
 
-    // Next steps: one row of chips over the composer that scrolls sideways
-    // rather than wrap, as a chip bar does, so the conversation keeps the
-    // panel's height.
-    m_chips = new QWidget;
-    m_chips->setObjectName(QStringLiteral("nextSteps"));
-    auto *chips = new FlowLayout(m_chips, 8);
-    chips->setSingleLine(true);
-    chips->setContentsMargins(kSidePadding, 8, kSidePadding, 4);
-    m_chips->setFixedHeight(kChipRowHeight);
-    m_chipFadeLeft = new ChipFade(true, m_chips);
-    m_chipFadeRight = new ChipFade(false, m_chips);
-    // Round buttons over the fades that page the row, as a chip bar's.
-    for (const bool back : {true, false}) {
-        auto *pager = new ChatIconButton(back ? ChatIconButton::Glyph::Back : ChatIconButton::Glyph::Forward, kChipPager, m_chips);
-        pager->setObjectName(back ? QStringLiteral("chipsBack") : QStringLiteral("chipsForward"));
-        pager->setFilled(true);
-        pager->setToolTip(back ? QStringLiteral("Earlier suggestions") : QStringLiteral("More suggestions"));
-        pager->setAccessibleName(pager->toolTip());
-        pager->hide();
-        connect(pager, &QAbstractButton::clicked, this, [this, back] { pageChips(back ? -1 : 1); });
-        (back ? m_chipBack : m_chipForward) = pager;
-    }
-    m_chips->installEventFilter(this);
-    m_chips->hide();
-    outer->addWidget(m_chips);
-    m_composer = buildComposer();
-    outer->addWidget(m_composer);
+    m_stash = new QWidget(this);
+    m_stash->hide();
 
-    m_resizeHandle = new QWidget(this);
-    m_resizeHandle->setObjectName(QStringLiteral("chatResizeHandle"));
-    m_resizeHandle->setCursor(Qt::SizeHorCursor);
-    m_resizeHandle->setToolTip(QStringLiteral("Drag to resize the conversation"));
-    m_resizeHandle->installEventFilter(this);
+    // The Kerf welcome (no record): who Kerf is, and what to try.
+    m_welcomeRow = new CommentRow(CommentRow::Kind::Kerf,
+                                  QStringLiteral("Mention @Kerf on any note, or describe an edit below. Each change comes back "
+                                                 "as a proposal you preview before it touches the cut"),
+                                  m_welcomeSince, m_stash);
+    m_welcomeRow->setObjectName(QStringLiteral("welcomeRow"));
+    m_welcomeRow->setRole(QStringLiteral("agent"));
+    ui::setTip(m_welcomeRow->timeLabel(), QStringLiteral("Since this window opened"));
+    m_welcomeTime = m_welcomeRow->timeLabel();
+    connectRow(m_welcomeRow);
 
     m_clock = new QTimer(this);
-    m_clock->setInterval(30000);
+    m_clock->setInterval(30 * 1000);
     connect(m_clock, &QTimer::timeout, this, &ChatPanel::refreshTimes);
     m_clock->start();
-    updateCount();
-    setProposalShown(false);
-    updateComposer(false);
+
+    auto *find = new QShortcut(QKeySequence::Find, this);
+    find->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(find, &QShortcut::activated, this, [this] { setSearchShown(true); });
+
+    rebuild();
+    updateHeader();
+    updateSuggestions();
 }
+
+ChatPanel::~ChatPanel() = default;
+
+void ChatPanel::focusComposer() { input()->setFocus(Qt::ShortcutFocusReason); }
 
 QWidget *ChatPanel::buildHeader() {
     auto *header = new QWidget;
     header->setObjectName(QStringLiteral("chatHeader"));
     header->setFixedHeight(kHeaderHeight);
     auto *layout = new QHBoxLayout(header);
-    layout->setContentsMargins(kSidePadding, 0, 8, 0);
-    layout->setSpacing(0);
-    m_title = label(QStringLiteral("Kerf"), "chatTitle");
+    layout->setContentsMargins(16, 0, 12, 0);
+    layout->setSpacing(4);
+    m_title = makeLabel(tokens::title, ink);
+    m_title->setObjectName(QStringLiteral("chatTitle"));
+    m_title->setText(QStringLiteral("Comments"));
     layout->addWidget(m_title);
-    layout->addSpacing(8);
-    m_count = label(QString(), "chatCount");
-    layout->addWidget(m_count);
     layout->addStretch(1);
-    m_more = new ChatIconButton(ChatIconButton::Glyph::More, 36);
+    m_more = new ChatIconButton(ChatIconButton::Glyph::More, 24);
     m_more->setObjectName(QStringLiteral("chatMore"));
-    m_more->setToolTip(QStringLiteral("More"));
+    ui::setTip(m_more, QStringLiteral("Search, sort, filter and more"));
     m_more->setAccessibleName(QStringLiteral("More"));
+    connect(m_more, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildMoreMenu(), m_more); });
+    // On while a filter hides rows.
+    m_filterDot = new ui::Dot(color(ink), m_more);
+    m_filterDot->setGeometry(24 - 3 - 6, 3, 6, 6);
+    m_filterDot->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_filterDot->hide();
     layout->addWidget(m_more);
-    m_close = new ChatIconButton(ChatIconButton::Glyph::Close, 36);
-    m_close->setObjectName(QStringLiteral("chatClose"));
-    m_close->setAccessibleName(QStringLiteral("Close Kerf Assistant"));
-    layout->addWidget(m_close);
     return header;
 }
 
-QFrame *ChatPanel::buildProposal() {
-    auto *box = new QFrame;
-    box->setObjectName(QStringLiteral("proposalBox"));
-    auto *layout = new QVBoxLayout(box);
-    // No rule under it: the list's own 16 points under it part them, as
-    // threads are parted; the list gives it its side padding.
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-    // "Pinned by Kerf" over the comment, its pin in the avatars' column.
-    m_proposalPinLine = new QWidget;
-    m_proposalPinLine->setObjectName(QStringLiteral("proposalPinLine"));
-    auto *pinned = new QHBoxLayout(m_proposalPinLine);
-    pinned->setContentsMargins(kAvatar - 12, 0, 0, 0);
-    pinned->setSpacing(12);
-    pinned->addWidget(new PinGlyph, 0, Qt::AlignVCenter);
-    pinned->addWidget(label(QStringLiteral("Pinned by Kerf"), "chatPinned"));
-    pinned->addStretch(1);
-    layout->addWidget(m_proposalPinLine);
-    auto *row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(12);
-    row->addWidget(new ChatAvatar(ChatAvatar::Who::Kerf, kAvatar), 0, Qt::AlignTop);
-    auto *column = new QVBoxLayout;
-    column->setContentsMargins(0, 0, 0, 0);
-    column->setSpacing(4);
-    // The name line every comment has, pinned or not: the author, then the time.
-    auto *name = new QHBoxLayout;
-    name->setContentsMargins(0, 0, 0, 0);
-    name->setSpacing(4);
-    m_proposalName = label(QStringLiteral("Kerf"), "chatName");
-    m_proposalTime = label(QStringLiteral("now"), "chatTime");
-    name->addWidget(m_proposalName);
-    name->addWidget(m_proposalTime);
-    name->addStretch(1);
-    column->addLayout(name);
-    // What it changes, and the expander for its script.
-    auto *line = new QHBoxLayout;
-    line->setContentsMargins(0, 0, 0, 0);
-    line->setSpacing(8);
-    m_proposalSummary = label(QStringLiteral("No pending changes"), "proposalSummary");
-    m_proposalSummary->setWordWrap(true);
-    m_proposalSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    line->addWidget(m_proposalSummary, 1);
-    m_proposalExpander = new ChatExpander;
-    m_proposalExpander->setText(QStringLiteral("Script"));
-    m_proposalExpander->setToolTip(QStringLiteral("Show the script and the document diff"));
-    line->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
-    m_proposalLine = line;
-    column->addLayout(line);
-    // The first few changes, one row each: glyph, description, detail.
-    m_proposalChanges = new QWidget;
-    m_proposalChanges->setObjectName(QStringLiteral("proposalChanges"));
-    auto *changes = new QVBoxLayout(m_proposalChanges);
-    changes->setContentsMargins(0, 2, 0, 4);
-    changes->setSpacing(0);
-    m_proposalChanges->hide();
-    column->addWidget(m_proposalChanges);
-    m_proposalDiff = new QTextEdit;
-    m_proposalDiff->setReadOnly(true);
-    m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
-    // As tall as its lines, up to ten (then it scrolls), so the request and
-    // reply under the pinned proposal stay in view.
-    m_proposalDiff->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_proposalDiff->setLineWrapMode(QTextEdit::WidgetWidth);
-    m_proposalDiff->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    m_proposalDiff->setFrameShape(QFrame::NoFrame);
-    m_proposalDiff->hide();
-    connect(m_proposalDiff->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
-            &ChatPanel::fitProposalDiff);
-    connect(m_proposalExpander, &QAbstractButton::toggled, this, &ChatPanel::fitProposalDiff);
-    // Reject, then Accept, the default, trailing as a comment field's
-    // Comment does.
-    auto *buttons = new QHBoxLayout;
-    buttons->setContentsMargins(0, 0, 0, 0);
-    buttons->setSpacing(8);
-    buttons->addStretch(1);
-    m_proposalButtons = buttons;
-    m_reject = pill(QStringLiteral("Reject"), "chatPillTonal", kPillHeight);
-    m_accept = pill(QStringLiteral("Accept"), "chatPillFilled", kPillHeight);
-    // The compact bar's pills follow these ones' state.
-    m_accept->installEventFilter(this);
-    m_reject->installEventFilter(this);
-    buttons->addWidget(m_reject);
-    buttons->addWidget(m_accept);
-    column->addLayout(buttons);
-    column->addWidget(m_proposalDiff);
-    row->addLayout(column, 1);
-    layout->addLayout(row);
-    // A hairline closes the pinned comment, 16 points under its pills, as
-    // a pinned comment is parted from the thread under it.
-    layout->addSpacing(16 - layout->spacing());
-    m_proposalRule = new QFrame;
-    m_proposalRule->setObjectName(QStringLiteral("proposalRule"));
-    m_proposalRule->setFixedHeight(1);
-    layout->addWidget(m_proposalRule);
-    return box;
-}
-
-QFrame *ChatPanel::buildProposalBar() {
-    auto *bar = new QFrame;
-    bar->setObjectName(QStringLiteral("proposalBar"));
-    auto *layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(kSidePadding, 8, kSidePadding, 8);
-    layout->setSpacing(8);
-    // The pin, the summary (cut with an ellipsis in a narrow panel), then
-    // the pills.
-    layout->addWidget(new PinGlyph, 0, Qt::AlignVCenter);
-    m_proposalBarSummary = new ElidedLabel;
-    m_proposalBarSummary->setObjectName(QStringLiteral("proposalBarSummary"));
-    m_proposalBarSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    layout->addWidget(m_proposalBarSummary, 1);
-    m_barReject = pill(QStringLiteral("Reject"), "chatPillTonal", kComposerPillHeight);
-    m_barAccept = pill(QStringLiteral("Accept"), "chatPillFilled", kComposerPillHeight);
-    for (QPushButton *button : {m_barReject, m_barAccept}) layout->addWidget(button);
-    // They are the pinned proposal's own: a click is theirs.
-    connect(m_barReject, &QPushButton::clicked, this, [this] { m_reject->click(); });
-    connect(m_barAccept, &QPushButton::clicked, this, [this] { m_accept->click(); });
-    bar->hide();
-    return bar;
-}
-
-void ChatPanel::setProposalSummary(const QString &summary, const QString &compact, const QString &count) {
-    m_summaryFull = summary;
-    m_summaryShort = compact;
-    m_proposalSummary->setText(summary);
-    placeProposalExpander();
-    const QString bar = compact.isEmpty() ? summary : compact;
-    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(bar, count);
-    m_proposalBarSummary->setToolTip(summary);
-}
-
-QWidget *ChatPanel::buildWelcome() {
-    // Before the first message, Kerf's own first comment: what it does, and
-    // two requests to try, which fill the composer.
-    auto *welcome = new QWidget;
-    welcome->setObjectName(QStringLiteral("chatWelcome"));
-    auto *row = new QHBoxLayout(welcome);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(12);
-    row->addWidget(new ChatAvatar(ChatAvatar::Who::Kerf, kAvatar), 0, Qt::AlignTop);
-    auto *column = new QVBoxLayout;
-    column->setContentsMargins(0, 0, 0, 0);
-    column->setSpacing(2);
-    // The name line every comment has: the author, then the time.
-    auto *line = new QHBoxLayout;
-    line->setContentsMargins(0, 0, 0, 0);
-    line->setSpacing(4);
-    line->addWidget(label(QStringLiteral("Kerf"), "chatName"));
-    // It ages as comments do, from when the conversation opened.
-    m_welcomeSince = QDateTime::currentDateTime();
-    m_welcomeTime = label(relativeTime(m_welcomeSince, m_welcomeSince), "chatTime");
-    line->addWidget(m_welcomeTime);
-    line->addStretch(1);
-    column->addLayout(line);
-    QLabel *intro = label(QString(), "chatBody");
-    intro->setTextFormat(Qt::RichText);
-    intro->setText(bodyMarkup(QStringLiteral("Describe the change you want. I’ll propose it, and you review it before it touches the cut.")));
-    intro->setWordWrap(true);
-    intro->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    column->addWidget(intro);
-    column->addSpacing(10);
-    column->addWidget(label(QStringLiteral("Try asking"), "chatSection"));
-    column->addSpacing(4);
-    // Each as a row of plain words after an arrow, wrapping to two lines,
-    // as a list of suggestions: no box, a wash under the pointer.
-    auto *examples = new QWidget;
-    examples->setObjectName(QStringLiteral("chatExamples"));
-    auto *list = new QVBoxLayout(examples);
-    list->setContentsMargins(0, 0, 0, 0);
-    list->setSpacing(0);
-    for (const QString &example : {QStringLiteral("Trim the opening to three seconds."),
-                                   QStringLiteral("Lower the music under the dialogue.")}) {
-        auto *suggestion = new SuggestionButton(example);
-        suggestion->setObjectName(QStringLiteral("chatExample"));
-        suggestion->setToolTip(QStringLiteral("Write this in the composer"));
-        suggestion->setAccessibleName(example);
-        connect(suggestion, &QAbstractButton::clicked, this, [this, example] {
-            if (!m_input->isEnabled()) return;
-            m_input->setPlainText(example);
-            m_input->setFocus(Qt::OtherFocusReason);
-            m_input->moveCursor(QTextCursor::End);
-        });
-        list->addWidget(suggestion);
-        m_examples.append(suggestion);
+QWidget *ChatPanel::buildSearch() {
+    m_searchRow = new QWidget;
+    m_searchRow->setObjectName(QStringLiteral("chatSearch"));
+    m_searchRow->setFixedHeight(kSearchHeight);
+    auto *layout = new QHBoxLayout(m_searchRow);
+    layout->setContentsMargins(16, 0, 12, 8);
+    layout->setSpacing(4);
+    m_search = new QLineEdit;
+    m_search->setObjectName(QStringLiteral("commentSearch"));
+    m_search->setPlaceholderText(QStringLiteral("Search comments"));
+    m_search->setClearButtonEnabled(true);
+    m_search->setFont(tokens::font(control));
+    m_search->setStyleSheet(QStringLiteral("QLineEdit#commentSearch { background: %1; border: 0; border-radius: 6px; padding: 0 8px; "
+                                           "min-height: 24px; max-height: 24px; color: %2; }")
+                                .arg(color(raised).name(QColor::HexRgb), color(ink).name(QColor::HexRgb)));
+    {
+        QPalette palette = m_search->palette();
+        palette.setColor(QPalette::PlaceholderText, color(ink3));
+        m_search->setPalette(palette);
     }
-    column->addWidget(examples);
-    row->addLayout(column, 1);
-    return welcome;
-}
-
-QFrame *ChatPanel::buildComposer() {
-    auto *composer = new QFrame;
-    composer->setObjectName(QStringLiteral("chatComposer"));
-    auto *layout = new QVBoxLayout(composer);
-    layout->setContentsMargins(kSidePadding, 10, kSidePadding, 10);
-    layout->setSpacing(8);
-    auto *row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(12);
-    row->addWidget(new ChatAvatar(ChatAvatar::Who::User, kComposerAvatar), 0, Qt::AlignTop);
-    auto *field = new QVBoxLayout;
-    field->setContentsMargins(0, 0, 0, 0);
-    field->setSpacing(4);
-    m_input = new QTextEdit;
-    m_input->setObjectName(QStringLiteral("chatInput"));
-    m_input->setAccessibleName(QStringLiteral("Message Kerf"));
-    m_input->setAcceptRichText(false);
-    m_input->setFrameShape(QFrame::NoFrame);
-    m_input->document()->setDocumentMargin(0);
-    m_input->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_input->setTabChangesFocus(true);
-    m_input->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(m_input->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this, &ChatPanel::fitInput);
-    field->addWidget(m_input);
-    field->addWidget(new ComposerRule);
-    row->addLayout(field, 1);
-    layout->addLayout(row);
-
-    // Shown while the composer is in use: the model, a hint, Cancel, Send
-    // (or Stop while Kerf works), as a comment field shows its buttons.
-    m_composerActions = new QWidget;
-    m_composerActions->setObjectName(QStringLiteral("chatComposerActions"));
-    auto *actions = new QHBoxLayout(m_composerActions);
-    actions->setContentsMargins(kComposerAvatar + 12 - 4, 0, 0, 0);
-    actions->setSpacing(8);
-    m_model = new QComboBox;
-    m_model->setEditable(true);
-    m_model->setInsertPolicy(QComboBox::NoInsert);
-    m_model->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    m_model->setMinimumContentsLength(6);
-    m_model->setObjectName(QStringLiteral("agentModel"));
-    m_model->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    // It gives way to Cancel and Send in a narrow panel.
-    m_model->setMinimumWidth(64);
-    actions->addWidget(m_model, 0);
-    actions->addStretch(1);
-    m_cancel = pill(QStringLiteral("Cancel"), "chatPillText", kComposerPillHeight);
-    m_cancel->setToolTip(QStringLiteral("Clear the draft"));
-    connect(m_cancel, &QPushButton::clicked, this, [this] {
-        m_input->clear();
-        m_input->clearFocus();
-        updateComposer(m_busy);
+    m_search->installEventFilter(this);
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString &text) {
+        if (m_model) m_model->setSearch(text);
+        m_list->verticalScrollBar()->setValue(0);
     });
-    actions->addWidget(m_cancel);
-    m_stop = pill(QStringLiteral("Stop"), "chatPillTonal", kComposerPillHeight);
-    m_stop->setObjectName(QStringLiteral("abortButton"));
-    m_stop->setToolTip(QStringLiteral("Stop the current agent request"));
-    actions->addWidget(m_stop);
-    m_send = pill(QStringLiteral("Send"), "chatPillFilled", kComposerPillHeight);
-    m_send->setObjectName(QStringLiteral("chatSendButton"));
-    m_send->setAccessibleName(QStringLiteral("Send message"));
-    m_send->setToolTip(QStringLiteral("Send message (Return)"));
-    actions->addWidget(m_send);
-    layout->addWidget(m_composerActions);
-    connect(m_input, &QTextEdit::textChanged, this, [this] { updateComposer(m_busy); });
-    return composer;
+    layout->addWidget(m_search);
+    m_searchRow->hide();
+    return m_searchRow;
 }
 
-void ChatPanel::fitInput() {
-    // One line at rest, growing with the draft up to four, then it scrolls.
-    const int line = m_input->fontMetrics().lineSpacing();
-    const int content = static_cast<int>(std::ceil(m_input->document()->size().height()));
-    const int height = std::clamp(content, line, 4 * line);
-    if (m_input->height() != height) m_input->setFixedHeight(height);
-    m_input->setVerticalScrollBarPolicy(content > 4 * line ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
+void ChatPanel::setSearchShown(bool shown) {
+    m_searchRow->setVisible(shown);
+    if (shown) {
+        m_search->setFocus(Qt::ShortcutFocusReason);
+        m_search->selectAll();
+    } else {
+        m_search->clear();
+    }
 }
 
-CommentRow *ChatPanel::addComment(CommentRow::Kind kind, const QString &text) {
-    // Sending follows the conversation to the latest again.
-    if (m_rows.isEmpty() || kind == CommentRow::Kind::User) m_follow = true;
-    m_welcome->hide();
-    auto *row = new CommentRow(kind, text, QDateTime::currentDateTime());
-    connect(row, &CommentRow::askAgain, this, &ChatPanel::askAgain);
-    m_list->insertWidget(m_list->indexOf(m_statusRow), row);
-    m_rows.append(row);
-    updateCount();
+QFrame *ChatPanel::buildPinBar() {
+    m_pinBar = new QFrame;
+    m_pinBar->setObjectName(QStringLiteral("pinBar"));
+    m_pinBar->setFixedHeight(0);
+    m_pinBar->setCursor(Qt::PointingHandCursor);
+    m_pinBar->installEventFilter(this);
+    auto *layout = new QHBoxLayout(m_pinBar);
+    layout->setContentsMargins(16, 0, 8, 0);
+    layout->setSpacing(8);
+    auto *pin = new QLabel;
+    pin->setFixedSize(14, 14);
+    pin->setPixmap(icons::pixmap(QStringLiteral("g-pin"), color(ink3), 14, 2));
+    layout->addWidget(pin);
+    m_pinAuthor = makeLabel(control, ink3);
+    layout->addWidget(m_pinAuthor);
+    m_pinSummary = new ElidedLabel;
+    m_pinSummary->setFont(tokens::font(controlStrong));
+    {
+        QPalette palette = m_pinSummary->palette();
+        palette.setColor(QPalette::WindowText, color(ink));
+        m_pinSummary->setPalette(palette);
+    }
+    m_pinSummary->setFixedHeight(controlStrong.line);
+    m_pinSummary->setObjectName(QStringLiteral("pinSummary"));
+    m_pinSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    layout->addWidget(m_pinSummary, 1);
+    auto *nav = new QHBoxLayout;
+    nav->setSpacing(2);
+    m_pinPrev = new ui::IconButton(QStringLiteral("g-chevl"), ui::IconButton::Size::S20);
+    m_pinPrev->setTip(QStringLiteral("Previous proposal"));
+    m_pinCount = makeLabel(monoSmall, ink3);
+    m_pinNext = new ui::IconButton(QStringLiteral("g-chevr"), ui::IconButton::Size::S20);
+    m_pinNext->setTip(QStringLiteral("Next proposal"));
+    nav->addWidget(m_pinPrev);
+    nav->addWidget(m_pinCount);
+    nav->addWidget(m_pinNext);
+    layout->addLayout(nav);
+    const auto step = [this](int delta) {
+        const int n = m_model ? int(m_model->openProposals().size()) : 0;
+        if (n <= 0) return;
+        m_pinIndex = (m_pinIndex + delta + n) % n;
+        updatePinBar();
+    };
+    connect(m_pinPrev, &QAbstractButton::clicked, this, [step] { step(-1); });
+    connect(m_pinNext, &QAbstractButton::clicked, this, [step] { step(1); });
+    m_pinGrow = new QVariantAnimation(this);
+    m_pinGrow->setEasingCurve(easing());
+    connect(m_pinGrow, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_pinBar->setFixedHeight(value.toInt());
+    });
+    return m_pinBar;
+}
+
+// ---- inputs ----------------------------------------------------------------
+
+void ChatPanel::setReview(ReviewModel *model) {
+    if (m_model == model) return;
+    if (m_model) disconnect(m_model, nullptr, this, nullptr);
+    m_model = model;
+    if (m_model) {
+        m_model->setWelcomeShown(true);
+        connect(m_model, &ReviewModel::changed, this, &ChatPanel::scheduleRebuild);
+        connect(m_model, &ReviewModel::countsChanged, this, &ChatPanel::updateCounts);
+        connect(m_model, &ReviewModel::currentChanged, this, &ChatPanel::updateCurrent);
+    }
+    rebuild();
+}
+
+void ChatPanel::setSnapshot(const QJsonObject &snapshot) {
+    const QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+    const QJsonObject timelines = snapshot.value(QStringLiteral("proposalTimelines")).toObject();
+    if (timeline == m_timeline && timelines == m_proposalTimelines) return;
+    m_timeline = timeline;
+    m_proposalTimelines = timelines;
+    // A colour card whose frames never came (a newer preview request stops an
+    // older one) asks again when the rebuild finds it open.
+    for (auto it = m_colourRequested.begin(); it != m_colourRequested.end();) {
+        if (m_effectFrames.contains(QStringLiteral("after:") + *it)) ++it;
+        else it = m_colourRequested.erase(it);
+    }
+    scheduleRebuild();
+}
+
+void ChatPanel::setNamedTimeline(const QJsonObject &timeline) {
+    if (timeline == m_named) return;
+    m_named = timeline;
+    scheduleRebuild();
+}
+
+void ChatPanel::setFps(double fps) {
+    if (!(fps > 0) || fps == m_fps) return;
+    m_fps = fps;
+    m_composer->setTimecode(review::timecode(m_playhead, m_fps));
+    scheduleRebuild();
+}
+
+void ChatPanel::setPlayhead(double seconds) {
+    m_playhead = seconds;
+    m_composer->setTimecode(review::timecode(seconds, m_fps));
+}
+
+void ChatPanel::setConnected(bool connected) {
+    if (m_connected == connected) return;
+    m_connected = connected;
+    scheduleRebuild();
+}
+
+QString ChatPanel::reviewLink(double seconds) const { return m_reviewLink ? m_reviewLink(seconds) : QString(); }
+
+void ChatPanel::setModels(const QStringList &models, const QString &current, bool choosable) {
+    m_models = models;
+    m_currentModel = current;
+    m_modelsChoosable = choosable;
+}
+
+void ChatPanel::setNextSteps(const QJsonArray &steps) {
+    m_steps = steps;
+    refillWelcome();
+    updateSuggestions();
+}
+
+void ChatPanel::setCheckRows(const QJsonArray &rows) {
+    m_checkRows = rows;
+    updateSuggestions();
+}
+
+void ChatPanel::setPreviewProposal(const QString &proposalId) {
+    if (m_previewProposal == proposalId) return;
+    m_previewProposal = proposalId;
+    for (ProposalCard *card : cards()) {
+        const ReviewModel::Proposal *proposal = m_model ? m_model->proposal(card->proposalId()) : nullptr;
+        card->setPreview(!proposalId.isEmpty() && proposal && proposal->hasVersion(proposalId));
+    }
+}
+
+bool ChatPanel::setEffectPreview(const QString &key, const QImage &frame) {
+    if (!key.startsWith(QLatin1String("before:")) && !key.startsWith(QLatin1String("after:"))) return false;
+    m_effectFrames.insert(key, frame);
+    const QString version = key.section(QLatin1Char(':'), 1);
+    for (ProposalCard *card : cards())
+        if (card->shownId() == version)
+            card->setColourFrames(m_effectFrames.value(QStringLiteral("before:") + version),
+                                  m_effectFrames.value(QStringLiteral("after:") + version));
+    return true;
+}
+
+void ChatPanel::markSettledHere(const QString &proposalId, bool accepted) {
+    m_settledHere.insert(proposalId, accepted);
+    m_settledAt.insert(proposalId, QDateTime::currentDateTime());
+    scheduleRebuild();
+}
+
+QJsonObject ChatPanel::colourPreviewRequest(const QString &versionId) const {
+    if (!m_model) return {};
+    const ReviewModel::Proposal *proposal = m_model->proposal(versionId);
+    if (!proposal) return {};
+    const ColourChange change = colourChange(*proposal, versionId);
+    if (change.clip.isEmpty()) return {};
+    const QJsonObject clip = findClip(m_timeline, change.clip);
+    // At the playhead when it is over the clip, else the clip's middle.
+    const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+    const double end = start + clip.value(QStringLiteral("duration")).toDouble();
+    const double at = m_playhead >= start && m_playhead < end ? m_playhead : (start + end) / 2.0;
+    QJsonObject before{{QStringLiteral("fx"), change.fx}, {QStringLiteral("key"), QStringLiteral("before:") + versionId}};
+    // A new effect's "before" is the effect at its defaults: the clip as it is.
+    if (change.hadBefore) before.insert(QStringLiteral("params"), change.before);
+    const QJsonObject after{{QStringLiteral("fx"), change.fx},
+                            {QStringLiteral("params"), change.after},
+                            {QStringLiteral("key"), QStringLiteral("after:") + versionId}};
+    return QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
+                       {QStringLiteral("clip"), change.clip},
+                       {QStringLiteral("at"), at},
+                       {QStringLiteral("effects"), QJsonArray{before, after}},
+                       {QStringLiteral("width"), 160},
+                       {QStringLiteral("key"), QStringLiteral("proposal:") + versionId}};
+}
+
+ChatPanel::ColourChange ChatPanel::colourChange(const ReviewModel::Proposal &proposal, const QString &versionId) const {
+    ColourChange out;
+    const QList<ReviewModel::ClipChange> changes = versionChanges(proposal, versionId);
+    if (changes.size() != 1) return out;
+    const ReviewModel::ClipChange &change = changes.constFirst();
+    if (!change.effects || change.transition || change.added || change.removed) return out;
+    const QJsonObject was = findClip(m_timeline, change.clip);
+    const QJsonObject now = findClip(m_proposalTimelines.value(versionId).toObject(), change.clip);
+    if (now.isEmpty()) return out;
+    const QJsonArray before = was.value(QStringLiteral("effects")).toArray();
+    const QJsonArray after = now.value(QStringLiteral("effects")).toArray();
+    for (qsizetype index = 0; index < after.size(); ++index) {
+        const QJsonObject effect = after.at(index).toObject();
+        const QString fx = effect.value(QStringLiteral("fx")).toString();
+        QJsonObject old;
+        bool had = false;
+        for (qsizetype other = 0; other < before.size(); ++other) {
+            const QJsonObject candidate = before.at(other).toObject();
+            if (candidate.value(QStringLiteral("fx")).toString() == fx) {
+                old = candidate;
+                had = true;
+                break;
+            }
+        }
+        const QJsonObject oldParams = staticParams(old.value(QStringLiteral("params")).toObject());
+        const QJsonObject newParams = staticParams(effect.value(QStringLiteral("params")).toObject());
+        if (had && oldParams == newParams) continue;
+        if (!isColourEffect(fx)) return out;
+        out.clip = change.clip;
+        out.fx = fx;
+        out.hadBefore = had;
+        out.before = oldParams;
+        out.after = newParams;
+        out.title = QStringLiteral("%1 · %2").arg(change.name.isEmpty() ? clipName(change.clip) : change.name, effectLabel(fx));
+        QStringList parts;
+        for (auto it = newParams.begin(); it != newParams.end(); ++it) {
+            if (had && oldParams.value(it.key()) == it.value()) continue;
+            const QString value = paramValue(it.value());
+            if (!value.isEmpty()) parts << QStringLiteral("%1 %2").arg(effectLabel(it.key()), value);
+        }
+        out.params = parts.join(QStringLiteral(", "));
+        return out;
+    }
+    return out;
+}
+
+// ---- building the list --------------------------------------------------------
+
+void ChatPanel::scheduleRebuild() {
+    if (m_rebuildQueued) return;
+    m_rebuildQueued = true;
+    QTimer::singleShot(0, this, [this] {
+        if (m_rebuildQueued) rebuild();
+    });
+}
+
+QString ChatPanel::trackName(const QString &trackId) const {
+    for (const QJsonObject *timeline : {&m_named, &m_timeline})
+        for (const QJsonValue &value : timeline->value(QStringLiteral("tracks")).toArray()) {
+            const QJsonObject track = value.toObject();
+            if (track.value(QStringLiteral("id")).toString() != trackId) continue;
+            const QString name = track.value(QStringLiteral("name")).toString();
+            if (!name.isEmpty()) return name;
+        }
+    return trackId;
+}
+
+QString ChatPanel::clipName(const QString &clipId) const {
+    for (const QJsonObject *timeline : {&m_named, &m_timeline}) {
+        const QString name = findClip(*timeline, clipId).value(QStringLiteral("name")).toString();
+        if (!name.isEmpty()) return name;
+    }
+    return clipId;
+}
+
+QList<ReviewModel::ClipChange> ChatPanel::versionChanges(const ReviewModel::Proposal &proposal, const QString &versionId) const {
+    if (versionId.isEmpty() || versionId == proposal.id) {
+        if (!proposal.changes.isEmpty() || !m_proposalTimelines.contains(proposal.id)) return proposal.changes;
+    }
+    const QString id = versionId.isEmpty() ? proposal.id : versionId;
+    if (!m_proposalTimelines.contains(id)) return {};
+    return ReviewModel::diffTimelines(m_timeline, m_proposalTimelines.value(id).toObject());
+}
+
+bool ChatPanel::repliesOpenByDefault(const ReviewModel::Thread &thread) const {
+    // Open while something waits on them: a pending proposal, a failure,
+    // one's own reply; folded once settled or when they are only notes.
+    if (thread.resolved()) return false;
+    if (!thread.openProposal.isEmpty()) return true;
+    for (const ReviewModel::Comment &reply : thread.replies)
+        if (reply.error || (m_model && m_model->isOwn(reply))) return true;
+    return false;
+}
+
+void ChatPanel::connectRow(CommentRow *row) {
+    connect(row, &CommentRow::seekRequested, this, &ChatPanel::seekRequested);
+    connect(row, &CommentRow::hoverChanged, this, [this, row](bool hovered) {
+        if (row->threadId().isEmpty()) return;
+        emit threadHovered(hovered ? row->threadId() : QString());
+    });
+    connect(row, &CommentRow::pressed, this, [this, row] {
+        m_selectedComment = row->commentId();
+        for (CommentRow *other : rows()) other->setSelected(other == row && !row->commentId().isEmpty());
+        if (!row->commentId().isEmpty()) emit commentSelected(row->commentId());
+        if (m_model && !row->isReply() && !row->threadId().isEmpty() && m_model->thread(row->threadId())) {
+            m_model->setCurrentThread(row->threadId());
+            emit currentThreadChosen(row->threadId());
+        }
+    });
+    connect(row, &CommentRow::replyClicked, this, [this, row] { setReplyTarget(row->threadId()); });
+    connect(row, &CommentRow::ringClicked, this, [this, row] {
+        const ReviewModel::Thread *thread = m_model ? m_model->thread(row->threadId()) : nullptr;
+        if (thread) emit resolveRequested(thread->id, !thread->resolved());
+    });
+    connect(row, &CommentRow::moreClicked, this, [this, row] { showRowMenu(row); });
+    connect(row, &CommentRow::tagClicked, this, [this](const QString &tag) {
+        if (!m_model) return;
+        m_model->toggleTag(tag);
+        m_list->verticalScrollBar()->setValue(0);
+    });
+    connect(row, &CommentRow::foldToggled, this, [this, row](bool open) {
+        m_foldState.insert(row->threadId(), open);
+        if (ThreadWidget *thread = threadWidget(row->threadId())) thread->setRepliesShown(open);
+        QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
+    });
+    connect(row, &CommentRow::stepsToggled, this, [this, row](bool open) {
+        if (open) m_stepsOpen.insert(row->commentId());
+        else m_stepsOpen.remove(row->commentId());
+    });
+    connect(row, &CommentRow::suggestionChosen, this, [this](const QString &request) { m_composer->fill(request); });
+    connect(row, &CommentRow::stopClicked, this, &ChatPanel::stopRequested);
+    connect(row, &CommentRow::askAgainClicked, this, [this, row] {
+        for (const LocalTurn &turn : std::as_const(m_turns))
+            if (turn.kerf == row || turn.rows.contains(row)) {
+                emit askAgainInThread(turn.text, turn.threadId);
+                return;
+            }
+    });
+}
+
+CommentRow *ChatPanel::buildRow(const ReviewModel::Comment &comment, const ReviewModel::Thread &thread, bool root) {
+    auto *row = new CommentRow(CommentRow::Kind::Record, QString(), comment.created);
+    row->setCommentId(comment.id);
+    row->setThreadId(thread.id);
+    row->setFps(m_fps);
+    const bool own = m_model->isOwn(comment);
+    const QString kind = comment.author.kind.isEmpty() ? QStringLiteral("person") : comment.author.kind;
+    row->setAuthor(kind, own ? QString() : ReviewModel::initials(comment.author));
+    row->setName(m_model->displayName(comment.author));
+    QString role = comment.author.role;
+    if (role.isEmpty() && kind == QLatin1String("kerf")) role = QStringLiteral("agent");
+    // A person's role is said once, on the thread's note.
+    if (!root && comment.author.isPerson()) role.clear();
+    row->setRole(role);
+    if (root && comment.hasAt()) row->setMark(comment.at, comment.duration, m_fps);
+    row->setTime(comment.created, comment.revision);
+    row->setError(comment.error);
+    row->setDrawing(comment.hasDrawing());
+    row->setText(comment.body);
+    const bool record = thread.origin == ReviewModel::Origin::Record;
+    if (root) {
+        row->setMuted(thread.resolved());
+        if (record) row->setRing(true, thread.resolved());
+        if (!comment.qcKey.isEmpty() && thread.open) row->addTag(QStringLiteral("Failed"), TagButton::Style::Failed);
+        if (thread.flagged) row->addTag(QStringLiteral("Blocking"), TagButton::Style::Blocking, QString::fromLatin1(ReviewModel::kBlockingTag));
+        for (const QString &tag : thread.tags) row->addTag(QStringLiteral("#") + tag, TagButton::Style::Tag, tag);
+        if (thread.acceptedRevision >= 0)
+            row->addTag(QStringLiteral("Accepted in rev %1").arg(thread.acceptedRevision), TagButton::Style::Accepted);
+    }
+    if (comment.error) {
+        ChatExpander *again = row->addLink(QStringLiteral("Ask again"));
+        ChatExpander *copy = row->addLink(QStringLiteral("Copy"));
+        // The request that failed: the latest of one's own notes before it.
+        QString request = thread.root.body;
+        for (const ReviewModel::Comment &reply : thread.replies) {
+            if (reply.id == comment.id) break;
+            if (m_model->isOwn(reply)) request = reply.body;
+        }
+        const QString threadId = thread.id;
+        connect(again, &QAbstractButton::clicked, this, [this, request, threadId] {
+            emit askAgainInThread(request, threadId);
+        });
+        connect(copy, &QAbstractButton::clicked, this, [body = comment.body] { QApplication::clipboard()->setText(body); });
+    }
+    if (!comment.steps.isEmpty()) {
+        row->setSteps(comment.steps);
+        row->setRepliesExpanded(m_stepsOpen.contains(comment.id));
+    }
+    row->setActions(record, root && record && !own, true);
+    row->setSelected(!m_selectedComment.isEmpty() && comment.id == m_selectedComment);
+    connectRow(row);
     return row;
 }
 
+ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const ReviewModel::Thread &thread) {
+    // A settled proposal keeps a card only when it was settled here.
+    QString settledKey;
+    for (auto it = m_settledHere.cbegin(); it != m_settledHere.cend(); ++it)
+        if (proposal.hasVersion(it.key()) || it.key() == proposal.id) settledKey = it.key();
+    if (!proposal.isOpen() && settledKey.isEmpty()) return nullptr;
+    auto *card = new ProposalCard(proposal.id);
+    if (m_acceptAction) card->setAcceptKey(ui::keyText(m_acceptAction->shortcut()));
+    const QList<ReviewModel::Proposal> open = m_model->openProposals();
+    const bool pinned = proposal.isOpen() && !open.isEmpty() && open.constFirst().id == proposal.id;
+    CardState &state = m_cardState[proposal.id];
+    if (!state.openSet) {
+        state.open = pinned;
+        state.openSet = true;
+    }
+    QString shown = state.shown;
+    if (!shown.isEmpty() && !proposal.hasVersion(shown)) shown.clear();
+    const QString versionId = shown.isEmpty() ? proposal.id : shown;
+    card->setPinned(pinned, proposal.blocking);
+    card->setTitle(proposal.summary);
+
+    // The changes: from the timelines when there are some, else the script's words.
+    QList<ProposalCard::Change> rows;
+    for (const ReviewModel::ClipChange &change : versionChanges(proposal, versionId)) {
+        ProposalCard::Change row;
+        const QString name = change.transition ? QStringLiteral("Transition") : (change.name.isEmpty() ? clipName(change.clip) : change.name);
+        row.name = change.track.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, trackName(change.track));
+        if (change.removed) {
+            row.target = QStringLiteral("removed");
+        } else if (change.added) {
+            row.target = QStringLiteral("→ %1").arg(review::timecode(change.newStart, m_fps));
+            row.shift = QStringLiteral("new");
+        } else if (change.moved) {
+            row.target = QStringLiteral("→ %1").arg(review::timecode(change.newStart, m_fps));
+            row.shift = review::signedFrames(std::llround(change.shift() * m_fps));
+        } else if (change.trimmed) {
+            row.target = QStringLiteral("→ %1").arg(review::timecode(change.newEnd, m_fps));
+            row.shift = review::signedFrames(
+                std::llround(((change.newEnd - change.newStart) - (change.oldEnd - change.oldStart)) * m_fps));
+        } else {
+            QStringList what;
+            if (change.effects) what << QStringLiteral("effects");
+            if (change.properties) what << QStringLiteral("properties");
+            if (change.toggled) what << QStringLiteral("enabled");
+            if (change.retimed) what << QStringLiteral("speed");
+            if (change.relinked) what << QStringLiteral("link");
+            if (change.retracked) what << QStringLiteral("track");
+            row.target = what.join(QStringLiteral(", "));
+        }
+        rows << row;
+    }
+    if (rows.isEmpty() && m_describer) {
+        QString script = proposal.script;
+        for (const ReviewModel::Version &version : proposal.versions)
+            if (version.proposalId == versionId) script = version.script;
+        for (const QString &line : script.split(QLatin1Char('\n'))) {
+            const QString text = line.trimmed();
+            if (text.isEmpty() || text.startsWith(QLatin1Char('#')) || text.startsWith(QLatin1String("use "))) continue;
+            const ProposalChange change = m_describer(text);
+            rows << ProposalCard::Change{change.description, change.detail, QString()};
+        }
+    }
+    card->setChanges(rows);
+
+    // Versions, each with where its first move lands.
+    QList<ProposalCard::VersionItem> versions;
+    for (const ReviewModel::Version &version : proposal.versions) {
+        ProposalCard::VersionItem item{version.version, version.proposalId, QStringLiteral("v%1").arg(version.version)};
+        for (const ReviewModel::ClipChange &change : versionChanges(proposal, version.proposalId))
+            if (change.moved) {
+                item.label = QStringLiteral("v%1 %2 · %3 fr")
+                                 .arg(version.version)
+                                 .arg(review::timecode(change.newStart, m_fps))
+                                 .arg(review::signedFrames(std::llround(change.shift() * m_fps)).chopped(1));
+                break;
+            }
+        versions << item;
+    }
+    card->setVersions(versions, versionId);
+
+    // The colour chip, for a colour change on one clip.
+    const ColourChange colour = colourChange(proposal, versionId);
+    if (!colour.clip.isEmpty()) {
+        card->setColour(ProposalCard::Colour{colour.clip, colour.fx, colour.title, colour.params});
+        card->setColourFrames(m_effectFrames.value(QStringLiteral("before:") + versionId),
+                              m_effectFrames.value(QStringLiteral("after:") + versionId));
+    }
+
+    // The diff: the document's changed lines, else the script.
+    QString diff = proposal.documentDiff;
+    QString script = proposal.script;
+    for (const ReviewModel::Version &version : proposal.versions)
+        if (version.proposalId == versionId) {
+            diff = version.documentDiff;
+            script = version.script;
+        }
+    QStringList lines;
+    for (const QString &line : diff.split(QLatin1Char('\n'))) {
+        if (line.startsWith(QLatin1String("+++")) || line.startsWith(QLatin1String("---"))) continue;
+        if (line.startsWith(QLatin1Char('+')) || line.startsWith(QLatin1Char('-'))) lines << line;
+    }
+    if (lines.isEmpty())
+        for (const QString &line : script.split(QLatin1Char('\n')))
+            if (!line.trimmed().isEmpty()) lines << line;
+    card->setDiff(lines);
+
+    card->setOpen(state.open);
+    card->setScriptShown(state.script);
+    card->setPreview(!m_previewProposal.isEmpty() && proposal.hasVersion(m_previewProposal));
+    card->setPrimary(pinned || proposal.blocking);
+    const ReviewModel::Comment &root = thread.root;
+    if (root.author.isPerson() && !m_model->isOwn(root) && thread.origin == ReviewModel::Origin::Record)
+        card->setAcceptTip(QStringLiteral("Accept · resolves %1's note").arg(firstName(root.author.name)));
+    card->setGuest(m_model->guestMode());
+    if (proposal.stale) card->setAcceptBlocked(QStringLiteral("Out of date · ask for a new version"));
+    if (!m_connected) card->setActionsEnabled(false);
+    if (!proposal.isOpen()) {
+        const bool accepted = proposal.status == QLatin1String("accepted");
+        const QString when = review::age(m_settledAt.value(settledKey), QDateTime::currentDateTime());
+        card->setSettled(accepted ? (proposal.appliedRevision >= 0
+                                         ? QStringLiteral("Accepted in rev %1 · You · %2").arg(proposal.appliedRevision).arg(when)
+                                         : QStringLiteral("Accepted · You · %1").arg(when))
+                                  : QStringLiteral("Rejected · You · %1").arg(when),
+                         accepted);
+    }
+
+    const QString id = proposal.id;
+    connect(card, &ProposalCard::openToggled, this, [this, id, card](bool openNow) {
+        m_cardState[id].open = openNow;
+        if (openNow && card->hasColour() && !m_colourRequested.contains(card->shownId())) {
+            m_colourRequested.insert(card->shownId());
+            emit colourPreviewWanted(card->shownId());
+        }
+        QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
+    });
+    connect(card, &ProposalCard::scriptToggled, this, [this, id](bool shownNow) { m_cardState[id].script = shownNow; });
+    connect(card, &ProposalCard::previewToggled, this, [this, card](bool on) { emit previewRequested(card->shownId(), on); });
+    connect(card, &ProposalCard::versionChosen, this, [this, id](const QString &version) {
+        m_cardState[id].shown = version == id ? QString() : version;
+        // Choosing an older version previews it.
+        emit previewRequested(version, true);
+        emit shownVersionChanged(id, version);
+        scheduleRebuild();
+    });
+    connect(card, &ProposalCard::acceptRequested, this, &ChatPanel::acceptRequested);
+    connect(card, &ProposalCard::rejectRequested, this, &ChatPanel::rejectRequested);
+    if (state.open && card->hasColour() && !m_colourRequested.contains(versionId)) {
+        m_colourRequested.insert(versionId);
+        QTimer::singleShot(0, this, [this, versionId] { emit colourPreviewWanted(versionId); });
+    }
+    return card;
+}
+
+void ChatPanel::stashLocalRows() {
+    m_welcomeRow->setParent(m_stash);
+    for (LocalTurn &turn : m_turns)
+        for (const QPointer<CommentRow> &row : std::as_const(turn.rows))
+            if (row) row->setParent(m_stash);
+    for (const QPointer<CommentRow> &row : std::as_const(m_pendingNotes))
+        if (row) row->setParent(m_stash);
+}
+
+void ChatPanel::rebuild() {
+    m_rebuildQueued = false;
+    const int scrolled = m_list->verticalScrollBar()->value();
+    stashLocalRows();
+    // Later, not now: a row of an old thread may be the sender of the
+    // signal that asked for this rebuild.
+    for (ThreadWidget *thread : std::as_const(m_threads)) {
+        m_listLayout->removeWidget(thread);
+        thread->hide();
+        thread->setParent(nullptr);
+        thread->deleteLater();
+    }
+    m_threads.clear();
+
+    bool first = true;
+    const auto addThread = [this, &first](ThreadWidget *thread) {
+        m_listLayout->insertWidget(int(m_threads.size()), thread);
+        m_threads.append(thread);
+        // Shown now, not by the layout's queued show, so the list measures it.
+        thread->show();
+        first = false;
+    };
+    const QList<ReviewModel::Thread> threads = m_model ? m_model->threads() : QList<ReviewModel::Thread>{};
+    const bool welcome = !m_model || std::any_of(threads.begin(), threads.end(), [](const ReviewModel::Thread &thread) {
+        return thread.origin == ReviewModel::Origin::Welcome;
+    });
+    if (welcome) {
+        auto *thread = new ThreadWidget(QString::fromLatin1(ReviewModel::kWelcomeId), first);
+        thread->setRoot(m_welcomeRow);
+        m_welcomeRow->setThreadId(thread->threadId());
+        m_welcomeRow->show();
+        addThread(thread);
+    }
+    for (const ReviewModel::Thread &thread : threads) {
+        if (thread.origin == ReviewModel::Origin::Welcome) continue;
+        auto *widget = new ThreadWidget(thread.id, first);
+        CommentRow *root = buildRow(thread.root, thread, true);
+        widget->setRoot(root);
+        root->setCurrent(m_model->isCurrent(thread.id));
+        QList<CommentRow *> replies;
+        for (const ReviewModel::Comment &reply : thread.replies) {
+            CommentRow *row = buildRow(reply, thread, false);
+            widget->addReply(row);
+            replies << row;
+        }
+        // Each proposal's card goes under the first comment that carries it.
+        QSet<QString> carded;
+        const auto attach = [&](CommentRow *row, const QString &carried, bool isRoot) {
+            if (carried.isEmpty()) return;
+            const ReviewModel::Proposal *proposal = m_model->proposal(carried);
+            if (!proposal || carded.contains(proposal->id)) return;
+            carded.insert(proposal->id);
+            ProposalCard *card = buildCard(*proposal, thread);
+            if (!card) return;
+            if (isRoot || card->isSettled()) row->addBodyWidget(card);
+            else row->addWideWidget(card);
+        };
+        attach(root, thread.origin == ReviewModel::Origin::Proposal ? thread.openProposal : thread.root.proposal, true);
+        for (qsizetype index = 0; index < thread.replies.size(); ++index)
+            attach(replies.at(index), thread.replies.at(index).proposal, false);
+        const bool open = m_foldState.value(thread.id, repliesOpenByDefault(thread));
+        root->setReplyFold(int(thread.replies.size()), open);
+        widget->setRepliesShown(open);
+        addThread(widget);
+    }
+    placeLocalRows(first);
+    updateCounts();
+    updateHeader();
+    // The people and notes the composer offers follow the review.
+    updateSuggestions();
+    syncContent();
+    m_list->verticalScrollBar()->setValue(scrolled);
+    QTimer::singleShot(0, this, [this] {
+        m_list->updateFades();
+        updatePinBar();
+        if (!m_placed && isVisible()) placeFirst();
+    });
+}
+
+void ChatPanel::placeLocalRows(bool &first) {
+    // Notes posted with comment_add, then the agent turns, each in its
+    // thread when it has one in the list, else as a thread of its own.
+    const auto place = [this, &first](const QString &threadId, const QList<CommentRow *> &rows) {
+        if (rows.isEmpty()) return;
+        if (ThreadWidget *thread = threadWidget(threadId)) {
+            for (CommentRow *row : rows) {
+                thread->addReply(row);
+                row->setThreadId(threadId);
+                row->show();
+            }
+            thread->setRepliesShown(true);
+            if (CommentRow *root = thread->root())
+                if (ChatExpander *fold = root->replyFold()) fold->setOpenQuietly(true);
+            return;
+        }
+        auto *thread = new ThreadWidget(QStringLiteral("local:%1").arg(m_threads.size()), first);
+        thread->setRoot(rows.constFirst());
+        rows.constFirst()->show();
+        for (qsizetype index = 1; index < rows.size(); ++index) {
+            thread->addReply(rows.at(index));
+            rows.at(index)->show();
+        }
+        thread->setRepliesShown(true);
+        m_listLayout->insertWidget(int(m_threads.size()), thread);
+        m_threads.append(thread);
+        thread->show();
+        first = false;
+    };
+    for (auto it = m_pendingNotes.cbegin(); it != m_pendingNotes.cend(); ++it)
+        if (it.value()) place(m_pendingThreads.value(it.key()), {it.value().data()});
+    for (const LocalTurn &turn : std::as_const(m_turns)) {
+        QList<CommentRow *> rows;
+        for (const QPointer<CommentRow> &row : turn.rows)
+            if (row) rows << row.data();
+        place(turn.threadId, rows);
+    }
+}
+
+void ChatPanel::refillWelcome() {
+    QList<QPair<QString, QString>> suggestions;
+    for (const QJsonValue &value : std::as_const(m_steps)) {
+        const QJsonObject step = value.toObject();
+        const QString label = value.isString() ? value.toString() : step.value(QStringLiteral("label")).toString();
+        const QString request = value.isString() ? value.toString() : step.value(QStringLiteral("request")).toString();
+        if (!label.isEmpty()) suggestions.append({label, request.isEmpty() ? label : request});
+    }
+    m_welcomeRow->setSuggestions(suggestions);
+}
+
+void ChatPanel::updateCounts() {
+}
+
+void ChatPanel::updateHeader() {
+    // A filter that hides rows shows on the ⋯ button.
+    const bool chip = m_model && m_model->chip() != ReviewModel::Chip::All;
+    const bool from = m_model && m_model->from() != ReviewModel::From::Anyone;
+    m_filterDot->setVisible(chip || from);
+}
+
+bool ChatPanel::filterDotShown() const { return !m_filterDot->isHidden(); }
+
+void ChatPanel::updateCurrent() {
+    for (ThreadWidget *thread : std::as_const(m_threads))
+        if (CommentRow *root = thread->root()) root->setCurrent(m_model && m_model->isCurrent(thread->threadId()));
+}
+
+// ---- threads -------------------------------------------------------------------
+
+QList<ThreadWidget *> ChatPanel::threadWidgets() const { return m_threads; }
+
+ThreadWidget *ChatPanel::threadWidget(const QString &threadId) const {
+    if (threadId.isEmpty()) return nullptr;
+    for (ThreadWidget *thread : m_threads)
+        if (thread->threadId() == threadId) return thread;
+    return nullptr;
+}
+
+CommentRow *ChatPanel::rowFor(const QString &commentId) const {
+    if (commentId.isEmpty()) return nullptr;
+    for (CommentRow *row : rows())
+        if (row->commentId() == commentId) return row;
+    return nullptr;
+}
+
+void ChatPanel::setAcceptAction(QAction *action) {
+    m_acceptAction = action;
+    if (!action) return;
+    const auto follow = [this, action] {
+        for (ProposalCard *card : cards()) card->setAcceptKey(ui::keyText(action->shortcut()));
+    };
+    connect(action, &QAction::changed, this, follow);
+    follow();
+}
+
+ProposalCard *ChatPanel::card(const QString &proposalId) const {
+    const ReviewModel::Proposal *proposal = m_model ? m_model->proposal(proposalId) : nullptr;
+    for (ProposalCard *card : cards())
+        if (card->proposalId() == proposalId || (proposal && card->proposalId() == proposal->id)) return card;
+    return nullptr;
+}
+
+QList<ProposalCard *> ChatPanel::cards() const { return m_content->findChildren<ProposalCard *>(); }
+
+void ChatPanel::syncContent() {
+    // The scroll area sizes its content on a posted layout request; size it
+    // now, so the scroll range is the content's before scrolling.
+    QCoreApplication::sendPostedEvents(m_content, QEvent::LayoutRequest);
+    m_content->layout()->activate();
+    const int width = m_list->viewport()->width();
+    const int height = std::max(m_list->viewport()->height(),
+                                m_content->hasHeightForWidth() ? m_content->heightForWidth(width) : m_content->sizeHint().height());
+    if (m_content->size() != QSize(width, height)) m_content->resize(width, height);
+}
+
+void ChatPanel::scrollToThread(const QString &threadId) {
+    ThreadWidget *thread = threadWidget(threadId);
+    if (!thread || !thread->root()) return;
+    syncContent();
+    // Its highlight starts 12 under the list's top.
+    const int top = thread->root()->mapTo(m_content, QPoint()).y();
+    m_list->verticalScrollBar()->setValue(std::max(0, top - kListTop));
+}
+
+void ChatPanel::openThread(const QString &threadId, bool flash) {
+    if (!m_model) return;
+    const ReviewModel::Thread *thread = m_model->threadOf(threadId);
+    if (!thread) return;
+    const QString id = thread->id;
+    // A thread the filters hide is shown again.
+    if (!m_model->passes(*thread)) m_model->clearFilters();
+    m_model->setCurrentThread(id);
+    m_foldState.insert(id, true);
+    if (m_rebuildQueued) rebuild();
+    if (ThreadWidget *widget = threadWidget(id)) {
+        widget->setRepliesShown(true);
+        if (CommentRow *root = widget->root())
+            if (ChatExpander *fold = root->replyFold()) fold->setOpenQuietly(true);
+    }
+    m_placed = true;
+    QTimer::singleShot(0, this, [this, id, flash] {
+        scrollToThread(id);
+        if (flash)
+            if (ThreadWidget *widget = threadWidget(id))
+                if (CommentRow *root = widget->root()) root->flash();
+    });
+}
+
+void ChatPanel::placeFirst() {
+    // After the rebuild that lists the threads (it calls this again).
+    if (m_placed || !m_model || m_rebuildQueued) return;
+    QString current = m_model->currentThread();
+    if (current.isEmpty()) current = m_model->threadAt(m_playhead, 0.5);
+    if (current.isEmpty()) {
+        const QList<ReviewModel::Thread> threads = m_model->threads();
+        for (const ReviewModel::Thread &thread : threads)
+            if (thread.origin == ReviewModel::Origin::Record && thread.open) {
+                current = thread.id;
+                break;
+            }
+    }
+    if (current.isEmpty() || !threadWidget(current)) return;
+    m_placed = true;
+    m_model->setCurrentThread(current);
+    scrollToThread(current);
+    if (!m_reviewWorkspace) return;
+    // In Review, the pinned proposal's Accept row clears the bottom fade by 30.
+    const QList<ReviewModel::Proposal> open = m_model->openProposals();
+    if (open.isEmpty()) return;
+    ProposalCard *pinned = card(open.constFirst().id);
+    if (!pinned || !pinned->footer()->isVisible()) return;
+    QScrollBar *bar = m_list->verticalScrollBar();
+    const int footerBottom = pinned->footer()->mapTo(m_content, QPoint(0, pinned->footer()->height())).y();
+    const int wanted = footerBottom - (m_list->viewport()->height() - 30);
+    if (wanted > bar->value()) bar->setValue(std::min(wanted, bar->maximum()));
+}
+
+// ---- the pin bar -----------------------------------------------------------------
+
+QString ChatPanel::pinBarProposal() const {
+    if (!m_model) return {};
+    const QList<ReviewModel::Proposal> open = m_model->openProposals();
+    if (open.isEmpty()) return {};
+    return open.at(m_pinIndex % open.size()).id;
+}
+
+void ChatPanel::updatePinBar() {
+    const QList<ReviewModel::Proposal> open = m_model ? m_model->openProposals() : QList<ReviewModel::Proposal>{};
+    if (open.isEmpty()) {
+        m_pinIndex = 0;
+        animatePinBar(false);
+        return;
+    }
+    m_pinIndex %= int(open.size());
+    const ReviewModel::Proposal &proposal = open.at(m_pinIndex);
+    m_pinAuthor->setText(m_model->displayName(proposal.author));
+    m_pinAuthor->setFixedWidth(ui::snapWidth(control, m_pinAuthor->text()));
+    m_pinSummary->setText(proposal.summary);
+    m_pinSummary->setToolTip(QString());
+    ui::setTip(m_pinSummary, proposal.summary);
+    m_pinCount->setText(QStringLiteral("%1/%2").arg(m_pinIndex + 1).arg(open.size()));
+    m_pinCount->setFixedWidth(ui::snapWidth(monoSmall, m_pinCount->text()));
+    // Shown while that card's footer is not fully in view.
+    bool visible = false;
+    if (ProposalCard *card = this->card(proposal.id)) {
+        QWidget *footer = card->footer();
+        if (footer->isVisible()) {
+            const QRect area = m_list->viewport()->rect();
+            const QPoint top = footer->mapTo(m_list->viewport(), QPoint(0, 0));
+            const int bottom = top.y() + footer->height();
+            visible = top.y() >= area.top() - 1 && bottom <= area.bottom() + 1 - kPinMargin;
+        }
+    }
+    animatePinBar(!visible);
+}
+
+void ChatPanel::animatePinBar(bool shown) {
+    if (shown == m_pinWanted && (m_pinGrow->state() == QAbstractAnimation::Running || m_pinBar->height() == (shown ? kPinHeight : 0)))
+        return;
+    m_pinWanted = shown;
+    m_pinGrow->stop();
+    const int target = shown ? kPinHeight : 0;
+    const int ms = ui::motionDuration(motion::fade);
+    if (ms <= 0 || !isVisible()) {
+        m_pinBar->setFixedHeight(target);
+        return;
+    }
+    m_pinGrow->setDuration(ms);
+    m_pinGrow->setStartValue(m_pinBar->height());
+    m_pinGrow->setEndValue(target);
+    m_pinGrow->start();
+}
+
+// ---- the agent turn in progress ---------------------------------------------------------
+
+CommentRow *ChatPanel::beginTurn(const QString &text, const QString &threadId, double at) {
+    LocalTurn turn;
+    turn.threadId = threadId;
+    turn.started = QDateTime::currentDateTimeUtc();
+    turn.text = text;
+    auto *row = new CommentRow(CommentRow::Kind::User, text, QDateTime::currentDateTime(), m_stash);
+    row->setFps(m_fps);
+    if (threadId.isEmpty() && std::isfinite(at)) row->setMark(at, 0, m_fps);
+    ui::setTip(row->timeLabel(), QStringLiteral("Unsaved · syncs on push"));
+    connectRow(row);
+    turn.rows << row;
+    m_turns << turn;
+    scheduleRebuild();
+    scheduleFollow();
+    return row;
+}
+
+CommentRow *ChatPanel::turnKerfRow(bool create) {
+    if (m_turns.isEmpty()) {
+        if (!create) return nullptr;
+        LocalTurn turn;
+        turn.started = QDateTime::currentDateTimeUtc();
+        m_turns << turn;
+    }
+    LocalTurn &turn = m_turns.last();
+    if (turn.kerf || !create) return turn.kerf;
+    auto *row = new CommentRow(CommentRow::Kind::Drafting, QString(), QDateTime(), m_stash);
+    row->setFps(m_fps);
+    row->setRole(QStringLiteral("agent"));
+    connectRow(row);
+    turn.kerf = row;
+    turn.rows << row;
+    scheduleRebuild();
+    scheduleFollow();
+    return row;
+}
+
+void ChatPanel::setTurnBusy(bool busy) {
+    if (busy) {
+        CommentRow *row = turnKerfRow(true);
+        if (row && !row->isDrafting() && !m_turns.last().done) row->setDrafting(true);
+    }
+    m_composer->setBusy(busy);
+}
+
+void ChatPanel::setTurnStatus(const QString &meta) {
+    if (m_turns.isEmpty()) return;
+    if (CommentRow *row = m_turns.last().kerf) row->setDraftMeta(meta);
+}
+
+void ChatPanel::stopTurn() {
+    if (m_turns.isEmpty()) return;
+    // The stop may come after the turn ended (busy off first): the stopped
+    // row stands in for Kerf's answer either way.
+    CommentRow *row = turnKerfRow(true);
+    if (row) row->setStopped(true);
+    m_turns.last().done = true;
+}
+
+void ChatPanel::finishTurn() {
+    if (m_turns.isEmpty()) return;
+    LocalTurn &turn = m_turns.last();
+    if (turn.kerf && turn.kerf->isDrafting()) {
+        if (turn.kerf->text().isEmpty() && turn.kerf->replies().isEmpty()) {
+            turn.rows.removeAll(turn.kerf);
+            turn.kerf->deleteLater();
+            turn.kerf = nullptr;
+            scheduleRebuild();
+        } else {
+            turn.kerf->finish();
+        }
+    }
+    turn.done = true;
+    reconcileLocal();
+}
+
+CommentRow *ChatPanel::addPendingNote(const QString &clientId, const QString &text, const QString &threadId, double at) {
+    auto *row = new CommentRow(CommentRow::Kind::User, text, QDateTime::currentDateTime(), m_stash);
+    row->setCommentId(clientId);
+    row->setFps(m_fps);
+    if (threadId.isEmpty() && std::isfinite(at)) row->setMark(at, 0, m_fps);
+    ui::setTip(row->timeLabel(), QStringLiteral("Saving"));
+    connectRow(row);
+    m_pendingNotes.insert(clientId, row);
+    m_pendingThreads.insert(clientId, threadId);
+    scheduleRebuild();
+    scheduleFollow();
+    return row;
+}
+
+void ChatPanel::failPendingNote(const QString &clientId, const QString &message) {
+    if (CommentRow *row = m_pendingNotes.value(clientId)) {
+        row->setError(true);
+        row->errorLabel()->setText(QStringLiteral("Couldn't post"));
+        ui::setTip(row->errorLabel(), message);
+    }
+}
+
+void ChatPanel::reconcileLocal() {
+    if (!m_model) return;
+    bool changed = false;
+    // Notes the log has by their client id.
+    for (auto it = m_pendingNotes.begin(); it != m_pendingNotes.end();) {
+        if (!it.value() || m_model->comment(it.key())) {
+            if (it.value()) it.value()->deleteLater();
+            m_pendingThreads.remove(it.key());
+            it = m_pendingNotes.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    // The agent turn's rows, once kerfd recorded them as comments: the
+    // request as one's own comment with its words, Kerf's answer as a
+    // reply in that thread written after the turn began.
+    QSet<QString> claimed;
+    for (LocalTurn &turn : m_turns) {
+        const QDateTime since = turn.started.addSecs(-5);
+        if (!turn.youRecorded && !turn.rows.isEmpty() && turn.rows.constFirst() && turn.rows.constFirst()->kind() == CommentRow::Kind::User) {
+            for (const ReviewModel::Thread &thread : m_model->allThreads()) {
+                QList<const ReviewModel::Comment *> comments{&thread.root};
+                for (const ReviewModel::Comment &reply : thread.replies) comments << &reply;
+                for (const ReviewModel::Comment *comment : comments) {
+                    if (claimed.contains(comment->id) || !m_model->isOwn(*comment)) continue;
+                    if (comment->body.trimmed() != turn.text.trimmed()) continue;
+                    if (comment->created.isValid() && comment->created < since) continue;
+                    claimed.insert(comment->id);
+                    turn.youRecorded = true;
+                    turn.threadId = thread.id;
+                    CommentRow *you = turn.rows.takeFirst();
+                    if (you) you->deleteLater();
+                    changed = true;
+                    break;
+                }
+                if (turn.youRecorded) break;
+            }
+        }
+        if (turn.done && turn.kerf && (turn.youRecorded || turn.threadId.isEmpty())) {
+            const ReviewModel::Thread *thread = m_model->thread(turn.threadId);
+            bool answered = false;
+            if (thread)
+                for (const ReviewModel::Comment &reply : thread->replies)
+                    if (reply.author.isKerf() && (!reply.created.isValid() || reply.created >= since)) answered = true;
+            if (answered) {
+                turn.rows.removeAll(turn.kerf);
+                turn.kerf->deleteLater();
+                turn.kerf = nullptr;
+                changed = true;
+            }
+        }
+    }
+    // Error rows of a finished, recorded turn go with it.
+    for (qsizetype index = m_turns.size() - 1; index >= 0; --index) {
+        LocalTurn &turn = m_turns[index];
+        turn.rows.removeAll(QPointer<CommentRow>());
+        if (turn.done && turn.youRecorded && !turn.kerf) {
+            for (const QPointer<CommentRow> &row : std::as_const(turn.rows))
+                if (row) row->deleteLater();
+            turn.rows.clear();
+        }
+        if (turn.rows.isEmpty() && (turn.done || index < m_turns.size() - 1)) {
+            m_turns.removeAt(index);
+            changed = true;
+        }
+    }
+    if (changed) scheduleRebuild();
+}
+
+CommentRow *ChatPanel::addComment(CommentRow::Kind kind, const QString &text) {
+    switch (kind) {
+    case CommentRow::Kind::User: return beginTurn(text, m_replyTarget);
+    case CommentRow::Kind::Kerf:
+    case CommentRow::Kind::Record: {
+        // Kerf's answer in the turn in progress, or a turn of its own.
+        if (m_turns.isEmpty() || m_turns.last().kerf || m_turns.last().done) {
+            LocalTurn turn;
+            turn.started = QDateTime::currentDateTimeUtc();
+            if (!m_turns.isEmpty() && m_turns.last().done) turn.threadId = m_turns.last().threadId;
+            m_turns << turn;
+        }
+        auto *row = new CommentRow(CommentRow::Kind::Kerf, text, QDateTime::currentDateTime(), m_stash);
+        row->setFps(m_fps);
+        row->setRole(QStringLiteral("agent"));
+        connectRow(row);
+        m_turns.last().kerf = row;
+        m_turns.last().rows << row;
+        scheduleRebuild();
+        scheduleFollow();
+        return row;
+    }
+    case CommentRow::Kind::Error: {
+        if (m_turns.isEmpty()) {
+            LocalTurn turn;
+            turn.started = QDateTime::currentDateTimeUtc();
+            m_turns << turn;
+        }
+        LocalTurn &turn = m_turns.last();
+        CommentRow *row = turn.kerf;
+        if (row && row->isDrafting()) {
+            row->finish();
+            row->setText(text);
+            row->setError(true);
+        } else {
+            row = new CommentRow(CommentRow::Kind::Error, text, QDateTime::currentDateTime(), m_stash);
+            row->setFps(m_fps);
+            row->setRole(QStringLiteral("agent"));
+            connectRow(row);
+            turn.rows << row;
+        }
+        ChatExpander *again = row->addLink(QStringLiteral("Ask again"));
+        ChatExpander *copy = row->addLink(QStringLiteral("Copy"));
+        const QString request = turn.text;
+        const QString threadId = turn.threadId;
+        connect(again, &QAbstractButton::clicked, this, [this, request, threadId] {
+            if (!request.isEmpty()) emit askAgainInThread(request, threadId);
+        });
+        connect(copy, &QAbstractButton::clicked, this, [row] { QApplication::clipboard()->setText(row->text()); });
+        scheduleRebuild();
+        scheduleFollow();
+        return row;
+    }
+    case CommentRow::Kind::Drafting: return turnKerfRow(true);
+    }
+    return nullptr;
+}
+
+QList<CommentRow *> ChatPanel::rows() const {
+    QList<CommentRow *> out;
+    for (ThreadWidget *thread : m_threads)
+        for (CommentRow *row : thread->rows())
+            if (row != m_welcomeRow) out << row;
+    // Local rows the next rebuild places, in their order.
+    for (const QPointer<CommentRow> &row : m_pendingNotes)
+        if (row && row->parentWidget() == m_stash) out << row.data();
+    for (const LocalTurn &turn : m_turns)
+        for (const QPointer<CommentRow> &row : turn.rows)
+            if (row && row->parentWidget() == m_stash) out << row.data();
+    return out;
+}
+
 QString ChatPanel::transcript() const {
-    QStringList parts;
-    for (const CommentRow *row : m_rows) parts << row->name() + QLatin1Char('\n') + row->text();
-    return parts.join(QStringLiteral("\n\n"));
+    QStringList lines;
+    for (CommentRow *row : rows()) {
+        lines << row->name();
+        if (!row->text().isEmpty()) lines << row->text();
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 void ChatPanel::refreshTimes() {
     const QDateTime now = QDateTime::currentDateTime();
-    for (CommentRow *row : std::as_const(m_rows)) row->refreshTime(now);
-    if (m_welcomeTime) m_welcomeTime->setText(relativeTime(m_welcomeSince, now));
-    if (m_proposalSince.isValid()) m_proposalTime->setText(relativeTime(m_proposalSince, now));
+    m_welcomeRow->setTime(m_welcomeSince);
+    m_welcomeRow->refreshTime(now);
+    ui::setTip(m_welcomeRow->timeLabel(), QStringLiteral("Since this window opened"));
+    for (CommentRow *row : rows()) row->refreshTime(now);
 }
 
-void ChatPanel::updateCount() {
-    // As a comments panel heads itself: the title, then how many.
-    m_count->setText(m_rows.isEmpty() ? QString() : QString::number(m_rows.size()));
-}
-
-void ChatPanel::setProposalShown(bool shown, const QString &id) {
-    m_proposal->setVisible(shown);
-    if (!shown) {
-        m_proposalExpander->setChecked(false);
-        m_proposalId.clear();
-        m_proposalSince = QDateTime();
-    } else if (!id.isEmpty() && id != m_proposalId) {
-        // A new proposal is read from its head: the list scrolls to its top
-        // (the proposal 16 points under the header) and stops following the
-        // latest comment until the reader scrolls or sends.
-        m_proposalId = id;
-        // Its time ages from when it came, as a comment's does.
-        m_proposalSince = QDateTime::currentDateTime();
-        m_proposalTime->setText(relativeTime(m_proposalSince, m_proposalSince));
-        m_follow = false;
-        m_scroll->verticalScrollBar()->setValue(0);
-        QTimer::singleShot(0, this, [this] {
-            if (!m_follow) m_scroll->verticalScrollBar()->setValue(0);
-        });
-    }
-    updateListEdge();
-}
-
-QList<ProposalChangeRow *> ChatPanel::proposalChangeRows() const {
-    return m_proposalChanges->findChildren<ProposalChangeRow *>(QString(), Qt::FindDirectChildrenOnly);
-}
-
-void ChatPanel::setProposalChanges(const QList<ProposalChange> &changes) {
-    QLayout *layout = m_proposalChanges->layout();
-    while (QLayoutItem *item = layout->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
-    const qsizetype shown = std::min<qsizetype>(changes.size(), kProposalChangeLines);
-    for (qsizetype index = 0; index < shown; ++index) layout->addWidget(new ProposalChangeRow(changes.at(index), m_proposalChanges));
-    if (changes.size() > shown)
-        layout->addWidget(label(QStringLiteral("%1 more in the script").arg(changes.size() - shown), "chatChangeMore"));
-    m_proposalChanges->setProperty("count", int(changes.size()));
-    fitProposalDiff();
-}
-
-bool ChatPanel::proposalExpanded() const { return m_proposalExpander->isChecked(); }
-
-void ChatPanel::setProposalExpanded(bool expanded) { m_proposalExpander->setChecked(expanded); }
-
-bool ChatPanel::composerExpanded() const { return m_composerActions->isVisibleTo(m_composer); }
-
-void ChatPanel::updateComposer(bool busy) {
-    m_busy = busy;
-    const QWidget *focus = QApplication::focusWidget();
-    const bool focused = focus && m_composer->isAncestorOf(focus);
-    const bool draft = !m_input->toPlainText().isEmpty();
-    m_composerActions->setVisible(m_input->isEnabled() ? (focused || draft || busy) : busy);
-    m_cancel->setVisible(!busy && (focused || draft));
-    m_typing->setProperty("active", busy);
-    m_typing->update();
-    fitInput();
-}
-
-void ChatPanel::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(editorTheme().chatSurface);
-    painter.drawRoundedRect(QRectF(rect()), kRadius, kRadius);
-}
-
-void ChatPanel::resizeEvent(QResizeEvent *) {
-    m_resizeHandle->setGeometry(0, kRadius, 6, std::max(0, height() - 2 * kRadius));
-    m_resizeHandle->raise();
-    placeProposalExpander();
-    fitProposalDiff();
-}
-
-void ChatPanel::placeProposalExpander() {
-    // In a narrow panel (beside a laptop) "Script" would take the end of the
-    // summary's line and wrap it: it moves to the start of the pills' row,
-    // a text button level with Reject and Accept (which tighten a little),
-    // and the summary gets the whole column, without its count (the rows
-    // under it count the changes), so it keeps one line.
-    // Only once the stage has placed it (an unplaced panel's width means nothing).
-    const bool narrow = testAttribute(Qt::WA_Resized) && width() < kNarrowProposal;
-    const QString summary = narrow && !m_summaryShort.isEmpty() ? m_summaryShort : m_summaryFull;
-    if (m_proposalSummary->text() != summary) m_proposalSummary->setText(summary);
-    m_proposalSummary->setToolTip(summary == m_summaryFull ? QString() : m_summaryFull);
-    if (m_proposal->property("narrow").toBool() != narrow) {
-        m_proposal->setProperty("narrow", narrow);
-        for (QPushButton *pill : {m_accept, m_reject}) {
-            repolish(pill);
-            // Their padding changed: they measure themselves afresh.
-            QEvent change(QEvent::StyleChange);
-            QCoreApplication::sendEvent(pill, &change);
-            pill->updateGeometry();
-        }
-    }
-    const bool inRow = m_proposalButtons->indexOf(m_proposalExpander) >= 0;
-    if (inRow == narrow) return;
-    if (narrow) {
-        // [Script, taking the slack, aligned left][Reject][Accept].
-        m_proposalLine->removeWidget(m_proposalExpander);
-        delete m_proposalButtons->takeAt(0); // the stretch before the pills
-        m_proposalExpander->setCompact(true);
-        m_proposalButtons->insertWidget(0, m_proposalExpander, 1, Qt::AlignLeft | Qt::AlignVCenter);
-    } else {
-        m_proposalButtons->removeWidget(m_proposalExpander);
-        m_proposalButtons->insertStretch(0, 1);
-        m_proposalExpander->setCompact(false);
-        m_proposalLine->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
-    }
-}
-
-void ChatPanel::fitProposalDiff() {
-    // As tall as its lines, up to ten (then it scrolls); it scrolls with the
-    // list it heads. Its frame is in its contents margins (a QFrame keeps it
-    // there). The changes are listed until the script and diff, which hold
-    // them all, are opened.
-    const QMargins frame = m_proposalDiff->contentsMargins();
-    const int chrome = frame.top() + frame.bottom();
-    const int margins = static_cast<int>(std::ceil(2 * m_proposalDiff->document()->documentMargin()));
-    const int lines = m_proposalDiff->fontMetrics().lineSpacing();
-    const int least = 2 * lines + margins + chrome;
-    const int most = kProposalDiffLines * lines + margins + chrome;
-    const bool expanded = m_proposalExpander->isChecked();
-    m_proposalChanges->setVisible(m_proposalChanges->property("count").toInt() > 0 && !expanded);
-    const int content = static_cast<int>(std::ceil(m_proposalDiff->document()->size().height())) + chrome;
-    m_proposalDiff->setFixedHeight(std::clamp(content, least, most));
-    m_proposalDiff->setVisible(expanded);
-}
-
-void ChatPanel::updateListEdge() {
-    const int value = m_scroll->verticalScrollBar()->value();
-    // The compact bar while the pinned proposal's head ("Pinned by Kerf",
-    // which says what the pills decide) or its pills are out of the view.
-    bool sticky = false;
-    if (m_proposal->isVisibleTo(m_content)) {
-        const QRect pills(m_accept->mapTo(m_content, QPoint()), m_accept->size());
-        const int head = m_proposalPinLine->mapTo(m_content, QPoint()).y() + m_proposalPinLine->height();
-        sticky = head < value || pills.top() < value || pills.bottom() >= value + m_scroll->viewport()->height();
-    }
-    if (m_proposalBar->isVisibleTo(this) != sticky) {
-        m_proposalBar->setVisible(sticky);
-        // The view's height changes with it.
-        refitListSoon();
-    }
-    m_barAccept->setEnabled(m_accept->isEnabled());
-    m_barReject->setEnabled(m_reject->isEnabled());
-    updateEdgeCover();
-    // A hairline under the header (or the bar) while the view is scrolled
-    // away from its top.
-    const bool scrolled = value > 0;
-    if (m_scrollEdge->property("scrolled").toBool() == scrolled) return;
-    m_scrollEdge->setProperty("scrolled", scrolled);
-    repolish(m_scrollEdge);
-}
-
-QList<QRect> ChatPanel::edgeCoverStrips() const { return m_edgeCover->strips(); }
-
-QList<TextLine> labelTextLines(const QLabel *label) {
-    // Laid out as the label lays it out: its font, its width when it
-    // wraps, its rich text's own line heights; placed as its alignment
-    // places the text in its contents.
-    const QRect inner = label->contentsRect();
-    QTextDocument document;
-    document.setDocumentMargin(0);
-    document.setDefaultFont(label->font());
-    const bool rich = label->textFormat() == Qt::RichText || (label->textFormat() == Qt::AutoText && Qt::mightBeRichText(label->text()));
-    if (rich) document.setHtml(label->text());
-    else document.setPlainText(label->text());
-    document.setTextWidth(label->wordWrap() ? inner.width() : -1);
-    const double height = document.size().height();
-    const Qt::Alignment align = label->alignment();
-    const double offset = (align & Qt::AlignTop) ? 0.0 : (align & Qt::AlignBottom) ? inner.height() - height : (inner.height() - height) / 2.0;
-    // Capitals stand this far under a line's ascent; a larger span (a
-    // bigger ascent) has taller capitals, in proportion.
-    const QFontMetricsF metrics(label->font());
-    const double capShare = metrics.ascent() > 0 ? metrics.capHeight() / metrics.ascent() : 0.7;
-    QList<TextLine> lines;
-    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
-        const QRectF bounds = document.documentLayout()->blockBoundingRect(block);
-        const QTextLayout *layout = block.layout();
-        for (int index = 0; layout && index < layout->lineCount(); ++index) {
-            const QTextLine line = layout->lineAt(index);
-            const QRectF at(bounds.left() + line.x(), bounds.top() + line.y() + offset, std::max(1.0, line.naturalTextWidth()), line.height());
-            const QRect rect(inner.left() + int(std::floor(at.left())), inner.top() + int(std::floor(at.top())), int(std::ceil(at.width())),
-                             int(std::round(at.height())));
-            const int capTop = inner.top() + int(std::floor(at.top() + line.ascent() * (1.0 - capShare)));
-            lines << TextLine{rect, std::clamp(capTop, rect.top(), rect.bottom())};
-        }
-    }
-    return lines;
-}
-
-TextLine buttonTextLine(const QAbstractButton *button) {
-    const QFontMetricsF metrics(button->font());
-    const double line = metrics.lineSpacing();
-    const double middle = button->height() / 2.0;
-    const QRect rect(0, int(std::round(middle - line / 2.0)), button->width(), int(std::round(line)));
-    // The words' box (ascent over descent) is centred; the capitals stand
-    // capHeight over its baseline.
-    const double textTop = middle - metrics.height() / 2.0;
-    const int capTop = int(std::floor(textTop + metrics.ascent() - metrics.capHeight()));
-    return {rect, std::clamp(capTop, rect.top(), rect.bottom())};
-}
-
-void ChatPanel::updateEdgeCover() {
-    QWidget *viewport = m_scroll->viewport();
-    m_edgeCover->setGeometry(viewport->rect());
-    m_edgeCover->raise();
-    const int top = 0;
-    const int bottom = viewport->height();
-    QList<QRect> strips;
-    // `box` (in the view) cut by an edge: covered where less than `least`
-    // of it would show (`leastTop` under the top edge, when given).
-    const auto cut = [&](const QRect &box, double least, double leastTop = -1.0) {
-        if (box.top() < top && box.bottom() >= top && box.bottom() + 1 - top < (leastTop >= 0.0 ? leastTop : least))
-            strips << QRect(box.left(), top, box.width(), box.bottom() + 1 - top);
-        if (box.top() < bottom && box.bottom() >= bottom && bottom - box.top() < least)
-            strips << QRect(box.left(), box.top(), box.width(), bottom - box.top());
-    };
-    for (QWidget *child : m_content->findChildren<QWidget *>()) {
-        if (!child->isVisibleTo(m_content) || child == m_edgeCover) continue;
-        const QRect box(child->mapTo(viewport, QPoint()), child->size());
-        if (box.bottom() < top || box.top() >= bottom) continue;
-        if (box.top() >= top && box.bottom() < bottom) continue;
-        // Text: each line by itself, by its line's height; under the top
-        // edge, by its capitals: a line shows only with their tops.
-        if (auto *label = qobject_cast<QLabel *>(child); label && !label->text().isEmpty()) {
-            for (const TextLine &line : labelTextLines(label))
-                cut(line.rect.translated(box.topLeft()), kSliverLine * line.rect.height(),
-                    std::max(kSliverLine * line.rect.height(), double(line.rect.bottom() + 1 - line.capTop)));
-            continue;
-        }
-        // A button's words, centred in it: as a label's line, by its
-        // capitals under the top edge.
-        if (auto *button = qobject_cast<QAbstractButton *>(child); button && !button->text().isEmpty() && button->findChildren<QWidget *>().isEmpty()) {
-            // Under the top edge the cover runs on to the button's foot, so
-            // no descender of the words it hides is left under it (the style
-            // may set them a point lower than their centred line).
-            const TextLine line = buttonTextLine(button);
-            const QRect words = line.rect.translated(box.topLeft());
-            const int foot = std::max(0, box.bottom() - words.bottom());
-            cut(words.adjusted(0, 0, 0, foot), kSliverLine * words.height(),
-                std::max(kSliverLine * words.height(), double(line.rect.bottom() + 1 - line.capTop)) + foot);
-            cut(box, kSliver);
-            continue;
-        }
-        // Symbols and painted rows: only leaves (a container's own parts
-        // are judged one by one).
-        bool leaf = true;
-        for (QWidget *grand : child->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
-            if (grand->isVisibleTo(child)) leaf = false;
-        // An avatar shows only while half of it does: under that, the name
-        // line beside it has gone and its arc would stand alone.
-        const double share = qobject_cast<ChatAvatar *>(child) ? kSliverAvatar : kSliverSymbol;
-        if (leaf) cut(box, std::max<double>(kSliver, share * box.height()));
-    }
-    m_edgeCover->setStrips(strips);
-}
-
-void ChatPanel::refitListSoon() {
-    // Once the panel and the list are laid out again, the view measures its
-    // content and its range afresh: a scroll area hears of its viewport's
-    // resize, not of its content's new size hint (as when the pinned
-    // proposal shows, opens or folds), and its range would lag a step.
-    QTimer::singleShot(0, m_scroll, [this] {
-        QEvent request(QEvent::LayoutRequest);
-        QCoreApplication::sendEvent(m_scroll, &request);
+void ChatPanel::scheduleFollow() {
+    if (!m_follow) return;
+    QTimer::singleShot(0, this, [this] {
+        syncContent();
+        m_list->verticalScrollBar()->setValue(m_list->verticalScrollBar()->maximum());
+        m_follow = true;
     });
 }
 
-void ChatPanel::setHovered(bool hovered) {
-    if (m_scroll->property("hovered").toBool() == hovered) return;
-    m_scroll->setProperty("hovered", hovered);
-    repolish(m_scroll->verticalScrollBar());
+// ---- the composer -------------------------------------------------------------------
+
+QString ChatPanel::shownVersion(const QString &proposalId) const {
+    const QString shown = m_cardState.value(proposalId).shown;
+    const ReviewModel::Proposal *proposal = m_model && !shown.isEmpty() ? m_model->proposal(proposalId) : nullptr;
+    return proposal && proposal->hasVersion(shown) ? shown : proposalId;
 }
 
-void ChatPanel::enterEvent(QEnterEvent *) { setHovered(true); }
+void ChatPanel::setReplyTarget(const QString &threadId) {
+    m_replyTarget = threadId;
+    m_editing.clear();
+    const ReviewModel::Thread *thread = m_model && !threadId.isEmpty() ? m_model->thread(threadId) : nullptr;
+    // A proposal's own thread is not in the review log: kerfd has no parent to reply to.
+    if (thread && thread->origin != ReviewModel::Origin::Record) thread = nullptr;
+    if (!thread) {
+        m_replyTarget.clear();
+        m_replyBar->setTarget({}, {});
+        return;
+    }
+    m_replyBar->setTarget(QStringLiteral("Replying to"), m_model->displayName(thread->root.author));
+    m_composer->input()->setFocus(Qt::OtherFocusReason);
+}
 
-void ChatPanel::leaveEvent(QEvent *) { setHovered(false); }
+void ChatPanel::setEditing(const QString &commentId) {
+    const ReviewModel::Comment *comment = m_model && !commentId.isEmpty() ? m_model->comment(commentId) : nullptr;
+    m_replyTarget.clear();
+    m_editing = comment ? commentId : QString();
+    if (!comment) {
+        m_replyBar->setTarget({}, {});
+        return;
+    }
+    m_replyBar->setTarget(QStringLiteral("Editing"), QStringLiteral("your note"));
+    m_composer->fill(comment->body);
+}
 
-void ChatPanel::updateChipRow() {
-    auto *flow = static_cast<FlowLayout *>(m_chips->layout());
-    const int room = std::max(0, m_chips->width() - 2 * kSidePadding);
-    const int most = std::max(0, flow->contentWidth() - room);
-    flow->setScroll(std::clamp(flow->scroll(), 0, most));
-    const bool back = flow->scroll() > 0;
-    const bool forward = flow->scroll() < most;
-    const int top = 8;
-    // Each end: the pager, at the row's padding less 8, over a fade that
-    // runs kChipFadeWidth in from it.
-    const int inset = kSidePadding - 8;
-    const int fadeWidth = inset + kChipPager + kChipFadeWidth;
-    // Only chips that fit whole show between the pagers: each end's cover
-    // starts at the first chip that does not (8 points clear of the pager),
-    // opaque, so no part of a chip shows through it. A chip too wide to fit
-    // whole even alone keeps the gradient instead.
-    int leftCover = fadeWidth;
-    int rightCover = m_chips->width() - fadeWidth;
-    int leftRamp = kChipFadeWidth;
-    int rightRamp = kChipFadeWidth;
-    {
-        const int openLeft = back ? inset + kChipPager + 8 : 0;
-        const int openRight = forward ? m_chips->width() - inset - kChipPager - 8 : m_chips->width();
-        QList<QRect> placed;
-        for (int index = 0; index < flow->count(); ++index)
-            if (QWidget *chip = flow->itemAt(index)->widget(); chip && !chip->isHidden()) placed << chip->geometry();
-        bool whole = false;
-        for (const QRect &chip : std::as_const(placed)) whole = whole || (chip.left() >= openLeft && chip.right() < openRight);
-        if (whole) {
-            if (forward)
-                for (const QRect &chip : std::as_const(placed))
-                    if (chip.right() >= openRight && chip.left() < m_chips->width()) {
-                        rightCover = std::clamp(chip.left(), openLeft, openRight);
-                        rightRamp = 0;
-                        break;
-                    }
-            if (back)
-                for (auto it = placed.crbegin(); it != placed.crend(); ++it)
-                    if (it->left() < openLeft && it->right() >= 0) {
-                        leftCover = std::clamp(it->right() + 1, openLeft, openRight);
-                        leftRamp = 0;
-                        break;
-                    }
+void ChatPanel::updateComposer(bool busy) { m_composer->setBusy(busy); }
+
+QStringList ChatPanel::mentionCandidates() const {
+    QStringList names{QStringLiteral("Kerf")};
+    if (!m_model) return names;
+    for (const ReviewModel::Thread &thread : m_model->allThreads()) {
+        QList<const ReviewModel::Comment *> comments{&thread.root};
+        for (const ReviewModel::Comment &reply : thread.replies) comments << &reply;
+        for (const ReviewModel::Comment *comment : comments)
+            if (comment->author.isAgent() && !comment->author.name.isEmpty() && !names.contains(comment->author.name))
+                names << comment->author.name;
+    }
+    for (const ReviewModel::Person &person : m_model->people())
+        if (!person.name.isEmpty() && !names.contains(person.name)) names << person.name;
+    return names;
+}
+
+void ChatPanel::updateSuggestions() {
+    m_suggestionList.clear();
+    // Kerf's next steps.
+    for (const QJsonValue &value : std::as_const(m_steps)) {
+        const QJsonObject step = value.toObject();
+        const QString label = value.isString() ? value.toString() : step.value(QStringLiteral("label")).toString();
+        const QString request = value.isString() ? value.toString() : step.value(QStringLiteral("request")).toString();
+        if (!label.isEmpty()) m_suggestionList << Suggestion{label, request.isEmpty() ? label : request, false};
+    }
+    if (m_model) {
+        // Each person's open notes.
+        QHash<QString, QStringList> notes;
+        QStringList order;
+        for (const ReviewModel::Thread &thread : m_model->allThreads()) {
+            if (thread.origin != ReviewModel::Origin::Record || !thread.open || !thread.root.author.isPerson()) continue;
+            if (m_model->isOwn(thread.root)) continue;
+            const QString name = thread.root.author.name;
+            if (!notes.contains(name)) order << name;
+            notes[name] << (thread.root.hasAt() ? QStringLiteral("%1 %2").arg(review::timecode(thread.root.at, m_fps), thread.root.body)
+                                                : thread.root.body);
+        }
+        for (const QString &name : std::as_const(order))
+            m_suggestionList << Suggestion{QStringLiteral("Address %1's open notes").arg(firstName(name)),
+                                           QStringLiteral("@Kerf Address %1's open notes:\n%2").arg(name, notes.value(name).join(QLatin1Char('\n'))),
+                                           false};
+    }
+    // Each failing check row.
+    for (const QJsonValue &value : std::as_const(m_checkRows)) {
+        const QJsonObject row = value.toObject();
+        if (row.value(QStringLiteral("passed")).toBool(true)) continue;
+        const QString name = row.value(QStringLiteral("name")).toString();
+        if (name.isEmpty()) continue;
+        const QString lowered = name.left(1).toLower() + name.mid(1);
+        QString request = QStringLiteral("@Kerf Fix the %1").arg(lowered);
+        const QJsonValue at = row.value(QStringLiteral("at"));
+        if (at.isDouble()) request += QStringLiteral(" at %1").arg(review::timecode(at.toDouble(), m_fps));
+        m_suggestionList << Suggestion{QStringLiteral("Fix the %1").arg(lowered), request, false};
+    }
+    m_suggestionList << Suggestion{QStringLiteral("Run QC on the whole sequence"), QStringLiteral("qc"), true};
+    QStringList labels;
+    for (const Suggestion &suggestion : std::as_const(m_suggestionList)) labels << suggestion.label;
+    m_composer->setSuggestions(labels);
+    m_composer->setMentionCandidates(mentionCandidates());
+}
+
+QScrollArea *ChatPanel::scroll() const { return m_list; }
+QFrame *ChatPanel::composer() const { return m_composer; }
+QTextEdit *ChatPanel::input() const { return m_composer->input(); }
+QPushButton *ChatPanel::sendButton() const { return m_composer->sendButton(); }
+QPushButton *ChatPanel::stopButton() const { return m_composer->stopButton(); }
+QWidget *ChatPanel::welcome() const { return m_welcomeRow; }
+
+QList<QAbstractButton *> ChatPanel::examples() const {
+    QList<QAbstractButton *> out;
+    for (SuggestionButton *button : m_welcomeRow->suggestions()) out << button;
+    return out;
+}
+
+// ---- menus ----------------------------------------------------------------------------
+
+QMenu *ChatPanel::buildSortMenu() {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("sortMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    for (const ReviewModel::Sort sort : {ReviewModel::Sort::Timecode, ReviewModel::Sort::Newest, ReviewModel::Sort::OpenFirst,
+                                         ReviewModel::Sort::Commenter}) {
+        QAction *action = menu->addAction(ReviewModel::sortName(sort));
+        action->setCheckable(true);
+        action->setChecked(m_model && m_model->sort() == sort);
+        action->setEnabled(m_model);
+        connect(action, &QAction::triggered, this, [this, sort] {
+            if (!m_model) return;
+            m_model->setSort(sort);
+            updateHeader();
+        });
+    }
+    return menu;
+}
+
+QMenu *ChatPanel::buildFilterMenu() {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("filterMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    const auto scrollTop = [this] {
+        updateHeader();
+        m_list->verticalScrollBar()->setValue(0);
+    };
+    ui::addMenuHeader(menu, QStringLiteral("From"));
+    for (const auto &[name, from] : {std::pair{"Kerf", ReviewModel::From::Kerf}, std::pair{"Agents", ReviewModel::From::Agents},
+                                     std::pair{"People", ReviewModel::From::People}}) {
+        QAction *action = menu->addAction(QString::fromLatin1(name));
+        action->setCheckable(true);
+        action->setChecked(m_model && m_model->from() == from);
+        connect(action, &QAction::triggered, this, [this, from = from, scrollTop] {
+            if (!m_model) return;
+            m_model->setFrom(m_model->from() == from ? ReviewModel::From::Anyone : from);
+            scrollTop();
+        });
+    }
+    menu->addSeparator();
+    QAction *hide = menu->addAction(QStringLiteral("Hide resolved"));
+    hide->setCheckable(true);
+    hide->setChecked(m_model && m_model->hideResolved());
+    connect(hide, &QAction::triggered, this, [this, scrollTop](bool on) {
+        if (!m_model) return;
+        m_model->setHideResolved(on);
+        scrollTop();
+    });
+    QAction *drawings = menu->addAction(QStringLiteral("With drawings"));
+    drawings->setCheckable(true);
+    drawings->setChecked(m_model && m_model->withDrawings());
+    connect(drawings, &QAction::triggered, this, [this, scrollTop](bool on) {
+        if (!m_model) return;
+        m_model->setWithDrawings(on);
+        scrollTop();
+    });
+    const QList<ReviewModel::TagCount> tags = m_model ? m_model->tags() : QList<ReviewModel::TagCount>{};
+    if (!tags.isEmpty()) {
+        menu->addSeparator();
+        ui::addMenuHeader(menu, QStringLiteral("Tags"));
+        for (const ReviewModel::TagCount &tag : tags) {
+            QAction *action = menu->addAction(tag.blocking ? QStringLiteral("Blocking") : QStringLiteral("#") + tag.tag);
+            action->setCheckable(true);
+            action->setChecked(m_model->tag() == tag.tag);
+            ui::setMenuKey(action, QString::number(tag.count));
+            connect(action, &QAction::triggered, this, [this, tag = tag.tag, scrollTop] {
+                m_model->toggleTag(tag);
+                scrollTop();
+            });
         }
     }
-    static_cast<ChipFade *>(m_chipFadeLeft)->setRamp(leftRamp);
-    static_cast<ChipFade *>(m_chipFadeRight)->setRamp(rightRamp);
-    m_chipFadeLeft->setGeometry(0, top, leftCover, kChipHeight);
-    m_chipFadeRight->setGeometry(rightCover, top, m_chips->width() - rightCover, kChipHeight);
-    m_chipBack->move(inset, top + (kChipHeight - kChipPager) / 2);
-    m_chipForward->move(m_chips->width() - inset - kChipPager, top + (kChipHeight - kChipPager) / 2);
-    m_chipFadeLeft->setVisible(back);
-    m_chipFadeRight->setVisible(forward);
-    m_chipBack->setVisible(back);
-    m_chipForward->setVisible(forward);
-    for (QWidget *over : {static_cast<QWidget *>(m_chipFadeLeft), static_cast<QWidget *>(m_chipFadeRight),
-                          static_cast<QWidget *>(m_chipBack), static_cast<QWidget *>(m_chipForward)})
-        over->raise();
+    return menu;
 }
 
-void ChatPanel::pageChips(int direction) {
-    auto *flow = static_cast<FlowLayout *>(m_chips->layout());
-    flow->setScroll(flow->scroll() + direction * kChipPage);
-    updateChipRow();
+QMenu *ChatPanel::buildMoreMenu() {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("commentsMoreMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    // Search, sort and the filter: what the header held.
+    QAction *search = menu->addAction(QStringLiteral("Search comments"));
+    search->setObjectName(QStringLiteral("commentsSearch"));
+    ui::setMenuKey(search, QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText));
+    connect(search, &QAction::triggered, this, [this] { setSearchShown(true); });
+    QMenu *sort = buildSortMenu();
+    sort->setAttribute(Qt::WA_DeleteOnClose, false);
+    sort->setParent(menu, sort->windowFlags());
+    sort->setTitle(QStringLiteral("Sort"));
+    ui::styleMenu(sort);
+    QAction *sortItem = menu->addMenu(sort);
+    sortItem->setObjectName(QStringLiteral("commentsSort"));
+    ui::setMenuKey(sortItem, m_model ? ReviewModel::sortName(m_model->sort()) : QString());
+    menu->addSeparator();
+    const ReviewModel::Counts counts = m_model ? m_model->counts() : ReviewModel::Counts{};
+    const std::tuple<const char *, ReviewModel::Chip, int> chips[] = {{"All", ReviewModel::Chip::All, counts.all},
+                                                                      {"Open", ReviewModel::Chip::Open, counts.open},
+                                                                      {"Proposals", ReviewModel::Chip::Proposals, counts.proposals}};
+    for (const auto &[name, chip, count] : chips) {
+        QAction *action = menu->addAction(QString::fromLatin1(name));
+        action->setObjectName(QStringLiteral("commentsShow.%1").arg(QString::fromLatin1(name)));
+        action->setCheckable(true);
+        action->setChecked(m_model ? m_model->chip() == chip : chip == ReviewModel::Chip::All);
+        action->setEnabled(m_model);
+        ui::setMenuKey(action, QString::number(count));
+        connect(action, &QAction::triggered, this, [this, chip = chip] {
+            if (!m_model) return;
+            m_model->setChip(chip);
+            updateHeader();
+            m_list->verticalScrollBar()->setValue(0);
+        });
+    }
+    QMenu *filter = buildFilterMenu();
+    filter->setAttribute(Qt::WA_DeleteOnClose, false);
+    filter->setParent(menu, filter->windowFlags());
+    filter->setTitle(QStringLiteral("Filter"));
+    ui::styleMenu(filter);
+    menu->addMenu(filter)->setObjectName(QStringLiteral("commentsFilter"));
+    menu->addSeparator();
+    QAction *settings = menu->addAction(QStringLiteral("Agent settings…"));
+    ui::setMenuKey(settings, m_currentModel);
+    connect(settings, &QAction::triggered, this, [this] { emit moreAction(QStringLiteral("settings"), QString()); });
+    if (m_models.size() > 1 && m_modelsChoosable) {
+        QMenu *models = menu->addMenu(QStringLiteral("Model"));
+        ui::styleMenu(models);
+        for (const QString &model : std::as_const(m_models)) {
+            QAction *action = models->addAction(model);
+            action->setCheckable(true);
+            action->setChecked(model == m_currentModel);
+            connect(action, &QAction::triggered, this, [this, model] { emit moreAction(QStringLiteral("model"), model); });
+        }
+    }
+    connect(menu->addAction(QStringLiteral("Activity")), &QAction::triggered, this,
+            [this] { emit moreAction(QStringLiteral("activity"), QString()); });
+    if (m_model) {
+        for (const ReviewModel::Person &person : m_model->people()) {
+            QAction *view = menu->addAction(QStringLiteral("View as %1").arg(person.name));
+            view->setCheckable(true);
+            view->setChecked(m_model->viewAs() == person.id && m_model->guestMode());
+            connect(view, &QAction::triggered, this, [this, id = person.id](bool on) {
+                emit moreAction(QStringLiteral("viewAs"), on ? id : QString());
+            });
+        }
+    }
+    menu->addSeparator();
+    ui::addMenuHeader(menu, QStringLiteral("Export comments"));
+    for (const auto &[label, format] : {std::pair{"As sequence markers", "markers"}, std::pair{"As CSV", "csv"},
+                                        std::pair{"As EDL locators", "edl"}}) {
+        QAction *action = menu->addAction(QString::fromLatin1(label));
+        action->setEnabled(m_connected);
+        connect(action, &QAction::triggered, this, [this, format = QString::fromLatin1(format)] {
+            emit moreAction(QStringLiteral("export"), format);
+        });
+    }
+    menu->addSeparator();
+    const QString link = reviewLink(std::numeric_limits<double>::quiet_NaN());
+    QAction *copy = menu->addAction(link.isEmpty() ? QStringLiteral("Copy review link") : QStringLiteral("Copy review link %1").arg(link));
+    copy->setEnabled(!link.isEmpty());
+    connect(copy, &QAction::triggered, this, [link] { QApplication::clipboard()->setText(link); });
+    return menu;
+}
+
+QMenu *ChatPanel::buildRowMenu(const QString &commentId) {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("rowMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->setMinimumWidth(240);
+    const ReviewModel::Comment *comment = m_model ? m_model->comment(commentId) : nullptr;
+    CommentRow *row = rowFor(commentId);
+    const QString body = comment ? comment->body : row ? row->text() : QString();
+    connect(menu->addAction(QStringLiteral("Copy")), &QAction::triggered, this, [body] { QApplication::clipboard()->setText(body); });
+    double at = std::numeric_limits<double>::quiet_NaN();
+    if (comment) {
+        at = comment->at;
+        if (!comment->hasAt())
+            if (const ReviewModel::Thread *thread = m_model->threadOf(commentId)) at = thread->root.at;
+    }
+    const QString link = reviewLink(at);
+    QAction *copyLink = menu->addAction(link.isEmpty() ? QStringLiteral("Copy link") : QStringLiteral("Copy link %1").arg(link));
+    copyLink->setEnabled(!link.isEmpty());
+    connect(copyLink, &QAction::triggered, this, [link] { QApplication::clipboard()->setText(link); });
+    if (comment && comment->author.isPerson() && comment->hasAt()) {
+        QAction *marker = menu->addAction(QStringLiteral("Convert to sequence marker"));
+        marker->setEnabled(m_connected);
+        connect(marker, &QAction::triggered, this, [this, commentId] { emit rowAction(QStringLiteral("marker"), commentId); });
+    }
+    if (comment && m_model->isOwn(*comment)) {
+        menu->addSeparator();
+        const ReviewModel::Thread *thread = m_model->threadOf(commentId);
+        const QString threadId = thread ? thread->id : QString();
+        QAction *again = menu->addAction(QStringLiteral("Ask again"));
+        again->setEnabled(m_connected);
+        connect(again, &QAction::triggered, this, [this, body, threadId] { emit askAgainInThread(body, threadId); });
+        connect(menu->addAction(QStringLiteral("Edit")), &QAction::triggered, this, [this, commentId] { setEditing(commentId); });
+        QAction *remove = menu->addAction(QStringLiteral("Delete"));
+        ui::setMenuRole(remove, ui::MenuRole::Warn);
+        remove->setEnabled(m_connected);
+        connect(remove, &QAction::triggered, this, [this, commentId] { emit rowAction(QStringLiteral("delete"), commentId); });
+    }
+    return menu;
+}
+
+void ChatPanel::showRowMenu(CommentRow *row) {
+    QMenu *menu = buildRowMenu(row->commentId());
+    row->setActionsShown(true);
+    connect(menu, &QMenu::aboutToHide, row, [row] { row->setActionsShown(row->underMouse()); });
+    ui::popupMenu(menu, row->moreAction()->isVisible() ? static_cast<QWidget *>(row->moreAction()) : row);
+}
+
+// ---- events ------------------------------------------------------------------------------
+
+void ChatPanel::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF area(rect());
+    p.setPen(Qt::NoPen);
+    p.setBrush(color(tokens::chrome));
+    p.drawRect(area);
+}
+
+void ChatPanel::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
+}
+
+void ChatPanel::showEvent(QShowEvent *event) {
+    QWidget::showEvent(event);
+    if (!m_placed) QTimer::singleShot(0, this, &ChatPanel::placeFirst);
 }
 
 bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == m_chips) {
-        switch (event->type()) {
-        case QEvent::Wheel: {
-            // A wheel or a trackpad scrolls the row sideways, either way it turns.
-            auto *wheel = static_cast<QWheelEvent *>(event);
-            const QPoint pixels = wheel->pixelDelta();
-            const QPoint angle = wheel->angleDelta() / 4;
-            const int delta = !pixels.isNull() ? (pixels.x() ? pixels.x() : pixels.y()) : (angle.x() ? angle.x() : angle.y());
-            auto *flow = static_cast<FlowLayout *>(m_chips->layout());
-            flow->setScroll(flow->scroll() - delta);
-            updateChipRow();
-            return true;
+    if (watched == m_pinBar && event->type() == QEvent::MouseButtonRelease) {
+        // Opens the card and scrolls it to the list's top + 24.
+        const QString id = pinBarProposal();
+        if (ProposalCard *card = this->card(id)) {
+            if (!card->isOpen()) {
+                card->setOpen(true);
+                emit card->openToggled(true);
+            }
+            syncContent();
+            QWidget *anchor = card->parentWidget() ? card->parentWidget() : card;
+            for (QWidget *up = card; up && up != m_content; up = up->parentWidget())
+                if (qobject_cast<CommentRow *>(up)) {
+                    anchor = up;
+                    break;
+                }
+            m_list->verticalScrollBar()->setValue(std::max(0, anchor->mapTo(m_content, QPoint()).y() - 24));
         }
-        case QEvent::Resize:
-        case QEvent::LayoutRequest:
-        case QEvent::ChildAdded:
-        case QEvent::Show:
-            QTimer::singleShot(0, this, &ChatPanel::updateChipRow);
-            break;
-        default:
-            break;
-        }
+        return true;
     }
-    if (watched == m_scroll->viewport() && event->type() == QEvent::Resize)
-        QTimer::singleShot(0, this, &ChatPanel::updateListEdge);
-    if (watched == m_content && event->type() == QEvent::LayoutRequest) refitListSoon();
-    if (watched == m_content && (event->type() == QEvent::LayoutRequest || event->type() == QEvent::Resize))
-        QTimer::singleShot(0, this, &ChatPanel::updateEdgeCover);
-    if ((watched == m_accept || watched == m_reject) && event->type() == QEvent::EnabledChange) updateListEdge();
-    if (watched == m_resizeHandle) {
-        switch (event->type()) {
-        case QEvent::MouseButtonPress: {
-            auto *mouse = static_cast<QMouseEvent *>(event);
-            if (mouse->button() != Qt::LeftButton) break;
-            m_dragFromX = int(mouse->globalPosition().x());
-            m_dragFromWidth = width();
+    if (watched == m_pinBar && event->type() == QEvent::Paint) {
+        QPainter p(m_pinBar);
+        p.fillRect(m_pinBar->rect(), color(chrome));
+        p.fillRect(QRect(0, m_pinBar->height() - 1, m_pinBar->width(), 1), color(line));
+        return false;
+    }
+    if (watched == m_search && event->type() == QEvent::KeyPress) {
+        if (static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            setSearchShown(false);
             return true;
-        }
-        case QEvent::MouseMove: {
-            auto *mouse = static_cast<QMouseEvent *>(event);
-            if (!(mouse->buttons() & Qt::LeftButton)) break;
-            // The panel grows leftward, towards the picture.
-            emit widthDragged(m_dragFromWidth - (int(mouse->globalPosition().x()) - m_dragFromX));
-            return true;
-        }
-        case QEvent::MouseButtonRelease:
-            if (static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) emit widthDragFinished();
-            return true;
-        default:
-            break;
         }
     }
     return QWidget::eventFilter(watched, event);

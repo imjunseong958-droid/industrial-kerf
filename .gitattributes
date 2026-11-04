@@ -1,0 +1,2 @@
+# Compared byte for byte with what the exporter writes, on every platform.
+crates/kerf-interchange/tests/golden/*.edl -text

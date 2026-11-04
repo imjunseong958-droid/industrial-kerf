@@ -1,10 +1,12 @@
-//! OpenTimelineIO interchange through the bundled Python bridge.
+//! Project interchange: OpenTimelineIO through the bundled Python bridge,
+//! and a native CMX3600 EDL writer (`edl`).
 //!
 //! OTIO remains an optional process dependency. Rust owns validation,
 //! invocation, timeout handling, conversion to and from the model (see
 //! `otio`), and structured reports; the bridge owns the Python OTIO object
 //! model.
 
+pub mod edl;
 pub mod otio;
 
 use kerf_model::Project;

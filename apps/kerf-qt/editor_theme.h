@@ -8,23 +8,8 @@
 
 namespace kerf {
 
-// Light or dark. System follows the platform's appearance as it changes;
-// KERF_COLOR_SCHEME=light or dark picks one for the whole run.
-enum class ColorScheme { System, Light, Dark };
-
-// Appearance detection, shared by the launcher and the editor.
-//
-// Whether the platform is in its dark appearance: Qt's colour scheme where
-// the platform reports one (Qt 6.5 and later), else the lightness of the
-// system palette's window colour.
-bool systemIsDark();
-// Kerf's own accent, one per appearance: an aubergine ink on cream and its
-// mauve on the warm dark. Kerf does not follow the system accent.
-QColor kerfAccent(bool dark);
-// KERF_COLOR_SCHEME: Light or Dark when it names one, else System.
-ColorScheme environmentColorScheme();
-// Whether `scheme` draws dark: Dark, or System on a dark platform.
-bool schemeIsDark(ColorScheme scheme);
+// The editor is dark only: one graphite ramp and one blue accent, from
+// design_tokens.h.
 
 // A colour written as CSS writes it: #rrggbb, or #rrggbbaa with the alpha
 // last (QColor reads eight digits as #aarrggbb).
@@ -41,7 +26,7 @@ QColor readableOn(const QColor &color, const QColor &background, qreal ratio, in
 QColor readableAlphaOn(const QColor &color, const QColor &background, qreal ratio);
 
 // How one kind of clip is drawn on the timeline. Labels on `header` meet
-// 4.5:1 in both appearances.
+// 4.5:1.
 struct ClipStyle {
     QColor fill;   // The body under the filmstrip or waveform.
     QColor header; // The name bar along the clip's top edge (the whole clip on short rows).
@@ -65,38 +50,49 @@ ClipKind trackKind(const QJsonObject &track);
 
 // Every colour the editor draws, by role. The application style sheet is
 // generated from these, and painted widgets read them at paint time from
-// editorTheme(); a widget that caches colours or pixmaps rebuilds them on
-// EditorAppearance::changed().
-//
-// Both share the project launcher's palette, so opening a project keeps the
-// same look: antique cream paper in light, warm espresso in dark, never
-// pure white or black. Kerf's own purple marks Kerf, focus, the playhead
-// and the default action. The viewer's stage follows the appearance; the
-// picture card is warm black in both.
+// editorTheme(). Each role is one of design_tokens.h's colours (the graphite
+// ramp, the lines, the accent family, pos/neg/warn and the literal overlay
+// colours), or one laid on the surface it is drawn on, or a guard's step
+// from one where a role must read at a ratio. The project launcher draws
+// from the same ramp. The blue accent marks Kerf, focus, proposals and the
+// default action; the playhead is its own red.
 struct EditorTheme {
-    bool dark = true;
+    // The design's tokens themselves (design_tokens.h 0.2), so the style
+    // sheet and painted widgets can name the ramp directly.
+    QColor card;        // Comments panel, Source viewer, menus, tooltips, clips.
+    QColor on;          // Selected or on fill, avatars, the sliding segment.
+    QColor hover2;      // Hover over a `raised` surface.
+    QColor ink;         // Primary text, slider knob.
+    QColor ink2;        // Secondary text, icon default.
+    QColor ink3;        // Tertiary text, meta: 4.66:1 on chrome, under 4.5:1 on card and raised.
+    QColor track;       // Slider and progress track, minor ticks.
+    QColor track2;      // Slider fill, major ticks, played bar.
+    QColor line;        // Hairlines (white 8%).
+    QColor line2;       // Control outlines (white 14%).
+    QColor lineh;       // Hover outline (white 22%).
+    QColor accentHover; // The primary button under the pointer.
+    QColor accentInk;   // Timecode links, accepted text, "Ask Kerf" actions.
+    QColor pos;         // Pass, diff additions, connected.
 
     // Accent: Kerf's own (focus, the default button, the playhead, checked
     // tools, progress). It does not follow the system accent.
     QColor accent;
-    QColor accentTop;         // Top of an accent bezel's gradient.
     QColor accentPressed;     // An accent button held down.
     QColor accentText;        // The accent as text or a thin line, 4.5:1 on every surface it is drawn on:
-                              // `panel` (the transports' timecodes), `rulerCorner` (the timeline's
-                              // corner time), and `statusBar` (the sync chip).
+                              // `panel` (the transports' timecodes), and `rulerCorner` (the timeline's
+                              // corner time).
     QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge, the chosen
                               // mask tool and the selected mask. `accentText` reads on it at 3:1.
     QColor accentTintPressed; // `accentTint` darkened while held, as a bezel darkens; `accentText`
                               // still reads on it at 3:1.
-    QColor onAccent;          // Text and glyphs on `accent`, 4.5:1: cream on the aubergine, dark ink on
-                              // the light mauve of the dark appearance.
+    QColor onAccent;          // Text and glyphs on `accent`, 4.5:1: white.
     QColor onAccentSecondary; // Secondary text on `selection`: `selectionText` held back only as far as
                               // it still reads at 4.5:1.
 
     // Surfaces, from the back of the window forwards.
-    QColor window;           // Behind everything: the main window, the dock container.
+    QColor window;           // Behind everything: the main window.
     QColor chrome;           // Toolbar, menu bar, and tool palette.
-    QColor panel;            // A docked panel's body: monitors' frames, timeline, inspector, transport.
+    QColor panel;            // A panel's body: the timeline, the sheets.
     QColor panelTitle;       // A dock's title strip, and its inactive tabs.
     QColor panelTitleActive; // The current tab in a title strip.
     QColor raised;           // Cards inside a panel or dialog.
@@ -106,8 +102,6 @@ struct EditorTheme {
     QColor dialog;           // Dialog and settings window background.
 
     // Lines.
-    QColor dockSeparator;      // Splitter handles between docked panels.
-    QColor dockSeparatorHover; // A splitter handle under the pointer.
     QColor divider;            // The hairline between bars and panels (toolbar foot, title strip foot).
     QColor borderSubtle;       // Quiet edges: menus, menu separators.
     QColor border;             // Ordinary edges: pills, group boxes.
@@ -128,7 +122,6 @@ struct EditorTheme {
     QColor selectionInactiveText; // Text on `selectionInactive`.
     QColor textSelection;         // Selected text in a field.
     QColor hover;                 // Translucent wash under the pointer (rows, quiet buttons).
-    QColor pressed;               // Translucent wash while a quiet button is held.
 
     // Fields: line edits, text edits, spin boxes, pop-ups' lists.
     QColor field;
@@ -137,13 +130,12 @@ struct EditorTheme {
     QColor focusRing; // The border of the field being typed in (the accent).
     QColor focusHalo; // The soft ring outside a button focused from the keyboard (the accent at 35%).
 
-    // An unchecked check box or radio button: a fill and an edge that reads
-    // at 3:1 on the panels and dialogs it sits on.
-    QColor checkFill;
+    // An unchecked check box or radio button: no fill of its own and the
+    // design's outline (white at 16%, laid on chrome).
     QColor checkBorder;
 
-    // Push buttons: a fill with a lighter top edge and a darker bottom one,
-    // as macOS draws its bezels (the launcher's buttons).
+    // Push buttons (mockup-spec 0.5 .btn, secondary): the raised fill with a
+    // line2 edge, flat (top and bottom edges the same).
     QColor button;
     QColor buttonEdge;
     QColor buttonTop;
@@ -180,33 +172,18 @@ struct EditorTheme {
     QColor tabSelectedText;
 
     QColor sliderGroove;
-    QColor sliderGrooveBorder;
     QColor sliderHandle;
-    QColor sliderHandleBorder;
 
     // The Inspector's controls. No colours of their own: aliases of the
     // palette's. A fill means a value can be changed (plain text cannot).
-    QColor inspectorField;   // Fields, pop-ups, wells and segmented tracks: `group` in light, `field` in dark.
-    QColor switchOn;         // A switch that is on: the neutral ink of the timeline's toggles, not the accent...
-    QColor switchOnKnob;     // ...and its knob.
+    QColor inspectorField;   // Fields, pop-ups, wells and segmented tracks: `field`.
     QColor switchOff;        // A switch that is off, as the launcher's...
     QColor switchOffStroke;  // ...its edge...
     QColor knob;             // ...and its knob.
-    QColor inspectorDetent;  // The tick at a slider's default.
-    // A slider knob's edge, read against the groove and panel round it: away
-    // from its default the more visible one (`text` in light, `textSecondary`
-    // in dark, where `text` is the knob's own colour), at it the quieter one
-    // (`sliderHandleBorder` in light, `borderStrong` in dark).
-    QColor sliderHandleChanged;
-    QColor sliderHandleAtDefault;
 
-    QColor statusBar;
-    QColor statusText;
-    QColor statusDivider; // Between status bar items.
 
     // Status. `*Surface` and `*Border` are a banner's fill and edge; `*Text`
-    // reads on the surface at 4.5:1. The plain colour reads on `panel` and
-    // `statusBar`.
+    // reads on the surface at 4.5:1. The plain colour reads on `panel`.
     QColor error;
     QColor errorSurface;
     QColor errorBorder;
@@ -220,21 +197,17 @@ struct EditorTheme {
     QColor success;
 
     // Agent work (the AI bar, proposals, Ask Kerf, the agent's messages):
-    // Kerf's purple is the accent itself. It marks, and never fills a
-    // button other than the default action.
+    // the accent family. It marks, and never fills a button other than the
+    // default action.
     QColor assistant;        // Thin marks: proposal outlines, the AI bar's stripe, the Ask prompt's ring.
     QColor assistantSurface; // A bar or note's fill.
-    QColor assistantBorder;  // A bar or note's edge, and its buttons' outlines.
     QColor assistantText;    // Text on `assistantSurface`, and the agent's name in the conversation.
     QColor assistantHover;   // A suggestion chip (an `assistantSurface` pill) under the pointer.
 
     // Conversation rows in the chat: they have no boxes, so their fills and
     // edges are the chat's own surface.
     QColor messageUser;
-    QColor messageUserBorder;
     QColor messageAgent;
-    QColor messageAgentBorder;
-    QColor messageText;     // Message body text.
     QColor messageUserRole; // "You" over the user's messages, 4.5:1 on `messageUser`.
 
     // The chat panel laid out beside the picture, as a video site's comments
@@ -251,17 +224,10 @@ struct EditorTheme {
     QColor chatAvatarKerf;        // Kerf's avatar disc (the accent) and its monogram.
     QColor chatAvatarKerfText;
     QColor chatExpander;          // "2 changes" under Kerf's row, in the accent as text.
-    QColor chatComposerRule;      // The composer's underline, and in focus.
     QColor chatComposerRuleFocus;
     QColor chatScrollHandle;      // The list's scroll bar, shown only while the pointer is over the panel...
     QColor chatScrollHandleHover; // ...and under the pointer.
     // The round buttons between the picture and the chat.
-    QColor railButton;
-    QColor railButtonHover;
-    QColor railButtonActive;      // The chat's toggle while it is open: tonal, not filled...
-    QColor railGlyph;
-    QColor railGlyphActive;       // ...its symbol in Kerf's ink.
-    QColor railLabel;             // The count or label under a button.
     // A tonal pill (Reject, a secondary action): a fill and no outline.
     QColor pillTonal;
     QColor pillTonalText;
@@ -271,39 +237,10 @@ struct EditorTheme {
     QColor glyphDisabled;
     QColor toolSelected; // Behind a chosen tool or mode: a tonal fill, no outline (its symbol is the accent).
 
-    // Timeline.
-    QColor timelineBackground;      // Below the last track, so spare height never reads as a track.
+    // Timeline: the ruler, which the playhead and markers read on.
     QColor ruler;                   // Ruler gradient, top...
     QColor rulerBottom;             // ...and bottom.
-    QColor rulerTick;               // Major ticks.
-    QColor rulerTickHalf;           // The half-way minor tick.
-    QColor rulerTickMinor;          // Other minor ticks.
-    QColor rulerText;               // Ruler timecodes.
     QColor rulerCorner;             // The box over the track headers showing the playhead time.
-    QColor trackHeader;             // A track's header.
-    QColor trackHeaderEdge;         // The 1px highlight along a header's top.
-    QColor trackHeaderColumn;       // The header column behind and below the headers.
-    QColor trackHeaderText;         // The track name.
-    QColor trackHeaderTextDisabled; // The name of a disabled track.
-    QColor trackHeaderDetail;       // The clip count under the name.
-    QColor trackResizeGrip;         // The bar shown while a header's lower edge is dragged.
-    QColor trackBadgeText;    // The V1/A1 number: plain secondary text, no fill.
-    QColor trackToggle;       // Output, mute and lock: bare symbols, faint when off...
-    QColor trackToggleOn;     // ...and a neutral ink when on, not the accent...
-    QColor trackToggleHover;  // ...on a round wash only under the pointer.
-    QColor trackLane;         // A track's lane.
-    QColor laneGrid;          // Faint lines down the lanes at the ruler's major ticks, which show
-                              // through a sound clip's translucent body.
-    QColor trackLaneAlt;      // Every other lane, where alternation is wanted.
-    QColor trackLaneLocked;   // The hatch over a locked lane.
-    QColor trackDivider;      // The line under each lane and header.
-    QColor trackBankDivider;  // The 2px line between the picture and sound banks.
-    QColor headerPreview;     // The header's preview slot.
-    QColor headerPreviewBorder;
-    QColor addLane;           // The add-track row.
-    QColor addLaneButton;
-    QColor addLaneButtonBorder;
-    QColor addLaneText;
 
     // Clips, by kind (see clipKind()).
     ClipStyle clipVideo;
@@ -311,32 +248,13 @@ struct EditorTheme {
     ClipStyle clipMusic;
     ClipStyle clipGenerator;
     ClipStyle clipCaption;
-    QColor clipSelectedRing;      // The selected clip's 2px inner ring...
-    QColor clipSelectedRingOuter; // ...and the 1px line outside it, so it reads on every clip hue
-                                  // and lane: cream over ink, not a second loud hue.
-    QColor clipTrim;         // The trim bracket on the edge under the pointer or being trimmed.
-    QColor clipHighlight;    // The 1px highlight inside a clip's top edge.
-    QColor clipFxBadge;      // The FX badge on an effected clip's header...
-    QColor clipFxBadgeText;  // ...and its text.
-    QColor filmstripSeam;    // Between filmstrip tiles.
-    QColor waveCenter;       // The centre line of an audio clip's body.
-    QColor waveformPeak;     // A waveform's peaks, and its RMS body over them: white on the clip's
-    QColor waveformBody;     // own colour, the same in either appearance, as Logic and Final Cut ink it.
     QColor playhead;         // The playhead: the accent, deepened where it would not read on the ruler
                              // and on its halo clearly more than `playheadIdle` does.
     QColor playheadHalo;     // The solid 1px line either side of the playhead's line, skimmed or not, so
                              // the line reads the same over pictures, clips and bare lanes.
     QColor playheadIdle;     // The playhead while the skimmer leads: a grey that reads at 3:1 on the
                              // ruler (its head) and on its halo (its line), and less than `playhead`.
-    QColor skimmer;          // The skimmer line.
-    QColor skimmerText;      // The corner time while skimming.
-    QColor scrubTrack;       // A scrub bar's track (Source monitor).
     QColor inOutRange;       // The marked in-to-out range on a scrub bar or ruler.
-    QColor snapLine;         // The line shown at the edit point a drag snaps to.
-    QColor readout;          // The drag readout box...
-    QColor readoutBorder;
-    QColor readoutText;
-    QColor dragShadow;       // Under the clip being dragged.
 
     // Marker colours, by the document's names; marker() looks one up. Each
     // reads at 3:1 on the whole ruler, top to foot.
@@ -350,61 +268,22 @@ struct EditorTheme {
     QColor markerPink;
     QColor markerWhite; // A mid grey on the light ruler, where white would vanish.
 
-    // A pending proposal drawn on the timeline: clips it adds, clips it
-    // changes, and clips it removes.
-    QColor proposalAdd;
-    QColor proposalAddFill;
+    // A pending proposal's changed clip (the timeline's own drawing is
+    // design_tokens.h's).
     QColor proposalChange;
-    QColor proposalChangeFill;
-    QColor proposalRemove;
-    QColor proposalRemoveHatch;
-    // The solid rule under an added or changed clip's dashes, so they read on
-    // any picture, its own purples and pinks included.
-    QColor proposalUnderlay;
 
-    // Viewers (Program and Source monitors, the region picker). The stage
-    // follows the appearance; the picture card and what is drawn on it are
-    // the same warm black in both.
-    QColor viewerSurround;      // The stage around the picture card.
+    // Viewers (the picture, the Source monitor, the region picker): the picture's
+    // canvas black.
+    QColor viewerSurround;      // Around the region picker's frame.
     QColor viewerCanvas;        // The canvas behind a picture that does not fill it, and when empty.
     QColor viewerText;          // The empty viewer's title...
     QColor viewerTextDim;       // ...and its hint; the Source monitor's message.
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
-    QColor viewerCaptionText;
-    // The phone a portrait picture is shown in: a deep graphite in both
-    // appearances, its 1px lighter edge, and its soft shadow on the stage
-    // (the laptop's too).
-    QColor deviceFrame;
-    QColor deviceEdge;
-    QColor deviceShadow;
-    QColor deviceScreen;        // The screen's black above and below the picture (the laptop's too).
-    QColor deviceInk;           // The status bar's time, signal and battery.
-    // The laptop a wide picture is shown in: a warm stone metal in both
-    // appearances, never a silver...
-    QColor laptopShell;         // ...its lid's rim and its base's front...
-    QColor laptopShellShade;    // ...the front's foot and the thumb-cut...
-    QColor laptopDeck;          // ...the base's lit top face...
-    QColor laptopHighlight;     // ...and the line along its top.
-    QColor laptopBezel;         // The lid's black glass round the screen, and the notch.
-    QColor laptopCamera;        // The camera in the notch.
-    QColor laptopHinge;         // The hinge under the lid, and the base's feet.
-    QColor safeZoneFill;        // Where a vertical-video app's interface usually covers the picture...
-    QColor safeZoneLine;        // ...its outline...
-    QColor safeZoneText;        // ...and its label...
-    QColor safeZoneLabel;       // ...on a small dark chip.
-    // The player's controls on the picture: white glyphs and time on a
-    // gradient to black, the played part of the bar in the accent.
-    QColor playerInk;           // Glyphs and the time, white at 90%.
-    QColor playerInkDisabled;
-    QColor playerShade;         // The gradient's darkest, under the controls.
-    QColor playerTopShade;      // The top-left cluster's shade on a portrait card.
-    QColor playerHover;         // A round wash under the pointer.
-    QColor playerTrack;         // The bar's unplayed part...
-    QColor playerPlayed;        // ...its played part (the accent)...
-    QColor playerTipFill;       // ...and the time over the bar under the pointer.
-    // Masks and regions over the picture: cream over a dark rule, never the
-    // accent, whose hue can be the picture's own.
+    // The Source viewer's black above and below its picture.
+    QColor deviceScreen;
+    // Masks and regions over the picture: white over a dark rule; only the
+    // handles are the accent.
     QColor maskOutline;         // A selected mask's outline...
     QColor maskOutlineIdle;     // ...one that is not selected...
     QColor maskShadow;          // ...and the dark rule under both.
@@ -416,71 +295,14 @@ struct EditorTheme {
     QColor maskText;            // ...and the name on either.
 
     // The project bin, the Effects panel, and media badges.
-    QColor thumbnail;           // The letterbox bars behind a picture that does not fill its tile.
     QColor tileEmpty;           // A picture tile with no picture yet (or offline)...
-    QColor tileEmptyBorder;
     QColor tileEmptyText;       // ...and its film or waveform symbol.
-    QColor audioTile;           // A sound-only media tile...
-    QColor audioTileGlyph;      // ...and its waveform.
     QColor cardPlaceholder;     // An effect card before its preview arrives...
     QColor cardPlaceholderText; // ...and the effect symbol on it.
     QColor badgeError;          // Offline...
     QColor badgeErrorText;
     QColor badgeInfo;           // Not downloaded...
     QColor badgeInfoText;
-    QColor badgeNeutral;        // External.
-    QColor badgeNeutralText;
-
-    // The hardware finish: vintage studio hardware with a modern finish, as
-    // a good plug-in's faceplate is drawn. Cream plates, recessed wells,
-    // engraved labels and black knobs in light; the same parts in espresso
-    // and bakelite in dark. No screws, wood, grain or gloss, and colour only
-    // on lamps, the default action and the accent. editor_common's paint*()
-    // primitives draw every part from these.
-    QColor faceplateTop;       // The toolbar's plate, a gradient from its top...
-    QColor faceplateBottom;    // ...to its foot...
-    QColor faceplateHighlight; // ...the light caught along its top edge...
-    QColor faceplateEdge;      // ...and the line under it.
-    QColor keyTop;             // A raised key's face, a gradient from its top...
-    QColor keyBottom;          // ...to its foot...
-    QColor keyRing;            // ...the 1px ring round it...
-    QColor keyDrop;            // ...the 1px drop under it...
-    QColor keyHighlight;       // ...and the light along the inside of its top edge.
-    QColor keyLatched;         // A key held in (latched): pressed below the plate...
-    QColor keyLatchedShadow;   // ...in the shadow its rim throws across its top.
-    QColor keyLed;             // The amber bar lit at the top of a key that is on.
-    QColor bankWell;           // The well a bank of keys sits in...
-    QColor bankShadow;         // ...the shadow inside its top edge...
-    QColor bankLip;            // ...and the light along the lip below it.
-    QColor wellFill;           // A recessed field (a number, a pop-up)...
-    QColor wellShadow;         // ...the shadow inside its top edge (and an unlit lamp's)...
-    QColor wellLip;            // ...and the light along the lip below it.
-    QColor modulePlate;        // A framed module's plate...
-    QColor moduleEdge;         // ...its 1px edge...
-    QColor moduleHighlight;    // ...and the light inside its top edge.
-    QColor engravedInk;        // An engraved label, 4.5:1 on `modulePlate` and the faceplate...
-    QColor engravedHighlight;  // ...and the 1px catch of light (in dark, of shadow) below its strokes.
-    QColor lampOff;            // A jewel lamp that is dark...
-    QColor lampChanged;        // ...lit amber: a value moved from its default...
-    QColor lampKerf;           // ...lit in Kerf's ink: Kerf's work, a proposal (the accent)...
-    QColor lampOk;             // ...lit green: all is well.
-    QColor glassTop;           // The display glass (a dark readout), a gradient from its top...
-    QColor glassBottom;        // ...to its foot...
-    QColor glassShadow;        // ...the shadow inside its top edge...
-    QColor glassLip;           // ...and the lip of light below it.
-    QColor glassText;          // The readout's figures, 4.5:1 on the glass...
-    QColor glassLabel;         // ...and the small labels beside them, also 4.5:1.
-    QColor knobRing;           // A bakelite knob's skirt...
-    QColor knobFaceLight;      // ...its domed face, lit at the top left...
-    QColor knobFaceDark;       // ...falling to its shaded edge...
-    QColor knobTick;           // ...the scale's ticks round it...
-    QColor knobPointer;        // ...and the cream line it points with.
-    QColor vuBezelTop;         // An analogue VU meter's dark bezel, a gradient from its top...
-    QColor vuBezelBottom;      // ...to its foot...
-    QColor vuFace;             // ...its cream face...
-    QColor vuInk;              // ...the scale and "VU" printed on it, 4.5:1 on the face...
-    QColor vuRedZone;          // ...the red at the loud end of the scale...
-    QColor vuNeedle;           // ...and the black needle and its pivot.
 
     // The style of a clip of `kind`.
     const ClipStyle &clip(ClipKind kind) const;
@@ -488,27 +310,24 @@ struct EditorTheme {
     QColor marker(const QString &name) const;
 };
 
-// The theme for an appearance.
-EditorTheme makeEditorTheme(bool dark);
+// The editor's one theme, built from design_tokens.h.
+EditorTheme makeEditorTheme();
 
-// The scheme the editor draws in: KERF_COLOR_SCHEME's, else System, until
-// setEditorColorScheme() picks another.
-ColorScheme editorColorScheme();
-// Draw the editor (and launchers made after this) in `scheme`, now.
-void setEditorColorScheme(ColorScheme scheme);
-// The theme in force. Before the first applyEditorAppearance() it is the
-// one the current scheme calls for.
+// Register every font compiled in under :/fonts with the application, so
+// tokens::font() finds them on a system that has none installed.
+void loadBundledFonts();
+
+// The theme in force.
 const EditorTheme &editorTheme();
-// Compute the theme for the current scheme and, when it
-// changed (or was never applied), set the application's palette and style
-// sheet, repaint every widget, and emit EditorAppearance::changed().
+// Set the application's palette and style sheet from the theme the first
+// time (and again after a font or screen density change), repaint every
+// widget, and emit EditorAppearance::changed(). Later calls with nothing
+// changed do nothing.
 void applyEditorAppearance();
-// Re-apply as the platform's appearance changes: on
-// QStyleHints::colorSchemeChanged and on application palette changes.
-void followSystemAppearance();
 
-// Tells widgets that cache colours or pixmaps that the theme changed.
-// Anything painted from editorTheme() at paint time is repainted already.
+// Tells widgets that cache colours or pixmaps to rebuild them. The theme
+// never changes, so this fires once as it is first applied, then only when
+// the application font or a screen's density changes.
 class EditorAppearance final : public QObject {
     Q_OBJECT
 public:
@@ -523,8 +342,7 @@ private:
 
 // The application palette for `theme`: the roles Fusion paints controls the
 // style sheet leaves to it with (check boxes, radio buttons, plain text
-// edits). It leaves Window to the platform, so systemIsDark()'s palette
-// fallback keeps reading the system's.
+// edits), and the window and accent, so native parts draw on the ramp too.
 QPalette editorPalette(const EditorTheme &theme);
 
 } // namespace kerf

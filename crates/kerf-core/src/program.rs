@@ -1335,7 +1335,7 @@ pub fn sound_filters(
         }
         _ => {}
     }
-    filters.extend(audio_effects(clip)?);
+    filters.extend(audio_effects(catalog, clip)?);
     for (direction, fade) in [("in", fade_in), ("out", fade_out)] {
         let Some(Crossfade {
             start,
@@ -1383,12 +1383,21 @@ fn place(delay: i64, total: Time) -> String {
     )
 }
 
-fn audio_effects(clip: &Clip) -> Result<Vec<String>> {
+/// The filters a clip's sound effects lower to, in order. A render and
+/// playback both run these.
+fn audio_effects(catalog: &Catalog, clip: &Clip) -> Result<Vec<String>> {
     let mut filters = Vec::new();
     for effect in clip.effects.iter().filter(|effect| effect.enabled) {
         let value = |name: &str| -> Result<f64> {
             match effect.params.get(name) {
-                None => Ok(0.0),
+                None => Ok(catalog
+                    .fx(effect.fx.as_str())
+                    .and_then(|fx| fx.find(name))
+                    .and_then(|def| match def.default {
+                        Value::Number(n) => Some(n),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0)),
                 Some(Param::Static(Value::Number(n))) => Ok(*n),
                 Some(_) => Err(ProgramError::unsupported(
                     &clip.id,
@@ -1408,6 +1417,28 @@ fn audio_effects(clip: &Clip) -> Result<Vec<String>> {
                 if high != 0.0 {
                     filters.push(format!("treble=g={}:f=4000", fmt(high)));
                 }
+            }
+            "audio.eq" => {
+                let (lowcut, presence) = (value("lowcut_hz")?, value("presence_db")?);
+                if lowcut > 0.0 {
+                    filters.push(format!("highpass=f={}", fmt(lowcut)));
+                }
+                if presence != 0.0 {
+                    filters.push(format!("equalizer=f=3000:t=q:w=1:g={}", fmt(presence)));
+                }
+            }
+            "audio.limiter" => {
+                // `alimiter` takes the limit as a linear level. Its
+                // auto-level, which would raise everything back up to the
+                // limit, is off, and it makes up for its look-ahead so the
+                // sound stays on the picture.
+                let (limit, release) = (value("limit_db")?, value("release_ms")?);
+                let level = 10f64.powf(limit.clamp(-24.0, 0.0) / 20.0);
+                filters.push(format!(
+                    "alimiter=limit={}:release={}:level=false:latency=true",
+                    fmt(level),
+                    fmt(release.clamp(1.0, 8000.0))
+                ));
             }
             other => {
                 return Err(ProgramError::unsupported(
@@ -1615,3 +1646,104 @@ fn color_filters(params: &ColorParams) -> Vec<String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sound_effect_tests {
+    use super::*;
+    use kerf_lang::parse_document;
+
+    /// The one clip of a document whose audio clip carries `effects`.
+    fn clip_with(effects: &str) -> Clip {
+        let text = format!(
+            "kerf 1\nproject name=\"t\"\n\
+             media m1 path=\"/media/a.wav\" rate=24 dur=00:01:00:00 audio=2ch@48000\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=m1 src=0f at=0f dur=24f\n\
+             {effects}"
+        );
+        let project = parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        project.clip("a1").expect("a1").clone()
+    }
+
+    fn lowered(effects: &str) -> Vec<String> {
+        audio_effects(Catalog::builtin(), &clip_with(effects)).expect("lowers")
+    }
+
+    #[test]
+    fn channel_eq_lowers_to_a_high_pass_and_a_presence_band() {
+        assert_eq!(
+            lowered("      fx audio.eq lowcut_hz=80 presence_db=1.5\n"),
+            ["highpass=f=80", "equalizer=f=3000:t=q:w=1:g=1.5"]
+        );
+        // A low cut at 0 is off; so is a flat presence band.
+        assert_eq!(
+            lowered("      fx audio.eq presence_db=-3\n"),
+            ["equalizer=f=3000:t=q:w=1:g=-3"]
+        );
+        assert_eq!(
+            lowered("      fx audio.eq lowcut_hz=120\n"),
+            ["highpass=f=120"]
+        );
+        assert!(lowered("      fx audio.eq\n").is_empty());
+    }
+
+    #[test]
+    fn the_limiter_lowers_to_alimiter_at_a_linear_limit() {
+        assert_eq!(
+            lowered("      fx audio.limiter limit_db=-6 release_ms=200\n"),
+            ["alimiter=limit=0.501187:release=200:level=false:latency=true"]
+        );
+        // Unset parameters take the catalog defaults: -1 dBFS and 50 ms.
+        assert_eq!(
+            lowered("      fx audio.limiter\n"),
+            ["alimiter=limit=0.891251:release=50:level=false:latency=true"]
+        );
+        // Effects chain in order, and a disabled one lowers to nothing.
+        let mut clip =
+            clip_with("      fx audio.eq lowcut_hz=80\n      fx audio.limiter limit_db=-2\n");
+        assert_eq!(
+            audio_effects(Catalog::builtin(), &clip).unwrap(),
+            [
+                "highpass=f=80",
+                "alimiter=limit=0.794328:release=50:level=false:latency=true"
+            ]
+        );
+        clip.effects[1].enabled = false;
+        assert_eq!(
+            audio_effects(Catalog::builtin(), &clip).unwrap(),
+            ["highpass=f=80"]
+        );
+    }
+
+    #[test]
+    fn animated_eq_and_limiter_parameters_are_refused() {
+        let clip = clip_with("      fx audio.limiter limit_db={0f:-1 12f:-6}\n");
+        let error = audio_effects(Catalog::builtin(), &clip).unwrap_err();
+        assert!(error.to_string().contains("limit_db"), "{error}");
+    }
+
+    #[test]
+    fn ffmpeg_accepts_the_lowered_filters() {
+        let chain = lowered(
+            "      fx audio.eq lowcut_hz=80 presence_db=1.5\n      fx audio.limiter limit_db=-6 release_ms=200\n",
+        )
+        .join(",");
+        let run = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-nostdin", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:sample_rate=48000:duration=0.2")
+            .args(["-af", &chain, "-f", "null", "-"])
+            .output();
+        let Ok(output) = run else {
+            eprintln!("skipped: ffmpeg is not on PATH");
+            return;
+        };
+        assert!(
+            output.status.success(),
+            "ffmpeg refused `{chain}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

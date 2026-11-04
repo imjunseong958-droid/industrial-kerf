@@ -4,7 +4,8 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    EndpointAddress, RuntimeClient, RuntimeLease, StateSnapshot, MAX_REQUEST_BYTES,
+    Author, CommentPatch, EndpointAddress, NewComment, RuntimeClient, RuntimeLease,
+    StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -322,6 +323,91 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
     let _ = fs::remove_dir_all(&directory);
 }
 
+#[test]
+fn comments_are_added_listed_and_set_over_the_socket_without_touching_the_project() {
+    let project = Project::new("comments");
+    let directory = project.0.clone();
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory).unwrap();
+    wait_until_ready(&client);
+    let opened = client.get_state().unwrap();
+    assert_eq!(client.comments().unwrap().items, Vec::new());
+
+    let mut note = NewComment::new(
+        Author {
+            id: Some("mina@example.com".into()),
+            ..Author::new("person", "Mina Park")
+        },
+        "The flare hides the logo",
+    );
+    note.id = Some("c-socket-1".into());
+    note.at = Some(2.0);
+    note.tags = vec!["picture".into()];
+    let (added, log) = client.add_comment("ui", note.clone()).unwrap();
+    assert_eq!(added.id, "c-socket-1");
+    assert_eq!(added.frame, Some(60));
+    assert_eq!(log.items, vec![added.clone()]);
+    // A retry with the same id adds nothing.
+    let (again, log) = client.add_comment("ui", note).unwrap();
+    assert_eq!(again, added);
+    assert_eq!(log.items.len(), 1);
+
+    // An agent's reply arrives from another client, as an MCP note does.
+    let agent = RuntimeClient::new(&directory).unwrap();
+    let mut reply = NewComment::new(
+        Author {
+            role: Some("MCP".into()),
+            ..Author::new("mcp", "Claude Code")
+        },
+        "Masked the flare",
+    );
+    reply.parent = Some(added.id.clone());
+    let (reply, _) = agent.add_comment("mcp", reply).unwrap();
+
+    let (resolved, log) = client
+        .set_comment(
+            "ui",
+            &added.id,
+            CommentPatch {
+                resolved: Some(true),
+                ..CommentPatch::default()
+            },
+        )
+        .unwrap();
+    let resolved = resolved.unwrap();
+    assert!(resolved.resolved);
+    assert_eq!(log.items.len(), 2);
+    let state = client.get_state().unwrap();
+    assert_eq!(state.revision, opened.revision);
+    assert_eq!(state.document, opened.document);
+    assert!(state.review_revision > opened.review_revision);
+    assert_eq!(state.review_revision, log.review_revision);
+
+    let (deleted, log) = client
+        .set_comment(
+            "ui",
+            &reply.id,
+            CommentPatch {
+                deleted: Some(true),
+                ..CommentPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(deleted.is_none());
+    assert_eq!(log.items, vec![resolved.clone()]);
+    let missing = client
+        .set_comment("ui", "c-missing", CommentPatch::default())
+        .unwrap_err();
+    assert_eq!(missing.code, "COMMENT_NOT_FOUND");
+
+    // The log outlives the daemon.
+    stop_daemon(daemon);
+    let restarted = start_daemon(&directory);
+    wait_until_ready(&client);
+    assert_eq!(client.comments().unwrap().items, vec![resolved]);
+    stop_daemon(restarted);
+}
+
 /// `seconds` of 64x36 picture at 24 fps with a tone.
 fn media_file(path: &Path, seconds: u32) {
     let output = Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
@@ -396,6 +482,104 @@ fn media_is_replaced_through_the_client_relative_to_the_project() {
     assert_eq!(undone.document, imported.document);
     stop_daemon(daemon);
     let _ = fs::remove_dir_all(&directory);
+}
+
+/// What ffprobe finds in `path`: each stream's codec, profile, and sample
+/// format.
+fn streams(path: &Path) -> Vec<serde_json::Value> {
+    let output = Command::new(kerf_engine::ffmpeg::resolve_ffprobe_bin())
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,profile,sample_fmt,bits_per_raw_sample",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let probe: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    probe["streams"].as_array().unwrap().clone()
+}
+
+#[test]
+fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
+    if !["prores_ks", "prores_videotoolbox"]
+        .into_iter()
+        .any(kerf_engine::render::encoder_available)
+    {
+        eprintln!("skipped: this FFmpeg has no ProRes encoder");
+        return;
+    }
+    let project = Project::new("master");
+    let directory = project.0.clone();
+    fs::create_dir_all(directory.join("media")).unwrap();
+    media_file(&directory.join("media/a.mp4"), 1);
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory)
+        .unwrap()
+        .with_request_timeout(Duration::from_secs(60));
+    wait_until_ready(&client);
+    client
+        .import_media_request("ui", "import", "media/a.mp4", 0)
+        .unwrap();
+
+    let options = StartRenderOptions {
+        codec: Some("prores_hq".into()),
+        output: Some("deliveries/v1/".into()),
+        name: Some("Master".into()),
+        ..StartRenderOptions::new("master")
+    };
+    let (job, document, output) = client.start_render_with(&options).unwrap();
+    assert!(
+        output.ends_with("deliveries/v1/Master.mov"),
+        "{}",
+        output.display()
+    );
+    assert_eq!(
+        (
+            job.quality.as_deref(),
+            job.codec.as_deref(),
+            job.name.as_deref()
+        ),
+        (Some("master"), Some("prores_hq"), Some("Master"))
+    );
+    let queued = client.list_renders().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].status, "queued");
+
+    kerf_runtime::run_render_job(&client, &job, &document, &output, false, |_| {}).unwrap();
+    let streams = streams(&output);
+    let stream = |kind: &str| {
+        streams
+            .iter()
+            .find(|stream| stream["codec_type"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} stream in {streams:?}"))
+    };
+    assert_eq!(stream("video")["codec_name"], "prores");
+    assert_eq!(stream("video")["profile"], "HQ");
+    assert_eq!(stream("audio")["codec_name"], "pcm_s24le");
+    let done = client.list_renders().unwrap();
+    assert_eq!(done[0].status, "completed");
+    assert_eq!(done[0].progress, 1.0);
+
+    // An output that climbs out of the project is refused over the socket,
+    // and nothing is queued.
+    let refused = client
+        .start_render_with(&StartRenderOptions {
+            output: Some("../elsewhere/".into()),
+            ..StartRenderOptions::new("master")
+        })
+        .unwrap_err();
+    assert_eq!(refused.code, "INVALID_RENDER_OUTPUT", "{}", refused.message);
+    assert_eq!(client.list_renders().unwrap().len(), 1);
+    stop_daemon(daemon);
 }
 
 #[test]

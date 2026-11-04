@@ -137,9 +137,40 @@ pub struct Track {
     pub enabled: bool,
     pub locked: bool,
     pub muted: bool,
+    /// What the track carries, for grouping, stems, and the timeline's
+    /// role colours: one of [`TRACK_ROLES`] or free text. `None` means the
+    /// kind's default ([`Track::role_or_default`]).
+    pub role: Option<String>,
+    /// Ripple edits on other tracks move this track's clips too, keeping it
+    /// in sync with them. Off, the track holds still unless the edit is on
+    /// it. Absent from a document means on.
+    pub sync_locked: bool,
     /// Ordered by start and never overlapping.
     pub clips: Vec<Clip>,
     pub transitions: Vec<Transition>,
+}
+
+/// The track roles every surface knows by name. A role may also be any
+/// other word or phrase.
+pub const TRACK_ROLES: [&str; 5] = ["video", "titles", "dialogue", "music", "effects"];
+
+/// A role as a track keeps it: trimmed, a known role in its own spelling
+/// whatever the case written, and `None` for nothing. `Err` for text that
+/// is not one line.
+pub fn track_role(text: &str) -> Result<Option<String>, &'static str> {
+    let role = text.trim();
+    if role.is_empty() {
+        return Ok(None);
+    }
+    if role.chars().any(char::is_control) {
+        return Err("a track role is one line of text");
+    }
+    Ok(Some(
+        TRACK_ROLES
+            .iter()
+            .find(|known| known.eq_ignore_ascii_case(role))
+            .map_or_else(|| role.to_owned(), |known| (*known).to_owned()),
+    ))
 }
 
 impl Track {
@@ -151,9 +182,21 @@ impl Track {
             enabled: true,
             locked: false,
             muted: false,
+            role: None,
+            sync_locked: true,
             clips: Vec::new(),
             transitions: Vec::new(),
         }
+    }
+
+    /// The track's role, or the one its kind implies: `video` for picture,
+    /// `dialogue` for sound, and none for subtitles.
+    pub fn role_or_default(&self) -> Option<&str> {
+        self.role.as_deref().or(match self.kind {
+            TrackKind::Video => Some("video"),
+            TrackKind::Audio => Some("dialogue"),
+            TrackKind::Subtitle => None,
+        })
     }
 
     pub fn clip(&self, id: &str) -> Option<&Clip> {

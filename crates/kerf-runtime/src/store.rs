@@ -2,7 +2,9 @@
 //! journal, checkpoints, and atomic file replacement.
 
 use crate::kernel;
-use crate::{io_error, PendingProposal, RenderJob, RuntimeError, StateSnapshot};
+use crate::{
+    io_error, Author, PendingProposal, ProposalVersion, RenderJob, RuntimeError, StateSnapshot,
+};
 use fs2::FileExt;
 use kerf_model::Project;
 use serde::{Deserialize, Serialize};
@@ -157,11 +159,29 @@ pub(crate) struct JournalRecord {
     pub(crate) operation: Option<JournalOperation>,
     #[serde(default)]
     pub(crate) import: Option<JournalImport>,
+    /// The one proposal slot records before several proposals were kept.
     #[serde(default)]
     pub(crate) proposal: Option<ProposalRecord>,
     #[serde(default)]
     pub(crate) job: Option<RenderJob>,
+    /// Every proposal kept after this record; absent in older records,
+    /// which carry `proposal` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) proposals: Option<Vec<ProposalRecord>>,
+    /// When a record that made a new revision made it, RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) time: Option<String>,
     pub(crate) checksum: String,
+}
+
+impl JournalRecord {
+    /// The proposals this record leaves, from either format.
+    pub(crate) fn take_proposals(&mut self) -> Vec<ProposalRecord> {
+        match self.proposals.take() {
+            Some(proposals) => proposals,
+            None => self.proposal.take().into_iter().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -178,8 +198,13 @@ pub(crate) struct PersistedCheckpoint {
     pub(crate) journal_sequence: u64,
     pub(crate) operations: HashMap<String, OperationRecord>,
     pub(crate) imports: HashMap<String, ImportRecord>,
-    #[serde(default)]
+    /// Checkpoints from before several proposals were kept hold one here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proposal: Option<ProposalRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) proposals: Vec<ProposalRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) revision_time: Option<String>,
     #[serde(default)]
     pub(crate) jobs: HashMap<String, RenderJob>,
     #[serde(default)]
@@ -302,6 +327,23 @@ pub(crate) struct ProposalRecord {
     pub(crate) fingerprint: String,
     #[serde(default)]
     pub(crate) receipt: Option<ProposalReceipt>,
+    /// Who made it and its versions; absent on proposals staged before
+    /// they were kept, which read as Kerf's v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) meta: Option<ProposalMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProposalMeta {
+    pub(crate) author: Author,
+    pub(crate) version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) supersedes: Option<String>,
+    /// Every version, oldest first, the current one included.
+    #[serde(default)]
+    pub(crate) versions: Vec<ProposalVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) staged: Option<String>,
 }
 
 /// Move an older kerfd's checkpoint and journal aside, unchanged.

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "device_frame.h"
 #include "editor_common.h"
+#include "test_friends.h"
 
 #include <QAction>
 #include <QCheckBox>
@@ -22,7 +22,6 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QMenu>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -36,14 +35,30 @@
 
 #include <cmath>
 #include <functional>
+#include <memory>
+
+struct KerfFrame; // bridge.h
 
 namespace kerf {
 
 class AskPrompt;
+class BrowserPanel;
 class ChatPanel;
+class DeliverTray;
+class EditorBus;
+class FinishTray;
+class InspectorColumn;
+// The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
+// its region's own state.
+class BinWiring;
+class InspectorWiring;
+class ReviewWiring;
+class SourceWiring;
+class StageWiring;
+class TimelineWiring;
+class ToolbarWiring;
 struct ProposalChange;
 class CommentRow;
-class StageRail;
 class CommandRegistry;
 class ExportButton;
 class FormatBank;
@@ -52,18 +67,45 @@ class EffectsPanel;
 class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
-class Workspace;
+class PreviewChip;
+class StageShell;
 class MediaArtwork;
 class TimelineWidget;
-class TimelineZoomControl;
 class ViewerWidget;
 
+// The editor's window. Its content is a StageShell (ui/stage_shell.h): the
+// picture, the conversation and the timeline, the rest on demand. Its member
+// functions are split by region into main_window_<region>.cpp (review, stage,
+// toolbar, status, timeline, inspector, bin, source), each region's own state in
+// its wiring class; the regions talk through the EditorBus (ui/editor_bus.h) it
+// owns.
 class MainWindow final : public QMainWindow {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
+    friend class BinWiring;
+    friend class InspectorWiring;
+    friend class ReviewWiring;
+    friend class SourceWiring;
+    friend class StageWiring;
+    friend class TimelineWiring;
+    friend class ToolbarWiring;
 public:
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
+    // The bus the window's regions share.
+    EditorBus *bus() const { return m_bus; }
+    // The project folder this editor has open (absolute; empty for none).
+    QString projectDirectory() const { return m_projectDirectory; }
+    // The slugs a kerf:// review link may name this project by: its
+    // folder's and its document's name (links::slug).
+    QStringList projectSlugs() const;
+    // A kerf:// link followed to this project: once it is connected and its
+    // programme is known, seek to `timecode` ("HH:MM:SS:FF"; empty stays at
+    // the playhead), and say so when the link names another revision.
+    void followLink(qint64 revision, const QString &timecode);
+    bool linkPending() const { return m_linkPending; }
+    // The tray to open in ("Finish", "Deliver"; anything else is the base state).
+    void openTray(const QString &name);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -91,12 +133,8 @@ private slots:
     void settlePointerSeek();
     bool scrubFromShownFrame(double time) const;
     void selectClip(const QString &id);
-    // A clip clicked on the timeline: selected, and the Inspector brought
-    // forward in its column (see Workspace::raiseInspector).
     // ⌘-click or ⇧-click on a clip in the timeline.
     void extendClipSelection(const QString &id, bool toggle);
-    void updateSelectionStatus();
-    void clickSelectClip(const QString &id);
     // Open the conversation with `subject` ("@clip") in the composer.
     void askAboutInChat(const QString &subject);
 
@@ -135,7 +173,6 @@ private slots:
     // Ask Kerf about the selected clip, or the sequence at the playhead.
     void askAi();
     void askSubmitted(const QString &text, const QString &scope);
-    void updateAiBar();
     // Kerf's next steps as buttons in the AI bar and over the composer;
     // pressing one asks for it with the focus of the last request.
     void showNextSteps(const QJsonArray &steps);
@@ -145,6 +182,7 @@ private slots:
     // What the registry needs to know about the agent's connection.
     QString aiAccess() const;
     void updateCloudStatus();
+    void updateComposerHint();
     void updateChatControls();
     QString activeProviderId() const;
     QJsonObject agentSettingsPayload() const;
@@ -153,24 +191,44 @@ private slots:
     void updateAgentModelChoices();
     void loadAgentSettings();
     void saveAgentSettings();
-    void acceptProposal();
-    void rejectProposal();
-    // Kerf's conversation, in the Program monitor's stage beside the
-    // picture: open there (and the Program monitor with it, in front), or
-    // closed. Remembered on this Mac, never in the project.
-    bool chatOpen() const;
-    void setChatOpen(bool open);
-    // Bring the switches that open it in line with chatOpen().
-    void syncChatSwitches();
-
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
+    // A program frame from the bridge (pollBridge): shown in the viewer and
+    // handed to the bus; false when it is not shown (offline, short, or
+    // farther from the scrub target than the one on screen).
+    bool showProgramFrame(const KerfFrame &frame);
     void buildUi();
+    // The regions' parts of buildUi, each in its region's file.
+    void buildReview();
+    void buildStage();
+    void buildTimeline();
+    void buildSource();
+    void buildInspector();
+    void buildBin();
+    // Settings (main_window.cpp).
+    void buildPreferences();
+    // The shell: the regions, the sheets, the trays and the bars, once the
+    // regions are built.
+    void buildShell();
+    // The timeline's gestures, once every region exists (main_window_timeline.cpp).
+    void wireTimeline();
+    // The toolbar, once the registry's actions exist (main_window_toolbar.cpp).
+    void setupToolbar(const QHash<QString, QMenu *> &menus);
+    // The picture's commands, once the registry's actions exist.
+    void setupPictureCommands();
+    // A tray opened or closed: the bus, its commands, the keys.
+    void applyTray();
+    // The sheets' and the trays' commands checked as they show.
+    void syncPanelCommands();
+    // A registry command by id for the bus: a frontend command runs its
+    // handler, an engine command goes through execute().
+    bool runCommand(const QString &id, const QJsonObject &params);
     // On macOS, where the toolbar is the title bar: fill the title bar's
     // height and start past the window buttons (none in full screen).
     void fitTitleBar();
@@ -185,8 +243,6 @@ private:
     void applyAppearance();
     // Size Settings to what it shows, up to the screen's height; it scrolls past that.
     void fitPreferences();
-    // Window ▸ Workspaces: the workspaces, and saving or resetting the current one.
-    void buildWorkspaceMenu(QMenu *menu);
     void syncCanvasPreset(const QSize &size);
     void setupActions();
     // Resolve a command in the current context and send its request.
@@ -195,35 +251,28 @@ private:
     QJsonObject commandContext() const;
     void updateCommandStates();
 
-    // The transport, as the player's controls on the Program monitor's
-    // picture (see PlayerOverlay): what they ask for runs here, and they
-    // show the playhead's time, the length, and what can be pressed.
-    void setupPlayerOverlay();
-    void updateTransport();
-    // The rail's VU meter: the program's sound at the playhead while it
-    // plays, from the sound clips' peaks; at rest, its needle falls back.
-    void updateProgramLevel();
-    // The phone a portrait picture shows in and its safe zones, and the
-    // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
-    // remembered on this Mac.
-    void setDevicePreview(DevicePreview preview);
-    void setLaptopPreview(LaptopPreview preview);
+    // Safe zones over the picture, remembered on this Mac; off by default.
     void setSafeZones(bool shown);
-    void showDeviceMenu();
-    void updateViewerRail();
-    void fitPanelDetails();
     void seekToStart() { queueSeek(0.0); }
     void seekToEnd() { queueSeek(m_duration); }
     // Step from the frame on screen so each press moves exactly one frame.
     void stepFrames(int frames);
     void stepBackward() { stepFrames(-1); }
     void stepForward() { stepFrames(1); }
-    void setupStatusBar();
+    // A passing message in the toolbar's subtitle, for `timeout` ms (0: until
+    // the next one), then the normal subtitle again.
+    void showStatus(const QString &message, int timeout = 0);
     QJsonValue revisionValue() const { return QJsonValue::fromVariant(QVariant::fromValue(m_revision)); }
     bool sendSimple(const QJsonObject &value);
     bool sendSeek(double position, bool scrub);
     void flushSeek();
+    // A bridge event: the window handles it (routeEvent), then the bus sends
+    // it on to the regions.
     void handleEvent(QJsonObject event);
+    void routeEvent(const QJsonObject &event);
+    // The agent's events (agent, agent_busy, agent_state, agent_next); false
+    // for any other (main_window_review.cpp).
+    bool handleAgentEvent(const QJsonObject &event);
     void applySnapshot(const QJsonObject &snapshot);
     QString selectedTrackType() const;
     QJsonObject selectedClipObject() const;
@@ -238,15 +287,10 @@ private:
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
     void updateProposal(const QJsonValue &value);
-    // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
-    void showProposalText();
     // A proposal's script line as the change its pinned comment lists.
     ProposalChange describeScriptLine(const QString &line) const;
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
-    // The number of messages under the rail's chat button.
-    void updateChatCount();
-    void updateChatTips();
     // The quiet status line after the latest comment.
     void updateChatStatus();
     // The activity log, from the conversation's ⋯ menu.
@@ -268,7 +312,6 @@ private:
     // window shows where the project stands and what a sync brought in.
     void handleCollabEvent(const QJsonObject &event);
     QJsonObject collabContext() const;
-    void updateSyncChip();
     void buildBranchMenu(QMenu *menu);
     void commitChanges();
     void newBranch();
@@ -290,6 +333,22 @@ private:
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
 
+    EditorBus *m_bus = nullptr;
+    std::unique_ptr<ReviewWiring> m_reviewWiring;
+    std::unique_ptr<StageWiring> m_stageWiring;
+    std::unique_ptr<ToolbarWiring> m_toolbarWiring;
+    std::unique_ptr<InspectorWiring> m_inspectorWiring;
+    std::unique_ptr<TimelineWiring> m_timelineWiring;
+    std::unique_ptr<BinWiring> m_binWiring;
+    std::unique_ptr<SourceWiring> m_sourceWiring;
+    // The regions' containers: the shell, the timeline's panel, the Inspector
+    // column, the browser, the Finish and Deliver trays.
+    StageShell *m_shell = nullptr;
+    QWidget *m_timelinePanel = nullptr;
+    InspectorColumn *m_inspectorColumn = nullptr;
+    BrowserPanel *m_browserPanel = nullptr;
+    FinishTray *m_finishTray = nullptr;
+    DeliverTray *m_deliverTray = nullptr;
     MediaArtwork *m_artwork = nullptr;
     QToolBar *m_toolbar = nullptr;
     // The room at the toolbar's leading end for the window buttons (macOS).
@@ -297,9 +356,18 @@ private:
     QLabel *m_projectTitle = nullptr;
     QLabel *m_projectSubtitle = nullptr;
     QString m_projectName;
-    QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
-    // The toolbar's last control: opens and closes Kerf's conversation.
-    QToolButton *m_chatToggle = nullptr;
+    // A followed kerf:// link not yet applied (followLink).
+    bool m_linkPending = false;
+    qint64 m_linkRevision = -1;
+    QString m_linkTimecode;
+    void applyPendingLink();
+    // The keys to the timeline when Qt handed them to a button as if Tab had
+    // been pressed: after a tray or sheet closes, and as the window first
+    // shows and first becomes active (m_focusSettled).
+    void settleFocus();
+    // Closes a sheet or tray that lies over the composer.
+    void uncoverComposer();
+    bool m_focusSettled = false;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;
@@ -325,16 +393,6 @@ private:
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off), the laptop
-    // (Laptop, Off) and safe zones.
-    QList<QAction *> m_deviceActions;
-    QList<QAction *> m_laptopActions;
-    QAction *m_safeZonesAction = nullptr;
-    // Panel details shown in the panels' title strips.
-    QAction *m_viewerDetail = nullptr;
-    QLabel *m_timelineDetail = nullptr;
-    TimelineZoomControl *m_timelineZoom = nullptr;
-    Workspace *m_workspace = nullptr;
     InspectorPanel *m_inspector = nullptr;
     // Add effect in the Inspector raised the Effects browser: adding one
     // brings the Inspector back.
@@ -342,9 +400,6 @@ private:
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
     EffectsPanel *m_effects = nullptr;
-    QWidget *m_nextSteps = nullptr;
-    QWidget *m_chatNextSteps = nullptr;
-    QJsonArray m_steps;
     QJsonObject m_lastFocus;
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
@@ -356,8 +411,6 @@ private:
     QLabel *m_divergedGlyph = nullptr;
     QPushButton *m_loadFromDisk = nullptr;
     QPushButton *m_keepEditorVersion = nullptr;
-    // The branch and how far it is from its upstream; a click syncs.
-    QToolButton *m_syncChip = nullptr;
     QMenu *m_recentMenu = nullptr;
     QMenu *m_branchMenu = nullptr;
     // The bridge's last `collab` status, empty until one arrives.
@@ -371,10 +424,7 @@ private:
     QStringList m_syncLines;
     QJsonObject m_mediaStatus;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
-    QToolBar *m_toolPalette = nullptr;
     AskPrompt *m_askPrompt = nullptr;
-    QFrame *m_aiBar = nullptr;
-    QLabel *m_aiBarText = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;
     QRadioButton *m_cloudRadio = nullptr;
@@ -385,16 +435,11 @@ private:
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
     QWidget *m_preferencesContent = nullptr;
-    QLabel *m_statusAccount = nullptr;
-    // Where the live preview draws: the GPU adapter, or the CPU.
-    QLabel *m_statusDevice = nullptr;
     // The last account report from the bridge.
     QString m_cloudAccess;
     QJsonObject m_cloudAccount;
     QString m_cloudMessage;
     QDialog *m_preferences = nullptr;
-    QLabel *m_statusConnection = nullptr;
-    QLabel *m_statusRevision = nullptr;
     quint64 m_revision = 0;
     int m_trackCount = 0;
     double m_duration = 0.0;
@@ -417,21 +462,18 @@ private:
     bool m_hasShownFrame = false;
     bool m_updatingCanvasPreset = false;
     bool m_agentBusy = false;
-    QString m_agentRunState = QStringLiteral("idle");
     QString m_agentText;
     QString m_selectedClip;
     // Every selected clip, m_selectedClip (the primary one) among them.
     QStringList m_selectedClips;
-    QLabel *m_selectionStatus = nullptr;
     QString m_proposalId;
     QStringList m_activityLog;
     QSize m_canvasSize{1920, 1080};
 
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
-    // The conversation and the rail beside the picture.
+    // The conversation, always open.
     ChatPanel *m_chat = nullptr;
-    StageRail *m_rail = nullptr;
     // Kerf's comment for this turn, which streamed text and steps go to, and
     // steps that came before it.
     QPointer<CommentRow> m_agentRow;
@@ -439,12 +481,16 @@ private:
     QFrame *m_activityPopup = nullptr;
     // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;
-    QLabel *m_chatActivity = nullptr;
+    // The agent's latest progress line, for the turn's drafting row.
+    QString m_activityDetail;
     QFrame *m_chatComposer = nullptr;
     QTextEdit *m_chatInput = nullptr;
     QRadioButton *m_anthropicActiveRadio = nullptr;
     QRadioButton *m_openaiActiveRadio = nullptr;
-    QComboBox *m_modelSelect = nullptr;
+    // The model each chat request names (the More menu's Model, else the
+    // active connection's), and the ones offered.
+    QString m_agentModel;
+    QStringList m_agentModels;
     QLineEdit *m_anthropicKey = nullptr;
     QLineEdit *m_anthropicBaseUrl = nullptr;
     QLineEdit *m_anthropicModel = nullptr;
@@ -459,18 +505,10 @@ private:
     QPushButton *m_sendButton = nullptr;
     QPushButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
-    QLabel *m_agentStatus = nullptr;
-    QLabel *m_proposalSummary = nullptr;
-    QTextEdit *m_proposalDiff = nullptr;
-    QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
-    QPushButton *m_acceptButton = nullptr;
-    QPushButton *m_rejectButton = nullptr;
-    QFrame *m_proposalBox = nullptr;
     // The toolbar's right-hand group: the format bank, then Export (its
     // menu holds the quality and Render Preview).
     FormatBank *m_formatBank = nullptr;
     ExportButton *m_exportButton = nullptr;
-    QProgressBar *m_exportProgress = nullptr;
 };
 
 } // namespace kerf

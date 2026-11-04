@@ -307,6 +307,8 @@ fn track_head(track: &Track) -> Track {
         enabled: track.enabled,
         locked: track.locked,
         muted: track.muted,
+        role: track.role.clone(),
+        sync_locked: track.sync_locked,
         ..Track::new(track.id.clone(), track.kind)
     }
 }
@@ -575,6 +577,14 @@ fn merge_track(base: &Track, ours: &Track, theirs: &Track, clashes: &mut Vec<Str
             clashes,
         ),
         muted: pick("muted", &base.muted, &ours.muted, &theirs.muted, clashes),
+        role: pick("role", &base.role, &ours.role, &theirs.role, clashes),
+        sync_locked: pick(
+            "sync lock",
+            &base.sync_locked,
+            &ours.sync_locked,
+            &theirs.sync_locked,
+            clashes,
+        ),
         clips: Vec::new(),
         transitions: Vec::new(),
     }
@@ -1527,6 +1537,13 @@ fn track_changes(before: &Track, after: &Track) -> Vec<String> {
     differs(&mut fields, "enabled", &before.enabled, &after.enabled);
     differs(&mut fields, "locked", &before.locked, &after.locked);
     differs(&mut fields, "muted", &before.muted, &after.muted);
+    differs(&mut fields, "role", &before.role, &after.role);
+    differs(
+        &mut fields,
+        "sync lock",
+        &before.sync_locked,
+        &after.sync_locked,
+    );
     fields
 }
 
@@ -2078,6 +2095,46 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
         assert_eq!(
             merged.conflicts,
             vec![conflict("s1/V1/c1", "scale changed on both sides", "ours")]
+        );
+    }
+
+    #[test]
+    fn track_roles_and_sync_locks_merge_by_track() {
+        let role = ("  track V1 video\n", "  track V1 video role=titles\n");
+        let sync = (
+            "  track A1 audio\n",
+            "  track A1 audio role=music sync=off\n",
+        );
+        let merged = merge(BASE, &edit(BASE, &[role]), &edit(BASE, &[sync]));
+        assert_eq!(merged.text, edit(BASE, &[role, sync]));
+        assert_eq!(merged.conflicts, vec![]);
+        assert_eq!(
+            summarize(&project(BASE), &project(&merged.text)),
+            [
+                "Changed track V1: role",
+                "Changed track A1: role, sync lock"
+            ]
+        );
+
+        // The same field set apart on both sides keeps ours.
+        let theirs = (
+            "  track V1 video\n",
+            "  track V1 video role=\"B roll\" sync=off\n",
+        );
+        let merged = merge(BASE, &edit(BASE, &[role]), &edit(BASE, &[theirs]));
+        assert_eq!(
+            merged.text,
+            edit(
+                BASE,
+                &[(
+                    "  track V1 video\n",
+                    "  track V1 video role=titles sync=off\n"
+                )]
+            )
+        );
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict("s1/V1", "role changed on both sides", "ours")]
         );
     }
 

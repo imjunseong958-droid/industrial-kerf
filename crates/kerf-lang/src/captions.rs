@@ -1,9 +1,11 @@
 //! Captions from timed words: what a clip says, as script lines that put
 //! caption clips on a subtitle track, timed to the speech as the clip
-//! plays it.
+//! plays it. And captions out: a sequence's caption clips as SubRip
+//! (`.srt`) and WebVTT (`.vtt`) files.
 
 use crate::text::{quote, Clock};
-use kerf_model::{Content, Project, Time, TrackKind};
+use kerf_model::time::FLICKS_PER_SECOND;
+use kerf_model::{Content, Id, Project, Sequence, Time, TrackKind};
 
 /// A spoken word, timed in seconds of its media.
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +125,106 @@ pub fn caption_script(
     Ok(lines.join("\n"))
 }
 
+/// One caption as a file carries it: sequence offsets and its lines.
+struct Cue {
+    start: Time,
+    end: Time,
+    lines: Vec<String>,
+}
+
+/// The caption clips of `sequence`'s subtitle tracks, or of `track` alone,
+/// in the order they appear. Disabled tracks and clips, and captions with
+/// no text, are left out; blank lines inside a caption are dropped, as both
+/// formats end a cue at one.
+fn cues(sequence: &Sequence, track: Option<&Id>) -> Vec<Cue> {
+    let mut cues: Vec<(usize, Cue)> = Vec::new();
+    for (index, found) in sequence.tracks.iter().enumerate() {
+        if found.kind != TrackKind::Subtitle
+            || !found.enabled
+            || track.is_some_and(|track| *track != found.id)
+        {
+            continue;
+        }
+        for clip in found.clips.iter().filter(|clip| clip.enabled) {
+            let Content::Caption { text } = &clip.content else {
+                continue;
+            };
+            let lines: Vec<String> = text
+                .lines()
+                .map(|line| line.trim().to_owned())
+                .filter(|line| !line.is_empty())
+                .collect();
+            if lines.is_empty() {
+                continue;
+            }
+            cues.push((
+                index,
+                Cue {
+                    start: clip.start,
+                    end: clip.end(),
+                    lines,
+                },
+            ));
+        }
+    }
+    cues.sort_by_key(|(index, cue)| (cue.start, *index));
+    cues.into_iter().map(|(_, cue)| cue).collect()
+}
+
+/// `HH:MM:SS` then `separator` and milliseconds, rounded to the nearest.
+fn cue_time(time: Time, separator: char) -> String {
+    let flicks = i128::from(time.flicks().max(0));
+    let per_second = i128::from(FLICKS_PER_SECOND);
+    let ms = (flicks * 1000 + per_second / 2) / per_second;
+    format!(
+        "{:02}:{:02}:{:02}{separator}{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
+}
+
+/// The captions of `sequence` (every subtitle track, or `track` alone) as
+/// a SubRip file, timed from the sequence's first frame.
+pub fn to_srt(sequence: &Sequence, track: Option<&Id>) -> String {
+    let mut out = String::new();
+    for (number, cue) in cues(sequence, track).iter().enumerate() {
+        out.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            number + 1,
+            cue_time(cue.start, ','),
+            cue_time(cue.end, ','),
+            cue.lines.join("\n")
+        ));
+    }
+    out
+}
+
+/// The captions of `sequence` (every subtitle track, or `track` alone) as
+/// a WebVTT file, timed from the sequence's first frame.
+pub fn to_vtt(sequence: &Sequence, track: Option<&Id>) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for cue in cues(sequence, track) {
+        let lines: Vec<String> = cue
+            .lines
+            .iter()
+            .map(|line| {
+                line.replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+            })
+            .collect();
+        out.push_str(&format!(
+            "{} --> {}\n{}\n\n",
+            cue_time(cue.start, '.'),
+            cue_time(cue.end, '.'),
+            lines.join("\n")
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +341,93 @@ marker add as=done at=00:00:06:00
         assert!(caption_script(&project, "c1", "V1", &[word(10.5, 11.0, "x")], 3).is_err());
         assert!(caption_script(&project, "c1", "S1", &[word(30.0, 31.0, "x")], 3).is_err());
         assert!(caption_script(&project, "c9", "S1", &[], 3).is_err());
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+    use crate::parse_document;
+    use kerf_model::Catalog;
+
+    const DOCUMENT: &str = "kerf 1
+project name=\"Captions\"
+sequence s1 rate=24 size=1920x1080 start=01:00:00:00
+  track V1 video
+  track S1 subtitle
+    clip k1 caption=\"So here we\\n\\n  are. \" at=01:00:00:06 dur=00:00:02:00
+    clip k2 caption=\"Fish & <chips>\" at=01:00:03:00 dur=00:00:01:12
+    clip k4 caption=\"Off\" at=01:00:06:00 dur=00:00:01:00 enabled=false
+  track S2 subtitle
+    clip k3 caption=\"[music]\" at=01:00:01:00 dur=00:00:00:13
+    clip k5 caption=\"  \" at=01:00:08:00 dur=00:00:01:00
+  track S3 subtitle enabled=false
+    clip k6 caption=\"Hidden\" at=01:00:00:00 dur=00:00:01:00
+";
+
+    fn sequence() -> Sequence {
+        let project = parse_document(DOCUMENT, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        project.sequences[0].clone()
+    }
+
+    #[test]
+    fn srt_lists_every_subtitle_track_in_time_order() {
+        assert_eq!(
+            to_srt(&sequence(), None),
+            "1
+00:00:00,250 --> 00:00:02,250
+So here we
+are.
+
+2
+00:00:01,000 --> 00:00:01,542
+[music]
+
+3
+00:00:03,000 --> 00:00:04,500
+Fish & <chips>
+
+"
+        );
+    }
+
+    #[test]
+    fn vtt_escapes_markup_and_can_take_one_track() {
+        assert_eq!(
+            to_vtt(&sequence(), None),
+            "WEBVTT
+
+00:00:00.250 --> 00:00:02.250
+So here we
+are.
+
+00:00:01.000 --> 00:00:01.542
+[music]
+
+00:00:03.000 --> 00:00:04.500
+Fish &amp; &lt;chips&gt;
+
+"
+        );
+        let s2 = Id::new("S2").unwrap();
+        assert_eq!(
+            to_vtt(&sequence(), Some(&s2)),
+            "WEBVTT\n\n00:00:01.000 --> 00:00:01.542\n[music]\n\n"
+        );
+        assert_eq!(to_srt(&sequence(), Some(&Id::new("V1").unwrap())), "");
+    }
+
+    #[test]
+    fn cue_times_round_to_the_millisecond_on_ntsc_rates() {
+        let rate = kerf_model::Rate::FPS_29_97;
+        // Frame 1 of 29.97 starts at 33.3667 ms; frame 1800 at 60.06 s.
+        assert_eq!(cue_time(rate.time_of(1), ','), "00:00:00,033");
+        assert_eq!(cue_time(rate.time_of(1800), '.'), "00:01:00.060");
+        assert_eq!(
+            cue_time(Time::from_seconds(3723.5).unwrap(), ','),
+            "01:02:03,500"
+        );
     }
 }

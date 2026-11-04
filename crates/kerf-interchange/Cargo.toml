@@ -3,7 +3,7 @@ name = "kerf-interchange"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Project interchange for Kerf: OpenTimelineIO"
+description = "Project interchange for Kerf: OpenTimelineIO and CMX3600 EDL"
 
 [dependencies]
 kerf-model = { path = "../kerf-model" }

@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 kerf-core = { path = "../kerf-core" }
+kerf-compose = { path = "../kerf-compose" }
 kerf-lang = { path = "../kerf-lang" }
 kerf-model = { path = "../kerf-model" }
 kerf-runtime = { path = "../kerf-runtime" }
@@ -21,6 +22,7 @@ kerf-commands = { path = "../kerf-commands" }
 kerf-mcp = { path = "../kerf-mcp" }
 kerf-engine = { path = "../kerf-engine" }
 kerf-fx = { path = "../kerf-fx" }
+kerf-interchange = { path = "../kerf-interchange" }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

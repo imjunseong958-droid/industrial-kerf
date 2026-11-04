@@ -2,8 +2,9 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, EditOp, RenderJob, RenderRange, RequestEnvelope, RuntimeError,
-    RuntimeHandle, RuntimeRequest, RuntimeResponse, StateSnapshot,
+    io_error, kernel, unique_id, Author, Comment, CommentPatch, EditOp, NewComment, RenderJob,
+    RenderRange, RequestEnvelope, ReviewLog, RuntimeError, RuntimeHandle, RuntimeRequest,
+    RuntimeResponse, StartRenderOptions, StateSnapshot,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -415,7 +416,66 @@ impl RuntimeClient {
             base_revision,
             script: script.to_owned(),
             source: source.map(str::to_owned),
+            author: None,
+            revises: None,
         })?)
+    }
+
+    /// Stage `script` as a proposal by `author`, beside the ones already
+    /// open; with `revises`, as the next version of that open proposal.
+    pub fn stage_script_proposal_by(
+        &self,
+        request_key: &str,
+        base_revision: u64,
+        script: &str,
+        source: Option<&str>,
+        author: &Author,
+        revises: Option<&str>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::StageScriptProposal {
+            request_key: request_key.to_owned(),
+            base_revision,
+            script: script.to_owned(),
+            source: source.map(str::to_owned),
+            author: Some(author.clone()),
+            revises: revises.map(str::to_owned),
+        })?)
+    }
+
+    /// The review log's comments.
+    pub fn comments(&self) -> Result<ReviewLog, RuntimeError> {
+        expect_comments(self.request(RuntimeRequest::ListComments)?).map(|(log, _)| log)
+    }
+
+    /// Add a comment as `actor` (`ui`, `agent`, `mcp` or `system`): the
+    /// comment as written, and the log after it.
+    pub fn add_comment(
+        &self,
+        actor: &str,
+        comment: NewComment,
+    ) -> Result<(Comment, ReviewLog), RuntimeError> {
+        let (log, comment) = expect_comments(self.request(RuntimeRequest::AddComment {
+            actor: actor.to_owned(),
+            comment,
+        })?)?;
+        let comment = comment.ok_or_else(|| unexpected_response("comment"))?;
+        Ok((comment, log))
+    }
+
+    /// Change comment `id` as `patch` says: the comment after it (none once
+    /// deleted), and the log.
+    pub fn set_comment(
+        &self,
+        actor: &str,
+        id: &str,
+        patch: CommentPatch,
+    ) -> Result<(Option<Comment>, ReviewLog), RuntimeError> {
+        let (log, comment) = expect_comments(self.request(RuntimeRequest::SetComment {
+            actor: actor.to_owned(),
+            id: id.to_owned(),
+            patch,
+        })?)?;
+        Ok((comment, log))
     }
 
     /// Load a `project.kerf` changed outside kerfd as one revision.
@@ -554,15 +614,37 @@ impl RuntimeClient {
         proposal: Option<&str>,
         sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        let (start, duration) = range
+        self.start_render_with(&StartRenderOptions {
+            quality: quality.to_owned(),
+            range,
+            proposal: proposal.map(str::to_owned),
+            sequence: sequence.map(str::to_owned),
+            ..StartRenderOptions::default()
+        })
+    }
+
+    /// Queue a render job as `options` describe it: its quality and codec
+    /// (a ProRes 422 HQ master, a review copy), where its file goes, and its
+    /// name. Returns the job, the document to render, and the file to write;
+    /// [`crate::run_render_job`] renders it.
+    pub fn start_render_with(
+        &self,
+        options: &StartRenderOptions,
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
+        let (start, duration) = options
+            .range
+            .as_ref()
             .map(|range| (Some(range.start), Some(range.duration)))
             .unwrap_or((None, None));
         match self.request(RuntimeRequest::StartRender {
-            quality: quality.to_owned(),
+            quality: options.quality.clone(),
             start,
             duration,
-            proposal_id: proposal.map(str::to_owned),
-            sequence: sequence.map(str::to_owned),
+            proposal_id: options.proposal.clone(),
+            sequence: options.sequence.clone(),
+            codec: options.codec.clone(),
+            output: options.output.clone(),
+            name: options.name.clone(),
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -570,6 +652,15 @@ impl RuntimeClient {
                 output,
             } => Ok((job, document, output)),
             _ => Err(unexpected_response("render-start")),
+        }
+    }
+
+    /// Every render job kept: queued, running, and the newest finished,
+    /// oldest first.
+    pub fn list_renders(&self) -> Result<Vec<RenderJob>, RuntimeError> {
+        match self.request(RuntimeRequest::ListRenders)? {
+            RuntimeResponse::RenderJobs(jobs) => Ok(jobs),
+            _ => Err(unexpected_response("render-jobs")),
         }
     }
 
@@ -769,12 +860,27 @@ impl RuntimeClient {
             // otherwise open a console window of its own.
             command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         }
-        command.spawn().map_err(|error| {
-            RuntimeError::new(
-                "RUNTIME_UNAVAILABLE",
-                format!("failed to start kerfd at {}: {error}", binary.display()),
-            )
-        })
+        // A binary just written can stay busy for a moment: a process another
+        // thread is forking holds it open for writing until its exec.
+        let mut busy = 0;
+        loop {
+            match command.spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 25 =>
+                {
+                    busy += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                result => {
+                    return result.map_err(|error| {
+                        RuntimeError::new(
+                            "RUNTIME_UNAVAILABLE",
+                            format!("failed to start kerfd at {}: {error}", binary.display()),
+                        )
+                    });
+                }
+            }
+        }
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -973,6 +1079,8 @@ fn request_is_read_only(request: &RuntimeRequest) -> bool {
             | RuntimeRequest::GetDocument { .. }
             | RuntimeRequest::GetProposalDocuments { .. }
             | RuntimeRequest::GetRender { .. }
+            | RuntimeRequest::ListRenders
+            | RuntimeRequest::ListComments
     )
 }
 
@@ -1014,15 +1122,21 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         // operation-receipt table. A lost response is therefore ambiguous
         // and must not be replayed automatically.
         RuntimeRequest::StageScriptProposal { .. } => false,
+        // An add with its own id returns the comment it already made, and a
+        // change sets fields to values, so either converges when repeated.
+        RuntimeRequest::AddComment { comment, .. } => comment.id.is_some(),
+        RuntimeRequest::SetComment { .. } => true,
         RuntimeRequest::RejectProposal {
             idempotency_key: Some(idempotency_key),
             ..
         } => !idempotency_key.trim().is_empty(),
         RuntimeRequest::GetState
+        | RuntimeRequest::ListComments
         | RuntimeRequest::GetDocument { .. }
         | RuntimeRequest::GetProposalDocuments { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
+        | RuntimeRequest::ListRenders
         | RuntimeRequest::UpdateJob { .. }
         | RuntimeRequest::CancelRender { .. }
         | RuntimeRequest::RepairProjection
@@ -1079,6 +1193,25 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             after: after.to_owned(),
         });
     }
+    if let Some(comments) = object.get("comments") {
+        let log = ReviewLog {
+            items: serde_json::from_value(comments.clone())
+                .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?,
+            review_revision: object
+                .get("reviewRevision")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+        };
+        let comment = match object.get("comment") {
+            Some(Value::Null) | None => None,
+            Some(comment) => {
+                Some(serde_json::from_value(comment.clone()).map_err(|error| {
+                    RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string())
+                })?)
+            }
+        };
+        return Ok(RuntimeResponse::Comments { log, comment });
+    }
     if let Some(state) = object.get("state") {
         let state = serde_json::from_value::<StateSnapshot>(state.clone())
             .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
@@ -1099,6 +1232,11 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             });
         }
         return Ok(RuntimeResponse::State(state));
+    }
+    if let Some(jobs) = object.get("jobs") {
+        let jobs = serde_json::from_value::<Vec<RenderJob>>(jobs.clone())
+            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        return Ok(RuntimeResponse::RenderJobs(jobs));
     }
     if let Some(job) = object.get("job") {
         let job = serde_json::from_value::<RenderJob>(job.clone())
@@ -1204,6 +1342,15 @@ fn expect_collab(response: RuntimeResponse) -> Result<(StateSnapshot, Value), Ru
     }
 }
 
+fn expect_comments(
+    response: RuntimeResponse,
+) -> Result<(ReviewLog, Option<Comment>), RuntimeError> {
+    match response {
+        RuntimeResponse::Comments { log, comment } => Ok((log, comment)),
+        _ => Err(unexpected_response("comments")),
+    }
+}
+
 fn expect_job(response: RuntimeResponse) -> Result<RenderJob, RuntimeError> {
     match response {
         RuntimeResponse::RenderJob(job) => Ok(job),
@@ -1269,6 +1416,20 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "id": id,
             "ok": true,
             "job": job
+        }),
+        Ok(RuntimeResponse::RenderJobs(jobs)) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "jobs": jobs
+        }),
+        Ok(RuntimeResponse::Comments { log, comment }) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "comments": log.items,
+            "reviewRevision": log.review_revision,
+            "comment": comment
         }),
         Ok(RuntimeResponse::Collab { state, report }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
@@ -2240,6 +2401,80 @@ mod tests {
             IpcOptions::with_idle_timeout(Some("0")).lease_grace,
             default.lease_grace
         );
+    }
+
+    /// The editor's typed ops over the socket, read from the JSON the
+    /// bridge forwards: a title inserted as a generator, and a frame rate
+    /// that changes only while the sequence is empty.
+    #[test]
+    fn kerfd_takes_generator_inserts_and_rate_changes_from_the_editor() {
+        let daemon = Daemon::start("editor-ops", options(Duration::from_millis(200), None));
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        let client = &daemon.client;
+        let send = |key: &str, ops: serde_json::Value| {
+            let ops: Vec<EditOp> = serde_json::from_value(ops).unwrap();
+            let revision = client.get_state().unwrap().revision;
+            client.apply_ops_request("ui", key, ops, revision)
+        };
+        // A new project's sequence is empty, so its rate can change.
+        let state = send(
+            "rate-1",
+            serde_json::json!([
+                {"op": "set-sequence", "rate": {"num": 24, "den": 1}},
+                {"op": "add-track", "kind": "video"},
+                {"op": "add-track", "kind": "video"}
+            ]),
+        )
+        .unwrap();
+        assert_eq!(state.timeline["fps"], 24.0);
+        let state = send(
+            "title-1",
+            serde_json::json!([{"op": "insert",
+                "generator": {"fx": "title", "params": {"text": "Opening"}},
+                "at": 0, "frames": 48, "tracks": ["V2"]}]),
+        )
+        .unwrap();
+        let clips = &state.timeline["tracks"][1]["clips"];
+        assert_eq!(clips[0]["kind"], "generator", "{clips}");
+        assert_eq!(clips[0]["fx"], "title");
+        assert_eq!(clips[0]["name"], "Opening");
+        assert_eq!(clips[0]["durationFrames"], 48);
+        // Now it has a clip, the rate stays, and kerfd says why.
+        let error = send(
+            "rate-2",
+            serde_json::json!([{"op": "set-sequence", "rate": {"num": 30, "den": 1}}]),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "INVALID_EDIT");
+        assert_eq!(error.message, crate::kernel::RATE_NEEDS_EMPTY);
+        let error = send(
+            "title-2",
+            serde_json::json!([{"op": "insert", "generator": {"fx": "sparkle"},
+                "at": 0, "frames": 24, "tracks": ["V2"]}]),
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "no generator `sparkle`");
+        // The name, size, and start still go through set-sequence.
+        let state = send(
+            "format-1",
+            serde_json::json!([{"op": "set-sequence", "name": "Short", "width": 1080,
+                "height": 1920, "start": "01:00:00:00"}]),
+        )
+        .unwrap();
+        assert_eq!(state.timeline["width"], 1080);
+        assert_eq!(state.timeline["start"], 3600.0);
+        drop(lease);
+        let client = daemon.wait_for_exit();
+        let written =
+            fs::read_to_string(client.directory().join(crate::store::PROJECT_FILE)).unwrap();
+        assert!(written.contains("gen=title@1"), "{written}");
+        assert!(written.contains("text=\"Opening\""), "{written}");
+        assert!(
+            written.contains("name=\"Short\" rate=24 size=1080x1920"),
+            "{written}"
+        );
+        remove_project(&client);
     }
 
     #[test]

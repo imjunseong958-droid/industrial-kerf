@@ -1,9 +1,12 @@
 #pragma once
 
+#include "design_tokens.h"
 #include "editor_common.h"
 #include "inspector_presentation.h"
+#include "test_friends.h"
 
 #include <QAbstractButton>
+#include <QComboBox>
 #include <QLabel>
 #include <QPointer>
 #include <QWidget>
@@ -12,36 +15,47 @@
 
 class QHBoxLayout;
 class QLineEdit;
+class QMenu;
 class QTimer;
 class QVBoxLayout;
 
 namespace kerf {
 
-// The Inspector's controls, painted from the editor theme's hardware
-// finish: values sit in recessed wells (a value that can be changed is in
-// a well; plain text cannot be), choices are latching keys in a bank, the
-// clip's timing is a display glass, and a jewel lamp marks what moved from
-// its default. Purple is the focus ring's, and a changed value's ink.
+// The Inspector's controls in the flat graphite look of the review-thread
+// design (mockup-spec 5): property groups with a 28-point header (an
+// enable box, the name, a count, a reset shown on hover and a fold
+// chevron) over 24-point rows on one grid, 84 | 1fr | 56 | 20 (label,
+// control, value, keyframe), with the kit's slider, ghost pop-ups, mono
+// values with their units, X/Y pairs and keyframe buttons. Colours, type
+// and radii come from design_tokens.h only.
 
-// The ink a value moved from its default is drawn in: the accent, 4.5:1 on
-// the well it sits in.
+// A type style as style-sheet declarations (family, size, weight): the app's
+// sheet sets `* { font-size: 12px }`, which wins over setFont(), so a label
+// in another style says its own in its local sheet.
+QString inspectorFontCss(const tokens::TypeStyle &style);
+
+// The ink a value is drawn in once it moved from its default. The design
+// shows every value in the primary ink; kept for the callers that ask.
 QColor changedValueInk();
 
 // The one control behind every number and timecode: the value right-aligned
-// in tabular figures with its unit after it. Drag across it (or its row's
-// label) to scrub, one step per 2 points (⇧ ×10, ⌥ ÷10); click to type;
-// ↑↓ step while focused or typing. A gesture is one edit: the value follows the
-// pointer and `committed` fires once, on release; a run of ↑↓ presses (a
-// held key, or presses under 400 ms apart) is one edit too, committed
-// 400 ms after the last or when the field loses focus. A click or a drag
-// takes no keyboard focus (only Tab and typing do), so the transport keys
-// keep working; Return or Esc after typing hands the keys back
-// (`doneEditing`).
+// in mono 12 ink with its unit after it (UI 11 ink3 in a 14-point slot, 2
+// after the figures) and an axis prefix before it (UI 11 ink3, 4 before the
+// figures). Drag across it (or its row's label) to scrub, one step per 2
+// points (⇧ ×10, ⌥ ÷10); click to type; ↑↓ step while focused or typing. A
+// gesture is one edit: the value follows the pointer and `committed` fires
+// once, on release; a run of ↑↓ presses (a held key, or presses under 400 ms
+// apart) is one edit too, committed 400 ms after the last or when the field
+// loses focus. A click or a drag takes no keyboard focus (only Tab and typing
+// do), so the transport keys keep working; Return or Esc after typing hands
+// the keys back (`doneEditing`).
 class ScrubField final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr int kHeight = 24;
+    static constexpr int kUnitSlot = 14; // the unit's slot after the figures
+    static constexpr int kUnitGap = 2;
 
     explicit ScrubField(QWidget *parent = nullptr);
     // Room kept clear at the right end, for a glyph inside the field (the
@@ -53,7 +67,7 @@ public:
     // The value in display units; it does not emit.
     void setValue(double display);
     double value() const { return m_value; }
-    // The value a reset restores, so a value at it is drawn quieter.
+    // The value a reset restores.
     void setDefaultValue(double display);
     bool isDefault() const;
     // Several clips disagree: "Mixed", and scrubbing moves each by the same amount.
@@ -62,21 +76,22 @@ public:
     // Its effect is switched off: the value in the secondary ink (it still edits).
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
-    // Behind the display glass (the clip's timing): no well, its figures in
-    // the glass's cream, in the monospaced face.
-    void setGlass(bool glass);
-    bool isGlass() const { return m_glass; }
-    // The ink its value is drawn in (the accent once moved from its
-    // default), and which side it keeps to (left for timecode, as the
-    // timing row reads, right for everything else).
+    // The small form under a colour wheel: mono 11 ink3, centred.
+    void setSmall(bool small);
+    bool isSmall() const { return m_small; }
+    // The ink its value is drawn in, and which side it keeps to.
     QColor valueInk() const;
     Qt::Alignment valueAlignment() const;
-    // Read-only: an animated value, shown at the playhead.
+    // Read-only: shown, never edited (a value no gesture may change).
     void setReadOnly(bool readOnly);
     bool isReadOnly() const { return m_readOnly; }
     QString text() const;
+    // The unit as drawn after the figures (empty for none).
+    QString unitText() const;
     // Whether its value, unit and prefix fit it whole (no ellipsis).
     bool showsWhole() const;
+    // The width its figures, unit and prefix need, snapped to whole points.
+    int neededWidth() const;
     QSize sizeHint() const override;
 
     // A drag that began on the row's label.
@@ -119,7 +134,6 @@ protected:
 
 private:
     QFont valueFont() const;
-    double padding() const;
     double clamped(double display, bool *clamped = nullptr) const;
     double stepFor(Qt::KeyboardModifiers modifiers) const;
     void endTyping(bool commit);
@@ -133,7 +147,7 @@ private:
     bool m_hasDefault = false;
     bool m_mixed = false;
     bool m_dimmed = false;
-    bool m_glass = false;
+    bool m_small = false;
     bool m_readOnly = false;
     bool m_hovered = false;
     // Dragging: where it began, and the value then.
@@ -151,18 +165,21 @@ private:
     QTimer *m_stepRun = nullptr;
 };
 
-// A slider paired with a ScrubField (the field is the source of truth): a
-// 4pt groove filled in the neutral ink from its origin (the default, or the
-// centre of a bipolar range) to the knob, with a detent tick at the
-// default the knob catches on exactly one pointer pixel. A gain fader maps
-// its travel so 0 dB sits at 75%. A press never jumps the value, on the
-// knob or anywhere on the groove: a drag moves the knob by as much as the
-// pointer moves, so a stray click or an off-centre grab changes nothing.
+// The kit's slider (.sl) paired with a ScrubField (the field is the source
+// of truth), in a 24-point row: a 2-point track (`track`) at the row's
+// middle, filled in `track2` from its origin (the left end, or the middle of
+// a bipolar range) to the knob, a 10-point ink knob with the knob shadow,
+// and on a bipolar slider a 1 x 6 `track2` tick at the middle. A gain fader
+// maps its travel so 0 dB sits at 75%. A press never jumps the value, on the
+// knob or anywhere on the track: a drag moves the knob by as much as the
+// pointer moves, so a stray click or an off-centre grab changes nothing. The
+// default catches the knob on one pointer pixel only.
 class InspectorSlider final : public QWidget {
     Q_OBJECT
-    friend class EditorTest;
+    KERF_TEST_FRIENDS
 public:
     static constexpr double kGrab = 6.0;
+    static constexpr double kKnobRadius = 5.0;
     explicit InspectorSlider(QWidget *parent = nullptr);
     void setRange(double minimum, double maximum);
     void setOrigin(double origin);
@@ -172,33 +189,27 @@ public:
     double value() const { return m_value; }
     // Several clips disagree: the knob hides.
     void setMixed(bool mixed);
-    // Its effect is switched off: the fill in the secondary ink (it still edits).
+    // Its effect is switched off: the fill quieter (it still edits).
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
+    // A range either side of zero: filled from the middle, with its tick.
+    bool isBipolar() const;
     // The ink its fill is drawn in.
     QColor fillInk() const;
-    QSize sizeHint() const override { return {92, ScrubField::kHeight}; }
-    // The knob's centre, for tests.
+    QSize sizeHint() const override { return {100, ScrubField::kHeight}; }
+    // The knob's centre and the track, for tests.
     QPointF knobCenter() const;
+    QRectF trackRect() const { return groove(); }
     // The fill from the origin to the knob's centre; empty at the origin.
-    static constexpr double kKnobRadius = 6.5;
     QRectF fillRect() const;
-    // The 1pt mark at the default. When the default lies under the knob it
-    // reaches kTickBeyondKnob past the knob's top and bottom, so its ends
-    // show; nothing is drawn on the knob.
-    static constexpr int kTickBeyondKnob = 3;
+    // The bipolar slider's 1 x 6 tick at its middle; empty otherwise.
     QRect detentTick() const;
-    // The knob's edge: `sliderHandleChanged` away from the default (a small
-    // change shows there, the edge standing out against groove and panel),
-    // the quieter `sliderHandleAtDefault` at it.
-    QColor knobEdge() const;
     // The default catches the pointer only on the one pixel nearest it
-    // (half a pixel of pointer travel either side), so the default is easy
-    // to land on and every other pixel still gives its own value.
+    // (half a pixel of pointer travel either side).
     static constexpr double kSnap = 0.5;
     // With ⌥ held the knob moves a tenth of the pointer's travel.
     static constexpr double kFine = 10.0;
-    // The value at `x` along the groove; `scale` is how far the knob moves
+    // The value at `x` along the track; `scale` is how far the knob moves
     // per pixel of pointer travel (1, or 1/kFine), which the catch follows.
     double valueAt(double x, double scale = 1.0) const;
 
@@ -215,8 +226,6 @@ protected:
 
 private:
     double travelOf(double value) const;
-    // Where the knob goes for the pointer at `x` (with `modifiers`) during
-    // a drag, and the value there.
     double dragValue(double x, Qt::KeyboardModifiers modifiers);
     double fromTravel(double travel) const;
     QRectF groove() const;
@@ -231,29 +240,29 @@ private:
     bool m_mixed = false;
     bool m_dimmed = false;
     bool m_dragging = false;
-    // Where the press began and the knob was then; the knob moves by the
-    // pointer's travel from there.
     double m_pressX = 0.0;
     double m_pressKnob = 0.0;
-    // ⌥ held: the knob moves by a tenth of the pointer's travel.
     bool m_fine = false;
 };
 
-// An on/off switch, 26 by 16: the neutral ink with its knob when on, the
-// launcher's off plate when off. Space toggles it when focused.
-class InspectorSwitch final : public QAbstractButton {
+// The kit's 14-point check box (.cbx): radius 4, an inset 1-point white 16%
+// line; on, the `on` fill with the check path in ink2. Space toggles it when
+// focused. A switch property (a mask's Invert, a bool parameter) and a
+// group's or an effect's enable box.
+class InspectorSwitch : public QAbstractButton {
     Q_OBJECT
 public:
+    static constexpr int kSize = 14;
     explicit InspectorSwitch(QWidget *parent = nullptr);
-    QSize sizeHint() const override { return {26, 16}; }
+    QSize sizeHint() const override { return {kSize, kSize}; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 };
 
-// Two or three choices in a recessed well, the chosen one a raised key
-// (its legend in the accent when it is not the default). None is chosen
-// when the values match no choice.
+// Two or three choices on the kit's segmented track (raised, radius 6, pad
+// 2): the chosen one on the `on` fill, its legend in ink 500, the others in
+// ink2. None is chosen when the values match no choice.
 class SegmentedField final : public QWidget {
     Q_OBJECT
 public:
@@ -266,7 +275,6 @@ public:
     explicit SegmentedField(const QList<Segment> &segments, QWidget *parent = nullptr);
     void setCurrent(int index);
     int current() const { return m_current; }
-    // The choice a reset restores: any other is drawn as a change.
     void setDefaultIndex(int index);
     int count() const { return int(m_segments.size()); }
     QRect segmentRect(int index) const;
@@ -288,159 +296,77 @@ private:
     int m_default = -1;
 };
 
-// A bank of latching keys in their recessed well, 24 high as the fields:
-// a key held in is latched, its amber bar lit. In an exclusive bank one key
-// at most is in (none when the values match none, as Fit and Fill after a
-// move); otherwise each latches on its own (Flip's H and V). A click emits
-// `activated` with the key's index and latches it at once; the model's
-// next snapshot says what stays in.
-class KeyBank final : public QWidget {
+// A pop-up as the design draws it: a ghost button (.ghost-b, 24 tall,
+// radius 6, pad 0 8, UI 12/16 ink2 with a 14-point chevron; hover raised and
+// ink), right-aligned in its row. It is a QComboBox underneath (items, data,
+// `activated`), and opens a kit menu (ui::styleMenu) of its items, the
+// current one checked.
+class GhostPopup : public QComboBox {
     Q_OBJECT
 public:
-    static constexpr int kPadding = 2; // Round the keys, and between them.
-    struct Key {
-        QString label;
-        QString tip;
-        QString name; // The key's object name.
-    };
-    KeyBank(const QList<Key> &keys, bool exclusive, QWidget *parent = nullptr);
-    int count() const { return int(m_keys.size()); }
-    QAbstractButton *key(int index) const { return m_keys.value(index); }
-    bool isExclusive() const { return m_exclusive; }
-    // Exclusive: the key that is in (−1 for none).
-    void setCurrent(int index);
-    int current() const;
-    void setLatched(int index, bool latched);
-    bool isLatched(int index) const;
+    explicit GhostPopup(QWidget *parent = nullptr);
+    void showPopup() override;
+    void hidePopup() override;
     QSize sizeHint() const override;
-
-signals:
-    void activated(int index);
+    QSize minimumSizeHint() const override;
+    // The menu the last showPopup() opened (for tests), or null.
+    QMenu *menu() const { return m_menu; }
+    QColor textColor() const;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
-    QList<QAbstractButton *> m_keys;
-    bool m_exclusive;
+    QPointer<QMenu> m_menu;
+    bool m_hovered = false;
 };
 
-// An effect's power key: a small raised key carrying a jewel lamp, held in
-// with its lamp lit green while the effect is on, out and dark while off.
-// Space toggles it when focused.
-class PowerKey final : public QAbstractButton {
+// A row's keyframe button (.kf): 20 x 20, radius 4. Empty: the g-kf
+// diamond outline in ink3; hover raised and ink. At a keyframe (`has`):
+// the filled g-kff diamond in ink, "Keyframe at playhead". Disabled: dis,
+// its tooltip saying why.
+class KeyframeButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    explicit PowerKey(QWidget *parent = nullptr);
-    QSize sizeHint() const override { return {22, 20}; }
-    LampState lampState() const { return isChecked() ? LampState::Ok : LampState::Off; }
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-};
-
-// A jewel lamp (paintLamp) `diameter` across, centred in its widget.
-class InspectorLamp final : public QWidget {
-    Q_OBJECT
-public:
-    explicit InspectorLamp(qreal diameter, QWidget *parent = nullptr);
-    void setState(LampState state);
-    LampState state() const { return m_state; }
-    qreal diameter() const { return m_diameter; }
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    qreal m_diameter;
-    LampState m_state = LampState::Off;
-};
-
-// A bakelite knob beside Rotation (paintKnob), its pointer at the angle.
-// Drag up to turn it clockwise, down anticlockwise, 1° a point (⇧ in 15°
-// steps, ⌥ a tenth as fast), one edit on release; the wheel steps 1° (⇧
-// 15°), a run of steps one edit; a double-click turns it back to 0°.
-class RotationKnob final : public QWidget {
-    Q_OBJECT
-public:
-    static constexpr int kSize = 28;
-    // The pause after the last wheel step that ends its run (one edit).
-    static constexpr int kWheelRunMs = 400;
-    explicit RotationKnob(QWidget *parent = nullptr);
-    void setAngle(double degrees);
-    double angle() const { return m_angle; }
-    // Its field's precision: an angle turned to is rounded to it.
-    void setDecimals(int decimals) { m_decimals = decimals; }
+    static constexpr int kSize = 20;
+    explicit KeyframeButton(QWidget *parent = nullptr);
+    void setHas(bool has);
+    bool has() const { return m_has; }
+    // The parameter has keyframes, though none at the playhead.
+    void setAnimated(bool animated);
+    bool isAnimated() const { return m_animated; }
+    QString iconName() const;
+    QColor iconColor() const;
     QSize sizeHint() const override { return {kSize, kSize}; }
-    // A run of wheel steps sent now rather than after its pause.
-    void flushWheel();
-    bool isWheeling() const { return m_wheeling; }
-
-signals:
-    void turned(double degrees);
-    void released(double degrees, double start);
-    // A double-click: every clip back to 0°, not only the one it shows.
-    void resetRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
-    void mousePressEvent(QMouseEvent *event) override;
-    void mouseMoveEvent(QMouseEvent *event) override;
-    void mouseReleaseEvent(QMouseEvent *event) override;
-    void mouseDoubleClickEvent(QMouseEvent *event) override;
-    void wheelEvent(QWheelEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
-    double dragAngle(double y, Qt::KeyboardModifiers modifiers) const;
-    double rounded(double degrees) const;
-    double m_angle = 0.0;
-    double m_start = 0.0;
-    double m_pressY = 0.0;
-    int m_decimals = 1;
-    bool m_pressed = false;
-    bool m_dragging = false;
-    bool m_wheeling = false;
-    int m_wheelRest = 0; // Wheel travel short of a whole step.
-    QTimer *m_wheelRun = nullptr;
+    bool m_has = false;
+    bool m_animated = false;
+    bool m_hovered = false;
 };
 
-// The clip's Start, End and Duration behind one display glass
-// (paintGlass): each column's small label ("IN", "OUT", "DUR") in the
-// glass's label ink over its figures in cream.
-class GlassReadout final : public QWidget {
-    Q_OBJECT
-public:
-    static constexpr int kLabelBand = 13; // The labels' band over the figures.
-    static constexpr int kPadding = 4;    // Inside the glass, and between columns.
-    explicit GlassReadout(QWidget *parent = nullptr);
-    void addColumn(const QString &label, QWidget *value);
-    // Removes (and deletes) every column.
-    void clearColumns();
-    QStringList labels() const;
-    // The labels' font: 9px bold capitals, tracked.
-    static QFont labelFont(const QFont &base);
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    QHBoxLayout *m_layout = nullptr;
-    QList<QPair<QString, QPointer<QWidget>>> m_columns;
-};
-
-// A bare symbol button (no bezel): a round wash under the pointer.
+// A bare icon button (.ib, 24 x 24, radius 6, a 16-point icon in ink2;
+// hover raised and ink; checked on and ink; disabled dis). The glyphs are
+// the design's icons where it has one (g-reset, g-more, g-chev, g-kf,
+// g-mrect, g-mell, g-mpen), drawn in code for the rest.
 class GlyphButton final : public QAbstractButton {
     Q_OBJECT
 public:
     enum class Glyph { Reset, More, Plus, Chevron, Reverse, Menu, Diamond, Rectangle, Ellipse, Pen, Folder, Bubble };
     explicit GlyphButton(Glyph glyph, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
+    // A chevron's fold: open points down, folded turns it −90°.
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
     QSize sizeHint() const override;
-    // The disc behind the glyph (invalid when none) and the glyph's ink: a
-    // toggle off is a quiet secondary glyph with no disc; on, full ink on
-    // the neutral pressed disc, never an accent wash.
+    // The fill behind the glyph (invalid when none) and the glyph's ink.
     QColor discColor() const;
     QColor inkColor() const;
 
@@ -455,15 +381,18 @@ private:
 // Draw one of the glyphs into `rect` in `color`.
 void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRectF &rect, const QColor &color, bool open = false);
 
-// A row's label: drag across it to scrub the row's field, double-click it
-// to reset the row. Always one line at 12 points: one too long for the
-// label column ends in an ellipsis (the whole of it in its tooltip).
+// A row's label: UI 12/16 ink2, one line, an ellipsis where its column cuts
+// it (the whole in its tooltip). Drag across it to scrub the row's field,
+// double-click it to reset the row.
 class RowLabel final : public QLabel {
     Q_OBJECT
 public:
     explicit RowLabel(const QString &text, QWidget *parent = nullptr);
     void setField(ScrubField *field) { m_field = field; }
     ScrubField *field() const { return m_field; }
+    QString fullText() const { return m_full; }
+    // The label of a `.l.w` row: in ink, beside a check box.
+    void setStrong(bool strong);
 
 signals:
     void resetRequested();
@@ -481,75 +410,77 @@ private:
     bool m_pressed = false;
 };
 
-// One 32pt row on the column's one grid: a 76pt label column, 8 points,
-// the controls, then a 16pt reset lane 4 points after them. While the
-// value differs from its default a small amber lamp rests in the lane,
-// turning into ↺ under the pointer. Every row's controls end at the same
-// edge (the lane's), every value field is 72 points wide (room for "+0.40
-// EV" and "−8.0 dB" whole), and a slider fills what its field leaves (84
-// points at a 300-point column, so it is a control, not a decoration). The
-// row presses a recessed well behind each of its pop-ups and text fields.
+// One 24-point property row on the column's grid: pad 0 8 0 12, then
+// 84 | 1fr | 56 | 20 with 8 between (label, control, value, keyframe). A
+// slider fills the control column and its value sits in the value column;
+// a row without a slider is "wide": its label runs on as far as its
+// controls (a pop-up, a value, an X/Y pair) leave, and they sit at the right
+// end of the control and value columns. The keyframe column always keeps
+// its place, so every row's values end at the same edge.
 class InspectorRow final : public QWidget {
     Q_OBJECT
 public:
-    static constexpr int kHeight = 32;
-    static constexpr int kLabelWidth = 76;
-    static constexpr int kResetLane = 16;
-    static constexpr int kValueField = 72;
-    static constexpr qreal kLampDiameter = 5;
+    static constexpr int kHeight = 24;
+    static constexpr int kLabelWidth = 84;
+    static constexpr int kValueField = 56;
+    static constexpr int kKeyframe = 20;
+    static constexpr int kGap = 8;
+    static constexpr int kPadLeft = 12;
+    static constexpr int kPadRight = 8;
 
     explicit InspectorRow(const QString &label, QWidget *parent = nullptr);
     RowLabel *label() const { return m_label; }
+    // The control column (1fr), and the value column (56).
     QHBoxLayout *controls() const { return m_controls; }
-    GlyphButton *resetButton() const { return m_reset; }
-    InspectorLamp *lamp() const { return m_lamp; }
+    void addValue(QWidget *value);
+    QWidget *valueSlot() const { return m_valueSlot; }
+    KeyframeButton *keyframeButton() const { return m_keyframe; }
+    // Wide: the label takes what the controls leave (no slider in the row).
+    void setWide(bool wide);
+    bool isWide() const { return m_wide; }
     void setChanged(bool changed);
     bool isChanged() const { return m_changed; }
-    // An animated value: ◆ in the reset lane, and its tooltip.
+    // An animated value, and what its keyframe button says.
     void setAnimated(bool animated, const QString &tip = QString());
     bool isAnimated() const { return m_animated; }
     void setResetHandler(std::function<void()> reset);
     void reset();
-    // Where the row presses a well: behind each pop-up and text field of
-    // its controls (those marked `inspector`), in the row's coordinates.
-    QList<QRect> wells() const;
-
-protected:
-    void enterEvent(QEnterEvent *event) override;
-    void leaveEvent(QEvent *event) override;
-    void paintEvent(QPaintEvent *event) override;
 
 private:
-    void updateLane();
     RowLabel *m_label = nullptr;
+    QWidget *m_controlSlot = nullptr;
     QHBoxLayout *m_controls = nullptr;
-    GlyphButton *m_reset = nullptr;
-    InspectorLamp *m_lamp = nullptr;
-    QLabel *m_diamond = nullptr;
+    QWidget *m_valueSlot = nullptr;
+    QHBoxLayout *m_values = nullptr;
+    KeyframeButton *m_keyframe = nullptr;
     std::function<void()> m_resetHandler;
+    bool m_wide = false;
     bool m_changed = false;
     bool m_animated = false;
-    bool m_hovered = false;
 };
 
-// A module: a framed plate holding a header (a jewel lamp, lit amber when
-// anything in it differs from its default, the title engraved, an
-// optional count, the summary of what changed, its trailing buttons, ↺ on
-// hover when anything in it differs, and the chevron) over its rows.
-// A click on the header folds or opens it; ⌥-click opens or closes every
-// module; ⌘-click opens this one and closes the rest. Folded modules one
-// after another stand together as one rack, a hairline between them; any
-// other module keeps a gap under it.
+// A property group (#insp .grp): a 28-point header, pad 0 8 0 12, gap 8,
+// UI 500 12 ink: the enable box (the effect's enabled flag, or the group's
+// own switch; disabled with the reason where nothing can switch it), the
+// name, a count in ink3 400, then at the right end the reset icon button,
+// shown while the pointer is over the header, and the 14-point fold chevron
+// in ink3, turned −90° when folded. Its rows under it, 4 of padding under
+// them; a 1-point line at its foot. Folded, the rows hide. A click on the
+// header folds or opens it; ⌥-click opens or closes every group; ⌘-click
+// opens this one and closes the rest.
 class InspectorSection final : public QWidget {
     Q_OBJECT
 public:
-    static constexpr int kHeaderHeight = 24;
-    // Inside the plate: round its header and rows, and under its rows.
-    static constexpr int kInset = 8;
+    static constexpr int kHeaderHeight = 28;
     static constexpr int kFoot = 4;
-    // Under a module that does not join the next.
-    static constexpr int kGap = 4;
-    static constexpr qreal kLampDiameter = 6;
+
+    // What the header's box says.
+    enum class Enable {
+        Hidden,  // no box (a list: tracks, markers)
+        On,      // checked, toggles
+        Off,     // unchecked, toggles (a group added on first enable)
+        Always,  // checked and disabled: always applied (its tooltip says so)
+    };
 
     explicit InspectorSection(const QString &id, const QString &title, QWidget *parent = nullptr);
     QString id() const { return m_id; }
@@ -557,15 +488,14 @@ public:
     QWidget *header() const { return m_header; }
     QVBoxLayout *body() const { return m_body; }
     QWidget *bodyWidget() const { return m_bodyWidget; }
-    InspectorLamp *lamp() const { return m_lamp; }
     QLabel *titleLabel() const { return m_titleLabel; }
+    InspectorSwitch *enableBox() const { return m_enable; }
+    void setEnable(Enable enable, const QString &tip = QString());
+    Enable enable() const { return m_enableState; }
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
     void setCount(int count);
-    // What changed, as whole items: as many as fit, joined by ", ", then
-    // " +N" for the rest, then `suffix` (" · 1 off"); when not even the
-    // first fits, `compact` ("1 on · 1 off"); else nothing. Never cut
-    // mid-word. `full` is the tooltip and summary().
+    // What changed in it, as whole items, for the header's tooltip.
     struct Summary {
         QStringList items;
         QString suffix;
@@ -573,30 +503,25 @@ public:
         QString full;
     };
     void setSummary(const Summary &summary);
-    // One item, shown whole or not at all.
     void setSummary(const QString &summary);
     QString summary() const { return m_summary.full; }
-    // What the folded header shows now.
-    QString shownSummary() const;
-    // The longest form that fits `room` points in `metrics`.
+    // The longest form of `summary` that fits `room` points in `metrics`.
     static QString fitSummary(const Summary &summary, const QFontMetrics &metrics, int room);
     void addTrailing(QWidget *widget);
     void setChanged(bool changed);
     bool isChanged() const { return m_changed; }
     void setResetHandler(std::function<void()> reset);
     GlyphButton *resetButton() const { return m_reset; }
+    GlyphButton *chevron() const { return m_chevron; }
     QSize headerSizeHint() const;
-    // Whether its plate runs on into the module above, or the one below, as
-    // one rack (its gap under it goes when it joins the next).
-    void setJoined(bool above, bool below);
-    bool joinsAbove() const { return m_joinAbove; }
-    bool joinsBelow() const { return m_joinBelow; }
 
 signals:
     // A click on the header; `modifiers` say whether all, or only this.
     void toggled(bool open, Qt::KeyboardModifiers modifiers);
     // Opened or folded, by a click or from code.
     void foldChanged(bool open);
+    // The enable box was clicked.
+    void enableToggled(bool on);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -607,39 +532,62 @@ private:
     QString m_id;
     QString m_title;
     QWidget *m_header = nullptr;
-    InspectorLamp *m_lamp = nullptr;
+    InspectorSwitch *m_enable = nullptr;
     GlyphButton *m_chevron = nullptr;
     QLabel *m_titleLabel = nullptr;
     QLabel *m_countLabel = nullptr;
-    QLabel *m_summaryLabel = nullptr;
     QHBoxLayout *m_trailing = nullptr;
     GlyphButton *m_reset = nullptr;
     QWidget *m_bodyWidget = nullptr;
     QVBoxLayout *m_body = nullptr;
     Summary m_summary;
     std::function<void()> m_resetHandler;
+    Enable m_enableState = Enable::Hidden;
     bool m_open = false;
     bool m_changed = false;
     bool m_hovered = false;
-    bool m_joinAbove = false;
-    bool m_joinBelow = false;
 };
 
-// The thumbnail of the identity header: 64 by 36, radius 4, a hairline;
-// several clips stack up to three, 4 points apart.
-class InspectorThumbnail final : public QWidget {
+// A colour wheel of the Finish workspace (.wheel .w): a 72-point circle
+// with an inset 2-point `track` ring and a 1-point `track` crosshair 48 long,
+// its 8-point ink puck (with the knob shadow) at the colour it pushes the
+// picture towards. The puck is a unit vector, −1..1 each way within the
+// disc, x right, y down. A drag moves the puck by as much as the pointer
+// (a press alone changes nothing); its release is one edit. A double-click
+// puts it back in the middle.
+class ColorWheel final : public QWidget {
     Q_OBJECT
 public:
-    explicit InspectorThumbnail(QWidget *parent = nullptr);
-    void setImages(const QList<QImage> &images);
-    QList<QImage> images() const { return m_images; }
-    QSize sizeHint() const override;
+    static constexpr int kSize = 72;
+    static constexpr int kRing = 2;
+    static constexpr int kCross = 48;
+    static constexpr int kPuck = 8;
+    // How far from the middle the puck's centre may go, in points.
+    static constexpr double kTravel = kSize / 2.0 - kRing - kPuck / 2.0 - 1.0;
+    explicit ColorWheel(QWidget *parent = nullptr);
+    void setPuck(const QPointF &unit);
+    QPointF puck() const { return m_puck; }
+    // The puck's centre in the widget.
+    QPointF puckCenter() const;
+    QSize sizeHint() const override { return {kSize, kSize}; }
+
+signals:
+    void puckMoved(const QPointF &unit);
+    void puckReleased(const QPointF &unit, const QPointF &start);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
 
 private:
-    QList<QImage> m_images;
+    QPointF m_puck;
+    QPointF m_start;
+    QPointF m_pressAt;
+    bool m_pressed = false;
+    bool m_dragging = false;
 };
 
 // The kind line's 8 by 8 square, radius 2, in the clip's timeline colour.
@@ -658,8 +606,8 @@ private:
     QColor m_color;
 };
 
-// The clip's name in the identity header; double-click (or Return when
-// focused) edits it in place: Return commits, Esc reverts.
+// The clip's name in the clip header: UI 500 14/20 ink. Double-click (or
+// Return when focused) edits it in place: Return commits, Esc reverts.
 class NameLabel final : public QWidget {
     Q_OBJECT
 public:

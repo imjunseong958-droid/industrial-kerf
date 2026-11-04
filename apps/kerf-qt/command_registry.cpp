@@ -70,11 +70,17 @@ void CommandRegistry::load(const QString &keymap) {
         }
         QList<QKeySequence> shortcuts;
         for (const QJsonValue &key : command.value(QStringLiteral("keys")).toArray())
-            shortcuts.append(QKeySequence::fromString(key.toString(), QKeySequence::PortableText));
+            shortcuts.append(keymapKey(key.toString()));
         action->setShortcuts(shortcuts);
         refreshTip(id);
     }
     emit shortcutsChanged();
+}
+
+QKeySequence CommandRegistry::keymapKey(const QString &key, bool mac) {
+    QString text = key;
+    if (!mac) text.replace(QStringLiteral("Meta+"), QStringLiteral("Ctrl+"));
+    return QKeySequence::fromString(text, QKeySequence::PortableText);
 }
 
 void CommandRegistry::setKeymap(const QString &id) {

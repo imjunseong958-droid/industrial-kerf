@@ -33,6 +33,9 @@ pub enum Scope {
     Timeline,
     /// Only while the source monitor has focus.
     Source,
+    /// Only while the comment composer has focus (not its text field,
+    /// which types the key).
+    Composer,
 }
 
 /// The menus, in menu-bar order.
@@ -248,6 +251,12 @@ pub enum Request {
     },
     /// Copy media from outside the project into `media/` and relink it.
     CollabConsolidate,
+    /// Run the QC pass over a sequence (the program one without a name):
+    /// the bridge answers with a `check` event.
+    Check {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sequence: Option<String>,
+    },
 }
 
 /// A GitHub repository to create with `gh`; without a name it is named
@@ -433,6 +442,11 @@ fn can_play(context: &Context) -> Result<(), &'static str> {
     }
 }
 
+/// Why a command the editor lists has no handler yet: its region lands
+/// later in this release, and the command reads as unavailable until then.
+/// Every command has its handler now; a new one without one says this.
+pub const COMING: &str = "Coming in this release";
+
 const NOT_SHARED: &str = "Share the project with Git first (Collaborate → Publish to GitHub…)";
 const SYNCING: &str = "A sync is running";
 const DIVERGED: &str = "project.kerf changed on disk: load it or keep the editor's version first";
@@ -582,6 +596,11 @@ const fn source(mut command: Command) -> Command {
     command
 }
 
+const fn composer(mut command: Command) -> Command {
+    command.scope = Scope::Composer;
+    command
+}
+
 const fn keys(mut command: Command, keys: &'static [&'static str]) -> Command {
     command.keys = keys;
     command
@@ -627,10 +646,19 @@ pub static COMMANDS: &[Command] = &[
         ),
         &["Ctrl+O"],
     ),
+    // The toolbar's Export with the quality chosen in its menu; ⌘E is
+    // Export Master.
+    params(
+        menu(command("file.export", "Export…", connected), Menu::File, 1),
+        r#"{"quality": "preview" | "full"}"#,
+    ),
+    // The finished file: the `master` quality, which the runtime renders as
+    // ProRes 422 HQ.
     keys(
-        params(
-            menu(command("file.export", "Export…", connected), Menu::File, 1),
-            r#"{"quality": "preview" | "full"}"#,
+        menu(
+            command("export.master", "Export Master", connected),
+            Menu::File,
+            1,
         ),
         &["Ctrl+E"],
     ),
@@ -713,6 +741,24 @@ pub static COMMANDS: &[Command] = &[
         Menu::Edit,
         2,
     )),
+    // The searches of the bin and of the effects browser; each brings its
+    // panel forward first.
+    keys(
+        frontend(menu(
+            command("bin.search", "Find in Bin", always),
+            Menu::Edit,
+            2,
+        )),
+        &["Ctrl+F"],
+    ),
+    keys(
+        frontend(menu(
+            command("browser.search", "Find in Browser", always),
+            Menu::Edit,
+            2,
+        )),
+        &["Ctrl+Shift+F"],
+    ),
     keys(
         frontend(menu(
             command("app.preferences", "Settings…", always),
@@ -720,6 +766,14 @@ pub static COMMANDS: &[Command] = &[
             3,
         )),
         &["Ctrl+,"],
+    ),
+    keys(
+        frontend(menu(
+            command("keyboard.customise", "Customise Keyboard…", always),
+            Menu::Edit,
+            3,
+        )),
+        &["Ctrl+Alt+K"],
     ),
     keys(
         frontend(menu(command("ai.ask", "Ask Kerf…", can_ask), Menu::Clip, 1)),
@@ -742,6 +796,16 @@ pub static COMMANDS: &[Command] = &[
         &["Escape"],
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
+    // The current thread's proposal, from its card: ⌘↩ and Esc there are
+    // `proposal.accept` and `proposal.reject`'s keys.
+    params(
+        command("comment.accept", "Accept", can_accept),
+        r#"{"proposal": string}"#,
+    ),
+    params(
+        command("comment.reject", "Reject", has_proposal),
+        r#"{"proposal": string}"#,
+    ),
     keys(
         params(
             menu(
@@ -814,6 +878,19 @@ pub static COMMANDS: &[Command] = &[
             has_source,
         ))),
         &["Right"],
+    ),
+    // The Source monitor's own buttons: its picture played on its own,
+    // and the clip it shows opened in the timeline.
+    source(frontend(command("source.play", "Play Source", always))),
+    source(frontend(command(
+        "source.reveal",
+        "Open in Timeline",
+        always,
+    ))),
+    // The comment composer's Draw on Frame button.
+    keys(
+        composer(frontend(command("composer.draw", "Draw on Frame", always))),
+        &["D"],
     ),
     menu(
         command(
@@ -952,6 +1029,143 @@ pub static COMMANDS: &[Command] = &[
         ))),
         &["End"],
     ),
+    checkable(keys(
+        frontend(menu(
+            command("playback.loop", "Loop Playback", connected),
+            Menu::Playback,
+            2,
+        )),
+        &["Ctrl+L"],
+    )),
+    // The program's in and out marks; the Source monitor's are
+    // `source.markIn` and `source.markOut`, on the same keys there.
+    keys(
+        timeline(frontend(menu(
+            command("mark.in", "Mark In", connected),
+            Menu::Markers,
+            2,
+        ))),
+        &["I"],
+    ),
+    keys(
+        timeline(frontend(menu(
+            command("mark.out", "Mark Out", connected),
+            Menu::Markers,
+            2,
+        ))),
+        &["O"],
+    ),
+    keys(
+        timeline(frontend(menu(
+            command("mark.clear", "Clear Marks", connected),
+            Menu::Markers,
+            2,
+        ))),
+        &["Ctrl+Shift+X"],
+    ),
+    // Add Marker (M) is `marker.add`; Snap (⇧S) is `sequence.snap`.
+    keys(
+        timeline(frontend(menu(
+            command("timeline.addTrack", "Add Track…", connected),
+            Menu::Sequence,
+            1,
+        ))),
+        &["Ctrl+Shift+T"],
+    ),
+    // The toolbar's four formats, as its segments name them; each asks
+    // `sequence.setFormat` for its size.
+    keys(
+        frontend(menu(
+            command("sequence.setFormat.169", "Landscape 16:9", always),
+            Menu::Sequence,
+            3,
+        )),
+        &["Alt+1"],
+    ),
+    keys(
+        frontend(menu(
+            command("sequence.setFormat.916", "Vertical 9:16", always),
+            Menu::Sequence,
+            3,
+        )),
+        &["Alt+2"],
+    ),
+    keys(
+        frontend(menu(
+            command("sequence.setFormat.11", "Square 1:1", always),
+            Menu::Sequence,
+            3,
+        )),
+        &["Alt+3"],
+    ),
+    keys(
+        frontend(menu(
+            command("sequence.setFormat.45", "Portrait 4:5", always),
+            Menu::Sequence,
+            3,
+        )),
+        &["Alt+4"],
+    ),
+    keys(
+        frontend(menu(
+            command("sequence.settings", "Sequence Settings…", always),
+            Menu::Sequence,
+            3,
+        )),
+        &["Ctrl+0"],
+    ),
+    menu(command("qc.run", "Run QC", connected), Menu::Sequence, 3),
+    // The program viewer's switches.
+    checkable(keys(
+        frontend(menu(
+            command("view.annotations", "Annotations", always),
+            Menu::View,
+            0,
+        )),
+        &["Shift+A"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("view.safeZones", "Safe Zones", always),
+            Menu::View,
+            0,
+        )),
+        &["'"],
+    )),
+    keys(
+        frontend(menu(
+            command("viewer.zoom", "Viewer Zoom…", always),
+            Menu::View,
+            0,
+        )),
+        &["Shift+Z"],
+    ),
+    // The Inspector column's kinds, ⌃⌥4-6 as in Final Cut Pro.
+    checkable(keys(
+        frontend(menu(
+            command("inspector.video", "Video Inspector", always),
+            Menu::View,
+            2,
+        )),
+        // Meta is a Mac's Control key; the editor binds it to Ctrl elsewhere.
+        &["Meta+Alt+4"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("inspector.audio", "Audio Inspector", always),
+            Menu::View,
+            2,
+        )),
+        &["Meta+Alt+5"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("inspector.info", "Info Inspector", always),
+            Menu::View,
+            2,
+        )),
+        &["Meta+Alt+6"],
+    )),
     frontend(menu(
         command("view.fitTracks", "Fit Tracks to Panel", always),
         Menu::View,
@@ -962,6 +1176,15 @@ pub static COMMANDS: &[Command] = &[
         Menu::View,
         1,
     )),
+    // The bin between its grid of thumbnails and its list.
+    keys(
+        frontend(menu(
+            command("bin.toggleView", "Switch Bin View", always),
+            Menu::View,
+            3,
+        )),
+        &["Ctrl+Alt+2"],
+    ),
     params(
         menu(
             command("collab.sync", "Sync Now", can_sync),
@@ -1028,45 +1251,42 @@ pub static COMMANDS: &[Command] = &[
         Menu::Collaborate,
         2,
     ),
-    frontend(menu(
-        command(
-            "window.saveWorkspace",
-            "Save Changes to This Workspace",
-            always,
-        ),
-        Menu::Window,
-        0,
-    )),
-    frontend(menu(
-        command("window.saveWorkspaceAs", "Save as New Workspace…", always),
-        Menu::Window,
-        0,
-    )),
-    keys(
+    // The base state and the two trays over it, one chosen at a time.
+    checkable(keys(
         frontend(menu(
-            command("window.resetWorkspace", "Reset to Saved Layout", always),
+            command("workspace.review", "Review", always),
             Menu::Window,
             0,
         )),
-        &["Alt+Shift+0"],
-    ),
-    checkable(frontend(menu(
-        command("window.project", "Project", always),
-        Menu::Window,
-        1,
-    ))),
+        &["Alt+Shift+2"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("workspace.finish", "Finish", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+3"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("workspace.deliver", "Deliver", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+4"],
+    )),
+    // The sheets over the conversation; the same command opens and closes one.
+    checkable(keys(
+        frontend(menu(
+            command("window.project", "Media", always),
+            Menu::Window,
+            1,
+        )),
+        &["Ctrl+1"],
+    )),
     checkable(frontend(menu(
         command("window.source", "Source Monitor", always),
-        Menu::Window,
-        1,
-    ))),
-    checkable(frontend(menu(
-        command("window.program", "Program Monitor", always),
-        Menu::Window,
-        1,
-    ))),
-    checkable(frontend(menu(
-        command("window.timeline", "Timeline", always),
         Menu::Window,
         1,
     ))),
@@ -1081,39 +1301,29 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Ctrl+4"],
     )),
-    // Whether clicking a clip brings the Inspector to the front of its column.
     checkable(keys(
         frontend(menu(
-            command(
-                "window.inspectorFollows",
-                "Inspector Follows Selection",
-                always,
-            ),
+            command("window.effects", "Effects and titles", always),
             Menu::Window,
             1,
         )),
-        &["Ctrl+Alt+4"],
+        &["Ctrl+5"],
     )),
-    checkable(frontend(menu(
-        command("window.effects", "Effects", always),
-        Menu::Window,
-        1,
-    ))),
     checkable(frontend(menu(
         command("window.presets", "Presets", always),
         Menu::Window,
         1,
     ))),
-    // Shows and hides Kerf's conversation beside the Program monitor, as
-    // the comments button does beside a Short; Ask Kerf is Ctrl+J.
-    checkable(keys(
+    // Kerf's conversation is always open: this puts the keys in its composer.
+    // Ask Kerf is Ctrl+J.
+    keys(
         frontend(menu(
             command("window.assistant", "Kerf Assistant", always),
             Menu::Window,
             1,
         )),
         &["Ctrl+Shift+J"],
-    )),
+    ),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.
@@ -1134,7 +1344,7 @@ pub static KEYMAPS: &[Keymap] = &[
         label: "Premiere Pro",
         overrides: &[
             ("file.import", &["Ctrl+I"]),
-            ("file.export", &["Ctrl+M"]),
+            ("export.master", &["Ctrl+M"]),
             ("clip.split", &["Ctrl+K"]),
             ("sequence.renderPreview", &["Return"]),
             ("sequence.snap", &["S"]),
@@ -1152,6 +1362,8 @@ pub static KEYMAPS: &[Keymap] = &[
             ("sequence.renderPreview", &["Meta+R"]),
             ("source.insert", &["W"]),
             ("source.overwrite", &["D"]),
+            // D is Overwrite window-wide here, so drawing has no key.
+            ("composer.draw", &[]),
             ("sequence.snap", &["N"]),
             ("tool.selection", &["A"]),
             ("tool.razor", &["B"]),
@@ -1159,6 +1371,10 @@ pub static KEYMAPS: &[Keymap] = &[
             ("tool.roll", &[]),
             ("tool.slip", &[]),
             ("tool.slide", &[]),
+            // Final Cut Pro's workspaces are on ⌃⇧2, ⌃⇧3, …
+            ("workspace.review", &["Meta+Shift+2"]),
+            ("workspace.finish", &["Meta+Shift+3"]),
+            ("workspace.deliver", &["Meta+Shift+4"]),
         ],
     },
 ];
@@ -1313,8 +1529,11 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "sequence.addVideoTrack" => track("video", "Video", context.video_tracks),
         "sequence.addAudioTrack" => track("audio", "Audio", context.audio_tracks),
         "sequence.setFormat" => edit(EditOp::SetSequence {
-            width: params.require_size("width")?,
-            height: params.require_size("height")?,
+            width: Some(params.require_size("width")?),
+            height: Some(params.require_size("height")?),
+            name: None,
+            rate: None,
+            start: None,
             sequence: None,
         }),
         "clip.move" => edit(EditOp::Move {
@@ -1350,13 +1569,22 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             enabled: params.bool("enabled")?,
             locked: params.bool("locked")?,
             muted: params.bool("muted")?,
+            // An empty role gives the track back its kind's own.
+            role: params.string("role").map(|role| role.trim().to_string()),
+            sync_locked: params.bool("syncLocked")?,
         }),
-        "proposal.accept" | "proposal.reject" => {
+        "export.master" => Request::Export {
+            quality: "master".into(),
+        },
+        "qc.run" => Request::Check {
+            sequence: params.trimmed("sequence"),
+        },
+        "proposal.accept" | "proposal.reject" | "comment.accept" | "comment.reject" => {
             let proposal_id = match params.string("proposal") {
                 Some(id) => id,
                 None => context.proposal.clone().unwrap_or_default().id,
             };
-            if id == "proposal.accept" {
+            if id == "proposal.accept" || id == "comment.accept" {
                 Request::Accept {
                     proposal_id,
                     revision,
@@ -1446,26 +1674,31 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             if media.is_empty() || frames <= 0 || tracks.is_empty() {
                 return Err("a source edit needs media, a length, and tracks".into());
             }
-            let (ids, sequence) = (Vec::new(), None);
+            let (media, generator, ids, sequence, mode) =
+                (Some(media), None, Vec::new(), None, None);
             edit(if id == "source.insert" {
                 EditOp::Insert {
                     media,
                     source_in,
+                    generator,
                     frames,
                     at,
                     tracks,
                     ids,
                     sequence,
+                    mode,
                 }
             } else {
                 EditOp::Overwrite {
                     media,
                     source_in,
+                    generator,
                     frames,
                     at,
                     tracks,
                     ids,
                     sequence,
+                    mode,
                 }
             })
         }
@@ -1649,12 +1882,271 @@ mod tests {
     }
 
     #[test]
-    fn the_assistant_toggles_from_the_keyboard_in_every_keymap() {
+    fn the_assistant_has_its_key_in_every_keymap() {
         let assistant = find("window.assistant").unwrap();
-        assert!(assistant.checkable);
+        // It focuses the composer: the conversation has no closed state.
+        assert!(!assistant.checkable);
         for keymap in KEYMAPS {
             assert_eq!(keymap.keys(assistant), ["Ctrl+Shift+J"], "{}", keymap.id);
         }
+    }
+
+    #[test]
+    fn base_state_trays_sheets_and_viewer_switches_have_their_keys_in_every_keymap() {
+        let kerf = Keymap::find("kerf");
+        let premiere = Keymap::find("premiere");
+        let fcp = Keymap::find("fcp");
+        for (index, id) in ["workspace.review", "workspace.finish", "workspace.deliver"]
+            .into_iter()
+            .enumerate()
+        {
+            let command = find(id).unwrap();
+            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
+            assert_eq!(command.menu, Some(Menu::Window), "{id}");
+            // On the same keys as before the Edit workspace went.
+            let number = index + 2;
+            assert_eq!(kerf.keys(command), [format!("Alt+Shift+{number}")], "{id}");
+            assert_eq!(
+                premiere.keys(command),
+                [format!("Alt+Shift+{number}")],
+                "{id}"
+            );
+            assert_eq!(fcp.keys(command), [format!("Meta+Shift+{number}")], "{id}");
+        }
+        let keys = |id: &str| kerf.keys(find(id).unwrap());
+        assert_eq!(keys("window.project"), ["Ctrl+1"]);
+        assert_eq!(keys("window.inspector"), ["Ctrl+4"]);
+        assert_eq!(keys("window.effects"), ["Ctrl+5"]);
+        assert_eq!(find("window.project").unwrap().label, "Media");
+        assert_eq!(find("window.effects").unwrap().label, "Effects and titles");
+        for id in ["window.project", "window.inspector", "window.effects"] {
+            let command = find(id).unwrap();
+            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
+        }
+        assert_eq!(keys("view.annotations"), ["Shift+A"]);
+        assert_eq!(keys("view.safeZones"), ["'"]);
+        assert_eq!(keys("viewer.zoom"), ["Shift+Z"]);
+        assert_eq!(keys("playback.loop"), ["Ctrl+L"]);
+        assert_eq!(keys("mark.in"), ["I"]);
+        assert_eq!(keys("mark.out"), ["O"]);
+        assert_eq!(keys("timeline.addTrack"), ["Ctrl+Shift+T"]);
+        assert_eq!(keys("inspector.video"), ["Meta+Alt+4"]);
+        assert_eq!(keys("inspector.audio"), ["Meta+Alt+5"]);
+        assert_eq!(keys("inspector.info"), ["Meta+Alt+6"]);
+        assert_eq!(keys("export.master"), ["Ctrl+E"]);
+        assert_eq!(premiere.keys(find("export.master").unwrap()), ["Ctrl+M"]);
+        assert_eq!(keys("sequence.settings"), ["Ctrl+0"]);
+        assert_eq!(keys("keyboard.customise"), ["Ctrl+Alt+K"]);
+        assert_eq!(keys("bin.search"), ["Ctrl+F"]);
+        assert_eq!(keys("bin.toggleView"), ["Ctrl+Alt+2"]);
+        assert_eq!(keys("browser.search"), ["Ctrl+Shift+F"]);
+        assert_eq!(keys("composer.draw"), ["D"]);
+        assert!(keys("source.play").is_empty());
+        assert!(keys("source.reveal").is_empty());
+        assert_eq!(keys("window.assistant"), ["Ctrl+Shift+J"]);
+        // The program's marks are the timeline's, the source's the Source
+        // monitor's: the same keys in their own panels.
+        assert_eq!(find("mark.in").unwrap().scope, Scope::Timeline);
+        assert_eq!(find("source.markIn").unwrap().scope, Scope::Source);
+    }
+
+    #[test]
+    fn the_commands_of_the_old_layout_are_gone() {
+        for id in [
+            "workspace.edit",
+            "window.saveWorkspace",
+            "window.saveWorkspaceAs",
+            "window.resetWorkspace",
+            "window.program",
+            "window.timeline",
+            "window.inspectorFollows",
+            "view.dim",
+            "view.devicePreview",
+            "view.comments",
+        ] {
+            assert!(find(id).is_none(), "{id}");
+        }
+    }
+
+    #[test]
+    fn commands_without_a_handler_yet_say_so() {
+        let states = states(&ready());
+        // Every command has its handler now.
+        for command in COMMANDS {
+            assert_ne!(states[command.id], COMING, "{}", command.id);
+        }
+        for id in [
+            "sequence.settings",
+            "keyboard.customise",
+            "view.annotations",
+            "viewer.zoom",
+            "playback.loop",
+            "mark.in",
+            "mark.out",
+            "mark.clear",
+            "inspector.audio",
+            "inspector.info",
+            "workspace.review",
+            "workspace.finish",
+            "workspace.deliver",
+            "view.safeZones",
+            "inspector.video",
+            "timeline.addTrack",
+            "export.master",
+            "qc.run",
+        ] {
+            assert!(states[id].is_null(), "{id}: {}", states[id]);
+        }
+        assert_eq!(states["qc.run"], Value::Null);
+        let offline = super::states(&Context::default());
+        assert_eq!(offline["qc.run"], json!(OFFLINE));
+        // The program's marks and loop need a program; the viewer's
+        // switches and the Inspector's kinds work without one.
+        for id in ["playback.loop", "mark.in", "mark.out", "mark.clear"] {
+            assert_eq!(offline[id], json!(OFFLINE), "{id}");
+        }
+        for id in [
+            "view.annotations",
+            "viewer.zoom",
+            "inspector.audio",
+            "inspector.info",
+        ] {
+            assert!(offline[id].is_null(), "{id}: {}", offline[id]);
+        }
+        // The editor's own commands, carried out in the editor, which says
+        // itself when one cannot run.
+        for id in [
+            "sequence.settings",
+            "keyboard.customise",
+            "sequence.setFormat.169",
+            "sequence.setFormat.916",
+            "sequence.setFormat.11",
+            "sequence.setFormat.45",
+            "bin.search",
+            "bin.toggleView",
+            "browser.search",
+            "source.play",
+            "source.reveal",
+            "composer.draw",
+        ] {
+            let command = find(id).unwrap();
+            assert_eq!(command.kind, Kind::Frontend, "{id}");
+            assert!(states[id].is_null(), "{id}: {}", states[id]);
+            assert!(offline[id].is_null(), "{id}: {}", offline[id]);
+            assert!(run(id, &ready(), &Value::Null).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_formats_the_searches_and_the_panel_buttons_have_their_places() {
+        let kerf = Keymap::find("kerf");
+        for (index, (id, label)) in [
+            ("sequence.setFormat.169", "Landscape 16:9"),
+            ("sequence.setFormat.916", "Vertical 9:16"),
+            ("sequence.setFormat.11", "Square 1:1"),
+            ("sequence.setFormat.45", "Portrait 4:5"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let command = find(id).unwrap();
+            assert_eq!(command.label, label);
+            assert_eq!(
+                (command.menu, command.scope),
+                (Some(Menu::Sequence), Scope::Window)
+            );
+            for keymap in KEYMAPS {
+                assert_eq!(keymap.keys(command), [format!("Alt+{}", index + 1)], "{id}");
+            }
+        }
+        // The formats sit with Sequence Settings, before it.
+        let sequence: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|command| command.menu == Some(Menu::Sequence) && command.group == 3)
+            .map(|command| command.id)
+            .collect();
+        assert_eq!(
+            sequence,
+            [
+                "sequence.setFormat.169",
+                "sequence.setFormat.916",
+                "sequence.setFormat.11",
+                "sequence.setFormat.45",
+                "sequence.settings",
+                "qc.run"
+            ]
+        );
+        for (id, menu) in [
+            ("bin.search", Menu::Edit),
+            ("browser.search", Menu::Edit),
+            ("bin.toggleView", Menu::View),
+        ] {
+            assert_eq!(find(id).unwrap().menu, Some(menu), "{id}");
+            assert_eq!(find(id).unwrap().scope, Scope::Window, "{id}");
+        }
+        // The Source monitor's buttons and the composer's Draw live in
+        // their panels, not in a menu.
+        for id in ["source.play", "source.reveal"] {
+            let command = find(id).unwrap();
+            assert_eq!((command.menu, command.scope), (None, Scope::Source), "{id}");
+        }
+        let draw = find("composer.draw").unwrap();
+        assert_eq!((draw.menu, draw.scope), (None, Scope::Composer));
+        assert_eq!(kerf.keys(draw), ["D"]);
+        assert_eq!(Keymap::find("premiere").keys(draw), ["D"]);
+        // Final Cut Pro's D is Overwrite, everywhere in the window.
+        assert!(Keymap::find("fcp").keys(draw).is_empty());
+        assert_eq!(
+            Keymap::find("fcp").keys(find("source.overwrite").unwrap()),
+            ["D"]
+        );
+        let catalog = catalog("kerf");
+        let entry = catalog["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|command| command["id"] == "composer.draw")
+            .unwrap();
+        assert_eq!(entry["scope"], "composer");
+        assert_eq!(entry["kind"], "frontend");
+    }
+
+    #[test]
+    fn master_export_qc_and_the_cards_resolve_to_bridge_requests() {
+        let context = ready();
+        assert_eq!(
+            serde_json::to_value(run("export.master", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "export", "quality": "master"})
+        );
+        assert_eq!(
+            serde_json::to_value(run("qc.run", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "check"})
+        );
+        assert_eq!(
+            serde_json::to_value(
+                run("qc.run", &context, &json!({"sequence": "vertical"})).unwrap()
+            )
+            .unwrap(),
+            json!({"type": "check", "sequence": "vertical"})
+        );
+        let mut reviewing = context.clone();
+        reviewing.proposal = Some(ProposalState {
+            id: "p1".into(),
+            blocked: None,
+        });
+        assert_eq!(
+            serde_json::to_value(
+                run("comment.accept", &reviewing, &json!({"proposal": "p2"})).unwrap()
+            )
+            .unwrap(),
+            json!({"type": "accept", "proposalId": "p2", "revision": 7})
+        );
+        assert_eq!(
+            serde_json::to_value(run("comment.reject", &reviewing, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "reject", "proposalId": "p1", "revision": 7})
+        );
+        assert!(run("comment.accept", &context, &Value::Null).is_err());
+        assert!(run("workspace.review", &context, &Value::Null).is_err());
     }
 
     #[test]
@@ -1783,10 +2275,18 @@ mod tests {
         assert_eq!(
             format,
             [EditOp::SetSequence {
-                width: 1080,
-                height: 1920,
+                width: Some(1080),
+                height: Some(1920),
+                name: None,
+                rate: None,
+                start: None,
                 sequence: None
             }]
+        );
+        // On the wire it is the set-sequence the bridge takes.
+        assert_eq!(
+            serde_json::to_value(&format[0]).unwrap(),
+            json!({"op": "set-sequence", "width": 1080, "height": 1920})
         );
     }
 
@@ -1811,14 +2311,21 @@ mod tests {
         assert_eq!(
             insert,
             [EditOp::Insert {
-                media: "m1".into(),
+                media: Some("m1".into()),
                 source_in: 50,
+                generator: None,
                 frames: 24,
                 at: 48,
                 tracks: vec!["V1".into(), "A1".into()],
                 ids: vec![],
-                sequence: None
+                sequence: None,
+                mode: None,
             }]
+        );
+        assert_eq!(
+            serde_json::to_value(&insert[0]).unwrap(),
+            json!({"op": "insert", "media": "m1", "sourceIn": 50, "frames": 24, "at": 48,
+                   "tracks": ["V1", "A1"]})
         );
         let overwrite = ops(run("source.overwrite", &context, &json!({"tracks": ["V2"]})).unwrap());
         assert!(matches!(&overwrite[0], EditOp::Overwrite { tracks, .. } if tracks == &["V2"]));
@@ -1854,8 +2361,20 @@ mod tests {
                 sequence: None,
                 enabled: None,
                 locked: Some(true),
-                muted: None
+                muted: None,
+                role: None,
+                sync_locked: None,
             }]
+        );
+        let roles = ops(run(
+            "track.set",
+            &ready(),
+            &json!({"track": "V2", "role": " Titles ", "syncLocked": false}),
+        )
+        .unwrap());
+        assert_eq!(
+            serde_json::to_value(&roles[0]).unwrap(),
+            json!({"op": "set-track", "track": "V2", "role": "Titles", "syncLocked": false})
         );
     }
 
@@ -2201,12 +2720,15 @@ mod tests {
                 json!({"remote": "git@example.com:film.git"}),
             ),
             ("collab.consolidate", json!({})),
+            ("qc.run", Value::Null),
+            ("export.master", Value::Null),
         ];
         for (id, params) in invocations {
             let request = request(id, &context, params);
             let kind = request["type"].as_str().unwrap();
             assert!(BRIDGE.contains(kind), "bridge.h has no `{kind}` for {id}");
         }
+        assert!(BRIDGE.contains("check {sequence?}"));
         assert!(BRIDGE.contains("projection_import") && BRIDGE.contains("projection_repair"));
     }
 }

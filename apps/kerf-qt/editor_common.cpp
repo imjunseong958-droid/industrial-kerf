@@ -1,4 +1,5 @@
 #include "editor_common.h"
+#include "design_tokens.h"
 #include "editor_theme.h"
 
 #include <QAbstractItemView>
@@ -21,6 +22,7 @@
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QStyleOptionMenuItem>
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QtMath>
@@ -37,6 +39,8 @@ namespace {
 
 // Where a pop-up row's text starts, past the current choice's check.
 constexpr int kPopupTextLeft = 22;
+// A pop-up row is a menu item: 28pt (mockup-spec 0.5).
+constexpr int kPopupRowHeight = 28;
 
 } // namespace
 
@@ -136,34 +140,54 @@ QString timelineTimecode(double seconds, double fps) {
         .arg(frames, 2, 10, QLatin1Char('0'));
 }
 
-QString timelineRulerLabel(double seconds, double fps, double duration) {
-    const QString full = timelineTimecode(seconds, fps);
-    return duration >= 3600.0 ? full : full.mid(3);
-}
-
-RulerScale rulerScale(double pixelsPerSecond, double fps) {
-    const double pps = std::max(pixelsPerSecond, 0.001);
-    const double frame = 1.0 / std::max(1.0, fps);
-    const double steps[] = {frame,      2 * frame, 5 * frame, 10 * frame, 15 * frame, 1,    2,   5,
-                            10,         15,        30,        60,         120,        300, 600, 1800,
-                            3600,       7200};
-    double major = steps[std::size(steps) - 1];
-    for (double step : steps) {
-        if (step * pps >= 72.0) {
-            major = step;
-            break;
-        }
-    }
-    int divisions = 1;
-    if (major > frame * 1.01) {
-        for (int candidate : {10, 5, 4, 2}) {
-            if ((major / candidate) * pps >= 7.0) {
-                divisions = candidate;
+RulerTicks rulerTicks(double pixelsPerSecond, double fps) {
+    const double rate = std::max(1.0, fps);
+    const double perFrame = std::max(pixelsPerSecond, 1e-6) / rate;
+    // 1, 2, 5, 10, 20, 50 ... frames: the first whose ticks stand 8 apart.
+    qint64 minor = 1;
+    for (qint64 decade = 1; decade < (qint64(1) << 40); decade *= 10) {
+        bool found = false;
+        for (const qint64 step : {decade, 2 * decade, 5 * decade}) {
+            if (double(step) * perFrame >= 8.0) {
+                minor = step;
+                found = true;
                 break;
             }
         }
+        if (found) break;
     }
-    return {major, std::max(1, divisions)};
+    const qint64 perSecond = std::max<qint64>(1, std::llround(rate));
+    if (minor * 10 < perSecond) return {minor, minor * 5, minor * 10};
+    // Ten minor ticks 8 apart is the least a label step may span.
+    const double least = 80.0 / std::max(pixelsPerSecond, 1e-6);
+    qint64 seconds = 0;
+    for (const qint64 step : {1, 2, 4, 8, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600}) {
+        if (double(step) >= least) {
+            seconds = step;
+            break;
+        }
+    }
+    if (seconds == 0) seconds = 3600 * qint64(std::ceil(least / 3600.0));
+    const qint64 label = seconds * perSecond;
+    // The most minor ticks the label step divides into whole frames.
+    for (const qint64 parts : {10, 8, 5, 4, 2}) {
+        if (label % parts == 0) return {label / parts, parts % 2 == 0 ? label / 2 : label, label};
+    }
+    return {label, label, label};
+}
+
+QString rulerLabel(qint64 frame, double fps, qint64 labelFrames) {
+    const int frameRate = std::max(1, static_cast<int>(std::lround(std::max(1.0, fps))));
+    const qint64 at = std::max<qint64>(0, frame);
+    const qint64 seconds = at / frameRate;
+    const int frames = static_cast<int>(at % frameRate);
+    const int hours = static_cast<int>(seconds / 3600);
+    const int minutes = static_cast<int>((seconds / 60) % 60);
+    const int secs = static_cast<int>(seconds % 60);
+    QString text = hours > 0 ? QStringLiteral("%1:%2:%3").arg(hours).arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'))
+                             : QStringLiteral("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(secs, 2, 10, QLatin1Char('0'));
+    if (labelFrames % frameRate != 0) text += QStringLiteral(":%1").arg(frames, 2, 10, QLatin1Char('0'));
+    return text;
 }
 
 QString clipName(const QJsonObject &clip) {
@@ -219,7 +243,9 @@ QHash<QString, QString> sourceNames(const QJsonArray &sources) {
 }
 
 QFont monoFont(int pixelSize, QFont::Weight weight) {
-    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    // The tokens' mono face (JetBrains Mono when bundled, else Menlo, else
+    // the system's fixed font), tabular, at the size asked for.
+    QFont font = tokens::font(tokens::TypeStyle{pixelSize, pixelSize, int(weight), true});
     font.setPixelSize(pixelSize);
     font.setWeight(weight);
     return font;
@@ -283,6 +309,11 @@ bool isAudioTrack(const QJsonObject &track) {
     return type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
 }
 
+bool isCaptionTrack(const QJsonObject &track) {
+    const QString type = track.value(QStringLiteral("type")).toString().toLower();
+    return type.contains(QStringLiteral("subtitle")) || type.contains(QStringLiteral("caption"));
+}
+
 TrackBadge trackBadge(const QJsonObject &project, const QString &trackId) {
     int picture = 0;
     int sound = 0;
@@ -292,7 +323,9 @@ TrackBadge trackBadge(const QJsonObject &project, const QString &trackId) {
         const int number = audio ? ++sound : ++picture;
         if (track.value(QStringLiteral("id")).toString() != trackId) continue;
         QString name = track.value(QStringLiteral("name")).toString().trimmed();
-        if (name.isEmpty()) name = (audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(number);
+        if (name.isEmpty())
+            name = isCaptionTrack(track) ? QStringLiteral("Captions")
+                                         : (audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(number);
         return TrackBadge{(audio ? QStringLiteral("A") : QStringLiteral("V")) + QString::number(number), name};
     }
     return TrackBadge{trackId, QString()};
@@ -357,22 +390,6 @@ QString checkMarkImagePath(const QColor &color) {
     });
 }
 
-QString closeMarkImagePath(const QColor &color) {
-    return glyphImagePath(colorKey("close", color), QSize(12, 12), [&color](QPainter &painter) {
-        // Through pixel centres, so the strokes are solid even at 1x.
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(3.5, 3.5), QPointF(8.5, 8.5));
-        painter.drawLine(QPointF(8.5, 3.5), QPointF(3.5, 8.5));
-    });
-}
-
-QString tabsMenuImagePath(const QColor &color) {
-    return glyphImagePath(colorKey("tabs-menu", color), QSize(12, 12), [&color](QPainter &painter) {
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(QPolygonF{{3.0, 4.75}, {6.0, 7.75}, {9.0, 4.75}});
-    });
-}
-
 void drawMenuCheck(QPainter &painter, const QPointF &at, const QColor &color) {
     painter.save();
     painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -409,7 +426,7 @@ QColor StepperSpinBox::stepperColor() const {
 PopupItemDelegate::PopupItemDelegate(QComboBox *combo) : QStyledItemDelegate(combo), m_combo(combo) {}
 
 QSize PopupItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const {
-    return {kPopupTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, 22};
+    return {kPopupTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, kPopupRowHeight};
 }
 
 void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const {
@@ -421,7 +438,7 @@ void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     if (selected) {
         painter->setPen(Qt::NoPen);
         painter->setBrush(c.selection);
-        painter->drawRoundedRect(row, 4, 4);
+        painter->drawRoundedRect(row, 6, 6);
     }
     const QColor color = selected ? c.selectionText : c.text;
     if (index.row() == m_combo->currentIndex()) drawMenuCheck(*painter, QPointF(row.left() + 7, row.center().y()), color);
@@ -438,15 +455,67 @@ PopupItemDelegate::Colors PopupItemDelegate::colors() const {
 
 namespace {
 
-// Fusion, whose push buttons (and check boxes) take focus from Tab alone,
-// and whose pop-up buttons' menu windows paint no panel of their own.
+// Fusion with the design's flat metrics (mockup-spec 0.4, 0.5): controls
+// 24pt tall (the style sheet makes toolbar ones 28), 6pt radii, 14pt check
+// boxes, 16pt icons, a 16pt slider with a 10pt knob, no scroll bar width (the
+// design hides them), and tooltips that wake after 400ms and come back at
+// once within 300ms. Its push buttons (and check boxes) take focus from Tab
+// alone, and its pop-up buttons' menu windows paint no panel of their own.
 class EditorStyle final : public QProxyStyle {
 public:
     EditorStyle() : QProxyStyle(QStringLiteral("Fusion")) {}
 
     int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *data) const override {
-        if (hint == SH_Button_FocusPolicy) return Qt::TabFocus;
-        return QProxyStyle::styleHint(hint, option, widget, data);
+        switch (hint) {
+        case SH_Button_FocusPolicy: return Qt::TabFocus;
+        case SH_ToolTip_WakeUpDelay: return 400;
+        case SH_ToolTip_FallAsleepDelay: return 300;
+        case SH_ScrollBar_Transient: return 1;
+        case SH_DialogButtonBox_ButtonsHaveIcons: return 0;
+        case SH_Menu_FadeOutOnHide: return 0;
+        default: return QProxyStyle::styleHint(hint, option, widget, data);
+        }
+    }
+
+    int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override {
+        switch (metric) {
+        case PM_IndicatorWidth:
+        case PM_IndicatorHeight:
+        case PM_ExclusiveIndicatorWidth:
+        case PM_ExclusiveIndicatorHeight: return kCheckSize;
+        case PM_SmallIconSize:
+        case PM_ToolBarIconSize:
+        case PM_ButtonIconSize:
+        case PM_TabBarIconSize: return kIconSize;
+        case PM_ScrollBarExtent: return 0;
+        case PM_SliderThickness: return kSliderThickness;
+        case PM_SliderLength:
+        case PM_SliderControlThickness: return kSliderKnob;
+        case PM_DefaultFrameWidth: return 1;
+        case PM_MenuPanelWidth: return 1;
+        case PM_MenuHMargin:
+        case PM_MenuVMargin: return 4;
+        case PM_ToolTipLabelFrameWidth: return 1;
+        default: return QProxyStyle::pixelMetric(metric, option, widget);
+        }
+    }
+
+    QSize sizeFromContents(ContentsType type, const QStyleOption *option, const QSize &contents, const QWidget *widget) const override {
+        QSize size = QProxyStyle::sizeFromContents(type, option, contents, widget);
+        switch (type) {
+        case CT_PushButton:
+        case CT_ComboBox:
+        case CT_LineEdit:
+        case CT_SpinBox: size.setHeight(std::max(size.height(), kControlHeight)); break;
+        case CT_ToolButton: size = size.expandedTo(QSize(kControlHeight, kControlHeight)); break;
+        case CT_MenuItem:
+            if (const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+                item && item->menuItemType != QStyleOptionMenuItem::Separator)
+                size.setHeight(std::max(size.height(), kMenuItemHeight));
+            break;
+        default: break;
+        }
+        return size;
     }
 
     void drawPrimitive(PrimitiveElement element, const QStyleOption *option, QPainter *painter, const QWidget *widget) const override {
@@ -457,12 +526,20 @@ public:
             return;
         QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
+
+private:
+    static constexpr int kControlHeight = 24;
+    static constexpr int kMenuItemHeight = 28;
+    static constexpr int kCheckSize = 14;
+    static constexpr int kIconSize = 16;
+    static constexpr int kSliderThickness = 16;
+    static constexpr int kSliderKnob = 10;
 };
 
 // The ring around a focused field, or a button or pop-up focused from the
-// keyboard: 3 points of the accent at 35% outside its bezel, as the
-// launcher rings its fields. It sits in the control's parent, under the
-// control, and follows it.
+// keyboard: the design's focus outline, 2pt of the accent 1pt outside the
+// control's bezel (mockup-spec 0.2). It sits in the control's parent, under
+// the control, and follows it.
 class FocusHalo final : public QWidget {
 public:
     explicit FocusHalo(QWidget *control) : QWidget(control->parentWidget()), m_control(control) {
@@ -497,16 +574,19 @@ protected:
         const qreal radius = m_control->property("bezelRadius").toReal(&set);
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(editorTheme().focusHalo, kWidth));
+        painter.setPen(QPen(editorTheme().focusHalo, kRing));
         painter.setBrush(Qt::NoBrush);
-        // The pen's middle runs half its width outside the bezel.
-        const qreal middle = kWidth / 2.0;
-        const qreal round = (set ? radius : 5.0) + middle;
+        // The pen's middle runs half its width inside the halo's edge, so
+        // the ring ends kOffset outside the bezel.
+        const qreal middle = kRing / 2.0;
+        const qreal round = (set ? radius : 6.0) + kOffset + middle;
         painter.drawRoundedRect(QRectF(rect()).adjusted(middle, middle, -middle, -middle), round, round);
     }
 
 private:
-    static constexpr int kWidth = 3;
+    static constexpr int kRing = 2;
+    static constexpr int kOffset = 1;
+    static constexpr int kWidth = kRing + kOffset;
 
     void place() {
         if (!m_control) return;
@@ -518,8 +598,8 @@ private:
     QPointer<QWidget> m_control;
 };
 
-// Gives pop-up buttons their rows, pop-up windows their round corners, and
-// focused controls their ring, for the whole application.
+// Gives pop-up buttons their rows, pop-up windows and tooltips their round
+// corners, and focused controls their ring, for the whole application.
 class EditorControls final : public QObject {
 public:
     using QObject::QObject;
@@ -544,6 +624,9 @@ protected:
             } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
                 roundCorners(menu);
                 markColumns(menu);
+            } else if (watched->inherits("QTipLabel")) {
+                // The style sheet rounds a tooltip's card by 6pt.
+                roundCorners(static_cast<QWidget *>(watched));
             }
             break;
         case QEvent::ActionAdded:
@@ -908,335 +991,6 @@ QPainterPath maskPath(const QJsonObject &mask) {
         if (mask.value(QStringLiteral("closed")).toBool(true) && points.size() > 2) path.closeSubpath();
     }
     return path;
-}
-
-namespace {
-
-// How many device pixels one logical pixel spans, along x.
-qreal deviceScale(const QPainter &painter) {
-    const QTransform t = painter.deviceTransform();
-    return std::hypot(t.m11(), t.m12());
-}
-
-// One device pixel's worth of line at 1x and 1.25x, two at 2x: a 1px line
-// as the design draws it, never blurred across two device pixels.
-qreal hairline(const QPainter &painter) {
-    const qreal scale = deviceScale(painter);
-    return scale > 0 ? std::max<qreal>(1.0, std::round(scale)) / scale : 1.0;
-}
-
-// `rect` with its edges moved to the nearest device pixel's edge, so its
-// straight sides land crisp. A rotated or sheared painter is left alone.
-QRectF snapToPixels(const QPainter &painter, const QRectF &rect) {
-    const QTransform t = painter.deviceTransform();
-    if (t.type() > QTransform::TxScale) return rect;
-    bool invertible = false;
-    const QTransform back = t.inverted(&invertible);
-    if (!invertible) return rect;
-    const QRectF device = t.mapRect(rect);
-    return back.mapRect(QRectF(QPointF(std::round(device.left()), std::round(device.top())),
-                               QPointF(std::round(device.right()), std::round(device.bottom()))));
-}
-
-// `point` moved to where a shape `size` logical pixels across, centred on
-// it, has its edges on device pixels' edges.
-QPointF snapCentre(const QPainter &painter, const QPointF &point, qreal size) {
-    const QRectF snapped = snapToPixels(painter, QRectF(point - QPointF(size, size) / 2, QSizeF(size, size)));
-    return snapped.center();
-}
-
-QPainterPath roundedPath(const QRectF &rect, qreal radius) {
-    QPainterPath path;
-    const qreal r = std::min({radius, rect.width() / 2, rect.height() / 2});
-    path.addRoundedRect(rect, r, r);
-    return path;
-}
-
-QColor clear(QColor color) {
-    color.setAlpha(0);
-    return color;
-}
-
-// A 1px line of light (or shadow) inside the top of `shape`, following its
-// rounded corners, as CSS's inset 0 1px 0 draws it.
-void innerTopLine(QPainter &painter, const QPainterPath &shape, qreal line, const QColor &color) {
-    painter.fillPath(shape.subtracted(shape.translated(0, line)), color);
-}
-
-// The soft shadow a rim throws `depth` pixels down the inside of `shape`.
-void innerTopShadow(QPainter &painter, const QPainterPath &shape, qreal depth, const QColor &color) {
-    const QRectF bounds = shape.boundingRect();
-    QLinearGradient shade(bounds.topLeft(), bounds.topLeft() + QPointF(0, depth));
-    shade.setColorAt(0, color);
-    shade.setColorAt(1, clear(color));
-    painter.fillPath(shape, shade);
-}
-
-// A recess: `lip` fills the rounded `rect`, then the recess itself (the
-// rect less its bottom line) is laid over it in `fill`, so the lip shows
-// as a 1px line of light below, inside `rect`; then the rim's shadow.
-QPainterPath paintRecess(QPainter &painter, const QRectF &rect, qreal radius, const QBrush &fill, const QColor &lip,
-                         const QColor &shadow, qreal depth) {
-    const qreal line = hairline(painter);
-    const QRectF outer = snapToPixels(painter, rect);
-    const QPainterPath body = roundedPath(outer.adjusted(0, 0, 0, -line), radius);
-    painter.fillPath(roundedPath(outer, radius), lip);
-    painter.fillPath(body, fill);
-    innerTopShadow(painter, body, depth, shadow);
-    return body;
-}
-
-// Whether `text` is Hangul, Han, kana or bopomofo anywhere: written
-// without capitals, and spoilt by tracking.
-bool isCjkText(const QString &text) {
-    for (const char32_t code : text.toUcs4()) {
-        switch (QChar::script(code)) {
-        case QChar::Script_Hangul:
-        case QChar::Script_Han:
-        case QChar::Script_Hiragana:
-        case QChar::Script_Katakana:
-        case QChar::Script_Bopomofo: return true;
-        default: break;
-        }
-    }
-    return false;
-}
-
-// Where the angle `degrees` (0 up, clockwise) puts a point `radius` from `centre`.
-QPointF onDial(const QPointF &centre, qreal radius, qreal degrees) {
-    const qreal radians = qDegreesToRadians(degrees);
-    return centre + QPointF(std::sin(radians), -std::cos(radians)) * radius;
-}
-
-} // namespace
-
-void paintRaisedKey(QPainter &painter, const QRectF &rect, bool latched, bool hovered, bool lit) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const qreal line = hairline(painter);
-    const qreal radius = 4;
-    const QRectF outer = snapToPixels(painter, rect);
-    // The key's ring sits above its 1px drop; held in, the key has no drop,
-    // as it no longer stands proud of the bank.
-    const QRectF ringRect = latched ? outer : outer.adjusted(0, 0, 0, -line);
-    const QPainterPath ring = roundedPath(ringRect, radius);
-    const QPainterPath face = roundedPath(ringRect.adjusted(line, line, -line, -line), radius - line);
-    if (!latched) painter.fillPath(ring.translated(0, line), t.keyDrop);
-    painter.fillPath(ring, t.keyRing);
-    if (latched) {
-        painter.fillPath(face, t.keyLatched);
-        innerTopShadow(painter, face, std::min<qreal>(4, face.boundingRect().height() / 2), t.keyLatchedShadow);
-    } else {
-        QLinearGradient bevel(face.boundingRect().topLeft(), face.boundingRect().bottomLeft());
-        bevel.setColorAt(0, t.keyTop);
-        bevel.setColorAt(1, t.keyBottom);
-        painter.fillPath(face, bevel);
-        innerTopLine(painter, face, line, t.keyHighlight);
-    }
-    if (hovered) painter.fillPath(face, t.hover);
-    if (lit) {
-        // A 10x2 bar 3px below the key's top, and its glow, kept to the face.
-        const QRectF faceRect = face.boundingRect();
-        const QRectF led = snapToPixels(painter, QRectF(faceRect.center().x() - 5, faceRect.top() + 2, 10, 2));
-        QRadialGradient glow(led.center(), 7);
-        QColor halo = t.keyLed;
-        halo.setAlphaF(0.45);
-        glow.setColorAt(0, halo);
-        glow.setColorAt(1, clear(halo));
-        painter.fillPath(face, glow);
-        painter.fillPath(roundedPath(led, 1), t.keyLed);
-    }
-    painter.restore();
-}
-
-void paintKeyBank(QPainter &painter, const QRectF &rect) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    paintRecess(painter, rect, 6, t.bankWell, t.bankLip, t.bankShadow, 3);
-    painter.restore();
-}
-
-void paintWell(QPainter &painter, const QRectF &rect, qreal radius) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    paintRecess(painter, rect, radius, t.wellFill, t.wellLip, t.wellShadow, 3);
-    painter.restore();
-}
-
-void paintModulePlate(QPainter &painter, const QRectF &rect) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const qreal line = hairline(painter);
-    const QRectF outer = snapToPixels(painter, rect);
-    const QPainterPath plate = roundedPath(outer.adjusted(line, line, -line, -line), 6 - line);
-    painter.fillPath(roundedPath(outer, 6), t.moduleEdge);
-    painter.fillPath(plate, t.modulePlate);
-    innerTopLine(painter, plate, line, t.moduleHighlight);
-    painter.restore();
-}
-
-void paintGlass(QPainter &painter, const QRectF &rect, qreal radius) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const QRectF outer = snapToPixels(painter, rect);
-    QLinearGradient glass(outer.topLeft(), outer.bottomLeft());
-    glass.setColorAt(0, t.glassTop);
-    glass.setColorAt(1, t.glassBottom);
-    paintRecess(painter, outer, radius, glass, t.glassLip, t.glassShadow, 4);
-    painter.restore();
-}
-
-void paintLamp(QPainter &painter, const QPointF &centre, qreal diameter, LampState state) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const QPointF at = snapCentre(painter, centre, diameter);
-    const qreal radius = diameter / 2;
-    QPainterPath dot;
-    dot.addEllipse(at, radius, radius);
-    if (state == LampState::Off) {
-        // A dark lamp is a lens set into the plate: its rim's shadow inside
-        // its top edge.
-        painter.fillPath(dot, t.lampOff);
-        painter.fillPath(dot.subtracted(dot.translated(0, std::max<qreal>(hairline(painter), diameter / 6))), t.wellShadow);
-    } else {
-        const QColor lit = state == LampState::Changed ? t.lampChanged : state == LampState::Kerf ? t.lampKerf : t.lampOk;
-        QColor halo = lit;
-        halo.setAlphaF(0.4);
-        QRadialGradient glow(at, diameter);
-        glow.setColorAt(0.4, halo);
-        glow.setColorAt(1, clear(halo));
-        painter.setBrush(glow);
-        painter.drawEllipse(at, diameter, diameter);
-        // The lens: brighter where the light inside it shows through.
-        QRadialGradient lens(at - QPointF(0, radius / 3), radius * 1.2);
-        lens.setColorAt(0, lit.lighter(135));
-        lens.setColorAt(1, lit);
-        painter.fillPath(dot, lens);
-    }
-    painter.restore();
-}
-
-QFont engravedFont(const QFont &base, const QString &text) {
-    QFont font = base;
-    font.setWeight(QFont::Bold);
-    if (isCjkText(text)) {
-        font.setPixelSize(11);
-        font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
-        font.setCapitalization(QFont::MixedCase);
-    } else {
-        font.setPixelSize(10);
-        font.setLetterSpacing(QFont::AbsoluteSpacing, 1.3);
-        font.setCapitalization(QFont::AllUppercase);
-    }
-    return font;
-}
-
-void drawEngraved(QPainter &painter, const QRectF &rect, int flags, const QString &text) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setFont(engravedFont(painter.font(), text));
-    const qreal line = hairline(painter);
-    // The ink keeps its catch of light inside `rect`: it is set one line up.
-    const QRectF ink = snapToPixels(painter, rect).adjusted(0, 0, 0, -line);
-    painter.setPen(t.engravedHighlight);
-    painter.drawText(ink.translated(0, line), flags, text);
-    painter.setPen(t.engravedInk);
-    painter.drawText(ink, flags, text);
-    painter.restore();
-}
-
-void paintKnob(QPainter &painter, const QRectF &box, double turn) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const qreal side = std::min(box.width(), box.height());
-    const qreal unit = side / 32;
-    const QPointF centre = snapCentre(painter, box.center(), side);
-    // Seven ticks from -135° to 135°, as the knob's travel runs.
-    painter.setPen(QPen(t.knobTick, std::max<qreal>(hairline(painter), unit), Qt::SolidLine, Qt::RoundCap));
-    for (int tick = 0; tick < 7; ++tick) {
-        const qreal angle = -135 + tick * 45;
-        painter.drawLine(onDial(centre, 12.5 * unit, angle), onDial(centre, 15 * unit, angle));
-    }
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(t.knobRing);
-    painter.drawEllipse(centre, 10.5 * unit, 10.5 * unit);
-    QRadialGradient face(centre, 9.5 * unit, centre + QPointF(-3, -4) * unit);
-    face.setColorAt(0, t.knobFaceLight);
-    face.setColorAt(1, t.knobFaceDark);
-    painter.setBrush(face);
-    painter.drawEllipse(centre, 9.5 * unit, 9.5 * unit);
-    painter.setPen(QPen(t.knobPointer, 1.8 * unit, Qt::SolidLine, Qt::RoundCap));
-    painter.drawLine(onDial(centre, 3 * unit, turn), onDial(centre, 8.5 * unit, turn));
-    painter.restore();
-}
-
-void paintVuMeter(QPainter &painter, const QRectF &rect, double level) {
-    const EditorTheme &t = editorTheme();
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const QRectF outer = snapToPixels(painter, rect);
-    QLinearGradient bezel(outer.topLeft(), outer.bottomLeft());
-    bezel.setColorAt(0, t.vuBezelTop);
-    bezel.setColorAt(1, t.vuBezelBottom);
-    painter.fillPath(roundedPath(outer, 6), bezel);
-    const qreal inset = std::clamp<qreal>(std::min(outer.width(), outer.height()) / 12, 2, 5);
-    const QRectF faceRect = snapToPixels(painter, outer.adjusted(inset, inset, -inset, -inset));
-    const QPainterPath face = roundedPath(faceRect, 3);
-    painter.fillPath(face, t.vuFace);
-    // Everything printed on the face, and the needle, stays on it.
-    painter.setClipPath(face, Qt::IntersectClip);
-    // The scale sweeps 50° either side of straight up from the pivot at the
-    // face's foot; its radius fits the face either way.
-    const QPointF pivot(faceRect.center().x(), faceRect.bottom() - faceRect.height() * 0.08);
-    const qreal reach = std::min(faceRect.height() * 0.78, faceRect.width() * 0.5 / std::sin(qDegreesToRadians(50.0)));
-    const auto angleAt = [](double along) { return -50.0 + 100.0 * along; };
-    const QRectF arc(pivot - QPointF(reach, reach), QSizeF(2 * reach, 2 * reach));
-    const qreal stroke = std::max<qreal>(hairline(painter), reach / 40);
-    // Qt's arcs start at 3 o'clock and run anticlockwise, in 16ths of a degree.
-    const auto arcSpan = [&](double from, double to) {
-        return std::make_pair(int((90 - angleAt(from)) * 16), int(-(angleAt(to) - angleAt(from)) * 16));
-    };
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(t.vuInk, stroke, Qt::SolidLine, Qt::FlatCap));
-    const auto [start, span] = arcSpan(0, 0.75);
-    painter.drawArc(arc, start, span);
-    painter.setPen(QPen(t.vuRedZone, stroke * 3, Qt::SolidLine, Qt::FlatCap));
-    const auto [redStart, redSpan] = arcSpan(0.75, 1);
-    painter.drawArc(arc.adjusted(-stroke, -stroke, stroke, stroke), redStart, redSpan);
-    for (int tick = 0; tick <= 10; ++tick) {
-        const bool major = tick % 5 == 0;
-        painter.setPen(QPen(tick >= 8 ? t.vuRedZone : t.vuInk, stroke, Qt::SolidLine, Qt::FlatCap));
-        painter.drawLine(onDial(pivot, reach, angleAt(tick / 10.0)),
-                         onDial(pivot, reach + reach * (major ? 0.14 : 0.08), angleAt(tick / 10.0)));
-    }
-    QFont label = painter.font();
-    label.setWeight(QFont::Bold);
-    label.setPixelSize(std::max(7, int(std::lround(reach * 0.2))));
-    painter.setFont(label);
-    painter.setPen(t.vuInk);
-    painter.drawText(QRectF(pivot.x() - reach / 2, pivot.y() - reach * 0.55, reach, reach * 0.25), Qt::AlignCenter,
-                     QStringLiteral("VU"));
-    painter.setPen(QPen(t.vuNeedle, std::max<qreal>(hairline(painter), reach / 45), Qt::SolidLine, Qt::RoundCap));
-    painter.drawLine(pivot, onDial(pivot, reach * 1.1, angleAt(std::clamp(level, 0.0, 1.0))));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(t.vuNeedle);
-    painter.drawEllipse(pivot, reach * 0.07 + 1, reach * 0.07 + 1);
-    painter.restore();
 }
 
 } // namespace kerf

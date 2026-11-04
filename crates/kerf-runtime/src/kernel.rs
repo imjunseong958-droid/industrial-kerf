@@ -11,9 +11,10 @@ use kerf_lang::{
     Speech,
 };
 use kerf_model::{
-    apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
-    MarkerColor, Mask, MaskMode, MaskShape, Media, NewClip, Op, Param, ParamType, Project, Rate,
-    Ratio, Rejected, Sequence, SequenceChange, Time, TrackChange, TrackKind, Value, VideoInfo,
+    apply, track_role, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Domain, Edge, Effect,
+    FxDef, FxKind, Id, Interp, Keyframe, MarkerChange, MarkerColor, Mask, MaskMode, MaskShape,
+    Media, NewClip, Op, Param, ParamDef, ParamType, Project, Rate, Ratio, Rejected, Sequence,
+    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange, Value, VideoInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -736,7 +737,9 @@ pub enum EditOp {
     RippleDelete {
         clips: Vec<String>,
     },
-    /// Static property or generator parameter values; `null` restores the
+    /// Property or generator parameter values: a static value, keyframes
+    /// as `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}` with
+    /// `at` counted from the clip's first frame, or `null` to restore the
     /// default. `name` renames the clip; an empty one gives it back the
     /// name of what it shows.
     Set {
@@ -751,7 +754,8 @@ pub enum EditOp {
         speed: String,
     },
     /// Add an effect to the end of the clip's stack, or at `index`, with
-    /// static parameter values; the rest stay at their defaults.
+    /// parameter values, static or keyframed; the rest stay at their
+    /// defaults.
     FxAdd {
         clip: String,
         fx: String,
@@ -760,8 +764,8 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
-    /// Turn the effect at `index` on or off, or set its parameters; `null`
-    /// restores a parameter's default.
+    /// Turn the effect at `index` on or off, or set its parameters, static
+    /// or keyframed; `null` restores a parameter's default.
     FxSet {
         clip: String,
         index: usize,
@@ -810,9 +814,17 @@ pub enum EditOp {
         clip: String,
         name: String,
     },
+    /// Place media or a generator at `at` on each of `tracks`, pushing
+    /// what follows later by `frames`.
     Insert {
-        media: String,
+        /// The media to place, from `sourceIn` (frames of the media); or
+        /// else `generator`, a generated picture such as a title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<String>,
+        #[serde(default)]
         source_in: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generator: Option<GeneratorSpec>,
         frames: i64,
         at: i64,
         tracks: Vec<String>,
@@ -820,10 +832,21 @@ pub enum EditOp {
         ids: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
+        /// `insert` or `overwrite` in place of the op's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
     },
+    /// Place media or a generator at `at` on each of `tracks` over what
+    /// is there.
     Overwrite {
-        media: String,
+        /// The media to place, from `sourceIn` (frames of the media); or
+        /// else `generator`, a generated picture such as a title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<String>,
+        #[serde(default)]
         source_in: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generator: Option<GeneratorSpec>,
         frames: i64,
         at: i64,
         tracks: Vec<String>,
@@ -831,6 +854,9 @@ pub enum EditOp {
         ids: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
+        /// `insert` or `overwrite` in place of the op's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
     },
     AddMarker {
         at: i64,
@@ -847,6 +873,23 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
     },
+    /// Move, retime, rename, recolour, or annotate the marker `marker`:
+    /// `at` is a frame offset from the sequence's first frame and `frames`
+    /// its length, as `add-marker` counts them. An empty `name`, `note`, or
+    /// `color` clears it; what is absent stays as it is.
+    SetMarker {
+        marker: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
     RemoveMarker {
         id: String,
     },
@@ -856,6 +899,11 @@ pub enum EditOp {
     Unlink {
         clips: Vec<String>,
     },
+    /// `set-track`: a track's switches, its role, and its sync lock. `role`
+    /// is one of `video`, `titles`, `dialogue`, `music`, `effects` (any
+    /// case) or other one-line text, and an empty one gives back the
+    /// kind's own; `syncLocked` false keeps ripple edits on other tracks
+    /// from moving the track.
     SetTrack {
         track: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -866,6 +914,10 @@ pub enum EditOp {
         locked: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         muted: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sync_locked: Option<bool>,
     },
     /// An empty track after the others of its kind (`video`, `audio`, or
     /// `subtitle`), with a generated id unless `id` names it.
@@ -878,13 +930,91 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
     },
-    /// The frame size of a sequence.
+    /// A sequence's name, frame size, frame rate, and start timecode;
+    /// what is absent stays as it is. `width` and `height` go together.
+    /// `rate` (`{"num": 30, "den": 1}`, or text such as `"29.97"`) changes
+    /// only while the sequence has no clips or markers, and the start
+    /// keeps its timecode at the new rate. `start` is timecode text, with
+    /// `;` before the frames for drop-frame.
     SetSequence {
-        width: u32,
-        height: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rate: Option<RateSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
     },
+}
+
+/// Why `set-sequence` refuses a new frame rate for a sequence with content.
+pub const RATE_NEEDS_EMPTY: &str = "Frame rate can change only while the sequence is empty";
+
+/// A generated picture for `insert` and `overwrite`: a generator of the
+/// catalog (`title`, `solid`, `adjustment`) and its parameter values,
+/// static or keyframed as `set` takes them; the rest stay at their
+/// defaults.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GeneratorSpec {
+    pub fx: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, Json>,
+}
+
+impl GeneratorSpec {
+    /// The clip content it makes; keyframes count frames of `rate`.
+    fn content(&self, rate: Rate) -> Result<Content, RuntimeError> {
+        let def = catalog()
+            .fx(&self.fx)
+            .ok_or_else(|| invalid(format!("no generator `{}`", self.fx)))?;
+        if def.kind != FxKind::Generator {
+            return Err(invalid(format!(
+                "`{}` is {} {}, not a generator",
+                self.fx,
+                if def.kind == FxKind::Effect {
+                    "an"
+                } else {
+                    "a"
+                },
+                def.kind.name()
+            )));
+        }
+        let params = fx_params(def, &self.params, Some(rate))?
+            .into_iter()
+            .filter_map(|(name, param)| param.map(|param| (name, param)))
+            .collect();
+        Ok(Content::Generator {
+            fx: def.id.clone(),
+            version: def.version,
+            params,
+        })
+    }
+}
+
+/// A frame rate as the editor gives one: `{"num": 30000, "den": 1001}`,
+/// text the language reads (`"29.97"`, `"24000/1001"`), or a number.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RateSpec {
+    Fraction { num: u32, den: u32 },
+    Text(String),
+    Fps(f64),
+}
+
+impl RateSpec {
+    pub fn rate(&self) -> Result<Rate, RuntimeError> {
+        match self {
+            Self::Fraction { num, den } => Rate::new(*num, *den),
+            Self::Text(text) => Rate::parse(text.trim()),
+            Self::Fps(fps) => Rate::from_fps(*fps),
+        }
+        .map_err(|error| invalid(format!("frame rate: {error}")))
+    }
 }
 
 /// A mask's outline, as the language writes it: at most one of `rect`
@@ -938,8 +1068,10 @@ fn mask_mode(mode: &Option<String>) -> Result<Option<MaskMode>, RuntimeError> {
 }
 
 /// A mask's properties from JSON, as `fx_params` reads an effect's.
+/// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn mask_params(
     params: &BTreeMap<String, Json>,
+    rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
         .iter()
@@ -947,13 +1079,7 @@ fn mask_params(
             let def = catalog()
                 .mask_prop(name)
                 .ok_or_else(|| invalid(format!("a mask has no property `{name}`")))?;
-            let value = match value {
-                Json::Null => None,
-                value => Some(Param::Static(json_value(&def.ty, value).ok_or_else(
-                    || invalid(format!("`{name}` expects a {}", def.ty.name())),
-                )?)),
-            };
-            Ok((name.clone(), value))
+            Ok((name.clone(), param_value(name, def, value, rate)?))
         })
         .collect()
 }
@@ -997,12 +1123,12 @@ pub(crate) fn lower_ops(project: &Project, ops: &[EditOp]) -> Result<Vec<Op>, Ru
 }
 
 fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
-    let clip_rate = |clip: &str| {
+    let rate_of = |clip: &str| {
         project
             .locate(clip)
             .map(|at| project.sequences[at.sequence].rate)
-            .ok_or_else(|| invalid(format!("no clip `{clip}`")))
     };
+    let clip_rate = |clip: &str| rate_of(clip).ok_or_else(|| invalid(format!("no clip `{clip}`")));
     let sequence = |id: &Option<String>| match id {
         Some(id) => project
             .sequence(id)
@@ -1076,13 +1202,14 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 .locate(clip)
                 .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
             let target = project.clip_at(at);
+            let rate = project.sequences[at.sequence].rate;
             let domain = project.sequences[at.sequence].tracks[at.track]
                 .kind
                 .domain();
             let mut changes = Vec::new();
             for (name, value) in props {
-                let def = domain
-                    .and_then(|domain| catalog().prop(domain, name))
+                let prop = domain.and_then(|domain| catalog().prop(domain, name));
+                let def = prop
                     .or_else(|| match &target.content {
                         Content::Generator { fx, .. } => {
                             catalog().fx(fx.as_str()).and_then(|def| def.find(name))
@@ -1090,12 +1217,10 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                         _ => None,
                     })
                     .ok_or_else(|| invalid(format!("clip `{clip}` has no property `{name}`")))?;
-                let param = match value {
-                    Json::Null => None,
-                    value => Some(Param::Static(json_value(&def.ty, value).ok_or_else(
-                        || invalid(format!("`{name}` expects a {}", def.ty.name())),
-                    )?)),
-                };
+                let param = param_value(name, def, value, Some(rate))?;
+                if prop.is_some() && domain == Some(Domain::Audio) {
+                    sound_keyframes(None, name, param.as_ref())?;
+                }
                 changes.push(ClipChange::Param(name.clone(), param));
             }
             if let Some(name) = name {
@@ -1122,7 +1247,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             let def = catalog()
                 .fx(fx)
                 .ok_or_else(|| invalid(format!("no effect `{fx}`")))?;
-            let params = fx_params(def, params)?
+            let params = fx_params(def, params, rate_of(clip))?
                 .into_iter()
                 .filter_map(|(name, param)| param.map(|param| (name, param)))
                 .collect();
@@ -1154,7 +1279,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 clip: edit_id(clip)?,
                 index: *index,
                 enabled: *enabled,
-                params: fx_params(def, params)?,
+                params: fx_params(def, params, rate_of(clip))?,
             }
         }
         EditOp::FxRemove { clip, index } => Op::FxRemove {
@@ -1185,7 +1310,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                     shape,
                     mode: mask_mode(mode)?.unwrap_or_default(),
                     inverted: inverted.unwrap_or(false),
-                    params: mask_params(params)?
+                    params: mask_params(params, rate_of(clip))?
                         .into_iter()
                         .filter_map(|(name, param)| param.map(|param| (name, param)))
                         .collect(),
@@ -1206,7 +1331,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             shape: outline.shape()?,
             mode: mask_mode(mode)?,
             inverted: *inverted,
-            params: mask_params(params)?,
+            params: mask_params(params, rate_of(clip))?,
         },
         EditOp::MaskRemove { clip, name } => Op::MaskRemove {
             clip: edit_id(clip)?,
@@ -1215,32 +1340,60 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::Insert {
             media,
             source_in,
+            generator,
             frames,
             at,
             tracks,
             ids,
             sequence: id,
+            mode,
         }
         | EditOp::Overwrite {
             media,
             source_in,
+            generator,
             frames,
             at,
             tracks,
             ids,
             sequence: id,
+            mode,
         } => {
             let sequence = sequence(id)?;
-            let found = project
-                .media(media)
-                .ok_or_else(|| invalid(format!("no media `{media}`")))?;
             if ids.len() > tracks.len() {
                 return Err(invalid("give at most one id per track"));
             }
-            let content = Content::Media {
-                media: found.id.clone(),
-                source_in: found.rate.time_of(*source_in),
-                speed: Ratio::ONE,
+            let content = match (media, generator) {
+                (Some(media), None) => {
+                    let found = project
+                        .media(media)
+                        .ok_or_else(|| invalid(format!("no media `{media}`")))?;
+                    Content::Media {
+                        media: found.id.clone(),
+                        source_in: found.rate.time_of(*source_in),
+                        speed: Ratio::ONE,
+                    }
+                }
+                (None, Some(generator)) => {
+                    if *source_in != 0 {
+                        return Err(invalid("a generator has no source in point"));
+                    }
+                    generator.content(sequence.rate)?
+                }
+                (Some(_), Some(_)) => {
+                    return Err(invalid("place media or a generator, not both"));
+                }
+                (None, None) => return Err(invalid("give the media or the generator to place")),
+            };
+            let overwrite = match mode.as_deref().map(str::trim) {
+                None => matches!(op, EditOp::Overwrite { .. }),
+                Some("insert") => false,
+                Some("overwrite") => true,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "`{other}` is not an edit mode; use insert or overwrite"
+                    )))
+                }
             };
             let mut targets = Vec::new();
             for (index, track) in tracks.iter().enumerate() {
@@ -1249,7 +1402,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 targets.push((edit_id(track)?, clip));
             }
             let (at, duration) = (sequence.rate.time_of(*at), sequence.rate.time_of(*frames));
-            if matches!(op, EditOp::Insert { .. }) {
+            if !overwrite {
                 Op::Insert {
                     sequence: sequence.id.clone(),
                     at,
@@ -1291,6 +1444,44 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 note: note.clone(),
             }
         }
+        EditOp::SetMarker {
+            marker,
+            at,
+            frames,
+            name,
+            note,
+            color,
+        } => {
+            let sequence = project
+                .sequences
+                .iter()
+                .find(|sequence| sequence.marker(marker).is_some())
+                .ok_or_else(|| invalid(format!("no marker `{marker}`")))?;
+            // Blank text clears; absent text leaves what is there.
+            let text = |text: &Option<String>| {
+                text.as_ref()
+                    .map(|text| (!text.trim().is_empty()).then(|| text.clone()))
+            };
+            let color = match color.as_deref().map(str::trim) {
+                None => None,
+                Some("") => Some(None),
+                Some(color) => {
+                    Some(Some(MarkerColor::parse(color).ok_or_else(|| {
+                        invalid(format!("`{color}` is not a marker color"))
+                    })?))
+                }
+            };
+            Op::SetMarker {
+                id: edit_id(marker)?,
+                change: MarkerChange {
+                    at: at.map(|at| sequence.rate.time_of(at)),
+                    duration: frames.map(|frames| sequence.rate.time_of(frames)),
+                    name: text(name),
+                    color,
+                    note: text(note),
+                },
+            }
+        }
         EditOp::RemoveMarker { id } => Op::RemoveMarker { id: edit_id(id)? },
         EditOp::Link { clips } => Op::Link {
             clips: edit_ids(clips)?,
@@ -1305,16 +1496,42 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             enabled,
             locked,
             muted,
-        } => Op::SetTrack {
-            sequence: sequence(id)?.id.clone(),
-            track: edit_id(track)?,
-            change: TrackChange {
+            role,
+            sync_locked,
+        } => {
+            let (sequence, track) = (sequence(id)?.id.clone(), edit_id(track)?);
+            let switches = TrackChange {
                 name: None,
                 enabled: *enabled,
                 locked: *locked,
                 muted: *muted,
-            },
-        },
+            };
+            let roles = TrackRoleChange {
+                role: role
+                    .as_deref()
+                    .map(|role| track_role(role).map_err(invalid))
+                    .transpose()?,
+                sync_locked: *sync_locked,
+            };
+            let mut ops = Vec::new();
+            // An op that names nothing to change still names the track,
+            // which must exist, as `set-track` always has.
+            if switches != TrackChange::default() || roles == TrackRoleChange::default() {
+                ops.push(Op::SetTrack {
+                    sequence: sequence.clone(),
+                    track: track.clone(),
+                    change: switches,
+                });
+            }
+            if roles != TrackRoleChange::default() {
+                ops.push(Op::SetTrackRole {
+                    sequence,
+                    track,
+                    change: roles,
+                });
+            }
+            return Ok(ops);
+        }
         EditOp::AddTrack {
             kind,
             id,
@@ -1349,22 +1566,62 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::SetSequence {
             width,
             height,
+            name,
+            rate,
+            start,
             sequence: id,
-        } => Op::SetSequence {
-            sequence: sequence(id)?.id.clone(),
-            change: SequenceChange {
-                size: Some((*width, *height)),
-                ..SequenceChange::default()
-            },
-        },
+        } => {
+            let target = sequence(id)?;
+            let size = match (width, height) {
+                (Some(width), Some(height)) => Some((*width, *height)),
+                (None, None) => None,
+                _ => return Err(invalid("give the width and the height together")),
+            };
+            let rate = rate
+                .as_ref()
+                .map(RateSpec::rate)
+                .transpose()?
+                .filter(|rate| *rate != target.rate);
+            let empty = target.tracks.iter().all(|track| track.clips.is_empty())
+                && target.markers.is_empty();
+            if rate.is_some() && !empty {
+                return Err(invalid(RATE_NEEDS_EMPTY));
+            }
+            let name = name
+                .as_deref()
+                .map(|name| match name.trim() {
+                    "" => Err(invalid("a sequence needs a name")),
+                    name => Ok(name.to_owned()),
+                })
+                .transpose()?;
+            let start = start
+                .as_deref()
+                .map(|text| {
+                    kerf_model::time::parse_timecode(text.trim(), rate.unwrap_or(target.rate))
+                        .map_err(|error| invalid(format!("start timecode: {error}")))
+                })
+                .transpose()?;
+            Op::SetSequence {
+                sequence: target.id.clone(),
+                change: SequenceChange {
+                    name,
+                    rate,
+                    size,
+                    sample_rate: None,
+                    start,
+                },
+            }
+        }
     }])
 }
 
-/// An effect's parameters from JSON: a static value each, or `None` (for
-/// `null`) to restore the default.
+/// An effect's parameters from JSON: a static value or keyframes each (see
+/// `json_param`), or `None` (for `null`) to restore the default.
+/// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn fx_params(
     def: &FxDef,
     params: &BTreeMap<String, Json>,
+    rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
         .iter()
@@ -1372,15 +1629,132 @@ fn fx_params(
             let param = def
                 .find(name)
                 .ok_or_else(|| invalid(format!("`{}` has no parameter `{name}`", def.id)))?;
-            let value = match value {
-                Json::Null => None,
-                value => Some(Param::Static(json_value(&param.ty, value).ok_or_else(
-                    || invalid(format!("`{name}` expects a {}", param.ty.name())),
-                )?)),
-            };
+            let value = param_value(name, param, value, rate)?;
+            if def.domain == Domain::Audio {
+                sound_keyframes(Some(def.id.as_str()), name, value.as_ref())?;
+            }
             Ok((name.clone(), value))
         })
         .collect()
+}
+
+/// A property or parameter value a typed op gives: `None` for `null`, which
+/// restores the default, else a static value or keyframes. `rate` is the
+/// rate of the clip's sequence, or `None` when there is no such clip.
+fn param_value(
+    name: &str,
+    def: &ParamDef,
+    value: &Json,
+    rate: Option<Rate>,
+) -> Result<Option<Param>, RuntimeError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let keyed = value.get("keys").is_some();
+    if keyed && !def.animatable {
+        return Err(invalid(format!("`{name}` cannot be animated")));
+    }
+    let param = match rate {
+        Some(rate) => json_param(&def.ty, value, rate),
+        None if keyed => return Err(invalid("keyframes need a clip to count frames on")),
+        None => json_value(&def.ty, value).map(Param::Static),
+    };
+    param.map(Some).ok_or_else(|| {
+        invalid(if keyed {
+            format!(
+                "`{name}` keyframes are {{\"keys\": [{{\"at\": <frame>, \"value\": <{}>, \
+                 \"interp\": {}}}]}}, at least one, at whole frames",
+                def.ty.name(),
+                Interp::ALL.map(Interp::name).join("|"),
+            )
+        } else {
+            format!("`{name}` expects a {}", def.ty.name())
+        })
+    })
+}
+
+/// Refuse keyframes on sound that playback and renders cannot follow. The
+/// program (kerf-core) lowers keyframed clip gain to a volume expression;
+/// it refuses keyframed pan and keyframed sound-effect parameters, so an
+/// edit that makes them is refused here, with the reason, before it lands.
+fn sound_keyframes(
+    fx: Option<&str>,
+    name: &str,
+    param: Option<&Param>,
+) -> Result<(), RuntimeError> {
+    if !matches!(param, Some(Param::Animated(_))) {
+        return Ok(());
+    }
+    match fx {
+        None if name == "gain" => Ok(()),
+        None => Err(invalid(format!(
+            "`{name}` cannot be animated on sound: playback and renders follow keyframes on \
+             gain only"
+        ))),
+        Some(fx) => Err(invalid(format!(
+            "`{fx}` {name} cannot be animated: playback and renders do not follow keyframes on \
+             sound effects"
+        ))),
+    }
+}
+
+/// The largest keyframe offset a typed op takes, in frames: well past any
+/// clip, and far inside what a time holds.
+const MAX_KEY_FRAMES: i64 = 1 << 30;
+
+/// A parameter from JSON of type `ty`: a static value, or keyframes as
+/// `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}`. `at` counts
+/// whole frames of `rate` (the clip's sequence) from the clip's first frame,
+/// as the model keeps keyframes clip-relative; `interp` is `linear` (the
+/// default), `hold`, `ease`, `ease-in` or `ease-out`, and says how the value
+/// moves toward the next key. Keys are put in time order; two at one frame
+/// are refused when the edit is checked. `None` for anything else.
+pub(crate) fn json_param(ty: &ParamType, value: &Json, rate: Rate) -> Option<Param> {
+    let Some(keys) = value.as_object().and_then(|object| object.get("keys")) else {
+        return json_value(ty, value).map(Param::Static);
+    };
+    if value.as_object().is_some_and(|object| object.len() != 1) {
+        return None;
+    }
+    let mut keys = keys
+        .as_array()?
+        .iter()
+        .map(|key| {
+            let key = key.as_object()?;
+            let at = key.get("at").and_then(whole_frames)?;
+            let value = json_value(ty, key.get("value")?)?;
+            let interp = match key.get("interp") {
+                None | Some(Json::Null) => Interp::Linear,
+                Some(Json::String(name)) => Interp::parse(name)?,
+                Some(_) => return None,
+            };
+            Some(Keyframe {
+                at: rate.time_of(at),
+                value,
+                interp,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_by_key(|key| key.at);
+    Some(Param::Animated(keys))
+}
+
+/// A whole number of frames, within [`MAX_KEY_FRAMES`] either way.
+fn whole_frames(value: &Json) -> Option<i64> {
+    let frames = match value.as_i64() {
+        Some(frames) => frames,
+        None => {
+            let frames = value.as_f64()?;
+            if frames.fract() != 0.0 || frames.abs() > MAX_KEY_FRAMES as f64 {
+                return None;
+            }
+            frames as i64
+        }
+    };
+    (frames.abs() <= MAX_KEY_FRAMES).then_some(frames)
 }
 
 fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
@@ -1406,7 +1780,290 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::time::Duration;
+
+    /// A 24 fps sequence: c1 on V1 (0–4 s), V2 empty, and an empty
+    /// second sequence `empty` starting at 01:00:00:00.
+    fn project() -> Project {
+        parse(
+            "kerf 1\nproject name=\"Ops\"\n\n\
+             media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080\n\n\
+             sequence s1 name=\"Main\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00\n\
+             \x20 track V2 video\n\
+             \x20 track A1 audio\n\n\
+             sequence empty name=\"Empty\" rate=24 size=1080x1920 audio=48000 start=01:00:00:00\n\
+             \x20 track V1 video\n",
+        )
+        .unwrap()
+    }
+
+    /// The editor's ops as the bridge reads them, lowered on `project`.
+    fn lowered(project: &Project, ops: Json) -> Result<Vec<Op>, RuntimeError> {
+        let ops: Vec<EditOp> = serde_json::from_value(ops).unwrap();
+        lower_ops(project, &ops)
+    }
+
+    fn refusal(project: &Project, ops: Json) -> String {
+        let error = lowered(project, ops).unwrap_err();
+        assert_eq!(error.code, "INVALID_EDIT", "{}", error.message);
+        error.message
+    }
+
+    #[test]
+    fn a_generator_insert_reads_as_the_editor_writes_it_and_places_a_title() {
+        let project = project();
+        let json = json!({"op": "insert", "generator": {"fx": "title", "params": {"text": "Day One"}},
+                          "at": 24, "frames": 48, "tracks": ["V2"]});
+        let op: EditOp = serde_json::from_value(json.clone()).unwrap();
+        let EditOp::Insert {
+            media: None,
+            generator: Some(generator),
+            source_in: 0,
+            mode: None,
+            ..
+        } = &op
+        else {
+            panic!("a generator insert, got {op:?}");
+        };
+        assert_eq!(generator.fx, "title");
+        // It writes back as it was read.
+        assert_eq!(serde_json::to_value(&op).unwrap(), {
+            let mut written = json.clone();
+            written["sourceIn"] = json!(0);
+            written
+        });
+        let ops = lowered(&project, json!([json])).unwrap();
+        let [Op::Insert {
+            at,
+            duration,
+            targets,
+            ..
+        }] = ops.as_slice()
+        else {
+            panic!("an insert, got {ops:?}");
+        };
+        assert_eq!(
+            (*at, *duration),
+            (Rate::FPS_24.time_of(24), Rate::FPS_24.time_of(48))
+        );
+        let [(track, clip)] = targets.as_slice() else {
+            panic!("one target");
+        };
+        assert_eq!(track.as_str(), "V2");
+        let Content::Generator {
+            fx,
+            version,
+            params,
+        } = &clip.content
+        else {
+            panic!("generator content, got {:?}", clip.content);
+        };
+        assert_eq!((fx.as_str(), *version), ("title", 1));
+        assert_eq!(params["text"], Param::Static(Value::Text("Day One".into())));
+        // A solid with no parameters keeps its defaults; overwrite and
+        // `mode` place it over what is there.
+        for json in [
+            json!({"op": "overwrite", "generator": {"fx": "solid"}, "at": 0, "frames": 24, "tracks": ["V1"]}),
+            json!({"op": "insert", "mode": "overwrite", "generator": {"fx": "solid"}, "at": 0,
+                   "frames": 24, "tracks": ["V1"]}),
+        ] {
+            let ops = lowered(&project, json!([json])).unwrap();
+            let [Op::Overwrite { targets, .. }] = ops.as_slice() else {
+                panic!("an overwrite, got {ops:?}");
+            };
+            assert!(
+                matches!(&targets[0].1.content, Content::Generator { fx, params, .. }
+                if fx.as_str() == "solid" && params.is_empty())
+            );
+        }
+        // Colours are text, as the Inspector writes them.
+        let ops = lowered(
+            &project,
+            json!([{"op": "insert", "generator": {"fx": "solid", "params": {"color": "#ff0000"}},
+                    "at": 0, "frames": 25, "tracks": ["V2"]}]),
+        )
+        .unwrap();
+        let [Op::Insert { targets, .. }] = ops.as_slice() else {
+            panic!("an insert, got {ops:?}");
+        };
+        assert!(
+            matches!(&targets[0].1.content, Content::Generator { params, .. }
+            if params.contains_key("color"))
+        );
+        let ops = lowered(
+            &project,
+            json!([{"op": "overwrite", "mode": "insert", "generator": {"fx": "title"}, "at": 0,
+                    "frames": 24, "tracks": ["V2"]}]),
+        )
+        .unwrap();
+        assert!(matches!(ops.as_slice(), [Op::Insert { .. }]));
+    }
+
+    #[test]
+    fn generator_inserts_that_cannot_be_made_say_why() {
+        let project = project();
+        let place = |extra: Json| {
+            let mut op = json!({"op": "insert", "at": 0, "frames": 24, "tracks": ["V2"]});
+            op.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            json!([op])
+        };
+        assert_eq!(
+            refusal(&project, place(json!({"generator": {"fx": "sparkle"}}))),
+            "no generator `sparkle`"
+        );
+        assert_eq!(
+            refusal(
+                &project,
+                place(json!({"generator": {"fx": "blur.gaussian"}}))
+            ),
+            "`blur.gaussian` is an effect, not a generator"
+        );
+        assert!(refusal(
+            &project,
+            place(json!({"generator": {"fx": "title", "params": {"glow": 1}}}))
+        )
+        .contains("glow"));
+        assert_eq!(
+            refusal(
+                &project,
+                place(json!({"media": "m1", "generator": {"fx": "title"}}))
+            ),
+            "place media or a generator, not both"
+        );
+        assert_eq!(
+            refusal(&project, place(json!({}))),
+            "give the media or the generator to place"
+        );
+        assert_eq!(
+            refusal(
+                &project,
+                place(json!({"sourceIn": 12, "generator": {"fx": "title"}}))
+            ),
+            "a generator has no source in point"
+        );
+        assert_eq!(
+            refusal(
+                &project,
+                place(json!({"mode": "replace", "generator": {"fx": "title"}}))
+            ),
+            "`replace` is not an edit mode; use insert or overwrite"
+        );
+        // A title on a sound track is refused by the kernel.
+        let ops: Vec<EditOp> = serde_json::from_value(json!([{"op": "insert",
+            "generator": {"fx": "title"}, "at": 0, "frames": 24, "tracks": ["A1"]}]))
+        .unwrap();
+        assert!(lower_ops(&project, &ops).is_err());
+    }
+
+    #[test]
+    fn set_sequence_changes_the_rate_only_while_the_sequence_is_empty() {
+        let project = project();
+        // With a clip in it, the rate stays; the same rate is no change.
+        assert_eq!(
+            refusal(
+                &project,
+                json!([{"op": "set-sequence", "rate": {"num": 30, "den": 1}}])
+            ),
+            RATE_NEEDS_EMPTY
+        );
+        assert_eq!(
+            RATE_NEEDS_EMPTY,
+            "Frame rate can change only while the sequence is empty"
+        );
+        let same = lowered(
+            &project,
+            json!([{"op": "set-sequence", "rate": {"num": 24, "den": 1}, "name": "Cut"}]),
+        )
+        .unwrap();
+        assert!(matches!(&same[..], [Op::SetSequence { change, .. }]
+            if change.rate.is_none() && change.name.as_deref() == Some("Cut")));
+        // Clips placed earlier in the same edit count.
+        assert_eq!(
+            refusal(
+                &project,
+                json!([
+                    {"op": "insert", "generator": {"fx": "title"}, "at": 0, "frames": 24,
+                     "tracks": ["V1"], "sequence": "empty"},
+                    {"op": "set-sequence", "rate": "30", "sequence": "empty"}
+                ])
+            ),
+            RATE_NEEDS_EMPTY
+        );
+        // Empty, it takes any spelling of a rate, and the start keeps its
+        // timecode.
+        for (rate, expected) in [
+            (json!({"num": 30000, "den": 1001}), Rate::FPS_29_97),
+            (json!("25"), Rate::FPS_25),
+            (json!(23.976), Rate::FPS_23_976),
+        ] {
+            let ops = lowered(
+                &project,
+                json!([{"op": "set-sequence", "sequence": "empty", "rate": rate}]),
+            )
+            .unwrap();
+            assert!(matches!(&ops[..], [Op::SetSequence { change, .. }]
+                if change.rate == Some(expected) && change.start.is_none()));
+            let (next, _) = apply(&project, catalog(), &ops).unwrap();
+            let sequence = next.sequence("empty").unwrap();
+            assert_eq!(sequence.rate, expected);
+            assert_eq!(
+                kerf_model::time::format_timecode(sequence.start, expected, false),
+                "01:00:00:00"
+            );
+        }
+        assert!(refusal(
+            &project,
+            json!([{"op": "set-sequence", "sequence": "empty", "rate": {"num": 0, "den": 1}}])
+        )
+        .starts_with("frame rate:"));
+    }
+
+    #[test]
+    fn set_sequence_keeps_name_size_and_start_and_checks_them() {
+        let project = project();
+        let ops = lowered(
+            &project,
+            json!([{"op": "set-sequence", "sequence": "empty", "name": "  Vertical  ",
+                    "width": 1080, "height": 1350, "rate": {"num": 30, "den": 1},
+                    "start": "00:59:58:00"}]),
+        )
+        .unwrap();
+        let (next, _) = apply(&project, catalog(), &ops).unwrap();
+        let sequence = next.sequence("empty").unwrap();
+        assert_eq!(sequence.name, "Vertical");
+        assert_eq!((sequence.width, sequence.height), (1080, 1350));
+        assert_eq!(sequence.rate, Rate::FPS_30);
+        assert_eq!(sequence.start, Rate::FPS_30.time_of((3600 - 2) * 30));
+        // The language writes what the op did.
+        let script = print_ops(&project, catalog(), &ops);
+        assert!(script.contains("name=\"Vertical\""), "{script}");
+        assert!(script.contains("rate=30"), "{script}");
+        assert!(script.contains("size=1080x1350"), "{script}");
+        assert!(script.contains("start=00:59:58:00"), "{script}");
+        assert_eq!(
+            refusal(&project, json!([{"op": "set-sequence", "width": 1080}])),
+            "give the width and the height together"
+        );
+        assert_eq!(
+            refusal(&project, json!([{"op": "set-sequence", "name": " "}])),
+            "a sequence needs a name"
+        );
+        assert!(
+            refusal(&project, json!([{"op": "set-sequence", "start": "1:00"}]))
+                .starts_with("start timecode:")
+        );
+        // A drop-frame start needs a rate that has drop-frame.
+        assert!(refusal(
+            &project,
+            json!([{"op": "set-sequence", "start": "00:00:00;00"}])
+        )
+        .starts_with("start timecode:"));
+    }
 
     fn running(directory: &Path) -> usize {
         background_state()

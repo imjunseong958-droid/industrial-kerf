@@ -10,7 +10,10 @@
 //! per snapshot, keyed by track type, and `generators` the parameter
 //! definitions of each generator. Each clip's `props` holds only the
 //! properties and generator parameters it sets: a static value, or a keyframe
-//! list when animated. Anything absent is at its default. Its `effects` list
+//! list when animated, each key with its clip-relative `at` in seconds, the
+//! same offset as a whole `frame` on the sequence rate (what a typed op's
+//! `{"keys": [...]}` takes back), its `value` and its `interp`. Anything
+//! absent is at its default. Its `effects` list
 //! the effect stack in order, each with the parameters it sets the same way;
 //! their definitions are [`fx_catalog_json`]. Its `masks` list a picture
 //! clip's masks in order: each one's outline as the language writes it
@@ -18,7 +21,10 @@
 //! the properties it sets, which `maskProperties` defines; `maskModes` lists
 //! the modes. The sequence's `dropFrame` and `sampleRate`, and each
 //! source's `channels` and `sampleRate`, describe the formats an inspector
-//! shows.
+//! shows. Each track carries its `role` (the one it was given, or its kind's:
+//! `video` for picture, `dialogue` for sound, none for subtitles),
+//! `roleAssigned` (whether it was given one), and `syncLocked` (whether ripple
+//! edits on other tracks move it).
 
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Param, ParamDef, ParamType,
@@ -49,7 +55,16 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             source
         }).collect::<Vec<_>>(),
         "sequences": project.sequences.iter().map(|sequence| {
-            json!({"id": sequence.id.as_str(), "name": sequence.name})
+            json!({
+                "id": sequence.id.as_str(),
+                "name": sequence.name,
+                "width": sequence.width,
+                "height": sequence.height,
+                "rate": sequence.rate.to_string(),
+                "fps": sequence.rate.fps(),
+                "dropFrame": sequence.drop_frame,
+                "duration": sequence.duration().seconds(),
+            })
         }).collect::<Vec<_>>(),
         "properties": properties_json(),
         "maskProperties": Catalog::builtin().mask_props().iter().map(param_def_json).collect::<Vec<_>>(),
@@ -130,6 +145,9 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
         "enabled": track.enabled,
         "locked": track.locked,
         "muted": track.muted,
+        "role": track.role_or_default(),
+        "roleAssigned": track.role.is_some(),
+        "syncLocked": track.sync_locked,
         "clips": track.clips.iter().map(|clip| clip_json(project, rate, clip)).collect::<Vec<_>>(),
         "transitions": track.transitions.iter().map(|transition| {
             let cut = track.clip(transition.from.as_str()).map_or(Time::ZERO, Clip::end);
@@ -222,7 +240,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         .props
         .iter()
         .chain(params.into_iter().flatten())
-        .map(|(name, param)| (name.clone(), param_json(param)))
+        .map(|(name, param)| (name.clone(), param_json(param, rate)))
         .collect();
     if !props.is_empty() {
         object.insert("props".into(), Json::Object(props));
@@ -236,7 +254,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                     let params: Map<String, Json> = effect
                         .params
                         .iter()
-                        .map(|(name, param)| (name.clone(), param_json(param)))
+                        .map(|(name, param)| (name.clone(), param_json(param, rate)))
                         .collect();
                     json!({
                         "fx": effect.fx.as_str(),
@@ -250,12 +268,18 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         );
     }
     if !clip.masks.is_empty() {
-        object.insert("masks".into(), clip.masks.iter().map(mask_json).collect());
+        object.insert(
+            "masks".into(),
+            clip.masks
+                .iter()
+                .map(|mask| mask_json(mask, rate))
+                .collect(),
+        );
     }
     value
 }
 
-fn mask_json(mask: &Mask) -> Json {
+fn mask_json(mask: &Mask, rate: Rate) -> Json {
     let mut value = json!({
         "name": mask.name.as_str(),
         "mode": mask.mode.name(),
@@ -263,7 +287,7 @@ fn mask_json(mask: &Mask) -> Json {
         "params": mask
             .params
             .iter()
-            .map(|(name, param)| (name.clone(), param_json(param)))
+            .map(|(name, param)| (name.clone(), param_json(param, rate)))
             .collect::<Map<String, Json>>(),
     });
     match &mask.shape {
@@ -284,23 +308,42 @@ pub fn fx_catalog_json() -> Json {
     let entries: Vec<Json> = Catalog::builtin()
         .all()
         .filter(|fx| fx.domain == Domain::Video && fx.kind != FxKind::Generator)
-        .map(|fx| {
-            let name = fx
-                .doc
-                .split_once(": ")
-                .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
-            json!({
-                "id": fx.id.as_str(),
-                "kind": fx.kind.name(),
-                "category": fx.category,
-                "name": name,
-                "doc": fx.doc,
-                "engine": fx.engine.name(),
-                "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
-            })
-        })
+        .map(fx_entry_json)
         .collect();
     Json::Array(entries)
+}
+
+/// The whole catalog in the shape of [`fx_catalog_json`]: picture and
+/// sound effects, transitions, and generators (titles and other pictures a
+/// clip makes on its own, `kind` `generator`), each with its `domain`
+/// (`video` or `audio`).
+pub fn fx_catalog_all_json() -> Json {
+    Json::Array(
+        Catalog::builtin()
+            .all()
+            .map(|fx| {
+                let mut entry = fx_entry_json(fx);
+                entry["domain"] = json!(fx.domain.name());
+                entry
+            })
+            .collect(),
+    )
+}
+
+fn fx_entry_json(fx: &kerf_model::FxDef) -> Json {
+    let name = fx
+        .doc
+        .split_once(": ")
+        .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
+    json!({
+        "id": fx.id.as_str(),
+        "kind": fx.kind.name(),
+        "category": fx.category,
+        "name": name,
+        "doc": fx.doc,
+        "engine": fx.engine.name(),
+        "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
+    })
 }
 
 fn param_def_json(def: &ParamDef) -> Json {
@@ -328,7 +371,7 @@ fn param_def_json(def: &ParamDef) -> Json {
     value
 }
 
-fn param_json(param: &Param) -> Json {
+fn param_json(param: &Param, rate: Rate) -> Json {
     match param {
         Param::Static(value) => value_json(value),
         Param::Animated(keys) => keys
@@ -336,6 +379,7 @@ fn param_json(param: &Param) -> Json {
             .map(|key| {
                 json!({
                     "at": key.at.seconds(),
+                    "frame": frames(rate, key.at),
                     "value": value_json(&key.value),
                     "interp": key.interp.name(),
                 })
@@ -356,6 +400,51 @@ fn value_json(value: &Value) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_sequence_is_listed_with_its_format() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\n\
+             sequence s1 name=\"Main\" rate=25 size=1920x1080 audio=48000\n\
+             sequence vertical name=\"Vertical cut\" rate=29.97 size=1080x1920 audio=48000\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_json(&project);
+        let sequences = value["sequences"].as_array().unwrap();
+        assert_eq!(sequences.len(), 2);
+        assert_eq!(sequences[0]["id"], "s1");
+        assert_eq!(sequences[0]["name"], "Main");
+        assert_eq!(sequences[0]["width"], 1920);
+        assert_eq!(sequences[0]["rate"], "25");
+        assert_eq!(sequences[0]["fps"], 25.0);
+        assert_eq!(sequences[1]["id"], "vertical");
+        assert_eq!(sequences[1]["width"], 1080);
+        assert_eq!(sequences[1]["height"], 1920);
+        assert_eq!(sequences[1]["duration"], 0.0);
+    }
+
+    #[test]
+    fn the_whole_catalog_holds_generators_and_sound_effects() {
+        let all = fx_catalog_all_json();
+        let all = all.as_array().unwrap();
+        let picture = fx_catalog_json();
+        assert!(all.len() > picture.as_array().unwrap().len());
+        assert!(all
+            .iter()
+            .any(|fx| fx["id"] == "title" && fx["kind"] == "generator" && fx["domain"] == "video"));
+        assert!(all.iter().any(|fx| fx["domain"] == "audio"));
+        assert!(all
+            .iter()
+            .all(|fx| fx["params"].is_array() && fx["name"].is_string()));
+        // The picture catalog is as it was: no generators, no domain field.
+        assert!(picture
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|fx| fx["kind"] != "generator" && fx.get("domain").is_none()));
+    }
 
     #[test]
     fn clips_keep_their_own_spans_beside_transitions() {
