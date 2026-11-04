@@ -9,6 +9,9 @@ set(CMAKE_AUTOUIC ON)
 if(MSVC)
     # The sources are UTF-8; MSVC otherwise reads them in the system code page.
     add_compile_options(/utf-8)
+    # MSBuild's --parallel only runs projects side by side; /MP is what makes
+    # cl compile a project's source files in parallel.
+    add_compile_options(/MP)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
