@@ -45,7 +45,8 @@ public:
     static constexpr const char *kFinish = "Finish";
     static constexpr const char *kDeliver = "Deliver";
     // The built-in workspace's name before layout version 9; its layout and
-    // its place as the current workspace go to Review. Deprecated, removed in W3.
+    // its place as the current workspace go to Review. Kept to migrate the
+    // layouts saved before then.
     static constexpr const char *kEditing = "Editing";
 
     // A workspace's stage: whether the comments panel is open, whether the
@@ -67,9 +68,9 @@ public:
     ads::CDockManager *manager() const { return m_manager; }
     // A panel whose `id` names it in saved layouts.
     ads::CDockWidget *addPanel(const QString &id, const QString &title, QWidget *content);
-    // The panel `id`. The ids of panels that became pages are kept until W3
-    // (deprecated): effects and presets are the browser's pages, source the
-    // Inspector column's.
+    // The panel `id`. The ids of panels that became pages still answer
+    // (Window's commands and saved layouts name them): effects and presets
+    // are the browser's, source the Inspector column's.
     ads::CDockWidget *panel(const QString &id) const;
     // The column whose pages the Inspector commands switch, and the browser
     // whose pages Add effect brings up.

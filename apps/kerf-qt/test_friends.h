@@ -13,10 +13,13 @@ class BusTest;
 class CommentsTest;
 class DeliverTest;
 class DeviceTest;
+class FeatureTest;
 class FinishTest;
 class InspectorTest;
 class KitTest;
 class LauncherTest;
+class LinkTest;
+class MockupParityTest;
 class ReviewModelTest;
 class ScrubRailTest;
 class SourceTest;
@@ -41,10 +44,13 @@ struct Access;
     friend class ::kerf::CommentsTest;                                                                                 \
     friend class ::kerf::DeliverTest;                                                                                  \
     friend class ::kerf::DeviceTest;                                                                                   \
+    friend class ::kerf::FeatureTest;                                                                                  \
     friend class ::kerf::FinishTest;                                                                                   \
     friend class ::kerf::InspectorTest;                                                                                \
     friend class ::kerf::KitTest;                                                                                      \
     friend class ::kerf::LauncherTest;                                                                                 \
+    friend class ::kerf::LinkTest;                                                                                     \
+    friend class ::kerf::MockupParityTest;                                                                             \
     friend class ::kerf::ReviewModelTest;                                                                              \
     friend class ::kerf::ScrubRailTest;                                                                                \
     friend class ::kerf::SourceTest;                                                                                   \

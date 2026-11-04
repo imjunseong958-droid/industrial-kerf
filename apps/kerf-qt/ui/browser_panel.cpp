@@ -10,7 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
-#include <QShortcut>
+#include <QAction>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -38,13 +38,11 @@ BrowserPanel::BrowserPanel(QWidget *parent, EditorBus *bus) : QWidget(parent), m
     stripLayout->addStretch(1);
     m_search = new ui::IconButton(QStringLiteral("g-search"));
     m_search->setObjectName(QStringLiteral("browserSearch"));
-    m_search->setTip(QStringLiteral("Search effects"), QStringLiteral("⌘⇧F"));
     connect(m_search, &QAbstractButton::clicked, this, &BrowserPanel::focusSearch);
     stripLayout->addWidget(m_search);
     layout->addWidget(strip);
-    // ⌘⇧F (no registry command carries it yet).
-    auto *find = new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), this, nullptr, nullptr, Qt::WindowShortcut);
-    connect(find, &QShortcut::activated, this, &BrowserPanel::focusSearch);
+    // ⌘⇧F is the registry's browser.search (setSearchAction).
+    updateSearchTip();
 
     m_stack = new QStackedWidget;
     m_stack->setObjectName(QStringLiteral("browserPagesStack"));
@@ -89,7 +87,7 @@ void BrowserPanel::setPage(Page page) {
     m_pages->setCurrentIndex(int(page));
     if (page == m_page) return;
     m_page = page;
-    m_search->setTip(page == Page::Titles ? QStringLiteral("Search titles") : QStringLiteral("Search effects"), QStringLiteral("⌘⇧F"));
+    updateSearchTip();
     showCurrent();
     emit pageChanged(page);
 }
@@ -129,6 +127,25 @@ void BrowserPanel::focusSearch() {
     if (m_page == Page::Presets) setPage(Page::Effects);
     EffectsPanel *panel = m_page == Page::Titles ? m_titles : m_effects;
     if (panel) panel->focusSearch();
+}
+
+void BrowserPanel::setSearchAction(QAction *action) {
+    if (m_searchAction) {
+        removeAction(m_searchAction);
+        m_searchAction->disconnect(this);
+    }
+    m_searchAction = action;
+    if (action) {
+        action->setShortcutContext(Qt::WindowShortcut);
+        addAction(action);
+        connect(action, &QAction::changed, this, &BrowserPanel::updateSearchTip);
+    }
+    updateSearchTip();
+}
+
+void BrowserPanel::updateSearchTip() {
+    m_search->setTip(m_page == Page::Titles ? QStringLiteral("Search titles") : QStringLiteral("Search effects"),
+                     m_searchAction ? m_searchAction->shortcut().toString(QKeySequence::NativeText) : QString());
 }
 
 void BrowserPanel::showCurrent() {

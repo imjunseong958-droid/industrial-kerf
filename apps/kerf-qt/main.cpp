@@ -3,6 +3,7 @@
 #include "editor_theme.h"
 #include "main_window.h"
 #include "project_launcher.h"
+#include "review_link.h"
 
 #include <QApplication>
 #include <QDir>
@@ -75,6 +76,7 @@ int main(int argc, char **argv) {
     QSize windowSize;
     QString workspace;
     QStringList positional;
+    QStringList links;
     for (int i = 1; i < argc; ++i) {
         const QString argument = QString::fromUtf8(argv[i]);
         if (argument == QStringLiteral("--render-preview")) {
@@ -96,6 +98,10 @@ int main(int argc, char **argv) {
         } else if (argument == QStringLiteral("--workspace") && i + 1 < argc) {
             // A built-in or saved workspace's name: Review, Edit, Finish, Deliver.
             workspace = QString::fromUtf8(argv[++i]);
+        } else if (kerf::links::isReviewLink(argument)) {
+            // kerf://<project>/rev<N>[@TC], from a shell (macOS hands a
+            // clicked link over as a QFileOpenEvent instead).
+            links << argument;
         } else {
             positional << argument;
         }
@@ -111,6 +117,27 @@ int main(int argc, char **argv) {
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
 
+    // kerf:// review links raise (or open) their project's editor and seek.
+    QPointer<kerf::ProjectLauncher> choosing;
+    kerf::links::Router router(
+        [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {
+            // A link followed while the launcher waits stands for its choice.
+            if (choosing) choosing->reject();
+            return openEditor(directory, kerfd);
+        },
+        [] {
+            QList<kerf::MainWindow *> windows;
+            for (QWidget *widget : QApplication::topLevelWidgets())
+                if (auto *window = qobject_cast<kerf::MainWindow *>(widget); window && !window->isHidden()) windows << window;
+            return windows;
+        });
+    app.installEventFilter(&router);
+    const auto anyEditor = [] {
+        for (QWidget *widget : QApplication::topLevelWidgets())
+            if (qobject_cast<kerf::MainWindow *>(widget) && !widget->isHidden()) return true;
+        return false;
+    };
+
     // Without a project, choose one first. A smoke run shows the launcher
     // and captures it instead of waiting for a choice.
     QPointer<QWidget> shown;
@@ -119,15 +146,23 @@ int main(int argc, char **argv) {
         launcher->setAttribute(Qt::WA_DeleteOnClose);
         launcher->show();
         shown = launcher;
-    } else if (project.isEmpty()) {
+    } else if (project.isEmpty() && !links.isEmpty()) {
+        // Opened for a link: its project is the one to show.
+        for (const QString &link : std::as_const(links))
+            if (kerf::MainWindow *window = router.follow(link)) shown = window;
+        links.clear();
+    }
+    if (!shown && project.isEmpty()) {
         kerf::ProjectLauncher launcher(kerfd);
+        choosing = &launcher;
         // Closing the launcher is not the last window closing.
         app.setQuitOnLastWindowClosed(false);
-        if (launcher.exec() != QDialog::Accepted) return 0;
+        const bool chosen = launcher.exec() == QDialog::Accepted;
         app.setQuitOnLastWindowClosed(true);
-        project = launcher.chosenPath();
+        if (!chosen && !anyEditor()) return 0;
+        if (chosen) project = launcher.chosenPath();
     }
-    if (!shown) {
+    if (!shown && !project.isEmpty()) {
         // The workspace to open in, as if chosen when the editor last closed.
         if (!workspace.isEmpty()) QSettings().setValue(QStringLiteral("workspace/current"), workspace);
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
@@ -139,6 +174,8 @@ int main(int argc, char **argv) {
             });
         }
     }
+    // Links given beside a project: followed once its editor exists.
+    for (const QString &link : std::as_const(links)) router.follow(link);
     if (smoke) {
         const int delay = quitAfterMs > 0 ? quitAfterMs : 500;
         QTimer::singleShot(delay, &app, [shown, &app, screenshotPath] {

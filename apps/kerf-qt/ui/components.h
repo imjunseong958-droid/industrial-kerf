@@ -161,9 +161,10 @@ public:
     // 0 at rest, 1 hovered, between while it fades.
     qreal hoverProgress() const { return m_hover; }
     bool isHovered() const { return m_hovered; }
+    // Whether it shows the focus ring now (keyboard focus from Tab).
+    bool focusVisible() const { return m_focusVisible && hasFocus(); }
 
 protected:
-    bool focusVisible() const { return m_focusVisible && hasFocus(); }
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
@@ -262,6 +263,15 @@ public:
     int trackHeight() const { return m_trackHeight; }
     // Width of icon segments: 24 (the default), 28 or 20.
     void setIconSegmentWidth(int width);
+    // One width for every text segment (0, the default: each its label's
+    // width at weight 500 plus 8 each side), as the toolbar's and the
+    // timeline's heights want.
+    void setTextSegmentWidth(int width);
+    int textSegmentWidth() const { return m_textWidth; }
+    // A count after a text segment's label (" 12"), UI 12/16 at weight 400
+    // in ink3 whether on or not; a negative count removes it.
+    void setSegmentCount(int index, int count);
+    int segmentCount(int index) const;
     // The menu-only tail (20 wide, 14 pt chevron). It emits menuRequested.
     void setMenuTail(bool on, const QString &tip = {}, const QString &shortcut = {});
     bool hasMenuTail() const;
@@ -269,7 +279,8 @@ public:
 
     int currentIndex() const { return m_current; }
     // Moves the fill to `index`; it slides (200 ms) when `animate` and the
-    // control is visible and motion is allowed.
+    // control is visible and motion is allowed. -1 chooses none: no fill,
+    // every segment off (currentChanged(-1)).
     void setCurrentIndex(int index, bool animate = true);
 
     // In this widget's coordinates: a segment's rect, and the fill as drawn now.
@@ -301,9 +312,11 @@ private:
     KitButton *m_tail = nullptr;
     QVariantAnimation *m_slide = nullptr;
     QRectF m_fill;
+    int segmentWidth(int index) const;
     int m_current = -1;
     int m_trackHeight = 24;
     int m_iconWidth = 24;
+    int m_textWidth = 0;
     bool m_focusVisible = false;
 };
 
@@ -329,6 +342,10 @@ public:
     void setControlHeight(int height);
     int controlHeight() const { return m_height; }
     void setHorizontalPadding(int padding);
+    // The meta look of small row actions ("Edit roles…"): UI 11/16 in ink3,
+    // ink on hover, 20 tall.
+    void setMeta(bool meta);
+    bool isMeta() const { return m_meta; }
     QColor textColor() const;
 
     QSize sizeHint() const override;
@@ -343,6 +360,7 @@ private:
     int m_padding = 8;
     bool m_mono = false;
     bool m_chevron = false;
+    bool m_meta = false;
 };
 
 // ---------------------------------------------------------------- Button
@@ -673,6 +691,10 @@ private:
 void styleMenu(QMenu *menu);
 // Opens a styled menu at popoverPlacement() of `anchor` (with the 160 ms fade).
 void popupMenu(QMenu *menu, QWidget *anchor, Side side = Side::Below);
+// The least width of `menu`'s card (220 by default), for menus the design
+// draws wider (the Workspaces and Sequence menus); 0 goes back to 220.
+void setMenuMinimumCardWidth(QMenu *menu, int width);
+int menuMinimumCardWidth(const QMenu *menu);
 
 enum class MenuRole { Normal, Header, Warn };
 // A non-interactive header row (.mhd): a disabled row the kit paints as a

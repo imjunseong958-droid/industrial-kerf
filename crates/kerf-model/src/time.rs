@@ -375,6 +375,16 @@ pub fn parse_timecode_frames(text: &str, rate: Rate) -> Result<(i64, bool), Time
     Ok((frames, drop))
 }
 
+/// `time`, the start of a sequence on `from`, restated for a sequence on
+/// `to`: the same `HH:MM:SS:FF` where `to` can show it, else the nearest
+/// frame of `to`. It stays drop-frame only where `to` supports that.
+pub fn restate_timecode(time: Time, from: Rate, drop_frame: bool, to: Rate) -> (Time, bool) {
+    let drop = drop_frame && from.supports_drop_frame() && to.supports_drop_frame();
+    let text = format_timecode(time, from, drop_frame);
+    let text = if drop { text } else { text.replace(';', ":") };
+    parse_timecode(&text, to).unwrap_or((to.round(time), drop))
+}
+
 /// Parse timecode into a time on `rate`.
 pub fn parse_timecode(text: &str, rate: Rate) -> Result<(Time, bool), TimeError> {
     let (frames, drop) = parse_timecode_frames(text, rate)?;
@@ -530,6 +540,33 @@ mod tests {
         for samples in [44_100, 48_000, 96_000, 192_000] {
             assert_eq!(FLICKS_PER_SECOND % samples, 0);
         }
+    }
+
+    #[test]
+    fn a_start_restated_at_another_rate_keeps_its_timecode() {
+        let hour = |rate: Rate| rate.time_of(i64::from(rate.timecode_base()) * 3600);
+        let restated = restate_timecode(hour(Rate::FPS_24), Rate::FPS_24, false, Rate::FPS_29_97);
+        assert_eq!(restated, (hour(Rate::FPS_29_97), false));
+        assert_eq!(
+            format_timecode(restated.0, Rate::FPS_29_97, false),
+            "01:00:00:00"
+        );
+        // Drop-frame goes where the new rate has none, and stays where it has.
+        let (start, drop) = parse_timecode("00:10:00;00", Rate::FPS_29_97).unwrap();
+        assert!(drop);
+        let at_30 = restate_timecode(start, Rate::FPS_29_97, true, Rate::FPS_30);
+        assert_eq!(
+            format_timecode(at_30.0, Rate::FPS_30, at_30.1),
+            "00:10:00:00"
+        );
+        let fps_59 = Rate::new(60_000, 1001).unwrap();
+        let at_59 = restate_timecode(start, Rate::FPS_29_97, true, fps_59);
+        assert!(at_59.1);
+        assert_eq!(format_timecode(at_59.0, fps_59, true), "00:10:00;00");
+        // A frame number the new rate cannot show falls to its nearest frame.
+        let late = Rate::FPS_30.time_of(29);
+        let at_24 = restate_timecode(late, Rate::FPS_30, false, Rate::FPS_24);
+        assert_eq!(at_24, (Rate::FPS_24.round(late), false));
     }
 
     #[test]

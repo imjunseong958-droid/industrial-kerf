@@ -820,8 +820,6 @@ ProjectLauncher::~ProjectLauncher() {
 #endif
 }
 
-void ProjectLauncher::setColorScheme(ColorScheme) {}
-
 void ProjectLauncher::applyTheme() {
     m_theme = launcherTheme();
     setStyleSheet(launcherStyleSheet(m_theme));

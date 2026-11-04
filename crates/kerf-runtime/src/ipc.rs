@@ -2388,6 +2388,80 @@ mod tests {
         );
     }
 
+    /// The editor's typed ops over the socket, read from the JSON the
+    /// bridge forwards: a title inserted as a generator, and a frame rate
+    /// that changes only while the sequence is empty.
+    #[test]
+    fn kerfd_takes_generator_inserts_and_rate_changes_from_the_editor() {
+        let daemon = Daemon::start("editor-ops", options(Duration::from_millis(200), None));
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        let client = &daemon.client;
+        let send = |key: &str, ops: serde_json::Value| {
+            let ops: Vec<EditOp> = serde_json::from_value(ops).unwrap();
+            let revision = client.get_state().unwrap().revision;
+            client.apply_ops_request("ui", key, ops, revision)
+        };
+        // A new project's sequence is empty, so its rate can change.
+        let state = send(
+            "rate-1",
+            serde_json::json!([
+                {"op": "set-sequence", "rate": {"num": 24, "den": 1}},
+                {"op": "add-track", "kind": "video"},
+                {"op": "add-track", "kind": "video"}
+            ]),
+        )
+        .unwrap();
+        assert_eq!(state.timeline["fps"], 24.0);
+        let state = send(
+            "title-1",
+            serde_json::json!([{"op": "insert",
+                "generator": {"fx": "title", "params": {"text": "Opening"}},
+                "at": 0, "frames": 48, "tracks": ["V2"]}]),
+        )
+        .unwrap();
+        let clips = &state.timeline["tracks"][1]["clips"];
+        assert_eq!(clips[0]["kind"], "generator", "{clips}");
+        assert_eq!(clips[0]["fx"], "title");
+        assert_eq!(clips[0]["name"], "Opening");
+        assert_eq!(clips[0]["durationFrames"], 48);
+        // Now it has a clip, the rate stays, and kerfd says why.
+        let error = send(
+            "rate-2",
+            serde_json::json!([{"op": "set-sequence", "rate": {"num": 30, "den": 1}}]),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "INVALID_EDIT");
+        assert_eq!(error.message, crate::kernel::RATE_NEEDS_EMPTY);
+        let error = send(
+            "title-2",
+            serde_json::json!([{"op": "insert", "generator": {"fx": "sparkle"},
+                "at": 0, "frames": 24, "tracks": ["V2"]}]),
+        )
+        .unwrap_err();
+        assert_eq!(error.message, "no generator `sparkle`");
+        // The name, size, and start still go through set-sequence.
+        let state = send(
+            "format-1",
+            serde_json::json!([{"op": "set-sequence", "name": "Short", "width": 1080,
+                "height": 1920, "start": "01:00:00:00"}]),
+        )
+        .unwrap();
+        assert_eq!(state.timeline["width"], 1080);
+        assert_eq!(state.timeline["start"], 3600.0);
+        drop(lease);
+        let client = daemon.wait_for_exit();
+        let written =
+            fs::read_to_string(client.directory().join(crate::store::PROJECT_FILE)).unwrap();
+        assert!(written.contains("gen=title@1"), "{written}");
+        assert!(written.contains("text=\"Opening\""), "{written}");
+        assert!(
+            written.contains("name=\"Short\" rate=24 size=1080x1920"),
+            "{written}"
+        );
+        remove_project(&client);
+    }
+
     #[test]
     fn a_hold_is_told_apart_from_a_request() {
         assert_eq!(

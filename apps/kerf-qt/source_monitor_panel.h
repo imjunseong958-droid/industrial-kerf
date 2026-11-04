@@ -10,6 +10,7 @@
 
 class QAbstractButton;
 class QAction;
+class QVariantAnimation;
 
 namespace kerf {
 
@@ -30,14 +31,19 @@ class FadeScrollArea;
 //            with the marked range and the position, the transport, a 40 pt
 //            filmstrip with the marked box, the media index's shots, and a
 //            footer of Insert, Overwrite and Clear in and out.
-//   Compact  the Inspector's Source pane: a 280 x 158 canvas, the bar, the
+//   Compact  the Inspector's Source pane: a 280 x 158 canvas (narrower in a
+//            narrower pane, at its shape: 216 x 122 at 240), the bar, the
 //            timecodes, the transport, the three edit buttons and the
 //            Source clip key-values, in a scrolling column.
 //
+// The stage form fades in when it comes into a window on screen (160 ms; at
+// once with reduced motion). It plays the picture only: no engine path plays a source's sound.
+//
 // The buttons run the registry's commands (setActions) when it has them:
 // source.markIn, source.markOut, source.previousFrame, source.nextFrame,
-// source.insert, source.overwrite and source.clearMarks. Play (Space while
-// the viewer has the focus) and Open in timeline (⇧F) are the viewer's own.
+// source.insert, source.overwrite and source.clearMarks, and source.play and
+// source.reveal (Play, Open in timeline). Space and ⇧F play and reveal while
+// the viewer has the focus, whatever the keymap.
 class SourceMonitorPanel final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
@@ -116,6 +122,9 @@ public:
     QPair<QString, QString> compactTimecodes() const;
     // The painted body that takes the focus, the pointer and the keys.
     QWidget *body() const;
+    // The stage form's fade-in: running, and the opacity it is at.
+    bool isFading() const;
+    qreal opacity() const;
 
 signals:
     void changed();
@@ -125,6 +134,7 @@ signals:
 protected:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return {0, 0}; }
+    void showEvent(QShowEvent *event) override;
 
 private:
     class Body;
@@ -136,6 +146,7 @@ private:
     Mode m_mode = Mode::Stage;
     Body *m_body = nullptr;
     ui::FadeScrollArea *m_scroll = nullptr;
+    QVariantAnimation *m_fade = nullptr;
 };
 
 } // namespace kerf

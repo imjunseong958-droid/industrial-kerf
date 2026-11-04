@@ -76,10 +76,6 @@ public:
     // Its effect is switched off: the value in the secondary ink (it still edits).
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
-    // Deprecated, removed in W3: the display glass is gone; a glass field
-    // is drawn as every other one.
-    void setGlass(bool glass);
-    bool isGlass() const { return m_glass; }
     // The small form under a colour wheel: mono 11 ink3, centred.
     void setSmall(bool small);
     bool isSmall() const { return m_small; }
@@ -151,7 +147,6 @@ private:
     bool m_hasDefault = false;
     bool m_mixed = false;
     bool m_dimmed = false;
-    bool m_glass = false;
     bool m_small = false;
     bool m_readOnly = false;
     bool m_hovered = false;
@@ -263,14 +258,6 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
-};
-
-// An effect's enable box. Deprecated name, removed in W3: it was the
-// hardware power key; it is now the kit check box, as every switch is.
-class PowerKey final : public InspectorSwitch {
-    Q_OBJECT
-public:
-    explicit PowerKey(QWidget *parent = nullptr);
 };
 
 // Two or three choices on the kit's segmented track (raised, radius 6, pad
@@ -440,8 +427,6 @@ public:
     static constexpr int kGap = 8;
     static constexpr int kPadLeft = 12;
     static constexpr int kPadRight = 8;
-    // Deprecated, removed in W3: the reset lane is the keyframe column.
-    static constexpr int kResetLane = kKeyframe;
 
     explicit InspectorRow(const QString &label, QWidget *parent = nullptr);
     RowLabel *label() const { return m_label; }
@@ -488,9 +473,6 @@ class InspectorSection final : public QWidget {
 public:
     static constexpr int kHeaderHeight = 28;
     static constexpr int kFoot = 4;
-    // Deprecated, removed in W3: groups have no plate or gap any more.
-    static constexpr int kInset = 0;
-    static constexpr int kGap = 0;
 
     // What the header's box says.
     enum class Enable {

@@ -106,14 +106,15 @@ private slots:
         QVERIFY(!window.chatOpen());
         QVERIFY(bus->run(QStringLiteral("window.assistant")));
         QVERIFY(window.chatOpen());
-        // The viewer's switches run now; one still to come does not.
+        // The viewer's switches run now; a command the registry does not
+        // have does not.
         QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
         const bool dimmed = dim->isChecked();
         QVERIFY(bus->run(QStringLiteral("view.dim")));
         QCOMPARE(dim->isChecked(), !dimmed);
         QVERIFY(bus->run(QStringLiteral("view.dim")));
         QCOMPARE(dim->isChecked(), dimmed);
-        QVERIFY(!bus->run(QStringLiteral("sequence.settings")));
+        QVERIFY(!bus->run(QStringLiteral("no.such.command")));
         QVERIFY(!bus->run(QString()));
     }
 

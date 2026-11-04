@@ -348,7 +348,7 @@ private slots:
         InspectorPanel *inspector = window.m_inspector;
         QWidget *box = inspector->findChild<QWidget *>(QStringLiteral("effectBox"));
         QVERIFY(box);
-        QVERIFY(!box->findChild<PowerKey *>(QStringLiteral("effectEnabled"))->isChecked());
+        QVERIFY(!box->findChild<InspectorSwitch *>(QStringLiteral("effectEnabled"))->isChecked());
         // The secondary ink reads at 4.5:1 on the column.
         QVERIFY(contrastRatio(tokens::color(tokens::ink2), tokens::color(tokens::chrome)) >= 4.5);
         const auto fields = box->findChildren<ScrubField *>();
@@ -412,7 +412,7 @@ private slots:
         }
         const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
         QCOMPARE(boxes.size(), 2);
-        auto *glow = boxes.at(0)->findChild<PowerKey *>(QStringLiteral("effectEnabled"));
+        auto *glow = boxes.at(0)->findChild<InspectorSwitch *>(QStringLiteral("effectEnabled"));
         auto *radius = boxes.at(0)->findChild<ScrubField *>(QStringLiteral("effectParam_radius"));
         auto *intensity = boxes.at(0)->findChild<ScrubField *>(QStringLiteral("effectParam_intensity"));
         QVERIFY(glow && radius && intensity);
@@ -423,7 +423,7 @@ private slots:
         QCOMPARE(intensity->text(), QStringLiteral("200"));
         QCOMPARE(intensity->format().unit, QStringLiteral("%"));
         QVERIFY(boxes.at(0)->findChild<InspectorSlider *>(QStringLiteral("slider_intensity")));
-        QVERIFY(!boxes.at(1)->findChild<PowerKey *>(QStringLiteral("effectEnabled"))->isChecked());
+        QVERIFY(!boxes.at(1)->findChild<InspectorSwitch *>(QStringLiteral("effectEnabled"))->isChecked());
         QVERIFY(boxes.at(1)->findChild<QLabel *>(QStringLiteral("effectName"))->property("off").toBool());
         // Folded at first: its rows hidden under its own row.
         QVERIFY(boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParams"))->isHidden());

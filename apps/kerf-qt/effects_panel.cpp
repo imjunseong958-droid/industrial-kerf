@@ -6,7 +6,6 @@
 #include "ui/tray_shell.h"
 
 #include <QAction>
-#include <QComboBox>
 #include <QElapsedTimer>
 #include <QHBoxLayout>
 #include <QImage>
@@ -22,7 +21,6 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QScrollBar>
-#include <QSignalBlocker>
 #include <QStyledItemDelegate>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -89,6 +87,9 @@ public:
         return QSize(kCard.width() + EffectsPanel::kColumnGap, kCard.height() + EffectsPanel::kNameTop + tokens::meta.line + EffectsPanel::kRowGap);
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        // QListView can ask for a row it has hidden, at the first card's place
+        // (its name then prints over that card's).
+        if (const auto *view = qobject_cast<const QListView *>(option.widget); view && view->isRowHidden(index.row())) return;
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
         const QRectF thumb(option.rect.left(), option.rect.top(), kCard.width(), kCard.height());
@@ -113,20 +114,22 @@ public:
 };
 
 // The cards drag as their effect's id, which the Inspector (and a clip)
-// drops into the clip's stack where it lands. The pointer over a thumb
+// drops into the clip's stack where it lands; title cards drag as their
+// generator's id, which a video track takes. The pointer over a thumb
 // scrubs it; a 32 pt fade covers the bottom while there is more below.
 class EffectCards final : public QListWidget {
 public:
     using QListWidget::QListWidget;
     std::function<void(const QString &fx, double fraction)> scrub;
     std::function<void()> unscrub;
+    QString mime = QString::fromLatin1(EffectsPanel::kFxMime);
 
 protected:
-    QStringList mimeTypes() const override { return {QStringLiteral("application/x-kerf-fx")}; }
+    QStringList mimeTypes() const override { return {mime}; }
     QMimeData *mimeData(const QList<QListWidgetItem *> &items) const override {
         if (items.isEmpty()) return nullptr;
         auto *data = new QMimeData;
-        data->setData(QStringLiteral("application/x-kerf-fx"), items.first()->data(kIdRole).toString().toUtf8());
+        data->setData(mime, items.first()->data(kIdRole).toString().toUtf8());
         data->setText(items.first()->text());
         return data;
     }
@@ -216,10 +219,14 @@ EffectsPanel::EffectsPanel(QWidget *parent, Mode mode) : QWidget(parent), m_mode
         QMenu *menu = categoryMenu();
         ui::popupMenu(menu, m_categoryButton);
     });
-    // The category in effect, one item per menu row.
-    m_category = new QComboBox(this);
-    m_category->setObjectName(mode == Mode::Effects ? QStringLiteral("effectsCategory") : QStringLiteral("titlesCategory"));
-    m_category->hide();
+    // The status line: what the engine answered an add with.
+    m_status = new QLabel;
+    m_status->setFont(tokens::font(tokens::meta));
+    m_status->setObjectName(QStringLiteral("browserStatus"));
+    m_status->setWordWrap(true);
+    m_status->setContentsMargins(kPadX, tokens::space::s4, kPadX, 0);
+    m_status->hide();
+    layout->addWidget(m_status);
 
     m_hint = shell::text(QString(), tokens::meta, tokens::ink3);
     m_hint->setObjectName(QStringLiteral("browserEmpty"));
@@ -232,8 +239,9 @@ EffectsPanel::EffectsPanel(QWidget *parent, Mode mode) : QWidget(parent), m_mode
     m_cards = cards;
     m_cards->setObjectName(mode == Mode::Effects ? QStringLiteral("effectsCards") : QStringLiteral("titlesCards"));
     m_cards->setItemDelegate(new CardDelegate(m_cards));
-    m_cards->setDragEnabled(mode == Mode::Effects);
-    m_cards->setDragDropMode(mode == Mode::Effects ? QAbstractItemView::DragOnly : QAbstractItemView::NoDragDrop);
+    if (mode == Mode::Titles) cards->mime = QString::fromLatin1(kGeneratorMime);
+    m_cards->setDragEnabled(true);
+    m_cards->setDragDropMode(QAbstractItemView::DragOnly);
     m_cards->setViewMode(QListView::IconMode);
     m_cards->setMovement(QListView::Static);
     m_cards->setResizeMode(QListView::Adjust);
@@ -275,7 +283,6 @@ EffectsPanel::EffectsPanel(QWidget *parent, Mode mode) : QWidget(parent), m_mode
     m_scrubTimer = new QTimer(this);
     m_scrubTimer->setSingleShot(true);
     connect(m_scrubTimer, &QTimer::timeout, this, &EffectsPanel::sendScrub);
-    connect(m_category, &QComboBox::currentIndexChanged, this, &EffectsPanel::refilter);
     connect(m_search, &QLineEdit::textChanged, this, &EffectsPanel::refilter);
     connect(m_cards, &QListWidget::itemActivated, this, &EffectsPanel::add);
     setCatalog({});
@@ -361,20 +368,19 @@ void EffectsPanel::rebuildCategories() {
             for (const QString &name : std::as_const(order))
                 m_categories.append({QStringLiteral("generator:") + name, name.isEmpty() ? QStringLiteral("Other") : name, counts.value(name), false});
     }
-    const QSignalBlocker blocker(m_category);
-    m_category->clear();
-    for (const Category &entry : std::as_const(m_categories)) m_category->addItem(entry.name, entry.key);
-    const int keep = m_category->findData(previous);
-    m_category->setCurrentIndex(keep >= 0 ? keep : 0);
+    const auto kept = std::find_if(m_categories.cbegin(), m_categories.cend(), [&previous](const Category &c) { return c.key == previous; });
+    m_categoryKey = kept != m_categories.cend() ? previous : m_categories.isEmpty() ? QString() : m_categories.constFirst().key;
 }
 
 QString EffectsPanel::category() const {
-    return m_category->currentData().toString();
+    return m_categoryKey;
 }
 
 void EffectsPanel::setCategory(const QString &key) {
-    const int index = m_category->findData(key);
-    if (index >= 0) m_category->setCurrentIndex(index);
+    if (key == m_categoryKey) return;
+    if (std::none_of(m_categories.cbegin(), m_categories.cend(), [&key](const Category &c) { return c.key == key; })) return;
+    m_categoryKey = key;
+    refilter();
 }
 
 QMenu *EffectsPanel::categoryMenu() {
@@ -436,12 +442,6 @@ void EffectsPanel::setCardImage(QListWidgetItem *item, const QImage &image) {
     item->setIcon(cardPixmap(image, std::max<qreal>(1.0, devicePixelRatioF())));
 }
 
-void EffectsPanel::setPreview(const QString &, const QString &, const QImage &) {
-    // Deprecated: without its key an answer cannot be told from one another
-    // region asked for (a proposal card's before/after), so it is dropped.
-    // BinWiring hands every effect_preview to the keyed call.
-}
-
 bool EffectsPanel::ownsPreviewKey(const QString &key) const {
     if (m_mode == Mode::Titles) return key == QLatin1String(kTitleKey);
     return key == QLatin1String(kCardKey) || key == QLatin1String(kScrubKey);
@@ -471,11 +471,30 @@ void EffectsPanel::setAddAvailable(bool available, const QString &reason) {
     updateTips();
 }
 
+void EffectsPanel::setStatus(const QString &message, bool error) {
+    m_statusError = error && !message.isEmpty();
+    m_status->setText(message);
+    // Its own sheet: the app's `*` rule would give it the text colour.
+    m_status->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: %2px; background: transparent; }")
+                                .arg(color(m_statusError ? tokens::neg : tokens::ink3).name(QColor::HexRgb))
+                                .arg(tokens::meta.px));
+    m_status->setVisible(!message.isEmpty());
+}
+
+QString EffectsPanel::status() const {
+    return m_status->text();
+}
+
+QString EffectsPanel::displayName(const QString &fx) const {
+    const QListWidgetItem *item = m_items.value(fx);
+    return item ? item->text() : fx;
+}
+
 void EffectsPanel::updateTips() {
     for (QListWidgetItem *item : std::as_const(m_items)) {
         const QJsonObject fx = m_fx.value(item->data(kIdRole).toString());
         QStringList tip{item->text()};
-        if (m_mode == Mode::Effects) tip.first() += QStringLiteral(" · drag to a clip");
+        tip.first() += m_mode == Mode::Effects ? QStringLiteral(" · drag to a clip") : QStringLiteral(" · double-click or drag to a video track");
         const QString doc = fx.value(QStringLiteral("doc")).toString();
         if (!doc.isEmpty() && doc != item->text()) tip << doc;
         if (!m_addAvailable && !m_addReason.isEmpty()) tip << m_addReason;
@@ -502,6 +521,8 @@ void EffectsPanel::refilter() {
     const auto at = std::find_if(m_categories.cbegin(), m_categories.cend(), [&key](const Category &c) { return c.key == key; });
     m_categoryButton->setText(at != m_categories.cend() ? at->name : m_mode == Mode::Effects ? QStringLiteral("All video effects")
                                                                                              : QStringLiteral("All titles"));
+    // A ghost button is as wide as it was last told to be.
+    m_categoryButton->setFixedSize(m_categoryButton->sizeHint());
     m_categoryButton->setEnabled(!m_items.isEmpty());
     // The empty states: no catalog (no engine), or nothing matches.
     if (m_items.isEmpty()) {

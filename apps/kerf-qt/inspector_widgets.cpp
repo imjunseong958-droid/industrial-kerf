@@ -157,10 +157,6 @@ void ScrubField::setDimmed(bool dimmed) {
     update();
 }
 
-void ScrubField::setGlass(bool glass) {
-    m_glass = glass;
-}
-
 void ScrubField::setSmall(bool small) {
     m_small = small;
     updateGeometry();
@@ -741,11 +737,6 @@ void InspectorSwitch::paintEvent(QPaintEvent *) {
         painter.setRenderHint(QPainter::Antialiasing);
         ui::paintFocusRing(painter, box.adjusted(1, 1, -1, -1), radius::small);
     }
-}
-
-PowerKey::PowerKey(QWidget *parent) : InspectorSwitch(parent) {
-    setObjectName(QStringLiteral("powerKey"));
-    setAccessibleName(QStringLiteral("On"));
 }
 
 // ------------------------------------------------------------ SegmentedField

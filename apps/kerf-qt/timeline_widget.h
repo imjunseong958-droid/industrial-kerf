@@ -205,9 +205,6 @@ public:
     void applyHeightPreset(HeightPreset preset);
     // The preset every track is at, or None.
     HeightPreset heightPreset() const;
-    // Deprecated, removed in W3: the heights are the bar's segmented
-    // control (TimelineZoomControl), so the dock gets no buttons of them.
-    QList<QAction *> trackHeightActions() const { return {}; }
     // Remember track heights for the project at `projectPath` in the
     // editor's settings (never in the project, which collaborators share),
     // and restore the ones remembered for it. An empty path forgets nothing
@@ -223,6 +220,9 @@ public:
     QRect trackHeaderRect(int row) const;
     // The row at widget `y`, or -1.
     int trackRowAt(int y) const { return rowAt(y); }
+    // The program time under `x` in the lanes (as a drop lands), or -1 over
+    // the track heads, which have no time.
+    double laneTimeAt(qreal x) const { return inHeader(QPoint(int(x), stickyOrigin().y())) ? -1.0 : timeAt(x); }
     // The volume rubber band of a sound clip, in widget coordinates: one
     // point per key (or the clip's ends for a level without keys).
     QPolygonF gainBand(const QString &clipId) const;
@@ -384,9 +384,6 @@ private:
     int commentMarkAt(const QPoint &point) const;
     int bandAt(const QPoint &point) const;
     void paintCorner(QPainter &p, const QPoint &origin) const;
-    // Deprecated, removed in W3: the hardware heads' engraved badge font,
-    // which theme_test still reads. The flat heads draw none.
-    QFont badgeFont() const { return engravedFont(font(), QStringLiteral("V1")); }
 
     // Painted every frame on top of the lane cache, in stacking order: the
     // playhead, the pinned ruler with its marks and the playhead's head,

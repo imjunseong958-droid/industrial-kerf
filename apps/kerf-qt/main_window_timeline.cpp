@@ -474,22 +474,18 @@ void MainWindow::deleteSelected() {
 void MainWindow::updateAiBar() {
     if (!m_aiBar) return;
     const bool pending = !m_proposalId.isEmpty();
-    const bool next = !m_steps.isEmpty() && !m_agentBusy;
     // The bar stands in for Kerf's conversation while it is closed, as a
     // Short's comment count does: open beside the picture, the conversation
-    // already shows the work, the proposal and the next steps, and the
-    // timeline keeps the row.
+    // already shows the work and the proposal, and the timeline keeps the
+    // row. Kerf's next steps are the panel's suggestions.
     const bool chatOpen = this->chatOpen();
-    m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending || next));
-    m_nextSteps->setVisible(next);
+    m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending));
     if (m_agentBusy) {
         m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
                                                          : QStringLiteral("Kerf is working on %1…").arg(m_agentFocusLabel));
     } else if (pending) {
-        // The whole summary (a narrow chat panel shows it without its count).
-        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_chat->proposalBarSummary()->toolTip()));
-    } else if (next) {
-        m_aiBarText->setText(QStringLiteral("Next with Kerf"));
+        // The pin bar's whole summary (the bar may show it cut).
+        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_chat->pinSummary()->toolTip()));
     }
     for (QToolButton *button : m_aiBar->findChildren<QToolButton *>()) {
         const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
@@ -527,14 +523,6 @@ void MainWindow::buildTimeline() {
     timelineScroll->setWidget(m_timeline);
     timelineScroll->viewport()->installEventFilter(this);
     timelineLayout->addWidget(timelineScroll);
-    // Deprecated, removed in W3: the tool palette. The tools are the bar's
-    // segmented control now; setupActions still fills this (hidden) bar.
-    m_toolPalette = new QToolBar(QStringLiteral("Tools"), m_timelinePanel);
-    m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
-    m_toolPalette->setOrientation(Qt::Vertical);
-    m_toolPalette->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_toolPalette->setIconSize(QSize(18, 18));
-    m_toolPalette->hide();
     // What Kerf is doing, and the proposal to review, where the edit happens.
     m_aiBar = new QFrame;
     m_aiBar->setObjectName(QStringLiteral("aiBar"));
@@ -544,13 +532,6 @@ void MainWindow::buildTimeline() {
     m_aiBarText = new QLabel;
     m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
     aiLayout->addWidget(m_aiBarText, 1);
-    m_nextSteps = new QWidget;
-    m_nextSteps->setObjectName(QStringLiteral("nextSteps"));
-    auto *nextLayout = new QHBoxLayout(m_nextSteps);
-    nextLayout->setContentsMargins(0, 0, 0, 0);
-    nextLayout->setSpacing(6);
-    m_nextSteps->hide();
-    aiLayout->addWidget(m_nextSteps);
     m_aiBar->hide();
     timelinePanelLayout->addWidget(m_aiBar);
     timelinePanelLayout->addWidget(timelineFrame, 1);

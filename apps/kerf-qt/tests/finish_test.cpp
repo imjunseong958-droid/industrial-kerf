@@ -611,6 +611,37 @@ private slots:
         QVERIFY(tray.highlightedPane().isEmpty());
     }
 
+    // A pane's highlight fades its outline from line to accent over 160 ms
+    // and back; under reduced motion (or hidden) it jumps.
+    void trayPaneHighlightFades() {
+        auto *body = new QWidget;
+        shell::TrayPane pane(QStringLiteral("fadePane"), QStringLiteral("Loudness"), nullptr, body);
+        pane.resize(320, 200);
+        QCOMPARE(pane.outlineColor().rgba(), tokens::color(tokens::line).rgba());
+        pane.setHighlighted(true);
+        QCOMPARE(pane.highlightLevel(), 1.0);
+        pane.setHighlighted(false);
+        QCOMPARE(pane.highlightLevel(), 0.0);
+        pane.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&pane));
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        QElapsedTimer clock;
+        clock.start();
+        pane.setHighlighted(true);
+        QVERIFY(pane.highlightLevel() < 1.0);
+        QTest::qWait(60);
+        QVERIFY2(pane.highlightLevel() > 0.0 && pane.highlightLevel() < 1.0, qPrintable(QString::number(pane.highlightLevel())));
+        QTRY_COMPARE_WITH_TIMEOUT(pane.highlightLevel(), 1.0, 1000);
+        QVERIFY(clock.elapsed() >= 140);
+        QCOMPARE(pane.outlineColor().rgba(), tokens::color(tokens::accent).rgba());
+        pane.setHighlighted(false);
+        QTRY_COMPARE_WITH_TIMEOUT(pane.highlightLevel(), 0.0, 1000);
+        ui::setReducedMotionOverride(1);
+        pane.setHighlighted(true);
+        QCOMPARE(pane.highlightLevel(), 1.0);
+    }
+
     // The clip the bar names is the one the program shows: a clip or track
     // that is off is passed over, and a clip without a name of its own is
     // called by its media's name.

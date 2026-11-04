@@ -16,10 +16,7 @@ namespace kerf {
 // the system's) for the default button, focus and a focused list's chosen
 // row. Painted parts (tiles, sidebar symbols, switches) read the same tokens.
 struct LauncherTheme {
-    // Deprecated, removed in W3: always true.
-    bool dark = true;
     QColor accent;
-    QColor accentTop;
     QColor accentPressed;
     QColor onAccent; // Text on the filled accent (the default button), 4.5:1.
     // Secondary text on `selection`: `selectionText` held back only as far
@@ -103,9 +100,7 @@ inline LauncherTheme launcherTheme() {
         return QColor::fromRgba(mixColor(tk::color(under), top, amount).rgba());
     };
     LauncherTheme t;
-    t.dark = true;
     t.accent = c(tk::accent);
-    t.accentTop = c(tk::accent);
     t.accentPressed = c(tk::accentHover);
     t.onAccent = c(tk::accentText);
     t.onAccentSecondary = alpha(tk::accentText, 0.78);
@@ -160,8 +155,6 @@ inline LauncherTheme launcherTheme() {
     t.secondaryOnSelection = readableOn(t.secondaryOnSelection, t.selectionInactive, 4.5);
     return t;
 }
-// Deprecated, removed in W3: the argument is ignored.
-inline LauncherTheme launcherTheme(bool) { return launcherTheme(); }
 
 // A complete style sheet for the launcher and everything in it. The editor's
 // application style sheet stays in force for every property this one leaves
@@ -407,9 +400,9 @@ QMenu::item:selected { color: @text; background: @field; }
 QMenu::item:disabled { color: @disabledText; background: transparent; }
 QMenu::separator { height: 1px; background: @separator; margin: 4px 0; }
 )QSS");
-    // Longer names first, so @accent does not eat @accentTop.
+    // Longer names first, so @accent does not eat @accentPressed.
     const std::pair<const char *, QColor> tokens[] = {
-        {"@accentPressed", t.accentPressed}, {"@accentTop", t.accentTop}, {"@onAccent", t.onAccent},
+        {"@accentPressed", t.accentPressed}, {"@onAccent", t.onAccent},
         {"@accent", t.accent}, {"@content", t.content}, {"@titleText", t.titleText}, {"@titleRule", t.titleRule},
         {"@sidebarDivider", t.sidebarDivider}, {"@sidebar", t.sidebar}, {"@textSelection", t.textSelection},
         {"@text", t.text}, {"@secondary", t.secondary}, {"@disabledText", t.disabledText},

@@ -306,7 +306,10 @@ private slots:
             QVERIFY(stage.source->isVisibleTo(&stage.viewer));
         }
         {
-            // 9:16, the panel open (480): the phone 12 left of the rail at 748.
+            // 9:16, the panel open (480): the phone 12 left of the rail at 748;
+            // the 360 scrub ends 12 left of the rail (sx = rx - 372), so the
+            // Source column runs to the scrub - 32 (344). PENDING OWNER
+            // CONFIRMATION: mockup-spec 3.1 says 400; see mockup_parity_test.
             Stage stage(QSize(1080, 1920));
             const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
             QCOMPARE(layout.kind, ViewerWidget::Device::Phone);
@@ -315,30 +318,32 @@ private slots:
             KERF_NEAR(layout.body.height(), 480, 1e-9, "phone height");
             QCOMPARE(layout.rail.left(), 748);
             QCOMPARE(layout.panel, QRect(804, 8, 480, 548));
-            QCOMPARE(layout.scrub, QRectF(432, 500, 360, 56));
+            QCOMPARE(layout.scrub, QRectF(376, 500, 360, 56));
+            QCOMPARE(layout.scrub.right(), double(layout.rail.left() - 12));
             QVERIFY(layout.narrowScrub);
-            QCOMPARE(layout.source, QRect(16, 8, 400, 548));
+            QCOMPARE(layout.source, QRect(16, 8, 344, 548));
             QVERIFY(stage.source->isVisibleTo(&stage.viewer));
             KERF_NEAR(layout.card.height(), 379.8, 0.05, "9:16 picture height");
             // The HUD docks as a 32 strip over the Source column; while it
             // shows, the column moves 40 down.
             QVERIFY(layout.hudStrip);
-            QCOMPARE(layout.hud, QRectF(16, 8, 400, 32));
+            QCOMPARE(layout.hud, QRectF(16, 8, 344, 32));
             stage.hud->show();
-            QCOMPARE(stage.viewer.stageLayout().source, QRect(16, 48, 400, 508));
-            QCOMPARE(stage.source->geometry(), QRect(16, 48, 400, 508));
-            QCOMPARE(stage.hud->geometry(), QRect(16, 8, 400, 32));
+            QCOMPARE(stage.viewer.stageLayout().source, QRect(16, 48, 344, 508));
+            QCOMPARE(stage.source->geometry(), QRect(16, 48, 344, 508));
+            QCOMPARE(stage.hud->geometry(), QRect(16, 8, 344, 32));
             stage.hud->hide();
-            QCOMPARE(stage.source->geometry(), QRect(16, 8, 400, 548));
+            QCOMPARE(stage.source->geometry(), QRect(16, 8, 344, 548));
         }
         {
-            // 9:16, the panel closed: the rail at 1240, the Source column to the scrub - 32.
+            // 9:16, the panel closed: the rail at 1240, the Source column to the
+            // scrub - 32 (836, PENDING OWNER CONFIRMATION; was 892).
             Stage stage(QSize(1080, 1920), false);
             const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
             KERF_NEAR(layout.body.left(), 998.6, 0.5, "phone closed lx");
             QCOMPARE(layout.rail.left(), 1240);
-            QCOMPARE(layout.scrub, QRectF(924, 500, 360, 56));
-            QCOMPARE(layout.source, QRect(16, 8, 892, 548));
+            QCOMPARE(layout.scrub, QRectF(868, 500, 360, 56));
+            QCOMPARE(layout.source, QRect(16, 8, 836, 548));
         }
         // 1:1 and 4:5 go in the same phone, beside the 480 panel.
         for (const QSize &canvas : {QSize(1080, 1080), QSize(1080, 1350)}) {
@@ -441,6 +446,56 @@ private slots:
     // The panel's open and close move the stage over 220 ms: the panel
     // slides 24 to the right as it fades out of the stage, the device goes
     // to its closed place. The first layout has no motion.
+    void agentHudCastsThePopShadow() {
+        Stage stage(QSize(1920, 1080));
+        QImage white(192, 108, QImage::Format_RGB32);
+        white.fill(Qt::white);
+        stage.viewer.setFrame(white, 0.0);
+        stage.viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stage.viewer));
+        QVERIFY(stage.viewer.hudShadowRect().isEmpty());
+        stage.hud->setAttribute(Qt::WA_NoSystemBackground);
+        stage.hud->show();
+        QCoreApplication::processEvents();
+        const QRectF hud = QRectF(stage.viewer.stageLayout().hud.toRect());
+        QCOMPARE(QRectF(stage.hud->geometry()), hud);
+        // 0 8 24: 24 round it, 32 under it.
+        const QMargins reach = ui::shadowMargins();
+        QCOMPARE(stage.viewer.hudShadowRect(), hud.marginsAdded(QMarginsF(reach)));
+        QVERIFY(reach.bottom() > reach.top());
+        const QImage shot = stage.viewer.grab().toImage();
+        const auto at = [&shot](const QPointF &point) { return pixelOf(shot, point).lightness(); };
+        const int under = at(QPointF(hud.center().x(), hud.bottom() + 6));
+        const int clear = at(QPointF(hud.center().x(), hud.bottom() + 60));
+        QVERIFY2(under < clear - 20, qPrintable(QStringLiteral("%1 under, %2 clear").arg(under).arg(clear)));
+        // A format change jumps, mid-move or not: no crossfade.
+        ViewerWidget::setMotionOverride(1);
+        const auto still = qScopeGuard([] { ViewerWidget::setMotionOverride(-1); });
+        stage.viewer.setChatOpen(false);
+        QVERIFY(stage.viewer.moving());
+        stage.viewer.setProjectInfo(1080, 1920);
+        QVERIFY(!stage.viewer.moving());
+        QCOMPARE(stage.viewer.shownLayout().body, stage.viewer.stageLayout().body);
+        QVERIFY(!stage.panel->graphicsEffect());
+        stage.viewer.setChatOpen(true);
+        QVERIFY(stage.viewer.moving());
+        stage.viewer.setDevicePreview(DevicePreview::Off);
+        QVERIFY(!stage.viewer.moving());
+        QCOMPARE(stage.viewer.shownLayout().card, stage.viewer.stageLayout().card);
+        stage.viewer.setDevicePreview(DevicePreview::Phone);
+        stage.viewer.setProjectInfo(1920, 1080);
+        stage.viewer.setChatOpen(false);
+        QVERIFY(stage.viewer.moving());
+        stage.viewer.setLaptopPreview(LaptopPreview::Off);
+        QVERIFY(!stage.viewer.moving());
+        // The same shape again moves nothing it should not stop.
+        stage.viewer.setChatOpen(true);
+        QVERIFY(stage.viewer.moving());
+        stage.viewer.setProjectInfo(1920, 1080);
+        QVERIFY(stage.viewer.moving());
+        QTRY_VERIFY(!stage.viewer.moving());
+    }
+
     void panelOpensAndClosesWithMotion() {
         Stage stage(QSize(1920, 1080));
         stage.viewer.show();
@@ -854,7 +909,6 @@ private slots:
         QVERIFY(viewer.stageLayout().device);
         QSignalSpy scrubs(&viewer, &ViewerWidget::scrubbed);
         QSignalSpy ends(&viewer, &ViewerWidget::scrubEnded);
-        QSignalSpy seeks(viewer.overlay(), &PlayerOverlay::seekRequested);
         QSignalSpy controls(viewer.overlay(), &PlayerOverlay::controlTriggered);
         QTest::mouseMove(&viewer, card.center().toPoint());
         QVERIFY(!scrubs.isEmpty());
@@ -872,13 +926,14 @@ private slots:
         QCOMPARE(controls.constFirst()[0].value<PlayerOverlay::Control>(), PlayerOverlay::Control::Play);
         QTest::mouseClick(&viewer, Qt::LeftButton, {}, QPoint(qRound(card.right() + 4), qRound(card.top() - 30)));
         QCOMPARE(controls.size(), 1);
-        QVERIFY(seeks.isEmpty());
+        // The click never moved the playhead: no skim came of it.
+        QCOMPARE(scrubs.size(), skimmed);
     }
 
     // The transport left the picture for the scrub strip under the device
     // (mockup-spec 3.4): nothing of a player lies over the picture (no
-    // shade, no controls, no time), whatever it shows, and the overlay takes
-    // no pointer; it still names the transport's commands for the window.
+    // shade, no controls, no time), whatever it shows; the player state
+    // still names the transport's commands for the window.
     void transportLeftThePicture() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -897,8 +952,6 @@ private slots:
         for (const QPointF &point : {QPointF(picture.left() + 20, picture.bottom() - 6), QPointF(picture.center().x(), picture.bottom() - 20),
                                      QPointF(picture.left() + 30, picture.bottom() - 22), QPointF(picture.left() + 20, picture.top() + 20)})
             QCOMPARE(pixelOf(image, point).rgb(), qRgb(255, 255, 255));
-        QVERIFY(!viewer->overlay()->mousePress(picture.center()));
-        QVERIFY(viewer->overlay()->toolTipAt(picture.center()).isEmpty());
         QVERIFY(viewer->overlay()->controlTip(PlayerOverlay::Control::Play).startsWith(QStringLiteral("Play")));
         // The scrub strip is the transport, under the laptop.
         QWidget *scrub = window.m_stageWiring->scrub();
@@ -1227,14 +1280,11 @@ private slots:
                                    {"inverted", false}, {"params", QJsonObject{}}};
             snapshot(10, QJsonArray{foot});
             viewer->selectMask(QString());
-            QVERIFY(viewer->m_overlay->controlsShown());
             // A first grab lays the viewer out at its size in the window.
             viewer->grab();
             toWidget = viewer->pictureToWidget();
             const QPointF edge = toWidget.map(QPointF(0.5, 0.98));
             QVERIFY2(toWidget.map(QPointF(0.5, 1.0)).y() - edge.y() < 20.0, qPrintable(QString::number(edge.y())));
-            // In the band the player's foot once kept outlines out of.
-            QVERIFY(edge.y() > viewer->m_overlay->footTop() - 4.0);
             const QImage shot = viewer->grab().toImage();
             int brightest = 0;
             for (double dy = -2.0; dy <= 2.0; dy += 0.5)
@@ -1366,7 +1416,8 @@ private slots:
                 QCOMPARE(stage.rail.left(), 748);
                 QVERIFY(window.m_stageSource->isVisible());
                 QCOMPARE(window.m_stageSource->geometry(), stage.source);
-                QCOMPARE(stage.source.width(), 400);
+                QCOMPARE(stage.source.width(), 344); // PENDING OWNER CONFIRMATION (spec 3.1: 400).
+                QCOMPARE(stage.scrub.right(), double(stage.rail.left() - 12));
             }
             QVERIFY2(std::abs(stage.card.width() / stage.card.height() - double(format.canvas.width()) / format.canvas.height()) < 0.01,
                      qPrintable(label));

@@ -5,13 +5,19 @@
 #include "fixtures.h"
 #include "test_registry.h"
 
+#include "chat_panel.h"
 #include "command_registry.h"
+#include "composer.h"
 #include "components.h"
 #include "editor_bus.h"
 #include "editor_common.h"
+#include "keymap_editor.h"
+#include "project_panel.h"
 #include "main_window.h"
 #include "render_queue_view.h"
 #include "review_model.h"
+#include "sequence_settings.h"
+#include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "wiring/toolbar_wiring.h"
 #include "workspace.h"
@@ -19,6 +25,10 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QComboBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QScopeGuard>
 #include <QCoreApplication>
 #include <QDir>
 #include <QHash>
@@ -234,12 +244,13 @@ private slots:
         QTest::mouseClick(bank->segment(0), Qt::LeftButton);
         QVERIFY(window.m_lastCommand.isEmpty());
 
-        // ⌥3 is Square.
-        QAction *square = nullptr;
-        for (QAction *action : window.actions())
-            if (action->objectName() == QStringLiteral("format.1:1")) square = action;
+        // ⌥3 is Square: the registry's sequence.setFormat.11, which the
+        // keymap owns (no window action of the toolbar's own is left).
+        QAction *square = window.m_commands->action(QStringLiteral("sequence.setFormat.11"));
         QVERIFY(square);
         QCOMPARE(square->shortcut(), QKeySequence(Qt::ALT | Qt::Key_3));
+        for (QAction *action : window.actions()) QVERIFY(!action->objectName().startsWith(QStringLiteral("format.")));
+        QCOMPARE(window.m_toolbarWiring->m_formatActions.size(), 4);
         square->trigger();
         const QJsonObject squareOp = window.m_lastCommand.value("ops").toArray().first().toObject();
         QCOMPARE(QSize(squareOp.value("width").toInt(), squareOp.value("height").toInt()), QSize(1080, 1080));
@@ -311,6 +322,193 @@ private slots:
         QVERIFY(items.contains(QStringLiteral("Colour space")));
     }
 
+    // The program of a 25 fps sequence "main", empty or with a clip.
+    static QJsonObject sequenceSnapshot(int revision, bool withClip, const QString &name = QStringLiteral("Spot"),
+                                        const QString &rate = QStringLiteral("25"), double fps = 25, double start = 0) {
+        QJsonArray clips;
+        if (withClip)
+            clips.append(QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}});
+        return QJsonObject{{"revision", revision}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", fps}, {"rate", rate}, {"sequence", "main"}, {"name", "Atlas"}, {"width", 1920}, {"height", 1080}, {"start", start},
+            {"sequences", QJsonArray{QJsonObject{{"id", "main"}, {"name", name}, {"width", 1920}, {"height", 1080}, {"rate", rate}, {"fps", fps}}}},
+            {"markers", QJsonArray{}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", clips}}}}}}};
+    }
+
+    // Sequence Settings… (⌘0) is the registry's sequence.settings: a dialog
+    // whose Apply sends set-sequence with what changed; kerfd's refusal
+    // shows in it and the next revision closes it.
+    void sequenceSettingsSendsSetSequence() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(sequenceSnapshot(3, false));
+        ToolbarWiring *wiring = window.m_toolbarWiring.get();
+        QAction *settings = window.m_commands->action(QStringLiteral("sequence.settings"));
+        QVERIFY(settings && settings->isEnabled());
+        QCOMPARE(settings->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_0));
+        QVERIFY(window.m_commands->reason(QStringLiteral("sequence.settings")).isEmpty());
+        QVERIFY(window.bus()->run(QStringLiteral("sequence.settings")));
+        SequenceSettingsDialog *dialog = wiring->sequenceSettings();
+        QVERIFY(dialog);
+        QVERIFY(dialog->isVisible());
+        QCOMPARE(dialog->nameField()->text(), QStringLiteral("Spot"));
+        QCOMPARE(dialog->formatControl()->currentIndex(), 0);
+        QCOMPARE(dialog->startField()->text(), QStringLiteral("00:00:00:00"));
+        // An empty sequence can take a new rate.
+        QVERIFY(dialog->rateEditable());
+        QVERIFY(dialog->rateField()->isEnabled());
+        QVERIFY(!dialog->rateNoteLabel()->isVisibleTo(dialog));
+        dialog->nameField()->setText(QStringLiteral("Spot v2"));
+        dialog->rateField()->setCurrentIndex(dialog->rateField()->findData(QStringLiteral("30")));
+        dialog->startField()->setText(QStringLiteral("01:00:00:00"));
+        window.m_lastCommand = {};
+        dialog->applyButton()->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        QCOMPARE(window.m_lastCommand.value("ops").toArray(),
+                 (QJsonArray{QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"name", "Spot v2"},
+                                         {"rate", QJsonObject{{"num", 30}, {"den", 1}}}, {"start", "01:00:00:00"}}}));
+        // No bridge took it here, and the dialog says so.
+        QVERIFY(dialog->error().contains(QStringLiteral("not connected")));
+        // kerfd's refusal, in its words, as it comes for a sent edit.
+        wiring->m_sequencePending = true;
+        wiring->m_sequenceRevision = 3;
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", SequenceSettingsDialog::rateNote()}});
+        QCOMPARE(dialog->error(), SequenceSettingsDialog::rateNote());
+        QVERIFY(dialog->isVisible());
+        // A newer revision that does not hold the change (someone else's
+        // edit) leaves the request waiting and the dialog open, typed
+        // fields as they were.
+        wiring->m_sequencePending = true;
+        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", sequenceSnapshot(4, false)}});
+        QVERIFY(wiring->m_sequencePending);
+        QVERIFY(dialog->isVisible());
+        QCOMPARE(dialog->nameField()->text(), QStringLiteral("Spot v2"));
+        // The revision whose sequence says what was asked is kerfd taking
+        // it: the dialog closes. kerfd writes the rate back as "30".
+        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", sequenceSnapshot(5, false, QStringLiteral("Spot v2"), QStringLiteral("30"), 30, 3600.0)}});
+        QTRY_VERIFY(!wiring->sequenceSettings() || !wiring->sequenceSettings()->isVisible());
+        QVERIFY(!wiring->m_sequencePending);
+        // holds() on its own: an NTSC rate as kerfd writes it is the
+        // fraction sent.
+        QVERIFY(SequenceSettingsDialog::holds(sequenceSnapshot(6, false, QStringLiteral("Spot"), QStringLiteral("29.97"), 29.97).value("timeline").toObject(),
+                                              QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"rate", QJsonObject{{"num", 30000}, {"den", 1001}}}}));
+        QVERIFY(!SequenceSettingsDialog::holds(sequenceSnapshot(6, false).value("timeline").toObject(),
+                                               QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"name", "Other"}}));
+
+        // With a clip in it, the rate is read-only and says why.
+        window.applySnapshot(sequenceSnapshot(6, true));
+        SequenceSettingsDialog *again = wiring->openSequenceSettings();
+        QVERIFY(!again->rateEditable());
+        QVERIFY(!again->rateField()->isEnabled());
+        QVERIFY(again->rateNoteLabel()->isVisibleTo(again));
+        QCOMPARE(again->rateNoteLabel()->text(), QStringLiteral("Frame rate can change only while the sequence is empty"));
+        // A format from the segments sends the size only.
+        again->formatControl()->setCurrentIndex(1, false);
+        emit again->formatControl()->activated(1);
+        window.m_lastCommand = {};
+        again->apply();
+        QCOMPARE(window.m_lastCommand.value("ops").toArray(),
+                 (QJsonArray{QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"width", 1080}, {"height", 1920}}}));
+        // The Sequence menu's rate row says the same.
+        wiring->buildSequenceMenu(wiring->m_sequenceMenu);
+        QCOMPARE(findAction(wiring->m_sequenceMenu, QStringLiteral("sequenceFrameRate"))->toolTip(), SequenceSettingsDialog::rateNote());
+        again->reject();
+    }
+
+    // Customise Keyboard… (⌥⌘K) opens the keymap editor over the registry:
+    // a key recorded there applies at once (menus, tips) and is kept for
+    // the next window; a taken key warns first; Reset all goes back.
+    void keymapEditorChangesKeysLive() {
+        QSettings().remove(QStringLiteral("commands/custom"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("commands/custom")); });
+        const QKeySequence own(Qt::CTRL | Qt::ALT | Qt::Key_3);
+        {
+            MainWindow window{QString(), QString()};
+            ToolbarWiring *wiring = window.m_toolbarWiring.get();
+            QAction *customise = window.m_commands->action(QStringLiteral("keyboard.customise"));
+            QVERIFY(customise && customise->isEnabled());
+            QCOMPARE(customise->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_K));
+            customise->trigger();
+            KeymapEditor *editor = wiring->keymapEditor();
+            QVERIFY(editor && editor->isVisible());
+            QCOMPARE(editor->customiser(), wiring->keymapCustomiser());
+            // The commands without a menu are there too.
+            editor->setFilter(QString());
+            for (const char *id : {"bin.search", "bin.toggleView", "browser.search", "source.play", "source.reveal", "composer.draw",
+                                   "sequence.setFormat.169", "sequence.settings"})
+                QVERIFY2(editor->shownCommands().contains(QString::fromLatin1(id)), id);
+            editor->setFilter(QStringLiteral("switch bin"));
+            QCOMPARE(editor->shownCommands(), QStringList{QStringLiteral("bin.toggleView")});
+            QCOMPARE(editor->selectedCommand(), QStringLiteral("bin.toggleView"));
+            QSignalSpy keys(window.m_commands, &CommandRegistry::shortcutsChanged);
+            editor->record(own);
+            QAction *view = window.m_commands->action(QStringLiteral("bin.toggleView"));
+            QCOMPARE(view->shortcut(), own);
+            QVERIFY(keys.size() >= 1);
+            QVERIFY(view->toolTip().contains(own.toString(QKeySequence::NativeText)));
+            QCOMPARE(ui::tipShortcut(window.m_projectPanel->m_viewButton), own.toString(QKeySequence::NativeText));
+            // ⌘E is Export Master's: a warning first, and nothing moves.
+            editor->record(QKeySequence(Qt::CTRL | Qt::Key_E));
+            QVERIFY(editor->conflictPending());
+            QVERIFY(editor->warning().contains(window.m_commands->action(QStringLiteral("export.master"))->text()));
+            QCOMPARE(view->shortcut(), own);
+            editor->cancelConflict();
+            QVERIFY(!editor->conflictPending());
+            QCOMPARE(window.m_commands->action(QStringLiteral("export.master"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_E));
+            editor->close();
+        }
+        {
+            // The next window has it, and the toolbar's format keys follow
+            // the registry the same way.
+            MainWindow window{QString(), QString()};
+            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), own);
+            ToolbarWiring *wiring = window.m_toolbarWiring.get();
+            KeymapEditor *editor = wiring->openKeymapEditor();
+            editor->selectCommand(QStringLiteral("sequence.setFormat.916"));
+            editor->record(QKeySequence(Qt::META | Qt::Key_9));
+            QCOMPARE(ui::tipShortcut(window.m_formatBank->segment(1)), QKeySequence(Qt::META | Qt::Key_9).toString(QKeySequence::NativeText));
+            // A keymap chosen keeps its own keys, and one's own come back with it.
+            window.m_commands->setKeymap(QStringLiteral("premiere"));
+            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
+            window.m_commands->setKeymap(QStringLiteral("kerf"));
+            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), own);
+            editor->m_resetAll->click();
+            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
+            QCOMPARE(window.m_commands->action(QStringLiteral("sequence.setFormat.916"))->shortcut(), QKeySequence(Qt::ALT | Qt::Key_2));
+            QCOMPARE(ui::tipShortcut(window.m_formatBank->segment(1)), QKeySequence(Qt::ALT | Qt::Key_2).toString(QKeySequence::NativeText));
+            editor->close();
+        }
+    }
+
+    // composer.draw (D) is the composer's Draw, while the composer has the
+    // focus; elsewhere it does nothing.
+    void composerDrawIsTheRegistrysCommand() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        Composer *composer = window.m_chat->composerWidget();
+        QAction *draw = window.m_commands->action(QStringLiteral("composer.draw"));
+        QVERIFY(draw);
+        QCOMPARE(draw->shortcut(), QKeySequence(Qt::Key_D));
+        QCOMPARE(composer->drawAction(), draw);
+        QVERIFY(composer->actions().contains(draw));
+        QCOMPARE(draw->shortcutContext(), Qt::WidgetWithChildrenShortcut);
+        QVERIFY(window.m_commandHandlers.contains(QStringLiteral("composer.draw")));
+        QCOMPARE(ui::tipShortcut(composer->drawButton()), QStringLiteral("D"));
+        QSignalSpy clicked(composer, &Composer::drawClicked);
+        window.m_timeline->setFocus();
+        QVERIFY(!window.m_toolbarWiring->drawInComposer());
+        QCOMPARE(clicked.size(), 0);
+        if (!composer->isVisible()) window.setChatOpen(true);
+        composer->drawButton()->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(composer->hasFocusWithin());
+        draw->trigger();
+        QCOMPARE(clicked.size(), 1);
+    }
+
     // Export is a split button: "Export  Master" exports the chosen quality
     // (export {master, prores_hq} or {review, h264}); the chevron opens the
     // menu: Master and Draft, Render preview, Preflight, Render master, the
@@ -340,7 +538,10 @@ private slots:
         QCOMPARE(ui::tipShortcut(button->mainPart()),
                  window.m_commands->action(QStringLiteral("export.master"))->shortcut().toString(QKeySequence::NativeText));
         QTest::mouseClick(button->mainPart(), Qt::LeftButton);
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "export"}, {"quality", "master"}, {"codec", "prores_hq"}}));
+        // The Deliver tray's Master command; without a project folder it names no folder or file.
+        QCOMPARE(window.m_lastCommand, deliver::exportCommand(deliver::output(window.m_projectDirectory, QStringLiteral("master"))));
+        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
+        QVERIFY(!window.m_lastCommand.contains("codec"));
 
         // The menu.
         button->showMenu();
@@ -521,7 +722,10 @@ private slots:
         QVERIFY(render->isEnabled());
         window.m_lastCommand = {};
         render->trigger();
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "export"}, {"quality", "master"}, {"codec", "prores_hq"}}));
+        // The Deliver tray's Master command; without a project folder it names no folder or file.
+        QCOMPARE(window.m_lastCommand, deliver::exportCommand(deliver::output(window.m_projectDirectory, QStringLiteral("master"))));
+        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
+        QVERIFY(!window.m_lastCommand.contains("codec"));
         window.m_bus->setReview(nullptr);
 
         // Offline, Render master says why.
@@ -535,12 +739,13 @@ private slots:
         QVERIFY(!findAction(menu, QStringLiteral("exportEdlLocators"))->isEnabled());
 
         // With one it is the Deliver paperwork's own option: on by default,
-        // kept under deliver/<project folder>/edlLocators, and a change tells
-        // Deliver so its paperwork rebuilds.
+        // kept under Deliver's key for the project (deliver::settingsKey,
+        // named after the folder and told apart by its path), and a change
+        // tells Deliver so its paperwork rebuilds.
         window.m_projectDirectory = QStringLiteral("/tmp/kerf-toolbar-test/atlas");
         const QString key = wiring->edlLocatorsKey();
         QCOMPARE(key, deliver::settingsKey(window.m_projectDirectory, QStringLiteral("edlLocators")));
-        QCOMPARE(key, QStringLiteral("deliver/atlas/edlLocators"));
+        QVERIFY(key.startsWith(QStringLiteral("deliver/atlas")) && key.endsWith(QStringLiteral("/edlLocators")));
         QSettings().remove(key);
         wiring->buildExportMenu();
         QAction *locators = findAction(menu, QStringLiteral("exportEdlLocators"));

@@ -19,6 +19,7 @@
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "proposal_card.h"
+#include "review_link.h"
 #include "review_model.h"
 #include "stage_rail.h"
 #include "timeline_widget.h"
@@ -29,7 +30,6 @@
 
 #include <QApplication>
 #include <QClipboard>
-#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
@@ -209,7 +209,6 @@ void ReviewWiring::attach(ChatPanel *panel) {
     connect(panel, &ChatPanel::stopRequested, w, [w] {
         if (!w->execute(QStringLiteral("ai.stop"))) return;
         w->m_abortButton->setEnabled(false);
-        w->m_agentStatus->setText(QStringLiteral("Stopping"));
         w->appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
     });
     connect(panel, &ChatPanel::drawRequested, this, [this] {
@@ -244,7 +243,8 @@ void ReviewWiring::attach(ChatPanel *panel) {
             m_model->setViewAs(argument);
             m_bus->setViewAs(argument);
         } else if (action == QLatin1String("model")) {
-            w->m_modelSelect->setEditText(argument);
+            w->m_agentModel = argument;
+            m_panel->setModels(w->m_agentModels, argument, true);
         } else if (action == QLatin1String("export")) {
             QString path;
             if (argument != QLatin1String("markers")) {
@@ -346,7 +346,6 @@ bool ReviewWiring::sendTurn(const QString &text, const QJsonObject &focus, const
     w->showNextSteps(QJsonArray{});
     w->m_agentBusy = true;
     w->m_agentText.clear();
-    w->m_agentStatus->setText(QStringLiteral("Working"));
     w->m_abortButton->setEnabled(true);
     if (m_panel) {
         const bool stamped = threadId.isEmpty() && comment.contains(QStringLiteral("at"));
@@ -468,13 +467,10 @@ bool ReviewWiring::editComment(const QString &commentId, const QString &body) {
 }
 
 QString ReviewWiring::reviewLink(double seconds) const {
+    // Named by the folder's slug, the name a link is followed by (not the
+    // document's, which a closed project could not be found by).
     const MainWindow *w = m_window;
-    QString project = w->m_projectName.isEmpty() ? QFileInfo(w->m_projectDirectory).fileName() : w->m_projectName;
-    if (project.isEmpty()) return {};
-    project = QString::fromUtf8(QUrl::toPercentEncoding(project.toLower().replace(QLatin1Char(' '), QLatin1Char('-'))));
-    QString link = QStringLiteral("kerf://%1/rev%2").arg(project).arg(w->m_revision);
-    if (std::isfinite(seconds)) link += QLatin1Char('@') + review::timecode(seconds, w->m_fps);
-    return link;
+    return links::make(w->m_projectDirectory, w->m_revision, seconds, w->m_fps);
 }
 
 void ReviewWiring::syncPinnedProposal() {
@@ -491,8 +487,6 @@ void ReviewWiring::syncPinnedProposal() {
     w->m_proposalId = pinned;
     if (moved && w->m_timeline) w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
     w->m_proposalBlocked = stale;
-    w->m_acceptButton->setEnabled(w->m_connected && !pinned.isEmpty() && !stale);
-    w->m_rejectButton->setEnabled(w->m_connected && !pinned.isEmpty());
     w->updateAiBar();
     w->updateCommandStates();
 }
@@ -595,30 +589,8 @@ void MainWindow::askSubmitted(const QString &text, const QString &scope) {
 }
 
 void MainWindow::showNextSteps(const QJsonArray &steps) {
-    m_steps = steps;
-    // The timeline's AI bar shows them as buttons while the panel is closed.
-    QWidget *row = m_nextSteps;
-    while (QLayoutItem *item = row->layout()->takeAt(0)) {
-        // A pressed button sends the request that clears it.
-        if (item->widget()) item->widget()->deleteLater();
-        delete item;
-    }
-    for (const QJsonValue &value : steps) {
-        const QJsonObject step = value.toObject();
-        const QString request = step.value(QStringLiteral("request")).toString();
-        auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
-        button->setObjectName(QStringLiteral("nextStep"));
-        button->setProperty("bezelRadius", 11);
-        button->setToolTip(request);
-        button->setCursor(Qt::PointingHandCursor);
-        connect(button, &QPushButton::clicked, this, [this, request] {
-            if (!m_agentBusy) sendAgent(request, m_lastFocus, m_lastFocusLabel);
-        });
-        row->layout()->addWidget(button);
-    }
-    // In the panel: the welcome's Try asking and the composer's suggestions.
+    // The welcome's Try asking and the composer's suggestions.
     m_chat->setNextSteps(steps);
-    updateAiBar();
 }
 
 void MainWindow::updateChatControls() {
@@ -634,45 +606,18 @@ void MainWindow::updateChatControls() {
     updateChatStatus();
 }
 
-void MainWindow::acceptProposal() { execute(QStringLiteral("proposal.accept")); }
-
-void MainWindow::rejectProposal() { execute(QStringLiteral("proposal.reject")); }
-
 void MainWindow::updateProposal(const QJsonValue &value) {
     // The snapshot's first open proposal; the review model's pin order takes
     // over once the state event reaches it (ReviewWiring::syncPinnedProposal).
+    // Its card in the panel and its bar on the timeline show it.
     m_proposalId.clear();
     m_proposalBlocked = false;
-    const bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
-    m_acceptButton->setEnabled(m_connected && pending);
-    m_rejectButton->setEnabled(m_connected && pending);
-    m_chat->setProposalShown(pending, pending ? value.toObject().value(QStringLiteral("proposalId")).toString() : QString());
-    if (!pending) {
-        m_proposalText.clear();
-        m_proposalDiff->clear();
-        m_chat->setProposalSummary(QStringLiteral("No pending changes"));
-        updateAiBar();
-        return;
-    }
     const QJsonObject proposal = value.toObject();
-    m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
-    const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
-    QStringList changes;
-    for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
-        const QString text = line.trimmed();
-        if (text.isEmpty() || text.startsWith(QLatin1Char('#'))) continue;
-        changes << describeScriptLine(text).description;
+    if (proposal.value(QStringLiteral("status")).toString() == QStringLiteral("pending")) {
+        m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
+        m_proposalBlocked = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
+        if (m_reviewWiring) m_reviewWiring->syncPinnedProposal();
     }
-    m_chat->setProposalSummary(changes.join(QStringLiteral(" · ")));
-    QString text;
-    if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
-    text += proposal.value(QStringLiteral("script")).toString();
-    text += QStringLiteral("\n") + proposal.value(QStringLiteral("documentDiff")).toString();
-    m_proposalText = text;
-    showProposalText();
-    m_acceptButton->setEnabled(m_connected && !stale);
-    m_proposalBlocked = stale;
-    if (m_reviewWiring) m_reviewWiring->syncPinnedProposal();
     updateAiBar();
 }
 
@@ -808,25 +753,6 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
 }
 
 
-void MainWindow::showProposalText() {
-    // The pending proposal's script and diff (deprecated view, kept for the
-    // regions that read it): additions in pos, removals in neg.
-    m_proposalDiff->clear();
-    QTextCursor cursor(m_proposalDiff->document());
-    const QStringList lines = m_proposalText.split(QLatin1Char('\n'));
-    for (qsizetype index = 0; index < lines.size(); ++index) {
-        const QString &line = lines.at(index);
-        const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
-        QTextCharFormat format;
-        format.setForeground(!header && line.startsWith(QLatin1Char('+'))   ? tokens::color(tokens::pos)
-                             : !header && line.startsWith(QLatin1Char('-')) ? tokens::color(tokens::neg)
-                                                                             : tokens::color(tokens::ink2));
-        if (index > 0) cursor.insertBlock();
-        cursor.insertText(line, format);
-    }
-    m_proposalDiff->moveCursor(QTextCursor::Start);
-}
-
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {
     if (text.isEmpty()) return;
     const bool user = speaker == QStringLiteral("You");
@@ -853,9 +779,9 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
 }
 
 void MainWindow::updateChatCount() {
-    // The rail's button counts the open threads.
-    const int open = m_reviewWiring && m_reviewWiring->model() ? m_reviewWiring->model()->counts().open : 0;
-    m_rail->chatButton()->setLabel(open ? QString::number(open) : QStringLiteral("Chat"));
+    // The rail's Comments badge counts the review's open threads
+    // (review()->counts().open); its tip follows.
+    m_rail->refreshCounts();
 }
 
 void MainWindow::updateChatTips() {
@@ -863,11 +789,9 @@ void MainWindow::updateChatTips() {
     QAction *assistant = m_commands->action(QStringLiteral("window.assistant"));
     const QString key = assistant ? assistant->shortcut().toString(QKeySequence::NativeText) : QString();
     ui::setTip(m_chat->closeButton(), QStringLiteral("Close"), key);
+    // The rail's button keeps the rail's own tip ("Comments · N open" and
+    // the panel's shortcut); only what it does is named here.
     RailButton *rail = m_rail->chatButton();
-    const int open = m_reviewWiring && m_reviewWiring->model() ? m_reviewWiring->model()->counts().open : 0;
-    rail->setToolTip(rail->isChecked() ? m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close comments"))
-                                       : m_commands->labelWithShortcut(QStringLiteral("window.assistant"),
-                                                                       QStringLiteral("Comments · %1 open").arg(open)));
     rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close comments") : QStringLiteral("Open comments"));
 }
 
@@ -920,8 +844,7 @@ void MainWindow::showActivity() {
 
 void MainWindow::updateChatStatus() {
     // Kerf at work shows in its drafting row: the latest status line.
-    m_chatActivity->setVisible(false);
-    if (m_agentBusy && !m_chatActivity->text().isEmpty()) m_chat->setTurnStatus(m_chatActivity->text());
+    if (m_agentBusy && !m_activityDetail.isEmpty()) m_chat->setTurnStatus(m_activityDetail);
 }
 
 void MainWindow::appendConversationNote(const QString &kind, const QString &text) {
@@ -937,8 +860,7 @@ void MainWindow::appendConversationNote(const QString &kind, const QString &text
         if (m_agentRow) m_agentRow->addReply(detail);
         else m_pendingReplies.append(detail);
     }
-    m_chatActivity->setText(detail);
-    m_chatActivity->setToolTip(QStringLiteral("%1 · %2").arg(kind, detail));
+    m_activityDetail = detail;
     m_chat->setTurnStatus(detail);
     updateChatStatus();
 }
@@ -984,12 +906,6 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        if (!m_connected) m_agentStatus->setText(QStringLiteral("Offline"));
-        else if (busy) m_agentStatus->setText(QStringLiteral("Thinking"));
-        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("Failed"));
-        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("Stopped"));
-        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("Review"));
-        else m_agentStatus->setText(QStringLiteral("Ready"));
         m_chat->setTurnBusy(busy);
         if (!busy) m_chat->finishTurn();
         updateChatControls();
@@ -997,13 +913,6 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         updateCommandStates();
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
-        m_agentRunState = state;
-        const QString label = state == QStringLiteral("running") ? QStringLiteral("Thinking")
-                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("Review")
-                              : state == QStringLiteral("failed") ? QStringLiteral("Failed")
-                              : state == QStringLiteral("aborted") ? QStringLiteral("Stopped")
-                              : QStringLiteral("Ready");
-        m_agentStatus->setText(m_connected ? label : QStringLiteral("Offline"));
         updateChatStatus();
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
@@ -1027,20 +936,10 @@ void MainWindow::buildReview() {
     m_chat = new ChatPanel;
     m_rail = new StageRail;
     m_chatScroll = m_chat->scroll();
-    m_chatActivity = m_chat->activityLabel();
-    m_agentStatus = m_chat->statusLabel();
     m_chatComposer = m_chat->composer();
     m_chatInput = m_chat->input();
-    m_modelSelect = m_chat->modelSelect();
     m_sendButton = m_chat->sendButton();
     m_abortButton = m_chat->stopButton();
-    m_proposalBox = m_chat->proposal();
-    m_proposalSummary = m_chat->proposalSummary();
-    m_proposalDiff = m_chat->proposalDiff();
-    m_acceptButton = m_chat->acceptButton();
-    m_rejectButton = m_chat->rejectButton();
-    m_chatNextSteps = m_chat->chips();
-    m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
     connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
     // Stop (m_abortButton) reaches kerfd through ChatPanel::stopRequested (ReviewWiring).
     m_abortButton->setEnabled(false);
@@ -1059,8 +958,6 @@ void MainWindow::buildReview() {
         m_activityList->setMinimumSize(320, 160);
         layout->addWidget(m_activityList);
     }
-    connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
-    connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
     m_reviewWiring->attach(m_chat);
 }
 

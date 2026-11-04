@@ -5,6 +5,7 @@
 #include "icons.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QAction>
 #include <QApplication>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
@@ -438,13 +439,42 @@ void Composer::setDraw(Draw state, const QJsonArray &strokes) {
     m_drawing = state == Draw::Attached ? strokes : QJsonArray{};
     m_draw->setChecked(state != Draw::None);
     switch (state) {
-    case Draw::None: m_draw->setTip(QStringLiteral("Draw on frame"), QStringLiteral("D")); break;
+    case Draw::None: m_draw->setTip(QStringLiteral("Draw on frame"), drawKey()); break;
     case Draw::Drawing: m_draw->setTip(QStringLiteral("Drawing on the frame · click to cancel"), QStringLiteral("Esc")); break;
     case Draw::Attached:
         m_draw->setTip(QStringLiteral("Drawing attached · %1 · click to remove")
                            .arg(strokes.size() == 1 ? QStringLiteral("1 stroke") : QStringLiteral("%1 strokes").arg(strokes.size())));
         break;
     }
+}
+
+void Composer::requestDraw() {
+    if (m_draw->isEnabled()) m_draw->click();
+}
+
+void Composer::setDrawAction(QAction *action) {
+    if (m_drawAction) {
+        removeAction(m_drawAction);
+        m_drawAction->disconnect(this);
+    }
+    m_drawAction = action;
+    if (action) {
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(action);
+        connect(action, &QAction::changed, this, [this] {
+            if (m_drawState == Draw::None) m_draw->setTip(QStringLiteral("Draw on frame"), drawKey());
+        });
+    }
+    if (m_drawState == Draw::None) m_draw->setTip(QStringLiteral("Draw on frame"), drawKey());
+}
+
+QString Composer::drawKey() const {
+    return m_drawAction ? m_drawAction->shortcut().toString(QKeySequence::NativeText) : QStringLiteral("D");
+}
+
+bool Composer::hasFocusWithin() const {
+    const QWidget *focus = QApplication::focusWidget();
+    return focus && (focus == this || isAncestorOf(focus));
 }
 
 void Composer::setError(const QString &message) {

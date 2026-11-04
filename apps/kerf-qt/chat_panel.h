@@ -16,9 +16,6 @@
 #include "test_friends.h"
 #include "comment_row.h"
 #include "review_model.h"
-// RailButton and StageRail moved to ui/stage_rail.h; included here for the files that
-// still find them through this header (deprecated, removed in W3).
-#include "stage_rail.h"
 
 #include <QAbstractButton>
 #include <QDateTime>
@@ -34,7 +31,6 @@
 #include <functional>
 #include <limits>
 
-class QComboBox;
 class QFrame;
 class QHBoxLayout;
 class QLabel;
@@ -76,12 +72,10 @@ struct ProposalChange {
 class ChatIconButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    // Close, the overflow's dots, and the chevrons.
-    enum class Glyph { Close, More, Back, Forward };
+    // Close and the overflow's dots.
+    enum class Glyph { Close, More };
     ChatIconButton(Glyph glyph, int diameter, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
-    // Deprecated: a filled disc at rest (W3 removes it).
-    void setFilled(bool filled) { m_filled = filled; update(); }
     QSize sizeHint() const override;
 
 protected:
@@ -92,7 +86,6 @@ protected:
 private:
     Glyph m_glyph;
     int m_diameter;
-    bool m_filled = false;
 };
 
 class ChatPanel final : public QWidget {
@@ -112,16 +105,6 @@ public:
     // The pin bar shows while the pinned card's footer is not fully in view
     // (its bottom 24 over the list's).
     static constexpr int kPinMargin = 24;
-    // Deprecated sizes of the old conversation, still read by tests of
-    // other regions (W3 removes them): buttons and chips are 24 now.
-    static constexpr int kComposerAvatar = 24;
-    static constexpr int kPillHeight = 24;
-    static constexpr int kComposerPillHeight = 24;
-    static constexpr int kChipHeight = 24;
-    static constexpr int kChipRowHeight = 32;
-    static constexpr int kProposalChangeLines = 3;
-    static constexpr int kProposalDiffLines = 10;
-    static constexpr int kNarrowProposal = 360;
 
     explicit ChatPanel(QWidget *parent = nullptr);
     ~ChatPanel() override;
@@ -148,6 +131,12 @@ public:
     // welcome's Try asking and the composer's suggestions.
     void setNextSteps(const QJsonArray &steps);
     QJsonArray nextSteps() const { return m_steps; }
+    // The models the More menu offers under Model (only with more than one,
+    // and while `choosable`: Kerf Cloud picks its own), and the one each
+    // request names, shown at Agent settings….
+    void setModels(const QStringList &models, const QString &current, bool choosable);
+    QStringList models() const { return m_models; }
+    QString model() const { return m_currentModel; }
     // The latest check's summary rows: failing ones become suggestions.
     void setCheckRows(const QJsonArray &rows);
     // The proposal a running preview shows (empty when none).
@@ -274,43 +263,12 @@ public:
     QMenu *buildMoreMenu();
     QMenu *buildRowMenu(const QString &commentId);
 
-    // ---- deprecated: the old conversation's parts, kept for other regions'
-    // code and tests until W3 removes them. None of them shows. ----------------
-    QLabel *countLabel() const { return m_count; }
-    QWidget *statusRow() const { return m_statusRow; }
-    QLabel *statusLabel() const { return m_status; }
-    QLabel *activityLabel() const { return m_activity; }
-    QWidget *chips() const { return m_chips; }
-    ChatIconButton *chipsBack() const { return m_chipBack; }
-    ChatIconButton *chipsForward() const { return m_chipForward; }
-    QComboBox *modelSelect() const { return m_modelSelect; }
-    QPushButton *cancelButton() const { return m_cancel; }
-    QFrame *proposal() const { return m_proposal; }
-    QLabel *proposalName() const { return m_proposalName; }
-    QLabel *proposalTime() const { return m_proposalTime; }
-    QLabel *proposalSummary() const { return m_proposalSummary; }
-    QTextEdit *proposalDiff() const { return m_proposalDiff; }
-    QPushButton *acceptButton() const { return m_accept; }
-    QPushButton *rejectButton() const { return m_reject; }
-    QFrame *proposalBar() const { return m_pinBar; }
-    QLabel *proposalBarSummary() const { return m_pinSummary; }
-    QPushButton *barAcceptButton() const { return m_barAccept; }
-    QPushButton *barRejectButton() const { return m_barReject; }
-    QFrame *listEdge() const { return m_scrollEdge; }
-    void setProposalShown(bool shown, const QString &id = QString());
-    void setProposalSummary(const QString &summary, const QString &compact = QString(), const QString &count = QString());
-    void setProposalChanges(const QList<ProposalChange> &changes);
-    bool proposalExpanded() const { return false; }
-    void setProposalExpanded(bool) {}
-    bool composerExpanded() const { return true; }
-
 signals:
     // A drag on the panel's leading edge asks for this width, and its end
     // for keeping it.
     void widthDragged(int width);
     void widthDragFinished();
     // "Ask again" on a row: the request to send again, in its thread.
-    void askAgain(const QString &text);
     void askAgainInThread(const QString &text, const QString &threadId);
     void seekRequested(double seconds);
     // The ring or Resolve: resolve (true) or reopen a thread.
@@ -378,7 +336,6 @@ private:
     QWidget *buildChips();
     QFrame *buildPinBar();
     QWidget *buildSearch();
-    void buildDeprecated();
     void scheduleRebuild();
     void syncContent();
     void rebuild();
@@ -413,6 +370,9 @@ private:
     std::function<ProposalChange(const QString &)> m_describer;
     std::function<QString(double)> m_reviewLink;
     QJsonArray m_steps;
+    QStringList m_models;
+    QString m_currentModel;
+    bool m_modelsChoosable = false;
     QJsonArray m_checkRows;
     QString m_previewProposal;
     QHash<QString, QImage> m_effectFrames;
@@ -469,32 +429,7 @@ private:
     QDateTime m_welcomeSince;
     QLabel *m_welcomeTime = nullptr;
 
-    // Deprecated parts (hidden).
-    QLabel *m_count = nullptr;
-    QWidget *m_statusRow = nullptr;
-    QLabel *m_status = nullptr;
-    QLabel *m_activity = nullptr;
-    QWidget *m_chips = nullptr;
-    ChatIconButton *m_chipBack = nullptr;
-    ChatIconButton *m_chipForward = nullptr;
-    QComboBox *m_modelSelect = nullptr;
-    QPushButton *m_cancel = nullptr;
-    QFrame *m_proposal = nullptr;
-    QLabel *m_proposalName = nullptr;
-    QLabel *m_proposalTime = nullptr;
-    QDateTime m_proposalSince;
-    QString m_proposalId;
-    QLabel *m_proposalSummary = nullptr;
-    QTextEdit *m_proposalDiff = nullptr;
-    QPushButton *m_accept = nullptr;
-    QPushButton *m_reject = nullptr;
-    QPushButton *m_barAccept = nullptr;
-    QPushButton *m_barReject = nullptr;
-    QFrame *m_scrollEdge = nullptr;
 };
 
-// The time a comment shows: "now", "4 min ago", "2 h ago", then the date
-// (the old conversation's form; rows use review::age).
-QString relativeTime(const QDateTime &then, const QDateTime &now);
 
 } // namespace kerf

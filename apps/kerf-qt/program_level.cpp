@@ -1,7 +1,6 @@
 #include "program_level.h"
 #include "design_tokens.h"
 #include "editor_common.h"
-#include "media_artwork.h"
 
 #include <QJsonArray>
 #include <QPainter>
@@ -183,73 +182,5 @@ QList<ProgramMeter::Segment> ProgramMeter::segments(double db, double height) {
 }
 
 QList<int> ProgramMeter::scaleMarks() { return {0, 6, 12, 18, 24, 40, 60}; }
-
-// ================================================================ deprecated
-
-namespace {
-
-// The sound a reading stands for: what played over the last 50 ms.
-constexpr double kWindowSeconds = 0.05;
-
-// The source seconds `offset` seconds into `clip`, as the timeline reads
-// them (TimelineWidget::clipSourceTime).
-double sourceTime(const QJsonObject &clip, double offset) {
-    const double duration = clip.value(QStringLiteral("duration")).toDouble();
-    const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
-    const double in = clip.value(QStringLiteral("in")).toDouble();
-    const double out = clip.value(QStringLiteral("out")).toDouble(in + duration * std::abs(speed));
-    const bool reverse = clip.value(QStringLiteral("reverse")).toBool() || speed < 0.0;
-    const double rate = duration > 0.0 ? (out - in) / duration : std::abs(speed);
-    return reverse ? out - offset * rate : in + offset * rate;
-}
-
-} // namespace
-
-double programPeak(const QJsonObject &timeline, const MediaArtwork *artwork, double seconds) {
-    if (!artwork) return 0.0;
-    double loudest = 0.0;
-    for (const QJsonValue &trackValue : timeline.value(QStringLiteral("tracks")).toArray()) {
-        const QJsonObject track = trackValue.toObject();
-        if (track.value(QStringLiteral("type")).toString() != QStringLiteral("audio")) continue;
-        if (track.value(QStringLiteral("muted")).toBool() || !track.value(QStringLiteral("enabled")).toBool(true)) continue;
-        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray()) {
-            const QJsonObject clip = clipValue.toObject();
-            if (!clip.value(QStringLiteral("enabled")).toBool(true)) continue;
-            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-            const double duration = clip.value(QStringLiteral("duration")).toDouble();
-            if (seconds < start || seconds >= start + duration) continue;
-            const auto found = artwork->peaks.constFind(clip.value(QStringLiteral("sourceId")).toString());
-            if (found == artwork->peaks.cend() || found->isEmpty()) continue;
-            const double to = seconds - start;
-            const double from = std::max(0.0, to - kWindowSeconds);
-            const AudioPeaks::Bucket bucket = found->range(sourceTime(clip, from), sourceTime(clip, to));
-            const double gain = std::pow(10.0, clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("gain")).toDouble(0.0) / 20.0);
-            loudest = std::max(loudest, std::max(std::abs(double(bucket.min)), std::abs(double(bucket.max))) * gain);
-        }
-    }
-    return loudest;
-}
-
-double vuNeedle(double peak) {
-    if (!(peak > 0.0)) return 0.0;
-    const double vu = std::clamp(20.0 * std::log10(peak) + 18.0, -20.0, 3.0);
-    const double volts = std::pow(10.0, vu / 20.0);
-    if (volts <= 1.0) return 0.75 * (volts - 0.1) / 0.9;
-    return 0.75 + 0.25 * (volts - 1.0) / (std::pow(10.0, 3.0 / 20.0) - 1.0);
-}
-
-VuMeter::VuMeter(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("programLevelVu"));
-    hide();
-}
-
-QSize VuMeter::sizeHint() const { return {48, 40}; }
-
-void VuMeter::setTarget(double needle) { m_target = std::clamp(needle, 0.0, 1.0); }
-
-void VuMeter::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    paintVuMeter(painter, rect(), m_target);
-}
 
 } // namespace kerf

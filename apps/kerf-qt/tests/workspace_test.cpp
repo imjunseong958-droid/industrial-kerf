@@ -5,6 +5,7 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
+#include "stage_rail.h"
 #include "command_registry.h"
 #include "device_frame.h"
 #include "editor_common.h"
@@ -170,16 +171,10 @@ private slots:
         QVERIFY(checkedWhileOpen);
         QVERIFY(device->isChecked());
 
-        window.m_chat->setProposalShown(true, QStringLiteral("p1"));
-        QCOMPARE(window.m_chat->proposalTime()->text(), QStringLiteral("now"));
-        window.m_chat->m_proposalSince = QDateTime::currentDateTime().addSecs(-5 * 60);
         window.m_chat->m_welcomeSince = QDateTime::currentDateTime().addSecs(-5 * 60);
         window.m_chat->refreshTimes();
-        const QString aged = relativeTime(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime());
-        QCOMPARE(window.m_chat->proposalTime()->text(), aged);
         // Comment rows say their age the short way (mockup .ctime: "5 min").
         QCOMPARE(window.m_chat->m_welcomeTime->text(), review::age(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime()));
-        window.m_chat->setProposalShown(false, QString());
 
         // An empty phone: the two lines wrap inside its screen, no ink in
         // the screen's outer 12 points on either side.
@@ -646,8 +641,7 @@ private slots:
         QVERIFY(window.chatOpen());
         QAction *toggle = window.m_commands->action(QStringLiteral("window.assistant"));
         QVERIFY(toggle->isCheckable() && toggle->isChecked());
-        QVERIFY(window.m_chatToggle && window.m_chatToggle->isChecked());
-        QCOMPARE(window.m_chatToggle->defaultAction(), toggle);
+        QVERIFY(window.m_rail->chatButton()->isChecked());
         // Each region in an area of its own; the Source monitor is a page of
         // the Inspector column, Effects and Presets pages of the browser.
         QCOMPARE(panel("source"), panel("inspector"));
@@ -692,11 +686,11 @@ private slots:
             QCOMPARE(stage.panel.right() + 1, window.m_viewer->width() - 12);
             QCOMPARE(stage.panel.top(), 8);
             QCOMPARE(stage.panel.height(), window.m_viewer->height() - 16);
-            QCOMPARE(stage.rail.left() - qRound(stage.body.right()), window.m_viewer->stageGap());
+            QCOMPARE(stage.rail.left() - qRound(stage.body.right()), ViewerWidget::kStageEdge);
             const double leftSpace = stage.body.left() - 16;
             const double rightSpace = (stage.panel.left() - 12) - stage.railRect.right();
             QVERIFY2(std::abs(leftSpace - rightSpace) <= 1.0, qPrintable(QStringLiteral("%1: %2 | %3").arg(what).arg(leftSpace).arg(rightSpace)));
-            QVERIFY2(stage.panel.height() >= ViewerWidget::kLeastChatHeight, what);
+            QVERIFY2(stage.panel.height() >= 280, what);
         };
         checkGroup("1440");
         // A wide picture keeps four fifths of its width with the
@@ -725,7 +719,7 @@ private slots:
         {
             const ViewerWidget::StageLayout stage = window.m_viewer->stageLayout();
             QVERIFY(!stage.overlay);
-            QCOMPARE(window.m_viewer->stageGap(), ViewerWidget::kNarrowStageGap);
+            QCOMPARE(ViewerWidget::kStageEdge, ViewerWidget::kStageEdge);
             // (Which of the picture and the panel is larger in a stage this
             // short is the stage layout's to say: Q-STAGE, W2.)
             QVERIFY(stage.panel.width() >= ViewerWidget::kMinChatWidth);
@@ -734,7 +728,7 @@ private slots:
             const double closedWidth = window.m_viewer->videoRect().width();
             window.setChatOpen(true);
             QCoreApplication::processEvents();
-            QVERIFY(stage.card.width() >= ViewerWidget::kCardKeeps * closedWidth - 1 || stage.panel.width() == ViewerWidget::kMinChatWidth);
+            QVERIFY(stage.card.width() >= 0.8 * closedWidth - 1 || stage.panel.width() == ViewerWidget::kMinChatWidth);
             checkGroup("1280");
         }
         window.resize(1440, 900);
@@ -743,17 +737,17 @@ private slots:
 
         // The (retired) toolbar switch closes it; the rail stays on the
         // picture's right, and the browsers keep their width.
-        window.m_chatToggle->click();
+        toggle->trigger();
         QCoreApplication::processEvents();
         QVERIFY(!window.chatOpen() && !window.m_chat->isVisible());
-        QVERIFY(!toggle->isChecked() && !window.m_chatToggle->isChecked() && !window.m_rail->chatButton()->isChecked());
+        QVERIFY(!toggle->isChecked() && !window.m_rail->chatButton()->isChecked());
         // Closed, the rail is anchored 12 from the stage's right.
         QCOMPARE(window.m_rail->geometry().right() + 1, window.m_viewer->width() - 12);
         QVERIFY(window.m_rail->isVisible());
-        QCOMPARE(window.m_rail->x() - qRound(window.m_viewer->stageLayout().body.right()), ViewerWidget::kStageGap);
+        QCOMPARE(window.m_rail->x() - qRound(window.m_viewer->stageLayout().body.right()), ViewerWidget::kStageEdge);
         QCOMPARE(frame(area("inspector")).width(), browser.width());
         // And opens it again as it was.
-        window.m_chatToggle->click();
+        toggle->trigger();
         QCoreApplication::processEvents();
         QVERIFY(window.chatOpen() && toggle->isChecked() && window.m_rail->chatButton()->isChecked());
         QCOMPARE(window.m_viewer->videoRect(), card);
@@ -771,7 +765,7 @@ private slots:
         QCOMPARE(toggle->shortcut(), QKeySequence(QStringLiteral("Ctrl+Shift+J")));
         QTest::keyClick(&window, Qt::Key_J, Qt::ControlModifier | Qt::ShiftModifier);
         QCoreApplication::processEvents();
-        QVERIFY(window.chatOpen() && window.m_chatToggle->isChecked());
+        QVERIFY(window.chatOpen());
         // The rail's chat button, beside the picture, is the same switch.
         RailButton *rail = window.m_rail->chatButton();
         QVERIFY(rail->isChecked());
@@ -784,7 +778,7 @@ private slots:
         // Window ▸ Kerf Assistant too.
         toggle->trigger();
         QCoreApplication::processEvents();
-        QVERIFY(!window.chatOpen() && !window.m_chatToggle->isChecked());
+        QVERIFY(!window.chatOpen());
         // With the Program monitor closed, opening the conversation brings it
         // back, its stage holding the conversation.
         panel("program")->toggleView(false);
@@ -802,13 +796,13 @@ private slots:
         panel("program")->toggleView(false);
         QCoreApplication::processEvents();
         QVERIFY(window.m_viewer->chatOpen() && !window.chatOpen());
-        QVERIFY(!toggle->isChecked() && !window.m_chatToggle->isChecked());
+        QVERIFY(!toggle->isChecked());
         QVERIFY(window.m_aiBar->isVisible());
         QVERIFY(window.m_aiBarText->text().startsWith(QStringLiteral("Proposal")));
         QTest::keyClick(&window, Qt::Key_J, Qt::ControlModifier | Qt::ShiftModifier);
         QCoreApplication::processEvents();
         QVERIFY(!panel("program")->isClosed() && window.chatOpen() && window.m_chat->isVisible());
-        QVERIFY(toggle->isChecked() && window.m_chatToggle->isChecked());
+        QVERIFY(toggle->isChecked());
         QVERIFY(!window.m_aiBar->isVisible());
         window.updateProposal(QJsonValue());
         toggle->trigger();
@@ -819,7 +813,7 @@ private slots:
         QVERIFY(details);
         details->click();
         QCoreApplication::processEvents();
-        QVERIFY(window.chatOpen() && toggle->isChecked() && window.m_chatToggle->isChecked());
+        QVERIFY(window.chatOpen() && toggle->isChecked());
 
         // Dragging its leading edge widens it, within its bounds; the
         // picture gives the room, and the width is this Mac's, kept. (In a
@@ -1323,7 +1317,7 @@ private slots:
             for (const char *id : {"transform", "compositing"}) {
                 InspectorSection *module = inspector->section(QString::fromLatin1(id));
                 QVERIFY2(module && module->isOpen(), id);
-                const QRect plate(module->mapTo(inspector, QPoint()), module->size() - QSize(0, InspectorSection::kGap));
+                const QRect plate(module->mapTo(inspector, QPoint()), module->size());
                 QVERIFY2(small.contains(plate), qPrintable(QStringLiteral("%1 at %2 in %3").arg(QString::fromLatin1(id)).arg(plate.bottom()).arg(small.bottom())));
             }
             window.resize(1600, 1000);

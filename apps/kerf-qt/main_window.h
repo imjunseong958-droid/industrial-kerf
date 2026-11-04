@@ -96,6 +96,16 @@ public:
     ~MainWindow() override;
     // The bus the window's regions share.
     EditorBus *bus() const { return m_bus; }
+    // The project folder this editor has open (absolute; empty for none).
+    QString projectDirectory() const { return m_projectDirectory; }
+    // The slugs a kerf:// review link may name this project by: its
+    // folder's and its document's name (links::slug).
+    QStringList projectSlugs() const;
+    // A kerf:// link followed to this project: once it is connected and its
+    // programme is known, seek to `timecode` ("HH:MM:SS:FF"; empty stays at
+    // the playhead), and say so when the link names another revision.
+    void followLink(qint64 revision, const QString &timecode);
+    bool linkPending() const { return m_linkPending; }
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -127,7 +137,6 @@ private slots:
     // forward in its column (see Workspace::raiseInspector).
     // ⌘-click or ⇧-click on a clip in the timeline.
     void extendClipSelection(const QString &id, bool toggle);
-    void updateSelectionStatus();
     void clickSelectClip(const QString &id);
     // Open the conversation with `subject` ("@clip") in the composer.
     void askAboutInChat(const QString &subject);
@@ -185,8 +194,6 @@ private slots:
     void updateAgentModelChoices();
     void loadAgentSettings();
     void saveAgentSettings();
-    void acceptProposal();
-    void rejectProposal();
     // Kerf's conversation, in the Program monitor's stage beside the
     // picture: open there (and the Program monitor with it, in front), or
     // closed. Remembered on this Mac, never in the project.
@@ -258,14 +265,11 @@ private:
     QJsonObject commandContext() const;
     void updateCommandStates();
 
-    // The transport, as the player's controls on the Program monitor's
-    // picture (see PlayerOverlay): what they ask for runs here, and they
-    // show the playhead's time, the length, and what can be pressed.
+    // The player state the Program picture keeps (PlayerOverlay): a click
+    // on the picture runs Play here, and updateTransport keeps the time,
+    // the length, and what can be pressed.
     void setupPlayerOverlay();
     void updateTransport();
-    // The rail's VU meter: the program's sound at the playhead while it
-    // plays, from the sound clips' peaks; at rest, its needle falls back.
-    void updateProgramLevel();
     // The phone a portrait picture shows in and its safe zones, and the
     // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
     // remembered on this Mac.
@@ -307,8 +311,6 @@ private:
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
     void updateProposal(const QJsonValue &value);
-    // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
-    void showProposalText();
     // A proposal's script line as the change its pinned comment lists.
     ProposalChange describeScriptLine(const QString &line) const;
     void appendConversation(const QString &speaker, const QString &text);
@@ -387,9 +389,17 @@ private:
     QLabel *m_projectTitle = nullptr;
     QLabel *m_projectSubtitle = nullptr;
     QString m_projectName;
+    // A followed kerf:// link not yet applied (followLink).
+    bool m_linkPending = false;
+    qint64 m_linkRevision = -1;
+    QString m_linkTimecode;
+    void applyPendingLink();
+    // The keys to the timeline (or the stage) when Qt handed them to a
+    // button as if Tab had been pressed: after a workspace change, and as
+    // the window first shows and first becomes active (m_focusSettled).
+    void settleFocus();
+    bool m_focusSettled = false;
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
-    // The toolbar's last control: opens and closes Kerf's conversation.
-    QToolButton *m_chatToggle = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;
@@ -432,9 +442,6 @@ private:
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
     EffectsPanel *m_effects = nullptr;
-    QWidget *m_nextSteps = nullptr;
-    QWidget *m_chatNextSteps = nullptr;
-    QJsonArray m_steps;
     QJsonObject m_lastFocus;
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
@@ -461,7 +468,6 @@ private:
     QStringList m_syncLines;
     QJsonObject m_mediaStatus;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
-    QToolBar *m_toolPalette = nullptr;
     AskPrompt *m_askPrompt = nullptr;
     QFrame *m_aiBar = nullptr;
     QLabel *m_aiBarText = nullptr;
@@ -483,7 +489,6 @@ private:
     QJsonObject m_cloudAccount;
     QString m_cloudMessage;
     QDialog *m_preferences = nullptr;
-    QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;
     quint64 m_revision = 0;
     int m_trackCount = 0;
@@ -507,12 +512,10 @@ private:
     bool m_hasShownFrame = false;
     bool m_updatingCanvasPreset = false;
     bool m_agentBusy = false;
-    QString m_agentRunState = QStringLiteral("idle");
     QString m_agentText;
     QString m_selectedClip;
     // Every selected clip, m_selectedClip (the primary one) among them.
     QStringList m_selectedClips;
-    QLabel *m_selectionStatus = nullptr;
     QString m_proposalId;
     QStringList m_activityLog;
     QSize m_canvasSize{1920, 1080};
@@ -529,12 +532,16 @@ private:
     QFrame *m_activityPopup = nullptr;
     // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;
-    QLabel *m_chatActivity = nullptr;
+    // The agent's latest progress line, for the turn's drafting row.
+    QString m_activityDetail;
     QFrame *m_chatComposer = nullptr;
     QTextEdit *m_chatInput = nullptr;
     QRadioButton *m_anthropicActiveRadio = nullptr;
     QRadioButton *m_openaiActiveRadio = nullptr;
-    QComboBox *m_modelSelect = nullptr;
+    // The model each chat request names (the More menu's Model, else the
+    // active connection's), and the ones offered.
+    QString m_agentModel;
+    QStringList m_agentModels;
     QLineEdit *m_anthropicKey = nullptr;
     QLineEdit *m_anthropicBaseUrl = nullptr;
     QLineEdit *m_anthropicModel = nullptr;
@@ -549,13 +556,6 @@ private:
     QPushButton *m_sendButton = nullptr;
     QPushButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
-    QLabel *m_agentStatus = nullptr;
-    QLabel *m_proposalSummary = nullptr;
-    QTextEdit *m_proposalDiff = nullptr;
-    QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
-    QPushButton *m_acceptButton = nullptr;
-    QPushButton *m_rejectButton = nullptr;
-    QFrame *m_proposalBox = nullptr;
     // The toolbar's right-hand group: the format bank, then Export (its
     // menu holds the quality and Render Preview).
     FormatBank *m_formatBank = nullptr;

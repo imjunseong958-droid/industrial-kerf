@@ -2079,6 +2079,15 @@ impl Editor<'_> {
                     format!("sequence `{sequence}` has content; changing its rate needs a conform"),
                 ));
             }
+            // The start keeps the timecode it reads, unless a new one is given.
+            if rate != target.rate && change.start.is_none() {
+                (target.start, target.drop_frame) = crate::time::restate_timecode(
+                    target.start,
+                    target.rate,
+                    target.drop_frame,
+                    rate,
+                );
+            }
             target.rate = rate;
         }
         if let Some(name) = &change.name {

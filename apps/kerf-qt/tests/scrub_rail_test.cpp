@@ -354,7 +354,7 @@ private slots:
         toggle.setShortcut(QKeySequence(Qt::Key_Space));
         QAction loop(QStringLiteral("Loop Playback"));
         loop.setEnabled(false);
-        loop.setStatusTip(QStringLiteral("Coming in this release"));
+        loop.setStatusTip(QStringLiteral("Waiting for the project connection"));
         loop.setShortcut(QKeySequence(QStringLiteral("Ctrl+L")));
         strip.setActions({{QStringLiteral("playback.toggle"), &toggle}, {QStringLiteral("playback.loop"), &loop}});
         QCOMPARE(ui::tipShortcut(strip.playButton()), QKeySequence(Qt::Key_Space).toString(QKeySequence::NativeText));
@@ -463,9 +463,8 @@ private slots:
         QCOMPARE(rail.scaleLabelRect(0), QRect(24, 0, 20, 16));
         QCOMPARE(rail.scaleLabelRect(18), QRect(24, 8 + 105 - 8, 20, 16));
         QCOMPARE(rail.scaleLabelRect(60), QRect(24, 350, 20, 16));
-        // The safe zones moved to the Program strip: that button never shows.
-        rail.safeZonesButton()->setVisible(true);
-        QVERIFY(rail.safeZonesButton()->isHidden());
+        // The safe zones moved to the Program strip: the rail has no button for them.
+        QVERIFY(!rail.findChild<QWidget *>(QStringLiteral("railSafeZones")));
 
         rail.resize(StageRail::kWidth, 400);
         QCOMPARE(rail.meterHeight(), 202);
@@ -810,41 +809,6 @@ private slots:
         QCOMPARE(bar->width(), AgentHud::kStripBar);
         QCOMPARE(hud.stopButton()->geometry().right(), 400 - 4 - 1);
         QVERIFY(bar->geometry().right() < hud.stopButton()->x());
-    }
-
-    // ---- deprecated, removed in W3 with programPeak and vuNeedle ----------------
-
-    // The old level guess still reads the waveform peaks under the playhead
-    // for its last caller (MainWindow::updateProgramLevel).
-    void programLevelReadsTheSoundUnderThePlayhead() {
-        MediaArtwork artwork;
-        AudioPeaks peaks;
-        peaks.levels.append(QVector<AudioPeaks::Bucket>(4 * AudioPeaks::kBucketsPerSecond));
-        for (int index = 0; index < AudioPeaks::kBucketsPerSecond; ++index) peaks.levels[0][index] = {-0.25f, 0.2f, 0.1f};
-        peaks.buildLevels();
-        artwork.peaks.insert(QStringLiteral("tone"), peaks);
-        const auto clip = [](const char *id, double start, double in, const QJsonObject &props = {}) {
-            return QJsonObject{{"id", id}, {"sourceId", "tone"}, {"timelineStart", start}, {"duration", 2.0},
-                               {"in", in}, {"out", in + 2.0}, {"props", props}};
-        };
-        const auto timelineOf = [](const QJsonArray &tracks) { return QJsonObject{{"tracks", tracks}}; };
-        const auto track = [](const char *type, const QJsonArray &clips, const QJsonObject &extra = {}) {
-            QJsonObject out{{"id", type}, {"type", type}, {"clips", clips}};
-            for (auto it = extra.begin(); it != extra.end(); ++it) out.insert(it.key(), it.value());
-            return out;
-        };
-        const QJsonObject plain = timelineOf({track("audio", {clip("a", 2.0, 0.0)})});
-        QCOMPARE(programPeak(plain, &artwork, 2.5), 0.25);
-        QCOMPARE(programPeak(plain, &artwork, 1.0), 0.0);
-        QCOMPARE(programPeak(plain, nullptr, 2.5), 0.0);
-        QCOMPARE(programPeak(timelineOf({track("audio", {clip("a", 2.0, 0.0)}, {{"muted", true}})}), &artwork, 2.5), 0.0);
-        QCOMPARE(vuNeedle(0.0), 0.0);
-        QVERIFY(std::abs(vuNeedle(std::pow(10.0, -18.0 / 20.0)) - 0.75) < 1e-9);
-        // The VuMeter the rail still hands out is never shown.
-        StageRail rail;
-        QVERIFY(rail.meter() && rail.meter()->isHidden());
-        rail.meter()->setTarget(2.0);
-        QCOMPARE(rail.meter()->needle(), 1.0);
     }
 };
 

@@ -27,6 +27,7 @@
 #include <QList>
 #include <QSize>
 #include <QStringList>
+#include <QPointer>
 #include <QWidget>
 
 class QAbstractButton;
@@ -36,6 +37,8 @@ class QListWidget;
 class QListWidgetItem;
 class QStackedWidget;
 class QVBoxLayout;
+
+class QAction;
 
 namespace kerf {
 
@@ -111,6 +114,10 @@ public:
     void setCurrentMedia(const QString &mediaId);
     // Shows the search field and puts the cursor in it (⌘F).
     void focusSearch();
+    // The registry's bin.search (⌘F) and bin.toggleView (⌘⌥2): their keys
+    // work while the bin has the focus (search) or is on screen (the view),
+    // and the strip's tips name them. The window runs them (BinWiring).
+    void setCommandActions(QAction *search, QAction *toggleView);
     // The strip's Import, which BinWiring keeps in step with file.import.
     QAbstractButton *importButton() const;
     QAbstractButton *editRolesButton() const { return m_editRoles; }
@@ -177,6 +184,8 @@ private:
 
     BinTabs *m_tabs = nullptr;
     ui::IconButton *m_searchButton = nullptr;
+    QPointer<QAction> m_searchAction;
+    QPointer<QAction> m_viewAction;
     ui::IconButton *m_viewButton = nullptr;
     ui::IconButton *m_importButton = nullptr;
     QWidget *m_searchRow = nullptr;

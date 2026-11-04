@@ -40,20 +40,12 @@ class ProjectLauncher final : public QDialog {
 
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };
-    // Deprecated, removed in W3: the launcher is dark only, whatever scheme
-    // is asked for.
-    using ColorScheme = kerf::ColorScheme;
-
     // `kerfdBinary` makes the first edit of a project made from a preset.
     explicit ProjectLauncher(const QString &kerfdBinary = QString(), QWidget *parent = nullptr);
     ~ProjectLauncher() override;
 
     QString chosenPath() const { return m_chosen; }
     void showPage(Page page);
-    // Deprecated, removed in W3: does nothing.
-    void setColorScheme(ColorScheme scheme);
-    // Deprecated, removed in W3: always Dark.
-    ColorScheme colorScheme() const { return ColorScheme::Dark; }
     const LauncherTheme &theme() const { return m_theme; }
 
     // Recent projects (QSettings `projects/recent`), most recent first.

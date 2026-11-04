@@ -46,7 +46,6 @@ namespace kerf {
 
 class EditorBus;
 class ProgramMeter;
-class VuMeter;
 
 // A rail button (.rbtn): 32 x 32, radius 6, a 16 pt icon in ink2. Hover:
 // raised and ink; on: the on fill, ink and an inset line2. The device button
@@ -72,10 +71,6 @@ public:
     // Whether it is drawn on now: checked (unless its owner sets its checked
     // state, as the device's says whether the device shows), or held.
     bool drawsOn() const;
-    // Deprecated, removed in W3: the rail draws its own labels under its
-    // buttons; this only keeps what callers set.
-    void setLabel(const QString &label) { m_label = label; }
-    QString label() const { return m_label; }
     // The button's square, in its own coordinates (the whole button).
     QRect discRect() const { return rect(); }
     QSize sizeHint() const override { return {kDisc, kDisc}; }
@@ -101,7 +96,6 @@ protected:
 private:
     Glyph m_glyph;
     QString m_icon;
-    QString m_label;
     bool m_chevron = false;
     bool m_held = false;
     bool m_checkedByOwner = false;
@@ -120,8 +114,6 @@ public:
     static constexpr int kMeterHeight = 350;
     // Under this the meter (and its L/R) is hidden.
     static constexpr int kMeterMinHeight = 60;
-    // Deprecated, removed in W3 (the old meter's gap over the buttons).
-    static constexpr int kMeterGap = 12;
     // The labels under the buttons: 60 wide, centred on the rail.
     static constexpr int kLabelWidth = 60;
 
@@ -136,13 +128,6 @@ public:
 
     RailButton *chatButton() const { return m_chat; }
     RailButton *deviceButton() const { return m_device; }
-    // Deprecated, removed in W3: safe zones moved to the Program strip; this
-    // button is retired and never shown.
-    RailButton *safeZonesButton() const { return m_safeZones; }
-    // Deprecated, removed in W3: the old VU meter, kept (hidden) so its old
-    // callers compile. The meter is programMeter() and levelMeter().
-    VuMeter *meter() const { return m_vu; }
-
     ProgramMeter *programMeter() const { return m_meter; }
     QWidget *levelMeter() const { return m_level; }
     QWidget *lufsReadout() const { return m_lufs; }
@@ -207,6 +192,8 @@ public:
     int openCount() const;
     // "Comments · 4 open", or "Comments" with no review.
     QString commentsTip() const;
+    // Reads the review's open count again: the badge and the tip.
+    void refreshCounts() { refreshComments(); }
 
 signals:
     // The Device menu chose the device (true) or the plain card (false).
@@ -245,10 +232,8 @@ private:
     QWidget *m_level = nullptr;
     QWidget *m_lufs = nullptr;
     RailButton *m_device = nullptr;
-    RailButton *m_safeZones = nullptr;
     RailButton *m_chat = nullptr;
     ui::Badge *m_badge = nullptr;
-    VuMeter *m_vu = nullptr;
     QPointer<QWidget> m_deviceLabel;
     QPointer<QWidget> m_commentsLabel;
     bool m_hasDevice = false;

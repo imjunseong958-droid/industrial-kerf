@@ -153,10 +153,6 @@ void AskPrompt::showScopeMenu() {
     ui::popupMenu(menu, m_scopeButton);
 }
 
-void AskPrompt::open(const QPoint &anchor, const QString &title, bool hasClip) {
-    open(anchor, title, hasClip ? QStringLiteral("this clip") : QString());
-}
-
 void AskPrompt::open(const QPoint &anchor, const QString &title, const QString &clip) {
     m_title->setText(title);
     m_clip = clip;

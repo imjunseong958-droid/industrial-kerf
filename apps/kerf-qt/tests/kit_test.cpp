@@ -392,6 +392,94 @@ private slots:
         QCOMPARE(menu.size(), 1);
     }
 
+    // W3 kit additions: none chosen (-1), one width for text segments, a
+    // count after a label in ink3, the ghost button's meta look, and a
+    // menu's own least card width.
+    void kitSegmentsCountsAndMenusTakeTheW3Options() {
+        ui::SegmentedControl seg;
+        for (const char *label : {"S", "M", "L"}) seg.addSegment(QString::fromLatin1(label));
+        seg.setCurrentIndex(1);
+        QSignalSpy changed(&seg, &ui::SegmentedControl::currentChanged);
+        seg.setCurrentIndex(-1);
+        QCOMPARE(seg.currentIndex(), -1);
+        QVERIFY(seg.fillRect().isEmpty());
+        QCOMPARE(changed.size(), 1);
+        QCOMPARE(changed.first().first().toInt(), -1);
+        seg.setCurrentIndex(-1);
+        QCOMPARE(changed.size(), 1);
+        seg.setCurrentIndex(-2);
+        QCOMPARE(seg.currentIndex(), -1);
+        // From none, the fill appears where it lands (nothing to slide from).
+        seg.setCurrentIndex(2);
+        QCOMPARE(seg.fillRect(), seg.segmentRect(2));
+        seg.setTextSegmentWidth(32);
+        QCOMPARE(seg.textSegmentWidth(), 32);
+        for (int i = 0; i < 3; ++i) QCOMPARE(seg.segmentRect(i), QRectF(2 + 32 * i, 2, 32, 20));
+        QCOMPARE(seg.size(), QSize(2 + 96 + 2, 24));
+        QCOMPARE(seg.fillRect(), seg.segmentRect(2));
+        seg.setTextSegmentWidth(0);
+        QCOMPARE(int(seg.segmentRect(0).width()), 16 + ui::snapWidth(controlStrong, QStringLiteral("S")));
+
+        ui::SegmentedControl tabs;
+        tabs.addSegment(QStringLiteral("Media"));
+        tabs.addSegment(QStringLiteral("Index"));
+        tabs.setSegmentCount(0, 12);
+        QCOMPARE(tabs.segmentCount(0), 12);
+        QCOMPARE(tabs.segmentCount(1), -1);
+        QCOMPARE(int(tabs.segmentRect(0).width()),
+                 16 + ui::snapWidth(controlStrong, QStringLiteral("Media")) + ui::snapWidth(control, QStringLiteral(" 12")));
+        tabs.setCurrentIndex(0);
+        tabs.resize(tabs.sizeHint());
+        // The count is drawn in ink3, the label in ink.
+        QImage shot(tabs.size() * 2, QImage::Format_ARGB32_Premultiplied);
+        shot.setDevicePixelRatio(2);
+        shot.fill(Qt::transparent);
+        tabs.segment(0)->render(&shot);
+        bool ink3Seen = false;
+        for (int y = 0; y < shot.height() && !ink3Seen; ++y)
+            for (int x = 0; x < shot.width(); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                if (c.alpha() == 255 && std::abs(c.lightness() - color(ink3).lightness()) <= 4) {
+                    ink3Seen = true;
+                    break;
+                }
+            }
+        QVERIFY(ink3Seen);
+        tabs.setSegmentCount(0, -1);
+        QCOMPARE(int(tabs.segmentRect(0).width()), 16 + ui::snapWidth(controlStrong, QStringLiteral("Media")));
+
+        ui::GhostButton edit(QStringLiteral("Edit roles…"));
+        edit.setMeta(true);
+        QVERIFY(edit.isMeta());
+        QCOMPARE(edit.height(), 20);
+        QCOMPARE(edit.textColor(), color(ink3));
+        QCOMPARE(edit.typeStyle().px, tokens::meta.px);
+        edit.setEnabled(false);
+        QCOMPARE(edit.textColor(), color(dis));
+        edit.setEnabled(true);
+        edit.setMeta(false);
+        QCOMPARE(edit.textColor(), color(ink2));
+
+        QWidget window;
+        window.resize(900, 600);
+        auto *anchor = new ui::GhostButton(QStringLiteral("Workspaces"), &window);
+        anchor->move(40, 40);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QMenu menu(&window);
+        menu.addAction(QStringLiteral("Edit"));
+        QCOMPARE(ui::menuMinimumCardWidth(&menu), 220);
+        ui::setMenuMinimumCardWidth(&menu, 280);
+        QCOMPARE(ui::menuMinimumCardWidth(&menu), 280);
+        ui::popupMenu(&menu, anchor);
+        QVERIFY(QTest::qWaitForWindowExposed(&menu));
+        const QMargins m = ui::shadowMargins();
+        QCOMPARE(menu.width() - 2 * qMax(m.left(), m.right()), 280);
+        menu.close();
+        ui::setMenuMinimumCardWidth(&menu, 0);
+        QCOMPARE(ui::menuMinimumCardWidth(&menu), 220);
+    }
+
     // The fill slides over 200 ms when motion is on, and jumps when it is off.
     void kitSegmentedFillSlidesOnlyWithMotion() {
         ui::setReducedMotionOverride(0);

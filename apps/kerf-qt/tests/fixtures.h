@@ -139,8 +139,6 @@ bool popupShowsEveryRow(QComboBox *combo);
 // through hover2): opaque, neutral (|r-g| and |g-b| at most 2), dark, and
 // not pure black.
 bool isGraphite(const QColor &color);
-// Deprecated, removed in W3: isGraphite(color); the editor is dark only.
-bool isWarmPaper(const QColor &color, bool dark);
 
 // Saturated amber or gold, as the editor's old accent was.
 bool isAmber(const QColor &color);
@@ -152,7 +150,6 @@ int amberPixels(const QImage &image, QPoint *first = nullptr);
 
 // `chat`'s list is scrolled to its end, with the latest row whole over the
 // chips (or the composer) and the rows cut cleanly at the list's edges.
-void verifyListEnd(ChatPanel *chat);
 
 // A waveform's ink (its RMS grey, rgba(144,144,144,.75), over a clip's
 // card and its peak): a neutral mid grey.

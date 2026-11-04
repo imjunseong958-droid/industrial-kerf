@@ -117,25 +117,16 @@ QString overlayCommand(PlayerOverlay::Control control) {
 } // namespace
 
 void MainWindow::setupPlayerOverlay() {
-    // Each control runs a playback command, as the keys do; updateTransport
-    // names it with the command's shortcut.
+    // A click on the picture runs Play, as the key does; updateTransport
+    // keeps each command's tip with its shortcut.
     PlayerOverlay *overlay = m_viewer->overlay();
     connect(overlay, &PlayerOverlay::controlTriggered, this,
             [this](PlayerOverlay::Control control) { triggerCommand(overlayCommand(control)); });
-    connect(overlay, &PlayerOverlay::seekRequested, this, [this](double fraction) {
-        if (m_duration <= 0.0) return;
-        queueSeek(fraction * m_duration);
-    });
-}
-
-void MainWindow::updateProgramLevel() {
-    // The rail's meter follows the bridge's `meter` events itself (ProgramMeter);
-    // nothing is estimated from the clips any more.
 }
 
 void MainWindow::updateTransport() {
     // Every clock tick, play and pause, seek and new snapshot comes here.
-    updateProgramLevel();
+    // (The rail's meter follows the bridge's `meter` events itself.)
     PlayerOverlay *overlay = m_viewer ? m_viewer->overlay() : nullptr;
     if (!overlay) return;
     overlay->setTime(m_playhead, m_duration, m_fps);
@@ -273,7 +264,8 @@ void MainWindow::buildStage() {
         // remembered on this Mac.
         m_viewer->setChatWidth(false, settings.value(QStringLiteral("viewer/chatWidth"), ViewerWidget::kDefaultChatWidth).toInt());
         m_viewer->setChatWidth(true, settings.value(QStringLiteral("viewer/chatWidthPhone"), ViewerWidget::kPhoneChatWidth).toInt());
-        m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
+        // Whether the panel is open comes from the workspace's stage, applied
+        // once the workspace has started (MainWindow::applyWorkspace).
         m_viewer->setDevicePreview(devicePreviewFromKey(settings.value(QStringLiteral("viewer/devicePreview")).toString()));
         m_viewer->setLaptopPreview(laptopPreviewFromKey(settings.value(QStringLiteral("viewer/laptopPreview")).toString()));
         m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), true).toBool());

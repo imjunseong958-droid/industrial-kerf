@@ -31,6 +31,7 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QVariant>
 #include <QWidget>
 
 class QAction;
@@ -57,10 +58,17 @@ QString projectName(const QString &directory);
 // The project's name as the document gives it (timeline.name, "Atlas"),
 // else its folder's name.
 QString projectTitle(const QString &directory, const QJsonObject &timeline);
-// The QSettings key of `key` for the project: deliver/<project name>/<key>.
-// The toolbar's Export menu reads `edlLocators` from here too. Empty
-// without a project, which keeps nothing.
+// The QSettings key of `key` for the project, by its absolute path:
+// deliver/<folder name>~<12 hex of the path's SHA-1>/<key>. The toolbar's
+// Export menu reads `edlLocators` from here too. Empty without a project,
+// which keeps nothing.
 QString settingsKey(const QString &directory, const QString &key);
+// The key as it was before W3 (deliver/<folder name>/<key>), still read
+// while the new one has nothing.
+QString legacySettingsKey(const QString &directory, const QString &key);
+// The project's setting `key`: the new key's value, else the legacy one's,
+// else `fallback`.
+QVariant settingValue(const QString &directory, const QString &key, const QVariant &fallback);
 
 // A paperwork option of the project ("markers", "csv", "edlLocators",
 // "includeResolved", "qcReport", "captions") and its default.

@@ -21,7 +21,8 @@ class CommandRegistry final : public QObject {
     Q_OBJECT
 public:
     // Shortcuts of a panel scope (`timeline`, `source`) are attached to the
-    // panel's widget and apply while it has focus.
+    // panel's widget and apply while it has focus. A scope not in `scopes`
+    // (`composer`) is attached by its owner (Composer::setDrawAction).
     CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent = nullptr);
 
     // A command's current id: renamed ones answer to their old ids too

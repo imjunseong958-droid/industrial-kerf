@@ -6,6 +6,7 @@
 #include "icons.h"
 
 #include <QAction>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEnterEvent>
 #include <QFileInfo>
@@ -51,9 +52,7 @@ QList<Output> defaults(const QString &directory) {
 
 // The saved part of the outputs: {id: {folder?, name?, codec?}}.
 QJsonObject saved(const QString &directory) {
-    const QString key = settingsKey(directory, kOutputsKey);
-    if (key.isEmpty()) return {};
-    return QJsonDocument::fromJson(QSettings().value(key).toString().toUtf8()).object();
+    return QJsonDocument::fromJson(settingValue(directory, kOutputsKey, QString()).toString().toUtf8()).object();
 }
 
 } // namespace
@@ -82,7 +81,29 @@ QString settingsKey(const QString &directory, const QString &key) {
     if (project.isEmpty()) return {};
     // A key's '/' would open a group of its own.
     project.replace(QLatin1Char('/'), QLatin1Char('-')).replace(QLatin1Char('\\'), QLatin1Char('-'));
+    // Keyed by the absolute project path, so two projects whose folders
+    // share a name keep their own outputs and paperwork: the folder's name
+    // (readable) and a digest of its whole path.
+    const QString path = QDir::cleanPath(QFileInfo(directory).absoluteFilePath());
+    const QString digest = QString::fromLatin1(QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha1).toHex().left(12));
+    return QStringLiteral("deliver/%1~%2/%3").arg(project, digest, key);
+}
+
+QString legacySettingsKey(const QString &directory, const QString &key) {
+    QString project = projectName(directory);
+    if (project.isEmpty()) return {};
+    project.replace(QLatin1Char('/'), QLatin1Char('-')).replace(QLatin1Char('\\'), QLatin1Char('-'));
     return QStringLiteral("deliver/%1/%2").arg(project, key);
+}
+
+QVariant settingValue(const QString &directory, const QString &key, const QVariant &fallback) {
+    const QString settings = settingsKey(directory, key);
+    if (settings.isEmpty()) return fallback;
+    const QSettings store;
+    if (store.contains(settings)) return store.value(settings);
+    // Kept before W3 under the folder's name alone: read until rewritten.
+    const QString legacy = legacySettingsKey(directory, key);
+    return store.contains(legacy) ? store.value(legacy) : fallback;
 }
 
 bool defaultOption(const QString &key) {
@@ -90,9 +111,7 @@ bool defaultOption(const QString &key) {
 }
 
 bool option(const QString &directory, const QString &key) {
-    const QString settings = settingsKey(directory, key);
-    if (settings.isEmpty()) return defaultOption(key);
-    return QSettings().value(settings, defaultOption(key)).toBool();
+    return settingValue(directory, key, defaultOption(key)).toBool();
 }
 
 void setOption(const QString &directory, const QString &key, bool on) {
@@ -575,7 +594,10 @@ RenderQueueView::RowState RenderQueueView::stateOf(const deliver::Output &output
         }
         const QString status = m_preview.value(QStringLiteral("status")).toString();
         if (!m_preview.value(QStringLiteral("proposalId")).toString().isEmpty()) spec << QStringLiteral("a proposal");
-        if (status == QStringLiteral("ready") || status == QStringLiteral("live")) spec << QStringLiteral("cached");
+        // kerfd's own words: a render it has kept, or a program its compositor
+        // draws as it plays, which nothing has rendered.
+        if (status == QStringLiteral("ready")) spec << QStringLiteral("cached");
+        else if (status == QStringLiteral("live")) spec << QStringLiteral("drawn live");
         state.job = {};
         state.progress = -1;
         state.bad = false;

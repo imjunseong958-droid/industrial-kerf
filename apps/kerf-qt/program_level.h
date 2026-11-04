@@ -7,11 +7,6 @@
 // loudness in LUFS, all null once playback stops) and keeps the peak-hold
 // ballistics. With no reading it holds nothing, so the meter shows its empty
 // track and never an estimate.
-//
-// VuMeter, vuNeedle and programPeak are the old analogue meter and the level
-// it guessed from the waveform peaks: deprecated, removed in W3 (only
-// MainWindow::updateProgramLevel still calls them, and the rail no longer
-// shows the VuMeter it hands out).
 
 #include <QElapsedTimer>
 #include <QJsonObject>
@@ -26,7 +21,6 @@
 
 namespace kerf {
 
-class MediaArtwork;
 
 // ---------------------------------------------------------------- ProgramMeter
 
@@ -123,43 +117,6 @@ private:
     bool m_auto = true;
     QTimer m_tick;
     QElapsedTimer m_clock;
-};
-
-// ---------------------------------------------------------------- deprecated
-
-// Deprecated, removed in W3: the level guessed from the waveform peaks under
-// the playhead, for the old VU meter. The rail's meter reads `meter` events.
-// The program's sound just before `seconds` on `timeline`: the largest peak,
-// as a linear sample size, of the sound clips there on enabled, unmuted sound
-// tracks, each with its own gain (props.gain, in dB).
-double programPeak(const QJsonObject &timeline, const MediaArtwork *artwork, double seconds);
-
-// Deprecated, removed in W3: where a linear peak puts a VU meter's needle, 0
-// to 1 (-20 VU to +3 VU, 0 VU at -18 dBFS three quarters of the way across).
-double vuNeedle(double peak);
-
-// Deprecated, removed in W3: the old analogue meter. StageRail::meter() still
-// hands one out so its old callers compile, but it is never shown; it keeps
-// what it is told and its needle stands at its target.
-class VuMeter final : public QWidget {
-    Q_OBJECT
-public:
-    static constexpr double kSettleSeconds = 0.3;
-    explicit VuMeter(QWidget *parent = nullptr);
-    void setTarget(double needle);
-    double target() const { return m_target; }
-    double needle() const { return m_target; }
-    void setPlaying(bool playing) { m_playing = playing; }
-    bool animating() const { return false; }
-    void advance(double) {}
-    QSize sizeHint() const override;
-
-protected:
-    void paintEvent(QPaintEvent *) override;
-
-private:
-    double m_target = 0.0;
-    bool m_playing = false;
 };
 
 } // namespace kerf

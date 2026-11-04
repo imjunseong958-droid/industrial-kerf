@@ -178,8 +178,6 @@ bool isGraphite(const QColor &color) {
     return neutral && color.alpha() == 255 && color.lightness() <= 0x36 && color.rgb() != QColor(Qt::black).rgb();
 }
 
-bool isWarmPaper(const QColor &color, bool) { return isGraphite(color); }
-
 bool isAmber(const QColor &color) {
     return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
 }
@@ -194,38 +192,6 @@ int amberPixels(const QImage &image, QPoint *first) {
             if (area && count++ == 0 && first) *first = QPoint(x, y);
         }
     return count;
-}
-
-void verifyListEnd(ChatPanel *chat) {
-    QScrollArea *scroll = chat->scroll();
-    QScrollBar *bar = scroll->verticalScrollBar();
-    QTRY_COMPARE(bar->value(), bar->maximum());
-    QCoreApplication::processEvents();
-    QWidget *content = scroll->widget();
-    int last = 0;
-    for (QWidget *child : content->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
-        if (child->isVisible()) last = std::max(last, child->geometry().bottom() + 1);
-    const int top = bar->value();
-    const int bottom = top + scroll->viewport()->height();
-    if (bar->maximum() > 0)
-        QVERIFY2(std::abs(last - bottom) <= 2, qPrintable(QStringLiteral("%1 px under the latest").arg(bottom - last)));
-    else
-        QVERIFY(last <= bottom);
-    // The view itself stops 16 points over the chips (or the composer),
-    // so the rows are cut there at every scroll position, not only at
-    // the list's end.
-    QWidget *under = chat->chips()->isVisible() ? chat->chips() : static_cast<QWidget *>(chat->composer());
-    QCOMPARE(under->mapTo(chat, QPoint()).y() - (scroll->viewport()->mapTo(chat, QPoint()).y() + scroll->viewport()->height()),
-             ChatPanel::kListBottom);
-    // Nothing over the view's top: the rows run right up to its edge.
-    for (QWidget *over : scroll->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
-        QVERIFY2(over == scroll->viewport() || over->objectName().startsWith(QStringLiteral("qt_scrollarea")) || !over->isVisible(),
-                 qPrintable(over->objectName()));
-    QWidget *edge = chat->listEdge();
-    const int edgeTop = edge->mapTo(chat, QPoint()).y();
-    QCOMPARE(scroll->viewport()->mapTo(chat, QPoint()).y(), edgeTop + edge->height());
-    QCOMPARE(edgeTop, chat->proposalBar()->isVisible() ? chat->proposalBar()->geometry().bottom() + 1 : ChatPanel::kHeaderHeight);
-    QCOMPARE(edge->property("scrolled").toBool(), top > 0);
 }
 
 bool isWaveInk(const QColor &pixel) {

@@ -1,7 +1,10 @@
 #include "main_window.h"
+#include "comment_row.h"
+#include "review_link.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
+#include "stage_rail.h"
 #include "command_registry.h"
 #include "inspector_panel.h"
 #include "effects_panel.h"
@@ -306,7 +309,6 @@ void MainWindow::selectClip(const QString &id) {
     updateInspector();
     updateCommandStates();
     updateChatControls();
-    updateSelectionStatus();
     m_bus->setSelection(m_selectedClips);
 }
 
@@ -328,31 +330,8 @@ void MainWindow::extendClipSelection(const QString &id, bool toggle) {
     updateInspector();
     updateCommandStates();
     updateChatControls();
-    updateSelectionStatus();
     m_bus->setSelection(m_selectedClips);
     m_workspace->raiseInspector(Workspace::InspectorOrigin::Click, false, m_selectedClip);
-}
-
-void MainWindow::updateSelectionStatus() {
-    // "3 clips selected · 00:00:04:18": how many, and the span from the
-    // first one's start to the last one's end.
-    if (!m_selectionStatus) return;
-    double start = 0.0;
-    double end = 0.0;
-    int count = 0;
-    for (const QString &id : std::as_const(m_selectedClips)) {
-        const QJsonObject clip = clipObject(id);
-        if (clip.isEmpty()) continue;
-        const double from = clip.value(QStringLiteral("timelineStart")).toDouble();
-        const double to = from + clip.value(QStringLiteral("duration")).toDouble();
-        start = count ? std::min(start, from) : from;
-        end = count ? std::max(end, to) : to;
-        ++count;
-    }
-    m_selectionStatus->setText(count == 0 ? QString()
-                                          : QStringLiteral("%1 selected  ·  %2")
-                                                .arg(count == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(count),
-                                                     timelineTimecode(end - start, m_fps)));
 }
 
 void MainWindow::clickSelectClip(const QString &id) {
@@ -453,7 +432,7 @@ QJsonObject MainWindow::agentSettingsPayload() const {
                        {QStringLiteral("apiMode"), m_openaiMode->currentData().toString()},
                        {QStringLiteral("apiKey"), key ? key->text().trimmed() : QString()},
                        {QStringLiteral("baseUrl"), baseUrl ? baseUrl->text().trimmed() : QString()},
-                       {QStringLiteral("model"), m_modelSelect->currentText().trimmed()},
+                       {QStringLiteral("model"), m_agentModel.trimmed()},
                        {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
                        {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
 }
@@ -499,27 +478,23 @@ void MainWindow::saveInboundMcpConfig() {
 }
 
 void MainWindow::updateAgentModelChoices() {
-    if (!m_modelSelect) return;
-    m_modelSelect->setEnabled(!usesCloud());
+    static const QString cloudModel = QStringLiteral("Kerf Cloud");
     if (usesCloud()) {
-        const QSignalBlocker blocker(m_modelSelect);
-        m_modelSelect->clear();
-        m_modelSelect->addItem(QStringLiteral("Kerf Cloud"));
-        m_modelSelect->setToolTip(QStringLiteral("Kerf Cloud picks the model"));
+        // The service picks the model: nothing to choose.
+        m_agentModels = {cloudModel};
+        m_agentModel = cloudModel;
+        if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, false);
         return;
     }
-    m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
+    // The active connection's model, else the one chosen, else its first.
     const bool openai = activeProviderId() == QStringLiteral("openai");
-    const QString current = m_modelSelect->currentText();
+    const QString current = m_agentModel == cloudModel ? QString() : m_agentModel;
     const QString configured = openai ? m_openaiModel->text().trimmed() : m_anthropicModel->text().trimmed();
-    const QStringList models = openai
-                                    ? QStringList{QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini")}
-                                    : QStringList{QStringLiteral("claude-sonnet-4-20250514"), QStringLiteral("claude-3-5-sonnet-latest")};
-    const QSignalBlocker blocker(m_modelSelect);
-    m_modelSelect->clear();
-    m_modelSelect->addItems(models);
+    m_agentModels = openai ? QStringList{QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini")}
+                           : QStringList{QStringLiteral("claude-sonnet-4-20250514"), QStringLiteral("claude-3-5-sonnet-latest")};
     const QString model = configured.isEmpty() ? current : configured;
-    m_modelSelect->setEditText(model.isEmpty() ? models.constFirst() : model);
+    m_agentModel = model.isEmpty() ? m_agentModels.constFirst() : model;
+    if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, true);
 }
 
 void MainWindow::loadAgentSettings() {
@@ -1000,7 +975,6 @@ void MainWindow::addPanels() {
     m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
     m_timelineZoom = new TimelineZoomControl(m_timeline);
     ads::CDockWidget *timelineDock = m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), m_timelinePanel);
-    timelineDock->setTitleBarActions(m_timeline->trackHeightActions());
     // Its least height is the one set on the panel, not its layout's.
     timelineDock->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
     m_workspace->setTitleWidgets(QStringLiteral("timeline"), m_timelineDetail, m_timelineZoom);
@@ -1182,7 +1156,6 @@ void MainWindow::setupActions() {
         // Tool symbols, the way edit suites label their palettes.
         action->setIcon(toolIcon(id));
         m_toolGlyphs.append(action);
-        m_toolPalette->addAction(action);
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
     m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
@@ -1300,10 +1273,18 @@ void MainWindow::setupActions() {
     // zones and the device preview.
     syncChatSwitches();
     updateViewerRail();
-    // The workspace the editor opens in, for the regions; its stage is as
-    // it was left (only choosing a workspace applies its stage).
-    m_bus->setWorkspace(m_workspace->current());
+    // The workspace the editor opens in, with its stage applied exactly as
+    // choosing it does (Workspace::stageState(): Edit closes the comments
+    // panel so the Source column shows, Finish dims), for every region.
+    applyWorkspace();
     rememberStage();
+    // The keys start on the timeline (the stage where a tray stands in for
+    // it), so activating the window gives them to no button.
+    {
+        const ads::CDockWidget *timeline = m_workspace->panel(QStringLiteral("timeline"));
+        QWidget *home = timeline && !timeline->isClosed() ? static_cast<QWidget *>(m_timeline) : m_viewer;
+        home->setFocus(Qt::OtherFocusReason);
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
@@ -1313,6 +1294,9 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 
 void MainWindow::showEvent(QShowEvent *event) {
     QMainWindow::showEvent(event);
+    // Shown the first time, the keys start where they belong (see
+    // settleFocus); later shows keep the reader's place.
+    if (!m_focusSettled) QTimer::singleShot(0, this, &MainWindow::settleFocus);
 #if KERF_EDITOR_OWN_TITLE_BAR
     hideNativeWindowTitle(this);
     if (QWindow *handle = windowHandle()) {
@@ -1326,6 +1310,13 @@ void MainWindow::showEvent(QShowEvent *event) {
 void MainWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) fitTitleBar();
+    // Only the first activation: Qt then hands the keys to the first button
+    // in the chain. Coming back to the window later keeps the button a
+    // keyboard user tabbed to.
+    if (event->type() == QEvent::ActivationChange && isActiveWindow() && !m_focusSettled) {
+        m_focusSettled = true;
+        settleFocus();
+    }
 }
 
 void MainWindow::newProject() {
@@ -1968,7 +1959,6 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     else if (!m_selectedClips.contains(m_selectedClip)) m_selectedClips = {m_selectedClip};
     m_timeline->setProject(m_project, m_duration, m_fps);
     m_timeline->setSelectedClips(m_selectedClips);
-    updateSelectionStatus();
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     const QSize canvasSize = resolvedCanvasSize(m_project, sources);
     m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
@@ -2005,6 +1995,35 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_bus->setSelection(m_selectedClips);
     m_bus->setSnapshot(snapshot, m_project, m_fps, canvasSize);
     if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
+    applyPendingLink();
+}
+
+QStringList MainWindow::projectSlugs() const {
+    QStringList slugs;
+    for (const QString &name : {QFileInfo(m_projectDirectory).fileName(), m_projectName,
+                                m_project.value(QStringLiteral("name")).toString()})
+        if (const QString slug = links::slug(name); !slug.isEmpty() && !slugs.contains(slug)) slugs << slug;
+    return slugs;
+}
+
+void MainWindow::followLink(qint64 revision, const QString &timecode) {
+    m_linkPending = true;
+    m_linkRevision = revision;
+    m_linkTimecode = timecode;
+    applyPendingLink();
+}
+
+void MainWindow::applyPendingLink() {
+    // Only once the project is connected and its programme known (the seek
+    // is clamped to the duration).
+    if (!m_linkPending || !m_connected || m_snapshot.isEmpty()) return;
+    m_linkPending = false;
+    if (!m_linkTimecode.isEmpty()) {
+        const double seconds = review::parseTimecode(m_linkTimecode, m_fps);
+        if (std::isfinite(seconds)) queueSeek(seconds);
+    }
+    if (m_linkRevision >= 0 && quint64(m_linkRevision) != m_revision)
+        addActivity(QStringLiteral("link"), QStringLiteral("The review link is for rev %1; the project is at rev %2").arg(m_linkRevision).arg(m_revision));
 }
 
 QString MainWindow::selectedTrackType() const {
@@ -2070,7 +2089,6 @@ void MainWindow::applyAppearance() {
         disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
     for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
-    if (!m_proposalText.isEmpty()) showProposalText();
 }
 
 void MainWindow::addActivity(const QString &kind, const QString &text) {
@@ -2115,6 +2133,18 @@ void MainWindow::applyWorkspace() {
     syncWorkspaceCommands();
     syncPanelCommands();
     syncChatSwitches();
+    settleFocus();
+}
+
+void MainWindow::settleFocus() {
+    // A panel that held the keys may have closed with the old layout (the
+    // timeline, in Finish and Deliver), or none held them yet; Qt hands the
+    // keys on as if Tab were pressed, which rings whichever button comes
+    // next. They go to the timeline, or the stage, instead.
+    if (auto *button = qobject_cast<QAbstractButton *>(QApplication::focusWidget()); button && isAncestorOf(button)) {
+        QWidget *home = m_timeline && m_timeline->isVisible() ? static_cast<QWidget *>(m_timeline) : m_viewer;
+        if (home) home->setFocus(Qt::OtherFocusReason);
+    }
 }
 
 void MainWindow::rememberStage() {

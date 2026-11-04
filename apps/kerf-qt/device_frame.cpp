@@ -247,10 +247,6 @@ QList<QRectF> deviceButtons(const DeviceGeometry &device) {
     return out;
 }
 
-QRectF deviceStatusBar(const DeviceGeometry &) { return {}; }
-
-QRectF deviceCamera(const DeviceGeometry &, DevicePreview) { return {}; }
-
 DeviceFeed deviceFeed(const DeviceGeometry &device) {
     const double s = std::min(1.0, device.screen.width() / kFeedReference);
     const QRectF pic = device.picture;
@@ -289,8 +285,6 @@ void paintDeviceFeed(QPainter &p, const DeviceGeometry &device) {
     bar(feed.captionMore);
     p.restore();
 }
-
-void paintDeviceChrome(QPainter &, const DeviceGeometry &, DevicePreview, const EditorTheme &) {}
 
 // ----------------------------------------------------------------------- laptop
 
@@ -335,8 +329,6 @@ LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect) {
     out.picture = pictureOn(out.screen, pictureAspect);
     return out;
 }
-
-QRectF laptopCamera(const LaptopGeometry &) { return {}; }
 
 void paintLaptopBody(QPainter &painter, const LaptopGeometry &laptop, const EditorTheme &) { paintLaptop(painter, laptop); }
 

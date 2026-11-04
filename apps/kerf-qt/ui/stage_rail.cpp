@@ -246,11 +246,6 @@ StageRail::StageRail(QWidget *parent, EditorBus *bus) : QWidget(parent) {
         if (isSignalConnected(QMetaMethod::fromSignal(&StageRail::devicePreviewRequested))) showDeviceMenu();
     });
 
-    m_safeZones = new RailButton(RailButton::Glyph::SafeZones, this);
-    m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
-    m_safeZones->setCheckable(true);
-    m_safeZones->setRetired(true);
-
     m_chat = new RailButton(RailButton::Glyph::Chat, this);
     m_chat->setObjectName(QStringLiteral("railComments"));
     m_chat->setCheckable(true);
@@ -260,8 +255,6 @@ StageRail::StageRail(QWidget *parent, EditorBus *bus) : QWidget(parent) {
     m_badge->setObjectName(QStringLiteral("railCommentsBadge"));
     m_badge->setRingColor(color(tokens::surround));
     m_badge->hide();
-
-    m_vu = new VuMeter(this);
 
     m_deviceLabel = new RailLabel(QStringLiteral("railDeviceLabel"), this);
     m_commentsLabel = new RailLabel(QStringLiteral("railCommentsLabel"), this);

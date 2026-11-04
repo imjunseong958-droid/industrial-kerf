@@ -12,6 +12,7 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
+#include "stage_rail.h"
 #include "command_registry.h"
 #include "comment_row.h"
 #include "components.h"
@@ -411,7 +412,8 @@ private slots:
         MainWindow window{QString(), QString()};
         showAssistant(window);
         QVERIFY(!window.findChild<QComboBox *>(QStringLiteral("agentProvider")));
-        QVERIFY(window.findChild<QComboBox *>(QStringLiteral("agentModel")));
+        // No model field: the More menu offers the models.
+        QVERIFY(!window.findChild<QComboBox *>(QStringLiteral("agentModel")));
         QWidget *panel = window.findChild<QWidget *>(QStringLiteral("chatPanel"));
         QVERIFY(panel);
         QVERIFY(window.m_preferences->isAncestorOf(window.m_anthropicKey));
@@ -442,8 +444,17 @@ private slots:
         QMenu *more = window.m_chat->buildMoreMenu();
         QAction *settings = actionNamed(more, QStringLiteral("Agent settings"));
         QVERIFY(settings);
-        QCOMPARE(settings->property("kerfMenuKey").toString(), window.m_modelSelect->currentText());
-        QCOMPARE(window.m_modelSelect->currentText(), QStringLiteral("claude-test-model"));
+        QCOMPARE(settings->property("kerfMenuKey").toString(), window.m_agentModel);
+        QCOMPARE(window.m_agentModel, QStringLiteral("claude-test-model"));
+        QCOMPARE(window.m_chat->model(), QStringLiteral("claude-test-model"));
+        // Its Model submenu chooses the model the next request names.
+        QMenu *models = nullptr;
+        for (QAction *action : more->actions())
+            if (action->menu() && action->text() == QStringLiteral("Model")) models = action->menu();
+        QVERIFY(models);
+        actionNamed(models, QStringLiteral("claude-3-5-sonnet-latest"))->trigger();
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("model")).toString(), QStringLiteral("claude-3-5-sonnet-latest"));
+        QCOMPARE(window.m_chat->model(), QStringLiteral("claude-3-5-sonnet-latest"));
         delete more;
         openaiRadio->setChecked(true);
         window.m_openaiKey->setText(QStringLiteral("sk-openai-test"));
@@ -772,8 +783,10 @@ private slots:
         QCOMPARE(window.m_chat->chipOpen()->count(), 4);
         // ⌘↩ and Esc act on the pinned proposal.
         QCOMPARE(window.m_proposalId, QStringLiteral("proposal-cc2"));
-        // The rail counts the open threads.
-        QCOMPARE(window.m_rail->chatButton()->label(), QStringLiteral("4"));
+        // The rail's badge counts the open threads; its tip says so.
+        QVERIFY(!window.m_rail->commentsBadge()->isHidden());
+        QCOMPARE(window.m_rail->commentsBadge()->text(), QStringLiteral("4"));
+        QCOMPARE(ui::tipName(window.m_rail->chatButton()), QStringLiteral("Comments · 4 open"));
         // bus openThread opens the panel at the thread and flashes its root.
         window.setChatOpen(false);
         emit window.m_bus->openThread(QStringLiteral("c-2718-r2"));
@@ -1138,7 +1151,10 @@ private slots:
     void rowMenuOffersEachRowsActions() {
         SeededWindow seeded;
         MainWindow &window = seeded.window;
-        window.m_projectName = QStringLiteral("Atlas");
+        // A link names the folder (what a closed project is found by), not
+        // the document's name.
+        window.m_projectName = QStringLiteral("Harbor Teaser");
+        window.m_projectDirectory = QDir(QDir::tempPath()).filePath(QStringLiteral("atlas"));
         QMenu *menu = window.m_chat->buildRowMenu(QStringLiteral("c-2614"));
         QVERIFY(actionNamed(menu, QStringLiteral("Copy")));
         QAction *link = actionNamed(menu, QStringLiteral("Copy link"));

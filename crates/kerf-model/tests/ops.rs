@@ -1,11 +1,12 @@
 //! Edit semantics on a small sync scenario: picture on V1, its linked sound
 //! on A1, and a music bed on A2.
 
+use kerf_model::time::{format_timecode, parse_timecode};
 use kerf_model::{
     apply, validate, AudioInfo, Catalog, Clip, ClipChange, Content, Edge, Id, Media, NewClip, Op,
     Param, Params, Project, Rate, Ratio, Sequence, Time, Track, TrackKind, Value, VideoInfo,
 };
-use kerf_model::{Align, TrackChange, TrackRoleChange};
+use kerf_model::{Align, SequenceChange, TrackChange, TrackRoleChange};
 
 fn f(n: i64) -> Time {
     Rate::FPS_24.time_of(n)
@@ -224,6 +225,113 @@ fn overwrite_trims_and_splits_only_the_target_track() {
     );
     assert_eq!(source_in(&project, "c2"), 252);
     assert_eq!(layout(&project, "A1"), layout(&scene(), "A1"));
+}
+
+#[test]
+fn a_title_generator_inserts_like_media_and_only_on_picture_tracks() {
+    let mut params = Params::new();
+    params.insert("text".into(), Param::Static(Value::Text("Day One".into())));
+    let title = || {
+        NewClip::new(Content::Generator {
+            fx: id("title"),
+            version: 1,
+            params: params.clone(),
+        })
+    };
+    let project = run(
+        &scene(),
+        vec![Op::Insert {
+            sequence: id("s1"),
+            at: f(48),
+            duration: f(24),
+            targets: vec![(id("V1"), title())],
+        }],
+    );
+    assert_eq!(
+        layout(&project, "V1"),
+        vec![row("c1", 0, 48), row("c3", 48, 72), row("c2", 72, 120)]
+    );
+    let Content::Generator { fx, params, .. } = &project.clip("c3").unwrap().content else {
+        panic!("c3 is a generator");
+    };
+    assert_eq!(fx.as_str(), "title");
+    assert_eq!(params["text"], Param::Static(Value::Text("Day One".into())));
+    assert_eq!(validate(&project, Catalog::builtin()), vec![]);
+    // A picture generator has no place on a sound track.
+    assert!(apply(
+        &scene(),
+        Catalog::builtin(),
+        &[Op::Overwrite {
+            sequence: id("s1"),
+            at: f(0),
+            duration: f(24),
+            targets: vec![(id("A2"), title())],
+        }],
+    )
+    .is_err());
+}
+
+#[test]
+fn the_frame_rate_changes_only_while_the_sequence_is_empty_and_keeps_the_start() {
+    let set_rate = |rate: Rate| Op::SetSequence {
+        sequence: id("s1"),
+        change: SequenceChange {
+            rate: Some(rate),
+            ..SequenceChange::default()
+        },
+    };
+    assert_eq!(
+        rejects(&scene(), vec![set_rate(Rate::FPS_30)]),
+        "sequence.conform"
+    );
+    // The same rate is no change at all.
+    run(&scene(), vec![set_rate(Rate::FPS_24)]);
+    let mut empty = scene();
+    for track in &mut empty.sequences[0].tracks {
+        track.clips.clear();
+    }
+    // 01:00:00:00 at 24 fps reads 01:00:00:00 at 29.97 too.
+    let project = run(&empty, vec![set_rate(Rate::FPS_29_97)]);
+    let sequence = &project.sequences[0];
+    assert_eq!(sequence.rate, Rate::FPS_29_97);
+    assert_eq!(
+        Rate::FPS_29_97.frames_exact(sequence.start),
+        Some(30 * 3600)
+    );
+    assert!(!sequence.drop_frame);
+    assert_eq!(validate(&project, Catalog::builtin()), vec![]);
+    // A drop-frame start stays drop-frame only where the rate has it.
+    let mut drop = project.clone();
+    (drop.sequences[0].start, drop.sequences[0].drop_frame) =
+        parse_timecode("01:00:00;00", Rate::FPS_29_97).unwrap();
+    let at_30 = run(&drop, vec![set_rate(Rate::FPS_30)]);
+    assert!(!at_30.sequences[0].drop_frame);
+    assert_eq!(
+        format_timecode(at_30.sequences[0].start, Rate::FPS_30, false),
+        "01:00:00:00"
+    );
+    assert_eq!(validate(&at_30, Catalog::builtin()), vec![]);
+    let fps_59 = Rate::new(60_000, 1001).unwrap();
+    let at_59 = run(&drop, vec![set_rate(fps_59)]);
+    assert!(at_59.sequences[0].drop_frame);
+    assert_eq!(
+        format_timecode(at_59.sequences[0].start, fps_59, true),
+        "01:00:00;00"
+    );
+    assert_eq!(validate(&at_59, Catalog::builtin()), vec![]);
+    // A start given with the rate is taken as it is.
+    let given = run(
+        &empty,
+        vec![Op::SetSequence {
+            sequence: id("s1"),
+            change: SequenceChange {
+                rate: Some(Rate::FPS_25),
+                start: Some((Time::ZERO, false)),
+                ..SequenceChange::default()
+            },
+        }],
+    );
+    assert_eq!(given.sequences[0].start, Time::ZERO);
 }
 
 #[test]

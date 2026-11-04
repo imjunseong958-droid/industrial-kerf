@@ -8,22 +8,34 @@
 #include "presets_panel.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
+#include "timeline_widget.h"
+#include "workspace.h"
 #include "ui/browser_panel.h"
 #include "ui/components.h"
 #include "ui/tray_shell.h"
+
+#include <DockWidget.h>
 
 #include <QAction>
 #include <QComboBox>
 #include <QHash>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFormLayout>
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QMimeData>
 #include <QPushButton>
+#include <QSet>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <cmath>
+#include <utility>
 
 namespace kerf {
 
@@ -45,14 +57,58 @@ QImage previewImage(const QJsonObject &event) {
     return QImage(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4, QImage::Format_RGBA8888).copy();
 }
 
+// A title card held over the timeline lands at the time under the pointer (at
+// the playhead when dropped on the track heads): a video track above V1 under
+// the pointer takes it; anywhere else (V1 included, so the picture is never
+// replaced) it goes on the track Add would choose.
+class GeneratorDrop final : public QObject {
+public:
+    GeneratorDrop(BinWiring *wiring, TimelineWidget *timeline) : QObject(wiring), m_wiring(wiring), m_timeline(timeline) {
+        timeline->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched != m_timeline) return false;
+        const QString mime = QString::fromLatin1(EffectsPanel::kGeneratorMime);
+        switch (event->type()) {
+        case QEvent::DragEnter:
+        case QEvent::DragMove: {
+            auto *drag = static_cast<QDragMoveEvent *>(event);
+            if (!drag->mimeData()->hasFormat(mime)) return false;
+            if (m_timeline->isEnabled()) drag->acceptProposedAction();
+            else drag->ignore();
+            return true;
+        }
+        case QEvent::Drop: {
+            auto *drop = static_cast<QDropEvent *>(event);
+            if (!drop->mimeData()->hasFormat(mime)) return false;
+            const QString fx = QString::fromUtf8(drop->mimeData()->data(mime));
+            const int row = m_timeline->trackRowAt(int(drop->position().y()));
+            const QString track = row >= 0 ? m_timeline->trackRowId(row) : QString();
+            const double at = m_timeline->laneTimeAt(drop->position().x());
+            if (!fx.isEmpty() && m_wiring->addGenerator(fx, track, at)) drop->acceptProposedAction();
+            else drop->ignore();
+            return true;
+        }
+        default:
+            return false;
+        }
+    }
+
+private:
+    BinWiring *m_wiring;
+    TimelineWidget *m_timeline;
+};
+
 } // namespace
 
 BinWiring::BinWiring(MainWindow *window, EditorBus *bus) : QObject(nullptr), m_window(window), m_bus(bus) {
     setObjectName(QStringLiteral("binWiring"));
 }
 
-QString BinWiring::titleAddReason() {
-    return QStringLiteral("Adding a title from here needs kerfd to insert generator clips; its insert edit takes media only");
+QString BinWiring::defaultTitleText() {
+    return QStringLiteral("Title");
 }
 
 void BinWiring::build() {
@@ -64,7 +120,22 @@ void BinWiring::build() {
         kerf_bridge_string_free(catalog);
         m_titles->setCatalog(all);
     }
-    m_titles->setAddAvailable(false, titleAddReason());
+    // Adding goes to kerfd as a generator insert; what it answers shows on
+    // the page (settleTitle).
+    m_titles->setAddAvailable(true);
+    connect(m_titles, &EffectsPanel::addRequested, this, [this](const QString &fx) { addGenerator(fx); });
+    m_titleTimer = new QTimer(this);
+    m_titleTimer->setSingleShot(true);
+    connect(m_titleTimer, &QTimer::timeout, this, [this] {
+        // A confirmation that has been read, or no answer in time: no
+        // snapshot showed the clip (a revision conflict sends no error).
+        if (m_titlePending) {
+            settleTitle(QStringLiteral("Kerf did not answer"));
+            return;
+        }
+        if (m_titles && !m_titles->statusIsError()) m_titles->setStatus(QString());
+    });
+    if (w->m_timeline) m_dropFilter = new GeneratorDrop(this, w->m_timeline);
     w->m_browserPanel->setTitles(m_titles);
     connect(m_titles, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
         m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
@@ -171,10 +242,206 @@ void BinWiring::onEvent(const QString &type, const QJsonObject &event) {
         // A new connection knows nothing of what was asked before.
         m_infoAsked.clear();
     }
+    // kerfd refused the generator add: its words, on the page that asked.
+    if (type == QStringLiteral("error") && m_titlePending) {
+        const QString command = event.value(QStringLiteral("command")).toString();
+        if (command.isEmpty() || command == QStringLiteral("edit"))
+            settleTitle(event.value(QStringLiteral("message")).toString(QStringLiteral("Kerf could not add it")));
+    }
+}
+
+void BinWiring::settleTitle(const QString &error) {
+    if (!m_titlePending || !m_titles) return;
+    m_titlePending = false;
+    if (!error.isEmpty()) {
+        m_titleTimer->stop();
+        m_titles->setStatus(QStringLiteral("%1 was not added: %2").arg(m_titleLabel, error), true);
+        return;
+    }
+    m_titles->setStatus(QStringLiteral("Added %1").arg(m_titleLabel));
+    m_titleTimer->start(4000);
+}
+
+QString BinWiring::previewClipFor(const QJsonObject &timeline, double seconds) {
+    const QString under = programClipAt(timeline, seconds);
+    if (!under.isEmpty()) return under;
+    // The sequence's first picture clip: the earliest on the lowest video
+    // track that has one.
+    for (const QJsonValue &trackValue : timeline.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = trackValue.toObject();
+        if (track.value(QStringLiteral("type")).toString() != QStringLiteral("video")) continue;
+        QString first;
+        double earliest = 0;
+        for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("kind")).toString(QStringLiteral("media")) != QStringLiteral("media")) continue;
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            if (first.isEmpty() || start < earliest) {
+                first = clip.value(QStringLiteral("id")).toString();
+                earliest = start;
+            }
+        }
+        if (!first.isEmpty()) return first;
+    }
+    return {};
+}
+
+QString BinWiring::titleTrack(const QJsonObject &timeline, const QStringList &targets, const QString &dropped) {
+    QStringList above;
+    bool first = true;
+    for (const QJsonValue &value : timeline.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = value.toObject();
+        if (track.value(QStringLiteral("type")).toString() != QStringLiteral("video")) continue;
+        const QString id = track.value(QStringLiteral("id")).toString();
+        const bool locked = track.value(QStringLiteral("locked")).toBool();
+        // The first video track is V1, the picture the title goes over: a
+        // drop there goes above it like Add (an overwrite on V1 would
+        // replace the picture).
+        if (!std::exchange(first, false) && !locked) above << id;
+    }
+    if (!dropped.isEmpty() && above.contains(dropped)) return dropped;
+    for (const QString &id : above)
+        if (targets.contains(id)) return id;
+    return above.value(0);
+}
+
+QSet<QString> BinWiring::generatorClips(const QJsonObject &timeline) {
+    QSet<QString> ids;
+    for (const QJsonValue &trackValue : timeline.value(QStringLiteral("tracks")).toArray())
+        for (const QJsonValue &value : trackValue.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("kind")).toString() == QStringLiteral("generator")) ids.insert(clip.value(QStringLiteral("id")).toString());
+        }
+    return ids;
+}
+
+bool BinWiring::holdsGenerator(const QJsonObject &timeline, const QString &track, const QString &fx, qint64 at, double fps,
+                               const QSet<QString> &before) {
+    if (fps <= 0) return false;
+    for (const QJsonValue &trackValue : timeline.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject row = trackValue.toObject();
+        if (row.value(QStringLiteral("id")).toString() != track) continue;
+        for (const QJsonValue &value : row.value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("kind")).toString() != QStringLiteral("generator")) continue;
+            if (clip.value(QStringLiteral("fx")).toString() != fx || before.contains(clip.value(QStringLiteral("id")).toString())) continue;
+            if (std::llround(clip.value(QStringLiteral("timelineStart")).toDouble() * fps) == at) return true;
+        }
+    }
+    return false;
+}
+
+QString BinWiring::newVideoTrackId(const QJsonObject &timeline) {
+    QSet<QString> ids;
+    int video = 0;
+    for (const QJsonValue &value : timeline.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = value.toObject();
+        ids.insert(track.value(QStringLiteral("id")).toString());
+        if (track.value(QStringLiteral("type")).toString() == QStringLiteral("video")) ++video;
+    }
+    int number = std::max(2, video + 1);
+    while (ids.contains(QStringLiteral("V%1").arg(number))) ++number;
+    return QStringLiteral("V%1").arg(number);
+}
+
+QJsonArray BinWiring::generatorOps(const QString &fx, const QJsonObject &params, qint64 at, qint64 frames, const QString &track,
+                                   const QString &newTrack) {
+    QJsonArray ops;
+    QString onto = track;
+    if (onto.isEmpty()) {
+        onto = newTrack;
+        ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("add-track")}, {QStringLiteral("kind"), QStringLiteral("video")},
+                               {QStringLiteral("id"), onto}});
+    }
+    QJsonObject generator{{QStringLiteral("fx"), fx}};
+    if (!params.isEmpty()) generator.insert(QStringLiteral("params"), params);
+    // Over what is there: a title on a track above the picture moves
+    // nothing (an insert would push every sync-locked track along).
+    ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("insert")},
+                           {QStringLiteral("generator"), generator},
+                           {QStringLiteral("at"), at},
+                           {QStringLiteral("frames"), frames},
+                           {QStringLiteral("tracks"), QJsonArray{onto}},
+                           {QStringLiteral("mode"), QStringLiteral("overwrite")}});
+    return ops;
+}
+
+bool BinWiring::addGenerator(const QString &fx, const QString &dropped, double seconds) {
+    MainWindow *w = m_window;
+    if (!m_titles || fx.isEmpty()) return false;
+    const QString name = m_titles->displayName(fx);
+    if (!w->m_connected) {
+        m_titles->setStatus(QStringLiteral("%1 was not added: waiting for the project connection").arg(name), true);
+        return false;
+    }
+    const QJsonObject timeline = m_bus->timeline();
+    const double fps = m_bus->fps() > 0 ? m_bus->fps() : 24.0;
+    const QStringList targets = w->m_timeline ? w->m_timeline->targetTracks() : QStringList{};
+    const QString track = titleTrack(timeline, targets, dropped);
+    const QString added = track.isEmpty() ? newVideoTrackId(timeline) : QString();
+    const qint64 at = std::llround(std::max(0.0, seconds >= 0 ? seconds : m_bus->playhead()) * fps);
+    const qint64 frames = std::max<qint64>(1, std::llround(kTitleSeconds * fps));
+    QJsonObject params;
+    if (fx == QStringLiteral("title")) params.insert(QStringLiteral("text"), defaultTitleText());
+    const QJsonArray ops = generatorOps(fx, params, at, frames, track, added);
+    m_titleLabel = QStringLiteral("%1 on %2 at %3").arg(name, track.isEmpty() ? added : track, timelineTimecode(double(at) / fps, fps));
+    m_titleRevision = m_bus->revision();
+    m_titleFx = fx;
+    m_titleTrack = track.isEmpty() ? added : track;
+    m_titleAt = at;
+    m_titleFps = fps;
+    m_titleBefore = generatorClips(timeline);
+    m_titleTimer->stop();
+    m_titles->setStatus(QString());
+    m_titlePending = w->sendEdit(ops);
+    if (!m_titlePending) {
+        m_titles->setStatus(QStringLiteral("%1 was not added: the Kerf engine is not connected").arg(name), true);
+        return false;
+    }
+    // An answer is due: a new revision that holds the clip (settled in
+    // onSnapshot), or an error.
+    m_titleTimer->start(15000);
+    return true;
+}
+
+void BinWiring::attachCommands() {
+    MainWindow *w = m_window;
+    CommandRegistry *commands = w->m_commands;
+    if (!commands) return;
+    w->m_commandHandlers.insert(QStringLiteral("bin.search"), [this] { searchBin(); });
+    w->m_commandHandlers.insert(QStringLiteral("bin.toggleView"), [this] { toggleBinView(); });
+    w->m_commandHandlers.insert(QStringLiteral("browser.search"), [this] { searchBrowser(); });
+    w->m_projectPanel->setCommandActions(commands->action(QStringLiteral("bin.search")), commands->action(QStringLiteral("bin.toggleView")));
+    w->m_browserPanel->setSearchAction(commands->action(QStringLiteral("browser.search")));
+}
+
+void BinWiring::searchBin() {
+    MainWindow *w = m_window;
+    if (ads::CDockWidget *bin = w->m_workspace ? w->m_workspace->panel(QStringLiteral("project")) : nullptr)
+        if (bin->isClosed()) bin->toggleView(true);
+    w->m_projectPanel->focusSearch();
+}
+
+void BinWiring::toggleBinView() {
+    ProjectPanel *bin = m_window->m_projectPanel;
+    bin->setListView(!bin->isListView());
+}
+
+void BinWiring::searchBrowser() {
+    MainWindow *w = m_window;
+    if (ads::CDockWidget *browser = w->m_workspace ? w->m_workspace->panel(QStringLiteral("browser")) : nullptr)
+        if (browser->isClosed()) browser->toggleView(true);
+    w->m_browserPanel->focusSearch();
 }
 
 void BinWiring::onSnapshot() {
     followImport();
+    // A newer revision after a generator add that holds a new clip of it at
+    // `at` on its track: kerfd took it. Any other revision (an agent's edit,
+    // another client's) leaves the add waiting.
+    if (m_titlePending && m_bus->revision() > m_titleRevision &&
+        holdsGenerator(m_bus->timeline(), m_titleTrack, m_titleFx, m_titleAt, m_titleFps, m_titleBefore))
+        settleTitle(QString());
     ProjectPanel *bin = m_window->m_projectPanel;
     const QJsonObject timeline = m_bus->timeline();
     bin->setFps(m_bus->fps());
@@ -200,7 +467,7 @@ void BinWiring::requestMediaInfo() {
 }
 
 void BinWiring::updateProgramClip() {
-    m_window->m_effects->setProgramClip(programClipAt(m_bus->timeline(), m_bus->playhead()));
+    m_window->m_effects->setProgramClip(previewClipFor(m_bus->timeline(), m_bus->playhead()));
 }
 
 QString BinWiring::programClipAt(const QJsonObject &timeline, double seconds) {

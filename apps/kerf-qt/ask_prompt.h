@@ -35,8 +35,6 @@ public:
     // Opens above `anchor` (global coordinates). With a clip (its name), the
     // request can stay on the clip or take in the whole sequence.
     void open(const QPoint &anchor, const QString &title, const QString &clip);
-    // Deprecated (W3 removes it): a clip with no name.
-    void open(const QPoint &anchor, const QString &title, bool hasClip);
     // `clip` or `sequence`.
     QString scope() const { return m_scope; }
     void setScope(const QString &scope);

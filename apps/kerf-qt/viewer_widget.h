@@ -107,25 +107,6 @@ public:
     // Stage and device moves, the panel's open and close.
     static constexpr int kMoveDuration = tokens::motion::move;
 
-    // Deprecated (the stage before the [OWNER] placement), removed in W3:
-    // kept so code that names them compiles.
-    static constexpr int kStageMargin = 16;
-    static constexpr int kLeastStageInset = 10;
-    static constexpr double kLeastPhoneScreen = 240.0;
-    static constexpr int kStageGap = 12;
-    static constexpr int kNarrowStageGap = 12;
-    static constexpr int kNarrowStage = 1000;
-    static constexpr int kCardRadius = 12;
-    static constexpr int kMinChatHeight = 352;
-    static constexpr int kLeastChatHeight = 280;
-    static constexpr int kMinCardWidth = 160;
-    static constexpr double kCardKeeps = 0.8;
-    static constexpr double kLaptopKeeps = 0.92;
-    static constexpr double kCompactPlayerWidth = 360.0;
-    int stageGap() const { return kStageEdge; }
-    int stageInset(Device) const { return kStageTop; }
-    bool compactPlayer(const QRectF &card) const { return phoneFormat() || card.width() < kCompactPlayerWidth; }
-
     // The rail and the comments panel, laid out in the stage as children.
     void setStage(QWidget *rail, QWidget *panel);
     // The scrub strip, the agent HUD and the Source column, the same way.
@@ -177,6 +158,8 @@ public:
     // Where the caption sits: centred, its foot on title safe's (mockup-spec 3.3).
     QRectF captionRect() const;
     PlayerOverlay *overlay() const { return m_overlay; }
+    // Where the agent HUD's pop shadow reaches (empty while it is hidden).
+    QRectF hudShadowRect() const;
 
     // Dim surround: the stage's backdrop from surround to surroundDim over
     // 220 ms (view.dim, and the Finish workspace).
@@ -269,6 +252,8 @@ private:
     // The panel's fade while it opens or closes, `m_move` of the way; none
     // once the move ends.
     void fadePanel();
+    // Ends a move under way at once (a format or device change jumps).
+    void jump();
     bool motionAllowed() const;
     double aspect() const;
     // Across the picture, as the player's bar is.

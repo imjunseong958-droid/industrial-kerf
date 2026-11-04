@@ -16,15 +16,29 @@ void kerf_bridge_free(void *bridge);
 // review log, below)}, abort, play, pause, seek {position,scrub},
 // volume {value}, solo {tracks: [trackId]} (hear only those audio tracks,
 // [] hears all; monitoring only, the project never changes, and it holds
-// across edits until changed; no event answers it). Agent
+// across edits and a reconnect to kerfd until changed, so sending it again
+// is harmless; no event answers it). Agent
 // settings are request-scoped so switching providers never mutates the
 // project or leaks credentials into its state.
 // Edit ops beyond moves and trims: set {clip, props} and the generator
-// parameters, fx-add/fx-set {clip, fx, params}, mask-add/mask-set {clip,
-// name, params} take a static value or keyframes {keys: [{at: frame
+// parameters, fx-add {clip, fx, params?, index?} (at the end of the stack
+// unless index), fx-set {clip, index, enabled?, params}, mask-add/mask-set
+// {clip, name, params} take a static value or keyframes {keys: [{at: frame
 // (whole frames from the clip's first frame), value, interp?: linear|hold|
-// ease|ease-in|ease-out}]}; keys on pan and on sound-effect parameters are
+// ease|ease-in|ease-out}]}, which the timeline sends back as it got them
+// (each key's frame); keys on pan and on sound-effect parameters are
 // refused (playback and renders follow keyframes on gain only).
+// insert / overwrite {media, sourceIn (media frames) | generator: {fx
+// (title, solid, adjustment), params?}, at, frames, tracks, ids?,
+// sequence?, mode?: insert|overwrite (in place of the op's own)} place
+// media or a generated picture on each of tracks; insert pushes what
+// follows, overwrite covers it. add-track {kind: video|audio|subtitle,
+// id?, name?, sequence?} adds an empty track after the others of its kind.
+// set-sequence {width?, height? (together), name?, rate?: {num, den} |
+// "29.97" | 25, start? (timecode text, ';' before the frames for drop
+// frame), sequence?} changes what it names; a new rate only while the
+// sequence has no clips or markers, else the edit is refused with "Frame
+// rate can change only while the sequence is empty".
 // set-marker {marker, at?: frame, frames?, name?, note?, color?} moves,
 // renames or recolours a marker ("" clears a field). set-track {track,
 // sequence?, enabled?, locked?, muted?, role?, syncLocked?} ("" role gives
@@ -118,7 +132,8 @@ void kerf_bridge_free(void *bridge);
 // name (or what it renders: Master, Review copy, Full render, Preview),
 // quality, codec, sequence, status: queued|running|completed|failed|
 // cancelled, progress, outputPath, error?}]} (oldest first: kerfd's queued,
-// running and newest finished jobs, from any client), which is also sent
+// running and newest finished jobs, from any client; kerfd keeps the newest
+// 50 finished), which is also sent
 // after every change of status. Closing the bridge stops the job rendering
 // and cancels the queued ones.
 // Paperwork: export_comments {format: csv|edl|markers, includeResolved
@@ -157,8 +172,10 @@ void kerf_bridge_free(void *bridge);
 // colorSpace?, transfer?, primaries?, colorRange?, camera?, lens?, reel?,
 // timecode?, audioCodec?, audioSampleFmt?, audioBitDepth?, audioChannels?,
 // audioSampleRate?}}, errors?: {mediaId: message}} (fields the file does
-// not say are left out); it is also sent on its own for media new to the
-// editor (on opening, after an import, a replace or a merge). The one
+// not say are left out) for every media of the project, or only the one
+// named; it is also sent on its own for media new to the editor (on
+// opening, after an import, a replace or a merge), naming only those, so
+// the editor merges each answer into what it has. The one
 // media asked for that cannot be read is error {command: media_info,
 // media, message}. It is never written into the document. media_index
 // {media} answers media_index {media, duration, cuts: [s], ranges:
@@ -228,7 +245,8 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // meter {peak: [l, r], rms: [l, r] (dBFS, at least -120), momentary,
 // shortTerm (BS.1770 LUFS, null until 400 ms / 3 s were heard), at (the
 // program time the reading reaches)} about 20 times a second while
-// playing, and once with every value null when playback stops,
+// playing, and once with every value null when playback stops (a pause
+// or the end of the program),
 // comments {items: [Comment], reviewRevision, comment? (the one a command
 // just wrote)}: the whole review log, sent on connecting, after every
 // change the editor or an agent turn makes, after a collab sync, and

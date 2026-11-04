@@ -123,8 +123,6 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
     m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
         : QStringLiteral("Project disconnected. %1").arg(message));
-    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("Thinking") : QStringLiteral("Ready"))
-        : status == QStringLiteral("connecting") ? QStringLiteral("Connecting") : QStringLiteral("Offline"));
     m_timeline->setEnabled(m_connected);
     if (m_formatBank) m_formatBank->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);

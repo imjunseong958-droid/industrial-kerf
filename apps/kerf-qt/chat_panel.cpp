@@ -8,7 +8,6 @@
 
 #include <QApplication>
 #include <QClipboard>
-#include <QComboBox>
 #include <QCoreApplication>
 #include <QEnterEvent>
 #include <QFontMetricsF>
@@ -128,26 +127,15 @@ void ChatIconButton::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const bool hover = isEnabled() && (underMouse() || isDown());
-    if (hover || m_filled) {
+    if (hover) {
         p.setPen(Qt::NoPen);
-        p.setBrush(color(hover ? raised : card));
+        p.setBrush(color(raised));
         p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     }
     const QColor ink = !isEnabled() ? color(dis) : hover ? color(tokens::ink) : color(ink2);
-    const QString icon = m_glyph == Glyph::Close  ? QStringLiteral("g-close")
-                         : m_glyph == Glyph::More ? QStringLiteral("g-more")
-                         : m_glyph == Glyph::Back ? QStringLiteral("g-chevl")
-                                                  : QStringLiteral("g-chevr");
+    const QString icon = m_glyph == Glyph::Close ? QStringLiteral("g-close") : QStringLiteral("g-more");
     icons::paint(p, icon, QRectF(rect()), ink, m_diameter <= 20 ? 14 : 16);
     if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::control);
-}
-
-QString relativeTime(const QDateTime &then, const QDateTime &now) {
-    const qint64 seconds = std::max<qint64>(0, then.secsTo(now));
-    if (seconds < 60) return QStringLiteral("now");
-    if (seconds < 3600) return QStringLiteral("%1 min ago").arg(seconds / 60);
-    if (seconds < 86400) return QStringLiteral("%1 h ago").arg(seconds / 3600);
-    return then.date().toString(QStringLiteral("d MMM"));
 }
 
 // ------------------------------------------------------------------ ChatPanel
@@ -157,7 +145,6 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, false);
     setAccessibleName(QStringLiteral("Comments"));
     m_welcomeSince = QDateTime::currentDateTime();
-    m_proposalSince = m_welcomeSince;
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -166,10 +153,6 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     layout->addWidget(buildSearch());
     layout->addWidget(buildChips());
     layout->addWidget(buildPinBar());
-    m_scrollEdge = new QFrame;
-    m_scrollEdge->setObjectName(QStringLiteral("chatListEdge"));
-    m_scrollEdge->setFixedHeight(0);
-    layout->addWidget(m_scrollEdge);
 
     m_list = new ui::FadeScrollArea;
     m_list->setObjectName(QStringLiteral("chatScroll"));
@@ -250,8 +233,6 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     ui::setTip(m_welcomeRow->timeLabel(), QStringLiteral("Since this window opened"));
     m_welcomeTime = m_welcomeRow->timeLabel();
     connectRow(m_welcomeRow);
-
-    buildDeprecated();
 
     m_clock = new QTimer(this);
     m_clock->setInterval(30 * 1000);
@@ -445,42 +426,6 @@ QFrame *ChatPanel::buildPinBar() {
     return m_pinBar;
 }
 
-void ChatPanel::buildDeprecated() {
-    // The old conversation's parts other regions still name (W3 removes
-    // them). They live on the stash, never shown.
-    m_count = new QLabel(m_stash);
-    m_count->setObjectName(QStringLiteral("chatCount"));
-    m_statusRow = new QWidget(m_stash);
-    m_status = new QLabel(QStringLiteral("Ready"), m_statusRow);
-    m_status->setObjectName(QStringLiteral("chatStatus"));
-    m_activity = new QLabel(m_statusRow);
-    m_activity->setObjectName(QStringLiteral("chatActivity"));
-    m_chips = new QWidget(m_stash);
-    m_chips->setObjectName(QStringLiteral("chatNextSteps"));
-    new QHBoxLayout(m_chips);
-    m_chipBack = new ChatIconButton(ChatIconButton::Glyph::Back, 28, m_stash);
-    m_chipForward = new ChatIconButton(ChatIconButton::Glyph::Forward, 28, m_stash);
-    m_modelSelect = new QComboBox(m_stash);
-    m_modelSelect->setObjectName(QStringLiteral("agentModel"));
-    m_modelSelect->setEditable(true);
-    m_cancel = new QPushButton(QStringLiteral("Cancel"), m_stash);
-    m_proposal = new QFrame(m_stash);
-    m_proposal->setObjectName(QStringLiteral("chatProposal"));
-    m_proposalName = new QLabel(QStringLiteral("Kerf"), m_proposal);
-    m_proposalTime = new QLabel(QStringLiteral("now"), m_proposal);
-    m_proposalSummary = new QLabel(m_proposal);
-    m_proposalSummary->setObjectName(QStringLiteral("proposalSummary"));
-    m_proposalDiff = new QTextEdit(m_proposal);
-    m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
-    m_proposalDiff->setReadOnly(true);
-    m_accept = new QPushButton(QStringLiteral("Accept"), m_proposal);
-    m_accept->setObjectName(QStringLiteral("chatPillAccept"));
-    m_reject = new QPushButton(QStringLiteral("Reject"), m_proposal);
-    m_reject->setObjectName(QStringLiteral("chatPillReject"));
-    m_barAccept = new QPushButton(QStringLiteral("Accept"), m_stash);
-    m_barReject = new QPushButton(QStringLiteral("Reject"), m_stash);
-}
-
 // ---- inputs ----------------------------------------------------------------
 
 void ChatPanel::setReview(ReviewModel *model) {
@@ -536,6 +481,12 @@ void ChatPanel::setConnected(bool connected) {
 }
 
 QString ChatPanel::reviewLink(double seconds) const { return m_reviewLink ? m_reviewLink(seconds) : QString(); }
+
+void ChatPanel::setModels(const QStringList &models, const QString &current, bool choosable) {
+    m_models = models;
+    m_currentModel = current;
+    m_modelsChoosable = choosable;
+}
 
 void ChatPanel::setNextSteps(const QJsonArray &steps) {
     m_steps = steps;
@@ -734,7 +685,6 @@ void ChatPanel::connectRow(CommentRow *row) {
         for (const LocalTurn &turn : std::as_const(m_turns))
             if (turn.kerf == row || turn.rows.contains(row)) {
                 emit askAgainInThread(turn.text, turn.threadId);
-                emit askAgain(turn.text);
                 return;
             }
     });
@@ -1089,7 +1039,6 @@ void ChatPanel::updateCounts() {
     m_chipAll->setCount(counts.all);
     m_chipOpen->setCount(counts.open);
     m_chipProposals->setCount(counts.proposals);
-    m_count->setText(QString::number(counts.all));
 }
 
 void ChatPanel::updateHeader() {
@@ -1526,7 +1475,6 @@ void ChatPanel::refreshTimes() {
     m_welcomeRow->setTime(m_welcomeSince);
     m_welcomeRow->refreshTime(now);
     ui::setTip(m_welcomeRow->timeLabel(), QStringLiteral("Since this window opened"));
-    m_proposalTime->setText(relativeTime(m_proposalSince, now));
     for (CommentRow *row : rows()) row->refreshTime(now);
 }
 
@@ -1730,16 +1678,15 @@ QMenu *ChatPanel::buildMoreMenu() {
     menu->setObjectName(QStringLiteral("commentsMoreMenu"));
     menu->setAttribute(Qt::WA_DeleteOnClose);
     QAction *settings = menu->addAction(QStringLiteral("Agent settings…"));
-    ui::setMenuKey(settings, m_modelSelect->currentText());
+    ui::setMenuKey(settings, m_currentModel);
     connect(settings, &QAction::triggered, this, [this] { emit moreAction(QStringLiteral("settings"), QString()); });
-    if (m_modelSelect->count() > 1 && m_modelSelect->isEnabled()) {
+    if (m_models.size() > 1 && m_modelsChoosable) {
         QMenu *models = menu->addMenu(QStringLiteral("Model"));
         ui::styleMenu(models);
-        for (int index = 0; index < m_modelSelect->count(); ++index) {
-            const QString model = m_modelSelect->itemText(index);
+        for (const QString &model : std::as_const(m_models)) {
             QAction *action = models->addAction(model);
             action->setCheckable(true);
-            action->setChecked(model == m_modelSelect->currentText());
+            action->setChecked(model == m_currentModel);
             connect(action, &QAction::triggered, this, [this, model] { emit moreAction(QStringLiteral("model"), model); });
         }
     }
@@ -1819,22 +1766,6 @@ void ChatPanel::showRowMenu(CommentRow *row) {
     connect(menu, &QMenu::aboutToHide, row, [row] { row->setActionsShown(row->underMouse()); });
     ui::popupMenu(menu, row->moreAction()->isVisible() ? static_cast<QWidget *>(row->moreAction()) : row);
 }
-
-// ---- the old conversation's API (deprecated) ------------------------------------------
-
-void ChatPanel::setProposalShown(bool shown, const QString &id) {
-    if (shown && id != m_proposalId) m_proposalSince = QDateTime::currentDateTime();
-    m_proposalId = shown ? id : QString();
-    m_proposalTime->setText(relativeTime(m_proposalSince, QDateTime::currentDateTime()));
-}
-
-void ChatPanel::setProposalSummary(const QString &summary, const QString &compact, const QString &count) {
-    Q_UNUSED(compact)
-    Q_UNUSED(count)
-    m_proposalSummary->setText(summary);
-}
-
-void ChatPanel::setProposalChanges(const QList<ProposalChange> &changes) { Q_UNUSED(changes) }
 
 // ---- events ------------------------------------------------------------------------------
 

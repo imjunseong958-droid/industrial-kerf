@@ -1,5 +1,7 @@
 #include "tray_shell.h"
 
+#include "components.h"
+
 #include <QAbstractButton>
 #include <QAction>
 #include <QHBoxLayout>
@@ -7,6 +9,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QVBoxLayout>
+#include <QVariantAnimation>
+
+#include <algorithm>
 
 namespace kerf::shell {
 
@@ -16,7 +21,18 @@ QLabel *text(const QString &content, const tokens::TypeStyle &style, QRgb ink) {
     QPalette palette = label->palette();
     palette.setColor(QPalette::WindowText, tokens::color(ink));
     label->setPalette(palette);
+    setTextStyle(label, style, ink);
     return label;
+}
+
+void setTextStyle(QLabel *label, const tokens::TypeStyle &style, QRgb ink) {
+    QPalette palette = label->palette();
+    palette.setColor(QPalette::WindowText, tokens::color(ink));
+    label->setPalette(palette);
+    label->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: %2px; font-weight: %3; background: transparent; }")
+                             .arg(tokens::color(ink).name(QColor::HexRgb))
+                             .arg(style.px)
+                             .arg(style.weight));
 }
 
 TrayPane::TrayPane(const QString &objectName, const QString &name, QLabel *meta, QWidget *body, QWidget *parent)
@@ -44,7 +60,30 @@ void TrayPane::addTrailing(QWidget *widget) {
 void TrayPane::setHighlighted(bool on) {
     if (m_highlighted == on) return;
     m_highlighted = on;
-    update();
+    const double end = on ? 1.0 : 0.0;
+    const int duration = ui::motionDuration(tokens::motion::fade);
+    if (!m_fade) {
+        m_fade = new QVariantAnimation(this);
+        m_fade->setEasingCurve(tokens::easing());
+        connect(m_fade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            m_level = value.toDouble();
+            update();
+        });
+    }
+    m_fade->stop();
+    if (duration <= 0 || !isVisible()) {
+        m_level = end;
+        update();
+        return;
+    }
+    m_fade->setDuration(duration);
+    m_fade->setStartValue(m_level);
+    m_fade->setEndValue(end);
+    m_fade->start();
+}
+
+QColor TrayPane::outlineColor() const {
+    return ui::mix(tokens::color(tokens::line), tokens::color(tokens::accent), std::clamp(m_level, 0.0, 1.0));
 }
 
 void TrayPane::paintEvent(QPaintEvent *) {
@@ -53,7 +92,7 @@ void TrayPane::paintEvent(QPaintEvent *) {
     QPainterPath card;
     card.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), tokens::radius::card, tokens::radius::card);
     painter.fillPath(card, tokens::color(tokens::card));
-    painter.setPen(QPen(tokens::color(m_highlighted ? tokens::accent : tokens::line), 1));
+    painter.setPen(QPen(outlineColor(), 1));
     painter.drawPath(card);
 }
 

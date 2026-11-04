@@ -17,7 +17,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QShortcut>
+#include <QAction>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
@@ -402,7 +402,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     stripLayout->addStretch(1);
     m_searchButton = new ui::IconButton(QStringLiteral("g-search"));
     m_searchButton->setObjectName(QStringLiteral("binSearchButton"));
-    m_searchButton->setTip(QStringLiteral("Search media"), QStringLiteral("⌘F"));
+    m_searchButton->setTip(QStringLiteral("Search media"));
     m_searchButton->setCheckable(true);
     m_viewButton = new ui::IconButton(QStringLiteral("g-list"));
     m_viewButton->setObjectName(QStringLiteral("binViewButton"));
@@ -540,12 +540,8 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     });
     if (m_artwork) connect(m_artwork, &MediaArtwork::changed, this, &ProjectPanel::refreshTiles);
 
-    // ⌘F while the bin has focus, ⌘⌥2 anywhere in the window (no registry
-    // command carries either yet).
-    auto *find = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_F), this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
-    connect(find, &QShortcut::activated, this, &ProjectPanel::focusSearch);
-    auto *view = new QShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2), this, nullptr, nullptr, Qt::WindowShortcut);
-    connect(view, &QShortcut::activated, this, [this] { setListView(!m_listView); });
+    // ⌘F and ⌘⌥2 are the registry's bin.search and bin.toggleView
+    // (setCommandActions).
 
     setListView(false);
     rebuildIndex();
@@ -780,7 +776,36 @@ void ProjectPanel::setListView(bool list) {
 void ProjectPanel::updateViewButton() {
     // The button offers the other view (mockup gridBtn).
     m_viewButton->setIconName(m_listView ? QStringLiteral("g-grid") : QStringLiteral("g-list"));
-    m_viewButton->setTip(m_listView ? QStringLiteral("Grid view") : QStringLiteral("List view"), QStringLiteral("⌘⌥2"));
+    m_viewButton->setTip(m_listView ? QStringLiteral("Grid view") : QStringLiteral("List view"),
+                         m_viewAction ? m_viewAction->shortcut().toString(QKeySequence::NativeText) : QString());
+}
+
+void ProjectPanel::setCommandActions(QAction *search, QAction *toggleView) {
+    for (QAction *old : {m_searchAction.data(), m_viewAction.data()})
+        if (old) {
+            removeAction(old);
+            old->disconnect(this);
+        }
+    m_searchAction = search;
+    m_viewAction = toggleView;
+    const auto follow = [this] {
+        m_searchButton->setTip(QStringLiteral("Search media"),
+                               m_searchAction ? m_searchAction->shortcut().toString(QKeySequence::NativeText) : QString());
+        updateViewButton();
+    };
+    // Search while the bin has the focus (the comments panel has its own
+    // ⌘F); the view while the bin is on screen.
+    if (search) {
+        search->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(search);
+        connect(search, &QAction::changed, this, follow);
+    }
+    if (toggleView) {
+        toggleView->setShortcutContext(Qt::WindowShortcut);
+        addAction(toggleView);
+        connect(toggleView, &QAction::changed, this, follow);
+    }
+    follow();
 }
 
 void ProjectPanel::requestIndex() {

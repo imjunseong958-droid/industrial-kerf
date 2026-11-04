@@ -136,6 +136,42 @@ private slots:
 
     void cleanup() { QSettings().remove(QStringLiteral("deliver")); }
 
+    // Delivery settings are kept by the project's absolute path: two
+    // projects whose folders share a name keep their own outputs and
+    // paperwork. A choice kept before (under the folder's name alone) is
+    // still read until the project saves its own.
+    void settingsAreKeptByTheProjectPath() {
+        const QString other = QDir(m_root->path()).filePath(QStringLiteral("elsewhere/atlas"));
+        QVERIFY(QDir().mkpath(other));
+        const QString key = deliver::settingsKey(m_project, QStringLiteral("csv"));
+        QVERIFY(key.startsWith(QStringLiteral("deliver/atlas~")));
+        QVERIFY(key.endsWith(QStringLiteral("/csv")));
+        QVERIFY(key != deliver::settingsKey(other, QStringLiteral("csv")));
+        // The same folder however it is spelled.
+        QCOMPARE(deliver::settingsKey(m_project + QStringLiteral("/"), QStringLiteral("csv")), key);
+        QCOMPARE(deliver::settingsKey(QDir(m_project).filePath(QStringLiteral("../atlas")), QStringLiteral("csv")), key);
+        QVERIFY(deliver::settingsKey(QString(), QStringLiteral("csv")).isEmpty());
+        deliver::setOption(m_project, QStringLiteral("csv"), false);
+        QVERIFY(!deliver::option(m_project, QStringLiteral("csv")));
+        QVERIFY(deliver::option(other, QStringLiteral("csv")));
+        deliver::setOutputFolder(m_project, QStringLiteral("master"), QStringLiteral("out/"));
+        QCOMPARE(deliver::output(m_project, QStringLiteral("master")).folder, QStringLiteral("out/"));
+        QCOMPARE(deliver::output(other, QStringLiteral("master")).folder, deliver::output(other, QStringLiteral("draft")).folder);
+        QVERIFY(deliver::output(other, QStringLiteral("master")).folder != QStringLiteral("out/"));
+        // The legacy key, read while the new one has nothing.
+        QSettings().setValue(deliver::legacySettingsKey(other, QStringLiteral("qcReport")), false);
+        QCOMPARE(deliver::legacySettingsKey(other, QStringLiteral("qcReport")), QStringLiteral("deliver/atlas/qcReport"));
+        QVERIFY(!deliver::option(other, QStringLiteral("qcReport")));
+        deliver::setOption(other, QStringLiteral("qcReport"), true);
+        QVERIFY(deliver::option(other, QStringLiteral("qcReport")));
+        // The toolbar's Master renders what the tray's Master row does.
+        const QJsonObject master = deliver::exportCommand(deliver::output(m_project, QStringLiteral("master")));
+        QCOMPARE(master.value("quality").toString(), QStringLiteral("master"));
+        QCOMPARE(master.value("output").toString(), QStringLiteral("out/"));
+        QCOMPARE(master.value("name").toString(), QStringLiteral("atlas_master"));
+        QVERIFY(!master.contains("codec"));
+    }
+
     void mastersRowsComeFromTheOutputsAndTheQueue() {
         Harness h;
         DeliverTray tray(nullptr, &h.bus);
@@ -159,6 +195,10 @@ private slots:
         h.event(QJsonObject{{"type", "preview"}, {"status", "ready"}});
         QCOMPARE(view->statusText("preview"), QStringLiteral("Ready"));
         QVERIFY(view->specText("preview").endsWith(QStringLiteral(" · cached")));
+        // A program the compositor draws as it plays was never rendered.
+        h.event(QJsonObject{{"type", "preview"}, {"status", "live"}});
+        QCOMPARE(view->statusText("preview"), QStringLiteral("Ready"));
+        QVERIFY(view->specText("preview").endsWith(QStringLiteral(" · drawn live")));
 
         // The queue: the Draft renders, an export from elsewhere has a row of its own.
         h.event(queue({job("j1", "atlas_draft", "review", "running", 0.38),
@@ -228,9 +268,10 @@ private slots:
         QCOMPARE(tray.projectText(), QStringLiteral("atlas · 30 s spot v7 · rev 22 · deliveries/"));
         // The document's own name for the project comes first when it has one.
         QJsonObject named = timeline();
-        named["name"] = "Atlas";
+        named["name"] = "Harbor Teaser";
         h.setTimeline(named);
-        QCOMPARE(tray.projectText(), QStringLiteral("Atlas · 30 s spot v7 · rev 22 · deliveries/"));
+        QCOMPARE(tray.projectText(), QStringLiteral("Harbor Teaser · 30 s spot v7 · rev 22 · deliveries/"));
+        // The link names the folder, as the comments' Copy link does.
         QCOMPARE(tray.paperworkView()->reviewLinkText(), QStringLiteral("kerf://atlas/rev22"));
         // Before the notes are known, nothing is said of them and the master waits.
         QCOMPARE(tray.blockingCount(), -1);
@@ -313,10 +354,10 @@ private slots:
         QVERIFY(!paper->isOn("includeResolved"));
         // A choice is kept for the project, where the toolbar reads it too.
         paper->setOn("includeResolved", true);
-        QCOMPARE(QSettings().value("deliver/atlas/includeResolved").toBool(), true);
+        QCOMPARE(QSettings().value(deliver::settingsKey(m_project, "includeResolved")).toBool(), true);
         QCOMPARE(paper->detailText("markers"), QStringLiteral("2 notes"));
         paper->setOn("edlLocators", false);
-        QCOMPARE(QSettings().value("deliver/atlas/edlLocators").toBool(), false);
+        QCOMPARE(QSettings().value(deliver::settingsKey(m_project, "edlLocators")).toBool(), false);
         paper->setOn("edlLocators", true);
 
         // A master that had finished before is not delivered again.
@@ -432,6 +473,19 @@ private slots:
         QCOMPARE(QGuiApplication::clipboard()->text(), paper.reviewLink());
         h.setTimeline(timeline(), 23);
         QCOMPARE(paper.reviewLinkText(), QStringLiteral("kerf://atlas/rev23"));
+        // A folder name with spaces or other letters: its slug, a host QUrl
+        // (and so macOS) reads, not a percent-encoded name.
+        const QString cut = QDir(m_root->path()).filePath(QStringLiteral("Atlas Cut"));
+        QVERIFY(QDir().mkpath(cut));
+        paper.setProjectDirectory(cut);
+        QCOMPARE(paper.reviewLinkText(), QStringLiteral("kerf://atlas-cut/rev23"));
+        QVERIFY(QUrl(paper.reviewLink()).isValid());
+        const QString cafe = QDir(m_root->path()).filePath(QStringLiteral("Café Cut"));
+        QVERIFY(QDir().mkpath(cafe));
+        paper.setProjectDirectory(cafe);
+        QCOMPARE(paper.reviewLinkText(), QStringLiteral("kerf://café-cut/rev23"));
+        QVERIFY(QUrl(paper.reviewLinkText()).isValid());
+        paper.setProjectDirectory(m_project);
         // No revision yet: nothing to link to.
         h.setTimeline(timeline(), 0);
         QVERIFY(paper.reviewLink().isEmpty());

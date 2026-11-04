@@ -4,6 +4,7 @@
 #include "editor_bus.h"
 #include "editor_common.h"
 #include "render_queue_view.h"
+#include "review_link.h"
 #include "review_model.h"
 
 #include <QClipboard>
@@ -272,10 +273,8 @@ int PaperworkView::noteCount() const {
 }
 
 QString PaperworkView::reviewLinkText() const {
-    const QString project = deliver::projectName(projectDirectory());
-    const quint64 revision = m_bus ? m_bus->revision() : 0;
-    if (project.isEmpty() || revision == 0) return {};
-    return QStringLiteral("kerf://%1/rev%2").arg(QString::fromUtf8(QUrl::toPercentEncoding(project)), QString::number(revision));
+    // The comments' Copy link's form: the folder's slug and the revision.
+    return links::make(projectDirectory(), m_bus ? qint64(m_bus->revision()) : 0);
 }
 
 QString PaperworkView::reviewLink() const {

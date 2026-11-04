@@ -594,6 +594,118 @@ private slots:
         QVERIFY(playing.count() >= 4);
     }
 
+    // Play and Open in timeline are the registry's source.play and
+    // source.reveal: the buttons run them, a key one gives them works while
+    // a viewer has the focus, and their tips name it. Space and ⇧F stay the
+    // viewer's own.
+    void sourcePlayAndRevealAreRegistryCommands() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(sourceSnapshot());
+        QAction *play = window.m_commands->action(QStringLiteral("source.play"));
+        QAction *reveal = window.m_commands->action(QStringLiteral("source.reveal"));
+        QVERIFY(play && reveal);
+        SourceState *state = window.m_sourceWiring->state();
+        QCOMPARE(state->action(QStringLiteral("source.play")), play);
+        QCOMPARE(state->action(QStringLiteral("source.reveal")), reveal);
+        QVERIFY(window.m_commandHandlers.contains(QStringLiteral("source.play")));
+        QVERIFY(window.m_commandHandlers.contains(QStringLiteral("source.reveal")));
+        QCOMPARE(play->shortcutContext(), Qt::WidgetWithChildrenShortcut);
+        for (SourceMonitorPanel *viewer : {window.m_stageSource, window.m_sourceMonitor}) {
+            QVERIFY(viewer->actions().contains(play));
+            QVERIFY(viewer->actions().contains(reveal));
+        }
+        window.openSource(QStringLiteral("m1"));
+        QAbstractButton *button = window.m_sourceMonitor->button(QStringLiteral("source.play"));
+        QTRY_VERIFY(button->isEnabled());
+        QCOMPARE(ui::tipShortcut(button), QStringLiteral("Space"));
+        QSignalSpy triggered(play, &QAction::triggered);
+        QSignalSpy playing(state, &SourceState::playingChanged);
+        button->click();
+        QCOMPARE(triggered.size(), 1);
+        QVERIFY(playing.size() >= 1);
+        state->pause();
+        // The command runs the state with no viewer in between.
+        QVERIFY(window.m_sourceWiring->togglePlay());
+        state->pause();
+        // A key of one's own shows on the button.
+        play->setShortcut(QKeySequence(Qt::Key_K));
+        QTRY_COMPARE(ui::tipShortcut(button), QKeySequence(Qt::Key_K).toString(QKeySequence::NativeText));
+        play->setShortcut(QKeySequence());
+        QTRY_COMPARE(ui::tipShortcut(button), QStringLiteral("Space"));
+        // Sound has no picture: the command does nothing.
+        SourceState sound;
+        sound.open(QJsonObject{{"id", "a1"}, {"path", "Sound.wav"}, {"duration", 3.0}, {"rate", "24"}, {"hasAudio", true}}, QString());
+        QVERIFY(!sound.canPlay());
+    }
+
+    // The compact pane fits the Inspector column at its narrowest: the
+    // canvas keeps its shape (216 x 122 at 240) and nothing runs past 12 in.
+    void compactPaneFitsAt240() {
+        SourceState state;
+        SourceMonitorPanel pane(&state, SourceMonitorPanel::Mode::Compact);
+        pane.resize(240, 520);
+        pane.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&pane));
+        state.open(QJsonObject{{"id", "m1"}, {"path", "missing.mov"}, {"duration", 9.0}, {"rate", "25"}, {"width", 1920}}, QString());
+        QCoreApplication::processEvents();
+        QCOMPARE(pane.pictureRect(), QRect(12, 12, 216, 122));
+        QCOMPARE(pane.barRect(), QRect(12, 12 + 122 + 12, 216, 4));
+        for (const char *id : {"source.markIn", "source.markOut", "source.previousFrame", "source.play", "source.nextFrame",
+                               "source.insert", "source.overwrite", "source.clearMarks"}) {
+            QAbstractButton *button = pane.button(QString::fromLatin1(id));
+            QVERIFY2(button->isVisible(), id);
+            QVERIFY2(button->geometry().left() >= 12 && button->geometry().right() + 1 <= 240 - 12, id);
+        }
+        // The transport stays centred.
+        QAbstractButton *first = pane.button(QStringLiteral("source.markIn"));
+        QAbstractButton *last = pane.button(QStringLiteral("source.nextFrame"));
+        QCOMPARE(first->geometry().left() - 12, 240 - 12 - (last->geometry().right() + 1));
+        QCOMPARE(pane.keyValueRect(0).width(), 240);
+        // At the full column the canvas is the design's 280 x 158 again.
+        pane.resize(304, 520);
+        QCoreApplication::processEvents();
+        QCOMPARE(pane.pictureRect(), QRect(12, 12, 280, 158));
+    }
+
+    // The stage column fades in over 160 ms (opacity) as it comes into a
+    // window on screen, at once with reduced motion; at rest it carries no
+    // effect.
+    void stageViewerFadesIn() {
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        SourceState state;
+        QWidget stage;
+        stage.resize(600, 600);
+        auto *column = new SourceMonitorPanel(&state, SourceMonitorPanel::Mode::Stage, &stage);
+        SourceMonitorPanel &viewer = *column;
+        viewer.setGeometry(16, 8, 400, 548);
+        viewer.hide();
+        stage.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stage));
+        viewer.show();
+        QVERIFY(viewer.isFading());
+        QVERIFY(viewer.opacity() < 1.0);
+        QVERIFY(viewer.graphicsEffect());
+        QTRY_VERIFY_WITH_TIMEOUT(!viewer.isFading(), 2000);
+        QCOMPARE(viewer.opacity(), 1.0);
+        QVERIFY(!viewer.graphicsEffect());
+        viewer.hide();
+        ui::setReducedMotionOverride(1);
+        viewer.show();
+        QVERIFY(!viewer.isFading());
+        QVERIFY(!viewer.graphicsEffect());
+        // A viewer that is a window of its own, and the compact pane, just show.
+        ui::setReducedMotionOverride(0);
+        SourceMonitorPanel alone(&state, SourceMonitorPanel::Mode::Stage);
+        alone.show();
+        QVERIFY(!alone.isFading());
+        auto *pane = new SourceMonitorPanel(&state, SourceMonitorPanel::Mode::Compact, &stage);
+        pane->hide();
+        pane->show();
+        QVERIFY(!pane->isFading());
+    }
+
     // KERF_SCREENSHOT_DIR=<dir>: the stage viewer and the compact pane on
     // real media, its filmstrip and a fixture index, saved for a look.
     void sourceGallery() {

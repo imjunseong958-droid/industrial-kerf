@@ -10,7 +10,9 @@
 // scrubs the effect's main parameter by the pointer's x, re-asking for the
 // preview at most once per 120 ms. Double-click, Return or a drag to a clip
 // adds it. Titles show each generator alone on black, from the generator
-// previews.
+// previews; double-click, Return or a drag to a video track adds one at the
+// playhead (BinWiring places it). A status line under the category row says
+// what the engine answered an add with (an error stays until the next add).
 
 #include "test_friends.h"
 
@@ -25,7 +27,6 @@
 
 #include <functional>
 
-class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -63,6 +64,10 @@ public:
     static constexpr char kCardKey[] = "card";
     static constexpr char kTitleKey[] = "title";
     static constexpr char kScrubKey[] = "scrub";
+    // What a card drags as: an effect's id (to a clip), or a generator's
+    // (to a video track).
+    static constexpr char kFxMime[] = "application/x-kerf-fx";
+    static constexpr char kGeneratorMime[] = "application/x-kerf-generator";
 
     // A row of the category menu.
     struct Category {
@@ -89,9 +94,6 @@ public:
     QString previewClip() const;
     // Show the search field and put the cursor in it.
     void focusSearch();
-    // Deprecated and a no-op: an effect_preview without its key may answer
-    // another region's request. The keyed call below takes every answer.
-    void setPreview(const QString &clip, const QString &fx, const QImage &image);
     // The keyed effect_preview. The Effects page takes kCardKey (a resting
     // thumb) and kScrubKey (the hover scrub's frame), the Titles page only
     // kTitleKey; every other key is dropped.
@@ -102,6 +104,13 @@ public:
     // tips carry it, and activating one does nothing).
     void setAddAvailable(bool available, const QString &reason = {});
     bool addAvailable() const { return m_addAvailable; }
+    // The status line under the category row: what an add came to (UI 11,
+    // ink3, or neg for an error); empty hides it.
+    void setStatus(const QString &message, bool error = false);
+    QString status() const;
+    bool statusIsError() const { return m_statusError; }
+    // A generator's (or effect's) name as the cards show it.
+    QString displayName(const QString &fx) const;
 
     QList<Category> categories() const { return m_categories; }
     QString category() const;
@@ -154,11 +163,13 @@ private:
     qint64 now() const;
 
     Mode m_mode;
-    // The category in effect: its items hold each row's key (the ghost
-    // button's menu is its face).
-    QComboBox *m_category = nullptr;
+    // The category in effect (a Category::key); the ghost button's menu
+    // chooses it.
+    QString m_categoryKey;
     ui::GhostButton *m_categoryButton = nullptr;
     QLabel *m_count = nullptr;
+    QLabel *m_status = nullptr;
+    bool m_statusError = false;
     QWidget *m_searchRow = nullptr;
     QLineEdit *m_search = nullptr;
     QListWidget *m_cards = nullptr;

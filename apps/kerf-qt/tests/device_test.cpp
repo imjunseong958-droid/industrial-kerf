@@ -5,6 +5,7 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
+#include "stage_rail.h"
 #include "command_registry.h"
 #include "design_tokens.h"
 #include "device_frame.h"
@@ -210,10 +211,6 @@ private slots:
         QVERIFY(std::abs(stage.card.width() - stage.screen.width()) < 0.01);
         QVERIFY(std::abs(stage.card.center().y() - stage.screen.center().y()) < 0.5);
         QVERIFY(stage.card.top() > stage.screen.top() && stage.card.bottom() < stage.screen.bottom());
-        // No status bar and no camera, whatever the old choice was.
-        QVERIFY(deviceStatusBar(device).isEmpty());
-        for (const DevicePreview preview : {DevicePreview::Phone, DevicePreview::Island, DevicePreview::PunchHole})
-            QVERIFY(deviceCamera(device, preview).isEmpty());
         // Drawn: the graphite band, the glass, the screen's black above the
         // picture and below it, and the stage past the body's corner.
         viewer.setSafeZones(false);
@@ -233,8 +230,8 @@ private slots:
         for (double y = stage.screen.top() + 2; y < stage.card.top() - 1; y += 1)
             for (double x = stage.screen.center().x() - 0.3 * stage.screen.width(); x <= stage.screen.center().x() + 0.3 * stage.screen.width(); x += 1)
                 QCOMPARE(pixelAt(phone, QPointF(x, y)).rgb(), black);
-        // The old island and punch-hole choices are the same phone.
-        viewer.setDevicePreview(DevicePreview::PunchHole);
+        // The old island and punch-hole settings open as the same phone.
+        viewer.setDevicePreview(devicePreviewFromKey(QStringLiteral("punch")));
         QCOMPARE(viewer.devicePreview(), DevicePreview::Phone);
         QCOMPARE(viewer.stageLayout().card, stage.card);
         QCOMPARE(render(), phone);
@@ -306,8 +303,6 @@ private slots:
         QVERIFY(std::abs(laptop.scoop.center().x() - laptop.base.center().x()) < 0.01);
         QCOMPARE(laptop.scoop.top(), laptop.base.top());
         QVERIFY(laptop.base.contains(laptop.scoop));
-        QVERIFY(laptop.notch.isEmpty());
-        QVERIFY(laptopCamera(laptop).isEmpty());
         // The picture: 16:9, across the screen, centred, black above and below.
         QVERIFY(stage.screen.adjusted(-0.01, -0.01, 0.01, 0.01).contains(stage.card));
         QVERIFY(std::abs(stage.card.width() / stage.card.height() - 16.0 / 9.0) < 0.001);
@@ -576,8 +571,8 @@ private slots:
         (void)viewer.grab();
         (void)viewer.grab();
         QCOMPARE(viewer.deviceFrameRenders(), 3);
-        // The old choices are the same phone: nothing to draw again.
-        viewer.setDevicePreview(DevicePreview::Island);
+        // The old settings are the same phone: nothing to draw again.
+        viewer.setDevicePreview(devicePreviewFromKey(QStringLiteral("island")));
         (void)viewer.grab();
         QCOMPARE(viewer.deviceFrameRenders(), 3);
         // The plain card has no frame to draw.
@@ -669,7 +664,7 @@ private slots:
     void devicePreviewIsRememberedOnThisMac() {
         QCOMPARE(devicePreviewChoices(), (QList<DevicePreview>{DevicePreview::Phone, DevicePreview::Off}));
         QCOMPARE(devicePreviewKey(DevicePreview::Phone), QStringLiteral("phone"));
-        QCOMPARE(devicePreviewKey(DevicePreview::Island), QStringLiteral("phone"));
+        QCOMPARE(devicePreviewFromKey(QStringLiteral("island")), DevicePreview::Phone);
         QCOMPARE(devicePreviewKey(DevicePreview::Off), QStringLiteral("off"));
         QCOMPARE(devicePreviewLabel(DevicePreview::Phone), QStringLiteral("Phone"));
         QCOMPARE(devicePreviewLabel(DevicePreview::Off), QStringLiteral("Off"));
@@ -699,7 +694,7 @@ private slots:
             RailButton *device = window.m_rail->deviceButton();
             QVERIFY(device->isVisible() && device->isChecked());
             QCOMPARE(device->glyph(), RailButton::Glyph::Phone);
-            QVERIFY(!window.m_rail->safeZonesButton()->isVisible());
+            QVERIFY(!window.m_rail->findChild<QWidget *>(QStringLiteral("railSafeZones")));
             QVERIFY(window.m_viewer->stageLayout().device);
             // The panel beside the phone: 480 wide, its right edge 12 from the stage's.
             const ViewerWidget::StageLayout stage = window.m_viewer->stageLayout();

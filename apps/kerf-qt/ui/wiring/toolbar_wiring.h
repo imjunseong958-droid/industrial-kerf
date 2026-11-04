@@ -12,9 +12,17 @@
 //   workspaces          Workspace::activate; Window ▸ Workspaces' builder
 //   title               snapshot timeline.name + timeline.sequences[].name,
 //                       revisionTime and revision
-//   format ⌥1-4         sequence.setFormat {width, height} (edit set-sequence)
+//   format ⌥1-4         the registry's sequence.setFormat.169/.916/.11/.45 ->
+//                       sequence.setFormat {width, height} (edit set-sequence)
 //   sequence button     bus frameSize/fps; Frame size presets as above;
-//                       sequence.settings (the registry's state)
+//                       sequence.settings (⌘0) -> SequenceSettingsDialog ->
+//                       edit {set-sequence {name?, width?, height?, start?,
+//                       rate? (empty sequences only)}}; kerfd's refusal shows
+//                       in the dialog, the next revision closes it
+//   keyboard            keyboard.customise (⌥⌘K) -> KeymapEditor over the
+//                       registry; one's own keys kept by KeymapCustomiser
+//                       (QSettings commands/custom/<keymap>/<id>)
+//   composer.draw       D while the composer has the focus: its Draw
 //   Export              export {quality: master, codec: prores_hq} or
 //                       {quality: review, codec: h264}; Render preview is
 //                       sequence.renderPreview
@@ -57,6 +65,9 @@ class QWidget;
 namespace kerf {
 
 class AgentStatus;
+class KeymapCustomiser;
+class KeymapEditor;
+class SequenceSettingsDialog;
 class EditorBus;
 class ExportButton;
 class FormatBank;
@@ -154,6 +165,25 @@ public:
 
     // Follows the registry: enablement and tips of the toolbar's commands.
     void syncCommands();
+
+    // ---- the commands the window carries out for the features (W3)
+    // The registry's format commands, in canvasPresets() order.
+    static QStringList formatCommands();
+    // Registers sequence.setFormat.*, sequence.settings,
+    // keyboard.customise and composer.draw, and the bin's and the source's.
+    void installCommands();
+    // Sequence Settings…: opens (or raises) the dialog over the program
+    // sequence; it is not modal, so the window goes on as it is open.
+    SequenceSettingsDialog *openSequenceSettings();
+    SequenceSettingsDialog *sequenceSettings() const;
+    // Sends the dialog's set-sequence op as an edit.
+    bool applySequenceSettings(const QJsonObject &op);
+    // Customise Keyboard…
+    KeymapEditor *openKeymapEditor();
+    KeymapEditor *keymapEditor() const;
+    KeymapCustomiser *keymapCustomiser() const { return m_customiser; }
+    // composer.draw: the composer's Draw when it has the focus.
+    bool drawInComposer();
     void setWorkspace(const QString &name);
     void updateSequence();
 
@@ -180,7 +210,15 @@ private:
     ui::IconButton *m_settings = nullptr;
     QMenu *m_workspaceMenu = nullptr;
     QMenu *m_sequenceMenu = nullptr;
-    QList<QAction *> m_formatActions; // ⌥1-4
+    QList<QAction *> m_formatActions; // ⌥1-4: the registry's sequence.setFormat.*
+    KeymapCustomiser *m_customiser = nullptr;
+    QPointer<KeymapEditor> m_keymapEditor;
+    QPointer<SequenceSettingsDialog> m_sequenceSettings;
+    // A set-sequence edit sent from the dialog, and the revision it went at.
+    bool m_sequencePending = false;
+    quint64 m_sequenceRevision = 0;
+    // The set-sequence op that is waiting for kerfd's answer.
+    QJsonObject m_sequenceOp;
     QTimer *m_titleTimer = nullptr;
 
     // Status bar.

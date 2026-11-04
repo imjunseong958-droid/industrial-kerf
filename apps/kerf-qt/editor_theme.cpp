@@ -185,17 +185,13 @@ QColor EditorTheme::marker(const QString &name) const {
 
 EditorTheme makeEditorTheme() {
     EditorTheme t;
-    t.dark = true;
 
-    t.surround = token(tk::surround);
-    t.surroundDim = token(tk::surroundDim);
     t.card = token(tk::card);
     t.on = token(tk::on);
     t.hover2 = token(tk::hover2);
     t.ink = token(tk::ink);
     t.ink2 = token(tk::ink2);
     t.ink3 = token(tk::ink3);
-    t.dis = token(tk::dis);
     t.track = token(tk::track);
     t.track2 = token(tk::track2);
     t.line = token(tk::line);
@@ -203,15 +199,11 @@ EditorTheme makeEditorTheme() {
     t.lineh = token(tk::lineh);
     t.accentHover = token(tk::accentHover);
     t.accentInk = token(tk::accentInk);
-    t.accentWash = token(tk::accentWash);
     t.pos = token(tk::pos);
-    t.neg = token(tk::neg);
-    t.warn = token(tk::warn);
 
     // Accent: the one blue. Text on it is white; as text and thin marks on
     // the ramp it is the light accent ink.
     t.accent = token(tk::accent);
-    t.accentTop = t.accent; // Flat: no bezel gradient.
     t.accentPressed = token(tk::accentHover);
     t.accentText = token(tk::accentInk);
     // A chosen tool or mode is the `on` fill (mockup .ib.on), darkening to
@@ -259,7 +251,6 @@ EditorTheme makeEditorTheme() {
     t.selectionInactiveText = token(tk::ink);
     t.textSelection = laid(tk::raised, alphaOf(tk::accent, 0.45));
     t.hover = alphaOf(0xffffffff, 0.06);
-    t.pressed = alphaOf(0xffffffff, 0.10);
 
     // Fields: inputs on `raised` with a line2 inset, the accent in focus.
     t.field = token(tk::raised);
@@ -268,7 +259,6 @@ EditorTheme makeEditorTheme() {
     t.focusRing = t.accent;
     t.focusHalo = t.accent; // The 2 pt outline, solid (mockup: outline 2px accent).
     // Check boxes: no fill, a 1 pt outline at 16% white; checked, `on`.
-    t.checkFill = token(tk::chrome);
     t.checkBorder = laid(tk::chrome, tk::checkboxOutline);
 
     // Buttons: the secondary button is the raised fill with a line2 edge,
@@ -308,9 +298,7 @@ EditorTheme makeEditorTheme() {
 
     // Sliders (.sl): a 2 pt track, a track2 fill and an ink knob.
     t.sliderGroove = token(tk::track);
-    t.sliderGrooveBorder = token(tk::track);
     t.sliderHandle = token(tk::ink);
-    t.sliderHandleBorder = token(tk::ink);
     t.statusBar = token(tk::chrome);
     t.statusText = token(tk::ink3);
     t.statusDivider = laid(tk::chrome, tk::line);
@@ -332,7 +320,6 @@ EditorTheme makeEditorTheme() {
     // proposal card is `raised`.
     t.assistant = t.accent;
     t.assistantSurface = token(tk::raised);
-    t.assistantBorder = token(tk::line2);
     t.assistantText = token(tk::accentInk);
     t.assistantHover = token(tk::hover2);
 
@@ -348,15 +335,11 @@ EditorTheme makeEditorTheme() {
     t.chatAvatarKerf = t.accent;
     t.chatAvatarKerfText = token(tk::accentText);
     t.chatExpander = token(tk::accentInk);
-    t.chatComposerRule = token(tk::line2);
     t.chatComposerRuleFocus = t.accent;
     t.chatScrollHandle = alphaOf(0xffffffff, 0.40);
     t.chatScrollHandleHover = alphaOf(0xffffffff, 0.70);
     t.messageUser = t.chatSurface;
-    t.messageUserBorder = t.messageUser;
     t.messageAgent = t.chatSurface;
-    t.messageAgentBorder = t.messageAgent;
-    t.messageText = t.chatText;
     t.messageUserRole = t.chatText;
     // The stage rail's icon buttons (.ib): clear at rest, `raised` under the
     // pointer, `on` while on; ink2 symbols, ink when on.
@@ -376,38 +359,12 @@ EditorTheme makeEditorTheme() {
     // W2's segmented tools use the on fill with an ink glyph instead.
     t.toolSelected = token(tk::raised);
 
-    // Timeline (7): chrome bar, ruler and headers, lanes on the well.
-    t.timelineBackground = token(tk::well);
+    // Timeline (7): the ruler's chrome, which the playhead and markers
+    // must read on (the guards below). The timeline paints the rest from
+    // design_tokens.h.
     t.ruler = token(tk::chrome);
     t.rulerBottom = token(tk::chrome);
-    t.rulerTick = token(tk::track2);
-    t.rulerTickHalf = token(tk::track);
-    t.rulerTickMinor = token(tk::track);
-    t.rulerText = token(tk::ink3);
     t.rulerCorner = token(tk::chrome);
-    t.trackHeader = token(tk::chrome);
-    t.trackHeaderEdge = token(tk::chrome);
-    t.trackHeaderColumn = token(tk::chrome);
-    t.trackHeaderText = token(tk::ink);
-    t.trackHeaderTextDisabled = token(tk::dis);
-    t.trackHeaderDetail = token(tk::ink3);
-    t.trackResizeGrip = token(tk::track2);
-    t.trackBadgeText = token(tk::ink3);
-    t.trackToggleOn = token(tk::ink);
-    t.trackToggle = alphaOf(tk::ink, 0.40); // The same ink at 40%.
-    t.trackToggleHover = token(tk::raised);
-    t.trackLane = token(tk::well);
-    t.laneGrid = alphaOf(0xffffffff, 0.03);
-    t.trackLaneAlt = token(tk::well);
-    t.trackLaneLocked = alphaOf(0xffffffff, 0.04);
-    t.trackDivider = laid(tk::well, tk::line);
-    t.trackBankDivider = laid(tk::well, tk::line2);
-    t.headerPreview = token(tk::well);
-    t.headerPreviewBorder = laid(tk::chrome, tk::line);
-    t.addLane = token(tk::chrome);
-    t.addLaneButton = token(tk::raised);
-    t.addLaneButtonBorder = token(tk::line2);
-    t.addLaneText = token(tk::ink2);
 
     // Clips (7.4): a card with a line2 inset and an ink name; a picture's
     // name bar is black at 55% over its filmstrip; titles and captions are
@@ -420,32 +377,13 @@ EditorTheme makeEditorTheme() {
     t.clipMusic = clipStyle(token(tk::card), token(tk::card), cardLine, token(tk::ink), wave);
     t.clipGenerator = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink), token(tk::ink2));
     t.clipCaption = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink2), token(tk::ink2));
-    // Selected: an inset 1.5 pt ink ring, over the lane's dark.
-    t.clipSelectedRing = token(tk::ink);
-    t.clipSelectedRingOuter = token(tk::well);
-    t.clipTrim = token(tk::ink);
-    t.clipHighlight = alphaOf(0xffffffff, 0.0); // Flat: no light along the top.
-    t.clipFxBadge = alphaOf(0xff000000, 0.55);
-    t.clipFxBadgeText = token(tk::ink2);
-    t.filmstripSeam = token(0xff000000);
-    t.waveCenter = alphaOf(0xffffffff, 0.08);
-    t.waveformPeak = token(tk::overlay::waveformPeak);
-    t.waveformBody = token(tk::overlay::waveformRms);
     // The playhead is its own red, stroked in the stage's dark.
     t.playhead = token(tk::playhead);
     t.playheadHalo = token(tk::surround);
     // The skimmed playhead: track2, which reads at 3:1 on the ruler and its
     // halo but clearly under the playhead.
     t.playheadIdle = token(tk::track2);
-    t.skimmer = alphaOf(tk::ink, 0.80);
-    t.skimmerText = token(tk::ink);
-    t.scrubTrack = token(tk::track);
     t.inOutRange = t.accent; // The selected range.
-    t.snapLine = alphaOf(tk::ink, 0.85);
-    t.readout = token(tk::card);
-    t.readoutBorder = token(tk::line2);
-    t.readoutText = token(tk::ink);
-    t.dragShadow = alphaOf(0xff000000, 0.35);
 
     // Marker colours are the document's names; each is lifted to read on
     // the ruler (the guard below).
@@ -459,14 +397,8 @@ EditorTheme makeEditorTheme() {
     t.markerPink = cssColor("#e07ab0");
     t.markerWhite = token(tk::ink);
 
-    // A pending proposal on the timeline: the accent family; removals neg.
-    t.proposalAdd = t.accent;
-    t.proposalAddFill = token(tk::accentWash);
+    // A pending proposal's changed clip: the accent ink.
     t.proposalChange = token(tk::accentInk);
-    t.proposalChangeFill = alphaOf(tk::accentInk, 0.14);
-    t.proposalRemove = token(tk::neg);
-    t.proposalRemoveHatch = alphaOf(tk::neg, 0.59);
-    t.proposalUnderlay = alphaOf(0xff000000, 0.59);
 
     // Viewers (3): the surround, a black canvas, the literal caption.
     t.viewerSurround = token(tk::surround);
@@ -475,35 +407,8 @@ EditorTheme makeEditorTheme() {
     t.viewerTextDim = token(tk::ink3);
     t.viewerCaption = token(tk::overlay::captionBackground);
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
-    t.viewerCaptionText = token(tk::overlay::captionText);
-    // Device frames (3.2, owner): a #0b0b0c glass bezel with a 1 pt black
-    // glass edge, the screen black; no notch, island, camera or status bar.
-    t.deviceFrame = token(tk::overlay::deviceGlass);
-    t.deviceEdge = token(0xff000000);
-    t.deviceShadow = alphaOf(0xff000000, 0.18);
+    // Device frames (3.2, owner) draw from device_frame's own colours.
     t.deviceScreen = token(tk::overlay::deviceScreen);
-    t.deviceInk = token(tk::overlay::captionText);
-    // The laptop's body, in the graphite ramp (Q-DEVICE draws its shape).
-    t.laptopShell = token(tk::raised);
-    t.laptopShellShade = token(tk::card);
-    t.laptopDeck = token(tk::on);
-    t.laptopHighlight = token(tk::hover2);
-    t.laptopBezel = token(tk::overlay::deviceGlass);
-    t.laptopCamera = token(tk::overlay::deviceGlass);
-    t.laptopHinge = token(tk::well);
-    t.safeZoneFill = alphaOf(0xffffffff, 0.12);
-    t.safeZoneLine = alphaOf(0xffffffff, 0.65);
-    t.safeZoneText = token(0xffffffff);
-    t.safeZoneLabel = alphaOf(0xff000000, 0.63);
-    // The player's controls on the picture: white glyphs on a shade.
-    t.playerInk = alphaOf(0xffffffff, 0.90);
-    t.playerInkDisabled = alphaOf(0xffffffff, 0.40);
-    t.playerShade = alphaOf(0xff000000, 0.60);
-    t.playerTopShade = alphaOf(0xff000000, 0.50);
-    t.playerHover = alphaOf(0xffffffff, 0.12);
-    t.playerTrack = alphaOf(0xffffffff, 0.30);
-    t.playerPlayed = t.accent;
-    t.playerTipFill = alphaOf(0xff000000, 0.70);
     // Masks over the picture: white over a dark rule; handles the accent.
     t.maskOutline = token(0xffffffff);
     t.maskOutlineIdle = alphaOf(0xffffffff, 0.70);
@@ -516,80 +421,20 @@ EditorTheme makeEditorTheme() {
     t.maskText = token(0xffffffff);
 
     // The bin and the browser (6, 8): tiles on the well.
-    t.thumbnail = token(0xff000000);
     t.tileEmpty = token(tk::card);
-    t.tileEmptyBorder = laid(tk::card, tk::line2);
     t.tileEmptyText = token(tk::ink2);
-    t.audioTile = token(tk::card);
-    t.audioTileGlyph = laid(tk::card, tk::overlay::waveformRms);
     t.cardPlaceholder = token(tk::raised);
     t.cardPlaceholderText = token(tk::ink2);
     t.badgeError = token(tk::neg);
     t.badgeErrorText = token(tk::surroundDim);
     t.badgeInfo = t.accent;
     t.badgeInfoText = token(tk::accentText);
-    t.badgeNeutral = alphaOf(0xff000000, 0.63);
-    t.badgeNeutralText = token(tk::ink);
-
-    // The hardware finish goes flat: faces are single ramp fills with no
-    // gradient, highlight, drop or inner shadow (those roles are clear), and
-    // lamps are the status colours. W2 replaces these widgets.
-    const QColor none = alphaOf(0xffffffff, 0.0);
-    t.faceplateTop = token(tk::chrome);
-    t.faceplateBottom = token(tk::chrome);
-    t.faceplateHighlight = none;
-    t.faceplateEdge = laid(tk::chrome, tk::line);
-    t.keyTop = token(tk::raised);
-    t.keyBottom = token(tk::raised);
-    t.keyRing = token(tk::line2);
-    t.keyDrop = none;
-    t.keyHighlight = none;
-    t.keyLatched = token(tk::on);
-    t.keyLatchedShadow = none;
-    t.keyLed = t.accent;
-    t.bankWell = token(tk::raised);
-    t.bankShadow = none;
-    t.bankLip = none;
-    t.wellFill = token(tk::raised);
-    t.wellShadow = none;
-    t.wellLip = none;
-    t.modulePlate = token(tk::chrome);
-    t.moduleEdge = laid(tk::chrome, tk::line);
-    t.moduleHighlight = none;
-    t.engravedInk = token(tk::ink3);
-    t.engravedHighlight = none;
-    t.lampOff = token(tk::track);
-    t.lampChanged = token(tk::warn);
-    t.lampKerf = t.accent;
-    t.lampOk = token(tk::pos);
-    t.glassTop = token(tk::well);
-    t.glassBottom = token(tk::well);
-    t.glassShadow = none;
-    t.glassLip = none;
-    t.glassText = token(tk::ink);
-    t.glassLabel = token(tk::ink3);
-    t.knobRing = token(tk::on);
-    t.knobFaceLight = token(tk::raised);
-    t.knobFaceDark = token(tk::raised);
-    t.knobTick = token(tk::track2);
-    t.knobPointer = token(tk::ink);
-    t.vuBezelTop = token(tk::chrome);
-    t.vuBezelBottom = token(tk::chrome);
-    t.vuFace = token(tk::well);
-    t.vuInk = token(tk::ink3);
-    t.vuRedZone = token(tk::neg);
-    t.vuNeedle = token(tk::ink);
 
     // The Inspector's controls: aliases.
     t.inspectorField = t.field;
-    t.switchOn = token(tk::ink2);
-    t.switchOnKnob = token(tk::chrome);
     t.switchOff = token(tk::track);
     t.switchOffStroke = token(tk::line2);
     t.knob = token(tk::ink);
-    t.inspectorDetent = token(tk::track2);
-    t.sliderHandleChanged = token(tk::ink2);
-    t.sliderHandleAtDefault = token(tk::track2);
 
     // Guards: each holds for the values above, and keeps holding if a token
     // is retuned. Text reads at 4.5:1 where it is drawn...
@@ -599,9 +444,6 @@ EditorTheme makeEditorTheme() {
     t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
     for (const QColor &surface : {t.field, t.chatSurface, t.dialog})
         t.placeholderText = justReadableOn(t.placeholderText, surface, 4.5);
-    for (const QColor &surface : {t.trackHeader, t.chrome})
-        t.trackBadgeText = justReadableOn(t.trackBadgeText, surface, 4.5);
-    t.trackHeaderDetail = justReadableOn(t.trackHeaderDetail, t.trackHeader, 4.5);
     t.statusText = justReadableOn(t.statusText, t.statusBar, 4.5);
     t.railLabel = justReadableOn(t.railLabel, t.viewerSurround, 4.5);
     t.viewerTextDim = justReadableOn(t.viewerTextDim, t.viewerCanvas, 4.5);
@@ -629,18 +471,8 @@ EditorTheme makeEditorTheme() {
     // ...every clip's name reads on its header at 4.5:1...
     for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
         style->label = readableOn(style->label, style->header, 4.5);
-    // ...and the hardware's text on whatever it is printed on.
-    for (const QColor &surface : {t.modulePlate, t.faceplateTop, t.faceplateBottom, t.keyTop, t.keyBottom, t.keyLatched})
-        t.engravedInk = justReadableOn(t.engravedInk, surface, 4.5);
-    for (const QColor &surface : {t.glassTop, t.glassBottom}) {
-        t.glassText = readableOn(t.glassText, surface, 4.5);
-        t.glassLabel = justReadableOn(t.glassLabel, surface, 4.5);
-    }
-    t.vuInk = justReadableOn(t.vuInk, t.vuFace, 4.5);
     return t;
 }
-
-EditorTheme makeEditorTheme(bool) { return makeEditorTheme(); }
 
 QPalette editorPalette(const EditorTheme &t) {
     QPalette palette;
@@ -678,12 +510,6 @@ QPalette editorPalette(const EditorTheme &t) {
     palette.setColor(QPalette::Disabled, QPalette::Highlight, t.selectionInactive);
     palette.setColor(QPalette::Disabled, QPalette::HighlightedText, t.textDisabled);
     return palette;
-}
-
-ColorScheme editorColorScheme() { return ColorScheme::Dark; }
-
-void setEditorColorScheme(ColorScheme) {
-    if (qApp) applyEditorAppearance();
 }
 
 const EditorTheme &editorTheme() {

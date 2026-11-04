@@ -43,6 +43,8 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -80,6 +82,7 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSettings>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QStackedWidget>
@@ -553,7 +556,18 @@ private slots:
         QCOMPARE(ui::tipName(bin.m_viewButton), QStringLiteral("Grid view"));
         bin.setListView(false);
         QCOMPARE(ui::tipName(bin.m_viewButton), QStringLiteral("List view"));
-        QCOMPARE(ui::tipShortcut(bin.m_viewButton), QStringLiteral("⌘⌥2"));
+        // The keys are the registry's (bin.search, bin.toggleView): none
+        // on a bin of its own, the commands' once it has them.
+        QVERIFY(ui::tipShortcut(bin.m_viewButton).isEmpty());
+        QAction search(QStringLiteral("Find in Bin"));
+        search.setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F));
+        QAction view(QStringLiteral("Switch Bin View"));
+        view.setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
+        bin.setCommandActions(&search, &view);
+        QCOMPARE(ui::tipShortcut(bin.m_viewButton), view.shortcut().toString(QKeySequence::NativeText));
+        QCOMPARE(ui::tipShortcut(bin.m_searchButton), search.shortcut().toString(QKeySequence::NativeText));
+        bin.setCommandActions(nullptr, nullptr);
+        QVERIFY(!bin.actions().contains(&view));
         // Search shows its field and narrows the media by name.
         bin.focusSearch();
         QVERIFY(bin.m_searchRow->isVisible());
@@ -888,9 +902,12 @@ private slots:
         QCOMPARE(effects.m_count->text(), QStringLiteral("3 items"));
         QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("All video effects"));
         QVERIFY(effects.m_categoryButton->hasChevron());
+        // The ghost button fits its text: it is sized once before the catalog names it.
+        QCOMPARE(effects.m_categoryButton->size(), effects.m_categoryButton->sizeHint());
         effects.setCategory(QStringLiteral("video:Color"));
         QCOMPARE(effects.shownCount(), 2);
         QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("Color"));
+        QCOMPARE(effects.m_categoryButton->size(), effects.m_categoryButton->sizeHint());
         effects.setCategory(QStringLiteral("audio"));
         QCOMPARE(effects.m_count->text(), QStringLiteral("2 items"));
         QVERIFY(effects.m_items.value(QStringLiteral("blur.gaussian"))->isHidden());
@@ -1048,9 +1065,6 @@ private slots:
         // The Titles page took nothing either.
         QVERIFY(titles->m_base.isEmpty());
 
-        // The deprecated unkeyed call takes nothing.
-        panel->setPreview(QStringLiteral("c1"), fx, QImage(16, 9, QImage::Format_RGB32));
-        QVERIFY(!panel->m_base.contains(fx));
         // The other page's key is not this one's either.
         panel->setPreview(QStringLiteral("c1"), fx, QString::fromLatin1(EffectsPanel::kTitleKey), QImage(16, 9, QImage::Format_RGB32));
         QVERIFY(!panel->m_base.contains(fx));
@@ -1072,8 +1086,8 @@ private slots:
     }
 
     // Titles: the catalog's generators, each previewed alone on black
-    // (effect_previews with clip "" and key title); adding one waits for an
-    // engine op that inserts generator clips, and says so.
+    // (effect_previews with clip "" and key title); adding one is a
+    // generator insert at the playhead (titlesAddAGeneratorClipThroughKerfd).
     void titlesListGeneratorsWithTheirPreviews() {
         QSettings().remove(QStringLiteral("workspace"));
         MainWindow window{QString(), QString()};
@@ -1105,17 +1119,268 @@ private slots:
         QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::white));
         // The Effects page did not take the generator's picture.
         QVERIFY(!window.m_effects->m_items.contains(QStringLiteral("title")));
-        // Adding is not available yet: the cards say why and nothing is sent.
-        QVERIFY(!titles->addAvailable());
-        QVERIFY(titles->m_items.value(QStringLiteral("title"))->toolTip().contains(BinWiring::titleAddReason()));
-        QSignalSpy added(titles, &EffectsPanel::addRequested);
-        window.m_lastCommand = {};
-        emit titles->m_cards->itemActivated(titles->m_items.value(QStringLiteral("title")));
-        QCOMPARE(added.size(), 0);
-        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        // Adding is available: the cards say how, and drag as generators.
+        QVERIFY(titles->addAvailable());
+        QVERIFY(titles->m_items.value(QStringLiteral("title"))->toolTip().contains(QStringLiteral("drag to a video track")));
+        QCOMPARE(titles->m_cards->model()->mimeTypes(), QStringList{QString::fromLatin1(EffectsPanel::kGeneratorMime)});
+        QCOMPARE(window.m_effects->m_cards->model()->mimeTypes(), QStringList{QString::fromLatin1(EffectsPanel::kFxMime)});
         // Search follows the page in front.
         browser->focusSearch();
         QVERIFY(titles->m_searchRow->isVisibleTo(titles));
+    }
+
+    // A program of 25 fps with the tracks given, as kerfd sends it.
+    static QJsonObject titleSnapshot(int revision, const QJsonArray &tracks) {
+        return QJsonObject{{"revision", revision}, {"duration", 10},
+                           {"timeline", QJsonObject{{"fps", 25}, {"rate", "25"}, {"sequence", "main"}, {"tracks", tracks}}}};
+    }
+    static QJsonObject videoTrack(const QString &id, const QJsonArray &clips = {}) {
+        return QJsonObject{{"id", id}, {"type", "video"}, {"clips", clips}};
+    }
+
+    // Titles ▸ Add (double-click, Return or a drag to a video track): one
+    // generator insert at the playhead, 5 s at the sequence's rate, over
+    // what is there, on the target video track above V1 (else the first
+    // above it, else a new track); kerfd's answer shows on the page.
+    void titlesAddAGeneratorClipThroughKerfd() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonArray clips{QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 8.0}}};
+        window.applySnapshot(titleSnapshot(3, QJsonArray{videoTrack("V1", clips), videoTrack("V2"), videoTrack("V3"),
+                                                          QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{}}}}));
+        window.queueSeek(2.0);
+        BinWiring *wiring = window.m_binWiring.get();
+        EffectsPanel *titles = wiring->titles();
+        QListWidgetItem *title = titles->m_items.value(QStringLiteral("title"));
+        QVERIFY(title);
+        const auto lastOps = [&window] { return window.m_lastCommand.value("ops").toArray(); };
+        const QJsonObject expected{{"op", "insert"},
+                                   {"generator", QJsonObject{{"fx", "title"}, {"params", QJsonObject{{"text", BinWiring::defaultTitleText()}}}}},
+                                   {"at", 50},
+                                   {"frames", 125},
+                                   {"tracks", QJsonArray{"V2"}},
+                                   {"mode", "overwrite"}};
+
+        // Double-click: on V2, the first video track above V1.
+        window.m_lastCommand = {};
+        emit titles->m_cards->itemActivated(title);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        QCOMPARE(lastOps(), QJsonArray{expected});
+        // No bridge took it here: the page says so, in neg.
+        QVERIFY(titles->statusIsError());
+        QVERIFY(titles->status().contains(QStringLiteral("not connected")));
+        QVERIFY(titles->m_status->isVisibleTo(titles));
+
+        // A targeted video track above V1 is where it goes.
+        window.m_timeline->setTargetsEditable(true);
+        window.m_timeline->setTargetTracks({QStringLiteral("V3"), QStringLiteral("A1")});
+        QVERIFY(wiring->addGenerator(QStringLiteral("title")) == false);
+        QCOMPARE(lastOps().first().toObject().value("tracks").toArray(), QJsonArray{"V3"});
+        // A solid has no text of its own.
+        wiring->addGenerator(QStringLiteral("solid"));
+        QCOMPARE(lastOps().first().toObject().value("generator").toObject(), (QJsonObject{{"fx", "solid"}}));
+
+        // Dropped on V1's row, it goes where Add puts it (V3, the target):
+        // an overwrite on V1 would replace the picture.
+        int v1 = -1;
+        for (int row = 0; row < window.m_timeline->trackRowCount(); ++row)
+            if (window.m_timeline->trackRowId(row) == QStringLiteral("V1")) v1 = row;
+        QVERIFY(v1 >= 0);
+        auto *mime = new QMimeData;
+        mime->setData(QString::fromLatin1(EffectsPanel::kGeneratorMime), QByteArray("title"));
+        const QPointF at(window.m_timeline->trackHeaderRect(v1).right() + 40, window.m_timeline->trackHeaderRect(v1).center().y());
+        QDragEnterEvent enter(at.toPoint(), Qt::CopyAction, mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(window.m_timeline, &enter);
+        QVERIFY(enter.isAccepted());
+        QDropEvent drop(at, Qt::CopyAction, mime, Qt::LeftButton, Qt::NoModifier);
+        window.m_lastCommand = {};
+        QApplication::sendEvent(window.m_timeline, &drop);
+        QCOMPARE(lastOps().first().toObject().value("tracks").toArray(), QJsonArray{"V3"});
+        // It lands at the time under the pointer, not at the playhead.
+        {
+            const double fps = window.m_bus->fps() > 0 ? window.m_bus->fps() : 24.0;
+            const double under = window.m_timeline->laneTimeAt(at.x());
+            QVERIFY(under >= 0);
+            QCOMPARE(lastOps().first().toObject().value("at").toInteger(), qint64(std::llround(under * fps)));
+            // Over the track heads there is no time (a drop there goes at
+            // the playhead).
+            QCOMPARE(window.m_timeline->laneTimeAt(window.m_timeline->trackHeaderRect(v1).center().x()), -1.0);
+        }
+        // An effect card held over the timeline is the timeline's own.
+        auto *effect = new QMimeData;
+        effect->setData(QString::fromLatin1(EffectsPanel::kFxMime), QByteArray("blur.gaussian"));
+        QDropEvent effectDrop(at, Qt::CopyAction, effect, Qt::LeftButton, Qt::NoModifier);
+        window.m_lastCommand = {};
+        QApplication::sendEvent(window.m_timeline, &effectDrop);
+        QVERIFY(window.m_lastCommand.value("ops").toArray().isEmpty() ||
+                window.m_lastCommand.value("ops").toArray().first().toObject().value("op").toString() != QStringLiteral("insert"));
+        delete effect;
+        delete mime;
+
+        // kerfd's answers, as they come for a sent edit: a refusal stays on
+        // the page in kerfd's words; a newer revision holding the clip is a
+        // confirmation.
+        wiring->m_titlePending = true;
+        wiring->m_titleLabel = QStringLiteral("Title on V2 at 00:00:02:00");
+        wiring->m_titleRevision = 3;
+        wiring->m_titleFx = QStringLiteral("title");
+        wiring->m_titleTrack = QStringLiteral("V2");
+        wiring->m_titleAt = 50;
+        wiring->m_titleFps = 25;
+        wiring->m_titleBefore = {QStringLiteral("g0")};
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", "no generator `title`"}});
+        QVERIFY(!wiring->titlePending());
+        QCOMPARE(titles->status(), QStringLiteral("Title on V2 at 00:00:02:00 was not added: no generator `title`"));
+        QVERIFY(titles->statusIsError());
+        // Another region's refusal is not the page's.
+        wiring->m_titlePending = true;
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "media_index"}, {"message", "unreadable"}});
+        QVERIFY(wiring->titlePending());
+        // A newer revision without the clip (an agent's edit, another
+        // client's; a title that was there already) is no confirmation.
+        const QJsonObject older{{"id", "g0"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}};
+        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", titleSnapshot(4, QJsonArray{videoTrack("V1", clips), videoTrack("V2", QJsonArray{older})})}});
+        QVERIFY(wiring->titlePending());
+        QVERIFY(titles->status().isEmpty() || !titles->status().startsWith(QStringLiteral("Added")));
+        const QJsonObject added{{"id", "g1"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}};
+        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", titleSnapshot(5, QJsonArray{videoTrack("V1", clips), videoTrack("V2", QJsonArray{added})})}});
+        QVERIFY(!wiring->titlePending());
+        QCOMPARE(titles->status(), QStringLiteral("Added Title on V2 at 00:00:02:00"));
+        QVERIFY(!titles->statusIsError());
+        // No snapshot with the clip before the wait runs out: not added.
+        wiring->m_titlePending = true;
+        wiring->m_titleTimer->start(1);
+        QTRY_VERIFY(!wiring->titlePending());
+        QCOMPARE(titles->status(), QStringLiteral("Title on V2 at 00:00:02:00 was not added: Kerf did not answer"));
+        QVERIFY(titles->statusIsError());
+
+        // With V1 alone, a video track is added for it first.
+        window.applySnapshot(titleSnapshot(6, QJsonArray{videoTrack("V1", clips)}));
+        window.m_timeline->setTargetTracks({QStringLiteral("V1")});
+        wiring->addGenerator(QStringLiteral("title"));
+        QCOMPARE(lastOps().size(), 2);
+        QCOMPARE(lastOps().at(0).toObject(), (QJsonObject{{"op", "add-track"}, {"kind", "video"}, {"id", "V2"}}));
+        QCOMPARE(lastOps().at(1).toObject().value("tracks").toArray(), QJsonArray{"V2"});
+
+        // Offline nothing goes, and the page says why.
+        window.setConnection(QStringLiteral("disconnected"));
+        window.m_lastCommand = {};
+        QVERIFY(!wiring->addGenerator(QStringLiteral("title")));
+        QVERIFY(window.m_lastCommand.isEmpty());
+        QVERIFY(titles->status().contains(QStringLiteral("waiting for the project connection")));
+    }
+
+    // A subtitle track without a name reads Captions, numbered with the
+    // picture tracks (mockup-spec 7: V5 Captions).
+    void captionTracksReadAsCaptions() {
+        const QJsonObject project{{"tracks", QJsonArray{videoTrack("V1"), QJsonObject{{"id", "S1"}, {"type", "subtitle"}},
+                                                        QJsonObject{{"id", "A1"}, {"type", "audio"}}}}};
+        const TrackBadge caption = trackBadge(project, QStringLiteral("S1"));
+        QCOMPARE(caption.badge, QStringLiteral("V2"));
+        QCOMPARE(caption.name, QStringLiteral("Captions"));
+        QCOMPARE(trackBadge(project, QStringLiteral("V1")).name, QStringLiteral("Video 1"));
+        QCOMPARE(trackBadge(project, QStringLiteral("A1")).name, QStringLiteral("Audio 1"));
+        QVERIFY(isCaptionTrack(QJsonObject{{"type", "subtitle"}}));
+        QVERIFY(!isCaptionTrack(QJsonObject{{"type", "video"}}));
+    }
+
+    // The ops and track choice on their own.
+    void titleTracksAndOps() {
+        const QJsonObject timeline{{"tracks", QJsonArray{videoTrack("V1"), QJsonObject{{"id", "V2"}, {"type", "video"}, {"locked", true}},
+                                                         videoTrack("V3"), QJsonObject{{"id", "A1"}, {"type", "audio"}}}}};
+        // A locked track takes nothing: the first unlocked above V1.
+        QCOMPARE(BinWiring::titleTrack(timeline, {}), QStringLiteral("V3"));
+        QCOMPARE(BinWiring::titleTrack(timeline, {QStringLiteral("V2")}), QStringLiteral("V3"));
+        // A drop on an audio track goes where Add would.
+        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("A1")), QStringLiteral("V3"));
+        // A drop on V1 goes above it too; one on a free track above V1 stays.
+        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("V1")), QStringLiteral("V3"));
+        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("V3")), QStringLiteral("V3"));
+        QCOMPARE(BinWiring::titleTrack(timeline, {QStringLiteral("V3")}, QStringLiteral("V2")), QStringLiteral("V3"));
+        // A snapshot shows an add by a new generator clip of it at the frame.
+        const QJsonObject held{{"tracks", QJsonArray{videoTrack("V1"), videoTrack("V2", QJsonArray{QJsonObject{
+                                   {"id", "g1"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}}})}}};
+        QVERIFY(BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 50, 25));
+        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 50, 25, {QStringLiteral("g1")}));
+        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("solid"), 50, 25));
+        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 75, 25));
+        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V1"), QStringLiteral("title"), 50, 25));
+        QCOMPARE(BinWiring::generatorClips(held), (QSet<QString>{QStringLiteral("g1")}));
+        QCOMPARE(BinWiring::newVideoTrackId(timeline), QStringLiteral("V4"));
+        QCOMPARE(BinWiring::newVideoTrackId(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}), QStringLiteral("V2"));
+        QCOMPARE(BinWiring::titleTrack(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}, {}), QString());
+    }
+
+    // With no picture clip selected, the cards show the clip under the
+    // playhead, else the sequence's first picture clip; the placeholder
+    // only when there is no picture clip at all.
+    void effectsPreviewOnTheProgramsFirstPictureClip() {
+        const QJsonArray later{QJsonObject{{"id", "c5"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 5.0}, {"duration", 2.0}},
+                               QJsonObject{{"id", "c3"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 3.0}, {"duration", 1.0}}};
+        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{
+                                       QJsonObject{{"id", "a1"}, {"kind", "media"}, {"timelineStart", 0.0}, {"duration", 9.0}}}}},
+                                                         videoTrack("V1", later)}}};
+        QCOMPARE(BinWiring::previewClipFor(timeline, 5.5), QStringLiteral("c5"));
+        QCOMPARE(BinWiring::previewClipFor(timeline, 0.0), QStringLiteral("c3"));
+        QCOMPARE(BinWiring::previewClipFor(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}, 0.0), QString());
+
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(titleSnapshot(3, QJsonArray{videoTrack("V1", later)}));
+        EffectsPanel *effects = window.m_effects;
+        QCOMPARE(effects->previewClip(), QStringLiteral("c3"));
+        effects->requestPreviews();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c3"));
+        window.queueSeek(5.5);
+        QCOMPARE(effects->previewClip(), QStringLiteral("c5"));
+        window.applySnapshot(titleSnapshot(4, QJsonArray{videoTrack("V1")}));
+        QCOMPARE(effects->previewClip(), QString());
+    }
+
+    // ⌘F, ⌘⌥2 and ⌘⇧F are the registry's bin.search, bin.toggleView and
+    // browser.search (no QShortcut of the panels' own is left), so the
+    // keymap lists them and one's own keys reach them.
+    void binAndBrowserKeysAreRegistryCommands() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ProjectPanel *bin = window.m_projectPanel;
+        BrowserPanel *browser = window.m_browserPanel;
+        QVERIFY(bin->findChildren<QShortcut *>().isEmpty());
+        QVERIFY(browser->findChildren<QShortcut *>().isEmpty());
+        QAction *search = window.m_commands->action(QStringLiteral("bin.search"));
+        QAction *view = window.m_commands->action(QStringLiteral("bin.toggleView"));
+        QAction *find = window.m_commands->action(QStringLiteral("browser.search"));
+        QVERIFY(search && view && find);
+        QCOMPARE(search->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_F));
+        QCOMPARE(view->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
+        QCOMPARE(find->shortcut(), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
+        QVERIFY(bin->actions().contains(search) && bin->actions().contains(view));
+        QVERIFY(browser->actions().contains(find));
+        // The bin's ⌘F is the bin's while it has the focus (the comments
+        // panel keeps its own ⌘F).
+        QCOMPARE(search->shortcutContext(), Qt::WidgetWithChildrenShortcut);
+        // The strip's tips name the keymap's keys.
+        QCOMPARE(ui::tipShortcut(bin->m_searchButton), search->shortcut().toString(QKeySequence::NativeText));
+        QCOMPARE(ui::tipShortcut(bin->m_viewButton), view->shortcut().toString(QKeySequence::NativeText));
+        QCOMPARE(ui::tipShortcut(browser->searchButton()), find->shortcut().toString(QKeySequence::NativeText));
+        // They run what the panels' keys ran.
+        const bool list = bin->isListView();
+        view->trigger();
+        QCOMPARE(bin->isListView(), !list);
+        search->trigger();
+        QVERIFY(bin->m_searchRow->isVisibleTo(bin));
+        find->trigger();
+        QVERIFY(window.m_effects->m_searchRow->isVisibleTo(window.m_effects));
+        // A key of one's own follows into the tips.
+        view->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_9));
+        QCOMPARE(ui::tipShortcut(bin->m_viewButton), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_9).toString(QKeySequence::NativeText));
+        view->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
     }
 
     // The browser at its 304 (303 inside its seam): 3 columns of 88 x 50

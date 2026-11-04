@@ -1,5 +1,6 @@
 #include "source_wiring.h"
 
+#include "command_registry.h"
 #include "editor_bus.h"
 #include "main_window.h"
 #include "source_monitor_panel.h"
@@ -9,6 +10,7 @@
 
 #include <DockWidget.h>
 
+#include <QAction>
 #include <QDir>
 #include <QJsonArray>
 
@@ -36,6 +38,29 @@ void SourceWiring::attach() {
         connect(m_bus, &EditorBus::event, this, &SourceWiring::onEvent);
         connect(m_bus, &EditorBus::snapshotChanged, this, &SourceWiring::onSnapshot);
     }
+}
+
+void SourceWiring::attachCommands() {
+    MainWindow *w = m_window;
+    if (!w->m_commands) return;
+    w->m_commandHandlers.insert(QStringLiteral("source.play"), [this] { togglePlay(); });
+    w->m_commandHandlers.insert(QStringLiteral("source.reveal"), [this] { reveal(); });
+    QHash<QString, QAction *> actions;
+    for (const char *id : {"source.play", "source.reveal"}) {
+        QAction *action = w->m_commands->action(QString::fromLatin1(id));
+        if (!action) continue;
+        // A key given to them acts while a Source viewer has the focus, as
+        // the registry's source-scoped commands do.
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        actions.insert(QString::fromLatin1(id), action);
+    }
+    if (!actions.isEmpty()) m_state->addActions(actions);
+}
+
+bool SourceWiring::togglePlay() {
+    if (!m_state->canPlay()) return false;
+    m_state->togglePlay();
+    return true;
 }
 
 void SourceWiring::onEvent(const QString &type, const QJsonObject &event) {

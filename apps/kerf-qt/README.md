@@ -31,43 +31,41 @@ it captures the launcher. `--window-size 1600x1000` sizes the window,
 `--workspace Finish` opens it in that workspace, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
-The editor and the launcher follow the system's light or dark appearance and
-switch live when it changes; `KERF_COLOR_SCHEME=light` or `dark` picks one
-for the run. Both draw one palette: antique cream paper in light (#f4eee2
-panels on a #e6dece desk) and warm espresso in dark (#1c1713 panels), with
-warm near-black or cream text, never pure black or white. Kerf has its own
-accent and does not follow the system's: an aubergine ink (#6a3471) on cream
-and its mauve (#c39acb, carrying dark ink) on espresso, for focus, the
-playhead, each default action and Kerf's own work (proposals, Ask Kerf).
-Chosen tools and modes are a quiet wash with no outline, groups and cards
-sit on their panel without frames, and the type follows one scale (11, 12,
-13, 14, 16 and 20px). The viewers' stage follows the appearance; the
-picture card is warm black in both. On macOS the editor's toolbar is its title bar, as the
-launcher's sidebar and title are: the window runs up under a transparent
+The editor and the launcher are dark only, and fill the screen edge to edge
+as Final Cut Pro does. There is one graphite ramp (#050505 behind the stage
+when dimmed, #0e0e0e the stage's surround, #121212 wells, #171717 panels,
+#1c1c1c cards and menus, #262626 raised controls, #303030 chosen ones) with
+ink #ededed / #a1a1a1 / #8a8a8a, and one blue accent (#3366e6) for Kerf, focus,
+proposals and the default action; the playhead is its own red. Colours, type
+(Inter and JetBrains Mono when bundled under `resources/fonts/`, else the
+system UI font and Menlo at the same sizes, with tabular figures), radii,
+spacing, control heights and motion (120/160/200/220 ms) come only from
+`design_tokens.h` and the kit in `ui/components.h` and `ui/icons.h` (icons
+are the mockup's SVG path data drawn as `QPainterPath`, without QtSvg).
+Menus, tooltips and popovers are flat cards with the `--pop` shadow
+(0 8 24, 45% black) round them; tooltips name the control and its shortcut.
+There is no light appearance and no `KERF_COLOR_SCHEME`. On macOS the
+editor's toolbar is its title bar: the window runs up under a transparent
 title bar, the window buttons sit at the toolbar's leading end, and the
-project's name is the window's title, centred on the window. Pop-up buttons
-and menus open as macOS's do (rounded, a check by the current choice, the
-accent under the pointer, no command symbols), buttons and pop-up buttons
-take focus from Tab alone, shown as a soft accent ring, and a field being
-typed in always shows that ring.
+project's name is centred on the window with its state under it
+("Edited 2m ago · rev 22").
 
-Sources live in the `kerf` namespace, one class per header/source pair:
-`main_window` (the window, which builds and connects the panels),
-`project_launcher` (the Choose a Project window), `workspace` (the docked
-panels and workspaces), `project_panel` (the bin), `presets_panel` (the
-project's preset library), `source_monitor_panel`, `effect_controls_panel`,
-`timeline_widget`, `viewer_widget` (the viewer, its mask drawing, and the
-focus-region picker),
-`command_registry` (the editor's side of the command registry), and
-`media_artwork` (background thumbnails and waveforms). `editor_common`
-holds shared constants and helpers (among them `useEditorStyle()`, the
-application style: Fusion with macOS's focus, pop-up rows and menu shapes),
-`editor_theme` the appearance (the
-`EditorTheme` colour roles every widget draws with, light and dark, Kerf's
-accent, and the system appearance detection the launcher shares),
-`editor_style.h` the stylesheet generated from those roles, and
-`main.cpp` only `main()`. `editor_test.cpp` (with `test_footage.cpp`) builds into `kerf-qt-tests`
-instead of `main.cpp`.
+Sources live in the `kerf` namespace. `main_window.cpp` builds the window;
+its members are split by region into `main_window_<region>.cpp` (stage,
+review, inspector, timeline, bin, source, toolbar, status), and each region
+keeps its state in a wiring class under `ui/wiring/` that talks to the others
+only through `ui/editor_bus.h` (the bridge's events, the snapshot, the
+playhead, the workspace and cross-region requests). `ui/` holds the shared
+parts: the kit (`components`, `icons`, `scope_math`), the review model and
+the comments panel's rows and proposal cards, the stage's scrub strip, rail
+and agent HUD, the Inspector column, the Finish and Deliver trays, and
+`review_link` (kerf:// links). `workspace` holds the docked panels and the
+four workspaces, `viewer_widget` the Program stage, `device_frame` the
+laptop and phone, `editor_theme`/`editor_style.h` the colour roles and the
+style sheet generated from them, and `project_launcher` the Choose a Project
+window. `main.cpp` holds only `main()`; the tests under `tests/` (one class
+per region, run together by `tests/test_main.cpp`) build into
+`kerf-qt-tests` instead.
 
 Menus, shortcuts, the toolbar, the player's controls, and timeline gestures
 run commands from the registry in `crates/kerf-commands`. Each
@@ -87,8 +85,8 @@ and timeline and Inspector edits go to `kerfd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
-trimming, split-at-playhead, and Delete. The tool palette beside the track
-headers picks what a click or drag on a clip does, with the usual keys while
+trimming, split-at-playhead, and Delete. The tools in the timeline's bar
+pick what a click or drag on a clip does, with the usual keys while
 the timeline has focus: Selection (V) moves and trims, Razor (C) splits
 where you click, Ripple Edit (B) trims and closes or opens the gap, Rolling
 Edit (N) moves a cut between two clips, Slip (Y) shows other media in the
@@ -155,8 +153,8 @@ a panel is never cut off, and a column of tabbed panels keeps one least
 width whichever tab is chosen; the timeline's divider, dragged all the way
 up, closes the row over it altogether (drag it down again to bring the row
 back), and the timeline itself never closes. Window lists the panels to show or hide and
-the workspaces: Editing is built in, and Save as New Workspace adds your
-own. A workspace keeps the changes made to it, across launches, until
+the workspaces: Review, Edit, Finish and Deliver are built in, and Save as
+New Workspace adds your own. A workspace keeps the changes made to it, across launches, until
 Reset to Saved Layout (Alt+Shift+0) returns it to its saved layout; Save
 Changes to This Workspace makes the current arrangement that layout. The
 timeline fits the window on its own. All tracks remain vertically
@@ -166,102 +164,88 @@ scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The
-Program monitor's transport lies on the picture, as a video player's
-controls do: a gradient along the picture's foot, a progress bar across it
-(thicker under the pointer, its played part in Kerf's purple, the time under
-the pointer shown over it; click or drag it to seek), and a row with play or
-pause, a frame back, a frame on, and the time over the program length. On a
-portrait picture they take a short-video player's arrangement: the bar along
-the foot, the buttons at the top left, the time small over the bar. They
-show while paused and while the pointer is over the picture, and fade out
-2.5 seconds after it stops while playing; the keys never depend on them.
-As on a video player, a click on the picture plays or pauses (the bar
-seeks), and moving the pointer across the picture skims it from start to
-end, as the bar maps it; the stage around the picture does neither. The
-caption preview rises over the controls while they show, as a player's
-captions do. Nothing sits under the picture. The Editing
-workspace reads as a Short does on YouTube's desktop page: the Program
-monitor takes the top row past the browsers, and in its stage the picture
-card (12-point corners), an action rail and the Kerf Assistant (the chat)
-form one group centred in the stage, the chat panel level with the card (or
-the phone or laptop it shows in) and exactly as tall, as a Short's comments
-open beside it: where the stage has the room the card is made tall enough
-for a chat of 352 points (its header, a couple of comments, the chips and
-the composer), the chat narrowing for it. A 9:16 or 1:1 card fills the
-stage's height; a 16:9 one takes the height, or the width the rail and chat
-leave it. With the chat closed the card is centred alone, the rail hanging
-on its right. In a narrow stage the chat narrows first, so the picture keeps
-four fifths of its width, then the card shrinks, and past that the chat lies
-over the stage's right side.
+transport is the scrub strip under the picture: the comment lane (a marker
+per thread, hover for its notes, click to open it), the bar (click or drag to
+seek, ranged comments as bars on it) and the timecode, marks (I, O), steps,
+Play (Space), Loop (⌘L) and the duration. A click on the picture plays or
+pauses. Captions, the QC overlap box, safe zones and the comments' drawings
+lie over the picture.
 
-A portrait (9:16) picture shows in a phone, as a simulator shows an app: a
-generic phone drawn in code, graphite in either appearance, its screen
-taller than the picture (9:18.5) with the picture across it and black above
-and below, a status bar, and a camera island or punch-hole. The phone's body
-takes the card's place in the group, the chat level with it. The rail's
-Phone button and Window ▸ Viewer choose Phone · Island (the default), Phone ·
-Punch-Hole or Off (the plain card); its Safe button outlines where a
-vertical-video app's interface usually covers the picture (a top bar, a
-column of actions, a caption band); while they show, the player's controls
-(all but the bar) wait for the pointer to come over the picture. Both are
-preferences of this Mac. Every format shares one layout: at 1440 × 900 the
-stage row is about 575 points over a 290-point timeline, so the timeline does
-not move when the format changes.
+## Workspaces and the stage
 
-A wide (16:9) picture shows in a laptop, the phone's companion: a generic
-laptop of today drawn in code in a warm stone metal (never a silver), its lid
-black glass in a thin metal rim, its screen 16:10 with rounded top corners
-inside a thin even bezel (a little thicker over it) so the picture sits
-across it with thin black bars above and below, a small camera notch in the
-bar over the picture, a hinge band, and a wider, thin base (108% of the lid)
-with a lit top face, a shallow thumb-cut and two feet. The player's controls lie inside the screen. The laptop's body (lid
-top to base bottom, as wide as the base, so the stage's margin and the gap
-before the rail are measured from its widest part) takes the card's place in
-the group, the chat level with it and as tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width
-(the bezel and base come out of the chat's width). The rail's Laptop button
-and Window ▸ Viewer choose Laptop (the default) or Off; it is a preference of
-this Mac. A square picture stays on the plain card: in a phone it would be
-under half as wide (measured at 1440 × 900: 499 points wide on the card, 242
-across the phone's screen). A card, a laptop and a phone all keep the same room
-over them as under them, 16 points; only a phone in a stage too short for a
-240-point screen at 16 takes as little less as it needs (12 at 1440 × 900).
-The phone's and the laptop's frames are drawn once for
-their size, appearance and pixel ratio and then only blitted, so playback
-costs no more for them.
+The editor follows the approved review design at a 1600 × 1000 window: the
+40-point toolbar, the Program monitor (its 28-point strip over a 564-point
+stage) beside the 304-point Inspector column, a 344-point band of the bin
+(272), the timeline and the Effects / Titles / Presets browser (304), and the
+24-point status bar. Columns keep their widths and the stage and timeline
+take the rest at other sizes. Four workspaces are built in, chosen from the
+toolbar's segmented control or ⌥⇧1–4: Review (the default: the comments
+panel open in the stage), Edit (the panel closed, so the Source viewer shows
+in the stage's left column), Finish (a tray of scopes, loudness and QC in
+place of the band, and the surround dimmed) and Deliver (a tray of masters,
+preflight, loudness and paperwork, and the Inspector's Deliver pane). Each
+keeps its own layout and stage (panel open, dim, Inspector kind) until Reset
+(⌥⇧0); Save as New Workspace adds your own. A launch opens in the workspace
+last used with its stage applied, exactly as choosing it does. Layouts from
+before version 9 migrate: the old Editing workspace becomes Review.
 
-The Source monitor is a tab behind the Program monitor; double-clicking media
-brings it forward. The chat stays with the Program monitor: while the
-Source monitor covers it, it counts as closed, so the bar over the timeline
-stands in for it and ⇧⌘J brings it back into sight. Left of them,
-the Project bin, the Inspector, Effects, and Presets share a column of
-about 300 points. The Timeline runs the window's full width under both, for
-its many tracks; the stage row takes the height (575 over a 290 timeline as
-arranged, for every picture shape). Panels have text tabs (the chosen one
-underlined), no title strips; the window's title has the project's state
-under it ("Edited · 9:16 · 24 fps"). The Project bin is "Search media" over
-two columns of tiles, each with its name, duration and shape.
+A 16:9 picture shows in a MacBook Pro 14" and 9:16, 1:1 and 4:5 in an
+iPhone 16 Pro, both drawn in code at the products' exact body and screen
+proportions (312.6 × 217.4 mm with a 302.4 × 196.4 mm screen; 71.5 × 149.6 mm
+with a 66.592 × 144.780 mm screen), with thin bezels of one width on all four
+sides and no notch, Dynamic Island, punch-hole, camera dot or status bar. A
+picture spans its screen's width, so a 16:9 one leaves 29.2 points of the
+screen's black above and below it on the laptop, as a 16:9 video plays full
+screen there; 1:1 and 4:5 show as a feed post. Off (the rail's Device menu or
+Window ▸ Viewer) shows the plain picture in the same place. The device, the
+44-point rail 12 to its right (the program meter in dBFS, LUFS M, the Device
+button and Comments with its open-thread badge) and the comments panel (368
+points beside a laptop, 480 beside a phone, dragged between 300 and 480 and
+remembered per shape) are placed exactly as the design's table puts them;
+the scrub strip with the comment lane and transport is 56 points under the
+picture (360 under a phone, ending 12 left of the rail). Opening or closing
+the panel moves the stage over 220 ms; a format or device change jumps. The
+frames are drawn once for their size and pixel ratio and then only blitted.
 
-The chat opens and closes like the comments button beside a Short: the
-rail's speech bubble (with the number of messages under it), the bubble at
-the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or the close button in
-the chat's header; opening it brings the Program monitor forward. Drag the
-chat's leading edge to resize it (300 to 420 points; 360 at first). Its width
-and whether it is open are preferences of this Mac (QSettings), never part of
-`project.kerf`. Layouts saved before this arrangement (layout versions 4 and
-5) give way to it for the Editing workspace; workspaces of your own saved
-then keep their arrangement, without the old Assistant dock. An empty
-timeline starts without tracks. Hover over the
-empty row in the left track header to reveal a plus; click it to add a video
-or audio track. Double-click a clip to open its media in the Source monitor
-at the clip's in point.
+## Comments and review
+
+The comments panel is the agent chat: every thread is a comment in the
+project's review log (`review/comments.jsonl`, kept by kerfd beside
+`project.kerf`, append-only and merged as a Git union), so a note never makes
+a pending proposal stale and never enters undo. Threads come from people,
+from Kerf (your turn and Kerf's reply are both kept as comments), from agents
+connected over MCP (their `note` tool and their proposals, with versions)
+and from QC (blocking findings of a check, resolved when a later check no
+longer finds them). Filters (All / Open / Proposals, From, tags, search),
+sort, resolve, drawings on the frame, @mentions and timecodes work as in the
+design; the pinned proposal card previews, accepts or rejects the version it
+shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link;
+Deliver's paperwork gives `kerf://<project>/rev<N>` with the branch, head and
+remote. `<project>` is the slug of the project's folder name (lower case, each
+run of anything but letters and digits one `-`: "Atlas Cut" is `atlas-cut`),
+whatever the document calls itself, so a link finds a project that is not
+open; a name outside ASCII travels in its punycode form and is read back. On macOS the app registers the `kerf` URL scheme, so a clicked link
+opens (or raises) the project's editor and seeks to the timecode; `kerf-qt
+kerf://atlas/rev22@00:00:17:08` does the same from a shell. A project this
+Mac has not opened is refused with a message, never guessed.
+
+The bridge also gives the editor (see `bridge.h`): the program meter
+(`meter`, L/R peak and RMS with BS.1770 momentary and short-term loudness)
+and dropped frames (`clock.dropped`), solo monitoring, effect and generator
+previews with parameters, the full QC `check` (loudness, true peak, gamut,
+luma, title safe, caption overlap and timing, flash and black), programme
+R128 `loudness`, a render queue with ProRes 422 HQ masters, paperwork
+(comments CSV, markers, CMX3600 EDL with locators, SRT/VTT), media
+information and the media index, and looks saved and applied as
+`.kerflook` files. Deliver keeps its output folders and paperwork choices per
+project, keyed by the project's absolute path.
 
 ## Projects
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
-Choose a Project window. Like the editor, it follows the system's light or
-dark appearance in the editor's palette and accent, and switches when it changes
-(`KERF_COLOR_SCHEME=light` or `dark` picks one). New Project offers Empty
+Choose a Project window, in the editor's dark graphite and blue accent.
+New Project offers Empty
 16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
 location, frame rate, and sharing: Share with Git makes the folder a
 repository, and Create a private GitHub repository (offered once the GitHub
@@ -427,46 +411,20 @@ focus, in frames of the sequence.
 
 Kerf's proposal shows on the timeline before anything changes: clips it adds
 or changes are outlined where they would land, and clips it removes are
-struck through. The Kerf Assistant starts open beside the picture and is laid
-out as a video's comments panel: a header with its title, the number of
-messages, ⋯ (Agent Settings…, Activity) and a close button; every turn is a
-comment row (an avatar, the name and time, the text, and quiet Copy and Ask
-again actions), with no bubbles; the steps Kerf's tools took fold under its
-comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
-and its latest step follow the latest comment. The comments scroll under the
-header as a comments panel's do: cut cleanly at its edge, with a hairline
-under it while the list is scrolled away from its top. A sliver is never left
-at either edge, and under the top one a line of text, or a text button's
-words (Copy, Ask again, "2 steps"), shows only with its capitals' tops (a name
-cut through them would read as another word). A file name in a comment wraps
-as one word, never at its hyphen, and selected text copies as written. A
-pending proposal is pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
-when one arrives the list shows it from its head (following the latest again
-once you scroll or send). It lists its changes in words, a row each with a
-glyph and a detail ("Trim fisher-close.mov — end −1.5 s", "Remove
-drone-pass.mov — 0:11–0:18"), up to three, under a summary that counts them
-("Trim, remove, add a title · 3 changes"). The amount or time is never cut:
-in a narrow panel (as beside the laptop) a row first drops the clip's file
-extension ("Trim fisher-close"), then puts the detail on a second line under
-it, with the full wording in its tooltip. Then come Reject and Accept pills
-(⌘Return; Escape with the timeline focused rejects) and a hairline; its
-script and diff are behind "Script" (as tall as their lines, up to ten).
-While its head or its pills are scrolled out of view, a compact bar under the
-header keeps its verbs (or only "3 changes" where they would not fit
-whole), Reject and Accept in reach. The up to three next steps Kerf ends each turn with
-("Stronger glow", "Wipe to the next shot") are one row of chips over the
-composer, scrolling sideways rather than wrapping, so the conversation
-keeps its height; pressing one asks for it about the same selection.
-The composer is the panel's footer: your avatar and one line over an
-underline that turns Kerf's purple in focus, growing with the draft, with the
-model, Cancel and Send (Stop while Kerf works) shown while it is in use.
-Return sends and Shift+Return inserts a new line. Before the first message
-Kerf's welcome offers two requests to try (plain rows after an arrow, wrapping
-to two lines), which fill the composer. While
-the chat is closed,
-a bar over the timeline stands in for it, as a Short's comment count does:
-it says what Kerf is working on, offers Stop, Accept, Reject and the next
-steps, and Details opens the chat again.
+struck through. Kerf's turns are threads of the Comments panel (above): your
+request is a comment, Kerf's answer a reply, the steps its tools took fold
+under it behind "2 steps", and while it works its drafting row shows the
+latest step with Stop. A pending proposal is a card in its thread (pinned
+first, the pin bar keeping it in reach while it is scrolled away): its
+changes in words, Preview, Script (the script and the document diff, in
+colour), Reject and Accept (⌘Return; Escape with the timeline focused
+rejects), and Versions once Kerf has revised it. Kerf's next steps become
+the welcome's requests to try and the composer's suggestions. The model each
+request names is the active connection's (Settings); with your own keys the
+More menu's Model chooses among its models, and Agent settings… names the one
+in use. While the panel is closed, a bar over the timeline stands in for it:
+it says what Kerf is working on (with Stop) or names the pinned proposal
+(with Reject and Accept), and Details opens the panel again.
 
 Use the project-format picker in the toolbar to switch between 16:9
 (1920 × 1080), 9:16 (1080 × 1920), 1:1 (1080 × 1080) and 4:5 (1080 × 1350). It
@@ -514,37 +472,19 @@ cmake --build target/qt --parallel 2
 ctest --test-dir target/qt --output-on-failure
 ```
 
-The tests cover disconnected controls, reconnection state, error deduplication,
-long timeline fit, scrolling through many tracks, complete proposal review,
-the sync chip and Collaborate requests, the diverged banner, the Presets
-panel, media badges, and the launcher's validation (test builds never start
-launcher tasks), and the launcher's and the editor's looks in both
-appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
-saves each page as `<page>-<light|dark>.png`, and
-`editorRendersBothAppearances` saves the editor (`editor-`), Settings
-(`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
-with an agent proposal and conversation (`states-`), and the Inspector
-with an effect's parameters (`inspector-`), each `<light|dark>.png`;
-`inspectorRendersEveryState` saves the Inspector for a video clip (its Scale
-row under the pointer), its effects, an audio clip, a title, an adjustment
-clip, a caption, nothing selected and three clips (`inspector-video-`,
-`-video-effects-`, `-audio-`, `-title-`, `-adjustment-`, `-caption-`,
-`-nothing-`, `-multi-`), and the whole editor with a clip clicked
-(`editor-9x16-inspector-`, `editor-16x9-inspector-`);
-`editorShowsEveryFormatBesideItsConversation` saves the whole editor with
-the chat open beside a 16:9 (in its laptop), a 9:16 (in its phone) and a 1:1
-picture (`editor-16x9-`, `editor-9x16-`, `editor-1x1-`), the 16:9 one with
-the laptop off (`editor-16x9-off-`), the 9:16 one in the other phone, with
-safe zones and on the plain card (`editor-9x16-punchhole-`, `-safezones-`,
-`-card-`), and both with the chat closed (`editor-16x9-closed-`,
-`editor-9x16-closed-`); `conversationRendersItsStates` saves the chat's
-welcome, a long streaming conversation, a pinned proposal and, scrolled away
-under a longer conversation, its compact bar (`editor-9x16-welcome-`,
-`-streaming-`, `-proposal-`, `-proposal-scrolled-`);
-`timelineFollowsTheAppearance` saves the timeline (`timeline-`,
-`timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
-(`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source
-monitor (`source-`), the bin (`bin-`) and the Effects panel (`effects-`).
+The tests cover every region (one class per region: stage, device, scrub
+and rail, comments and the review model, Inspector, timeline, bin and
+browser, Source, toolbar, status, Finish, Deliver, workspaces, the kit,
+theme, launcher, wiring guards, kerf:// links), each fed bridge events
+shaped as kerfd sends them, and `MockupParityTest` checks the whole editor
+against the design at 1600 × 1000 in every workspace (review, edit, finish,
+deliver) and format (16:9, 9:16, 1:1, 4:5) with the panel open and closed:
+the regions, the stage's placement table and the exact device sizes to half
+a point. With `KERF_SCREENSHOT_DIR` set, it saves each state under the
+mockup's query state (`review-169.png`, `edit-916.png`, … and
+`<ws>-<fmt>-panel0.png` / `-panel1.png` with the panel toggled), and the
+region galleries save theirs (`editor-<format>-dark.png`,
+`inspector-<pane>.png`, the launcher's pages, the comments panel's states).
 The pictures in them are the tests' procedural footage (`test_footage.h`:
 a harbor at dawn, a close-up on a dock and a drone pass over the coast,
 drawn in code with texture and grain), so no media files are needed.

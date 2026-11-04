@@ -2,7 +2,9 @@
 
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::resolve_ffmpeg_bin;
-use kerf_compose::Frame;
+pub use kerf_compose::Frame;
+use kerf_compose::{ComposeOptions, Compositor};
+use kerf_model::{Catalog, Project, Time};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -33,4 +35,59 @@ pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// The picture of `sequence` (the first when `None`) at sequence time `at`
+/// as a render draws it, captions burned in, at `scale` of its canvas (1
+/// is full size). Generators, titles among them, draw on their own; clips
+/// whose media cannot be read draw nothing.
+pub fn draw_frame(
+    project: &Project,
+    sequence: Option<&str>,
+    at: Time,
+    scale: f64,
+) -> Result<Frame> {
+    let compositor = Compositor::new(
+        project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: sequence.map(str::to_owned),
+            captions: true,
+        },
+    )?;
+    Ok(compositor.frame(at, scale))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kerf_model::Rate;
+
+    fn lit(frame: &Frame) -> usize {
+        frame
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 32))
+            .count()
+    }
+
+    #[test]
+    fn a_title_generator_draws_its_text_while_it_plays() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"Still\"\n\n\
+             sequence s1 name=\"Main\" rate=24 size=320x180 audio=48000 start=00:00:00:00\n\
+             \x20 track V1 video\n\
+             \x20   clip t1 gen=title@1 at=00:00:01:00 dur=00:00:01:00\n\
+             \x20     set text=\"Day One\" size=0.3\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let during = draw_frame(&project, None, Rate::FPS_24.time_of(36), 1.0).unwrap();
+        assert_eq!((during.width, during.height), (320, 180));
+        assert!(lit(&during) > 50, "the title draws");
+        let before = draw_frame(&project, Some("s1"), Rate::FPS_24.time_of(12), 1.0).unwrap();
+        assert_eq!(lit(&before), 0, "black before the title");
+        assert!(draw_frame(&project, Some("missing"), Time::ZERO, 1.0).is_err());
+    }
 }

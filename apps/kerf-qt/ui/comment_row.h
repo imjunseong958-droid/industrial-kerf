@@ -372,8 +372,6 @@ signals:
     void pressed();
     // The pointer came onto the row (true) or left it (false).
     void hoverChanged(bool hovered);
-    // Deprecated: "Ask again" on one of the reader's local rows (W3 removes it).
-    void askAgain(const QString &text);
 
 protected:
     void paintEvent(QPaintEvent *) override;

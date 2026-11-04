@@ -362,10 +362,8 @@ private slots:
             for (int page = ProjectLauncher::NewProject; page <= ProjectLauncher::Clone; ++page) {
                 QSettings().remove(QStringLiteral("launcher"));
                 ProjectLauncher launcher;
-                // The old scheme API changes nothing: the launcher is dark only.
-                launcher.setColorScheme(ProjectLauncher::ColorScheme::Light);
-                QCOMPARE(launcher.colorScheme(), ProjectLauncher::ColorScheme::Dark);
-                QVERIFY(launcher.theme().dark);
+                // Dark only: the launcher draws the one theme.
+                QCOMPARE(launcher.theme().accent, launcherTheme().accent);
                 launcher.m_inspectProject = inspectProject;
                 launcher.m_inspectPreset = inspectPreset;
                 launcher.reloadRecent();

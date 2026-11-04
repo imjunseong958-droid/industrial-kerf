@@ -8,6 +8,7 @@
 #include "editor_bus.h"
 #include "inspector_column.h"
 #include "chat_panel.h"
+#include "stage_rail.h"
 #include "command_registry.h"
 #include "device_frame.h"
 #include "editor_common.h"
@@ -330,7 +331,9 @@ private slots:
         }
         QVERIFY2(unwired.isEmpty(), qPrintable(unwired.join(QStringLiteral(", "))));
         coming.sort();
-        QCOMPARE(coming, (QStringList{"keyboard.customise", "sequence.settings"}));
+        // Nothing is left "Coming in this release" (W3: Sequence Settings and
+        // Customise Keyboard have their dialogs).
+        QVERIFY2(coming.isEmpty(), qPrintable(coming.join(QStringLiteral(", "))));
         // Export Master is ⌘E; Export… keeps the toolbar's chosen quality.
         QAction *master = window.m_commands->action(QStringLiteral("export.master"));
         QCOMPARE(master->shortcut(), QKeySequence::fromString(QStringLiteral("Ctrl+E"), QKeySequence::PortableText));

@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QEvent>
+#include <QGraphicsOpacityEffect>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QLinearGradient>
@@ -15,6 +16,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -41,6 +43,11 @@ constexpr int kRowFade = 16;
 // Compact.
 constexpr int kPad = 12;
 constexpr QSize kCanvas{280, 158};
+// The narrowest pane keeps the canvas's shape: 240 wide gives 216 x 122.
+QSize canvasFor(int width) {
+    const int w = std::clamp(width - 2 * kPad, 0, kCanvas.width());
+    return QSize(w, int(std::lround(w * double(kCanvas.height()) / kCanvas.width())));
+}
 constexpr int kKeyValue = 24;
 constexpr int kSection = 28;
 
@@ -178,7 +185,7 @@ public:
             m_buttons.value(kClearCompact)->hide();
             clear->show();
         } else {
-            p.box = QRect(QPoint(kPad, kPad), kCanvas);
+            p.box = QRect(QPoint(kPad, kPad), canvasFor(w));
             p.picture = p.box;
             const int inner = std::max(0, w - 2 * kPad);
             p.bar = QRect(kPad, p.box.bottom() + 1 + 12, inner, kBar);
@@ -234,6 +241,10 @@ public:
             QAction *action = s ? s->action(id) : nullptr;
             bool enabled = open;
             QString reason;
+            const bool own = id == QStringLiteral("source.play") || id == QStringLiteral("source.reveal");
+            // Play and Open in timeline keep the viewer's own Space and ⇧F;
+            // a key of the registry's (one's own keymap) shows instead.
+            if (own && action && !action->shortcut().isEmpty()) key = action->shortcut().toString(QKeySequence::NativeText);
             if (id == QStringLiteral("source.reveal")) {
                 enabled = open && !s->revealClip().isEmpty();
                 if (open && !enabled) reason = QStringLiteral("This media is not in the timeline");
@@ -272,12 +283,18 @@ public:
     void run(const QString &id) {
         SourceState *s = state();
         if (!s) return;
+        // Play and Open in timeline run the registry's commands when it has
+        // them (source.play, source.reveal), so they run as the menu and
+        // one's own keys do; a viewer without them acts itself.
         if (id == QStringLiteral("source.play")) {
-            s->togglePlay();
+            if (QAction *action = s->action(id); action && action->isEnabled()) action->trigger();
+            else s->togglePlay();
             return;
         }
         if (id == QStringLiteral("source.reveal")) {
-            if (!s->revealClip().isEmpty()) emit m_panel->revealRequested();
+            if (s->revealClip().isEmpty()) return;
+            if (QAction *action = s->action(id); action && action->isEnabled()) action->trigger();
+            else emit m_panel->revealRequested();
             return;
         }
         const QString command = id == kClearCompact ? QStringLiteral("source.clearMarks") : id;
@@ -709,6 +726,42 @@ SourceMonitorPanel::SourceMonitorPanel(SourceState *state, Mode mode, QWidget *p
 }
 
 SourceMonitorPanel::~SourceMonitorPanel() = default;
+
+void SourceMonitorPanel::showEvent(QShowEvent *event) {
+    QWidget::showEvent(event);
+    // The stage column fades in (mockup #srcv, the 160 ms fade) as it comes
+    // into a window already on screen; with reduced motion it is there at
+    // once, and a viewer that is a window of its own just shows. The
+    // effect lives only while it fades.
+    if (m_mode != Mode::Stage || isWindow() || !window()->isVisible() || event->spontaneous()) return;
+    const int duration = ui::motionDuration(tokens::motion::fade);
+    if (duration <= 0) return;
+    if (!m_fade) {
+        m_fade = new QVariantAnimation(this);
+        m_fade->setStartValue(0.0);
+        m_fade->setEndValue(1.0);
+        m_fade->setEasingCurve(tokens::easing());
+        connect(m_fade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            if (auto *effect = qobject_cast<QGraphicsOpacityEffect *>(graphicsEffect())) effect->setOpacity(value.toDouble());
+        });
+        connect(m_fade, &QVariantAnimation::finished, this, [this] { setGraphicsEffect(nullptr); });
+    }
+    m_fade->stop();
+    m_fade->setDuration(duration);
+    auto *effect = new QGraphicsOpacityEffect(this);
+    effect->setOpacity(0.0);
+    setGraphicsEffect(effect);
+    m_fade->start();
+}
+
+bool SourceMonitorPanel::isFading() const {
+    return m_fade && m_fade->state() == QAbstractAnimation::Running;
+}
+
+qreal SourceMonitorPanel::opacity() const {
+    const auto *effect = qobject_cast<const QGraphicsOpacityEffect *>(graphicsEffect());
+    return effect ? effect->opacity() : 1.0;
+}
 
 SourceState *SourceMonitorPanel::state() const {
     return m_state;

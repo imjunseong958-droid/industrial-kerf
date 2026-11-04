@@ -1989,7 +1989,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     }
     // The name, to the toggles.
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
-    if (name.isEmpty()) name = (layout.audio ? tr("Audio %1") : tr("Video %1")).arg(layout.number);
+    if (name.isEmpty()) name = isCaptionTrack(track) ? tr("Captions") : (layout.audio ? tr("Audio %1") : tr("Video %1")).arg(layout.number);
     const bool enabled = trackFlag(track, QStringLiteral("enabled"));
     p.setPen(C(enabled ? tk::ink : tk::ink3));
     const int nameLeft = left + kNameX;

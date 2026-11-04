@@ -3348,8 +3348,10 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     auto *row = new QHBoxLayout(header);
     row->setContentsMargins(InspectorRow::kPadLeft, 0, InspectorRow::kPadRight, 0);
     row->setSpacing(6);
-    auto *enabled = new PowerKey;
+    // The effect's enable box: the kit check box, as every switch is.
+    auto *enabled = new InspectorSwitch;
     enabled->setObjectName(QStringLiteral("effectEnabled"));
+    enabled->setAccessibleName(QStringLiteral("On"));
     ui::setTip(enabled, QStringLiteral("%1 on or off").arg(name));
     connect(enabled, &QAbstractButton::clicked, this, [this, index](bool on) {
         emitOps(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-set")}, {QStringLiteral("clip"), m_clips.first().id},

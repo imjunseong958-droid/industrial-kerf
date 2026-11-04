@@ -401,10 +401,6 @@ void MainWindow::buildBin() {
         m_effects->setCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
         kerf_bridge_string_free(catalog);
     }
-    if (char *catalog = kerf_fx_catalog()) {
-        m_inspector->setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
-        kerf_bridge_string_free(catalog);
-    }
     connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
         const QStringList clips = m_inspector->selection();
         if (clips.isEmpty()) return;

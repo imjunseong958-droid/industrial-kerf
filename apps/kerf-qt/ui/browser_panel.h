@@ -13,10 +13,12 @@
 // Each page has its own category row and an honest empty state (no catalog
 // or no bridge). BinWiring feeds the pages from the engine.
 
+#include <QPointer>
 #include <QString>
 #include <QWidget>
 
 class QAbstractButton;
+class QAction;
 class QStackedWidget;
 
 namespace kerf {
@@ -59,6 +61,9 @@ public:
     // Search (⌘⇧F): the search field of the Effects page, or of Titles
     // when it is in front.
     void focusSearch();
+    // The registry's browser.search (⌘⇧F): its key works while the browser
+    // is on screen and the Search button's tip names it. The window runs it.
+    void setSearchAction(QAction *action);
 
 signals:
     void pageChanged(BrowserPanel::Page page);
@@ -68,6 +73,7 @@ protected:
 
 private:
     void showCurrent();
+    void updateSearchTip();
 
     EditorBus *m_bus = nullptr;
     EffectsPanel *m_effects = nullptr;
@@ -78,6 +84,7 @@ private:
     QWidget *m_placeholder = nullptr;
     ui::SegmentedControl *m_pages = nullptr;
     ui::IconButton *m_search = nullptr;
+    QPointer<QAction> m_searchAction;
     Page m_page = Page::Effects;
 };
 

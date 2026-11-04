@@ -669,6 +669,13 @@ public:
         setText(m_text);
     }
     QString label() const { return m_text; }
+    // " 12" after the label, or empty.
+    QString countText() const { return m_count < 0 ? QString() : QStringLiteral(" %1").arg(m_count); }
+    int count() const { return m_count; }
+    void setCount(int count) {
+        m_count = count;
+        update();
+    }
     bool isIcon() const { return !m_icon.isEmpty(); }
     bool isTail() const { return m_tail; }
     void setOn(bool on) {
@@ -691,10 +698,24 @@ protected:
             icons::paint(p, QStringLiteral("g-chev"), rect(), c, 14);
         } else if (isIcon()) {
             icons::paint(p, m_icon, rect(), c, 16);
-        } else {
+        } else if (m_count < 0) {
             p.setFont(tokens::font(m_on ? controlStrong : control));
             p.setPen(c);
             p.drawText(rect(), Qt::AlignCenter, m_text);
+        } else {
+            // The label then its count (ink3, weight 400), as one centred run.
+            const QFont label = tokens::font(m_on ? controlStrong : control);
+            const QFont number = tokens::font(control);
+            const QString count = countText();
+            const qreal nameWidth = QFontMetricsF(label).horizontalAdvance(m_text);
+            const qreal countWidth = QFontMetricsF(number).horizontalAdvance(count);
+            const qreal left = (width() - nameWidth - countWidth) / 2.0;
+            p.setFont(label);
+            p.setPen(c);
+            p.drawText(QRectF(left, 0, nameWidth + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, m_text);
+            p.setFont(number);
+            p.setPen(isEnabled() ? color(ink3) : color(dis));
+            p.drawText(QRectF(left + nameWidth, 0, countWidth + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, count);
         }
     }
 
@@ -703,6 +724,7 @@ private:
     QString m_icon;
     bool m_tail;
     bool m_on = false;
+    int m_count = -1;
 };
 
 SegmentButton *asSegment(QWidget *w) { return static_cast<SegmentButton *>(w); }
@@ -782,6 +804,30 @@ void SegmentedControl::setIconSegmentWidth(int width) {
     relayout();
 }
 
+void SegmentedControl::setTextSegmentWidth(int width) {
+    m_textWidth = std::max(0, width);
+    relayout();
+}
+
+void SegmentedControl::setSegmentCount(int index, int count) {
+    if (index < 0 || index >= this->count()) return;
+    asSegment(m_segments[index])->setCount(count < 0 ? -1 : count);
+    relayout();
+}
+
+int SegmentedControl::segmentCount(int index) const {
+    return index >= 0 && index < count() ? asSegment(m_segments[index])->count() : -1;
+}
+
+int SegmentedControl::segmentWidth(int index) const {
+    auto *s = asSegment(m_segments[index]);
+    if (s->isIcon()) return m_iconWidth;
+    if (m_textWidth > 0) return m_textWidth;
+    // The label's width at weight 500, so the on segment never grows; a
+    // count adds its own at 400.
+    return space::s8 + snapWidth(controlStrong, s->label()) + (s->count() < 0 ? 0 : snapWidth(control, s->countText())) + space::s8;
+}
+
 void SegmentedControl::setMenuTail(bool on, const QString &tip, const QString &shortcut) {
     if (on && !m_tail) {
         m_tail = new SegmentButton(this, {}, {}, true);
@@ -800,11 +846,9 @@ QWidget *SegmentedControl::menuTail() const { return m_tail; }
 void SegmentedControl::relayout() {
     const int inner = m_trackHeight - 4;
     int x = 2;
-    for (KitButton *b : std::as_const(m_segments)) {
-        auto *s = asSegment(b);
-        // The label's width at weight 500, so the on segment never grows.
-        const int w = s->isIcon() ? m_iconWidth : space::s8 + snapWidth(controlStrong, s->label()) + space::s8;
-        s->setGeometry(x, 2, w, inner);
+    for (int i = 0; i < count(); ++i) {
+        const int w = segmentWidth(i);
+        m_segments[i]->setGeometry(x, 2, w, inner);
         x += w;
     }
     if (m_tail) {
@@ -819,10 +863,7 @@ void SegmentedControl::relayout() {
 
 QSize SegmentedControl::sizeHint() const {
     int x = 2;
-    for (KitButton *b : m_segments) {
-        auto *s = asSegment(b);
-        x += s->isIcon() ? m_iconWidth : space::s8 + snapWidth(controlStrong, s->label()) + space::s8;
-    }
+    for (int i = 0; i < count(); ++i) x += segmentWidth(i);
     if (m_tail) x += 20;
     return QSize(x + 2, m_trackHeight);
 }
@@ -834,13 +875,23 @@ QRectF SegmentedControl::segmentRect(int index) const {
 QRectF SegmentedControl::targetFill() const { return segmentRect(m_current); }
 
 void SegmentedControl::setCurrentIndex(int index, bool animate) {
-    if (index < 0 || index >= count() || index == m_current) return;
+    if (index < -1 || index >= count() || index == m_current) return;
+    if (index == -1) {
+        // None chosen: no fill, every segment off.
+        m_current = -1;
+        for (KitButton *b : std::as_const(m_segments)) asSegment(b)->setOn(false);
+        m_slide->stop();
+        m_fill = QRectF();
+        update();
+        emit currentChanged(-1);
+        return;
+    }
     const int previous = m_current;
     m_current = index;
     for (int i = 0; i < count(); ++i) asSegment(m_segments[i])->setOn(i == index);
     const QRectF target = targetFill();
     const int duration = motionDuration(motion::segment);
-    if (animate && previous >= 0 && isVisible() && duration > 0) {
+    if (animate && previous >= 0 && !m_fill.isEmpty() && isVisible() && duration > 0) {
         m_slide->stop();
         m_slide->setDuration(duration);
         m_slide->setStartValue(m_fill);
@@ -946,9 +997,18 @@ void GhostButton::setHorizontalPadding(int padding) {
     update();
 }
 
+void GhostButton::setMeta(bool meta) {
+    m_meta = meta;
+    m_style = meta ? tokens::meta : control;
+    m_mono = false;
+    m_height = meta ? height::h20 : 24;
+    setFixedSize(sizeHint());
+    update();
+}
+
 QColor GhostButton::textColor() const {
     if (!isEnabled()) return color(dis);
-    return mix(color(ink2), color(ink), hoverProgress());
+    return mix(color(m_meta ? ink3 : ink2), color(ink), hoverProgress());
 }
 
 QSize GhostButton::sizeHint() const {
@@ -1752,7 +1812,7 @@ void fitMenuWidth(QMenu *menu) {
     const bool checks = menuHasCheckColumn(menu);
     int widest = 0;
     for (const QAction *a : menu->actions()) widest = qMax(widest, menuItemWidth(a, checks));
-    const int card = qMax(220, 4 + widest + 4);
+    const int card = qMax(menuMinimumCardWidth(menu), 4 + widest + 4);
     menu->setMinimumWidth(card + 2 * menuShadowH());
 }
 
@@ -1895,6 +1955,17 @@ void styleMenu(QMenu *menu) {
         for (QAction *a : menu->actions())
             if (QMenu *sub = a->menu()) styleMenu(sub);
     });
+}
+
+void setMenuMinimumCardWidth(QMenu *menu, int width) {
+    if (!menu) return;
+    menu->setProperty("kerfMenuMinCard", std::max(0, width));
+    if (menu->property(kMenuStyled).toBool()) fitMenuWidth(menu);
+}
+
+int menuMinimumCardWidth(const QMenu *menu) {
+    const int width = menu ? menu->property("kerfMenuMinCard").toInt() : 0;
+    return width > 0 ? width : 220;
 }
 
 void popupMenu(QMenu *menu, QWidget *anchor, Side side) {

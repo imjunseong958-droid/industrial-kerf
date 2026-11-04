@@ -143,16 +143,16 @@ private slots:
 
     void disconnectedControlsAndRecovery() {
         MainWindow window{QString(), QString()};
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Connecting"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
         QVERIFY(!window.m_sendButton->isEnabled());
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "disconnected"}, {"message", "Daemon unavailable"}});
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Offline"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
         QVERIFY(window.m_reconnectButton->isEnabled());
         QVERIFY(!window.m_timeline->isEnabled());
         QVERIFY(!window.m_connectionBanner->isHidden());
         QVERIFY(window.m_connectionMessage->text().contains(QStringLiteral("Daemon unavailable")));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Offline"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
         QVERIFY(window.m_connectionBanner->isHidden());
         QVERIFY(window.m_timeline->isEnabled());
@@ -350,7 +350,7 @@ private slots:
         QCOMPARE(image.pixelColor(QPoint(bar->width() / 2, 12) * ratio).rgb(), tokens::chrome);
         QVERIFY(image.pixelColor(QPoint(bar->width() / 2, 0) * ratio).lightness() > tokens::color(tokens::chrome).lightness());
         // The older labels are out of sight.
-        QVERIFY(!window.m_selectionStatus->isVisible());
+        for (const QLabel *retired : window.findChildren<QLabel *>(QStringLiteral("statusSelection"))) QVERIFY(!retired->isVisible());
         QVERIFY(!window.m_exportProgress->isVisible());
     }
 

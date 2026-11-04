@@ -18,11 +18,13 @@
 #include <QAbstractButton>
 #include <QFrame>
 #include <QJsonArray>
+#include <QPointer>
 #include <QPushButton>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
 
+class QAction;
 class QLabel;
 class QTextEdit;
 class QVariantAnimation;
@@ -164,6 +166,16 @@ public:
     bool isBusy() const { return m_busy; }
     // Draw on frame: the stage is taking the drawing, or one is attached.
     void setDraw(Draw state, const QJsonArray &strokes = {});
+    // Draw on frame as its button asks for it: the registry's composer.draw
+    // (D while the composer has the focus outside its text, which keeps
+    // every letter typed).
+    void requestDraw();
+    // The registry's composer.draw: its key acts within the composer, and
+    // the Draw button's tip names it.
+    void setDrawAction(QAction *action);
+    QAction *drawAction() const { return m_drawAction; }
+    // Whether the focus is in the composer (its text or its buttons).
+    bool hasFocusWithin() const;
     Draw drawState() const { return m_drawState; }
     QJsonArray drawing() const { return m_drawing; }
     // A refused post, shown under the box in neg; empty clears it.
@@ -204,6 +216,7 @@ private:
     QString mentionPrefix(int *start = nullptr) const;
     void insertMention(const QString &name);
     void placePopovers();
+    QString drawKey() const;
 
     QWidget *m_box = nullptr;
     QTextEdit *m_input = nullptr;
@@ -218,6 +231,7 @@ private:
     QStringList m_candidates;
     QStringList m_mentionShown;
     QJsonArray m_drawing;
+    QPointer<QAction> m_drawAction;
     Draw m_drawState = Draw::None;
     bool m_busy = false;
     bool m_focused = false;

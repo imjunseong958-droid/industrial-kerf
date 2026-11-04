@@ -20,7 +20,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     using Field = QColor EditorTheme::*;
     static const QHash<QString, Field> fields{
         {QStringLiteral("accent"), &EditorTheme::accent},
-        {QStringLiteral("accentTop"), &EditorTheme::accentTop},
         {QStringLiteral("accentPressed"), &EditorTheme::accentPressed},
         {QStringLiteral("accentText"), &EditorTheme::accentText},
         {QStringLiteral("accentTint"), &EditorTheme::accentTint},
@@ -53,14 +52,12 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("selectionInactiveText"), &EditorTheme::selectionInactiveText},
         {QStringLiteral("textSelection"), &EditorTheme::textSelection},
         {QStringLiteral("hover"), &EditorTheme::hover},
-        {QStringLiteral("pressed"), &EditorTheme::pressed},
         {QStringLiteral("field"), &EditorTheme::field},
         {QStringLiteral("fieldBorder"), &EditorTheme::fieldBorder},
         {QStringLiteral("fieldDisabled"), &EditorTheme::fieldDisabled},
         {QStringLiteral("focusRing"), &EditorTheme::focusRing},
         {QStringLiteral("inspectorField"), &EditorTheme::inspectorField},
         {QStringLiteral("placeholderText"), &EditorTheme::placeholderText},
-        {QStringLiteral("checkFill"), &EditorTheme::checkFill},
         {QStringLiteral("checkBorder"), &EditorTheme::checkBorder},
         {QStringLiteral("button"), &EditorTheme::button},
         {QStringLiteral("buttonEdge"), &EditorTheme::buttonEdge},
@@ -88,9 +85,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("tabSelectedBorder"), &EditorTheme::tabSelectedBorder},
         {QStringLiteral("tabSelectedText"), &EditorTheme::tabSelectedText},
         {QStringLiteral("sliderGroove"), &EditorTheme::sliderGroove},
-        {QStringLiteral("sliderGrooveBorder"), &EditorTheme::sliderGrooveBorder},
         {QStringLiteral("sliderHandle"), &EditorTheme::sliderHandle},
-        {QStringLiteral("sliderHandleBorder"), &EditorTheme::sliderHandleBorder},
         {QStringLiteral("statusBar"), &EditorTheme::statusBar},
         {QStringLiteral("statusText"), &EditorTheme::statusText},
         {QStringLiteral("statusDivider"), &EditorTheme::statusDivider},
@@ -106,10 +101,8 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("success"), &EditorTheme::success},
         {QStringLiteral("assistant"), &EditorTheme::assistant},
         {QStringLiteral("assistantSurface"), &EditorTheme::assistantSurface},
-        {QStringLiteral("assistantBorder"), &EditorTheme::assistantBorder},
         {QStringLiteral("assistantText"), &EditorTheme::assistantText},
         {QStringLiteral("assistantHover"), &EditorTheme::assistantHover},
-        {QStringLiteral("messageText"), &EditorTheme::messageText},
         {QStringLiteral("chatSurface"), &EditorTheme::chatSurface},
         {QStringLiteral("chatText"), &EditorTheme::chatText},
         {QStringLiteral("chatSecondary"), &EditorTheme::chatSecondary},
@@ -122,16 +115,12 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("pillTonalText"), &EditorTheme::pillTonalText},
         {QStringLiteral("glyph"), &EditorTheme::glyph},
         {QStringLiteral("toolSelected"), &EditorTheme::toolSelected},
-        {QStringLiteral("scrubTrack"), &EditorTheme::scrubTrack},
-        {QStringLiteral("surround"), &EditorTheme::surround},
-        {QStringLiteral("surroundDim"), &EditorTheme::surroundDim},
         {QStringLiteral("card"), &EditorTheme::card},
         {QStringLiteral("on"), &EditorTheme::on},
         {QStringLiteral("hover2"), &EditorTheme::hover2},
         {QStringLiteral("ink"), &EditorTheme::ink},
         {QStringLiteral("ink2"), &EditorTheme::ink2},
         {QStringLiteral("ink3"), &EditorTheme::ink3},
-        {QStringLiteral("dis"), &EditorTheme::dis},
         {QStringLiteral("track"), &EditorTheme::track},
         {QStringLiteral("track2"), &EditorTheme::track2},
         {QStringLiteral("line"), &EditorTheme::line},
@@ -139,10 +128,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("lineh"), &EditorTheme::lineh},
         {QStringLiteral("accentHover"), &EditorTheme::accentHover},
         {QStringLiteral("accentInk"), &EditorTheme::accentInk},
-        {QStringLiteral("accentWash"), &EditorTheme::accentWash},
         {QStringLiteral("pos"), &EditorTheme::pos},
-        {QStringLiteral("neg"), &EditorTheme::neg},
-        {QStringLiteral("warn"), &EditorTheme::warn},
         {QStringLiteral("statusText"), &EditorTheme::statusText},
     };
     static const QRegularExpression token(QStringLiteral("@([A-Za-z][A-Za-z0-9]*)"));
@@ -381,10 +367,6 @@ QToolBar QToolButton {
 QToolBar QToolButton:hover { background: @raised; border-color: transparent; }
 QToolBar QToolButton:pressed { background: @on; border-color: transparent; }
 QToolBar QToolButton:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
-/* The conversation's switch: while its panel is open it is on. */
-QToolBar QToolButton#chatToggle { padding: 0px 6px; min-height: 18px; max-height: 18px; }
-QToolBar QToolButton#chatToggle:checked:enabled { background: @accentTint; border-color: transparent; }
-QToolBar QToolButton#chatToggle:checked:enabled:pressed { background: @accentTintPressed; }
 /* The primary button (.btn.p): the accent, white text, accent-hover under
    the pointer. */
 QPushButton#primaryButton,
@@ -407,52 +389,25 @@ QDialogButtonBox QPushButton:default:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
-QPushButton#dangerButton { color: @neg; }
-QPushButton#dangerButton:hover { background: @buttonHover; }
-/* Transport controls are icon buttons on the panel. */
-QToolButton#transportButton,
-QPushButton#transportButton {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    color: @textSecondary;
-    padding: 0px 3px;
-    min-height: 22px;
-    max-height: 22px;
-    min-width: 16px;
-    font-size: 11px;
-    font-weight: 400;
-}
-QToolButton#transportButton:disabled { background: transparent; border-color: transparent; color: @textDisabled; }
-QToolButton#transportButton:hover,
-QPushButton#transportButton:hover {
-    background: @raised;
-    border-color: transparent;
-    color: @textStrong;
-}
-QToolButton#transportButton:pressed,
-QPushButton#transportButton:pressed { background: @on; border-color: transparent; }
-QToolButton#abortButton {
-    color: @text;
-    background: transparent;
-    border-color: transparent;
-}
-
 QLabel#eyebrow { color: @textSecondary; font-size: 11px; font-weight: 500; letter-spacing: 0px; }
 QLabel#muted { color: @textSecondary; font-size: 11px; }
 QLabel#chatHint { color: @textSecondary; font-size: 11px; padding: 6px 2px 2px; }
 /* The Inspector (5): labels, units, counts and summaries are secondary;
    values the body ink, or the accent ink once moved from their defaults. */
-QLabel#inspectorLabel, QLabel#inspectorQuiet, QLabel#inspectorNote, QLabel#sectionCount,
-QLabel#sectionSummary, QLabel#effectSummary, QLabel#effectGroup, QLabel#effectMissing,
-QLabel#captionHint, QLabel#masksHint { color: @textSecondary; }
+QLabel#inspectorLabel,
+QLabel#inspectorQuiet,
+QLabel#inspectorNote,
+QLabel#sectionCount,
+QLabel#effectGroup,
+QLabel#effectMissing,
+QLabel#captionHint,
+QLabel#masksHint { color: @textSecondary; }
 QLabel#sectionTitle, QLabel#effectName { color: @text; }
 /* Before the switched-off rule, which wins over it. */
 QLineEdit[inspector="true"][changed="true"] { color: @accentText; }
 QLabel#effectName[off="true"],
 QLabel#colorHex[off="true"],
 QLineEdit[inspector="true"][off="true"] { color: @textSecondary; }
-QFrame#inspectorRule, QFrame#inspectorScrollEdge { background: @divider; border: 0; }
 QFrame#inspectorDropLine { background: @textStrong; border: 0; }
 QLineEdit#inspectorNameEditor {
     background: @inspectorField;
@@ -467,23 +422,6 @@ QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"], QLineEdit#scrubEd
 QLineEdit[inspector="true"]:focus, QPlainTextEdit[inspector="true"]:focus,
 QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor { border-color: @focusRing; }
 QLineEdit#scrubEditor { padding: 0px 7px; min-height: 22px; max-height: 22px; }
-/* Add effect, Reveal in Project, "6 more": words, no bezel. */
-QPushButton[inspectorLink="true"] {
-    background: transparent;
-    border: 0;
-    color: @text;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 0px;
-    min-height: 24px;
-    max-height: 24px;
-    text-align: left;
-}
-/* A link in the Inspector (the caption's Ask Kerf). */
-QPushButton[inspectorLink="true"][quiet="true"] { color: @textSecondary; font-weight: 400; }
-QPushButton[underlineOnHover="true"] { font-size: 12px; font-weight: 500; }
-QPushButton[underlineOnHover="true"]:hover { text-decoration: underline; background: transparent; border: 0; }
-QPushButton[inspectorLink="true"]:hover { color: @textStrong; background: transparent; }
 /* A mask's name: words, on the on fill while selected. */
 QToolButton#maskName { background: transparent; border-color: transparent; padding: 2px 6px; font-weight: 500; }
 /* The window's title (1): UI 500 13, centred in the toolbar. */
@@ -564,23 +502,6 @@ QComboBox:!editable:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
-/* The Inspector's pop-ups: clear, no bezel, 24pt as its fields; a choice
-   moved from its default in the accent ink. */
-QComboBox[inspector="true"],
-QComboBox[inspector="true"]:!editable,
-QComboBox[inspector="true"]:!editable:hover {
-    color: @text;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    min-height: 22px;
-    max-height: 22px;
-}
-QComboBox[inspector="true"][changed="true"],
-QComboBox[inspector="true"][changed="true"]:!editable { color: @accentText; }
-QComboBox[inspector="true"]:focus,
-QComboBox[inspector="true"]:!editable:focus { border-color: @focusRing; }
-QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them. */
 QDoubleSpinBox { padding: 0px 18px 0px 8px; }
@@ -613,10 +534,7 @@ QListWidget::item:hover { background: @hover; }
 QListWidget::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
 QListWidget::item:selected:focus,
 QListWidget#presetList::item:selected:focus { background: @selection; color: @selectionText; }
-QListWidget#mediaList,
-QListWidget#effectsCards,
-QScrollArea#mediaList { background: transparent; border: 0; padding: 0; }
-QWidget#mediaGrid { background: transparent; }
+QListWidget#effectsCards { background: transparent; border: 0; padding: 0; }
 QListWidget:disabled,
 QTextEdit:disabled,
 QPlainTextEdit:disabled,
@@ -695,9 +613,6 @@ QAbstractScrollArea::corner { background: transparent; border: 0; }
 QStatusBar { background: @statusBar; color: @statusText; border-top: 1px solid @divider; font-size: 11px; min-height: 23px; max-height: 23px; }
 QStatusBar::item { border: 0; }
 QStatusBar QLabel { color: @statusText; font-size: 11px; padding: 0 8px; border-left: 1px solid @statusDivider; }
-QStatusBar QLabel#statusConnection[state="ready"] { color: @success; }
-QStatusBar QLabel#statusConnection[state="connecting"] { color: @warning; }
-QStatusBar QLabel#statusConnection[state="disconnected"] { color: @error; }
 /* Banners are bars under the toolbar, edge to edge, with a hairline below. */
 QFrame#connectionBanner,
 QFrame#errorBanner { background: @errorSurface; border: 0; border-bottom: 1px solid @errorBorder; border-radius: 0; }
@@ -753,19 +668,6 @@ QFrame#aiBar QToolButton:disabled { color: @textDisabled; background: @chatChip;
 /* Kerf's conversation (4): ChatPanel paints its rounded card, and on it
    nothing is boxed. Names UI 500 13, body 13/20, meta 11 ink3. */
 QLabel#chatTitle { color: @chatText; font-size: 14px; font-weight: 500; }
-QLabel#chatCount { color: @chatSecondary; font-size: 11px; font-family: "JetBrains Mono", Menlo, monospace; }
-QLabel#chatName { color: @chatText; font-size: 13px; font-weight: 500; }
-QLabel#chatTime,
-QLabel#chatPinned,
-QLabel#chatStatus,
-QLabel#chatActivity,
-QLabel#chatChangeMore { color: @chatSecondary; font-size: 11px; }
-QLabel#chatSection { color: @chatSecondary; font-size: 11px; font-weight: 500; }
-QLabel#chatErrorTag { color: @errorText; font-size: 11px; font-weight: 500; }
-QLabel#chatBody,
-QLabel#proposalSummary { color: @chatText; font-size: 13px; }
-QLabel#proposalBarSummary { color: @chatText; font-size: 12px; font-weight: 500; }
-QLabel#chatReplyText { color: @chatText; font-size: 12px; }
 QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
 /* The Inspector's and the conversation's lists scroll with no bar. */
 QScrollArea#inspectorScroll QScrollBar:vertical { width: 0px; background: transparent; margin: 0; }
@@ -778,13 +680,6 @@ QScrollArea#chatScroll QScrollBar::handle:vertical { background: transparent; bo
 QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical { background: @chatScrollHandle; }
 QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:hover,
 QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:pressed { background: @chatScrollHandleHover; }
-QFrame#scrollEdge { background: transparent; border: 0; }
-QFrame#scrollEdge[scrolled="true"] { background: @divider; }
-QFrame#proposalBox,
-QFrame#proposalBar { background: transparent; border: 0; }
-QFrame#proposalRule { background: @divider; border: 0; }
-/* The proposal's script and diff, in mono so its columns line up. */
-QTextEdit#proposalDiff { background: transparent; border: 0; font-family: "JetBrains Mono", Menlo, monospace; font-size: 11px; color: @chatSecondary; }
 /* The footer: a hairline over it, then the composer. */
 QFrame#chatComposer { background: transparent; border: 0; border-top: 1px solid @divider; border-radius: 0; }
 QTextEdit#chatInput { background: transparent; border: 0; padding: 0; color: @chatText; font-size: 13px; }
@@ -805,77 +700,7 @@ QComboBox#agentModel {
 QComboBox#agentModel:hover { background: @chatChipHover; }
 QComboBox#agentModel:disabled { color: @chatSecondary; background: transparent; }
 QComboBox#agentModel QLineEdit { background: transparent; border: 0; padding: 0; color: @chatText; }
-/* Pills: Send and Accept filled with the accent, Reject and Stop on
-   `raised`, Cancel bare text; none has an outline. */
-QPushButton#chatPillFilled,
-QPushButton#chatSendButton,
-QPushButton#chatPillTonal,
-QPushButton#abortButton,
-QPushButton#chatPillText {
-    border: 0;
-    border-radius: 16px;
-    padding: 0 16px;
-    min-height: 32px;
-    max-height: 32px;
-    font-size: 13px;
-    font-weight: 500;
-}
-QPushButton#chatPillFilled,
-QPushButton#chatSendButton { color: @onAccent; background: @accent; }
-QPushButton#chatPillFilled:hover,
-QPushButton#chatSendButton:hover { background: @accentHover; }
-QPushButton#chatPillFilled:pressed,
-QPushButton#chatSendButton:pressed { background: @accentPressed; }
-QPushButton#chatPillTonal,
-QPushButton#abortButton { color: @pillTonalText; background: @pillTonal; }
-QPushButton#chatPillTonal:hover,
-QPushButton#abortButton:hover,
-QPushButton#chatPillTonal:pressed,
-QPushButton#abortButton:pressed { background: @chatChipHover; }
-QPushButton#chatPillText { color: @chatText; background: transparent; padding: 0 12px; }
-QPushButton#chatPillText:hover,
-QPushButton#chatPillText:pressed { background: @chatChip; }
-/* The pinned proposal's Accept and Reject, a size up. */
-QFrame#proposalBox QPushButton#chatPillFilled,
-QFrame#proposalBox QPushButton#chatPillTonal { border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 18px; }
-QFrame#proposalBox[narrow="true"] QPushButton#chatPillFilled,
-QFrame#proposalBox[narrow="true"] QPushButton#chatPillTonal { padding: 0 12px; }
-QFrame#proposalBar QPushButton#chatPillFilled,
-QFrame#proposalBar QPushButton#chatPillTonal { padding: 0 12px; }
-QPushButton#chatPillFilled:disabled,
-QPushButton#chatSendButton:disabled,
-QPushButton#chatPillTonal:disabled,
-QPushButton#abortButton:disabled { color: @textDisabled; background: @pillTonal; }
-/* A comment's quiet actions: words with `raised` under the pointer. */
-QPushButton#chatAction {
-    color: @chatSecondary;
-    background: transparent;
-    border: 0;
-    border-radius: 6px;
-    padding: 0 8px;
-    min-height: 24px;
-    max-height: 24px;
-    font-size: 12px;
-    font-weight: 400;
-}
-QPushButton#chatAction:hover,
-QPushButton#chatAction:pressed { color: @chatText; background: @chatChip; }
-/* Kerf's next steps and the welcome's examples: chips on `raised`. */
-QPushButton#nextStep {
-    color: @chatChipText;
-    background: @chatChip;
-    border: 0;
-    border-radius: 6px;
-    padding: 0 12px;
-    min-height: 28px;
-    max-height: 28px;
-    font-size: 12px;
-    font-weight: 500;
-}
-QPushButton#nextStep:hover,
-QPushButton#nextStep:pressed { background: @chatChipHover; }
 /* On the timeline's bar, the same chips at its controls' height. */
-QFrame#aiBar QPushButton#nextStep { min-height: 22px; max-height: 22px; border-radius: 6px; padding: 0 10px; font-size: 12px; }
 QFrame#activityPopup { background: @menu; border: 1px solid @menuBorder; border-radius: 8px; }
 QListWidget#activityList { background: transparent; border: 0; padding: 0; }
 
@@ -981,6 +806,7 @@ ads--CDockWidgetTab > #tabCloseButton:hover,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton:hover { background: @raised; }
 ads--CDockWidgetTab > #tabCloseButton:pressed,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton:pressed { background: @on; }
+/* The dock manager's own tabs menu button (ADS names it). */
 #tabsMenuButton { qproperty-icon: @tabsMenuMark; qproperty-iconSize: 12px 12px; }
 ads--CDockWidget { background: @panel; border: 0; }
 /* A strip's actions are icon buttons (.ib, 20-24pt) and meta text; the
@@ -1010,19 +836,6 @@ ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
 ads--CTitleBarButton#maskPen:checked:enabled:pressed { background: @accentTintPressed; }
 /* The Timeline's track heights are one segmented control the timeline
    paints: 20x24 each, edge to edge. */
-ads--CTitleBarButton#trackHeightMini,
-ads--CTitleBarButton#trackHeightMedium,
-ads--CTitleBarButton#trackHeightLarge,
-ads--CTitleBarButton#trackHeightFit {
-    background: transparent;
-    border: 0;
-    padding: 0;
-    margin: 0;
-    min-width: 20px;
-    max-width: 20px;
-    min-height: 24px;
-    max-height: 24px;
-}
 ads--CFloatingDockContainer { background: @panel; }
 /* The timeline's strip: its details after its name. */
 QLabel#timelineDetail { color: @textSecondary; font-size: 11px; padding: 0 0 0 8px; }

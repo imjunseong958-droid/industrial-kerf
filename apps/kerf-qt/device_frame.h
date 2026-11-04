@@ -93,10 +93,8 @@ constexpr double buttonDarker = 0.04;
 // Phone, or Off (the plain card). A per-user preference (QSettings
 // viewer/devicePreview), never the project's. A 1:1 or 4:5 picture in the
 // phone shows as a feed post (see deviceShowsFeed).
-//
-// Island and PunchHole are the old choices, now aliases of Phone:
-// deprecated, removed in W3.
-enum class DevicePreview { Phone, Off, Island = Phone, PunchHole = Phone };
+// The old settings values "island" and "punch" read as Phone.
+enum class DevicePreview { Phone, Off };
 
 // "phone" or "off".
 QString devicePreviewKey(DevicePreview preview);
@@ -168,11 +166,6 @@ QPainterPath deviceBodyPath(const DeviceGeometry &device);
 // The side buttons, Action, volume up and down on the left, the side button
 // and Camera Control on the right.
 QList<QRectF> deviceButtons(const DeviceGeometry &device);
-// The phone has no status bar and no camera on its screen: both empty.
-// Deprecated, removed in W3.
-QRectF deviceStatusBar(const DeviceGeometry &device);
-QRectF deviceCamera(const DeviceGeometry &device, DevicePreview preview);
-
 // The feed post's interface round a 1:1 or 4:5 picture, a skeleton in
 // tokens::raised (corners of 4) on the screen's black, at the mockup's
 // offsets from the picture's top left: an avatar and two lines over it,
@@ -193,9 +186,6 @@ DeviceFeed deviceFeed(const DeviceGeometry &device);
 void paintDeviceBody(QPainter &painter, const DeviceGeometry &device, const EditorTheme &theme);
 // The feed's skeleton (see DeviceFeed), on the screen's black.
 void paintDeviceFeed(QPainter &painter, const DeviceGeometry &device);
-// Draws nothing: the phone has no island, punch-hole or status bar. Nothing
-// calls it since W2; deprecated, removed in W3.
-void paintDeviceChrome(QPainter &painter, const DeviceGeometry &device, DevicePreview preview, const EditorTheme &theme);
 
 // ----------------------------------------------------------------------- laptop
 
@@ -214,7 +204,6 @@ struct LaptopGeometry {
     QRectF glass;   // The black glass inside the rim.
     QRectF screen;  // The display, 3024:1964.
     QRectF picture; // The picture, across the screen's width, centred on it.
-    QRectF notch;   // Always empty: there is no notch. Deprecated, removed in W3.
     QRectF hinge;   // The lid's bottom rim, in the hinge's tone, inset by the rim at both ends.
     QRectF base;    // The base's front face under the lid.
     QRectF scoop;   // The thumb scoop, cut from the base's top lip.
@@ -264,8 +253,6 @@ double laptopPictureShare();
 // The laptop that fills `body` (of laptopBodyAspect()), showing a picture of
 // `pictureAspect` (width over height) across its screen's width.
 LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect);
-// Always empty: the laptop has no notch or camera. Deprecated, removed in W3.
-QRectF laptopCamera(const LaptopGeometry &laptop);
 // The lid with its rim, glass, glass-edge line, black screen and hinge, and
 // the base with its top lip and thumb scoop. `theme` is unused.
 void paintLaptopBody(QPainter &painter, const LaptopGeometry &laptop, const EditorTheme &theme);

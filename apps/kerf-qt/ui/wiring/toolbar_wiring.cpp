@@ -1,6 +1,10 @@
 #include "toolbar_wiring.h"
 
+#include "chat_panel.h"
 #include "command_registry.h"
+#include "composer.h"
+#include "keymap_editor.h"
+#include "sequence_settings.h"
 #include "components.h"
 #include "editor_bus.h"
 #include "editor_common.h"
@@ -10,6 +14,8 @@
 #include "review_model.h"
 #include "toolbar_widgets.h"
 #include "workspace.h"
+#include "wiring/bin_wiring.h"
+#include "wiring/source_wiring.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -212,26 +218,21 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     row->addWidget(m_settings);
     toolbar->setContent(m_content);
 
-    // The conversation's switch has left the toolbar for the stage rail;
-    // the button stays for the code that reads it (removed in W3).
-    // So is the toolbar's old left end, which the title no longer reads.
+    // The toolbar's old left end, which the title no longer reads.
     w->m_toolbarLeftEnd = new QToolButton(m_retired);
     w->m_toolbarLeftEnd->setObjectName(QStringLiteral("retiredToolbarLeftEnd"));
-    w->m_chatToggle = new QToolButton(m_retired);
-    w->m_chatToggle->setObjectName(QStringLiteral("chatToggle"));
-    if (QAction *assistant = w->m_commands->action(QStringLiteral("window.assistant"))) w->m_chatToggle->setDefaultAction(assistant);
 
-    // ⌥1-4 choose the format, as its segments do.
-    const QList<CanvasPreset> presets = canvasPresets();
-    for (int i = 0; i < presets.size() && i < 9; ++i) {
-        auto *action = new QAction(formatTip(i), w);
-        action->setObjectName(QStringLiteral("format.%1").arg(QString::fromLatin1(presets.at(i).ratio)));
-        action->setShortcut(QKeySequence(Qt::ALT | Qt::Key(Qt::Key_1 + i)));
-        action->setShortcutContext(Qt::WindowShortcut);
-        connect(action, &QAction::triggered, this, [this, i] { chooseFormat(i); });
-        w->addAction(action);
-        m_formatActions << action;
-    }
+    // One's own keys go on before anything reads the registry's (and back
+    // on whenever it loads a keymap).
+    m_customiser = new KeymapCustomiser(w->m_commands, this);
+    // ⌥1-4 choose the format, as its segments do: the registry's commands,
+    // whose keys work anywhere in the window.
+    for (const QString &id : formatCommands())
+        if (QAction *action = w->m_commands->action(id)) {
+            if (!w->actions().contains(action)) w->addAction(action);
+            m_formatActions << action;
+        }
+    installCommands();
 
     // The title, centred on the window over the toolbar's row; layoutTitle
     // places it as the toolbar and its groups move.
@@ -302,12 +303,98 @@ void ToolbarWiring::syncCommands() {
         w->m_exportButton->setExportEnabled(enabled, enabled || reason.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, reason),
                                             isMaster ? nativeKeys(master) : QString());
     }
-    // The format segments name the keys of the ⌥1-4 actions.
+    // The format segments name the keys of the registry's ⌥1-4.
     if (FormatBank *bank = w->m_formatBank)
         for (int i = 0; i < m_formatActions.size() && i < bank->count(); ++i)
             bank->setSegmentTip(i, formatTip(i), nativeKeys(m_formatActions.at(i)));
     if (m_settings) ui::setTip(m_settings, QStringLiteral("Settings"), nativeKeys(commands->action(QStringLiteral("app.preferences"))));
     if (m_sequence) ui::setTip(m_sequence, QStringLiteral("Sequence settings"), nativeKeys(commands->action(QStringLiteral("sequence.settings"))));
+}
+
+QStringList ToolbarWiring::formatCommands() {
+    return {QStringLiteral("sequence.setFormat.169"), QStringLiteral("sequence.setFormat.916"), QStringLiteral("sequence.setFormat.11"),
+            QStringLiteral("sequence.setFormat.45")};
+}
+
+void ToolbarWiring::installCommands() {
+    MainWindow *w = m_window;
+    if (!w->m_commands) return;
+    const QStringList formats = formatCommands();
+    for (int i = 0; i < formats.size(); ++i) w->m_commandHandlers.insert(formats.at(i), [this, i] { chooseFormat(i); });
+    w->m_commandHandlers.insert(QStringLiteral("sequence.settings"), [this] { openSequenceSettings(); });
+    w->m_commandHandlers.insert(QStringLiteral("keyboard.customise"), [this] { openKeymapEditor(); });
+    w->m_commandHandlers.insert(QStringLiteral("composer.draw"), [this] { drawInComposer(); });
+    if (Composer *composer = w->m_chat ? w->m_chat->composerWidget() : nullptr)
+        composer->setDrawAction(w->m_commands->action(QStringLiteral("composer.draw")));
+    // The bin's and the source's commands, now that the registry is there.
+    if (w->m_binWiring) w->m_binWiring->attachCommands();
+    if (w->m_sourceWiring) w->m_sourceWiring->attachCommands();
+}
+
+bool ToolbarWiring::drawInComposer() {
+    Composer *composer = m_window->m_chat ? m_window->m_chat->composerWidget() : nullptr;
+    if (!composer || !composer->hasFocusWithin()) return false;
+    composer->requestDraw();
+    return true;
+}
+
+SequenceSettingsDialog *ToolbarWiring::openSequenceSettings() {
+    MainWindow *w = m_window;
+    // A dialog closed but not yet deleted starts over from the sequence.
+    if (m_sequenceSettings && !m_sequenceSettings->isVisible()) {
+        m_sequenceSettings->disconnect(this);
+        m_sequenceSettings->deleteLater();
+        m_sequenceSettings = nullptr;
+    }
+    if (!m_sequenceSettings) {
+        auto *dialog = new SequenceSettingsDialog(m_bus->timeline(), w);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog, &SequenceSettingsDialog::applyRequested, this, &ToolbarWiring::applySequenceSettings);
+        connect(dialog, &QDialog::finished, this, [this] { m_sequencePending = false; });
+        m_sequenceSettings = dialog;
+    } else {
+        m_sequenceSettings->setTimeline(m_bus->timeline());
+    }
+    // Window-modal on macOS (a sheet), so the editor stays as it is.
+    m_sequenceSettings->setWindowModality(Qt::WindowModal);
+    m_sequenceSettings->show();
+    m_sequenceSettings->raise();
+    m_sequenceSettings->activateWindow();
+    return m_sequenceSettings;
+}
+
+bool ToolbarWiring::applySequenceSettings(const QJsonObject &op) {
+    MainWindow *w = m_window;
+    if (op.isEmpty()) return false;
+    if (!w->m_connected) {
+        if (m_sequenceSettings) m_sequenceSettings->setError(QStringLiteral("Waiting for the project connection"));
+        return false;
+    }
+    m_sequenceRevision = m_bus->revision();
+    m_sequenceOp = op;
+    m_sequencePending = w->sendEdit(QJsonArray{op});
+    if (!m_sequencePending && m_sequenceSettings) m_sequenceSettings->setError(QStringLiteral("The Kerf engine is not connected"));
+    return m_sequencePending;
+}
+
+SequenceSettingsDialog *ToolbarWiring::sequenceSettings() const {
+    return m_sequenceSettings;
+}
+
+KeymapEditor *ToolbarWiring::keymapEditor() const {
+    return m_keymapEditor;
+}
+
+KeymapEditor *ToolbarWiring::openKeymapEditor() {
+    if (!m_keymapEditor) {
+        auto *editor = new KeymapEditor(m_customiser, m_window);
+        editor->setAttribute(Qt::WA_DeleteOnClose);
+        m_keymapEditor = editor;
+    }
+    m_keymapEditor->show();
+    m_keymapEditor->raise();
+    m_keymapEditor->activateWindow();
+    return m_keymapEditor;
 }
 
 void ToolbarWiring::setWorkspace(const QString &name) {
@@ -373,11 +460,13 @@ void ToolbarWiring::buildSequenceMenu(QMenu *menu) {
     QAction *frameSize = menu->addMenu(sizes);
     frameSize->setObjectName(QStringLiteral("sequenceFrameSize"));
     ui::setMenuKey(frameSize, QStringLiteral("%1×%2").arg(size.width()).arg(size.height()));
-    // The rate is the sequence's own; nothing changes it after it is made.
+    // The rate changes in Sequence Settings, and only while the sequence is
+    // empty; here it is information.
     QAction *frameRate = menu->addAction(QStringLiteral("Frame rate"));
     frameRate->setObjectName(QStringLiteral("sequenceFrameRate"));
     frameRate->setEnabled(false);
-    frameRate->setToolTip(QStringLiteral("A sequence keeps the frame rate it was made with"));
+    frameRate->setToolTip(SequenceSettingsDialog::fromTimeline(timeline).empty ? QStringLiteral("Change it in Sequence Settings…")
+                                                                                : SequenceSettingsDialog::rateNote());
     ui::setMenuKey(frameRate, rate);
     if (!colour.isEmpty()) {
         QAction *space = menu->addAction(QStringLiteral("Colour space"));
@@ -533,9 +622,13 @@ int ToolbarWiring::blockingCount() const {
 
 bool ToolbarWiring::sendExport(const QString &quality) {
     const bool master = quality == QStringLiteral("master");
-    const QJsonObject command{{QStringLiteral("type"), QStringLiteral("export")},
-                              {QStringLiteral("quality"), master ? QStringLiteral("master") : QStringLiteral("review")},
-                              {QStringLiteral("codec"), master ? QStringLiteral("prores_hq") : QStringLiteral("h264")}};
+    // The master renders as the Deliver tray's Master row does (its folder
+    // and file name, kept for the project); the draft is a review copy.
+    const QJsonObject command = master
+        ? deliver::exportCommand(deliver::output(m_window->m_projectDirectory, QStringLiteral("master")))
+        : QJsonObject{{QStringLiteral("type"), QStringLiteral("export")},
+                      {QStringLiteral("quality"), QStringLiteral("review")},
+                      {QStringLiteral("codec"), QStringLiteral("h264")}};
     if (!m_bus->send(command)) return false;
     m_sentQuality = command.value(QStringLiteral("quality")).toString();
     m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(master ? QStringLiteral("Master") : QStringLiteral("Draft")));
@@ -666,10 +759,8 @@ void ToolbarWiring::buildStatusBar() {
         m_retired = new QWidget(w);
         m_retired->hide();
     }
-    // The older labels, still written to by main_window.cpp; the row below
-    // shows the design's items instead (deprecated, removed in W3).
-    w->m_selectionStatus = new QLabel(m_retired);
-    w->m_selectionStatus->setObjectName(QStringLiteral("statusSelection"));
+    // The older device label, still written to by main_window.cpp; the row
+    // below shows the design's items instead.
     w->m_statusDevice = new QLabel(m_retired);
     w->m_statusDevice->setObjectName(QStringLiteral("statusDevice"));
     w->m_statusDevice->hide();
@@ -1058,6 +1149,18 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
 void ToolbarWiring::onSnapshot() {
     // The window is named as the toolbar names it, once the sequence is known.
     m_window->setWindowTitle(titleText());
+    // Sequence Settings: kerfd took the change (a newer revision whose
+    // sequence says what was asked), or the sequence changed under the open
+    // dialog (someone else's edit: the request is still waiting).
+    if (m_sequenceSettings) {
+        if (m_sequencePending && m_bus->revision() > m_sequenceRevision &&
+            SequenceSettingsDialog::holds(m_bus->timeline(), m_sequenceOp)) {
+            m_sequencePending = false;
+            m_sequenceSettings->accept();
+        } else {
+            m_sequenceSettings->setTimeline(m_bus->timeline());
+        }
+    }
     layoutTitle();
     updateSequence();
     updateSelection();
@@ -1126,6 +1229,13 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
         if (!status.isEmpty()) updateProgress();
     } else if (type == QStringLiteral("cloud")) {
         updateAgent();
+    } else if (type == QStringLiteral("error") && m_sequencePending && m_sequenceSettings) {
+        // kerfd refused the sequence's change: its words, in the dialog.
+        const QString command = event.value(QStringLiteral("command")).toString();
+        if (command.isEmpty() || command == QStringLiteral("edit")) {
+            m_sequencePending = false;
+            m_sequenceSettings->setError(event.value(QStringLiteral("message")).toString(QStringLiteral("Kerf could not change the sequence")));
+        }
     }
 }
 

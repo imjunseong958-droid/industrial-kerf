@@ -226,8 +226,7 @@ void DeliverTray::updateBar() {
                              : m_blocking == 1 ? QStringLiteral("1 blocking note open")
                                                : QStringLiteral("%1 blocking notes open").arg(m_blocking));
     // A local sheet, so the app's sheet (polished already) cannot keep the old ink.
-    m_blockingLabel->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; }").arg(tokens::color(m_blocking > 0 ? tokens::neg : tokens::ink3).name()));
+    shell::setTextStyle(m_blockingLabel, tokens::meta, m_blocking > 0 ? tokens::neg : tokens::ink3);
     // Render master is the registry's export.master (enabled with it, its
     // tip the registry's: the keymap's shortcut, why it is unavailable),
     // held back until the notes are known and while one blocks.

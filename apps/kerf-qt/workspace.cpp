@@ -166,7 +166,7 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
 
 ads::CDockWidget *Workspace::panel(const QString &id) const {
     if (ads::CDockWidget *dock = m_panels.value(id)) return dock;
-    // Deprecated ids, removed in W3: panels that became pages.
+    // Panels that became pages answer with the panel that holds them.
     if (id == QLatin1String("effects") || id == QLatin1String("presets")) return m_panels.value(QStringLiteral("browser"));
     if (id == QLatin1String("source")) return m_panels.value(QStringLiteral("inspector"));
     return nullptr;

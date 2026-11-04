@@ -18,6 +18,7 @@
 // one named. The run fails when any class fails, and ends with the totals of
 // all classes unless the caller asked for a log of their own.
 
+#include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "test_registry.h"
@@ -206,11 +207,11 @@ int main(int argc, char *argv[]) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings.path());
     QCoreApplication::setOrganizationName(QStringLiteral("Industrial Kerf Tests"));
     useEditorStyle();
-    // Tests draw in the dark appearance unless they pick one: offscreen
-    // reports a light system, and painted colours are checked in dark.
-    setEditorColorScheme(ColorScheme::Dark);
-    if (!editorTheme().dark) {
-        std::fprintf(stderr, "kerf-qt-tests: the editor did not take the dark appearance\n");
+    // The editor's one (dark) theme, applied as the app applies it:
+    // offscreen reports a light system, and painted colours are the ramp's.
+    applyEditorAppearance();
+    if (editorTheme().window != tokens::color(tokens::surroundDim)) {
+        std::fprintf(stderr, "kerf-qt-tests: the editor did not take its theme\n");
         return 1;
     }
 

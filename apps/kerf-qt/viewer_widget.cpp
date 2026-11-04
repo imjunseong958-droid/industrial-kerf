@@ -292,9 +292,11 @@ void ViewerWidget::setCaption(const QString &caption) {
 }
 
 void ViewerWidget::setProjectInfo(double width, double height) {
+    const bool reshaped = width != m_width || height != m_height;
     m_width = width;
     m_height = height;
     m_scaled = QImage();
+    if (reshaped) jump();
     layoutStage();
     update();
 }
@@ -423,9 +425,10 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout(Device device) const {
         }
     }
     // The scrub strip: the picture's width under a 16:9 picture; 360 under a
-    // phone, its right edge on the rail's.
+    // phone, ending 12 left of the rail (sx = rx - 372), so the narrow
+    // transport never sits under the rail's Comments button.
     if (phone) {
-        out.scrub = QRectF(railX + rail - kPhoneScrubWidth, scrubTop, kPhoneScrubWidth, kScrubHeight);
+        out.scrub = QRectF(railX - gap - kPhoneScrubWidth, scrubTop, kPhoneScrubWidth, kScrubHeight);
         out.narrowScrub = true;
     } else {
         out.scrub = QRectF(picture.left(), scrubTop, picture.width(), kScrubHeight);
@@ -539,7 +542,11 @@ void ViewerWidget::setStageParts(QWidget *scrub, QWidget *hud, QWidget *source) 
 
 bool ViewerWidget::eventFilter(QObject *watched, QEvent *event) {
     // The HUD shown or hidden moves the Source column under it.
-    if (watched == m_hud && (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)) layoutStage();
+    // Its shadow is the stage's to paint.
+    if (watched == m_hud && (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)) {
+        layoutStage();
+        update();
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -574,10 +581,20 @@ void ViewerWidget::setChatWidth(bool phone, int width) {
     if (phone == phoneFormat()) emit chatWidthChanged(width);
 }
 
+void ViewerWidget::jump() {
+    // A format or device change jumps to its layout: no crossfade, and a
+    // panel move under way ends where it was going.
+    if (!moving()) return;
+    m_mover->stop();
+    m_move = 1.0;
+    fadePanel();
+}
+
 void ViewerWidget::setDevicePreview(DevicePreview preview) {
     if (preview == m_device) return;
     m_device = preview;
     m_scaled = QImage();
+    jump();
     layoutStage();
     update();
 }
@@ -586,6 +603,7 @@ void ViewerWidget::setLaptopPreview(LaptopPreview preview) {
     if (preview == m_laptop) return;
     m_laptop = preview;
     m_scaled = QImage();
+    jump();
     layoutStage();
     update();
 }
@@ -737,7 +755,6 @@ QPointF ViewerWidget::fromFrame(const QPointF &fraction) const {
 void ViewerWidget::layoutStage() { applyLayout(shownLayout()); }
 
 void ViewerWidget::applyLayout(const StageLayout &layout) {
-    m_overlay->setRect(layout.card, compactPlayer(layout.card));
     if (m_rail) {
         m_rail->setGeometry(layout.rail);
         m_rail->setVisible(true);
@@ -748,8 +765,6 @@ void ViewerWidget::applyLayout(const StageLayout &layout) {
         if (layout.overlay) m_panel->raise();
     }
     if (m_scrub) m_scrub->setGeometry(layout.scrub.toRect());
-    // Beside a phone the scrub strip runs under the rail's foot (it ends at
-    // the rail's right edge): the rail's buttons stay on top.
     if (m_rail) m_rail->raise();
     if (m_source) {
         if (!layout.source.isEmpty()) m_source->setGeometry(layout.source);
@@ -1042,9 +1057,6 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
         }
         return;
     }
-    if (m_maskTool == MaskTool::None && m_dragHandle == -1 && (!editsMasks() || handleAt(position) < 0) &&
-        m_overlay->mousePress(position))
-        return;
     if (!editsMasks()) {
         // A click on the picture plays or pauses, as on a video site.
         // Elsewhere on the stage, a click does nothing.
@@ -1101,13 +1113,6 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         }
         return;
     }
-    if (!m_drawing && m_dragHandle == -1 && m_overlay->mouseMove(position, event->buttons() & Qt::LeftButton)) {
-        if (m_skimming) {
-            m_skimming = false;
-            emit scrubEnded();
-        }
-        return;
-    }
     if (m_drawing) {
         m_drawEnd = picturePoint(position);
         update();
@@ -1159,7 +1164,6 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
         }
         return;
     }
-    if (m_overlay->mouseRelease(event->position())) return;
     if (m_drawing) {
         m_drawing = false;
         m_drawEnd = picturePoint(event->position());
@@ -1194,7 +1198,6 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
 }
 
 void ViewerWidget::leaveEvent(QEvent *) {
-    m_overlay->leave();
     if (!m_skimming) return;
     m_skimming = false;
     emit scrubEnded();
@@ -1377,7 +1380,6 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     const StageLayout layout = shownLayout();
     const QRectF card = layout.card;
     const QRectF picture = pictureRect();
-    m_overlay->setRect(card, compactPlayer(card));
     // Where the picture may show: the device's screen, or the plain rect.
     QPainterPath viewport;
     // A device's frame is drawn once for its size and blitted after.
@@ -1448,6 +1450,14 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     paintAnnotations(p);
     p.restore();
     paintMasks(p);
+    // The agent HUD's --pop shadow (0 8 24 rgba(0,0,0,.45)), under the card
+    // it paints itself: the HUD is a child, so it lands over this.
+    if (m_hud && m_hud->isVisible()) ui::paintShadow(p, QRectF(m_hud->geometry()), tokens::radius::card);
+}
+
+QRectF ViewerWidget::hudShadowRect() const {
+    if (!m_hud || !m_hud->isVisible()) return {};
+    return QRectF(m_hud->geometry()).marginsAdded(QMarginsF(ui::shadowMargins()));
 }
 
 

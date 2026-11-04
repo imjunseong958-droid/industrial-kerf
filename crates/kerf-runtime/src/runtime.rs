@@ -1514,6 +1514,11 @@ impl Runtime {
         }
         let mut candidate = self.state.clone();
         candidate.jobs.insert(id.to_owned(), job.clone());
+        // A job that finishes may take the finished history past its bound,
+        // as journal replay of this record would.
+        if job_finished(&job.status) {
+            bound_jobs(&mut candidate.jobs);
+        }
         self.commit_candidate(candidate, JournalEvent::Job { job })?;
         Ok(())
     }
@@ -2628,8 +2633,11 @@ mod tests {
     /// Resize the first sequence with a typed operation.
     fn resize(runtime: &mut Runtime, width: u32) -> StateSnapshot {
         let ops = vec![EditOp::SetSequence {
-            width,
-            height: 1080,
+            width: Some(width),
+            height: Some(1080),
+            name: None,
+            rate: None,
+            start: None,
             sequence: None,
         }];
         let revision = runtime.state.revision;

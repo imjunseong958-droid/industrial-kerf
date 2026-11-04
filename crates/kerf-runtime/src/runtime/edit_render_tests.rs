@@ -263,6 +263,125 @@ fn set_marker_moves_renames_and_clears_a_marker() {
 }
 
 #[test]
+fn a_title_inserted_from_the_editor_is_kept_in_project_kerf_and_renders() {
+    let (mut runtime, directory) = project("generator");
+    // As the editor sends it: a title at the playhead on V2.
+    let state = ops(
+        &mut runtime,
+        json!([{"op": "insert", "generator": {"fx": "title", "params": {"text": "Day Two"}},
+                "at": 24, "frames": 12, "tracks": ["V2"]}]),
+    )
+    .unwrap();
+    let v2 = &state.timeline["tracks"][1]["clips"];
+    let title = v2
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clip| clip["name"] == "Day Two")
+        .unwrap_or_else(|| panic!("the new title on V2: {v2}"));
+    assert_eq!(
+        (title["kind"].as_str(), title["fx"].as_str()),
+        (Some("generator"), Some("title"))
+    );
+    assert_eq!(
+        (
+            title["startFrame"].as_i64(),
+            title["durationFrames"].as_i64()
+        ),
+        (Some(24), Some(12))
+    );
+    // Insert pushed the later title along by the new one's length.
+    assert!(v2
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|clip| clip["name"] == "Day One" && clip["startFrame"].as_i64() == Some(84)));
+    let id = title["id"].as_str().unwrap().to_owned();
+    drop(runtime);
+
+    // Reopened from the folder, project.kerf has it as the language writes it.
+    let written = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
+    assert!(
+        written.contains(&format!(
+            "clip {id} gen=title@1 at=00:00:01:00 dur=00:00:00:12"
+        )),
+        "{written}"
+    );
+    assert!(written.contains("set text=\"Day Two\""), "{written}");
+    let runtime = Runtime::open(&directory).unwrap();
+    let project = parse_document(&runtime.document(false)).unwrap();
+    let kerf_model::Content::Generator { fx, params, .. } = &project.clip(&id).unwrap().content
+    else {
+        panic!("{id} is a generator");
+    };
+    assert_eq!(fx.as_str(), "title");
+    assert_eq!(
+        params["text"],
+        kerf_model::Param::Static(kerf_model::Value::Text("Day Two".into()))
+    );
+    // It draws as a render draws it: the title shows while it plays.
+    let rate = kerf_model::Rate::FPS_24;
+    let frame = kerf_engine::still::draw_frame(&project, None, rate.time_of(30), 0.25).unwrap();
+    let lit = frame
+        .rgba
+        .chunks_exact(4)
+        .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 32))
+        .count();
+    assert!(lit > 0, "the title draws on the frame");
+    drop(runtime);
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn the_frame_rate_changes_through_set_sequence_only_while_the_sequence_is_empty() {
+    let (mut runtime, directory) = project("rate");
+    let error = ops(
+        &mut runtime,
+        json!([{"op": "set-sequence", "rate": {"num": 30, "den": 1}}]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        (
+            "INVALID_EDIT",
+            "Frame rate can change only while the sequence is empty"
+        )
+    );
+    assert_eq!(runtime.snapshot().timeline["fps"], 24.0);
+    // Emptied, it takes the rate with the name and size in one edit.
+    let clips = ["c1", "c2", "t1", "a1", "a2"];
+    ops(&mut runtime, json!([{"op": "delete", "clips": clips}])).unwrap();
+    let state = ops(
+        &mut runtime,
+        json!([{"op": "set-sequence", "rate": {"num": 30, "den": 1}, "name": "Vertical",
+                "width": 1080, "height": 1920}]),
+    )
+    .unwrap();
+    assert_eq!(state.timeline["fps"], 30.0);
+    assert_eq!(state.timeline["rate"], "30");
+    assert_eq!(
+        (
+            state.timeline["width"].as_u64(),
+            state.timeline["height"].as_u64()
+        ),
+        (Some(1080), Some(1920))
+    );
+    assert!(
+        state
+            .document
+            .contains("sequence s1 name=\"Vertical\" rate=30 size=1080x1920"),
+        "{}",
+        state.document
+    );
+    // Undo puts the rate back.
+    let revision = runtime.state.revision;
+    let undone = runtime.undo_request("ui", &unique_id(), revision).unwrap();
+    assert_eq!(undone.timeline["fps"], 24.0);
+    drop(runtime);
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn set_track_gives_roles_and_sync_lock() {
     let (mut runtime, directory) = project("roles");
     let state = runtime.snapshot();
@@ -809,6 +928,40 @@ fn render_jobs_list_in_the_order_they_were_made_across_runs() {
     assert_eq!(jobs.len(), MAX_FINISHED_JOBS);
     assert!(!jobs.contains_key("render-1800000000000000-9"));
     assert!(jobs.contains_key("render-1800000000000000-10"));
+    drop(runtime);
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn a_job_that_finishes_keeps_the_finished_history_bounded() {
+    let (mut runtime, directory) = project("render-bound-finish");
+    for seq in 0..MAX_FINISHED_JOBS {
+        let id = format!("render-1800000000000000-{seq:x}");
+        let job: RenderJob = serde_json::from_value(json!({
+            "jobId": id, "status": "completed", "outputUrl": null,
+            "outputPath": null, "error": null
+        }))
+        .unwrap();
+        runtime.state.jobs.insert(id, job);
+    }
+    let running = format!("render-1800000000000001-{:x}", MAX_FINISHED_JOBS);
+    let job: RenderJob = serde_json::from_value(json!({
+        "jobId": running, "status": "running", "outputUrl": null,
+        "outputPath": null, "error": null
+    }))
+    .unwrap();
+    runtime.state.jobs.insert(running.clone(), job);
+    runtime
+        .update_job(&running, "cancelled", None, None, None)
+        .unwrap();
+    let finished = runtime
+        .render_jobs()
+        .into_iter()
+        .filter(|job| job_finished(&job.status))
+        .count();
+    assert_eq!(finished, MAX_FINISHED_JOBS);
+    assert!(runtime.render_job(&running).is_ok());
+    assert!(runtime.render_job("render-1800000000000000-0").is_err());
     drop(runtime);
     let _ = fs::remove_dir_all(directory);
 }

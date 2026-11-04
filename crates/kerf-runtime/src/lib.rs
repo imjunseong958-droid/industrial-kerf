@@ -27,7 +27,10 @@ pub use ipc::{
     response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
 };
-pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, EditOp, MaskOutline, TrimSide};
+pub use kernel::{
+    resolve_media_paths, use_proxies, CachedFacts, EditOp, GeneratorSpec, MaskOutline, RateSpec,
+    TrimSide, RATE_NEEDS_EMPTY,
+};
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
 pub use review::{Author, Comment, CommentPatch, NewComment, ReviewLog, Stroke};
 pub use timeline::{fx_catalog_all_json, fx_catalog_json};

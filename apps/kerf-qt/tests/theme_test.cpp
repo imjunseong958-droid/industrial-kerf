@@ -158,18 +158,13 @@ private slots:
         QCOMPARE(t.accent.rgb(), QColor("#3366e6").rgb());
         QCOMPARE(t.accent.rgb(), tokens::color(tokens::accent).rgb());
         QCOMPARE(l.accent.rgb(), t.accent.rgb());
-        // Kerf's own marks are the accent: focus, the agent's proposals, its
+        // Kerf's own marks are the accent: focus, the agent's work, its
         // avatar and the mask handles. The playhead is the design's red.
-        for (const QColor &mark : {t.focusRing, t.assistant, t.proposalAdd, t.chatAvatarKerf, t.maskHandleFill, t.lampKerf})
+        for (const QColor &mark : {t.focusRing, t.assistant, t.chatAvatarKerf, t.maskHandleFill})
             QCOMPARE(mark.rgb(), t.accent.rgb());
         QCOMPARE(t.playhead.rgb(), QColor("#e5484d").rgb());
         // The accent as text is the accent ink.
         QCOMPARE(t.accentText.rgb(), QColor("#8fb0ff").rgb());
-        // Track toggles are bare symbols: on, a neutral ink, not the
-        // accent; off, the same ink, faint. No plate under either.
-        QVERIFY(t.trackToggleOn.rgb() != t.accent.rgb() && t.trackToggleOn.hsvSaturation() < 90);
-        QCOMPARE(t.trackToggle.rgb(), t.trackToggleOn.rgb());
-        QVERIFY(t.trackToggle.alpha() <= t.trackToggleOn.alpha() / 2);
         QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
         // Fewer boxes: the caption on the picture has no line round it; a
         // rail button is clear at rest and the on fill when on (.ib.on), its
@@ -214,7 +209,7 @@ private slots:
         // So does the Source monitor's marked range, at 3:1 on its panel.
         QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
         // Text on the accent's fill, at rest, under the pointer and held.
-        for (const QColor &fill : {theme.accent, theme.accentTop, theme.accentPressed, theme.accentHover})
+        for (const QColor &fill : {theme.accent, theme.accentPressed, theme.accentHover})
             QVERIFY2(contrastRatio(theme.onAccent, fill) >= 4.5, qPrintable(fill.name()));
     }
 
@@ -248,11 +243,6 @@ private slots:
         QCOMPARE(mono.pixelSize(), 12);
         QVERIFY(mono.families().contains(QStringLiteral("JetBrains Mono")));
         QVERIFY(mono.families().contains(QStringLiteral("Menlo")));
-        // The track number is engraved on its channel plate, at the
-        // hardware labels' size.
-        TimelineWidget timeline;
-        QCOMPARE(timeline.badgeFont().pixelSize(), engravedFont(timeline.font(), QStringLiteral("V1")).pixelSize());
-        QCOMPARE(timeline.badgeFont().weight(), QFont::Bold);
     }
 
     // Colours drawn one on another, each with the ratio it must reach there
@@ -286,17 +276,12 @@ private slots:
                 {"check box's tick", t.ink2, t.on, 3.0},
                 {"tertiary text on chrome", t.ink3, t.chrome, 4.5},
                 {"status bar text", t.statusText, t.statusBar, 4.5},
-                {"timeline ruler labels", t.rulerText, t.ruler, 4.5},
                 {"primary button's label under the pointer", t.onAccent, t.accentHover, 4.5},
-                {"track number on its header", t.trackBadgeText, t.trackHeader, 4.5},
-                {"track toggle's symbol, on", t.trackToggleOn, t.trackHeader, 3.0},
-                {"track toggle's symbol, on, under the pointer", t.trackToggleOn, laidOn(t.trackHeader, t.trackToggleHover), 3.0},
                 {"picture clip's name", t.clipVideo.label, t.clipVideo.header, 4.5},
                 {"sound clip's name", t.clipAudio.label, t.clipAudio.header, 4.5},
                 {"music clip's name", t.clipMusic.label, t.clipMusic.header, 4.5},
                 {"title clip's name", t.clipGenerator.label, t.clipGenerator.header, 4.5},
                 {"caption clip's name", t.clipCaption.label, t.clipCaption.header, 4.5},
-                {"selected clip's ring on its outer line", t.clipSelectedRing, t.clipSelectedRingOuter, 4.5},
                 {"Model field under the pointer", t.text, laidOn(t.field, t.hover), 4.5},
                 {"Model field under the pointer while sending", t.text, laidOn(t.assistantSurface, t.hover), 4.5},
                 {"disclosure chevron on a dialog", t.textSecondary, t.dialog, 3.0},
@@ -307,9 +292,6 @@ private slots:
                 {"scroll bar handle on a well", t.scrollHandle, t.well, 3.0},
                 {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
                 {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
-                {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
-                {"added clip's name on its band over a locked lane's hatch", t.assistantText,
-                 laidOn(laidOn(t.trackLane, t.trackLaneLocked), t.proposalAddFill), 4.5},
                 {"skimmed playhead's head on the ruler's top", t.playheadIdle, t.ruler, 3.0},
                 {"skimmed playhead's head on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
                 {"skimmed playhead's line on its halo", t.playheadIdle, t.playheadHalo, 3.0},
@@ -347,7 +329,6 @@ private slots:
                 {"launcher: text on a selected row", l.selectionText, l.selection, 4.5},
                 {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection, 4.5},
                 {"launcher: Choose's label", l.onAccent, l.accent, 4.5},
-                {"launcher: Choose's label, lit", l.onAccent, l.accentTop, 4.5},
                 {"launcher: Choose's label, held", l.onAccent, l.accentPressed, 4.5},
                 {"launcher: sidebar symbol", l.accent, l.sidebar, 3.0},
                 {"launcher: format tile's frame", l.tileGlyph, l.tile, 3.0},
@@ -519,15 +500,6 @@ private slots:
             for (const QRgb wash : {fill(selected), hovered(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
             QCOMPARE(held(selected), theme.accentTintPressed.rgb());
             QVERIFY(fill(unselected) != theme.accentTint.rgb());
-
-            // The Model field's text is drawn in one colour, hovered or not,
-            // so that colour reads on the hover wash.
-            QLineEdit *model = window.m_modelSelect->lineEdit();
-            QVERIFY(model);
-            model->ensurePolished();
-            const QColor modelText = model->palette().color(QPalette::Active, QPalette::Text);
-            QCOMPARE(modelText.rgb(), theme.chatText.rgb());
-            QVERIFY(contrastRatio(modelText, laidOn(theme.chatSurface, theme.chatChipHover)) >= 4.5);
             window.close();
         }
     }
@@ -576,11 +548,8 @@ private slots:
             const QString name = QStringLiteral("dark");
             // Each picture starts from the Editing layout.
             QSettings().remove(QStringLiteral("workspace"));
-            // The old scheme API draws the one theme, whatever it is asked.
-            setEditorColorScheme(ColorScheme::Light);
-            QCOMPARE(editorColorScheme(), ColorScheme::Dark);
+            // The one theme, whatever the system says.
             const EditorTheme &theme = editorTheme();
-            QVERIFY(theme.dark);
             // The ramp, exactly (mockup-spec 0.2).
             const std::pair<const char *, QColor> ramp[] = {
                 {"#050505", theme.window},    {"#0e0e0e", theme.viewerSurround}, {"#121212", theme.well},
@@ -627,8 +596,6 @@ private slots:
                 QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header) >= 4.5);
                 QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header.lighter(108)) >= 4.5);
             }
-            // A caption clip's body stands off its lane.
-            QVERIFY(contrastRatio(theme.clipCaption.fill, theme.trackLane) >= 1.12);
             // Every marker reads as a mark on the ruler.
             for (const char *marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white"})
                 QVERIFY2(contrastRatio(theme.marker(QString::fromLatin1(marker)), theme.ruler) >= 3.0, marker);
@@ -645,10 +612,6 @@ private slots:
             // accentTextReadsOnEverySurfaceItIsDrawnOn for every accent.
             for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar})
                 QVERIFY2(contrastRatio(theme.accentText, surface) >= 4.5, qPrintable(surface.name()));
-            // A track's number reads on its header as text; its toggles' bare
-            // symbols, when on, as glyphs, on the hover wash too.
-            QVERIFY(contrastRatio(theme.trackBadgeText, theme.trackHeader) >= 4.5);
-            QVERIFY(contrastRatio(theme.trackToggleOn, laidOn(theme.trackHeader, theme.trackToggleHover)) >= 3.0);
             // An unchecked check box's edge is the design's outline.
             const auto over = [](const QColor &under, QColor top) {
                 const qreal alpha = top.alphaF();
@@ -660,7 +623,6 @@ private slots:
             QCOMPARE(theme.checkBorder.rgb(), over(theme.chrome, tokens::color(tokens::checkboxOutline)).rgb());
             QVERIFY(contrastRatio(theme.assistantText, theme.chrome) >= 4.5);
             QVERIFY(contrastRatio(theme.tabInactiveText, theme.panelTitle) >= 4.5);
-            QVERIFY(contrastRatio(theme.trackHeaderDetail, theme.trackHeader) >= 4.5);
             QVERIFY(contrastRatio(theme.tileEmptyText, theme.tileEmpty) >= 4.5);
             QVERIFY(contrastRatio(theme.cardPlaceholderText, theme.cardPlaceholder) >= 4.5);
             QVERIFY(contrastRatio(theme.badgeInfoText, theme.badgeInfo) >= 4.5);
@@ -679,8 +641,6 @@ private slots:
             QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
             // The changed-on-disk triangle reads on its bar.
             QVERIFY(contrastRatio(theme.warningGlyph, theme.warningSurface) >= 3.0);
-            // A clip the agent adds is named in the accent ink, on its wash over the lane.
-            QVERIFY(contrastRatio(theme.assistantText, over(theme.trackLane, theme.proposalAddFill)) >= 4.5);
             // A control focused from the keyboard is outlined in the solid accent.
             QCOMPARE(theme.focusHalo.rgba(), theme.accent.rgba());
             // The stage is the surround, the picture's canvas black.
@@ -724,9 +684,10 @@ private slots:
                 const QImage plate = toolbar->grab().toImage();
                 const qreal ratio = plate.devicePixelRatio();
                 // Its 1px edge along the foot, and the plate above it.
-                QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), theme.faceplateEdge.rgb());
+                QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(),
+                         laidOn(tokens::color(tokens::chrome), tokens::color(tokens::line)).rgb());
                 const QColor middle = plate.pixelColor(QPoint(1, toolbar->height() / 2) * ratio);
-                QVERIFY2(nearColor(middle.rgb(), mixColor(theme.faceplateTop, theme.faceplateBottom, 0.5).rgb()), qPrintable(middle.name()));
+                QVERIFY2(nearColor(middle.rgb(), tokens::color(tokens::chrome).rgb()), qPrintable(middle.name()));
             }
             QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
             // The window is titled with the project, so the Window menu,
@@ -756,7 +717,8 @@ private slots:
             QCOMPARE(inBar(settingsButton).left() - inBar(exportButton).right() - 1, 8);
             QCOMPARE(toolbar->width() - inBar(settingsButton).right() - 1, 12);
             // The conversation's switch is the stage rail's now, not the bar's.
-            QVERIFY(!window.m_chatToggle->isVisible());
+            for (const QToolButton *retired : window.findChildren<QToolButton *>(QStringLiteral("chatToggle")))
+                QVERIFY(!retired->isVisible());
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
             // The toolbar is the title bar: the window runs up under a
             // transparent one, and its commands start past the window buttons.
@@ -819,11 +781,9 @@ private slots:
                 QEvent leave(QEvent::Leave);
                 QCoreApplication::sendEvent(timelineTab, &leave);
             }
-            // The chosen tool is `raised`, its accent glyph reading on it.
-            const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
-            const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
-            QCOMPARE(toolFill.rgb(), theme.toolSelected.rgb());
-            QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
+            // The tools live in the timeline bar's segmented control; the
+            // old vertical palette is gone.
+            QVERIFY(!window.findChild<QToolBar *>(QStringLiteral("toolPalette")));
             // An unavailable command's symbol is dimmed (the kit's `dis`),
             // never brightened: no pixel of the bar's Undo or Redo is lighter.
             for (const char *id : {"edit.undo", "edit.redo"}) {
@@ -1210,7 +1170,7 @@ private slots:
             QCOMPARE(qobject_cast<QLabel *>(well->parentWidget()->findChild<QLabel *>(QStringLiteral("colorHex")))->text(), QStringLiteral("#4DCCFF"));
             // A switch, not a check box, for an effect's bool and for each effect.
             QVERIFY(inspector->findChildren<QCheckBox *>().isEmpty());
-            QCOMPARE(inspector->findChildren<PowerKey *>(QStringLiteral("effectEnabled")).size(), 2);
+            QCOMPARE(inspector->findChildren<InspectorSwitch *>(QStringLiteral("effectEnabled")).size(), 2);
             // An effect's name is UI 12/16 ink (tokens::control, 400).
             for (QLabel *title : inspector->findChildren<QLabel *>(QStringLiteral("effectName"))) QCOMPARE(title->font().weight(), QFont::Normal);
             // The picture shows the whole Inspector: the window grows until
@@ -1259,10 +1219,7 @@ private slots:
         };
         QCOMPARE(surface(), editorTheme().chatSurface.rgb());
         QCOMPARE(nameInk(), editorTheme().chatText.rgb());
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::System, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
-            applyEditorAppearance();
-        }
+        for (int again = 0; again < 3; ++again) applyEditorAppearance();
         QCOMPARE(changed.count(), 0);
         QVERIFY(window.m_workspace->manager()->styleSheet().contains(editorTheme().panel.name()));
         QCoreApplication::processEvents();
@@ -1470,8 +1427,7 @@ private slots:
     void appearanceChangesOnlyForFontsAndScreens() {
         QSignalSpy changed(EditorAppearance::instance(), &EditorAppearance::changed);
         const QColor accent = editorTheme().accent;
-        setEditorColorScheme(ColorScheme::Light);
-        setEditorColorScheme(ColorScheme::System);
+        applyEditorAppearance();
         applyEditorAppearance();
         QCOMPARE(changed.count(), 0);
         const QFont was = QApplication::font();
@@ -1635,57 +1591,6 @@ private slots:
             QVERIFY(effects.m_categoryButton->hasChevron());
             save(browser, QStringLiteral("effects-%1").arg(name));
         }
-    }
-
-    // The hardware finish is flat on the graphite ramp until W2 replaces its
-    // widgets: single fills with no gradient, highlight, drop or inner
-    // shadow; lamps in the status colours; and its text reads at 4.5:1 on
-    // whatever it is printed on.
-    void hardwareTokens() {
-        const EditorTheme t = makeEditorTheme();
-        QCOMPARE(t.faceplateTop, QColor("#171717"));
-        QCOMPARE(t.faceplateBottom, t.faceplateTop);
-        QCOMPARE(t.keyTop, QColor("#262626"));
-        QCOMPARE(t.keyBottom, t.keyTop);
-        QCOMPARE(t.keyLatched, QColor("#303030"));
-        QCOMPARE(t.keyLed, t.accent);
-        QCOMPARE(t.wellFill, QColor("#262626"));
-        QCOMPARE(t.modulePlate, QColor("#171717"));
-        QCOMPARE(t.glassTop, QColor("#121212"));
-        QCOMPARE(t.glassBottom, t.glassTop);
-        QCOMPARE(t.vuRedZone, QColor("#ec5d61"));
-        QCOMPARE(t.keyRing.rgba(), qRgba(255, 255, 255, 36));
-        // Flat: every light and shadow the finish drew is clear.
-        for (const QColor &clear : {t.faceplateHighlight, t.keyDrop, t.keyHighlight, t.keyLatchedShadow, t.bankShadow, t.bankLip,
-                                    t.wellShadow, t.wellLip, t.moduleHighlight, t.engravedHighlight, t.glassShadow, t.glassLip})
-            QCOMPARE(clear.alpha(), 0);
-        QCOMPARE(t.knobFaceLight, t.knobFaceDark);
-        QCOMPARE(t.vuBezelTop, t.vuBezelBottom);
-        for (const QColor &color :
-             {t.faceplateTop, t.faceplateEdge, t.keyTop, t.keyRing, t.keyLatched, t.keyLed, t.bankWell, t.wellFill,
-              t.modulePlate, t.moduleEdge, t.engravedInk, t.lampOff, t.lampChanged, t.lampKerf, t.lampOk, t.glassTop,
-              t.glassText, t.glassLabel, t.knobRing, t.knobFaceLight, t.knobTick, t.knobPointer, t.vuBezelTop, t.vuFace,
-              t.vuInk, t.vuRedZone, t.vuNeedle})
-            QVERIFY(color.isValid() && color.alpha() > 0);
-        for (const QColor &glass : {t.glassTop, t.glassBottom}) {
-            QVERIFY(contrastRatio(t.glassText, glass) >= 4.5);
-            QVERIFY(contrastRatio(t.glassLabel, glass) >= 4.5);
-        }
-        for (const QColor &plate : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
-            QVERIFY(contrastRatio(t.engravedInk, plate) >= 4.5);
-        QVERIFY(contrastRatio(t.vuInk, t.vuFace) >= 4.5);
-        // Kerf's lamp is Kerf's ink; the others are pos, warn and the track.
-        QCOMPARE(t.lampKerf, t.accent);
-        QCOMPARE(t.lampOk, t.success);
-        QCOMPARE(t.lampChanged, t.warning);
-        QVERIFY(t.lampChanged != t.lampOk && t.lampChanged != t.accent);
-        // The glass is the well, deeper than the plate; a field is raised
-        // above it, and a latched key is on, above a raised one.
-        QVERIFY(t.glassBottom.lightness() < t.faceplateBottom.lightness());
-        QVERIFY(t.wellFill.lightness() > t.faceplateBottom.lightness());
-        QVERIFY(t.keyLatched.lightness() > t.keyBottom.lightness());
-        // A lamp that is off still shows on the plate.
-        QVERIFY(t.lampOff != t.modulePlate);
     }
 
     // The whole editor, a portrait project with a clip selected, to look at:

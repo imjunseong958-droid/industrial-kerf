@@ -126,6 +126,9 @@ QColor modelColor(const QString &hex);
 QString modelColorName(const QColor &color);
 
 bool isAudioTrack(const QJsonObject &track);
+// A subtitle (caption) track: numbered with the picture tracks, named
+// Captions when it has no name of its own (mockup-spec 7).
+bool isCaptionTrack(const QJsonObject &track);
 // A track as the timeline's header names it: its badge by position (picture
 // tracks count V1, V2… in the project's order, a subtitle track among them;
 // sound tracks A1, A2…) and its name, "Video 2" or "Audio 1" without one.
@@ -272,45 +275,5 @@ QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool
 // A snapshot mask's outline, in fractions of the clip's picture; open
 // paths are not closed.
 QPainterPath maskPath(const QJsonObject &mask);
-
-// The hardware finish's parts, painted from editorTheme()'s hardware tokens.
-// Each paints inside the rectangle it is given (its 1px drop or lip
-// included), with the rectangle's edges and its 1px lines snapped to the
-// device's pixels, so the parts stay crisp at 1x, 1.25x and 2x.
-
-// A key in a bank: raised, or `latched` (held in, below the plate). Under
-// the pointer it brightens; `lit`, a small bar in `keyLed` glows at its top.
-void paintRaisedKey(QPainter &painter, const QRectF &rect, bool latched, bool hovered, bool lit);
-// The recessed well a bank of keys sits in (2px round its keys, 2px apart).
-void paintKeyBank(QPainter &painter, const QRectF &rect);
-// A recessed field well, behind a number or a pop-up.
-void paintWell(QPainter &painter, const QRectF &rect, qreal radius = 4);
-// A framed module's plate.
-void paintModulePlate(QPainter &painter, const QRectF &rect);
-// The dark display glass behind a readout (figures in monoFont()).
-void paintGlass(QPainter &painter, const QRectF &rect, qreal radius = 5);
-
-// What a jewel lamp shows: dark; warn for a value moved from its default;
-// Kerf's ink for Kerf's work or a proposal; green for all is well.
-enum class LampState { Off, Changed, Kerf, Ok };
-// A jewel lamp `diameter` across on `centre`. A lit lamp's glow reaches
-// `diameter` from its centre, so it paints within a square twice as wide.
-void paintLamp(QPainter &painter, const QPointF &centre, qreal diameter, LampState state);
-
-// An engraved label's font for `text`, in `base`'s family: 10px bold
-// capitals tracked 1.3px apart, or, for Hangul and other CJK text, which
-// has no capitals and loses its shapes when spaced, 11px bold untracked.
-QFont engravedFont(const QFont &base, const QString &text);
-// `text` engraved in `rect` (laid out by Qt::AlignmentFlag `flags`): the
-// ink, with its 1px catch of light below, in engravedFont(painter.font()).
-void drawEngraved(QPainter &painter, const QRectF &rect, int flags, const QString &text);
-
-// A bakelite knob with its scale of seven ticks, filling the square centred
-// in `box` (drawn on a 32px grid). Its pointer turns `turn` degrees from
-// straight up, clockwise.
-void paintKnob(QPainter &painter, const QRectF &box, double turn);
-// An analogue VU meter in `rect`: a bezel round its face (the theme's), its
-// needle `level` of the way along the scale (0 to 1).
-void paintVuMeter(QPainter &painter, const QRectF &rect, double level);
 
 } // namespace kerf
