@@ -1983,7 +1983,9 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             if !position.is_finite() || position < 0.0 {
                 return false;
             }
-            if let Ok(mut slot) = bridge.shared.seek.try_lock() {
+            // The worker holds this only to take the seek out, and a seek
+            // refused for that moment would be lost.
+            if let Ok(mut slot) = bridge.shared.seek.lock() {
                 *slot = Some(PendingSeek {
                     position,
                     exact: !scrub,

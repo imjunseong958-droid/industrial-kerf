@@ -860,12 +860,27 @@ impl RuntimeClient {
             // otherwise open a console window of its own.
             command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         }
-        command.spawn().map_err(|error| {
-            RuntimeError::new(
-                "RUNTIME_UNAVAILABLE",
-                format!("failed to start kerfd at {}: {error}", binary.display()),
-            )
-        })
+        // A binary just written can stay busy for a moment: a process another
+        // thread is forking holds it open for writing until its exec.
+        let mut busy = 0;
+        loop {
+            match command.spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 25 =>
+                {
+                    busy += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                result => {
+                    return result.map_err(|error| {
+                        RuntimeError::new(
+                            "RUNTIME_UNAVAILABLE",
+                            format!("failed to start kerfd at {}: {error}", binary.display()),
+                        )
+                    });
+                }
+            }
+        }
     }
 
     #[cfg(not(any(unix, windows)))]
