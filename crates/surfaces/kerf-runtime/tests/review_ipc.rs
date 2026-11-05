@@ -41,7 +41,8 @@ impl Project {
             .expect("spawn kerfd");
         let project = Self { directory, daemon };
         let client = project.client();
-        for _ in 0..250 {
+        // A busy Windows runner takes more than five seconds to start several at once.
+        for _ in 0..1500 {
             if client.get_state().is_ok() {
                 return project;
             }
