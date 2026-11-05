@@ -58,6 +58,7 @@ fn scene() -> Project {
             width: 1920,
             height: 1080,
             alpha: false,
+            ..Default::default()
         }),
         audio: Some(AudioInfo {
             channels: 2,
@@ -917,6 +918,7 @@ fn camera_take(frames: i64, video: bool, audio: bool) -> Media {
             width: 1280,
             height: 720,
             alpha: false,
+            ..Default::default()
         }),
         audio: audio.then_some(AudioInfo {
             channels: 2,
@@ -961,6 +963,7 @@ fn replacing_media_keeps_its_id_and_every_clip_s_timing() {
             width: 3840,
             height: 2160,
             alpha: true,
+            ..Default::default()
         }),
         audio: Some(AudioInfo {
             channels: 6,

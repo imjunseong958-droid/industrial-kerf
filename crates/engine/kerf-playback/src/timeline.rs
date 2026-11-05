@@ -743,6 +743,15 @@ impl NativeCheck<'_> {
             {
                 return Some("a picture with transparency")
             }
+            Content::Media { media, .. }
+                if self
+                    .project
+                    .media(media.as_str())
+                    .and_then(|media| media.video)
+                    .is_some_and(|video| video.needs_converting()) =>
+            {
+                return Some("footage in another color space")
+            }
             Content::Generator { .. } => return Some("a generator"),
             Content::Caption { .. } => return Some("captions"),
             Content::Sequence { .. } if clip.speed().value() != 1.0 => {

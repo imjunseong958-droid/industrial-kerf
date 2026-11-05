@@ -9,6 +9,7 @@ use crate::catalog::{Catalog, Domain, ParamType};
 use crate::id::{Id, IdGen};
 use crate::time::{Rate, Ratio, Time};
 use crate::value::{Param, Value};
+use kerf_color::ColorSpace;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -55,6 +56,35 @@ pub struct VideoInfo {
     pub height: u32,
     /// The picture carries transparency, which compositing keeps.
     pub alpha: bool,
+    /// Bits per component the file holds.
+    pub bits: u8,
+    /// How its code values become light. Log footage rarely says so itself.
+    pub color: ColorSpace,
+}
+
+impl Default for VideoInfo {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            alpha: false,
+            bits: 8,
+            color: ColorSpace::Rec709,
+        }
+    }
+}
+
+impl VideoInfo {
+    /// Whether its code values mean something other than what 8-bit sRGB pictures mean, so that
+    /// showing them as they are would be wrong: HDR, log, and wide gamut.
+    pub fn needs_converting(&self) -> bool {
+        !matches!(self.color, ColorSpace::Rec709 | ColorSpace::Srgb)
+    }
+
+    /// Whether drawing it should keep more than 8 bits of it.
+    pub fn is_deep(&self) -> bool {
+        self.bits > 8 || self.needs_converting()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

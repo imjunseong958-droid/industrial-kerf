@@ -22,6 +22,7 @@ pub use model::{
     MaskMode, MaskShape, Media, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
     TRACK_ROLES,
 };
+pub use kerf_color::ColorSpace;
 pub use ops::{
     apply, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
     TrackChange, TrackRoleChange,

@@ -474,15 +474,19 @@ impl Drawing {
         Some(Some(match &plan.source {
             Source::Media { picture } => {
                 let (w, h) = shape.source;
-                let Some((decoded, stride, alpha)) =
-                    self.pictures.bytes(*picture, time, (w as u32, h as u32))
-                else {
+                let size = (w as u32, h as u32);
+                let Some(decoded) = self.pictures.decoded(*picture, time, size) else {
                     return Some(None);
                 };
-                if (decoded.width() as usize, decoded.height() as usize) != (w, h) {
+                let rgba = &decoded.picture;
+                if (rgba.width(), rgba.height()) != size {
                     return None;
                 }
-                frame.rgba8(decoded.data(0), w as u32, h as u32, stride, alpha)
+                let stride = rgba.stride(0) as u32;
+                match decoded.deep {
+                    Some(input) => frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input),
+                    None => frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha),
+                }
             }
             Source::Nested {
                 sequence: nested,

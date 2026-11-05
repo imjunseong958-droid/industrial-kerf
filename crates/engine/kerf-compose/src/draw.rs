@@ -1473,6 +1473,9 @@ impl<'a> Builder<'a> {
                     width: video.width,
                     height: video.height,
                     alpha: video.alpha,
+                    deep: video
+                        .is_deep()
+                        .then(|| crate::footage::input_transform(video.color)),
                     source_in: *source_in,
                     speed: *speed,
                     duration: clip.duration,
@@ -1630,8 +1633,15 @@ impl<'a> Builder<'a> {
         if matches!(plan.source, Source::Media { .. }) {
             plan.shown = largest.clamp(1e-6, 1.0);
             plan.letterboxed = !alpha && letterboxed(&plan, canvas);
-            plan.plain =
-                !alpha && self.nesting.len() == 1 && entering && size == canvas && untouched(&plan);
+            let deep = media
+                .and_then(|media| media.video)
+                .is_some_and(|video| video.is_deep());
+            plan.plain = !alpha
+                && !deep
+                && self.nesting.len() == 1
+                && entering
+                && size == canvas
+                && untouched(&plan);
         }
         Ok(Some(plan))
     }

@@ -11,6 +11,7 @@
 //! a real GPU, with `KERF_GPU=0` in the environment, or after the device fails, and the CPU then
 //! draws everything.
 
+use kerf_color::InputTransform;
 use kerf_draw::correct::Correction;
 use kerf_draw::{Affine, Blend, Image, Landing, Rect};
 use std::collections::HashMap;
@@ -59,6 +60,8 @@ pub struct Gpu {
     multiply: wgpu::ComputePipeline,
     halve: wgpu::ComputePipeline,
     composite: wgpu::ComputePipeline,
+    input_layout: wgpu::BindGroupLayout,
+    input: wgpu::ComputePipeline,
     correct: wgpu::ComputePipeline,
     by_weight: wgpu::ComputePipeline,
     plus: wgpu::ComputePipeline,
@@ -214,6 +217,52 @@ impl Gpu {
             kernel("correct"),
         );
         let (by_weight, plus) = (kernel("by_weight"), kernel("plus"));
+        let input_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("kerf-input"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("input.wgsl").into()),
+        });
+        let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("kerf-input"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                storage_entry(2, WORKING_FORMAT),
+                texture_entry(3),
+                texture_entry(4),
+            ],
+        });
+        let input_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("kerf-input"),
+                bind_group_layouts: &[Some(&input_layout)],
+                immediate_size: 0,
+            });
+        let input = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("input"),
+            layout: Some(&input_pipeline_layout),
+            module: &input_module,
+            entry_point: Some("input"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         let finish_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kerf-finish"),
             source: wgpu::ShaderSource::Wgsl(include_str!("finish.wgsl").into()),
@@ -273,6 +322,8 @@ impl Gpu {
             multiply,
             halve,
             composite,
+            input_layout,
+            input,
             correct,
             by_weight,
             plus,
@@ -671,6 +722,112 @@ impl<'a> Frame<'a> {
             ..Uniforms::default()
         };
         self.kernel(&gpu.decode, &uniforms, &view, None, (w, h))
+    }
+
+    /// Straight 16-bit little-endian RGBA, `stride` bytes a row, taken into linear light by `input`,
+    /// as `Image::from_rgba16` takes it with `InputTransform::convert`. Opaque unless `alpha` says
+    /// the picture's transparency counts.
+    pub fn rgba16(
+        &mut self,
+        rgba: &[u8],
+        (w, h): (u32, u32),
+        stride: u32,
+        alpha: bool,
+        input: &InputTransform,
+    ) -> Picture {
+        let gpu = self.gpu;
+        let source = self
+            .upload(wgpu::TextureFormat::Rgba16Uint, (w, h), rgba, stride)
+            .create_view(&Default::default());
+        let stages = input.stages();
+        let table = |frame: &mut Self, values: &[f32]| {
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            frame
+                .upload(
+                    wgpu::TextureFormat::R32Float,
+                    (values.len() as u32, 1),
+                    &bytes,
+                    values.len() as u32 * 4,
+                )
+                .create_view(&Default::default())
+        };
+        let curve = table(self, &stages.table.values);
+        let tone = match stages.tone {
+            Some(tone) => table(self, &tone.table().values),
+            None => gpu.dummy.clone(),
+        };
+        let parts = u32::from(stages.hlg.is_some())
+            | u32::from(stages.matrix.is_some()) << 1
+            | u32::from(stages.tone.is_some()) << 2
+            | u32::from(stages.compress) << 3
+            | u32::from(stages.desaturate.is_some()) << 4;
+        let (hlg, hlg_scale) = stages.hlg.unwrap_or(([0.0; 3], 0.0));
+        let matrix = stages.matrix.unwrap_or_default();
+        let luma = stages.desaturate.unwrap_or_default();
+        let (peak_in, peak_out) = stages.tone.map_or((0.0, 0.0), |tone| {
+            (tone.src_peak_nits as f32, tone.dst_peak_nits as f32)
+        });
+        let mut bytes = Vec::with_capacity(112);
+        for value in [parts, u32::from(alpha), 0, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let floats = [
+            [stages.table.lo, stages.table.hi, peak_in, peak_out],
+            [hlg[0], hlg[1], hlg[2], hlg_scale],
+            [matrix[0][0], matrix[0][1], matrix[0][2], stages.hlg_power],
+            [matrix[1][0], matrix[1][1], matrix[1][2], 0.0],
+            [matrix[2][0], matrix[2][1], matrix[2][2], 0.0],
+            [luma[0], luma[1], luma[2], 0.0],
+        ];
+        for value in floats.iter().flatten() {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let out = self.take(w, h);
+        let buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("kerf-input"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kerf-input"),
+            layout: &gpu.input_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&out.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&curve),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&tone),
+                },
+            ],
+        });
+        {
+            let mut pass = self
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("kerf-input"),
+                    timestamp_writes: None,
+                });
+            pass.set_pipeline(&gpu.input);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+        }
+        out
     }
 
     /// A picture the CPU drew, such as a title.
@@ -1170,6 +1327,44 @@ mod tests {
             let out = frame.correct(picture, &correction);
             let floats = frame.read_floats(&out).expect("read back");
             assert_close(&floats, &cpu.px, 4e-3, &format!("{case:?}"));
+        }
+    }
+
+    #[test]
+    fn deep_footage_comes_in_as_the_cpu_brings_it_in_every_color_space() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        let (w, h) = (128usize, 64usize);
+        // Every level and mixes of channels, full transparency to none.
+        let mut rgba = Vec::with_capacity(w * h * 8);
+        for y in 0..h {
+            for x in 0..w {
+                let u = (x * 65535 / (w - 1)) as u16;
+                let v = (y * 65535 / (h - 1)) as u16;
+                for code in [u, v, u / 2 + v / 2, if x % 2 == 0 { 65535 } else { 32768 }] {
+                    rgba.extend_from_slice(&code.to_le_bytes());
+                }
+            }
+        }
+        for space in kerf_color::ColorSpace::ALL {
+            let input = InputTransform::new(
+                space,
+                kerf_color::Range::Limited,
+                &kerf_color::ColorPipeline::REC709,
+                None,
+            );
+            let cpu = Image::from_rgba16(&rgba, (w, h), w * 8, true, |code| input.convert(code));
+            let mut frame = gpu.frame();
+            let picture = frame.rgba16(&rgba, (w as u32, h as u32), w as u32 * 8, true, &input);
+            let floats = frame.read_floats(&picture).expect("read back");
+            // Relative: log and HDR run well past 1.
+            let mut worst = 0.0f32;
+            for (g, c) in floats.iter().zip(&cpu.px) {
+                assert!(g.is_finite(), "{space:?}");
+                worst = worst.max((g - c).abs() / (1.0 + c.abs()));
+            }
+            assert!(worst < 2e-3, "{space:?} differs by {worst}");
         }
     }
 

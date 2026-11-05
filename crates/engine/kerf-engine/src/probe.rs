@@ -39,6 +39,12 @@ pub struct ProbeInfo {
     /// Whether the picture's pixel format carries transparency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<bool>,
+    /// Bits per picture component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u32>,
+    /// How its code values become light, as a color space's id, when it is not BT.709.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     #[serde(rename = "videoCodec", skip_serializing_if = "Option::is_none")]
     pub video_codec: Option<String>,
     #[serde(rename = "audioCodec", skip_serializing_if = "Option::is_none")]
@@ -153,6 +159,9 @@ struct FfprobeStream {
     pix_fmt: Option<String>,
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
+    bits_per_raw_sample: Option<String>,
+    color_transfer: Option<String>,
+    color_primaries: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +184,44 @@ pub fn parse_rate(rate: Option<&str>) -> Option<f64> {
         return None;
     }
     Some(numerator / denominator)
+}
+
+/// The color space a file's tags say it is in, when that is not BT.709. Log footage rarely tags
+/// itself, so that is for a person or an agent to write in the document.
+fn input_color(transfer: Option<&str>, primaries: Option<&str>) -> Option<kerf_model::ColorSpace> {
+    use kerf_model::ColorSpace;
+    match (transfer, primaries) {
+        (Some("smpte2084"), _) => Some(ColorSpace::Rec2100Pq),
+        (Some("arib-std-b67"), _) => Some(ColorSpace::Rec2100Hlg),
+        (_, Some("bt2020")) => Some(ColorSpace::Rec2020),
+        (_, Some("smpte432")) => Some(ColorSpace::P3D65),
+        _ => None,
+    }
+}
+
+impl ProbeInfo {
+    /// What a document holds about a picture of this size with these properties.
+    pub fn video_info(&self, width: u32, height: u32) -> kerf_model::VideoInfo {
+        kerf_model::VideoInfo {
+            width,
+            height,
+            alpha: self.alpha == Some(true),
+            bits: self
+                .bits
+                .map(|bits| match bits {
+                    0..=8 => 8,
+                    9 | 10 => 10,
+                    11 | 12 => 12,
+                    _ => 16,
+                })
+                .unwrap_or(8),
+            color: self
+                .color
+                .as_deref()
+                .and_then(kerf_model::ColorSpace::from_id)
+                .unwrap_or_default(),
+        }
+    }
 }
 
 /// Whether an FFmpeg pixel format carries transparency: `yuva420p`,
@@ -210,6 +257,17 @@ pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
             .or_else(|| parse_rate(video.r_frame_rate.as_deref()));
         result.video_codec = video.codec_name.clone();
         result.alpha = video.pix_fmt.as_deref().map(has_alpha);
+        result.bits = video
+            .bits_per_raw_sample
+            .as_deref()
+            .and_then(|bits| bits.parse().ok())
+            .filter(|bits| *bits > 0)
+            .or_else(|| video.pix_fmt.as_deref().and_then(pix_fmt_bit_depth));
+        result.color = input_color(
+            video.color_transfer.as_deref(),
+            video.color_primaries.as_deref(),
+        )
+        .map(|space| space.id().to_owned());
     }
     if let Some(audio) = audio {
         result.audio_codec = audio.codec_name.clone();
@@ -1541,5 +1599,60 @@ mod tests {
         let info = parse_media_info_json(untagged).expect("parses");
         assert_eq!(info.bit_depth, Some(8));
         assert_eq!((info.color_space, info.primaries), (None, None));
+    }
+}
+
+#[cfg(test)]
+mod input_color_tests {
+    use super::*;
+    use kerf_model::ColorSpace;
+
+    fn probe(stream: &str) -> ProbeInfo {
+        parse_ffprobe_json(&format!(
+            r#"{{"streams":[{{"codec_type":"video","width":64,"height":36,{stream}}}]}}"#
+        ))
+        .expect("parses")
+    }
+
+    #[test]
+    fn hdr_and_wide_gamut_are_found_from_their_tags() {
+        for (stream, space, bits) in [
+            (
+                r#""pix_fmt":"yuv420p10le","color_transfer":"smpte2084","color_primaries":"bt2020""#,
+                ColorSpace::Rec2100Pq,
+                10,
+            ),
+            (
+                r#""pix_fmt":"yuv420p10le","color_transfer":"arib-std-b67","color_primaries":"bt2020""#,
+                ColorSpace::Rec2100Hlg,
+                10,
+            ),
+            (
+                r#""pix_fmt":"yuv422p10le","color_primaries":"bt2020""#,
+                ColorSpace::Rec2020,
+                10,
+            ),
+            (
+                r#""pix_fmt":"yuv420p","color_primaries":"smpte432""#,
+                ColorSpace::P3D65,
+                8,
+            ),
+            (r#""pix_fmt":"yuv420p12le""#, ColorSpace::Rec709, 12),
+            (
+                r#""pix_fmt":"yuv420p","color_transfer":"bt709","color_primaries":"bt709""#,
+                ColorSpace::Rec709,
+                8,
+            ),
+        ] {
+            let info = probe(stream).video_info(64, 36);
+            assert_eq!((info.color, info.bits), (space, bits), "{stream}");
+        }
+    }
+
+    #[test]
+    fn the_raw_sample_size_is_taken_over_the_pixel_format() {
+        let info =
+            probe(r#""pix_fmt":"yuv420p16le","bits_per_raw_sample":"10""#).video_info(64, 36);
+        assert_eq!(info.bits, 10);
     }
 }

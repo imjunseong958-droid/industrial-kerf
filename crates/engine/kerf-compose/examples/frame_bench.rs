@@ -65,7 +65,10 @@ fn main() {
     let clip = std::env::args().nth(1).expect("a clip to draw");
     // Only the scenes whose names hold this.
     let only = std::env::args().nth(2).unwrap_or_default();
-    let media = format!("media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160\n");
+    // What the document says about the footage beyond its size, such as ` bits=10`.
+    let fields = std::env::var("KERF_BENCH_MEDIA").unwrap_or_default();
+    let media =
+        format!("media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160{fields}\n");
     println!(
         "{:<10} {:>9} {:>11} {:>8}",
         "scene", "size", "median ms", "fps"

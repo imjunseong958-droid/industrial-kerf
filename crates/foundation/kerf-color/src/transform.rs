@@ -148,6 +148,11 @@ impl ToneMap {
         });
         ToneMap { src_peak_nits, dst_peak_nits, table }
     }
+    /// The scale factor by max(R,G,B), PQ-encoded.
+    pub fn table(&self) -> &DecodeTable {
+        &self.table
+    }
+
     #[inline]
     pub fn apply(&self, c: [f32; 3]) -> [f32; 3] {
         let m = c[0].max(c[1]).max(c[2]);
@@ -255,10 +260,36 @@ impl InputTransform {
         c
     }
 
+    /// The transform as plain numbers, for a shader that runs [`InputTransform::convert`].
+    pub fn stages(&self) -> InputStages<'_> {
+        InputStages {
+            table: &self.table,
+            hlg: self.hlg,
+            hlg_power: (HLG_GAMMA - 1.0) as f32,
+            matrix: (!self.identity_matrix).then_some(self.matrix),
+            tone: self.tone.as_ref(),
+            compress: self.compress,
+            desaturate: self.desaturate,
+        }
+    }
+
     /// Signal → working linear for one RGB triple (table + pixel stage).
     pub fn convert(&self, rgb: [f32; 3]) -> [f32; 3] {
         self.apply(rgb.map(|v| self.table.lookup(v)))
     }
+}
+
+/// What [`InputTransform::apply`] does to a pixel, in order after the table.
+#[derive(Clone, Copy, Debug)]
+pub struct InputStages<'a> {
+    pub table: &'a DecodeTable,
+    /// The HLG OOTF's luma weights and scale to working units.
+    pub hlg: Option<([f32; 3], f32)>,
+    pub hlg_power: f32,
+    pub matrix: Option<[[f32; 3]; 3]>,
+    pub tone: Option<&'a ToneMap>,
+    pub compress: bool,
+    pub desaturate: Option<[f32; 3]>,
 }
 
 /// Whether gamut `a` lies inside gamut `b` (so no compression is needed going a → b).
