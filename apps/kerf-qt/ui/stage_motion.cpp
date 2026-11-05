@@ -5,10 +5,14 @@
 
 #include <QEasingCurve>
 #include <QFontMetricsF>
+#include <QGraphicsEffect>
+#include <QGraphicsOpacityEffect>
 #include <QHideEvent>
+#include <QPixmap>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QShowEvent>
-#include <QGraphicsOpacityEffect>
+#include <QTimer>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -39,6 +43,21 @@ void paintTileLabel(QPainter &p, const QRectF &box, const QString &label) {
     p.restore();
 }
 
+// An image as it is cheapest to draw over and over: no bigger than it will be
+// shown, and in the format the raster engine has its fast paths for.
+QImage readyToMove(QImage image, const QSizeF &largest, qreal ratio, bool whole) {
+    if (image.isNull()) return image;
+    QSize wanted = (largest * ratio).toSize().expandedTo(QSize(1, 1));
+    wanted = image.size().scaled(wanted, whole ? Qt::KeepAspectRatio : Qt::KeepAspectRatioByExpanding);
+    if (wanted.width() * 3 < image.width() * 2) {
+        const qreal own = image.devicePixelRatio();
+        image = image.scaled(wanted, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        image.setDevicePixelRatio(own);
+    }
+    const QImage::Format fast = image.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32;
+    return image.format() == fast ? image : image.convertToFormat(fast);
+}
+
 constexpr int kSheetSide = 16;
 constexpr int kSheetColumns = 4;
 constexpr int kSheetGap = 8;
@@ -55,6 +74,7 @@ FootageSheet::FootageSheet(QWidget *parent) : QWidget(parent) {
 
 void FootageSheet::setTiles(const QList<FootageTile> &tiles) {
     m_tiles = tiles;
+    for (FootageTile &tile : m_tiles) tile.poster = readyToMove(tile.poster, QSizeF(tokens::motion::posterMost, tokens::motion::posterMost) / 2.0, 1.0, false);
     m_taken.clear();
     setFixedHeight(heightForWidth(width()));
     const int length = ui::motionDuration(int(tiles.size()) * tokens::motion::popStagger + tokens::motion::pop);
@@ -138,7 +158,14 @@ WorkChip::WorkChip(QWidget *parent) : QWidget(parent) {
     m_pulse.setEndValue(1.0);
     m_pulse.setDuration(tokens::motion::workPulse);
     m_pulse.setLoopCount(-1);
-    connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this] { update(); });
+    // Over the picture, for as long as Kerf works: only the dot, and only when it
+    // has changed enough to see.
+    connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        const int step = qRound(value.toReal() * tokens::motion::workPulseSteps);
+        if (step == m_pulseStep) return;
+        m_pulseStep = step;
+        update(QRect(9, height() / 2 - 5, 10, 10));
+    });
 }
 
 QSize WorkChip::sizeHint() const {
@@ -162,7 +189,7 @@ void WorkChip::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0, 0, 0, 140));
     p.drawRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);
-    const qreal at = m_pulse.currentValue().toReal();
+    const qreal at = qreal(m_pulseStep) / tokens::motion::workPulseSteps;
     p.setOpacity(1.0 - 0.65 * (1.0 - std::abs(at * 2.0 - 1.0)));
     p.setBrush(tokens::color(tokens::accentInk));
     p.drawEllipse(QPointF(14, height() / 2.0), 3, 3);
@@ -177,77 +204,167 @@ StageMotion::StageMotion(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setAttribute(Qt::WA_TranslucentBackground);
     hide();
-    m_timer.setInterval(16);
-    connect(&m_timer, &QTimer::timeout, this, &StageMotion::tick);
+    m_ticker.setStartValue(0.0);
+    m_ticker.setEndValue(1.0);
+    m_ticker.setDuration(1000);
+    m_ticker.setLoopCount(-1);
+    connect(&m_ticker, &QVariantAnimation::valueChanged, this, &StageMotion::tick);
     m_clock.start();
 }
 
 bool StageMotion::fly(const Flight &flight) {
     if (ui::reducedMotion()) return false;
-    m_flights << Running{flight, m_clock.elapsed() + flight.delay};
+    Running running{flight, m_clock.elapsed() + flight.delay};
+    // Prepared once, as it starts, not in each of its frames.
+    const QSizeF largest = flight.from.size().expandedTo(flight.to.size());
+    running.flight.image = readyToMove(flight.image, largest, std::max(1.0, devicePixelRatioF()), flight.fit);
+    m_flights << running;
     show();
     raise();
-    if (!m_timer.isActive()) m_timer.start();
-    update();
+    wake();
     return true;
+}
+
+void StageMotion::wake() {
+    if (m_ticker.state() != QAbstractAnimation::Running) m_ticker.start();
+    tick();
 }
 
 void StageMotion::releaseStaying() {
     const qint64 now = m_clock.elapsed();
+    bool any = false;
     for (Running &running : m_flights) {
         if (!running.flight.stays) continue;
+        any = true;
         running.flight.stays = false;
+        running.atRest = false;
+        // Still on its way or still coming in, it goes on and fades after: nothing
+        // jumps to where it was going.
+        if (now - running.started < running.flight.duration) {
+            running.flight.tail = tokens::motion::standInRelease;
+            continue;
+        }
         running.flight.from = running.flight.to;
         running.flight.fromOpacity = running.flight.toOpacity;
         running.flight.toOpacity = 0.0;
         running.flight.duration = tokens::motion::standInRelease;
         running.started = now;
     }
+    if (any) wake();
 }
 
-void StageMotion::tick() {
-    const qint64 now = m_clock.elapsed();
-    m_flights.erase(std::remove_if(m_flights.begin(), m_flights.end(),
-                                   [now](const Running &running) {
-                                       return !running.flight.stays && now - running.started >= running.flight.duration + running.flight.tail;
-                                   }),
-                    m_flights.end());
-    if (m_flights.isEmpty()) {
-        m_timer.stop();
-        hide();
+void StageMotion::followPicture(const QRect &picture) {
+    if (picture.isEmpty()) {
+        releaseStaying();
         return;
     }
-    update();
+    m_now = m_clock.elapsed();
+    bool any = false;
+    for (Running &running : m_flights) {
+        Flight &flight = running.flight;
+        if (!flight.stays || !flight.fit || flight.to == QRectF(picture)) continue;
+        any = true;
+        running.atRest = false;
+        // It has not started: it only starts for somewhere else.
+        if (m_now < running.started) {
+            flight.to = picture;
+            continue;
+        }
+        const qreal opacity = opacityOf(running);
+        const int left = int(flight.duration - (m_now - running.started));
+        flight.from = boxOf(running);
+        flight.to = picture;
+        flight.fromOpacity = opacity;
+        flight.lively = false;
+        flight.duration = std::max(left, tokens::motion::move);
+        running.started = m_now;
+    }
+    if (any) wake();
 }
 
-void StageMotion::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    const qint64 now = m_clock.elapsed();
+QRectF StageMotion::boxOf(const Running &running) const {
     static const QEasingCurve soft = tokens::easing();
     static const QEasingCurve lively = [] {
         QEasingCurve curve(QEasingCurve::OutBack);
         curve.setOvershoot(tokens::motion::landOvershoot);
         return curve;
     }();
+    const Flight &flight = running.flight;
+    const qreal t = std::clamp(qreal(m_now - running.started) / std::max(1, flight.duration), 0.0, 1.0);
+    const qreal at = (flight.lively ? lively : soft).valueForProgress(t);
+    return QRectF(flight.from.left() + (flight.to.left() - flight.from.left()) * at,
+                  flight.from.top() + (flight.to.top() - flight.from.top()) * at,
+                  flight.from.width() + (flight.to.width() - flight.from.width()) * at,
+                  flight.from.height() + (flight.to.height() - flight.from.height()) * at);
+}
+
+qreal StageMotion::opacityOf(const Running &running) const {
+    const Flight &flight = running.flight;
+    const qint64 elapsed = m_now - running.started;
+    const qreal t = std::clamp(qreal(elapsed) / std::max(1, flight.duration), 0.0, 1.0);
+    const qreal opacity = flight.fromOpacity + (flight.toOpacity - flight.fromOpacity) * t;
+    if (flight.tail <= 0 || elapsed <= flight.duration) return opacity;
+    return opacity * (1.0 - std::min(1.0, qreal(elapsed - flight.duration) / flight.tail));
+}
+
+void StageMotion::tick() {
+    m_now = m_clock.elapsed();
+    // Only where something changed: the layer is clear, so what is marked is drawn
+    // again in every region under it.
+    QRegion dirty;
+    bool moving = false;
+    for (auto running = m_flights.begin(); running != m_flights.end();) {
+        const Flight &flight = running->flight;
+        const qint64 elapsed = m_now - running->started;
+        if (!flight.stays && elapsed >= flight.duration + flight.tail) {
+            dirty += running->drawn;
+            running = m_flights.erase(running);
+            continue;
+        }
+        if (elapsed < 0) {
+            moving = true;
+            ++running;
+            continue;
+        }
+        const bool still = flight.stays && elapsed >= flight.duration;
+        if (!running->atRest) {
+            // Its ring and its edge's smoothing lie just outside the box.
+            const QRect box = boxOf(*running).toAlignedRect().adjusted(-3, -3, 3, 3);
+            dirty += running->drawn;
+            dirty += box;
+            running->drawn = box;
+        }
+        running->atRest = still;
+        moving = moving || !still;
+        ++running;
+    }
+    if (m_flights.isEmpty()) {
+        m_ticker.stop();
+        hide();
+        return;
+    }
+    if (!dirty.isEmpty()) update(dirty);
+    // What is left holds still until it is released or sent on, however long that is.
+    if (!moving) m_ticker.stop();
+}
+
+void StageMotion::paintEvent(QPaintEvent *event) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     for (const Running &running : std::as_const(m_flights)) {
         const Flight &flight = running.flight;
-        const qint64 elapsed = now - running.started;
-        if (elapsed < 0) continue;
-        const qreal t = std::clamp(qreal(elapsed) / std::max(1, flight.duration), 0.0, 1.0);
-        const qreal at = (flight.lively ? lively : soft).valueForProgress(t);
-        const QRectF box(flight.from.left() + (flight.to.left() - flight.from.left()) * at,
-                         flight.from.top() + (flight.to.top() - flight.from.top()) * at,
-                         flight.from.width() + (flight.to.width() - flight.from.width()) * at,
-                         flight.from.height() + (flight.to.height() - flight.from.height()) * at);
+        if (m_now < running.started || !event->region().intersects(running.drawn)) continue;
+        const QRectF box = boxOf(running);
         p.save();
-        qreal opacity = flight.fromOpacity + (flight.toOpacity - flight.fromOpacity) * t;
-        if (flight.tail > 0 && elapsed > flight.duration) opacity *= 1.0 - std::min(1.0, qreal(elapsed - flight.duration) / flight.tail);
-        p.setOpacity(opacity);
-        QPainterPath clip;
-        clip.addRoundedRect(box, flight.radius, flight.radius);
-        p.setClipPath(clip);
+        p.setOpacity(opacityOf(running));
+        if (flight.radius > 0) {
+            QPainterPath clip;
+            clip.addRoundedRect(box, flight.radius, flight.radius);
+            p.setClipPath(clip);
+        } else {
+            p.setClipRect(box);
+        }
         if (flight.image.isNull()) {
             p.fillRect(box, tokens::color(tokens::on));
         } else {
@@ -270,13 +387,65 @@ void StageMotion::paintEvent(QPaintEvent *) {
 
 namespace moves {
 
+namespace {
+
+// What is under way on `effect` gives way to what comes next; two at once would
+// fight over each frame, and the first to end would take the effect from the other.
+void stopFades(QGraphicsEffect *effect) {
+    const QList<QPropertyAnimation *> fades = effect->findChildren<QPropertyAnimation *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QPropertyAnimation *fade : fades) {
+        fade->stop();
+        fade->deleteLater();
+    }
+}
+
+// A widget drawn lower than it is, and how much of it shows.
+class RiseEffect final : public QGraphicsEffect {
+    Q_OBJECT
+    Q_PROPERTY(qreal offset READ offset WRITE setOffset)
+    Q_PROPERTY(qreal level READ level WRITE setLevel)
+public:
+    using QGraphicsEffect::QGraphicsEffect;
+    qreal offset() const { return m_offset; }
+    void setOffset(qreal offset) {
+        m_offset = offset;
+        updateBoundingRect();
+    }
+    qreal level() const { return m_level; }
+    void setLevel(qreal level) {
+        m_level = level;
+        update();
+    }
+    QRectF boundingRectFor(const QRectF &rect) const override { return rect.adjusted(0, 0, 0, std::ceil(m_offset)); }
+
+protected:
+    void draw(QPainter *painter) override {
+        if (m_level <= 0.0) return;
+        QPoint at;
+        const QPixmap shown = sourcePixmap(Qt::LogicalCoordinates, &at, NoPad);
+        if (shown.isNull()) return;
+        painter->save();
+        painter->setOpacity(painter->opacity() * m_level);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->translate(0, m_offset);
+        painter->drawPixmap(at, shown);
+        painter->restore();
+    }
+
+private:
+    qreal m_offset = 0.0;
+    qreal m_level = 0.0;
+};
+
+} // namespace
+
 void fadeIn(QWidget *widget, int delay, int duration) {
     const int length = ui::motionDuration(duration);
     if (!widget || length <= 0) return;
     auto *effect = new QGraphicsOpacityEffect(widget);
     effect->setOpacity(0.0);
     widget->setGraphicsEffect(effect);
-    auto *fade = new QPropertyAnimation(effect, "opacity", widget);
+    auto *fade = new QPropertyAnimation(effect, "opacity", effect);
     fade->setDuration(length);
     fade->setStartValue(0.0);
     fade->setEndValue(1.0);
@@ -290,20 +459,32 @@ void fadeIn(QWidget *widget, int delay, int duration) {
 void rise(QWidget *widget, int delay, int distance, int duration) {
     const int length = ui::motionDuration(duration);
     if (!widget || length <= 0) return;
-    const QPoint home = widget->pos();
-    widget->move(home + QPoint(0, distance));
-    auto *slide = new QPropertyAnimation(widget, "pos", widget);
+    auto *effect = new RiseEffect(widget);
+    effect->setOffset(distance);
+    widget->setGraphicsEffect(effect);
+    auto *slide = new QPropertyAnimation(effect, "offset", effect);
     slide->setDuration(length);
-    slide->setStartValue(home + QPoint(0, distance));
-    slide->setEndValue(home);
+    slide->setStartValue(qreal(distance));
+    slide->setEndValue(0.0);
     slide->setEasingCurve(tokens::easing());
-    QTimer::singleShot(delay, slide, [slide] { slide->start(QAbstractAnimation::DeleteWhenStopped); });
-    fadeIn(widget, delay, duration / 2);
+    auto *fade = new QPropertyAnimation(effect, "level", effect);
+    fade->setDuration(length / 2);
+    fade->setStartValue(0.0);
+    fade->setEndValue(1.0);
+    fade->setEasingCurve(QEasingCurve::OutCubic);
+    QObject::connect(slide, &QAbstractAnimation::finished, widget, [widget, effect] {
+        if (widget->graphicsEffect() == effect) widget->setGraphicsEffect(nullptr);
+    });
+    QTimer::singleShot(delay, effect, [slide, fade] {
+        slide->start(QAbstractAnimation::DeleteWhenStopped);
+        fade->start(QAbstractAnimation::DeleteWhenStopped);
+    });
 }
 
 void dim(QWidget *widget, qreal level, int duration) {
     if (!widget) return;
     auto *effect = qobject_cast<QGraphicsOpacityEffect *>(widget->graphicsEffect());
+    if (effect) stopFades(effect);
     const int length = ui::motionDuration(duration);
     if (length <= 0) {
         // Under reduced motion it takes the level at once.
@@ -324,7 +505,7 @@ void dim(QWidget *widget, qreal level, int duration) {
         effect->setOpacity(1.0);
         widget->setGraphicsEffect(effect);
     }
-    auto *fade = new QPropertyAnimation(effect, "opacity", widget);
+    auto *fade = new QPropertyAnimation(effect, "opacity", effect);
     fade->setDuration(length);
     fade->setStartValue(effect->opacity());
     fade->setEndValue(level);
@@ -340,3 +521,5 @@ void dim(QWidget *widget, qreal level, int duration) {
 } // namespace moves
 
 } // namespace kerf
+
+#include "stage_motion.moc"

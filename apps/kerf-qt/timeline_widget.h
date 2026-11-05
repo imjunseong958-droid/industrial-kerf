@@ -42,6 +42,7 @@
 #include <utility>
 
 class QAction;
+class QVariantAnimation;
 class QShortcut;
 
 namespace kerf {
@@ -552,6 +553,7 @@ private:
     double m_agentCursor = std::numeric_limits<double>::quiet_NaN();
     QSet<QString> m_focusClips;
     qreal m_focusLift = 0.0;
+    QVariantAnimation *m_focusRise = nullptr;
     double m_hoverFrame = -1.0;
     double m_zoom = 1.0;
     int m_fitWidth = 0;

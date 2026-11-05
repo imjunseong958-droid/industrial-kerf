@@ -26,17 +26,17 @@ repeating their numbers, so changing a value does not make it wrong.
 
 | Scene | When | What moves | Code | Test |
 |---|---|---|---|---|
-| Start window | It opens | Heading, box and ideas rise in turn | `HomeWindow::enter` | none |
+| Start window | It opens | Heading, box and ideas rise in turn | `HomeWindow::enter` | `aRiseLeavesTheLayoutAlone` |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
-| Picture arrives | The first clip or proposal | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `StageShell::transition` | `regionsMoveToANewArrangementWhenMotionIsOn` |
-| Cut builds | Each new clip in a proposal | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn` |
+| Picture arrives | The first clip or proposal | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
+| Cut builds | Each new clip in a proposal | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
 | First cut shows | A proposal on an empty program | Timeline shows it, read-only; the picture takes its format and renders it | `MainWindow::showProposedCut` | `aFirstCutShowsOnTheTimelineUntilItIsTheProgram`, `aProposedCutBringsItsOwnFormat` |
 | Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview` | none |
-| Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes` |
-| Versions | "Try 3 versions" | Picture fans into leaning posters; the timeline falls back | `MainWindow::showCompare`, `CompareView::placeCards` | `versionsRunSideBySideAndOneIsUsed`, `versionCardsTakeThePicturesShape` |
-| Pick a version | "Use this" | The card goes to the picture and gives way to it; the others fall | `MainWindow::useVersion`, `CompareView::playPick` | `anUnusedCardKeepsItsPosterWhenTheStateChanges` |
-| Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | none |
+| Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
+| Versions | "Try 3 versions" | Picture fans into leaning posters; the timeline falls back | `MainWindow::showCompare`, `CompareView::placeCards` | `versionsRunSideBySideAndOneIsUsed`, `versionCardsTakeThePicturesShape`, `aCardOnItsWayGoesOn` |
+| Pick a version | "Use this" | The card goes to the picture and gives way to it; the others fall | `MainWindow::useVersion`, `CompareView::playPick` | `anUnusedCardKeepsItsPosterWhenTheStateChanges`, `aPickedCardIsNotCalledBack` |
+| Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
 
 "none" means it has only been checked in a real window. Motion can only be judged
@@ -53,7 +53,7 @@ Look here before writing a new animation.
 | Something to hold a place until the real thing comes | `Flight::stays`, ended by `releaseStaying` |
 | A stand-in for the picture | `Flight::fit`, so it shows footage as the render will |
 | Something to fade in where it is | `moves::fadeIn` |
-| Something to rise into place, outside a layout | `moves::rise` |
+| Something to rise into place, in a layout or not | `moves::rise` |
 | A region to fall back | `moves::dim` |
 | The timeline to fall back or come in | `StageShell::veilTimeline` (`moves::dim` does not work on it) |
 | A duration, stagger or distance | A name in `tokens::motion`, added there if none fits |
@@ -67,9 +67,38 @@ Look here before writing a new animation.
 3. Decide what shows while anything slow is happening.
 4. Check it in **16:9 and 9:16**, and from an empty project as well as one with a cut.
 5. Check it with Reduce Motion on, and test the end state without motion.
-6. Keep a frame's work small. Avoid a new `QGraphicsEffect` on a large region, and
-   anything that re-renders every tick.
+6. Keep a frame's work small: see **What a frame costs**.
 7. Update the **Scenes** table here in the same change.
+
+## What a frame costs
+
+The editor paints on the CPU, and everything clear over what changes is drawn again
+with it. So:
+
+- **Mark only what changed**, not the widget: `StageMotion::tick` marks where a flight
+  was and is, `StageShell::updateRoom` the room's lit part, `ViewerWidget::updateLine`
+  what a line crossed. `motionLeavesNothingBehind` fails if too little is marked.
+- **Nothing holding still draws frames.** A stand-in that has landed stops the ticker,
+  however long its render takes.
+- **Prepare an image once, when it starts moving** (`readyToMove`): no bigger than it
+  is shown, in `RGB32` or premultiplied `ARGB32`. Never scale one in `paintEvent` per
+  frame; the picture on the move draws what it has (`ViewerWidget::setStageMoving`).
+- **A long animation changes what can be seen, not every tick.** The working chip draws
+  `workPulseSteps` a pulse, the light follows only changes of `lightLeast`.
+- **One motion per property.** A new one takes over from the last, from where it has
+  got to (`moves::dim`, `CompareView::placeCards`). Two at once fight over each frame.
+- **Every start has its end**, also when cut short: `transitionFinished` always follows
+  `transitionStarted`.
+- Avoid a new `QGraphicsEffect` on a large region: it draws all of it again each frame.
+
+To measure, from the repository root:
+
+```sh
+KERF_MOTION_COSTS=1 QT_SCALE_FACTOR=2 target/qt/kerf-qt-tests -platform offscreen whatEachSceneCosts
+```
+
+This reads a frame's paint and the process's CPU, on the offscreen platform, so it
+compares one build with another and leaves out putting the frame on a display.
 
 ## Known limits
 
@@ -78,4 +107,7 @@ Look here before writing a new animation.
   that is all new has nothing to compare, so it has no wipe.
 - `Going home` follows the turn that called `render`, not that render finishing.
 - Stand-ins are posters, so they are soft until the render arrives.
-- Screenshots do not show whether motion is smooth. It has not been measured.
+- Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
+  it costs, not how it looks. Only a real window shows that.
+- The conversation lays its text out again in each frame it changes width
+  (about 2 ms a frame, more with a long conversation).
