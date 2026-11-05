@@ -5,8 +5,11 @@
 
 .DESCRIPTION
     Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools,
-    CMake, Qt for MSVC with its bin folder on PATH (for windeployqt), a shared build
-    of FFmpeg in FFMPEG_DIR, and LIBCLANG_PATH for its bindings.
+    CMake, Qt for MSVC with its bin folder on PATH (for windeployqt), a shared GPL
+    build of FFmpeg in FFMPEG_DIR, and LIBCLANG_PATH for its bindings.
+
+    The FFmpeg build makes the package GPL, so it may only be given to anyone with
+    its source: scripts/collect-kerf-windows-sources.sh makes that, of this commit.
 
     The package finds everything beside kerf-qt.exe. It is run once with nothing else
     on PATH, so a library that was left out stops the package here and not on someone
@@ -65,6 +68,22 @@ if (-not $FfmpegDir -or -not (Test-Path (Join-Path $FfmpegDir 'bin\ffmpeg.exe'))
 $windeployqt = (Get-Command windeployqt -ErrorAction SilentlyContinue).Source
 if (-not $windeployqt) { throw 'windeployqt not found: put the bin folder of Qt for MSVC on PATH' }
 
+# What the package says about its licence and its source has to hold.
+$ffmpegBuild = & (Join-Path $FfmpegDir 'bin\ffmpeg.exe') -hide_banner -buildconf
+if ($LASTEXITCODE -ne 0) { throw 'The FFmpeg build did not run' }
+if ($ffmpegBuild -match '--enable-nonfree') { throw 'This FFmpeg build is nonfree, and may not be given to anyone' }
+if (-not ($ffmpegBuild -match '--enable-gpl') -or -not ($ffmpegBuild -match '--enable-version3')) {
+    throw 'THIRD-PARTY.txt and SOURCE.txt describe a GPL version 3 build of FFmpeg, and this is not one'
+}
+$gplText = Join-Path $FfmpegDir 'LICENSE.txt'
+if (-not (Test-Path $gplText) -or -not (Select-String -Path $gplText -Quiet -Pattern 'GNU GENERAL PUBLIC LICENSE')) {
+    throw "No GPL text at $gplText"
+}
+if (& git -C $root status --porcelain --untracked-files=no) {
+    throw 'Commit first: the package names the commit its source comes from'
+}
+$commit = & git -C $root rev-parse HEAD
+
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $name = "Industrial-Kerf-$version-windows-x64"
 $build = Join-Path $root 'target/qt-package'
@@ -109,8 +128,20 @@ try {
     Copy-Item licenses (Join-Path $stage 'licenses') -Recurse
     New-Item -ItemType Directory -Path (Join-Path $stage 'fonts') | Out-Null
     Copy-Item apps/kerf-qt/resources/fonts/*-LICENSE.txt (Join-Path $stage 'fonts')
-    $ffmpegLicense = Join-Path $FfmpegDir 'LICENSE'
-    if (Test-Path $ffmpegLicense) { Copy-Item $ffmpegLicense (Join-Path $stage 'FFmpeg-LICENSE.txt') }
+    Copy-Item $gplText (Join-Path $stage 'COPYING-GPLv3.txt')
+    $ffmpegBuild | Set-Content -Path (Join-Path $stage 'FFmpeg-BUILD.txt') -Encoding utf8
+    $qtVersion = (Get-Item (Join-Path $stage 'Qt6Core.dll')).VersionInfo.ProductVersion
+    @"
+Industrial Kerf $version for Windows, from commit $commit.
+Its source: https://github.com/imjunseong958-droid/industrial-kerf
+
+This package is under the GNU General Public License version 3 (COPYING-GPLv3.txt),
+and you have the right to its complete source. That is $name-source.tar, published
+beside this package wherever you got it. It holds Kerf and its Rust crates, FFmpeg,
+each library built into FFmpeg, the scripts that built them, and Qt $qtVersion.
+
+Which licence covers which part is in THIRD-PARTY.txt.
+"@ | Set-Content -Path (Join-Path $stage 'SOURCE.txt') -Encoding utf8
 
     if (-not $SkipRun) {
         # With nothing else on PATH, it has to find all it needs beside itself.

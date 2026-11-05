@@ -128,16 +128,18 @@ jobs:
       # kerf-runtime reaches libav through kerf-engine and kerf-compose
       # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
       # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
-      # a pinned shared build; its DLLs go on PATH for the tests.
+      # a pinned shared build; its DLLs go on PATH for the tests. The build the
+      # Windows package carries (windows-package.yml), so that is what is tested.
       - name: Install FFmpeg
         shell: pwsh
         run: |
-          $version = '9.0.2'
-          $sha256 = '4d2060a8b34a940aa47d785142055bb92a63053781e55f2ace4546edd519a8f5'
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.7z'
+          $build = 'autobuild-2026-09-30-13-08'
+          $name = 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0'
+          $sha256 = '3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
-          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$version/ffmpeg-$version-full_build-shared.7z" -OutFile $archive
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $version archive does not match its checksum" }
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $name archive does not match its checksum" }
           7z x $archive "-o$target" | Out-Null
           $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
           "FFMPEG_DIR=$root" >> $env:GITHUB_ENV

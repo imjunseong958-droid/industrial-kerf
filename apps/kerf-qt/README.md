@@ -25,9 +25,14 @@ On macOS the build is an application bundle, `target/qt/kerf-qt.app`
 
 On Windows, `scripts/package-kerf-windows.ps1` makes a zip that runs on its own:
 the editor, `kerfd`, `kerf`, `kerf-mcp`, and the Qt, FFmpeg and C++ runtime libraries
-beside them. The script's help says what it needs; the **Windows package** workflow
-runs it and keeps the zip as an artifact. The package is a folder, with no
+beside them. The script's help says what it needs. The package is a folder, with no
 installer, so Windows does not open `kerf://` links with it.
+
+Its FFmpeg build makes the package GPL version 3, so publish it only together with
+its complete source, from `scripts/collect-kerf-windows-sources.sh`, and keep that
+available for as long as the package is. The **Windows package** workflow makes both,
+from one commit, as artifacts, and publishes neither. It takes that FFmpeg from
+BtbN's builds because they pin the commit of each library in them.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the

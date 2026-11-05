@@ -1,15 +1,17 @@
-Industrial Kerf is MIT licensed (LICENSE). This package also carries the
-following, unmodified, each under its own terms.
+What this package carries, and on what terms. SOURCE.txt says where the source of
+all of it is.
 
-Qt 6 (the Qt*.dll files and the plugins folders)
-  LGPL-3.0, dynamically linked.
-  https://www.qt.io/licensing  Source: https://download.qt.io/official_releases/qt/
+Industrial Kerf's own code
+  MIT (LICENSE.txt). The package as a whole is under the GNU GPL version 3, as it
+  joins that code with the GPL build of FFmpeg below (COPYING-GPLv3.txt).
 
 FFmpeg (ffmpeg.exe, ffprobe.exe, and the av*, sw* and postproc DLLs)
-  The terms depend on the build this package was made from. A build with
-  GPL parts, such as libx264, is GPL-licensed as a whole.
-  FFmpeg-LICENSE.txt is the licence the build came with, when it had one.
-  https://ffmpeg.org/legal.html  Source: https://ffmpeg.org/download.html
+  This build is GPL version 3, with libx264 and the other libraries built into it.
+  FFmpeg-BUILD.txt lists how it was configured.
+
+Qt 6 (the Qt*.dll files and the plugin folders)
+  LGPL version 3, dynamically linked. You may replace these files with your own
+  build of the same Qt version.
 
 Microsoft Visual C++ Runtime (msvcp140*.dll, vcruntime140*.dll, concrt140.dll)
   Redistributable under the Visual Studio licence terms.
