@@ -63,6 +63,14 @@ void MainWindow::buildAgentViews() {
         m_reelBar->update(m_playhead);
         const bool active = m_changeReel->isActive();
         if (!active) m_seekLimit = 0.0;
+        // Back from watching a cut that is only a proposal, the picture is still of it.
+        if (m_reelWasActive && !active && m_timeline->showsProposedCut()) {
+            m_previewedCut.clear();
+            m_cutPreview.start();
+            if (const ReviewModel::Proposal *shown = m_reviewWiring->model()->proposal(m_proposalId); shown && !shown->changes.isEmpty())
+                coverPicture(posterForClip(shown->changes.constFirst().clip));
+        }
+        m_reelWasActive = active;
         // The strip has its own Exit.
         quietenCutPreview();
         // The conversation falls back while the picture is looked at.
@@ -115,6 +123,7 @@ void MainWindow::buildAgentViews() {
         if (m_cutRendering) return;
         m_previewedCut = m_proposalId;
         m_cutRendering = m_reviewWiring->preview(m_proposalId, true);
+        quietenCutPreview();
     });
     connect(m_changeReel, &ChangeReel::changed, this, &MainWindow::followReelCompare);
     connect(m_bus, &EditorBus::event, this, [this](const QString &type, const QJsonObject &event) {
@@ -203,6 +212,7 @@ void MainWindow::coverPicture(const QImage &image) {
     cover.duration = 320;
     cover.lively = false;
     cover.stays = true;
+    cover.fit = true;
     cover.radius = tokens::layout::pictureRadius;
     m_motion->fly(cover);
     m_viewer->lightFrom(image);
@@ -315,6 +325,12 @@ void MainWindow::showProposedCut() {
     if (!showing && !m_timeline->showsProposedCut()) return;
     m_proposedDuration = end;
     m_timeline->setShowsProposedCut(showing);
+    // The picture has the shape of what it is showing.
+    const QSize canvas = resolvedCanvasSize(showing ? proposed : m_project, m_project.value(QStringLiteral("sources")).toArray());
+    m_viewer->setProjectInfo(canvas.width(), canvas.height());
+    m_shell->setAspect(m_viewer->pictureAspect());
+    m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
+    syncCanvasPreset(canvas);
     if (!showing) {
         m_cutPreview.stop();
         m_previewedCut.clear();
@@ -334,7 +350,7 @@ void MainWindow::quietenCutPreview() {
     const bool quiet = m_agentBusy && m_timeline->showsProposedCut();
     m_stageWiring->previewChip()->setSuppressed(quiet || m_changeReel->isActive());
     // The reel's strip already says it is getting the picture.
-    m_stageWiring->hud()->setQuiet(quiet || m_changeReel->isActive());
+    m_stageWiring->hud()->setQuiet(quiet || m_cutRendering || m_changeReel->isActive());
     m_chat->setHoldingProposals(quiet || m_shell->compareShown());
     if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_versionsRunning && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
 }
@@ -537,6 +553,7 @@ void MainWindow::showCompare(bool shown) {
 void MainWindow::refreshCompare() {
     if (!m_compare) return;
     ReviewModel *review = m_reviewWiring->model();
+    m_compare->setUpright(!stage::isWide(m_viewer->pictureAspect()));
     QList<CompareView::Version> versions;
     for (const VersionRun &run : std::as_const(m_versionRuns)) {
         CompareView::Version version;

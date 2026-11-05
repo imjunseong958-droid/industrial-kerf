@@ -1772,6 +1772,7 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             m_cutRendering = false;
             // The render is the picture now, if it is of the latest.
             if (m_proposalId == m_previewedCut) m_motion->releaseStaying();
+            quietenCutPreview();
             if (m_timeline->showsProposedCut() && m_proposalId != m_previewedCut) m_cutPreview.start();
         }
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
@@ -1842,10 +1843,13 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_timeline->setSelectedClips(m_selectedClips);
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     const QSize canvasSize = resolvedCanvasSize(m_project, sources);
-    m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
-    // A format change lays out again at once.
-    m_shell->setAspect(m_viewer->pictureAspect());
-    m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
+    // A format change lays out again at once. A first cut still being proposed has
+    // its own format, which stays until the next look at it (showProposedCut).
+    if (!m_timeline->showsProposedCut()) {
+        m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
+        m_shell->setAspect(m_viewer->pictureAspect());
+        m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
+    }
     applyPanes();
     syncCanvasPreset(canvasSize);
     m_artwork->request(sources, m_projectDirectory);

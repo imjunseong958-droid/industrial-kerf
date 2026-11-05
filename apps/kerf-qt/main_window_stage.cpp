@@ -253,6 +253,7 @@ void MainWindow::followContentWithPanes() {
         grow.lively = false;
         // It holds the place until the first frame is there.
         grow.stays = true;
+        grow.fit = true;
         grow.radius = tokens::layout::pictureRadius;
         grow.duration = tokens::motion::stage;
         m_motion->fly(grow);

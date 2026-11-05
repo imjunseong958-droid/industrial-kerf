@@ -1035,6 +1035,67 @@ private slots:
         QCOMPARE(window.m_proposedDuration, 0.0);
     }
 
+    void theStripSitsOnAnUprightPicture() {
+        stage::Panes panes;
+        panes.reel = true;
+        const stage::Rects r = stage::rects(QSize(1600, 1000), 9.0 / 16.0, 40, panes);
+        // Narrower than the strip, the picture has it centred across it.
+        QVERIFY(r.picture.width() < r.reel.width() + 24);
+        QVERIFY(qAbs(r.reel.center().x() - r.picture.center().x()) <= 1);
+        QCOMPARE(r.reel.top(), r.picture.top() + 12);
+        QVERIFY(r.slot.contains(r.reel));
+    }
+
+    void versionCardsTakeThePicturesShape() {
+        CompareView view;
+        view.resize(820, 560);
+        QVERIFY(view.cardRect(0, 3).height() < view.cardRect(0, 3).width() * 1.5);
+        view.setUpright(true);
+        const QRect upright = view.cardRect(0, 3);
+        QVERIFY(upright.height() > upright.width() * 1.7);
+        QVERIFY(view.rect().contains(view.cardRect(2, 3)));
+    }
+
+    void anUnusedCardKeepsItsPosterWhenTheStateChanges() {
+        CompareView view;
+        view.resize(820, 560);
+        QImage poster(16, 9, QImage::Format_RGB32);
+        poster.fill(Qt::red);
+        CompareView::Version version;
+        version.key = QStringLiteral("A");
+        version.poster = poster;
+        view.setVersions({version});
+        version.poster = QImage();
+        view.setVersions({version});
+        QVERIFY(view.findChild<ComparePoster *>()->hasImage());
+    }
+
+    void aProposedCutBringsItsOwnFormat() {
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QJsonObject empty = snapshotOf(QSize(1920, 1080));
+        QJsonObject timeline = empty.value(QStringLiteral("timeline")).toObject();
+        QJsonObject upright = timeline;
+        upright.insert(QStringLiteral("width"), 1080);
+        upright.insert(QStringLiteral("height"), 1920);
+        timeline.insert(QStringLiteral("tracks"), QJsonArray{});
+        empty.insert(QStringLiteral("timeline"), timeline);
+        empty.insert(QStringLiteral("duration"), 0.0);
+        window.applySnapshot(empty);
+        QVERIFY(stage::isWide(window.m_viewer->pictureAspect()));
+        empty.insert(QStringLiteral("proposalTimelines"), QJsonObject{{QStringLiteral("p1"), upright}});
+        window.m_proposalId = QStringLiteral("p1");
+        window.m_snapshot = empty;
+        window.showProposedCut();
+        QVERIFY(!stage::isWide(window.m_viewer->pictureAspect()));
+        // Another look at the program does not take it back while the cut is shown.
+        window.m_snapshot = empty;
+        window.showProposedCut();
+        QVERIFY(!stage::isWide(window.m_viewer->pictureAspect()));
+    }
+
     void theRoomHasNoLineAndThePictureFloats() {
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
@@ -1078,7 +1139,7 @@ private slots:
         // The stage reaches over the conversation, with the strip over the picture.
         QCOMPARE(r.conversation, QRect(240, 40, 400, 960));
         QCOMPARE(r.slot, QRect(520, 40, 1080, 608));
-        QCOMPARE(r.reel, QRect(532, 52, 460, 40));
+        QCOMPARE(r.reel, QRect(553, 64, 460, 40));
         QCOMPARE(r.timeline.left(), 520);
     }
 

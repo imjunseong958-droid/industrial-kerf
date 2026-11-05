@@ -38,6 +38,8 @@ public:
         bool lively = true;
         // Stays where it lands until released.
         bool stays = false;
+        // Shown whole on black, as the picture shows its footage, not filling its box.
+        bool fit = false;
         // Once landed it holds this long and fades, over what it became.
         int tail = 0;
         // The clip's name, on it, and a ring of light as it lands.

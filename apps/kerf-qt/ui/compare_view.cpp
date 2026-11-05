@@ -36,6 +36,8 @@ constexpr int kMargin = 16;
 constexpr int kGap = 14;
 constexpr int kCardWidth = 250;
 constexpr qreal kCardShape = 1.36;
+constexpr int kUprightCardWidth = 216;
+constexpr qreal kUprightCardShape = 1.78;
 constexpr qreal kTilt = 1.5;
 constexpr int kFan = 850;
 constexpr int kStagger = 110;
@@ -125,6 +127,11 @@ void ComparePoster::setImage(const QImage &image) {
     update();
 }
 
+void ComparePoster::setPlain(bool plain) {
+    m_plain = plain;
+    update();
+}
+
 void ComparePoster::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -138,6 +145,7 @@ void ComparePoster::paintEvent(QPaintEvent *) {
         shown.scale(size(), Qt::KeepAspectRatioByExpanding);
         p.drawImage(QRect(QPoint((width() - shown.width()) / 2, (height() - shown.height()) / 2), shown), m_image);
     }
+    if (m_plain) return;
     // What is written on it stays readable.
     QLinearGradient foot(0, height() * 0.35, 0, height());
     foot.setColorAt(0.0, QColor(0, 0, 0, 0));
@@ -209,7 +217,15 @@ CompareView::Card &CompareView::cardFor(const QString &key, bool *made) {
     return *m_byKey.insert(key, card);
 }
 
+void CompareView::setUpright(bool upright) {
+    if (upright == m_upright) return;
+    m_upright = upright;
+    placeCards(false);
+}
+
 void CompareView::setVersions(const QList<Version> &versions) {
+    // The one chosen is on its way: what it is now does not change that.
+    if (m_picking) return;
     QStringList keys;
     bool fresh = false;
     for (const Version &version : versions) {
@@ -223,7 +239,8 @@ void CompareView::setVersions(const QList<Version> &versions) {
             card.frame->show();
         }
         card.proposal = version.proposalId;
-        card.poster->setImage(version.poster);
+        // Once it has a picture it keeps one.
+        if (!version.poster.isNull()) card.poster->setImage(version.poster);
         QString status = version.status;
         if (status.isEmpty()) {
             switch (version.state) {
@@ -257,8 +274,9 @@ QRect CompareView::cardRect(int index, int count) const {
     const int shown = std::max(1, count);
     const int room = std::max(1, width() - 2 * kMargin - (shown - 1) * kGap);
     const int tall = std::max(1, height() - 2 * kMargin);
-    const int w = std::min({kCardWidth, room / shown, int(tall / kCardShape)});
-    const int h = std::min(tall, int(w * kCardShape));
+    const qreal cardShape = m_upright ? kUprightCardShape : kCardShape;
+    const int w = std::min({m_upright ? kUprightCardWidth : kCardWidth, room / shown, int(tall / cardShape)});
+    const int h = std::min(tall, int(w * cardShape));
     const int left = (width() - (shown * w + (shown - 1) * kGap)) / 2;
     return QRect(left + index * (w + kGap), (height() - h) / 2, w, h);
 }
@@ -287,19 +305,30 @@ void CompareView::playPick(const QString &proposalId, const QRect &to, std::func
         done();
         return;
     }
+    m_picking = true;
     for (const QString &key : std::as_const(m_keys)) {
         const Card &card = m_byKey[key];
         CardLean *effect = leanOf(card.frame);
         if (card.proposal == proposalId) {
             card.frame->raise();
+            // Only its picture goes on, and gives way to the real one as it lands.
+            for (QWidget *part : card.frame->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+                if (part != card.poster) part->hide();
+            card.poster->setPlain(true);
             glide(card.frame, to, 0, duration);
-            if (effect) ease(effect, "angle", 0.0, 0, duration);
+            if (effect) {
+                ease(effect, "angle", 0.0, 0, duration);
+                ease(effect, "level", 0.0, duration * 7 / 10, duration * 3 / 10);
+            }
         } else {
             glide(card.frame, card.frame->geometry().translated(0, 80), 0, duration);
             if (effect) ease(effect, "level", 0.0, 0, duration / 2);
         }
     }
-    QTimer::singleShot(duration, this, [done = std::move(done)] { done(); });
+    QTimer::singleShot(duration, this, [this, done = std::move(done)] {
+        m_picking = false;
+        done();
+    });
 }
 
 QStringList CompareView::keys() const { return m_keys; }

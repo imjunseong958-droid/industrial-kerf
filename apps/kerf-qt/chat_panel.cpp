@@ -933,6 +933,9 @@ void ChatPanel::rebuild() {
         addThread(widget);
     }
     placeLocalRows(first);
+    // What is said later comes after the note, and the footage stays last.
+    if (m_versionsNote) m_listLayout->insertWidget(std::min(m_versionsNoteAt, int(m_threads.size())), m_versionsNote);
+    if (m_footage) m_listLayout->insertWidget(int(m_threads.size()) + (m_versionsNote ? 1 : 0), m_footage);
     updateCounts();
     updateHeader();
     // The people and notes the composer offers follow the review.
@@ -1075,7 +1078,8 @@ void ChatPanel::setVersionsNote(const QString &request, const QString &answer) {
         line->setLook(CommentRow::Look::Answer);
         note->addReply(line);
         note->setRepliesShown(true);
-        m_listLayout->insertWidget(int(m_threads.size()), note);
+        m_versionsNoteAt = int(m_threads.size());
+        m_listLayout->insertWidget(m_versionsNoteAt, note);
         note->show();
         m_versionsNote = note;
         moves::fadeIn(note);
@@ -1097,7 +1101,7 @@ void ChatPanel::setFootage(const QList<FootageTile> &tiles) {
     }
     if (!m_footage) {
         m_footage = new FootageSheet(m_content);
-        m_listLayout->insertWidget(int(m_threads.size()), m_footage);
+        m_listLayout->insertWidget(int(m_threads.size()) + (m_versionsNote ? 1 : 0), m_footage);
     }
     m_footage->setTiles(tiles);
     m_footage->show();

@@ -253,9 +253,10 @@ void StageMotion::paintEvent(QPaintEvent *) {
         if (flight.image.isNull()) {
             p.fillRect(box, tokens::color(tokens::on));
         } else {
-            // It fills its box, as a clip's poster does.
+            // It fills its box, as a clip's poster does, unless it stands in for the picture.
+            if (flight.fit) p.fillRect(box, Qt::black);
             QSizeF shown = flight.image.size();
-            shown.scale(box.size(), Qt::KeepAspectRatioByExpanding);
+            shown.scale(box.size(), flight.fit ? Qt::KeepAspectRatio : Qt::KeepAspectRatioByExpanding);
             p.drawImage(QRectF(box.center() - QPointF(shown.width(), shown.height()) / 2.0, shown), flight.image);
         }
         if (!flight.label.isEmpty()) paintTileLabel(p, box, flight.label);

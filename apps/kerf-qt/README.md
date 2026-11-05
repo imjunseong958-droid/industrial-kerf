@@ -203,7 +203,7 @@ region are clear over it, so the picture floats. Kerf's footage gathers as named
 in the conversation; the first grows into the picture over the conversation as it
 gives way, the timeline comes in out of the room, and each tile flies to its lane
 while the picture becomes that clip. While a first cut is only a proposal the timeline
-shows it, read-only, and its preview follows. Watching what changed, what the picture
+shows it, read-only, the picture takes its format, and its preview follows. Watching what changed, what the picture
 was wipes to and fro over what it now is, with the changed clips lifted off their
 lanes; versions are posters a little askew, fanned out from the picture over the
 timeline; and when Kerf has rendered what was asked, the picture goes back into the

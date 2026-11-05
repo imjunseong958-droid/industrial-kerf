@@ -40,12 +40,15 @@ public:
     explicit ComparePoster(QWidget *parent = nullptr);
     void setImage(const QImage &image);
     bool hasImage() const { return !m_image.isNull(); }
+    // Nothing written on it: it is about to be the picture.
+    void setPlain(bool plain);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
     QImage m_image;
+    bool m_plain = false;
 };
 
 class CompareView final : public QWidget {
@@ -71,6 +74,8 @@ public:
     ui::IconButton *closeButton() const { return m_close; }
     // Where the cards fan out from, in this widget's coordinates: the picture.
     void setOrigin(const QRect &origin) { m_origin = origin; }
+    // Upright cards for an upright picture.
+    void setUpright(bool upright);
     // Where each card rests.
     QRect cardRect(int index, int count) const;
     // The card of `proposalId` flies to `to` and the others fall away; `done`
@@ -101,6 +106,8 @@ private:
 
     ui::IconButton *m_close = nullptr;
     QRect m_origin;
+    bool m_upright = false;
+    bool m_picking = false;
     QStringList m_keys;
     QHash<QString, Card> m_byKey;
 };

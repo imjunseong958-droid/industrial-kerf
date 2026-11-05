@@ -444,6 +444,7 @@ private:
     void showCompare(bool shown);
     void followReelCompare();
     QString m_reelCompareAt;
+    bool m_reelWasActive = false;
     QString m_lastVersionsRequest;
     void quietenCutPreview();
     void flyChange(const ReviewModel::ClipChange &change, int index);
