@@ -962,6 +962,53 @@ fn look_shows_no_more_frames_than_a_model_receives() {
 }
 
 #[test]
+fn scopes_read_the_program_and_what_a_proposal_would_make_of_it() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let read = |arguments: Value| {
+        let result = ok(&router, "look", arguments);
+        assert!(result.get("frames").is_none(), "numbers, not pictures");
+        result["readings"][0]["scopes"].clone()
+    };
+    let before = read(json!({"at": ["1s"], "scopes": true}));
+    assert!(before["luma"]["mean"].as_f64().unwrap() > 1.0, "{before}");
+    assert_eq!(before["histogram"].as_array().unwrap().len(), 16);
+    assert!(before["zones"]["midtones"].as_f64().is_some());
+    assert!(before["chroma"]["saturation"].as_f64().is_some());
+    assert!(before["clipped"]["white"].as_array().is_some());
+
+    let edit = ok(
+        &router,
+        "edit",
+        json!({"script": "fx c1 add color.basic saturation=0"}),
+    );
+    let proposal = edit["proposal"]["id"]
+        .as_str()
+        .or_else(|| edit["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{edit}"));
+    let after = read(json!({"at": ["1s"], "scopes": true, "proposal": proposal}));
+    let saturation = |reading: &Value| reading["chroma"]["saturation"].as_f64().unwrap();
+    assert!(
+        saturation(&after) < saturation(&before) - 50.0,
+        "{before} {after}"
+    );
+
+    for refused in [
+        json!({"scopes": true}),
+        json!({"scopes": true, "at": ["1s"], "media": "m1"}),
+        json!({"scopes": true, "at": ["1s"], "transcript": true}),
+        json!({"scopes": true, "at": ["99s"]}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;

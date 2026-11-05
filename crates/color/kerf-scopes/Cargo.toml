@@ -1,0 +1,14 @@
+[package]
+name = "kerf-scopes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Video scopes as numbers, for grading by measuring"
+
+# Reading a frame this way is carried from FilmCraft's scopes (see licenses/README.md).
+[dependencies]
+kerf-color = { path = "../../foundation/kerf-color" }
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -24,7 +24,8 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `edit` | What a timeline does beyond its model: interchange, sharing | `kerf-interchange`, `kerf-collab` |
 | 2 | `effects` | The effects carried from FilmCraft and EffectCraft, all areas together | `kerf-fx`, `kerf-raster-fx` |
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
-| 2 | `color`, `motion`, `vfx` | Reserved: each gets its folder with its first crate | |
+| 2 | `color` | Measuring a grade; the grading effects themselves are in `effects` for now | `kerf-scopes` |
+| 2 | `motion`, `vfx` | Reserved: each gets its folder with its first crate | |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
 | 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher` |
 
@@ -138,10 +139,14 @@ fades, with effects and buses. A timeline's own tools stay in `kerf-model` and
 Has: Lumetri, curves, levels, Hue/Saturation, Selective Color, CDL, LUTs, Auto
 corrections.
 
-To add: **scopes first**, carried from EffectCraft's `scopes.rs`, and given to the
-agent as numbers through `look` so that it can grade by measuring, which a person
-cannot do. Then color management (needs deep input), the Lumetri presets, and layered
-grades as stacked effects.
+`crates/color/kerf-scopes` reads a frame as a colorist reads scopes, and `look` gives the
+agent the numbers (`scopes: true`), so that it can grade by measuring: levels, clipping,
+tonal zones, a histogram, the cast, saturation, the skin tone line, and the densest colors.
+Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
+also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
+
+To add: color management (needs deep input), the Lumetri presets (cut in `6eafef8`), and
+layered grades as stacked effects.
 
 ### Motion
 
