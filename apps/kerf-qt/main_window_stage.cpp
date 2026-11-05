@@ -243,6 +243,8 @@ void MainWindow::refreshSidebar() {
         current = review->currentThread();
         for (const ReviewModel::Thread &thread : review->allThreads()) {
             if (thread.origin == ReviewModel::Origin::Welcome) continue;
+            // A proposal joins its conversation when the turn that staged it ends.
+            if (thread.origin == ReviewModel::Origin::Proposal && m_agentBusy) continue;
             ProjectSidebar::Conversation conversation;
             conversation.id = thread.id;
             conversation.title = thread.root.body.section(QLatin1Char('\n'), 0, 0).trimmed();
@@ -267,14 +269,19 @@ void MainWindow::startWith(const QString &request, bool importFolder) {
 }
 
 void MainWindow::runStart() {
-    if (!m_connected || m_snapshot.isEmpty()) return;
+    // Kerf is at work on something else: this keeps until the next snapshot.
+    if (!m_connected || m_snapshot.isEmpty() || m_agentBusy) return;
     if (m_startImport) {
         m_startImport = false;
         const QDir folder(m_projectDirectory);
         const QStringList files = folder.entryList({QStringLiteral("*.mov"), QStringLiteral("*.mp4"), QStringLiteral("*.m4v"), QStringLiteral("*.mkv"),
                                                     QStringLiteral("*.webm"), QStringLiteral("*.wav"), QStringLiteral("*.mp3")},
                                                    QDir::Files, QDir::Name);
-        for (const QString &file : files) execute(QStringLiteral("file.import"), QJsonObject{{QStringLiteral("path"), folder.absoluteFilePath(file)}});
+        // Into the project's media, with the timeline left for Kerf.
+        for (const QString &file : files)
+            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("import")},
+                                   {QStringLiteral("path"), folder.absoluteFilePath(file)},
+                                   {QStringLiteral("mediaOnly"), true}});
         if (!files.isEmpty()) addActivity(QStringLiteral("import"), QStringLiteral("Importing %1 files from the folder").arg(files.size()));
     }
     if (m_startRequest.isEmpty()) return;

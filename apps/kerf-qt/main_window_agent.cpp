@@ -19,6 +19,7 @@
 #include "media_artwork.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/review_wiring.h"
+#include "wiring/stage_wiring.h"
 
 #include <QJsonArray>
 #include <QSet>
@@ -43,7 +44,8 @@ void MainWindow::buildAgentViews() {
         queueSeek(seconds);
     };
     host.play = [this](bool playing) {
-        if (playing == m_playing || !m_connected) return;
+        // Always said: a pause and a play in a row outrun m_playing.
+        if (!m_connected) return;
         sendSimple(QJsonObject{{QStringLiteral("type"), playing ? QStringLiteral("play") : QStringLiteral("pause")}});
     };
     m_changeReel = new ChangeReel(std::move(host), this);
@@ -53,6 +55,8 @@ void MainWindow::buildAgentViews() {
         m_reelBar->update(m_playhead);
         const bool active = m_changeReel->isActive();
         if (!active) m_seekLimit = 0.0;
+        // The strip has its own Exit.
+        m_stageWiring->previewChip()->setSuppressed(active);
         stage::Panes panes = m_shell->panes();
         panes.reel = active;
         if (active) panes.picture = true;
@@ -84,6 +88,7 @@ void MainWindow::setFollowKerf(bool follow) {
 
 void MainWindow::showAgentAt(double seconds) {
     if (seconds < 0.0) return;
+    if (m_versionsRunning) return;
     m_timeline->setAgentCursor(seconds);
     if (!m_followKerf || m_playing || m_changeReel->isActive() || m_duration <= 0.0) return;
     queueSeek(seconds);
@@ -104,8 +109,8 @@ void MainWindow::followAgentFocus(const QJsonObject &event) {
 
 void MainWindow::followLiveProposal() {
     ReviewModel *review = m_reviewWiring->model();
-    if (!m_agentBusy || !review) return;
-    // A version's proposals grow on their own cards: the timeline shows one.
+    // Versions grow on their own cards, with no one place to follow.
+    if (!m_agentBusy || !review || m_versionsRunning) return;
     const ReviewModel::Proposal *proposal = m_proposalId.isEmpty() ? nullptr : review->proposal(m_proposalId);
     if (!proposal) return;
     QSet<QString> keys;
@@ -116,7 +121,8 @@ void MainWindow::followLiveProposal() {
         if (!m_liveChanges.contains(key) && !change.removed && (!newest || change.newStart >= newest->newStart)) newest = &change;
     }
     m_liveChanges = keys;
-    if (newest) showAgentAt(newest->newStart);
+    // Where a trim cuts is what it changes.
+    if (newest) showAgentAt(newest->trimmed && !newest->moved ? newest->newEnd : newest->newStart);
 }
 
 void MainWindow::endAgentFollow() {
@@ -129,6 +135,16 @@ void MainWindow::endAgentFollow() {
             ran = true;
         }
     if (ran) refreshCompare();
+    refreshSidebar();
+}
+
+// The changes with the names the program knows its clips by.
+QList<ReviewModel::ClipChange> MainWindow::namedChanges(QList<ReviewModel::ClipChange> changes) const {
+    for (ReviewModel::ClipChange &change : changes) {
+        const QJsonObject clip = clipObject(change.clip);
+        if (!clip.isEmpty()) change.name = clipName(clip);
+    }
+    return changes;
 }
 
 void MainWindow::watchChanges(const QString &proposalId) {
@@ -137,7 +153,7 @@ void MainWindow::watchChanges(const QString &proposalId) {
     if (!proposal) return;
     double after = 0.0;
     for (const ReviewModel::ClipChange &change : proposal->changes) after = std::max(after, change.removed ? change.oldEnd : change.newEnd);
-    const QList<reel::Segment> segments = reel::plan(proposal->changes, m_duration, after);
+    const QList<reel::Segment> segments = reel::plan(namedChanges(proposal->changes), m_duration, after);
     if (segments.isEmpty()) {
         showStatus(QStringLiteral("This proposal changes nothing on the timeline"), 4000);
         return;
@@ -151,6 +167,7 @@ bool MainWindow::sendVersions(const QString &text) {
     command.insert(QStringLiteral("text"), text);
     if (!m_bus->send(command)) return false;
     m_versionRuns.clear();
+    m_versionsRunning = true;
     m_agentBusy = true;
     m_abortButton->setEnabled(true);
     updateChatControls();
@@ -203,8 +220,7 @@ void MainWindow::refreshCompare() {
         if (const ReviewModel::Proposal *proposal = review && !run.proposal.isEmpty() ? review->proposal(run.proposal) : nullptr) {
             // A revise gives the proposal a new id.
             version.proposalId = proposal->id;
-            if (run.status.isEmpty() && run.state == CompareView::State::Ready) version.status = proposal->summary;
-            for (const ReviewModel::ClipChange &change : proposal->changes) version.changes << reel::changeTitle(change);
+            for (const ReviewModel::ClipChange &change : namedChanges(proposal->changes)) version.changes << reel::changeTitle(change);
             // The first clip it touches shows what it looks like.
             const QJsonObject timeline = proposalTimelineFor(m_snapshot, proposal->id);
             QString wanted = proposal->changes.isEmpty() ? QString() : proposal->changes.constFirst().clip;
@@ -215,6 +231,10 @@ void MainWindow::refreshCompare() {
                         version.poster = m_artwork->frames.value(clip.value(QStringLiteral("sourceId")).toString());
                 }
         }
+        // What Kerf said makes it different.
+        if (const ReviewModel::Thread *thread = review && !run.thread.isEmpty() ? review->thread(run.thread) : nullptr;
+            thread && !thread->replies.isEmpty() && version.status.isEmpty())
+            version.status = thread->replies.constLast().body.section(QLatin1Char('\n'), 0, 0).trimmed();
         versions << version;
     }
     m_compare->setVersions(versions);

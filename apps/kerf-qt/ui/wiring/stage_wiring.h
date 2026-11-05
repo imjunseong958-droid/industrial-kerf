@@ -50,6 +50,8 @@ public:
     QString text() const;
     QAbstractButton *exitButton() const;
     void follow(const QJsonObject &preview);
+    // Stands aside while something else says the same, with its own Exit.
+    void setSuppressed(bool suppressed);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -58,6 +60,7 @@ private:
     EditorBus *m_bus = nullptr;
     QLabel *m_text = nullptr;
     QAbstractButton *m_exit = nullptr;
+    bool m_suppressed = false;
 };
 
 class StageWiring final : public QObject {

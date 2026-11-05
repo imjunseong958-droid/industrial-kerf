@@ -144,6 +144,8 @@ void ReviewWiring::attach(ChatPanel *panel) {
     MainWindow *w = m_window;
     m_bus->setReview(m_model);
     panel->setReview(m_model);
+    // Who "you" are can arrive after the first of your comments does.
+    connect(m_model, &ReviewModel::changed, panel, &ChatPanel::reconcileLocal);
     panel->setScriptDescriber([w](const QString &line) { return w->describeScriptLine(line); });
     panel->setReviewLink([this](double seconds) { return reviewLink(seconds); });
 
@@ -871,9 +873,11 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        m_chat->setTurnBusy(busy);
+        // Versions have a thread each, and no turn of the conversation's own.
+        if (!m_versionsRunning) m_chat->setTurnBusy(busy);
         if (!busy) {
-            m_chat->finishTurn();
+            if (!m_versionsRunning) m_chat->finishTurn();
+            m_versionsRunning = false;
             endAgentFollow();
         }
         updateChatControls();

@@ -166,8 +166,8 @@ lie over the picture.
 
 **The start window.** With no project, Kerf asks one question beside the recent
 folders. Sending a request opens the chosen folder's editor with the request on
-its way to Kerf. A folder with no `project.kerf` becomes a project, and the media
-at its top level is imported first. Open without asking opens the folder as it
+its way to Kerf. A folder with no `project.kerf` becomes a project, with the media
+at its top level in its media and the timeline left empty. Open without asking opens the folder as it
 is, and New Project… is the Choose a Project window, for templates, presets and
 clones. A request Kerf cannot take yet (no connection set up) waits in the
 composer.

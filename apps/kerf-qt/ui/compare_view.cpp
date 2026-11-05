@@ -163,6 +163,9 @@ void CompareView::setVersions(const QList<Version> &versions) {
         m_cards->removeWidget(card.frame);
         card.frame->deleteLater();
     }
+    // In the order given, however they first came.
+    for (const QString &key : std::as_const(keys)) m_cards->removeWidget(m_byKey.value(key).frame);
+    for (const QString &key : std::as_const(keys)) m_cards->addWidget(m_byKey.value(key).frame, 1);
     m_keys = keys;
 }
 

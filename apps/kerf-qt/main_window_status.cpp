@@ -132,6 +132,8 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateChatControls();
     if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
+    // The first snapshot can come before this does.
+    if (m_connected) runStart();
     if (m_connected && !wasConnected) {
         startSession();
         // The timeline was disabled, which handed the keys to the next control.

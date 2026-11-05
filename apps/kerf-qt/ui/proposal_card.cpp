@@ -497,6 +497,7 @@ bool ProposalCard::scriptShown() const { return m_script->isChecked(); }
 void ProposalCard::setWatchLength(double seconds) {
     m_hasWatch = seconds > 0.0;
     m_watch->setText(QStringLiteral("Watch what changed · %1 s").arg(int(std::ceil(seconds))));
+    m_watch->setFixedWidth(m_watch->sizeHint().width());
     updateParts();
 }
 

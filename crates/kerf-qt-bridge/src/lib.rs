@@ -81,6 +81,9 @@ enum Command {
     PreviewExit,
     Import {
         path: String,
+        /// Add it to the project's media without cutting it into the program.
+        #[serde(default, rename = "mediaOnly")]
+        media_only: bool,
     },
     /// Typed edits on the model, applied atomically.
     Edit {
@@ -691,16 +694,21 @@ fn runtime_worker(
             }
             // A shared project copies the file into media/ on another
             // thread, then imports the copy.
-            Command::Import { path } if media::needs_copy(&directory, Path::new(&path)) => {
-                media::copy_then(&shared, &path, &commands, &tx, media::probe, |path| {
-                    Command::Import { path }
+            Command::Import { path, media_only }
+                if media::needs_copy(&directory, Path::new(&path)) =>
+            {
+                media::copy_then(&shared, &path, &commands, &tx, media::probe, move |path| {
+                    Command::Import { path, media_only }
                 });
                 continue;
             }
-            Command::Import { path } => active_client.get_state().and_then(|state| {
-                active_client
-                    .import_media_request("ui", &operation, &path, state.revision)
-                    .map(|(state, _, _)| state)
+            Command::Import { path, media_only } => active_client.get_state().and_then(|state| {
+                if media_only {
+                    active_client.add_media_request("ui", &operation, &path, state.revision)
+                } else {
+                    active_client.import_media_request("ui", &operation, &path, state.revision)
+                }
+                .map(|(state, _, _)| state)
             }),
             Command::MediaReplace { media, path }
                 if media::needs_copy(&directory, Path::new(&path)) =>
@@ -1779,7 +1787,7 @@ fn run_version(
     shared: &Arc<Shared>,
 ) {
     let key = VERSION_KEYS[index];
-    let title = format!("{} · version {key}", request.text.trim());
+    let title = format!("Version {key}: {}", request.text.trim());
     emit(
         tx,
         json!({"type":"agent_version","key":key,"state":"running","title":title}),

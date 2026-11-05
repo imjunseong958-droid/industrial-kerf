@@ -156,14 +156,14 @@ void ChangeReel::setSide(Side side) {
 
 void ChangeReel::show() {
     ++m_entry;
-    m_host.play(false);
     const reel::Segment &segment = m_segments.at(m_index);
     if (m_side == Side::Before) {
         if (m_previewing) {
-            // The program comes back on `exited`.
+            // The program comes back once playback has reopened it.
             m_previewing = false;
             m_rendered = false;
             m_waiting = true;
+            m_host.play(false);
             m_host.exitPreview();
             return;
         }
@@ -182,6 +182,7 @@ void ChangeReel::show() {
     m_renderedEnd = whole ? last : std::min(segment.afterEnd, segment.after + kMostRendered);
     m_rendered = false;
     m_waiting = true;
+    m_host.play(false);
     if (!m_host.preview(m_proposal, m_renderedStart, m_renderedEnd - m_renderedStart)) {
         m_waiting = false;
         stop();
@@ -195,7 +196,15 @@ void ChangeReel::enterSegment() {
     const bool after = m_side == Side::After;
     m_segmentEnd = after ? segment.afterEnd : segment.beforeEnd;
     m_host.seek(after ? segment.after : segment.before, m_limit);
-    m_host.play(true);
+    if (after) {
+        m_host.play(true);
+    } else {
+        // The program has only just reopened: let the seek land first.
+        const int entry = m_entry;
+        QTimer::singleShot(300, this, [this, entry] {
+            if (entry == m_entry && isActive()) m_host.play(true);
+        });
+    }
     emit changed();
 }
 
@@ -209,12 +218,14 @@ void ChangeReel::followPreview(const QJsonObject &event) {
     if (!isActive()) return;
     const QString status = event.value(QStringLiteral("status")).toString();
     if (status == QStringLiteral("running")) return;
-    if (status == QStringLiteral("ready")) {
-        // The program's own ready after an exit names no proposal.
+    if (status == QStringLiteral("ready") || status == QStringLiteral("live")) {
+        // The program's own ready, after an exit, names no proposal.
         const QString id = event.value(QStringLiteral("proposalId")).toString();
         if (m_side == Side::After && m_waiting && !id.isEmpty()) {
             m_previewing = true;
             m_rendered = true;
+            enterSegment();
+        } else if (m_side == Side::Before && m_waiting && id.isEmpty()) {
             enterSegment();
         }
         return;
@@ -229,9 +240,10 @@ void ChangeReel::followPreview(const QJsonObject &event) {
         m_previewing = false;
         m_rendered = false;
         if (m_side == Side::Before && m_waiting) {
-            // Past the reset that follows an exit, which would undo the seek.
+            // Playback says when it has reopened the program, if it had
+            // anything else open; this is for when it did not.
             const int entry = m_entry;
-            QTimer::singleShot(250, this, [this, entry] {
+            QTimer::singleShot(1500, this, [this, entry] {
                 if (entry == m_entry && m_waiting) enterSegment();
             });
         }

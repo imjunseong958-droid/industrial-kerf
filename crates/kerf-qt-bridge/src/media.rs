@@ -310,9 +310,9 @@ mod tests {
             &commands,
             &tx,
             |_| Ok(()),
-            |path| Command::Import { path },
+            |path| Command::Import { path, media_only: false },
         );
-        let Ok(Command::Import { path }) = copied.recv_timeout(Duration::from_secs(10)) else {
+        let Ok(Command::Import { path, .. }) = copied.recv_timeout(Duration::from_secs(10)) else {
             panic!("expected the copy's import");
         };
         assert!(path.starts_with("media/clip-"), "{path}");
@@ -335,7 +335,7 @@ mod tests {
             &commands,
             &tx,
             |file| Err(format!("{} is text, not media", file.display())),
-            |path| Command::Import { path },
+            |path| Command::Import { path, media_only: false },
         );
         let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(event["type"], "error", "{event}");

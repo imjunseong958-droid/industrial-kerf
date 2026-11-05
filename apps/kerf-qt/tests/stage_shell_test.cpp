@@ -856,6 +856,22 @@ private slots:
         QVERIFY(window.m_lastCommand.isEmpty());
     }
 
+    // The first snapshot can come before the connection says it is ready.
+    void aStartingRequestGoesOnceConnectedWhicheverComesFirst() {
+        MainWindow window{QString(), QString()};
+        int asked = 0;
+        window.m_bus->setSender([&asked](const QJsonObject &command) {
+            if (command.value(QStringLiteral("type")).toString() == QStringLiteral("agent")) ++asked;
+            return true;
+        });
+        window.setConnection(QStringLiteral("connecting"));
+        window.startWith(QStringLiteral("Make a cut"), false);
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        QCOMPARE(asked, 0);
+        window.setConnection(QStringLiteral("ready"));
+        QCOMPARE(asked, 1);
+    }
+
     void aFolderThatStartsAProjectBringsItsMediaIn() {
         QTemporaryDir folder;
         QVERIFY(folder.isValid());
@@ -957,7 +973,10 @@ private slots:
         QVERIFY(watching.isWaiting());
         calls.clear();
         watching.followPreview(QJsonObject{{"status", "exited"}});
-        QTRY_VERIFY(!watching.isWaiting());
+        // Not until playback has reopened the program.
+        QVERIFY(watching.isWaiting());
+        watching.followPreview(QJsonObject{{"status", "ready"}});
+        QVERIFY(!watching.isWaiting());
         QVERIFY(calls.contains(QStringLiteral("seek 21")));
         // The last one ends it, still open.
         watching.followPlayhead(25.0);

@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QPointer>
+#include <QRect>
 #include <QSettings>
 #include <QSize>
 #include <QStandardPaths>
@@ -19,10 +20,12 @@ namespace {
 // An editor window for `project`. It lives on the heap and is deleted when
 // closed; opening another project from it opens a new window first, so the
 // application keeps running.
-kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
+kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const QRect &geometry = QRect()) {
     kerf::ProjectLauncher::rememberProject(project);
     auto *window = new kerf::MainWindow(project, kerfd);
     window->setAttribute(Qt::WA_DeleteOnClose);
+    // In the place of the window it follows.
+    if (geometry.isValid()) window->setGeometry(geometry);
     QObject::connect(window, &kerf::MainWindow::projectOpenRequested, window, [window, kerfd](const QString &path) {
         openEditor(path, kerfd);
         window->close();
@@ -136,6 +139,7 @@ int main(int argc, char **argv) {
     QPointer<QWidget> shown;
     QString startRequest;
     bool startImport = false;
+    QRect startGeometry;
     if (project.isEmpty() && smoke) {
         auto *home = new kerf::HomeWindow(kerfd);
         home->setAttribute(Qt::WA_DeleteOnClose);
@@ -160,10 +164,11 @@ int main(int argc, char **argv) {
             project = home.chosenPath();
             startRequest = home.request();
             startImport = home.startsProject();
+            startGeometry = home.geometry();
         }
     }
     if (!shown && !project.isEmpty()) {
-        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd, startGeometry);
         if (!workspace.isEmpty()) window->openTray(workspace);
         if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);

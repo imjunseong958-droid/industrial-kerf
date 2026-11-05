@@ -455,6 +455,9 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
         path: String,
+        /// Add the media without cutting it into the program.
+        #[serde(default, rename = "mediaOnly")]
+        media_only: bool,
     },
     /// Swap the file behind media id `media` for the one at `path` (read as
     /// `Import` reads it), keeping every clip's timing. A file that is not

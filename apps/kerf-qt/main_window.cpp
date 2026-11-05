@@ -1761,6 +1761,14 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             m_previewRequired = false;
             showStatus(message.isEmpty() ? QStringLiteral("Live preview") : QStringLiteral("Live preview: ") + message, 4000);
         }
+        // Playback reopened the program from its start: back to where it was.
+        if (status == QStringLiteral("exited")) {
+            m_returnAfterPreview = true;
+        } else if ((status == QStringLiteral("ready") || status == QStringLiteral("live")) &&
+                   event.value(QStringLiteral("proposalId")).toString().isEmpty() && m_returnAfterPreview) {
+            m_returnAfterPreview = false;
+            if (!m_changeReel->isActive()) queueSeek(m_playhead);
+        }
         m_changeReel->followPreview(event);
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();
