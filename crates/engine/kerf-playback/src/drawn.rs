@@ -66,7 +66,10 @@ impl Drawn {
         frame_size: Option<(u32, u32)>,
         epoch: Arc<AtomicU64>,
     ) -> Result<Self, PlaybackError> {
-        let options = ComposeOptions::default();
+        let options = ComposeOptions {
+            keep_frames: true,
+            ..ComposeOptions::default()
+        };
         let compositor = Compositor::new(project, Catalog::builtin(), &options)
             .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
         let (width, height) = compositor.size();

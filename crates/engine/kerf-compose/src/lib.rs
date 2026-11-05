@@ -7,6 +7,7 @@
 mod domains;
 mod draw;
 mod footage;
+mod frames;
 mod sound;
 
 use kerf_model::{Catalog, Project, Rate, Time};
@@ -49,6 +50,10 @@ pub struct ComposeOptions {
     /// that shows captions itself leaves them out.
     pub captions: bool,
     pub accel: Accel,
+    /// Keep frames in memory by what they depend on, to give again to any compositor asked for the
+    /// same picture. Worth it where frames are asked for again, as playback and previews do, and
+    /// not for a render, which only passes through them.
+    pub keep_frames: bool,
 }
 
 /// One frame of straight RGBA, row by row.
@@ -77,6 +82,7 @@ impl Compositor {
                 options.sequence.as_deref(),
                 options.captions,
                 options.accel,
+                options.keep_frames,
             )?,
         })
     }
@@ -98,6 +104,18 @@ impl Compositor {
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
         self.drawing.frame(at, scale)
+    }
+
+    /// A number for everything the frame at sequence time `at` depends on: two frames with the same
+    /// number are the same picture, whichever document or compositor they come from. `None` when
+    /// the frame depends on more than the document says, such as a LUT file or another track.
+    pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
+        self.drawing.frame_key(at, scale)
+    }
+
+    /// Whether the frame at sequence time `at` is kept, and would not be drawn.
+    pub fn is_kept(&self, at: Time, scale: f64) -> bool {
+        self.frame_key(at, scale).is_some_and(frames::has)
     }
 
     /// Whether the GPU would draw the frame at sequence time `at`, at `scale` of the canvas: every
