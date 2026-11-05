@@ -257,7 +257,6 @@ void MainWindow::followContentWithPanes() {
         grow.radius = tokens::layout::pictureRadius;
         grow.duration = tokens::motion::stage;
         m_motion->fly(grow);
-        m_viewer->lightFrom(first);
     }
     if (!ui::reducedMotion() && isVisible()) {
         m_shell->veilTimeline(1.0, 0, 0);

@@ -95,11 +95,10 @@ void MainWindow::buildAgentViews() {
 
     m_motion = new StageMotion;
     m_shell->setMotion(m_motion);
-    // The picture floats in the window's room, and lights it.
+    // The picture floats in the window's room.
     m_viewer->setFloating(true);
     m_timeline->setRoomyLanes(true);
     m_chat->setConversationLook(true);
-    connect(m_viewer, &ViewerWidget::lightChanged, m_shell, &StageShell::setLight);
     m_workChip = new WorkChip;
     m_viewer->setWorkChip(m_workChip);
     // The picture is not rescaled in each frame while the stage moves, and flights
@@ -212,7 +211,6 @@ void MainWindow::coverPicture(const QImage &image) {
     cover.fit = true;
     cover.radius = tokens::layout::pictureRadius;
     m_motion->fly(cover);
-    m_viewer->lightFrom(image);
 }
 
 void MainWindow::flushFlights() {

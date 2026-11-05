@@ -3,7 +3,6 @@
 #include "components.h"
 #include "design_tokens.h"
 #include "stage_shell.h"
-#include <QRadialGradient>
 #include <QVariantAnimation>
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -303,14 +302,12 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
     m_frame = frame;
     m_time = time;
     m_scaled = QImage();
-    followGlow(frame);
     update();
 }
 
 void ViewerWidget::clearFrame() {
     m_frame = QImage();
     m_scaled = QImage();
-    followGlow(QImage());
     update();
 }
 
@@ -364,50 +361,6 @@ void ViewerWidget::wipeToNextFrame() {
     if (m_frame.isNull()) return;
     m_wipeFrom = m_frame;
     m_wipeArmed = true;
-}
-
-void ViewerWidget::followGlow(const QImage &frame) {
-    QColor target;
-    if (!frame.isNull()) {
-        // Often enough to follow the cuts, and never for every frame.
-        if (m_glowClock.isValid() && m_glowClock.elapsed() < 240) return;
-        m_glowClock.restart();
-        const QColor mean = frame.scaled(16, 9, Qt::IgnoreAspectRatio, Qt::FastTransformation)
-                                .scaled(1, 1, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                .pixelColor(0, 0);
-        target = mean;
-        // A cut moves the light; a picture moving about inside a shot does not. Each
-        // change lights the whole room for a stage's length, so it is not for less.
-        if (m_glowTarget.isValid() && std::max({std::abs(target.red() - m_glowTarget.red()), std::abs(target.green() - m_glowTarget.green()),
-                                                std::abs(target.blue() - m_glowTarget.blue())}) < tokens::motion::lightLeast)
-            return;
-    }
-    if (target == m_glowTarget) return;
-    m_glowTarget = target;
-    const int length = ui::motionDuration(tokens::motion::stage);
-    if (length <= 0) {
-        m_glow = target;
-        emit lightChanged(m_glow);
-        update();
-        return;
-    }
-    if (!m_glowFade) {
-        m_glowFade = new QVariantAnimation(this);
-        connect(m_glowFade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
-            m_glow = value.value<QColor>();
-            emit lightChanged(m_glow);
-            if (!m_floating) update();
-        });
-    }
-    m_glowFade->stop();
-    QColor from = m_glow.isValid() ? m_glow : target;
-    QColor to = target.isValid() ? target : from;
-    if (!m_glow.isValid()) from.setAlphaF(0.0f);
-    if (!target.isValid()) to.setAlphaF(0.0f);
-    m_glowFade->setDuration(length);
-    m_glowFade->setStartValue(from);
-    m_glowFade->setEndValue(to);
-    m_glowFade->start();
 }
 
 void ViewerWidget::setLiveScrub(bool live) {
@@ -1225,17 +1178,6 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     if (!m_floating) p.fillRect(rect(), Qt::black);
     const QRectF card = videoRect();
     const QRectF picture = pictureRect();
-    // The picture's colour, lit around it.
-    if (!m_floating && m_glow.isValid() && m_glow.alphaF() > 0.0) {
-        QRadialGradient light(card.center(), std::max(rect().width(), rect().height()) * 0.62);
-        QColor core = m_glow;
-        core.setAlphaF(float(m_glow.alphaF() * 0.5));
-        QColor edge = m_glow;
-        edge.setAlphaF(0.0f);
-        light.setColorAt(0.25, core);
-        light.setColorAt(1.0, edge);
-        p.fillRect(rect(), light);
-    }
     QPainterPath viewport;
     viewport.addRoundedRect(card, tokens::layout::pictureRadius, tokens::layout::pictureRadius);
     p.fillPath(viewport, theme.viewerCanvas);

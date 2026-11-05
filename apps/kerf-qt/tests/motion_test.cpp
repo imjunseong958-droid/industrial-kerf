@@ -247,7 +247,6 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         const QImage frame = footageFrame(QSize(1920, 1080));
         window.m_viewer->setFrame(frame, 0.0);
-        window.m_viewer->lightFrom(frame);
         ui::setReducedMotionOverride(0);
         const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
         stage::Panes open = window.m_shell->panes();
@@ -578,26 +577,38 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(chosen->geometry(), picture, 500);
     }
 
-    // The room's light follows cuts, not what moves within a shot.
-    void theLightFollowsCutsOnly() {
-        ui::setReducedMotionOverride(1);
-        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
-        ViewerWidget viewer;
-        viewer.resize(640, 360);
-        QSignalSpy light(&viewer, &ViewerWidget::lightChanged);
-        const auto plain = [](const QColor &color) {
-            QImage image(64, 36, QImage::Format_RGB32);
-            image.fill(color);
-            return image;
-        };
-        viewer.lightFrom(plain(QColor(100, 100, 100)));
-        QCOMPARE(light.size(), 1);
-        QTest::qWait(260);
-        viewer.lightFrom(plain(QColor(105, 98, 103)));
-        QCOMPARE(light.size(), 1);
-        QTest::qWait(260);
-        viewer.lightFrom(plain(QColor(180, 60, 40)));
-        QCOMPARE(light.size(), 2);
+    // Colour around a picture changes how its colours look: however strong its own,
+    // what is around it stays grey.
+    void theRoomTakesNoColourFromThePicture() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1400, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        stage::Panes open = window.m_shell->panes();
+        open.picture = true;
+        open.timeline = true;
+        window.m_shell->setPanes(open);
+        QImage red(1920, 1080, QImage::Format_RGBA8888);
+        red.fill(QColor(255, 0, 0));
+        window.m_viewer->setFrame(red, 0.0);
+        QCoreApplication::processEvents();
+        const QRect picture = window.m_shell->rects().picture;
+        const QPoint shell = window.m_shell->mapTo(&window, QPoint());
+        const QImage shown = window.grab().toImage();
+        if (const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR"); !shots.isEmpty()) shown.save(shots + QStringLiteral("/room-neutral.png"));
+        const qreal ratio = shown.devicePixelRatio();
+        // In the slot to each side of the picture, and in the conversation beside it.
+        for (const int x : {picture.left() - 8, picture.left() - 40, picture.right() + 8, picture.right() + 40}) {
+            const QPoint at = (QPoint(x, picture.center().y()) + shell) * ratio;
+            if (!shown.rect().contains(at)) continue;
+            const QColor colour = shown.pixelColor(at);
+            QVERIFY2(colour.red() == colour.green() && colour.green() == colour.blue(), qPrintable(colour.name()));
+        }
+        // And the picture is the picture.
+        QCOMPARE(shown.pixelColor((picture.center() + shell) * ratio).rgb(), QColor(255, 0, 0).rgb());
+        window.close();
     }
 
     // Again before the last has landed, it starts over, with one rise under way.

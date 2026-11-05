@@ -203,14 +203,15 @@ strip, or a picture with the transport's block, 88 tall, under it.
 
 A sequence narrower than 1.2 keeps the same arrangement: the picture fits inside
 its slot over a timeline with 36% of the height, at least 220. The picture keeps
-12 points inside its slot, with rounded corners and its colour lit around it.
+12 points inside its slot, with rounded corners, on the room's neutral grey.
 
 Track heights do not follow the timeline's height, so a big edit shows at once.
 Regions move to a new arrangement rather than jump to it (`ui/stage_shell.h`), and
 what is on screen becomes what comes next (`ui/stage_motion.h`). The conversation,
 the picture and the room are one surface with no line between them: the shell paints
-the room, the picture's light and its shadow, and the conversation and the picture's
-region are clear over it, so the picture floats. Kerf's footage gathers as named tiles
+the room and the picture's shadow, and the conversation and the picture's region are
+clear over it, so the picture floats. The room stays neutral, whatever the picture
+shows, so its colours can be judged. Kerf's footage gathers as named tiles
 in the conversation; the first grows into the picture over the conversation as it
 gives way, the timeline comes in out of the room, and each tile flies to its lane
 while the picture becomes that clip. While a first cut is only a proposal the timeline

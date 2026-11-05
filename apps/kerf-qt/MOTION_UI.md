@@ -12,8 +12,8 @@ repeating their numbers, so changing a value does not make it wrong.
 1. **Things become the next thing.** Nothing opens like a tab. What is on screen turns
    into what comes next: a tile becomes the picture, the picture becomes cards.
 2. **One room.** The conversation and the stage share a surface with no line between
-   them. `StageShell::paintEvent` paints the room, the picture's light and its shadow;
-   the conversation and the picture's region are clear over it.
+   them. `StageShell::paintEvent` paints the room and the picture's shadow; the
+   conversation and the picture's region are clear over it.
 3. **The picture floats over the conversation.** Motion that crosses regions is drawn
    above them, in `StageMotion`.
 4. **Motion never decides anything.** State changes at once and motion follows it, so
@@ -21,6 +21,9 @@ repeating their numbers, so changing a value does not make it wrong.
 5. **Reduce Motion means simply there.** Every scene has to work with no motion.
    Tests run this way (`KERF_REDUCE_MOTION=1`).
 6. **Never wait on a blank.** If a render is coming, something stands in for it.
+7. **Nothing moves the picture's colours.** The room around the picture stays neutral,
+   whatever it shows: colour around a picture changes how its colours look, and
+   this is where they are judged. Motion around it uses no colour taken from it.
 
 ## Scenes
 
@@ -76,7 +79,7 @@ The editor paints on the CPU, and everything clear over what changes is drawn ag
 with it. So:
 
 - **Mark only what changed**, not the widget: `StageMotion::tick` marks where a flight
-  was and is, `StageShell::updateRoom` the room's lit part, `ViewerWidget::updateLine`
+  was and is, `StageShell::updateRoom` where the shadow falls, `ViewerWidget::updateLine`
   what a line crossed. `motionLeavesNothingBehind` fails if too little is marked.
 - **Nothing holding still draws frames.** A stand-in that has landed stops the ticker,
   however long its render takes.
@@ -84,7 +87,7 @@ with it. So:
   is shown, in `RGB32` or premultiplied `ARGB32`. Never scale one in `paintEvent` per
   frame; the picture on the move draws what it has (`ViewerWidget::setStageMoving`).
 - **A long animation changes what can be seen, not every tick.** The working chip draws
-  `workPulseSteps` a pulse, the light follows only changes of `lightLeast`.
+  `workPulseSteps` a pulse.
 - **One motion per property.** A new one takes over from the last, from where it has
   got to (`moves::dim`, `CompareView::placeCards`). Two at once fight over each frame.
 - **Every start has its end**, also when cut short: `transitionFinished` always follows

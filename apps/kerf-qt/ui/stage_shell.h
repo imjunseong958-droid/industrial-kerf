@@ -126,8 +126,6 @@ public:
     void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect());
     // The layer flights are drawn on, over everything but the bars.
     void setMotion(QWidget *motion);
-    // The picture's colour, lighting the room around it, behind the conversation too.
-    void setLight(const QColor &light);
     // How much of the room lies over the timeline, 0 to 1, eased there after
     // `delay` ms: it comes in out of the room, and falls back under other things.
     void veilTimeline(qreal level, int delay = 0, int duration = tokens::motion::settle);
@@ -178,10 +176,9 @@ private:
     bool stopMoves();
     // What a move leaves behind it, however it ended.
     void settle();
-    // The room's light and the picture's shadow go this far around the picture;
-    // empty when neither is painted.
-    QRect roomLit() const;
-    // Marks the room where it was and is lit, not all of it: all that lies clear
+    // What the picture's shadow falls on; empty when it is not painted.
+    QRect shadowed() const;
+    // Marks the room where the shadow was and is, not all of it: all that lies clear
     // over it is drawn again with it.
     void updateRoom();
     // While a sheet or tray is open Esc is theirs, ahead of the window's own
@@ -192,8 +189,7 @@ private:
     QWidget *m_sidebar = nullptr;
     QWidget *m_reelBar = nullptr;
     QWidget *m_motion = nullptr;
-    QColor m_light;
-    QRect m_roomLit;
+    QRect m_shadowed;
     QWidget *m_veil = nullptr;
     QVariantAnimation *m_moves = nullptr;
     QWidget *m_compare = nullptr;
