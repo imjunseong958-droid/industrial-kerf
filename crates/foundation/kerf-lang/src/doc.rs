@@ -308,6 +308,12 @@ impl Parser<'_> {
         clip.enabled = fields.take_bool("enabled")?.unwrap_or(true);
         clip.link = fields.take_id("link")?;
         clip.parent = fields.take_id("parent")?;
+        if let Some(retime) = fields.take_with("retime", parse_retime)? {
+            if !matches!(clip.content, Content::Media { .. }) {
+                return Err(line.error(1, "`retime=` is for footage"));
+            }
+            clip.retime = retime;
+        }
         fields.finish(2)?;
         self.record(&clip.id, line);
         if let Some(link) = &clip.link {
@@ -653,6 +659,12 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
         audio,
         reel,
     })
+}
+
+/// A clip's `retime=`.
+pub(crate) fn parse_retime(text: &str) -> Result<kerf_model::Retime, String> {
+    kerf_model::Retime::from_id(text)
+        .ok_or_else(|| format!("`{text}` is not a retime; use frames, blend, or flow"))
 }
 
 /// A sequence's `color=`: Rec.709 or an HDR signal, which is what a finished file can be.
@@ -1102,6 +1114,9 @@ fn print_clip(
     .unwrap();
     if clip.speed() != Ratio::ONE {
         write!(out, " speed={}", clip.speed()).unwrap();
+    }
+    if clip.retime != kerf_model::Retime::default() {
+        write!(out, " retime={}", clip.retime.id()).unwrap();
     }
     if let Some(name) = &clip.name {
         write!(out, " name={}", quote(name)).unwrap();
@@ -1610,5 +1625,19 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
             .contains("color="));
         // Log is something footage is in, not something a file is finished in.
         assert!(parse_document(&text(" color=slog3"), Catalog::builtin()).is_err());
+    }
+
+    #[test]
+    fn a_retime_is_written_only_when_it_is_not_frames() {
+        let text = |retime: &str| {
+            format!("kerf 1\nproject name=\"t\"\nmedia m path=\"a.mov\" rate=24 dur=48f video=64x36\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f speed=1/2{retime}\n")
+        };
+        let flow = parse_document(&text(" retime=flow"), Catalog::builtin()).expect("parses");
+        let printed = print_document(&flow.project, Catalog::builtin(), PrintOptions::default());
+        assert!(printed.contains(" retime=flow"), "{printed}");
+        let plain = parse_document(&text(""), Catalog::builtin()).expect("parses");
+        let printed = print_document(&plain.project, Catalog::builtin(), PrintOptions::default());
+        assert!(!printed.contains("retime"), "{printed}");
+        assert!(parse_document(&text(" retime=smooth"), Catalog::builtin()).is_err());
     }
 }

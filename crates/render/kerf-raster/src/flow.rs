@@ -211,6 +211,46 @@ pub fn block_flow_window(a: &Image, b: &Image, tile: u32, window: u32, radius: i
     flow
 }
 
+/// A cross-fade of two frames: `a·(1 − w) + b·w`.
+pub fn mix(a: &Image, b: &Image, w: f32) -> Image {
+    if a.width != b.width || a.height != b.height {
+        return if w < 0.5 { a.clone() } else { b.clone() };
+    }
+    let mut out = a.clone();
+    out.data.par_iter_mut().zip(b.data.par_iter()).for_each(|(p, q)| {
+        for c in 0..4 {
+            p[c] += (q[c] - p[c]) * w;
+        }
+    });
+    out
+}
+
+/// The frame a fraction `w` of the way from `a` to `b`, each moved along the motion between them
+/// before they are cross-faded.
+pub fn interpolate(a: &Image, b: &Image, w: f32) -> Image {
+    if a.width != b.width || a.height != b.height {
+        return mix(a, b, w);
+    }
+    let flow = block_flow(a, b, 8, 6);
+    let mut out = Image::new(a.width, a.height);
+    let width = a.width as usize;
+    let along = f64::from(w);
+    out.data.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let cy = y as f64 + 0.5;
+        for (x, px) in row.iter_mut().enumerate() {
+            let cx = x as f64 + 0.5;
+            let f = flow.at(cx, cy);
+            let (fx, fy) = (f64::from(f[0]), f64::from(f[1]));
+            let pa = a.sample_bilinear_clamped(cx - along * fx, cy - along * fy);
+            let pb = b.sample_bilinear_clamped(cx + (1.0 - along) * fx, cy + (1.0 - along) * fy);
+            for c in 0..4 {
+                px[c] = pa[c] + (pb[c] - pa[c]) * w;
+            }
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

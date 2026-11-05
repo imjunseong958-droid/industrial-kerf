@@ -20,7 +20,7 @@ use ffmpeg_next::{decoder, filter, frame, media};
 use kerf_color::{ColorPipeline, ColorSpace, InputTransform, Range};
 use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Rate, Ratio, Time};
+use kerf_model::{Rate, Ratio, Retime, Time};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -47,6 +47,19 @@ pub(crate) fn input_transform(space: ColorSpace, hdr: bool) -> &'static InputTra
     })
 }
 
+/// A picture as the flow reads it.
+fn raster(picture: &Picture) -> kerf_raster::Image {
+    kerf_raster::Image {
+        width: picture.w as u32,
+        height: picture.h as u32,
+        data: picture
+            .px
+            .chunks_exact(4)
+            .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
+            .collect(),
+    }
+}
+
 /// What a media clip shows: its media's frames, from `source_in` at
 /// `speed`.
 #[derive(Clone, Debug)]
@@ -61,6 +74,7 @@ pub(crate) struct ClipSource {
     pub alpha: bool,
     /// How its 16-bit code values become light, for footage worth more than 8 bits.
     pub deep: Option<&'static InputTransform>,
+    pub retime: Retime,
     pub source_in: Time,
     pub speed: Ratio,
     pub duration: Time,
@@ -89,6 +103,27 @@ impl ClipSource {
             position.div_euclid(per)
         };
         frame.clamp(0, i128::from(self.frames.max(1) - 1)) as i64
+    }
+
+    /// The media frame clip time `at` lies after and how far on toward the next, in 64ths, when
+    /// it lies between two frames.
+    fn between_at(&self, at: Time) -> Option<(i64, u16)> {
+        let seconds = |time: Time| time.flicks() as f64 / FLICKS_PER_SECOND as f64;
+        let per_second = f64::from(self.rate.num()) / f64::from(self.rate.den());
+        let speed = f64::from(self.speed.num().unsigned_abs()) / f64::from(self.speed.den());
+        let position = if self.speed.is_reverse() {
+            let out = self.source_in + self.speed.source_span(self.duration);
+            (seconds(out) - seconds(at) * speed) * per_second - 1.0
+        } else {
+            (seconds(self.source_in) + seconds(at) * speed) * per_second
+        };
+        let first = position.floor();
+        let between = ((position - first) * 64.0).round() as u16;
+        let first = first as i64;
+        if between == 0 || between == 64 || first < 0 || first + 1 >= self.frames {
+            return None;
+        }
+        Some((first, between))
     }
 }
 
@@ -256,9 +291,45 @@ impl Pictures {
     /// The frame clip `index` shows at clip time `at`, decoded at `size`.
     pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
         let clip = self.clips.get(index)?;
-        let frame = clip.frame_at_time(at);
         let size = (size.0.max(1), size.1.max(1));
-        let key = (clip.path.clone(), frame, size);
+        if clip.retime != Retime::Frames {
+            if let Some((first, between)) = clip.between_at(at) {
+                return self.between(clip, first, between, size);
+            }
+        }
+        self.whole(clip, clip.frame_at_time(at), size)
+    }
+
+    /// The picture a fraction of the way from one frame of the file to the next.
+    fn between(
+        &self,
+        clip: &ClipSource,
+        first: i64,
+        between: u16,
+        size: (u32, u32),
+    ) -> Option<Arc<Picture>> {
+        let key = (clip.path.clone(), first, size, between);
+        if let Some(picture) = lock(&self.cache).get(&key) {
+            return Some(picture);
+        }
+        let from = raster(&*self.whole(clip, first, size)?);
+        let to = raster(&*self.whole(clip, first + 1, size)?);
+        let along = f32::from(between) / 64.0;
+        let made = match clip.retime {
+            Retime::Flow => kerf_raster::flow::interpolate(&from, &to, along),
+            _ => kerf_raster::flow::mix(&from, &to, along),
+        };
+        let mut picture = Picture::new(made.width as usize, made.height as usize);
+        for (pixel, value) in picture.px.chunks_exact_mut(4).zip(&made.data) {
+            pixel.copy_from_slice(value);
+        }
+        let picture = Arc::new(picture);
+        lock(&self.cache).insert(key, picture.clone());
+        Some(picture)
+    }
+
+    fn whole(&self, clip: &ClipSource, frame: i64, size: (u32, u32)) -> Option<Arc<Picture>> {
+        let key = (clip.path.clone(), frame, size, 0);
         if let Some(picture) = lock(&self.cache).get(&key) {
             return Some(picture);
         }
@@ -282,7 +353,7 @@ impl Pictures {
         let clip = self.clips.get(index)?;
         let frame = clip.frame_at_time(at);
         let size = (size.0.max(1), size.1.max(1));
-        let key = (clip.path.clone(), frame, size);
+        let key = (clip.path.clone(), frame, size, 0);
         // Not held while decoding: other frames go on.
         let kept = lock(&self.decoded).get(&key);
         let picture = match kept {
@@ -325,7 +396,8 @@ pub(crate) struct Decoded {
     pub deep: Option<&'static InputTransform>,
 }
 
-type FrameKey = (String, i64, (u32, u32));
+/// A file, its frame, the size, and how far on toward the next frame.
+type FrameKey = (String, i64, (u32, u32), u16);
 
 /// Decoded frames, the least recently used dropped first past the budget.
 struct FrameCache<T> {
@@ -704,6 +776,7 @@ mod tests {
             height: 9,
             alpha: false,
             deep: None,
+            retime: Retime::Frames,
             source_in: Rate::FPS_24.time_of(source_in),
             speed: Ratio::parse(speed).unwrap(),
             duration: Rate::FPS_24.time_of(duration),

@@ -18,7 +18,7 @@
 use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
-    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_sequence_color, parse_size, pinned,
+    parse_align, parse_marker_color, parse_mask_mode, parse_retime, parse_sample_rate, parse_sequence_color, parse_size, pinned,
     sequence_fields, sequence_line, take_mask_shape, take_role, take_sync, word_or_quote,
 };
 use crate::facts::{Facts, NoFacts, Snap};
@@ -1034,7 +1034,7 @@ impl Script<'_> {
                     .into_iter()
                     .flat_map(|g| g.params.iter().map(|p| p.name.as_str())),
             );
-            names.extend(["name", "enabled", "caption", "parent", "reset"]);
+            names.extend(["name", "enabled", "caption", "parent", "retime", "reset"]);
             names.join(", ")
         };
         let mut changes = Vec::new();
@@ -1056,6 +1056,9 @@ impl Script<'_> {
             } else {
                 Some(Id::new(text).map_err(|error| fields.error(parent, error.to_string()))?)
             }));
+        }
+        if let Some(retime) = fields.take_with("retime", parse_retime)? {
+            changes.push(ClipChange::Retime(retime));
         }
         if let Some(reset) = fields.take("reset") {
             for name in fields.text(reset)?.split(',') {
@@ -1912,6 +1915,9 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                             .map_or_else(|| quote(""), |parent| parent.to_string())
                     )
                     .unwrap(),
+                    ClipChange::Retime(retime) => {
+                        write!(text, " retime={}", retime.id()).unwrap()
+                    }
                     ClipChange::Caption(caption) => {
                         write!(text, " caption={}", quote(caption)).unwrap()
                     }

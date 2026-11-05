@@ -13,6 +13,7 @@ kerf-fx = { path = "../../effects/kerf-fx" }
 kerf-gpu = { path = "../../render/kerf-gpu" }
 kerf-image = { path = "../../image/kerf-image" }
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-raster = { path = "../../render/kerf-raster" }
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-scaling"] }
 rayon = "1"
 thiserror = "2"

@@ -1632,6 +1632,7 @@ impl<'a> Builder<'a> {
                     deep: video
                         .is_deep()
                         .then(|| crate::footage::input_transform(video.color, self.hdr)),
+                    retime: clip.retime,
                     source_in: *source_in,
                     speed: *speed,
                     duration: clip.duration,
@@ -1801,6 +1802,7 @@ impl<'a> Builder<'a> {
                 .is_some_and(|video| video.is_deep());
             plan.plain = !alpha
                 && !deep
+                && clip.retime == kerf_model::Retime::Frames
                 && !moved
                 && self.nesting.len() == 1
                 && entering
