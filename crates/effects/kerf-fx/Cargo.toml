@@ -16,5 +16,4 @@ kerf-geom = { path = "../../foundation/kerf-geom" }
 kerf-gpu = { path = "../../render/kerf-gpu" }
 kerf-text = { path = "../../foundation/kerf-text" }
 kerf-raster-fx = { path = "../../effects/kerf-raster-fx" }
-pollster = "0.4"
 rayon = "1"

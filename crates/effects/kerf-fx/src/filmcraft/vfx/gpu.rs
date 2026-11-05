@@ -365,45 +365,43 @@ struct Stage {
 
 impl Stage {
     fn new(gpu: &Gpu) -> Option<Self> {
-        let device = gpu.device();
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-vfx"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("kernels.wgsl").into()),
+        let built = gpu.build(|device| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("kerf-vfx"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("kernels.wgsl").into()),
+            });
+            let layout = kerf_gpu::kernel_layout(device);
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("kerf-vfx"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let kernel = |entry: &str| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            Self {
+                highlights: kernel("highlights"),
+                grade_light: kernel("grade_light"),
+                accumulate: kernel("accumulate"),
+                add_light: kernel("add_light"),
+                streak: kernel("streak"),
+                scale_all: kernel("scale_all"),
+                rgb_split: kernel("rgb_split"),
+                wave_warp: kernel("wave_warp"),
+                noise: kernel("noise"),
+                layout: layout.clone(),
+            }
         });
-        let layout = kerf_gpu::kernel_layout(device);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("kerf-vfx"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let kernel = |entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let stage = Self {
-            highlights: kernel("highlights"),
-            grade_light: kernel("grade_light"),
-            accumulate: kernel("accumulate"),
-            add_light: kernel("add_light"),
-            streak: kernel("streak"),
-            scale_all: kernel("scale_all"),
-            rgb_split: kernel("rgb_split"),
-            wave_warp: kernel("wave_warp"),
-            noise: kernel("noise"),
-            layout: layout.clone(),
-        };
-        if let Some(error) = pollster::block_on(scope.pop()) {
-            eprintln!("kerf-fx: look kernels did not build: {error}");
-            return None;
-        }
-        Some(stage)
+        built
+            .map_err(|error| eprintln!("kerf-fx: look kernels did not build: {error}"))
+            .ok()
     }
 
     fn pass(

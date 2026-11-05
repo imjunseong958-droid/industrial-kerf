@@ -380,34 +380,33 @@ struct Stage {
 
 impl Stage {
     fn new(gpu: &Gpu) -> Option<Self> {
-        let device = gpu.device();
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-fx"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("fx.wgsl").into()),
+        let built = gpu.build(|device| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("kerf-fx"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("fx.wgsl").into()),
+            });
+            let layout = kerf_gpu::kernel_layout(device);
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("kerf-fx"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let kernel = |entry: &str| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            let (px, run) = (kernel("fx_px"), kernel("fx_run"));
+            Self { px, run, layout }
         });
-        let layout = kerf_gpu::kernel_layout(device);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("kerf-fx"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let kernel = |entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let (px, run) = (kernel("fx_px"), kernel("fx_run"));
-        if let Some(error) = pollster::block_on(scope.pop()) {
-            eprintln!("kerf-fx: effect kernels did not build: {error}");
-            return None;
-        }
-        Some(Self { px, run, layout })
+        built
+            .map_err(|error| eprintln!("kerf-fx: effect kernels did not build: {error}"))
+            .ok()
     }
 }
 

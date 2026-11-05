@@ -66,6 +66,8 @@ pub struct Gpu {
     finish: wgpu::ComputePipeline,
     dummy: wgpu::TextureView,
     pool: Mutex<Pool>,
+    /// Held while kernels build: a device's error scopes nest, so two at once would cross.
+    building: Mutex<()>,
     failed: Arc<AtomicBool>,
 }
 
@@ -278,12 +280,25 @@ impl Gpu {
             finish,
             dummy,
             pool: Mutex::default(),
+            building: Mutex::new(()),
             failed,
         })
     }
 
     pub fn device(&self) -> &wgpu::Device {
         &self.device
+    }
+
+    /// Build kernels with `make`, or say why they did not build. An area's kernels build through
+    /// this, whichever thread first needs them.
+    pub fn build<T>(&self, make: impl FnOnce(&wgpu::Device) -> T) -> Result<T, wgpu::Error> {
+        let _one_at_a_time = self.building.lock().unwrap_or_else(PoisonError::into_inner);
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let built = make(&self.device);
+        match now(scope.pop()) {
+            Some(error) => Err(error),
+            None => Ok(built),
+        }
     }
 
     /// Whether a picture of this size fits in a texture.
@@ -1156,6 +1171,30 @@ mod tests {
             let floats = frame.read_floats(&out).expect("read back");
             assert_close(&floats, &cpu.px, 4e-3, &format!("{case:?}"));
         }
+    }
+
+    #[test]
+    fn kernels_build_from_several_threads_at_once() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        std::thread::scope(|threads| {
+            for _ in 0..8 {
+                threads.spawn(|| {
+                    for _ in 0..16 {
+                        let built = gpu.build(|device| {
+                            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                                label: Some("kerf-test"),
+                                source: wgpu::ShaderSource::Wgsl(
+                                    "@compute @workgroup_size(1) fn main() {}".into(),
+                                ),
+                            })
+                        });
+                        assert!(built.is_ok());
+                    }
+                });
+            }
+        });
     }
 
     #[test]
