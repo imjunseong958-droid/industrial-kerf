@@ -28,10 +28,10 @@ use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::EffectRun;
 use kerf_draw::text::{self, Justify, Text};
-use kerf_color::HdrOutput;
+use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
 use rayon::prelude::*;
-use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
+use kerf_fx::filmcraft::{self, catalog::Headroom, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
 use kerf_model::{
@@ -58,6 +58,24 @@ const GEOMETRY: [&str; 12] = [
 type Result<T> = std::result::Result<T, ComposeError>;
 
 /// A program ready to draw.
+/// What an effect's picture was brought under 1 by.
+enum Held {
+    Nothing,
+    Gains(Vec<f32>),
+    Scale(f32),
+}
+
+impl Held {
+    fn put_back(self, picture: &mut Image) {
+        match self {
+            Held::Nothing => {}
+            Held::Gains(gains) if gains.len() * 4 == picture.px.len() => picture.from_unit(&gains),
+            Held::Gains(_) => {}
+            Held::Scale(scale) => picture.scale_rgb(scale),
+        }
+    }
+}
+
 pub(crate) struct Drawing {
     /// How the program leaves, when it is an HDR sequence.
     hdr: Option<HdrOutput>,
@@ -329,6 +347,15 @@ impl Drawing {
             width: image.w as u32,
             height: image.h as u32,
             rgba,
+        }
+    }
+
+    /// What effects are told the picture is.
+    pub(super) fn working(&self) -> WorkingSpace {
+        match &self.hdr {
+            Some(output) if output.pq => WorkingSpace::Rec2100Pq,
+            Some(_) => WorkingSpace::Rec2100Hlg,
+            None => WorkingSpace::Rec709,
         }
     }
 
@@ -756,6 +783,7 @@ impl Drawing {
         let nested = upto < plan.effects.len();
         for (index, effect) in plan.effects[..upto].iter().enumerate() {
             let value = |name: &str| effect_number(effect, name, time);
+            let held = self.hold_headroom(picture, effect);
             match effect.fx.as_str() {
                 "color.basic" => {
                     let correction = Correction::new(&value);
@@ -778,7 +806,13 @@ impl Drawing {
                             upto: index,
                             working: (picture.w, picture.h),
                         };
-                        let read = |at: Time| env.picture_at(plan.clip.start + at);
+                        let read = |at: Time| {
+                            let mut other = env.picture_at(plan.clip.start + at)?;
+                            if let Held::Scale(scale) = held {
+                                other.scale_rgb(1.0 / scale);
+                            }
+                            Some(other)
+                        };
                         let run = EffectRun {
                             at: time,
                             per_source: placed.per_source,
@@ -795,6 +829,7 @@ impl Drawing {
                     None => self.filmcraft(picture, plan, time, placed, index, nested),
                 },
             }
+            held.put_back(picture);
         }
     }
 
@@ -873,6 +908,7 @@ impl Drawing {
             sequence.drop_frame,
         );
         let run = filmcraft::instance::Run {
+            working: self.working(),
             at: time,
             per_source: placed.per_source as f32,
             timecode: &timecode,
@@ -882,6 +918,29 @@ impl Drawing {
             frame_rate: sequence.rate.fps(),
         };
         filmcraft::instance::apply(picture, &instance, &run);
+    }
+
+    /// Bring an HDR picture under 1 for an effect written for 0 to 1. SDR footage in an HDR
+    /// sequence is never above 1, so it meets the effect as it would in an SDR sequence.
+    fn hold_headroom(&self, picture: &mut Image, effect: &Effect) -> Held {
+        if self.hdr.is_none() {
+            return Held::Nothing;
+        }
+        let way = filmcraft::catalog::headroom(effect.fx.as_str());
+        if way == Headroom::Keeps {
+            return Held::Nothing;
+        }
+        let peak = picture.peak();
+        if peak <= 1.0 {
+            return Held::Nothing;
+        }
+        if way == Headroom::PerPixel {
+            return Held::Gains(picture.to_unit());
+        }
+        // One scale for all footage up to the HDR peak, so it does not change between frames.
+        let scale = peak.max((1000.0 / kerf_color::REFERENCE_WHITE_NITS) as f32);
+        picture.scale_rgb(1.0 / scale);
+        Held::Scale(scale)
     }
 
     /// An adjustment layer: its effects on the picture beneath it, weighed

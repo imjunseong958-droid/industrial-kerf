@@ -103,6 +103,49 @@ impl Image {
         out
     }
 
+    /// The brightest value any pixel holds.
+    pub fn peak(&self) -> f32 {
+        self.px
+            .par_chunks(4)
+            .map(|pixel| pixel[0].max(pixel[1]).max(pixel[2]))
+            .reduce(|| 0.0, f32::max)
+    }
+
+    /// Bring each pixel under 1, hue and all, and say what to multiply it by to put it back.
+    pub fn to_unit(&mut self) -> Vec<f32> {
+        self.px
+            .par_chunks_mut(4)
+            .map(|pixel| {
+                let gain = pixel[0].max(pixel[1]).max(pixel[2]).max(1.0);
+                for value in &mut pixel[..3] {
+                    *value /= gain;
+                }
+                gain
+            })
+            .collect()
+    }
+
+    /// Put each pixel back by what [`Image::to_unit`] said.
+    pub fn from_unit(&mut self, gains: &[f32]) {
+        self.px
+            .par_chunks_mut(4)
+            .zip(gains)
+            .for_each(|(pixel, gain)| {
+                for value in &mut pixel[..3] {
+                    *value *= gain;
+                }
+            });
+    }
+
+    /// Multiply the color of every pixel.
+    pub fn scale_rgb(&mut self, by: f32) {
+        self.px.par_chunks_mut(4).for_each(|pixel| {
+            for value in &mut pixel[..3] {
+                *value *= by;
+            }
+        });
+    }
+
     /// This picture over black as 16-bit little-endian RGBA with `signal` making each pixel's code
     /// values, 0 to 1, for an HDR master.
     pub fn to_signal16_over_black(&self, signal: impl Fn([f32; 3]) -> [f32; 3] + Sync) -> Vec<u8> {
