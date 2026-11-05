@@ -177,10 +177,11 @@ Has: keys, track mattes, blurs, glows, distortions, warp stabilizer, restoration
 forward-backward check), and `look` gives the result as keyframes (`track`), so that what
 follows is plain text in the document, and a null and `parent=` do the rest.
 
-To add, in order: optical flow; planar tracking, for corner pins and screen replacements
-(EffectCraft's `track`); roto with the swappable model interface of its `segment`, for a
-Magnetic Mask or Object Matte of Kerf's own; `image.fill` over time, by flow
-(`fill_sequence`), so that it holds on a moving shot; the camera solver.
+To add, in order: planar tracking, for corner pins and screen replacements
+(EffectCraft's `track`); mask outlines that animate, and with them `image.fill` of what moves; roto with the swappable
+model interface of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; the camera
+solver. Optical flow is in
+`kerf-raster` now, which `image.fill` uses on a moving shot, and speed changes can use too.
 
 ### Image
 
