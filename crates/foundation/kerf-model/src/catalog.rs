@@ -849,6 +849,13 @@ fn builtin_catalog() -> Catalog {
             "Applies its effects to every layer beneath it.",
         )
         .category("Utility"),
+        FxDef::new(
+            "null",
+            FxKind::Generator,
+            Domain::Video,
+            "Draws nothing; clips parent to it to move together.",
+        )
+        .category("Utility"),
     ];
     for definition in definitions
         .into_iter()

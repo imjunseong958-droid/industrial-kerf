@@ -29,9 +29,9 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
   Seconds round to the nearest frame.
 - Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
-  Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve's
-  control points as a graph editor gives them, `x1,y1,x2,y2`:
-  `scale={0f:1 12f:1.2:0.2,0.8,0.4,1}`. Up may overshoot, for a bounce.
+  Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve
+  `x1,y1,x2,y2` that may overshoot: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
+- `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
@@ -292,6 +292,6 @@ mod tests {
         // Kept effects are listed by id; their parameters come from `look`.
         assert!(text.contains("- Blur & Sharpen: `blur.bilateral`"));
         assert!(!text.contains("Blend With Original"));
-        assert!(text.len() < 16 * 1024, "{}", text.len());
+        assert!(text.len() < 17 * 1024, "{}", text.len());
     }
 }

@@ -637,6 +637,7 @@ fn merge_clip(
         clashes.extend(masks.into_iter().map(|conflict| conflict.path));
         merged.into_iter().map(|(_, mask)| mask).collect()
     };
+    let parent = pick("parent", &b.parent, &o.parent, &t.parent, clashes);
     let effects = pick("effects", &b.effects, &o.effects, &t.effects, clashes);
     Placed {
         sequence,
@@ -648,6 +649,7 @@ fn merge_clip(
             content,
             enabled,
             name,
+            parent,
             link,
             props,
             masks,
@@ -1632,6 +1634,7 @@ fn clip_changes(
     differs(&mut fields, "enabled", &before.enabled, &after.enabled);
     differs(&mut fields, "name", &before.name, &after.name);
     differs(&mut fields, "link", &before.link, &after.link);
+    differs(&mut fields, "parent", &before.parent, &after.parent);
     param_changes(&mut fields, &before.props, &after.props);
     differs(&mut fields, "masks", &before.masks, &after.masks);
     differs(&mut fields, "effects", &before.effects, &after.effects);

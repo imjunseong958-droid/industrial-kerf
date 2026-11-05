@@ -269,6 +269,9 @@ pub struct Clip {
     pub enabled: bool,
     pub name: Option<String>,
     pub link: Option<Id>,
+    /// The clip of the same sequence this one moves with: its position, scale, and rotation
+    /// apply on top of this clip's own.
+    pub parent: Option<Id>,
     /// Intrinsic properties from the catalog; absent means default.
     pub props: Params,
     /// Masks on a picture clip, combined in order.
@@ -310,6 +313,7 @@ impl Clip {
             enabled: true,
             name: None,
             link: None,
+            parent: None,
             props: Params::new(),
             masks: Vec::new(),
             effects: Vec::new(),

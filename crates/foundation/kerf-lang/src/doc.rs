@@ -307,6 +307,7 @@ impl Parser<'_> {
         clip.name = fields.take_text("name")?.map(str::to_owned);
         clip.enabled = fields.take_bool("enabled")?.unwrap_or(true);
         clip.link = fields.take_id("link")?;
+        clip.parent = fields.take_id("parent")?;
         fields.finish(2)?;
         self.record(&clip.id, line);
         if let Some(link) = &clip.link {
@@ -1088,6 +1089,9 @@ fn print_clip(
     }
     if let Some(link) = &clip.link {
         write!(out, " link={link}").unwrap();
+    }
+    if let Some(parent) = &clip.parent {
+        write!(out, " parent={parent}").unwrap();
     }
     if options.annotate {
         write!(
