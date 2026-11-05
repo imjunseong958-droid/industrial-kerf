@@ -5,6 +5,7 @@
 #include "design_tokens.h"
 #include "project_launcher.h"
 #include "project_sidebar.h"
+#include "stage_motion.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
 #endif
@@ -20,6 +21,7 @@
 #include <QPalette>
 #include <QShowEvent>
 #include <QTextEdit>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -46,7 +48,7 @@ public:
         setText(text);
         setObjectName(QStringLiteral("homeIdea"));
         setFocusPolicy(Qt::TabFocus);
-        setFixedSize(ui::snapWidth(control, text) + 2 * space::s12, height::h28);
+        setFixedSize(ui::snapWidth(control, text) + 2 * space::s16, height::h32);
     }
 
 protected:
@@ -54,11 +56,11 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QRectF r = rect();
-        ui::paintInsetLine(p, r, radius::control, tokens::color(isHovered() ? lineh : line2));
+        ui::paintInsetLine(p, r, r.height() / 2.0, tokens::color(isHovered() ? lineh : line2));
         p.setFont(tokens::font(control));
         p.setPen(tokens::color(isHovered() ? ink : ink2));
         p.drawText(r, Qt::AlignCenter, text());
-        if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
+        if (focusVisible()) ui::paintFocusRing(p, r, r.height() / 2.0);
     }
 };
 
@@ -90,7 +92,8 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_sidebar = new ProjectSidebar;
     m_sidebar->setFixedWidth(layout::sidebar);
     m_sidebar->setConversationsShown(false);
-    m_sidebar->setTopInset(KERF_HOME_OWN_TITLE_BAR ? layout::toolbar : space::s8);
+    // The rows sit where the editor's will, so they do not move at the hand-over.
+    m_sidebar->setTopInset(KERF_HOME_OWN_TITLE_BAR ? layout::toolbar + space::s8 : space::s8);
     connect(m_sidebar, &ProjectSidebar::projectChosen, this, [this](const QString &path) {
         setFolder(path);
         m_composer->input()->setFocus();
@@ -106,6 +109,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
 
     auto *heading = new QLabel(QStringLiteral("What should we make?"));
     heading->setObjectName(QStringLiteral("homeHeading"));
+    m_heading = heading;
     heading->setFont(tokens::font(display));
     heading->setAlignment(Qt::AlignCenter);
     {
@@ -145,7 +149,9 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     middle->addLayout(line);
     middle->addSpacing(space::s8);
 
-    auto *ideas = new QHBoxLayout;
+    m_ideaRow = new QWidget;
+    m_ideaRow->setObjectName(QStringLiteral("homeIdeas"));
+    auto *ideas = new QHBoxLayout(m_ideaRow);
     ideas->setContentsMargins(0, 0, 0, 0);
     ideas->setSpacing(space::s8);
     ideas->addStretch(1);
@@ -156,7 +162,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
         m_ideas << chip;
     }
     ideas->addStretch(1);
-    middle->addLayout(ideas);
+    middle->addWidget(m_ideaRow);
     middle->addSpacing(space::s16);
 
     m_openOnly = new ui::GhostButton(QStringLiteral("Open without asking"));
@@ -231,7 +237,10 @@ void HomeWindow::finish(const QString &request) {
     if (m_folder.isEmpty()) return;
     m_request = request;
     m_startsProject = !QFileInfo::exists(QDir(m_folder).filePath(QStringLiteral("project.kerf")));
-    accept();
+    m_lastLook = grab();
+    // It stays on screen until the editor is over it.
+    setResult(QDialog::Accepted);
+    emit chosen();
 }
 
 void HomeWindow::showEvent(QShowEvent *event) {
@@ -240,7 +249,23 @@ void HomeWindow::showEvent(QShowEvent *event) {
     hideNativeWindowTitle(this);
 #endif
     m_composer->input()->setFocus();
+    // Once it is laid out.
+    if (!m_entered) {
+        m_entered = true;
+        QTimer::singleShot(0, this, &HomeWindow::enter);
+    }
 }
+
+void HomeWindow::enter() {
+    // The room comes together: the question, the box, then what to try.
+    moves::rise(m_heading, 0);
+    moves::rise(m_composer, 90);
+    moves::rise(m_ideaRow, 180);
+    moves::rise(m_openOnly, 260);
+    moves::fadeIn(m_sidebar, 0, 420);
+}
+
+QRect HomeWindow::composerRect() const { return QRect(m_composer->box()->mapTo(this, QPoint()), m_composer->box()->size()); }
 
 void HomeWindow::paintEvent(QPaintEvent *event) {
     QPainter p(this);

@@ -1,6 +1,7 @@
 #include "main_window.h"
 #include "comment_row.h"
 #include "review_link.h"
+#include "stage_motion.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
@@ -222,12 +223,33 @@ void MainWindow::togglePlayback() {
     sendSimple(QJsonObject{{QStringLiteral("type"), m_playing ? QStringLiteral("pause") : QStringLiteral("play")} });
 }
 
+QJsonObject MainWindow::withClipNames(QJsonObject timeline, const QJsonArray &sources) {
+    QHash<QString, QJsonObject> sourceById;
+    for (const auto &value : sources) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
+    const QHash<QString, QString> names = sourceNames(sources);
+    QJsonArray displayTracks;
+    for (const auto &value : timeline.value("tracks").toArray()) {
+        auto track = value.toObject(); QJsonArray displayClips;
+        for (const auto &clipValue : track.value("clips").toArray()) {
+            auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
+            // Named after its media's file; a clip of media with no path
+            // keeps no stand-in name (the Inspector and the timeline fall
+            // back on their own).
+            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", names.value(source.value("id").toString()));
+            displayClips.append(clip);
+        }
+        track.insert("clips", displayClips); displayTracks.append(track);
+    }
+    timeline.insert("tracks", displayTracks);
+    return timeline;
+}
+
 void MainWindow::queueSeek(double time) {
     if (!m_connected) return;
     m_hasPendingHoverSeek = false;
     m_hoverSkimming = false;
     m_timeline->clearSkimmer();
-    m_pendingSeek = std::clamp(time, 0.0, std::max(m_duration, m_seekLimit));
+    m_pendingSeek = std::clamp(time, 0.0, std::max({m_duration, m_seekLimit, m_proposedDuration}));
     m_pendingSeekScrub = scrubFromShownFrame(m_pendingSeek);
     m_hasPendingSeek = true;
     m_pointerOwnsPlayhead = true;
@@ -1734,6 +1756,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
                               status == QStringLiteral("completed") || status == QStringLiteral("failed") ||
                               status == QStringLiteral("cancelled") || status == QStringLiteral("canceled");
         if (finished) showStatus(QStringLiteral("Export %1").arg(status), 6000);
+        // What was made goes home to its folder.
+        if (status == QStringLiteral("complete") || status == QStringLiteral("completed") || status == QStringLiteral("ready")) flyExportHome();
         if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
     } else if (type == QStringLiteral("analysis")) {
         // Analyses effects draw from, made in the background.
@@ -1744,6 +1768,12 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         const QString status = event.value(QStringLiteral("status")).toString();
         const QString message = event.value(QStringLiteral("message")).toString();
         if (!status.isEmpty()) m_previewStatus = status;
+        if (status != QStringLiteral("running") && m_cutRendering) {
+            m_cutRendering = false;
+            // The render is the picture now, if it is of the latest.
+            if (m_proposalId == m_previewedCut) m_motion->releaseStaying();
+            if (m_timeline->showsProposedCut() && m_proposalId != m_previewedCut) m_cutPreview.start();
+        }
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
             m_previewRequired = true;
             m_viewer->clearFrame();
@@ -1797,23 +1827,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // as typed operations.
     m_project = snapshot.value(QStringLiteral("timeline")).toObject();
     // Derive presentation fields once per snapshot, not on every repaint.
-    QHash<QString, QJsonObject> sourceById;
-    for (const auto &value : m_project.value("sources").toArray()) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
-    const QHash<QString, QString> names = sourceNames(m_project.value("sources").toArray());
-    QJsonArray displayTracks;
-    for (const auto &value : m_project.value("tracks").toArray()) {
-        auto track = value.toObject(); QJsonArray displayClips;
-        for (const auto &clipValue : track.value("clips").toArray()) {
-            auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
-            // Named after its media's file; a clip of media with no path
-            // keeps no stand-in name (the Inspector and the timeline fall
-            // back on their own).
-            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", names.value(source.value("id").toString()));
-            displayClips.append(clip);
-        }
-        track.insert("clips", displayClips); displayTracks.append(track);
-    }
-    m_project.insert("tracks", displayTracks);
+    m_project = withClipNames(m_project, m_project.value(QStringLiteral("sources")).toArray());
     m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     setProjectTitle(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
@@ -1845,6 +1859,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     // The pinned proposal's (the version its card shows), not just the first open one.
     m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
+    showProposedCut();
+    refreshCompare();
     m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();

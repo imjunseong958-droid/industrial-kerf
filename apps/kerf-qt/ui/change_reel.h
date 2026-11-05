@@ -90,6 +90,8 @@ public:
 
 signals:
     void changed();
+    // About to change what shows, for the picture to wipe across.
+    void sideChanging();
 
 private:
     void show();

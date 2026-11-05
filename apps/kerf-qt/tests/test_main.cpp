@@ -188,6 +188,8 @@ int main(int argc, char *argv[]) {
     using namespace kerf;
     using namespace kerf::test;
 
+    // Tests read where things end up; a test of motion turns it on for itself.
+    qputenv("KERF_REDUCE_MOTION", "1");
     // As QTEST_MAIN sets a widget test up.
     QApplication app(argc, argv);
     app.setAttribute(Qt::AA_Use96Dpi, true);

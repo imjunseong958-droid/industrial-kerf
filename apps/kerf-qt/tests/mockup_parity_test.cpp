@@ -170,8 +170,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(746, 40, 747, 420), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
-    {"916", QSize(1080, 1920), QRect(1123, 40, 477, 848), QRect(1123, 40, 477, 848), QRect(240, 40, 883, 672), QRect(240, 712, 883, 288)},
+    {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(768, 52, 704, 396), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
+    {"916", QSize(1080, 1920), QRect(640, 40, 960, 614), QRect(954, 52, 332, 590), QRect(240, 40, 400, 960), QRect(640, 654, 960, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }

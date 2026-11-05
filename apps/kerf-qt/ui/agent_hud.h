@@ -42,6 +42,8 @@ public:
 
     // A preview renders and was not stopped here: the HUD shows.
     bool active() const { return m_running && !m_stopped; }
+    // It keeps out of the picture, whatever renders.
+    void setQuiet(bool quiet);
     // Row 1 ("Rendering preview · v2"), or empty while hidden.
     QString text() const;
     QString title() const;
@@ -87,6 +89,7 @@ private:
     ui::ThinProgress *m_bar = nullptr;
     bool m_running = false;
     bool m_stopped = false;
+    bool m_quiet = false;
     bool m_wasActive = false;
     bool m_filtering = false;
     double m_progress = 0.0;

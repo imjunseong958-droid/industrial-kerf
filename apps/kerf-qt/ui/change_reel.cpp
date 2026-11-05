@@ -148,6 +148,7 @@ void ChangeReel::previous() {
 
 void ChangeReel::setSide(Side side) {
     if (!isActive() || side == m_side) return;
+    emit sideChanging();
     m_side = side;
     m_finished = false;
     show();
@@ -341,9 +342,16 @@ void ChangeReelBar::update(double playhead) {
 }
 
 void ChangeReelBar::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event)
+    // A strip floating over the picture.
     QPainter p(this);
-    p.fillRect(event->rect(), color(chrome));
-    p.fillRect(QRect(0, height() - layout::seam, width(), layout::seam), color(line));
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QColor fill = color(chrome);
+    fill.setAlphaF(0.94f);
+    p.setPen(Qt::NoPen);
+    p.setBrush(fill);
+    p.drawRoundedRect(rect(), radius::panel, radius::panel);
+    ui::paintInsetLine(p, QRectF(rect()), radius::panel, color(line2));
 }
 
 } // namespace kerf

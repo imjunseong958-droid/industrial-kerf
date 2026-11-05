@@ -21,11 +21,13 @@
 //     aspect leaves; the picture pillarboxes in black in its slot.
 //   One pane alone has the panel: a picture with the transport's block 88 tall
 //   under it, or a timeline with the transport in its own strip.
-//   Vertical (aspect < 1.2), the panel goes: the picture over the transport's
-//   112 tall block is a column at the window's right, 477 x 848 at 1600 x 1000,
-//   as wide as its aspect wants while it leaves 480 on its left, down to 240.
-//   The rest of the width holds the conversation over the timeline, whose
-//   share is 30% of the height, at least 200.
+//   Vertical (aspect < 1.2), the picture is over the timeline too, whose share
+//   is 36% of the height, at least 220; the picture fits inside the slot.
+//   The picture keeps 12 points inside its slot, with rounded corners.
+//
+// Regions move to a new arrangement rather than jump to it, over 620 ms: the
+// picture from what it grows out of (setPanes' origin), the timeline up from
+// below. Under reduced motion, and while hidden, they are simply there.
 
 #include "test_friends.h"
 
@@ -33,7 +35,10 @@
 #include <QPointer>
 #include <QRect>
 #include <QSize>
+#include <QColor>
 #include <QWidget>
+
+class QVariantAnimation;
 
 namespace kerf {
 
@@ -44,7 +49,8 @@ struct Panes {
     bool sidebar = true;
     bool picture = true;
     bool timeline = true;
-    // Watching a proposal's changes: a strip over the picture.
+    // Watching a proposal's changes: the stage grows over the conversation,
+    // with a strip floating over the picture.
     bool reel = false;
     bool panelOpen() const { return picture || timeline; }
     bool operator==(const Panes &other) const {
@@ -73,6 +79,8 @@ struct Rects {
     QRect tray;
 };
 
+// The part of a slot the picture fits inside.
+QRect paddedSlot(const QRect &slot);
 // The geometry in window coordinates; `toolbar` is the height over the content.
 Rects rects(const QSize &window, double aspect, int toolbar = 40, const Panes &panes = {});
 // The largest rect of `aspect` inside `slot`, centred.
@@ -112,7 +120,18 @@ public:
 
     void setAspect(double aspect);
     double aspect() const { return m_aspect; }
-    void setPanes(const stage::Panes &panes);
+    // `pictureOrigin`, in this widget's coordinates: where the picture grows
+    // from, when it opens.
+    void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect());
+    // The layer flights are drawn on, over everything but the bars.
+    void setMotion(QWidget *motion);
+    // The picture's colour, lighting the room around it, behind the conversation too.
+    void setLight(const QColor &light);
+    // How much of the room lies over the timeline, 0 to 1, eased there after
+    // `delay` ms: it comes in out of the room, and falls back under other things.
+    void veilTimeline(qreal level, int delay = 0, int duration = 420);
+    qreal timelineVeil() const;
+    bool isMoving() const { return m_moves != nullptr; }
     const stage::Panes &panes() const { return m_panes; }
     // The geometry as this widget places it, in its own coordinates.
     stage::Rects rects() const;
@@ -135,6 +154,8 @@ signals:
     void sheetChanged(StageShell::Sheet sheet);
     void trayChanged(StageShell::Tray tray);
     void panesChanged();
+    void transitionStarted();
+    void transitionFinished();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -142,7 +163,13 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    struct Move {
+        QPointer<QWidget> widget;
+        QRect from;
+        QRect to;
+    };
     void place();
+    void transition(const QRect &pictureOrigin = QRect());
     // While a sheet or tray is open Esc is theirs, ahead of the window's own
     // shortcuts on Esc, outside text fields, menus and dialogs.
     void followEscape();
@@ -150,6 +177,10 @@ private:
     bool m_filtering = false;
     QWidget *m_sidebar = nullptr;
     QWidget *m_reelBar = nullptr;
+    QWidget *m_motion = nullptr;
+    QColor m_light;
+    QWidget *m_veil = nullptr;
+    QVariantAnimation *m_moves = nullptr;
     QWidget *m_compare = nullptr;
     bool m_compareShown = false;
     QWidget *m_picture = nullptr;

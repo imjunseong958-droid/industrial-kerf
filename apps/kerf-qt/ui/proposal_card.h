@@ -144,6 +144,9 @@ public:
     // Settled: one line, accent ink for an accept, ink2 for a reject. Empty
     // text opens the card again.
     void setSettled(const QString &text, bool accepted);
+    // Small: what to do with it stays when its changes are folded, and watching
+    // is the first thing it offers.
+    void setCompact(bool compact);
     bool isSettled() const { return m_settled; }
 
     QWidget *pinHeader() const { return m_pinHeader; }
@@ -183,6 +186,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    bool m_compact = false;
     void updateParts();
 
     QString m_id;

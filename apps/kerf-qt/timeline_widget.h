@@ -144,6 +144,12 @@ public:
     // Where Kerf is working, drawn over the lanes with its name; NaN for nowhere.
     void setAgentCursor(double seconds);
     double agentCursor() const { return m_agentCursor; }
+    // Only these clips stand out; the rest dim. Empty: all as they are.
+    void setFocusClips(const QSet<QString> &clips);
+    QSet<QString> focusClips() const { return m_focusClips; }
+    // Where a stretch of `track` lies in this widget's coordinates; the first
+    // track when it has no such track. Empty with no tracks at all.
+    QRect laneRect(const QString &track, double start, double end) const;
     void setTool(TimelineTool tool);
     TimelineTool tool() const { return m_tool; }
     // Dragged edges snap to clip edges, markers, the playhead, and the start.
@@ -178,6 +184,13 @@ public:
     // empty id ends it.
     void setPreview(const QString &proposalId, const QJsonObject &timeline);
     QString previewProposal() const { return m_previewId; }
+    // What it shows is a proposal's cut, the program having none: it can be
+    // looked through, not changed.
+    void setShowsProposedCut(bool shows) { m_showsProposedCut = shows; }
+    // Tracks start tall, for a timeline that has the room for them.
+    void setRoomyLanes(bool roomy) { m_roomyLanes = roomy; relayout(); }
+    bool showsProposedCut() const { return m_showsProposedCut; }
+    bool isAudioLane(const QString &track) const;
     // Clips a QC check found a problem in: a --neg dot in their name.
     void setQcClips(const QSet<QString> &clips);
     QSet<QString> qcClips() const { return m_qcClips; }
@@ -482,6 +495,8 @@ private:
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
     QJsonObject m_proposal;
+    bool m_showsProposedCut = false;
+    bool m_roomyLanes = false;
     QList<ProposalBand> m_bands;
     // The bands in effect: m_bands, else the one made from m_proposal.
     QList<ProposalBand> m_effectiveBands;
@@ -535,6 +550,8 @@ private:
     double m_playhead = 0.0;
     double m_skimmerTime = 0.0;
     double m_agentCursor = std::numeric_limits<double>::quiet_NaN();
+    QSet<QString> m_focusClips;
+    qreal m_focusLift = 0.0;
     double m_hoverFrame = -1.0;
     double m_zoom = 1.0;
     int m_fitWidth = 0;

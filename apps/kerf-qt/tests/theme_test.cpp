@@ -935,6 +935,11 @@ private slots:
                 if (card->isPinned()) pinned = card;
             QVERIFY(pinned);
             ui::Button *accept = pinned->acceptButton();
+            // In the conversation watching comes first; on its own, Accept.
+            QCOMPARE(accept->kind(), ui::Button::Kind::Secondary);
+            pinned->setCompact(false);
+            pinned->setOpen(true);
+            QCoreApplication::processEvents();
             QCOMPARE(accept->kind(), ui::Button::Kind::Primary);
             QCOMPARE(pinned->rejectButton()->parentWidget(), accept->parentWidget());
             QVERIFY(pinned->rejectButton()->geometry().right() < accept->geometry().left());
@@ -1088,8 +1093,9 @@ private slots:
         window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("Done."));
         QCoreApplication::processEvents();
         const auto surface = [&window] {
-            const QImage panel = window.m_chat->grab().toImage();
-            return panel.pixelColor(QPoint(4, window.m_chat->height() / 2) * panel.devicePixelRatio()).rgb();
+            // Clear over the window's room.
+            const QImage panel = window.m_shell->grab().toImage();
+            return panel.pixelColor(QPoint(window.m_chat->x() + 4, window.m_chat->y() + window.m_chat->height() / 2) * panel.devicePixelRatio()).rgb();
         };
         const auto nameInk = [&window] {
             QLabel *name = window.m_chat->rows().constFirst()->nameLabel();
@@ -1384,7 +1390,8 @@ private slots:
             viewer.selectMask(QStringLiteral("k1"));
             const QImage view = viewer.grab().toImage();
             const qreal ratio = view.devicePixelRatio();
-            QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), QColor(Qt::black));
+            // Black, with at most a little of the picture's light.
+            QVERIFY(view.pixelColor(QPoint(2, 2) * ratio).lightness() < 16);
             const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
             QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
             // The selected mask's name is light over the picture.

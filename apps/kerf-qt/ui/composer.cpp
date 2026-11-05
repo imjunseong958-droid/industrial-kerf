@@ -41,6 +41,10 @@ public:
         m_focused = focused;
         update();
     }
+    void setRadius(qreal radius) {
+        m_radius = radius;
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -48,11 +52,12 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(Qt::NoPen);
         p.setBrush(color(raised));
-        p.drawRoundedRect(QRectF(rect()), radius::card, radius::card);
-        ui::paintInsetLine(p, QRectF(rect()), radius::card, color(m_focused ? accent : line2));
+        p.drawRoundedRect(QRectF(rect()), m_radius, m_radius);
+        ui::paintInsetLine(p, QRectF(rect()), m_radius, color(m_focused ? accent : line2));
     }
 
 private:
+    qreal m_radius = radius::panel;
     bool m_focused = false;
 };
 
@@ -584,6 +589,7 @@ void Composer::placePopovers() {
 
 void Composer::setRoomy() {
     m_leastInput = 52;
+    static_cast<ComposerBox *>(m_box)->setRadius(16);
     m_input->setStyleSheet(m_input->styleSheet().replace(QStringLiteral("font-size: 14px"), QStringLiteral("font-size: 15px")));
     QFont font = m_input->font();
     font.setPixelSize(15);

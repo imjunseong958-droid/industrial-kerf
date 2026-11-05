@@ -183,20 +183,32 @@ only when it would leave the panel under 600. At a 1600 × 1000 window:
 | Sequence | Sidebar | Conversation | Picture | Timeline |
 |---|---|---|---|---|
 | Wide (aspect ≥ 1.2) | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 420 at (640, 40) | 960 × 540 at (640, 460) |
-| 9:16 | 240 × 960 at (0, 40) | 883 × 672 at (240, 40) | 477 × 848 at (1123, 40) | 883 × 288 at (240, 712) |
+| 9:16 | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 614 at (640, 40) | 960 × 346 at (640, 654) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
 its slot. One pane alone has the panel: a timeline with the transport in its
 strip, or a picture with the transport's block, 88 tall, under it.
 
-A sequence narrower than 1.2 is laid out for a phone: the picture is a column at
-the window's right, over a 112 tall block with the playhead's timecode and the
-transport, as wide as its aspect wants while it leaves 480 on its left, down to
-240, where it letterboxes in black. The rest of the width holds the conversation
-over the timeline, which has 30% of the height, at least 200.
+A sequence narrower than 1.2 keeps the same arrangement: the picture fits inside
+its slot over a timeline with 36% of the height, at least 220. The picture keeps
+12 points inside its slot, with rounded corners and its colour lit around it.
+
 Track heights do not follow the timeline's height, so a big edit shows at once.
-Switching format lays out again at once, with no animation.
+Regions move to a new arrangement rather than jump to it (`ui/stage_shell.h`), and
+what is on screen becomes what comes next (`ui/stage_motion.h`). The conversation,
+the picture and the room are one surface with no line between them: the shell paints
+the room, the picture's light and its shadow, and the conversation and the picture's
+region are clear over it, so the picture floats. Kerf's footage gathers as named tiles
+in the conversation; the first grows into the picture over the conversation as it
+gives way, the timeline comes in out of the room, and each tile flies to its lane
+while the picture becomes that clip. While a first cut is only a proposal the timeline
+shows it, read-only, and its preview follows. Watching what changed, what the picture
+was wipes to and fro over what it now is, with the changed clips lifted off their
+lanes; versions are posters a little askew, fanned out from the picture over the
+timeline; and when Kerf has rendered what was asked, the picture goes back into the
+project's folder and the conversation has the room again. Under Reduce Motion
+everything is simply there.
 
 **The panel** opens by itself with the first thing to show: a clip on the
 timeline, or a proposal. After that, or once a pane is opened or closed by hand,

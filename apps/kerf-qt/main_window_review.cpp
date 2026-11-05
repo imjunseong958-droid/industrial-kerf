@@ -497,7 +497,10 @@ void ReviewWiring::syncPinnedProposal() {
     if (pinned == w->m_proposalId && stale == w->m_proposalBlocked) return;
     const bool moved = pinned != w->m_proposalId;
     w->m_proposalId = pinned;
-    if (moved && w->m_timeline) w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
+    if (moved && w->m_timeline) {
+        w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
+        w->showProposedCut();
+    }
     w->m_proposalBlocked = stale;
     w->updateCommandStates();
 }
@@ -863,6 +866,7 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         } else if (kind == QStringLiteral("tool")) {
             appendConversationNote(QStringLiteral("Tool"), text);
             addActivity(QStringLiteral("tool"), text.left(120));
+            if (text.startsWith(QStringLiteral("render"), Qt::CaseInsensitive)) m_turnRendered = true;
         } else if (kind == QStringLiteral("status")) {
             appendConversationNote(QStringLiteral("Progress"), text);
             addActivity(QStringLiteral("status"), text.left(120));
@@ -875,10 +879,15 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         m_agentBusy = busy;
         // Versions have a thread each, and no turn of the conversation's own.
         if (!m_versionsRunning) m_chat->setTurnBusy(busy);
+        if (busy) showSheet();
+        quietenCutPreview();
         if (!busy) {
             if (!m_versionsRunning) m_chat->finishTurn();
             m_versionsRunning = false;
             endAgentFollow();
+            // What Kerf was asked to make is made: it goes home.
+            if (m_turnRendered) goHome();
+            m_turnRendered = false;
         }
         updateChatControls();
             updateCommandStates();

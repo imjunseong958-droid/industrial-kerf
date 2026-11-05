@@ -6,6 +6,8 @@
 #include "media_artwork.h"
 #include "review_model.h"
 
+#include <QAbstractAnimation>
+#include <QVariantAnimation>
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -531,6 +533,8 @@ void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
 
 int TimelineWidget::defaultTrackHeight(bool audio, int number) const {
     if (m_allHeight > 0) return m_allHeight;
+    // The picture lane large enough to see what is on it.
+    if (m_roomyLanes) return audio ? 28 : number == 1 ? 64 : 40;
     if (m_wideSequence) return audio ? kWideAudioHeight : number == 1 ? kWideV1Height : number == 2 ? kWideV2Height : kWideVideoHeight;
     return audio ? kTrackHeight : kVideoTrackHeight;
 }
@@ -849,6 +853,49 @@ void TimelineWidget::setAgentCursor(double seconds) {
     update();
 }
 
+void TimelineWidget::setFocusClips(const QSet<QString> &clips) {
+    if (clips == m_focusClips) return;
+    m_focusClips = clips;
+    // Those looked at rise off their lanes.
+    m_focusLift = 0.0;
+    const int length = ui::motionDuration(tk::motion::stage);
+    if (clips.isEmpty() || length <= 0) {
+        m_focusLift = clips.isEmpty() ? 0.0 : 8.0;
+        update();
+        return;
+    }
+    auto *rise = new QVariantAnimation(this);
+    rise->setDuration(length);
+    rise->setStartValue(0.0);
+    rise->setEndValue(8.0);
+    rise->setEasingCurve(tk::easing());
+    connect(rise, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_focusLift = value.toReal();
+        update();
+    });
+    rise->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+QRect TimelineWidget::laneRect(const QString &track, double start, double end) const {
+    if (m_rows.isEmpty()) return {};
+    const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+    int row = 0;
+    for (int index = 0; index < m_rows.size(); ++index)
+        if (tracks.at(m_rows.at(index).track).toObject().value(QStringLiteral("id")).toString() == track) {
+            row = index;
+            break;
+        }
+    return clipRect(row, start, std::max(0.0, end - start)).toAlignedRect();
+}
+
+bool TimelineWidget::isAudioLane(const QString &track) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject object = value.toObject();
+        if (object.value(QStringLiteral("id")).toString() == track) return isAudioTrack(object);
+    }
+    return false;
+}
+
 void TimelineWidget::paintEvent(QPaintEvent *event) {
     QPainter p(this);
     const QRegion region = event->region();
@@ -924,6 +971,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     const bool skimming = m_hasSkimmer;
     clearSkimmer();
     if (skimming) emit hoverSeekEnded();
+    if (m_showsProposedCut) {
+        beginScrub(event->position());
+        return;
+    }
     const QPoint pos = event->position().toPoint();
     const int grip = resizeRowAt(pos);
     if (grip >= 0) {
@@ -1171,6 +1222,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
 }
 
 void TimelineWidget::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (m_showsProposedCut) return;
     const ClipHit hit = clipAt(event->position().toPoint());
     if (event->button() != Qt::LeftButton || hit.id.isEmpty()) return;
     if (event->modifiers() & Qt::AltModifier) emit askRequested(hit.id);
@@ -1178,6 +1230,7 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent *event) {
 }
 
 void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
+    if (m_showsProposedCut) return;
     const QPoint pos = event->pos();
     if (const ClipHit hit = clipAt(pos); !hit.id.isEmpty()) {
         emit clipSelected(hit.id);
@@ -1392,7 +1445,7 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     if (!trackFlag(track, QStringLiteral("enabled"))) p.setOpacity(0.4);
     // While a proposal plays as a preview: where its clips were, dashed,
     // under the clips as it would leave them.
-    const bool previewing = !m_previewId.isEmpty() && m_previewTracks.contains(trackId);
+    const bool previewing = !m_previewId.isEmpty() && !m_showsProposedCut && m_previewTracks.contains(trackId);
     if (!m_previewId.isEmpty()) {
         for (const ProposalBand &band : std::as_const(m_effectiveBands)) {
             if (band.id != m_previewId) continue;
@@ -2086,9 +2139,52 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
         const int skimX = static_cast<int>(std::floor(timeToX(m_skimmerTime)));
         p.fillRect(QRect(skimX, origin.y() + kRulerMarkerRow, 1, height() - origin.y() - kRulerMarkerRow), C(tk::ink2));
     }
+    if (!m_focusClips.isEmpty()) {
+        // What is not being looked at falls back; what is, is ringed in light.
+        const QJsonObject &shown = m_previewId.isEmpty() || m_showsProposedCut ? m_project : m_previewTimeline;
+        const QJsonArray tracks = shown.value(QStringLiteral("tracks")).toArray();
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        for (int row = 0; row < m_rows.size(); ++row) {
+            for (const QJsonValue &value : tracks.at(m_rows.at(row).track).toObject().value(QStringLiteral("clips")).toArray()) {
+                const QJsonObject clip = value.toObject();
+                const QRectF box = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(), clip.value(QStringLiteral("duration")).toDouble());
+                if (m_focusClips.contains(clip.value(QStringLiteral("id")).toString())) {
+                    // It rises off its lane, ringed in light.
+                    const QRectF lifted = box.translated(0, m_rows.at(row).audio ? 0 : -m_focusLift);
+                    if (lifted != box && !m_laneCache.isNull() && m_laneCacheRect.contains(box.toRect())) {
+                        const qreal ratio = m_laneCache.devicePixelRatio();
+                        const QRectF source((box.left() - m_laneCacheRect.left()) * ratio, (box.top() - m_laneCacheRect.top()) * ratio, box.width() * ratio, box.height() * ratio);
+                        p.setPen(Qt::NoPen);
+                        p.setBrush(QColor(51, 102, 230, 70));
+                        p.drawRoundedRect(lifted.adjusted(-4, -2, 4, 8), tk::radius::small + 2, tk::radius::small + 2);
+                        p.drawPixmap(lifted, m_laneCache, source);
+                    }
+                    p.setPen(QPen(C(tk::accentInk), 2.0));
+                    p.setBrush(Qt::NoBrush);
+                    p.drawRoundedRect(lifted.adjusted(-1, -1, 1, 1), tk::radius::small, tk::radius::small);
+                } else {
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(QColor(12, 12, 12, 170));
+                    p.drawRect(box);
+                }
+            }
+        }
+        p.restore();
+    }
     if (!std::isnan(m_agentCursor)) {
         const int agentX = static_cast<int>(std::floor(timeToX(m_agentCursor)));
         const int top = origin.y() + kRulerMarkerRow;
+        // Its light, either side of it.
+        QLinearGradient light(agentX - 10, 0, agentX + 12, 0);
+        QColor lit = C(tk::accentInk);
+        lit.setAlphaF(0.0f);
+        light.setColorAt(0.0, lit);
+        lit.setAlphaF(0.35f);
+        light.setColorAt(0.5, lit);
+        lit.setAlphaF(0.0f);
+        light.setColorAt(1.0, lit);
+        p.fillRect(QRect(agentX - 10, top, 22, height() - top), light);
         p.fillRect(QRect(agentX, top, 2, height() - top), C(tk::accentInk));
         const QString name = QStringLiteral("Kerf");
         p.setFont(tk::font(tk::metaStrong));
@@ -2347,7 +2443,7 @@ const char *kFxMime = "application/x-kerf-fx";
 }
 
 void TimelineWidget::dragEnterEvent(QDragEnterEvent *event) {
-    if (isEnabled() && event->mimeData()->hasFormat(QString::fromLatin1(kFxMime))) event->acceptProposedAction();
+    if (isEnabled() && !m_showsProposedCut && event->mimeData()->hasFormat(QString::fromLatin1(kFxMime))) event->acceptProposedAction();
 }
 
 void TimelineWidget::dragMoveEvent(QDragMoveEvent *event) {

@@ -91,6 +91,7 @@
 #include "finish_tray.h"
 #include "inspector_column.h"
 #include "wiring/review_wiring.h"
+#include "stage_motion.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/timeline_wiring.h"
 
@@ -200,11 +201,11 @@ void MainWindow::setPaneOpen(const QString &command, bool open) {
     applyPanes();
 }
 
-void MainWindow::revealPanel(bool picture, bool timeline) {
+void MainWindow::revealPanel(bool picture, bool timeline, const QRect &origin) {
     stage::Panes panes = m_shell->panes();
     panes.picture = panes.picture || picture;
     panes.timeline = panes.timeline || timeline;
-    m_shell->setPanes(panes);
+    m_shell->setPanes(panes, origin);
 }
 
 void MainWindow::applyPanes() {
@@ -231,7 +232,41 @@ void MainWindow::followContentWithPanes() {
         content = content || !track.toObject().value(QStringLiteral("clips")).toArray().isEmpty();
     if (!content) return;
     m_panesFollowContent = false;
-    revealPanel(true, true);
+    // The picture grows out of the tile of the first thing it was going to show,
+    // over the conversation, which gives way as it does. The timeline follows.
+    QString firstClip;
+    const QJsonObject cut = proposalTimelineFor(m_snapshot, m_proposalId);
+    for (const QJsonObject &timeline : {cut, m_project})
+        for (const QJsonValue &track : timeline.value(QStringLiteral("tracks")).toArray()) {
+            if (track.toObject().value(QStringLiteral("type")).toString() != QStringLiteral("video")) continue;
+            const QJsonArray clips = track.toObject().value(QStringLiteral("clips")).toArray();
+            if (firstClip.isEmpty() && !clips.isEmpty()) firstClip = clips.first().toObject().value(QStringLiteral("id")).toString();
+        }
+    const QRect origin = flightStart(sourceOfClip(firstClip));
+    const QImage first = posterForClip(firstClip);
+    revealPanel(true, true, origin);
+    if (!first.isNull()) {
+        StageMotion::Flight grow;
+        grow.image = first;
+        grow.from = origin;
+        grow.to = m_shell->rects().picture;
+        grow.lively = false;
+        // It holds the place until the first frame is there.
+        grow.stays = true;
+        grow.radius = tokens::layout::pictureRadius;
+        grow.duration = tokens::motion::stage;
+        m_motion->fly(grow);
+        m_viewer->lightFrom(first);
+    }
+    if (!ui::reducedMotion() && isVisible()) {
+        m_shell->veilTimeline(1.0, 0, 0);
+        m_shell->veilTimeline(0.0, tokens::motion::stage - 150, 420);
+        m_holdFlights = true;
+        QTimer::singleShot(tokens::motion::stage, this, [this] {
+            m_holdFlights = false;
+            flushFlights();
+        });
+    }
 }
 
 void MainWindow::refreshSidebar() {

@@ -513,7 +513,7 @@ void ProposalCard::setPreview(bool on) {
 
 bool ProposalCard::previewOn() const { return m_preview->isChecked(); }
 
-void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
+void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary && !m_compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
 
 void ProposalCard::setAcceptTip(const QString &tip) {
     m_acceptTip = tip;
@@ -550,16 +550,24 @@ void ProposalCard::setSettled(const QString &text, bool accepted) {
     updateParts();
 }
 
+void ProposalCard::setCompact(bool compact) {
+    m_compact = compact;
+    m_watch->setKind(compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary);
+    m_accept->setKind(compact ? ui::Button::Kind::Secondary : ui::Button::Kind::Primary);
+    updateParts();
+}
+
 void ProposalCard::updateParts() {
     const bool card = !m_settled;
-    m_layout->setContentsMargins(card ? 12 : 0, card ? (m_pinned ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
-    m_pinHeader->setVisible(card && m_pinned);
+    const bool marked = m_pinned && !m_compact;
+    m_layout->setContentsMargins(card ? 12 : 0, card ? (marked ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
+    m_pinHeader->setVisible(card && marked);
     m_title->setVisible(card);
     m_second->setVisible(card);
     m_changes->setVisible(card && m_open);
     m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked());
-    m_footer->setVisible(card && m_open);
-    m_watchBox->setVisible(card && m_open && m_hasWatch);
+    m_footer->setVisible(card && (m_open || m_compact));
+    m_watchBox->setVisible(card && (m_open || m_compact) && m_hasWatch);
     m_settledLabel->setVisible(m_settled);
     m_reject->setVisible(!m_guest);
     m_accept->setVisible(!m_guest);
@@ -576,7 +584,7 @@ void ProposalCard::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen);
     p.setBrush(color(raised));
     p.drawRoundedRect(area, radius::card, radius::card);
-    if (m_pinned) {
+    if (m_pinned && !m_compact) {
         // inset 0 2px 0 accent: a 2 pt stripe inside the top edge, following its corners.
         p.save();
         QPainterPath clip;

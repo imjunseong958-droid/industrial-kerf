@@ -8,6 +8,8 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEventLoop>
+#include <QPixmap>
 #include <QPointer>
 #include <QRect>
 #include <QSettings>
@@ -140,6 +142,9 @@ int main(int argc, char **argv) {
     QString startRequest;
     bool startImport = false;
     QRect startGeometry;
+    QPixmap startLook;
+    QRect startBox;
+    QPointer<kerf::HomeWindow> chooser;
     if (project.isEmpty() && smoke) {
         auto *home = new kerf::HomeWindow(kerfd);
         home->setAttribute(Qt::WA_DeleteOnClose);
@@ -153,26 +158,44 @@ int main(int argc, char **argv) {
         links.clear();
     }
     if (!shown && project.isEmpty()) {
-        kerf::HomeWindow home(kerfd);
-        choosing = &home;
+        chooser = new kerf::HomeWindow(kerfd);
+        choosing = chooser.data();
         // Closing the window is not the last window closing.
         app.setQuitOnLastWindowClosed(false);
-        const bool chosen = home.exec() == QDialog::Accepted;
+        QEventLoop waiting;
+        QObject::connect(chooser, &kerf::HomeWindow::chosen, &waiting, &QEventLoop::quit);
+        QObject::connect(chooser, &QDialog::finished, &waiting, &QEventLoop::quit);
+        chooser->show();
+        waiting.exec();
         app.setQuitOnLastWindowClosed(true);
-        if (!chosen && !anyEditor()) return 0;
+        const bool chosen = chooser->result() == QDialog::Accepted;
         if (chosen) {
-            project = home.chosenPath();
-            startRequest = home.request();
-            startImport = home.startsProject();
-            startGeometry = home.geometry();
+            project = chooser->chosenPath();
+            startRequest = chooser->request();
+            startImport = chooser->startsProject();
+            startGeometry = chooser->geometry();
+            startLook = chooser->lastLook();
+            startBox = chooser->composerRect();
+        } else {
+            chooser->deleteLater();
+            if (!anyEditor()) return 0;
         }
     }
     if (!shown && !project.isEmpty()) {
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd, startGeometry);
         if (!workspace.isEmpty()) window->openTray(workspace);
         if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
+        if (!startLook.isNull()) window->takeOverFrom(startLook, startBox);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
+        // The editor is over it by now; nothing shows through at the hand-over.
+        if (chooser) {
+            QTimer::singleShot(200, chooser.data(), [chooser] {
+                if (!chooser) return;
+                chooser->hide();
+                chooser->deleteLater();
+            });
+        }
         if (renderPreview) {
             QTimer::singleShot(1500, window.data(), [window] {
                 QMetaObject::invokeMethod(window.data(), "renderPreview", Qt::DirectConnection);

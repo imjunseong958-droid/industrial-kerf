@@ -10,6 +10,8 @@
 
 #include <QDialog>
 #include <QList>
+#include <QPixmap>
+#include <QRect>
 #include <QString>
 #include <QStringList>
 
@@ -38,7 +40,16 @@ public:
     bool startsProject() const { return m_startsProject; }
 
     void setFolder(const QString &path);
+    // What the window looked like as it was accepted, and where its request box
+    // was, for the editor that takes its place.
+    QPixmap lastLook() const { return m_lastLook; }
+    QRect composerRect() const;
     static QStringList suggestions();
+
+signals:
+    // A folder is chosen, with what to do in it: result() is Accepted and the
+    // window stays up, for the editor to open over it.
+    void chosen();
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -52,6 +63,11 @@ private:
     void updateControls();
     void showFolderMenu();
 
+    void enter();
+    QPixmap m_lastLook;
+    bool m_entered = false;
+    QWidget *m_heading = nullptr;
+    QWidget *m_ideaRow = nullptr;
     QString m_kerfd;
     QString m_folder;
     QString m_request;

@@ -2,6 +2,7 @@
 
 #include "design_tokens.h"
 #include "icons.h"
+#include "stage_motion.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -193,13 +194,17 @@ void ProjectSidebar::rebuild() {
         row->hide();
         row->deleteLater();
     }
+    const QStringList before = m_rowKeys;
+    const bool first = before.isEmpty();
     m_rows.clear();
     m_rowKeys.clear();
     m_newConversation = nullptr;
-    const auto add = [this](SidebarRow *row, const QString &key) {
+    const auto add = [this, before, first](SidebarRow *row, const QString &key) {
         m_list->insertWidget(int(m_rows.size()), row);
         m_rows << row;
         m_rowKeys << key;
+        // A new conversation arrives; the rest were here all along.
+        if (!first && !before.contains(key)) moves::fadeIn(row);
     };
     constexpr int kChildIndent = space::s16 + space::s8;
     m_heading->setVisible(!m_projects.isEmpty());

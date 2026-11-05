@@ -1,5 +1,6 @@
 #include "stage_shell.h"
 
+#include "components.h"
 #include "design_tokens.h"
 
 #include <QAbstractSpinBox>
@@ -11,6 +12,8 @@
 #include <QPlainTextEdit>
 #include <QResizeEvent>
 #include <QTextEdit>
+#include <QTimer>
+#include <QVariantAnimation>
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +33,12 @@ QRect fitted(const QRect &slot, double aspect) {
     return QRect(slot.left() + (slot.width() - width) / 2, slot.top() + (slot.height() - height) / 2, width, height);
 }
 
+QRect paddedSlot(const QRect &slot) {
+    using namespace tokens::layout;
+    if (slot.width() <= 2 * picturePad || slot.height() <= 2 * picturePad) return slot;
+    return slot.adjusted(picturePad, picturePad, -picturePad, -picturePad);
+}
+
 Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes) {
     using namespace tokens::layout;
     Rects out;
@@ -47,48 +56,37 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     const int rest = room - conversation;
     const int left = side + conversation;
     if (panes.panelOpen()) out.panel = QRect(left, toolbar, rest, h);
-    if (!out.wide && panes.panelOpen()) {
-        // A vertical picture has its column at the right, as a phone would, and
-        // the rest of the width holds the conversation over the timeline.
-        const int block = std::min(h, pictureTransport);
-        const int slotHeight = h - block;
-        int column = 0;
-        if (panes.picture) {
-            const int least = std::min(room, pictureColumnLeast);
-            const int most = std::max(least, room - workUprightLeast);
-            column = std::clamp(int(std::lround(slotHeight * shape)), least, most);
-        }
-        const int work = room - column;
-        const int timeline = panes.timeline ? std::min(h, std::max(timelineUprightLeast, int(std::lround(h * timelineUprightShare)))) : 0;
-        out.conversation = QRect(side, toolbar, work, h - timeline);
-        if (panes.timeline) out.timeline = QRect(side, toolbar + h - timeline, work, timeline);
-        out.panel = QRect();
-        if (panes.picture) {
-            out.panel = QRect(side + work, toolbar, column, h);
-            out.slot = QRect(side + work, toolbar, column, slotHeight);
-            out.transport = QRect(side + work, toolbar + slotHeight, column, block);
-        }
-    } else if (panes.picture && panes.timeline && out.wide) {
-        // The timeline has its share, at least its least, and what the
-        // picture's aspect does not use.
-        const int timeline = std::min(h, std::max(timelineWideLeast, int(std::lround(h * timelineWideShare))));
-        const int slotHeight = std::min(h - timeline, int(std::lround(rest / shape)));
-        out.slot = QRect(left, toolbar, rest, slotHeight);
-        out.timeline = QRect(left, toolbar + slotHeight, rest, h - slotHeight);
+    // While watching changes the stage grows over the conversation, which stays
+    // where it is, dimmed.
+    const int reach = panes.reel && panes.panelOpen() ? std::min(rest, reelReach) : 0;
+    const int stageLeft = left - reach;
+    const int stageWidth = rest + reach;
+    if (reach > 0) out.panel = QRect(stageLeft, toolbar, stageWidth, h);
+    if (panes.picture && panes.timeline) {
+        // The picture over the timeline, whichever its shape. Under a wide
+        // picture the timeline also has what the picture's aspect does not use.
+        const bool roomy = out.wide && !panes.reel;
+        const double share = roomy ? timelineWideShare : timelineUprightShare;
+        const int least = roomy ? timelineWideLeast : timelineUprightLeast;
+        const int timeline = std::min(h, std::max(least, int(std::lround(h * share))));
+        int slotHeight = h - timeline;
+        if (out.wide) slotHeight = std::min(slotHeight, int(std::lround(stageWidth / shape)));
+        out.slot = QRect(stageLeft, toolbar, stageWidth, slotHeight);
+        out.timeline = QRect(stageLeft, toolbar + slotHeight, stageWidth, h - slotHeight);
     } else if (panes.picture) {
         // No timeline to carry the transport: the block is under the picture.
         const int block = std::min(h, pictureTransportLow);
-        out.slot = QRect(left, toolbar, rest, h - block);
-        out.transport = QRect(left, toolbar + h - block, rest, block);
+        out.slot = QRect(stageLeft, toolbar, stageWidth, h - block);
+        out.transport = QRect(stageLeft, toolbar + h - block, stageWidth, block);
     } else if (panes.timeline) {
-        out.timeline = out.panel;
+        out.timeline = QRect(stageLeft, toolbar, stageWidth, h);
     }
+    // The strip floats over the picture's top.
     if (panes.reel && !out.slot.isEmpty()) {
-        const int bar = std::min(out.slot.height(), reelBar);
-        out.reel = QRect(out.slot.left(), out.slot.top(), out.slot.width(), bar);
-        out.slot.setTop(out.slot.top() + bar);
+        out.reel = QRect(out.slot.left() + picturePad, out.slot.top() + picturePad,
+                         std::min(out.slot.width() - 2 * picturePad, 460), reelBar);
     }
-    out.picture = fitted(out.slot, shape);
+    out.picture = out.slot.isEmpty() ? out.slot : fitted(paddedSlot(out.slot), shape);
     // A sheet lies over the conversation alone, at its panel side, so a drag
     // reaches the timeline.
     const auto sheet = [&](int width) {
@@ -127,6 +125,59 @@ protected:
 
 QWidget *seam(QWidget *parent, const char *name) { return new Seam(parent, name); }
 
+// The room's colour over a region, as much as `level`.
+class Veil final : public QWidget {
+public:
+    explicit Veil(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("stageVeil"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        hide();
+        m_ease.setEasingCurve(tokens::easing());
+        connect(&m_ease, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) { apply(value.toReal()); });
+    }
+    qreal level() const { return m_level; }
+    void fadeTo(qreal level, int delay, int duration) {
+        ++m_order;
+        m_ease.stop();
+        const int length = ui::motionDuration(duration);
+        if (length <= 0) {
+            apply(level);
+            return;
+        }
+        const int order = m_order;
+        QTimer::singleShot(delay, this, [this, level, length, order] {
+            if (order != m_order) return;
+            m_ease.setDuration(length);
+            m_ease.setStartValue(m_level);
+            m_ease.setEndValue(level);
+            m_ease.start();
+        });
+    }
+    void hold(qreal level) {
+        ++m_order;
+        m_ease.stop();
+        apply(level);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QPainter p(this);
+        QColor room = tokens::color(tokens::chrome);
+        room.setAlphaF(float(m_level));
+        p.fillRect(event->rect(), room);
+    }
+
+private:
+    void apply(qreal level) {
+        m_level = level;
+        setVisible(level > 0.0 && parentWidget());
+        update();
+    }
+    QVariantAnimation m_ease;
+    qreal m_level = 0.0;
+    int m_order = 0;
+};
+
 } // namespace
 
 StageShell::StageShell(QWidget *parent) : QWidget(parent) {
@@ -140,6 +191,7 @@ StageShell::StageShell(QWidget *parent) : QWidget(parent) {
     m_seamTray = seam(this, "stageSeamTray");
     m_seamSheet->hide();
     m_seamTray->hide();
+    m_veil = new Veil(this);
 }
 
 void StageShell::setRegions(QWidget *picture, QWidget *conversation, QWidget *timeline) {
@@ -173,6 +225,7 @@ void StageShell::setCompareShown(bool shown) {
     if (shown == m_compareShown) return;
     m_compareShown = shown;
     place();
+    update();
 }
 
 void StageShell::setTransport(QWidget *transport) {
@@ -231,14 +284,98 @@ QString StageShell::sheetId(Sheet sheet) {
 void StageShell::setAspect(double aspect) {
     if (aspect <= 0.0 || aspect == m_aspect) return;
     m_aspect = aspect;
+    transition();
+}
+
+void StageShell::setPanes(const stage::Panes &panes, const QRect &pictureOrigin) {
+    if (panes == m_panes) return;
+    m_panes = panes;
+    transition(pictureOrigin);
+    emit panesChanged();
+}
+
+void StageShell::setMotion(QWidget *motion) {
+    m_motion = motion;
+    if (motion) motion->setParent(this);
     place();
 }
 
-void StageShell::setPanes(const stage::Panes &panes) {
-    if (panes == m_panes) return;
-    m_panes = panes;
+void StageShell::transition(const QRect &pictureOrigin) {
+    const int duration = ui::motionDuration(tokens::motion::stage);
+    if (m_moves) {
+        m_moves->stop();
+        m_moves->deleteLater();
+        m_moves = nullptr;
+    }
+    if (duration <= 0 || !isVisible()) {
+        place();
+        return;
+    }
+    QWidget *const regions[] = {m_sidebar, m_picture, m_conversation, m_timeline, m_transport, m_reelBar};
+    QList<QPair<QWidget *, QRect>> before;
+    for (QWidget *region : regions)
+        if (region) before.append({region, region->isVisible() ? region->geometry() : QRect()});
     place();
-    emit panesChanged();
+    QList<Move> moves;
+    for (const auto &[region, from] : std::as_const(before)) {
+        const bool shown = region->isVisible();
+        const QRect to = shown ? region->geometry() : QRect();
+        Move move;
+        move.widget = region;
+        if (from.isNull() && to.isNull()) continue;
+        if (from == to) continue;
+        if (from.isNull()) {
+            // It comes from somewhere: the picture from what it grows out of.
+            move.from = region == m_picture && pictureOrigin.isValid() ? pictureOrigin
+                        : region == m_sidebar                          ? to.translated(-to.width(), 0)
+                        : region == m_timeline                         ? to.translated(0, 48)
+                        : region == m_picture                          ? to.translated(48, 0)
+                                                                       : to;
+            move.to = to;
+        } else if (to.isNull()) {
+            move.from = from;
+            // The picture goes back into what it names, if anything.
+            move.to = region == m_sidebar                          ? from.translated(-from.width(), 0)
+                      : region == m_timeline                       ? from.translated(0, 48)
+                      : region == m_picture && pictureOrigin.isValid() ? pictureOrigin
+                      : region == m_picture                        ? from.translated(48, 0)
+                                                                   : from;
+            region->show();
+        } else {
+            move.from = from;
+            move.to = to;
+        }
+        region->setGeometry(move.from);
+        moves << move;
+    }
+    if (moves.isEmpty()) return;
+    for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn}) seam->hide();
+    m_moves = new QVariantAnimation(this);
+    m_moves->setDuration(duration);
+    m_moves->setStartValue(0.0);
+    m_moves->setEndValue(1.0);
+    m_moves->setEasingCurve(tokens::easing());
+    connect(m_moves, &QVariantAnimation::valueChanged, this, [this, moves](const QVariant &value) {
+        const qreal at = value.toReal();
+        update();
+        for (const Move &move : moves) {
+            if (!move.widget) continue;
+            const auto mix = [at](int a, int b) { return int(std::lround(a + (b - a) * at)); };
+            move.widget->setGeometry(mix(move.from.left(), move.to.left()), mix(move.from.top(), move.to.top()),
+                                     mix(move.from.width(), move.to.width()), mix(move.from.height(), move.to.height()));
+            if (move.widget == m_timeline) m_veil->setGeometry(m_timeline->geometry());
+        }
+    });
+    connect(m_moves, &QAbstractAnimation::finished, this, [this] {
+        if (m_moves) m_moves->deleteLater();
+        m_moves = nullptr;
+        place();
+        // Gone with what it lay over.
+        if (m_timeline && !m_timeline->isVisible()) static_cast<Veil *>(m_veil)->hold(0.0);
+        emit transitionFinished();
+    });
+    emit transitionStarted();
+    m_moves->start();
 }
 
 stage::Rects StageShell::rects() const {
@@ -325,9 +462,14 @@ void StageShell::place() {
     placeRegion(m_timeline, r.timeline);
     placeRegion(m_transport, r.transport);
     placeRegion(m_reelBar, r.reel);
-    // The versions lie over the timeline, and leave the picture free.
-    placeRegion(m_compare, m_compareShown ? (r.timeline.isEmpty() ? r.panel : r.timeline) : QRect());
+    // The stage lies over the conversation while it reaches across it.
+    for (QWidget *region : {m_picture, m_timeline, m_transport, m_reelBar})
+        if (region) region->raise();
+    if (m_timeline) m_veil->setGeometry(m_timeline->geometry());
+    m_veil->raise();
     if (m_compare && m_compareShown) m_compare->raise();
+    // The cards take the picture's place, with the timeline still under them.
+    placeRegion(m_compare, m_compareShown ? r.slot : QRect());
     // One hairline between the regions, drawn inside the edge of what lies
     // right of or under it.
     const auto placeSeam = [](QWidget *seam, const QRect &rect) {
@@ -336,13 +478,13 @@ void StageShell::place() {
         seam->raise();
     };
     placeSeam(m_seamSidebar, r.sidebar.isEmpty() ? QRect() : QRect(r.conversation.left(), r.conversation.top(), kSeam, r.conversation.height()));
-    placeSeam(m_seamUpright, r.panel.isEmpty() ? QRect() : QRect(r.panel.left(), r.panel.top(), kSeam, r.panel.height()));
+    // No line between the conversation and the stage: they share the room.
+    placeSeam(m_seamUpright, QRect());
     QRect across;
     if (!r.transport.isEmpty()) across = QRect(r.transport.left(), r.transport.top(), r.transport.width(), kSeam);
-    else if (r.wide && !r.slot.isEmpty() && !r.timeline.isEmpty()) across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
+    else if (!r.slot.isEmpty() && !r.timeline.isEmpty()) across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
     placeSeam(m_seamAcross, across);
-    // Beside a vertical picture, over the timeline under the conversation.
-    placeSeam(m_seamColumn, !r.wide && !r.timeline.isEmpty() ? QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam) : QRect());
+    placeSeam(m_seamColumn, QRect());
 
     // The tray, over the regions; a sheet over the tray.
     for (int index = 0; index < 2; ++index) {
@@ -377,6 +519,10 @@ void StageShell::place() {
         m_seamSheet->setGeometry(sheet.left() - kSeam, sheet.top(), kSeam, sheet.height());
         m_seamSheet->raise();
     }
+    if (m_motion) {
+        m_motion->setGeometry(rect());
+        m_motion->raise();
+    }
     // The bars, stacked at the top of the content, over everything but the sidebar.
     const int barLeft = r.sidebar.width();
     const int barWidth = width() - barLeft;
@@ -390,12 +536,60 @@ void StageShell::place() {
     }
 }
 
-void StageShell::resizeEvent(QResizeEvent *) { place(); }
+void StageShell::resizeEvent(QResizeEvent *) {
+    if (m_moves) {
+        m_moves->stop();
+        m_moves->deleteLater();
+        m_moves = nullptr;
+    }
+    place();
+}
+
+void StageShell::veilTimeline(qreal level, int delay, int duration) {
+    auto *veil = static_cast<Veil *>(m_veil);
+    if (delay == 0 && duration == 0) veil->hold(level);
+    else veil->fadeTo(level, delay, duration);
+}
+
+qreal StageShell::timelineVeil() const { return static_cast<Veil *>(m_veil)->level(); }
+
+void StageShell::setLight(const QColor &light) {
+    if (light == m_light) return;
+    m_light = light;
+    update();
+}
 
 void StageShell::paintEvent(QPaintEvent *event) {
-    // Nothing shows through: the regions fill the shell.
+    // One room: the conversation and the picture's region are clear over it, so
+    // the picture floats, its light reaching behind the conversation.
     QPainter p(this);
     p.fillRect(event->rect(), tokens::color(tokens::chrome));
+    if (!m_picture || m_picture->isHidden() || m_compareShown) return;
+    const QRectF picture = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
+    if (picture.isEmpty()) return;
+    p.setRenderHint(QPainter::Antialiasing, true);
+    if (m_light.isValid() && m_light.alphaF() > 0.0) {
+        const QRectF lit = picture.adjusted(-220, -150, 220, 150);
+        p.save();
+        p.translate(lit.center());
+        p.scale(lit.width() / 2.0, lit.height() / 2.0);
+        QRadialGradient light(QPointF(0, 0), 1.0);
+        QColor core = m_light;
+        core.setAlphaF(float(m_light.alphaF() * 0.55));
+        QColor edge = m_light;
+        edge.setAlphaF(0.0f);
+        light.setColorAt(0.4, core);
+        light.setColorAt(1.0, edge);
+        p.fillRect(QRectF(-1, -1, 2, 2), light);
+        p.restore();
+    }
+    // Its shadow, wide and soft under it.
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 12));
+    for (int step = 10; step >= 1; --step) {
+        const qreal out = step * 5.0;
+        p.drawRoundedRect(picture.adjusted(-out, -out + 18, out, out + 18), tokens::layout::pictureRadius + out, tokens::layout::pictureRadius + out);
+    }
 }
 
 bool StageShell::eventFilter(QObject *watched, QEvent *event) {
