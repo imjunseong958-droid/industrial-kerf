@@ -18,9 +18,9 @@ using namespace tokens;
 
 namespace {
 
-constexpr int kRowHeight = 30;
+constexpr int kRowHeight = height::h28;
 constexpr int kPadding = space::s8;
-constexpr int kIcon = 16;
+constexpr int kIcon = 14;
 
 QString cleanPath(const QString &path) { return path.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(path).absoluteFilePath()); }
 
@@ -74,7 +74,7 @@ void SidebarRow::paintEvent(QPaintEvent *) {
         p.drawText(QRectF(right - w, 0, w + 1, height()), Qt::AlignRight | Qt::AlignVCenter, m_trailing);
         right -= w + space::s8;
     }
-    p.setFont(tokens::font(body));
+    p.setFont(tokens::font(control));
     p.setPen(ink_);
     const QString shown = QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, int(right - x));
     p.drawText(QRectF(x, 0, right - x, height()), Qt::AlignLeft | Qt::AlignVCenter, shown);
@@ -121,7 +121,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scroll->setFadeColor(tokens::color(well));
+    m_scroll->setFadeColor(tokens::color(chrome));
     m_scroll->setStyleSheet(QStringLiteral("QScrollArea#sidebarScroll { background: transparent; border: 0; }"));
     m_scroll->viewport()->setAutoFillBackground(false);
     auto *content = new QWidget;
@@ -201,7 +201,7 @@ void ProjectSidebar::rebuild() {
         m_rows << row;
         m_rowKeys << key;
     };
-    constexpr int kChildIndent = space::s16 + space::s8;
+    constexpr int kChildIndent = space::s16 + space::s6;
     m_heading->setVisible(!m_projects.isEmpty());
     for (const QString &path : std::as_const(m_projects)) {
         auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
@@ -234,7 +234,7 @@ void ProjectSidebar::rebuild() {
 
 void ProjectSidebar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
-    p.fillRect(event->rect(), tokens::color(well));
+    p.fillRect(event->rect(), tokens::color(chrome));
 }
 
 } // namespace kerf

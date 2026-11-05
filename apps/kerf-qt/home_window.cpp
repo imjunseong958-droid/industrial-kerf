@@ -37,30 +37,7 @@ using namespace tokens;
 
 namespace {
 
-constexpr int kColumn = 720;
-
-// One thing to try: an outline and quiet words, under the question.
-class IdeaButton final : public ui::KitButton {
-public:
-    explicit IdeaButton(const QString &text) {
-        setText(text);
-        setObjectName(QStringLiteral("homeIdea"));
-        setFocusPolicy(Qt::TabFocus);
-        setFixedSize(ui::snapWidth(control, text) + 2 * space::s12, height::h28);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF r = rect();
-        ui::paintInsetLine(p, r, radius::control, tokens::color(isHovered() ? lineh : line2));
-        p.setFont(tokens::font(control));
-        p.setPen(tokens::color(isHovered() ? ink : ink2));
-        p.drawText(r, Qt::AlignCenter, text());
-        if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
-    }
-};
+constexpr int kColumn = 680;
 
 } // namespace
 
@@ -102,7 +79,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     auto *middle = new QVBoxLayout;
     middle->setContentsMargins(space::s16, layout::toolbar, space::s16, layout::toolbar);
     middle->setSpacing(0);
-    middle->addStretch(4);
+    middle->addStretch(1);
 
     auto *heading = new QLabel(QStringLiteral("What should we make?"));
     heading->setObjectName(QStringLiteral("homeHeading"));
@@ -114,12 +91,11 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
         heading->setPalette(palette);
     }
     middle->addWidget(heading);
-    middle->addSpacing(space::s16 + space::s8);
+    middle->addSpacing(space::s16);
 
     m_composer = new Composer;
     m_composer->setObjectName(QStringLiteral("homeComposer"));
     m_composer->setDivider(false);
-    m_composer->setRoomy();
     m_composer->setMaximumWidth(kColumn);
     m_composer->setOverlayParent(this);
     m_composer->input()->setPlaceholderText(QStringLiteral("Say what to make from this folder"));
@@ -150,7 +126,8 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     ideas->setSpacing(space::s8);
     ideas->addStretch(1);
     for (const QString &idea : suggestions()) {
-        auto *chip = new IdeaButton(idea);
+        auto *chip = new ui::Chip(idea);
+        chip->setObjectName(QStringLiteral("homeIdea"));
         connect(chip, &QAbstractButton::clicked, this, [this, idea] { m_composer->fill(idea); });
         ideas->addWidget(chip);
         m_ideas << chip;
@@ -164,7 +141,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_openOnly->setMeta(true);
     connect(m_openOnly, &QAbstractButton::clicked, this, [this] { finish(QString()); });
     middle->addWidget(m_openOnly, 0, Qt::AlignHCenter);
-    middle->addStretch(5);
+    middle->addStretch(1);
     root->addLayout(middle, 1);
 
     const QStringList recent = ProjectLauncher::recentProjects();

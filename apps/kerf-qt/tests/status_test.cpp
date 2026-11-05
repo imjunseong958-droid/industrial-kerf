@@ -144,12 +144,12 @@ private slots:
         QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Sign in to Kerf Cloud in Settings"));
         window.m_cloudAccess = QStringLiteral("ready");
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
         // Own key, and none set (the environment's counts too).
         window.m_ownKeyRadio->setChecked(true);
         window.m_anthropicKey->setText(QStringLiteral("test-key"));
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
         window.m_anthropicKey->clear();
         window.updateCommandStates();
         if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY")) {
@@ -159,7 +159,7 @@ private slots:
         // Busy is not a setup problem.
         window.m_anthropicKey->setText(QStringLiteral("test-key"));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
     }
 
     void disconnectedControlsAndRecovery() {

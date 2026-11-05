@@ -7,7 +7,6 @@
 #include <QLabel>
 #include <QPaintEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPalette>
 #include <QVBoxLayout>
 
@@ -55,15 +54,10 @@ void ComparePoster::setImage(const QImage &image) {
 void ComparePoster::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QPainterPath clip;
-    clip.addRoundedRect(QRectF(rect()), radius::small, radius::small);
-    p.setClipPath(clip);
-    p.fillRect(rect(), color(well));
+    p.fillRect(rect(), color(overlay::deviceScreen));
     if (m_image.isNull()) return;
-    // It fills the card; a poster only has to say which clip this is.
     QSize shown = m_image.size();
-    shown.scale(size(), Qt::KeepAspectRatioByExpanding);
+    shown.scale(size(), Qt::KeepAspectRatio);
     const QRect target(QPoint((width() - shown.width()) / 2, (height() - shown.height()) / 2), shown);
     p.drawImage(target, m_image);
 }
@@ -109,11 +103,11 @@ CompareView::Card &CompareView::cardFor(const QString &key) {
     card.poster = new ComparePoster;
     inner->addWidget(card.poster, 1);
     auto *name = new QLabel(QStringLiteral("Version %1").arg(key));
-    name->setFont(tokens::font(bodyName));
+    name->setFont(tokens::font(controlStrong));
     setInk(name, ink);
     inner->addWidget(name);
     card.status = new QLabel;
-    card.status->setFont(tokens::font(control));
+    card.status->setFont(tokens::font(meta));
     card.status->setWordWrap(true);
     setInk(card.status, ink2);
     inner->addWidget(card.status);
@@ -123,7 +117,6 @@ CompareView::Card &CompareView::cardFor(const QString &key) {
     setInk(card.changes, ink2);
     inner->addWidget(card.changes);
     auto *actions = new QHBoxLayout;
-    actions->setContentsMargins(0, space::s4, 0, 0);
     actions->setSpacing(space::s4);
     card.watch = new ui::Button(QStringLiteral("Watch"), ui::Button::Kind::Secondary);
     card.watch->setObjectName(QStringLiteral("compareWatch"));

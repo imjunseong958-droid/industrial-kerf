@@ -21,7 +21,7 @@ class Composer;
 class ProjectSidebar;
 
 namespace ui {
-class KitButton;
+class Chip;
 class GhostButton;
 } // namespace ui
 
@@ -60,7 +60,7 @@ private:
     Composer *m_composer = nullptr;
     ui::GhostButton *m_folderChip = nullptr;
     ui::GhostButton *m_openOnly = nullptr;
-    QList<ui::KitButton *> m_ideas;
+    QList<ui::Chip *> m_ideas;
     // The folder picker; tests replace it.
     std::function<QString()> m_pickFolder;
 };

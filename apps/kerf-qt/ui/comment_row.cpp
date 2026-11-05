@@ -616,7 +616,7 @@ void CommentRow::build() {
     // The text, 2 under the name line.
     m_body = new QLabel;
     m_body->setObjectName(QStringLiteral("commentBody"));
-    m_body->setFont(tokens::font(tokens::reading));
+    m_body->setFont(tokens::font(tokens::body));
     m_body->setWordWrap(true);
     m_body->setTextFormat(Qt::RichText);
     m_body->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);

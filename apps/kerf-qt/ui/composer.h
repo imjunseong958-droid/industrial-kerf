@@ -162,8 +162,6 @@ public:
     QHBoxLayout *toolRow() const { return m_toolRow; }
     // The hairline over the composer, where it closes a list.
     void setDivider(bool shown) { m_divider = shown; update(); }
-    // A larger box for when the composer is the whole of the window's work.
-    void setRoomy();
 
     // Where the popovers float: the panel. They are placed over the composer.
     void setOverlayParent(QWidget *parent);
@@ -232,7 +230,6 @@ private:
     QWidget *m_box = nullptr;
     QHBoxLayout *m_toolRow = nullptr;
     bool m_divider = true;
-    int m_leastInput = 22;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
     ui::IconButton *m_mention = nullptr;

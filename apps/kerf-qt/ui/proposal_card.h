@@ -213,7 +213,6 @@ private:
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
     ui::Button *m_watch = nullptr;
-    QWidget *m_watchBox = nullptr;
     bool m_hasWatch = false;
     ui::CheckBox *m_preview = nullptr;
     ui::GhostButton *m_script = nullptr;

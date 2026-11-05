@@ -105,16 +105,16 @@ private slots:
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
-    // The picture a column at the right, the conversation over the timeline.
+    // In the panel, two columns: the picture over the transport, the timeline.
     void verticalAtTheDesignSize() {
-        for (const auto &[aspect, width] : {std::pair{kPortrait, 477}, std::pair{kFeed, 678}, std::pair{1.0, 848}}) {
+        for (const double aspect : {kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             QVERIFY(!r.wide);
-            QCOMPARE(r.slot, QRect(1600 - width, 40, width, 848));
+            QCOMPARE(r.slot, QRect(640, 40, 360, 800));
             QCOMPARE(r.picture, stage::fitted(r.slot, aspect));
-            QCOMPARE(r.transport, QRect(1600 - width, 888, width, 112));
-            QCOMPARE(r.conversation, QRect(240, 40, 1360 - width, 672));
-            QCOMPARE(r.timeline, QRect(240, 712, 1360 - width, 288));
+            QCOMPARE(r.transport, QRect(640, 840, 360, 160));
+            QCOMPARE(r.timeline, QRect(1000, 40, 600, 960));
+            QCOMPARE(r.conversation, QRect(240, 40, 400, 960));
             expectFilled(r, QSize(1600, 1000), "vertical");
         }
     }
@@ -175,41 +175,41 @@ private slots:
         }
     }
 
-    // The column leaves 480 on its left while it can, down to 240; the picture
-    // then letterboxes.
+    // The timeline keeps 600 of width while the picture's column can give it
+    // up, down to 240; the picture then letterboxes.
     void verticalAtOtherWindowSizes() {
         // A square picture in a narrow window.
         {
             const stage::Rects r = stage::rects(QSize(1280, 800), 1.0);
-            QCOMPARE(r.conversation, QRect(240, 40, 480, 532));
-            QCOMPARE(r.slot, QRect(720, 40, 560, 648));
-            QCOMPARE(r.picture, QRect(720, 84, 560, 560));
-            QCOMPARE(r.transport, QRect(720, 688, 560, 112));
-            QCOMPARE(r.timeline, QRect(240, 572, 480, 228));
+            QCOMPARE(r.conversation, QRect(240, 40, 400, 760));
+            QCOMPARE(r.slot, QRect(640, 40, 240, 600));
+            QCOMPARE(r.picture, QRect(640, 220, 240, 240));
+            QCOMPARE(r.transport, QRect(640, 640, 240, 160));
+            QCOMPARE(r.timeline, QRect(880, 40, 400, 760));
             expectFilled(r, QSize(1280, 800), "letterbox");
         }
         // Wide enough: flush.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kPortrait);
-            QCOMPARE(r.slot, QRect(1835, 40, 725, 1288));
+            QCOMPARE(r.slot, QRect(640, 40, 698, 1240));
             QCOMPARE(r.picture, r.slot);
-            QCOMPARE(r.timeline, QRect(240, 1020, 1595, 420));
+            QCOMPARE(r.timeline, QRect(1338, 40, 1222, 1400));
             expectFilled(r, QSize(2560, 1440), "large");
         }
         // Short: the column keeps its least, for the transport.
         {
             const stage::Rects r = stage::rects(QSize(1600, 500), kPortrait);
-            QCOMPARE(r.slot, QRect(1360, 40, 240, 348));
-            QCOMPARE(r.picture.size(), QSize(196, 348));
-            QCOMPARE(r.transport, QRect(1360, 388, 240, 112));
+            QCOMPARE(r.slot, QRect(640, 40, 240, 300));
+            QCOMPARE(r.picture.size(), QSize(169, 300));
+            QCOMPARE(r.transport, QRect(640, 340, 240, 160));
             expectFilled(r, QSize(1600, 500), "short");
         }
         // Narrow: the column has its least, the timeline the rest.
         {
             const stage::Rects r = stage::rects(QSize(800, 900), kPortrait);
-            QCOMPARE(r.slot.width(), 320);
-            QCOMPARE(r.timeline, QRect(0, 642, 480, 258));
-            QCOMPARE(r.conversation.width(), 480);
+            QCOMPARE(r.slot.width(), 240);
+            QCOMPARE(r.timeline, QRect(560, 40, 240, 860));
+            QCOMPARE(r.conversation.width(), 320);
             expectFilled(r, QSize(800, 900), "narrow");
         }
     }
@@ -227,10 +227,9 @@ private slots:
     void sheetsAndTheTrayStandOverTheRegions() {
         for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
-            const int side = r.conversation.right() + 1;
-            QCOMPARE(r.media, QRect(side - 272, 40, 272, r.conversation.height()));
-            QCOMPARE(r.browser, QRect(side - 304, 40, 304, r.conversation.height()));
-            QCOMPARE(r.inspector, QRect(side - 304, 40, 304, r.conversation.height()));
+            QCOMPARE(r.media, QRect(640 - 272, 40, 272, r.conversation.height()));
+            QCOMPARE(r.browser, QRect(640 - 304, 40, 304, r.conversation.height()));
+            QCOMPARE(r.inspector, QRect(640 - 304, 40, 304, r.conversation.height()));
             QCOMPARE(r.tray, QRect(240, 656, 1360, 344));
             // A sheet leaves the timeline free: a drag can reach it.
             QVERIFY(!r.media.intersects(r.timeline));
@@ -315,7 +314,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
         // At once: no animation, nothing left to process.
         expectAt(9.0 / 16.0);
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 0, 477, 848));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 80, 360, 640));
         window.applySnapshot(snapshotOf(QSize(1080, 1350)));
         expectAt(4.0 / 5.0);
         window.resize(1280, 800);
@@ -324,7 +323,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1080)));
         expectAt(1.0);
         // The black is the picture's: letterboxed at this size.
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 44, 560, 560));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 180, 240, 240));
         const QImage shot = window.m_viewer->grab().toImage();
         QCOMPARE(shot.pixelColor(QPoint(10, 4) * shot.devicePixelRatio()).rgb(), qRgb(0, 0, 0));
         window.close();
@@ -720,16 +719,14 @@ private slots:
         QCOMPARE(wide.transport, QRect(640, 912, 960, 88));
         expectFilled(wide, QSize(1600, 1000), "picture");
         const stage::Rects upright = stage::rects(QSize(1600, 1000), kPortrait, 40, picture);
-        QCOMPARE(upright.slot, QRect(1123, 40, 477, 848));
-        QCOMPARE(upright.transport, QRect(1123, 888, 477, 112));
+        QCOMPARE(upright.transport, QRect(640, 840, 960, 160));
         expectFilled(upright, QSize(1600, 1000), "upright picture");
 
         stage::Panes timeline;
         timeline.picture = false;
         for (const double aspect : {kWide, kPortrait}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect, 40, timeline);
-            if (aspect == kWide) QCOMPARE(r.timeline, r.panel);
-            else QCOMPARE(r.timeline, QRect(240, 712, 1360, 288));
+            QCOMPARE(r.timeline, r.panel);
             QVERIFY(r.slot.isEmpty());
             QVERIFY(r.transport.isEmpty());
             expectFilled(r, QSize(1600, 1000), "timeline");

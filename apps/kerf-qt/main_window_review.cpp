@@ -618,7 +618,7 @@ void MainWindow::updateComposerHint() {
     // The design's one placeholder. Offline says so, and so does an agent that
     // cannot take requests (no key, Kerf Cloud signed out): the registry's
     // reason for ai.ask says why and what to do.
-    QString placeholder = QStringLiteral("Ask Kerf, or leave a note");
+    QString placeholder = QStringLiteral("Comment or ask Kerf");
     QString tip = QStringLiteral("Return sends · Shift-Return starts a new line");
     if (!m_connected) {
         placeholder = QStringLiteral("Connect to comment or ask Kerf");

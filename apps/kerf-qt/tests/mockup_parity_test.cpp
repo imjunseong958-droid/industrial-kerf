@@ -171,7 +171,7 @@ struct Format {
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
     {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(746, 40, 747, 420), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
-    {"916", QSize(1080, 1920), QRect(1123, 40, 477, 848), QRect(1123, 40, 477, 848), QRect(240, 40, 883, 672), QRect(240, 712, 883, 288)},
+    {"916", QSize(1080, 1920), QRect(640, 40, 360, 800), QRect(640, 120, 360, 640), QRect(240, 40, 400, 960), QRect(1000, 40, 600, 960)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -457,16 +457,14 @@ private:
         const QList<CommentRow *> rows = chat->m_content->findChildren<CommentRow *>();
         QVERIFY(!rows.isEmpty());
         // (A row keeps the design's 8 to the list's edge at every width.)
-        // Within the column it keeps to read in, when it has more room than that.
-        const int inset = std::max(0, (chat->width() - tokens::layout::conversationColumn) / 2);
         for (const CommentRow *row : rows)
-            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8 - inset);
+            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8);
         const QList<ProposalCard *> cards = chat->m_content->findChildren<ProposalCard *>();
         for (const ProposalCard *card : cards) {
             if (!card->isVisibleTo(chat)) continue;
             // Its gutters are its row's own, not a max-width's.
             const int right = card->mapTo(chat->m_content, QPoint(card->width(), 0)).x();
-            QVERIFY2(right >= width - 16 - inset, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
+            QVERIFY2(right >= width - 16, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
         }
     }
 };

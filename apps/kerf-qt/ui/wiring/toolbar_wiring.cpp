@@ -155,7 +155,6 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_followButton = paneButton(QStringLiteral("g-eye"), "paneFollowKerf", QStringLiteral("Follow Kerf"), QStringLiteral("view.followKerf"));
     w->m_followButton->setOn(w->m_followKerf);
     row->addWidget(w->m_followButton);
-    row->addSpacing(8 - row->spacing());
     w->m_pictureButton = paneButton(QStringLiteral("g-picture"), "panePicture", QStringLiteral("Picture"), QStringLiteral("view.picture"));
     row->addWidget(w->m_pictureButton);
     w->m_timelineButton = paneButton(QStringLiteral("g-timeline"), "paneTimeline", QStringLiteral("Timeline"), QStringLiteral("view.timeline"));
