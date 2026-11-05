@@ -29,7 +29,9 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
   Seconds round to the nearest frame.
 - Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
-  Interpolation: linear (default), hold, ease-in, ease-out, ease.
+  Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve's
+  control points as a graph editor gives them, `x1,y1,x2,y2`:
+  `scale={0f:1 12f:1.2:0.2,0.8,0.4,1}`. Up may overshoot, for a bounce.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as

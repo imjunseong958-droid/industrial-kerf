@@ -28,4 +28,4 @@ pub use ops::{
 };
 pub use time::{Rate, Ratio, Time, TimeError};
 pub use validate::validate;
-pub use value::{Interp, Keyframe, Param, Rgba, Value};
+pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};
