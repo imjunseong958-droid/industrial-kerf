@@ -295,6 +295,8 @@ void FloatingList::leaveEvent(QEvent *) {
 
 Composer::Composer(QWidget *parent) : QFrame(parent) {
     setObjectName(QStringLiteral("chatComposer"));
+    // The box shows its focus; a ring on the text inside would be cut off by it.
+    setProperty("ringsOwnFields", true);
     // The app's sheet draws #chatComposer's old divider; the composer paints its own.
     setStyleSheet(QStringLiteral("QFrame#chatComposer { border: 0; background: transparent; }"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -315,12 +317,12 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_input->setFrameShape(QFrame::NoFrame);
     m_input->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_input->setFont(tokens::font(tokens::body));
+    m_input->setFont(tokens::font(tokens::reading));
     m_input->document()->setDocumentMargin(0);
-    m_input->setPlaceholderText(QStringLiteral("Comment or ask Kerf"));
+    m_input->setPlaceholderText(QStringLiteral("Ask Kerf, or leave a note"));
     m_input->setStyleSheet(QStringLiteral("QTextEdit#chatInput, QTextEdit#chatInput:focus, QTextEdit#chatInput:hover, "
                                           "QTextEdit#chatInput:disabled { background: transparent; border: 0; padding: 0; "
-                                          "color: %1; font-size: 13px; }")
+                                          "color: %1; font-size: 14px; }")
                                .arg(color(ink).name(QColor::HexRgb)));
     {
         QPalette palette = m_input->palette();
@@ -328,7 +330,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         palette.setColor(QPalette::Text, color(ink));
         m_input->setPalette(palette);
     }
-    m_input->setFixedHeight(20);
+    m_input->setFixedHeight(22);
     m_input->installEventFilter(this);
     connect(m_input->document(), &QTextDocument::contentsChanged, this, [this] {
         fitInput();
@@ -580,11 +582,20 @@ void Composer::placePopovers() {
     }
 }
 
+void Composer::setRoomy() {
+    m_leastInput = 52;
+    m_input->setStyleSheet(m_input->styleSheet().replace(QStringLiteral("font-size: 14px"), QStringLiteral("font-size: 15px")));
+    QFont font = m_input->font();
+    font.setPixelSize(15);
+    m_input->setFont(font);
+    fitInput();
+}
+
 bool Composer::versionsOn() const { return m_versions->isChecked() && !m_versions->isHidden(); }
 
 void Composer::fitInput() {
     m_input->document()->setTextWidth(m_input->viewport()->width());
-    const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), 20, 100);
+    const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), m_leastInput, 110);
     if (m_input->height() != lines) m_input->setFixedHeight(lines);
     m_input->setVerticalScrollBarPolicy(m_input->document()->size().height() > 100 ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
 }

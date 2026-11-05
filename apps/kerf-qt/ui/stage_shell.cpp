@@ -47,27 +47,37 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     const int rest = room - conversation;
     const int left = side + conversation;
     if (panes.panelOpen()) out.panel = QRect(left, toolbar, rest, h);
-    if (panes.picture && panes.timeline && out.wide) {
+    if (!out.wide && panes.panelOpen()) {
+        // A vertical picture has its column at the right, as a phone would, and
+        // the rest of the width holds the conversation over the timeline.
+        const int block = std::min(h, pictureTransport);
+        const int slotHeight = h - block;
+        int column = 0;
+        if (panes.picture) {
+            const int least = std::min(room, pictureColumnLeast);
+            const int most = std::max(least, room - workUprightLeast);
+            column = std::clamp(int(std::lround(slotHeight * shape)), least, most);
+        }
+        const int work = room - column;
+        const int timeline = panes.timeline ? std::min(h, std::max(timelineUprightLeast, int(std::lround(h * timelineUprightShare)))) : 0;
+        out.conversation = QRect(side, toolbar, work, h - timeline);
+        if (panes.timeline) out.timeline = QRect(side, toolbar + h - timeline, work, timeline);
+        out.panel = QRect();
+        if (panes.picture) {
+            out.panel = QRect(side + work, toolbar, column, h);
+            out.slot = QRect(side + work, toolbar, column, slotHeight);
+            out.transport = QRect(side + work, toolbar + slotHeight, column, block);
+        }
+    } else if (panes.picture && panes.timeline && out.wide) {
         // The timeline has its share, at least its least, and what the
         // picture's aspect does not use.
         const int timeline = std::min(h, std::max(timelineWideLeast, int(std::lround(h * timelineWideShare))));
         const int slotHeight = std::min(h - timeline, int(std::lround(rest / shape)));
         out.slot = QRect(left, toolbar, rest, slotHeight);
         out.timeline = QRect(left, toolbar + slotHeight, rest, h - slotHeight);
-    } else if (panes.picture && panes.timeline) {
-        // Two columns: the picture over the transport, the timeline. The
-        // timeline keeps its width while the picture's column can give it up.
-        const int block = std::min(h, pictureTransport);
-        const int slotHeight = h - block;
-        const int least = std::min(rest, pictureColumnLeast);
-        const int most = std::max(least, rest - timelineUprightLeast);
-        const int width = std::clamp(int(std::lround(slotHeight * shape)), least, most);
-        out.slot = QRect(left, toolbar, width, slotHeight);
-        out.transport = QRect(left, toolbar + slotHeight, width, block);
-        out.timeline = QRect(left + width, toolbar, rest - width, h);
     } else if (panes.picture) {
         // No timeline to carry the transport: the block is under the picture.
-        const int block = std::min(h, out.wide ? pictureTransportLow : pictureTransport);
+        const int block = std::min(h, pictureTransportLow);
         out.slot = QRect(left, toolbar, rest, h - block);
         out.transport = QRect(left, toolbar + h - block, rest, block);
     } else if (panes.timeline) {
@@ -83,7 +93,7 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     // reaches the timeline.
     const auto sheet = [&](int width) {
         const int shown = std::min(width, out.conversation.width());
-        return QRect(left - shown, out.conversation.top(), shown, out.conversation.height());
+        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, out.conversation.height());
     };
     out.media = sheet(bin);
     out.browser = sheet(browser);
@@ -329,10 +339,10 @@ void StageShell::place() {
     placeSeam(m_seamUpright, r.panel.isEmpty() ? QRect() : QRect(r.panel.left(), r.panel.top(), kSeam, r.panel.height()));
     QRect across;
     if (!r.transport.isEmpty()) across = QRect(r.transport.left(), r.transport.top(), r.transport.width(), kSeam);
-    else if (!r.slot.isEmpty() && !r.timeline.isEmpty()) across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
+    else if (r.wide && !r.slot.isEmpty() && !r.timeline.isEmpty()) across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
     placeSeam(m_seamAcross, across);
-    const bool columns = !r.slot.isEmpty() && !r.timeline.isEmpty() && !r.wide;
-    placeSeam(m_seamColumn, columns ? QRect(r.timeline.left(), r.timeline.top(), kSeam, r.timeline.height()) : QRect());
+    // Beside a vertical picture, over the timeline under the conversation.
+    placeSeam(m_seamColumn, !r.wide && !r.timeline.isEmpty() ? QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam) : QRect());
 
     // The tray, over the regions; a sheet over the tray.
     for (int index = 0; index < 2; ++index) {
