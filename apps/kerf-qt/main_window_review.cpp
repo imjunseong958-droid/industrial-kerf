@@ -8,6 +8,7 @@
 // turn takes their place.
 
 #include "main_window.h"
+#include "project_sidebar.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
@@ -143,6 +144,8 @@ void ReviewWiring::attach(ChatPanel *panel) {
     MainWindow *w = m_window;
     m_bus->setReview(m_model);
     panel->setReview(m_model);
+    // Who "you" are can arrive after the first of your comments does.
+    connect(m_model, &ReviewModel::changed, panel, &ChatPanel::reconcileLocal);
     panel->setScriptDescriber([w](const QString &line) { return w->describeScriptLine(line); });
     panel->setReviewLink([this](double seconds) { return reviewLink(seconds); });
 
@@ -282,6 +285,14 @@ bool ReviewWiring::post() {
     const double at = w->m_playhead;
     const QJsonArray drawing = composer->drawing();
     bool sent = false;
+    if (composer->versionsOn() && parent.isEmpty()) {
+        if (w->m_agentBusy || !w->sendVersions(text)) return false;
+        composer->versionsButton()->setChecked(false);
+        composer->clear();
+        m_panel->setReplyTarget(QString());
+        w->updateChatControls();
+        return true;
+    }
     if (review::addressesKerf(text)) {
         if (w->m_agentBusy) return false;
         // About the replied thread's mark, or the playhead.
@@ -423,6 +434,13 @@ bool ReviewWiring::preview(const QString &proposalId, bool on) {
     return m_bus->send(command);
 }
 
+bool ReviewWiring::previewRange(const QString &proposalId, double start, double duration) {
+    return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")},
+                                   {QStringLiteral("proposalId"), proposalId},
+                                   {QStringLiteral("start"), start},
+                                   {QStringLiteral("duration"), duration}});
+}
+
 bool ReviewWiring::requestColour(const QString &versionId) {
     if (!m_panel) return false;
     const QJsonObject request = m_panel->colourPreviewRequest(versionId);
@@ -479,7 +497,10 @@ void ReviewWiring::syncPinnedProposal() {
     if (pinned == w->m_proposalId && stale == w->m_proposalBlocked) return;
     const bool moved = pinned != w->m_proposalId;
     w->m_proposalId = pinned;
-    if (moved && w->m_timeline) w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
+    if (moved && w->m_timeline) {
+        w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
+        w->showProposedCut();
+    }
     w->m_proposalBlocked = stale;
     w->updateCommandStates();
 }
@@ -590,6 +611,7 @@ void MainWindow::updateChatControls() {
     m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
     m_abortButton->setEnabled(m_agentBusy);
     m_chat->updateComposer(m_agentBusy);
+    if (m_sidebar) m_sidebar->setWorking(m_agentBusy);
     updateComposerHint();
     m_chat->setConnected(m_connected);
     updateChatStatus();
@@ -599,7 +621,7 @@ void MainWindow::updateComposerHint() {
     // The design's one placeholder. Offline says so, and so does an agent that
     // cannot take requests (no key, Kerf Cloud signed out): the registry's
     // reason for ai.ask says why and what to do.
-    QString placeholder = QStringLiteral("Comment or ask Kerf");
+    QString placeholder = QStringLiteral("Ask Kerf, or leave a note");
     QString tip = QStringLiteral("Return sends · Shift-Return starts a new line");
     if (!m_connected) {
         placeholder = QStringLiteral("Connect to comment or ask Kerf");
@@ -844,6 +866,7 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         } else if (kind == QStringLiteral("tool")) {
             appendConversationNote(QStringLiteral("Tool"), text);
             addActivity(QStringLiteral("tool"), text.left(120));
+            if (text.startsWith(QStringLiteral("render"), Qt::CaseInsensitive)) m_turnRendered = true;
         } else if (kind == QStringLiteral("status")) {
             appendConversationNote(QStringLiteral("Progress"), text);
             addActivity(QStringLiteral("status"), text.left(120));
@@ -854,8 +877,18 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        m_chat->setTurnBusy(busy);
-        if (!busy) m_chat->finishTurn();
+        // Versions have a thread each, and no turn of the conversation's own.
+        if (!m_versionsRunning) m_chat->setTurnBusy(busy);
+        if (busy) showSheet();
+        quietenCutPreview();
+        if (!busy) {
+            if (!m_versionsRunning) m_chat->finishTurn();
+            m_versionsRunning = false;
+            endAgentFollow();
+            // What Kerf was asked to make is made: it goes home.
+            if (m_turnRendered) goHome();
+            m_turnRendered = false;
+        }
         updateChatControls();
             updateCommandStates();
     } else if (type == QStringLiteral("agent_state")) {
@@ -870,6 +903,10 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         }
     } else if (type == QStringLiteral("agent_next")) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
+    } else if (type == QStringLiteral("agent_focus")) {
+        followAgentFocus(event);
+    } else if (type == QStringLiteral("agent_version")) {
+        followVersion(event);
     } else {
         return false;
     }

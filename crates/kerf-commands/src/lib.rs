@@ -1099,6 +1099,23 @@ pub static COMMANDS: &[Command] = &[
         &["Ctrl+0"],
     ),
     menu(command("qc.run", "Run QC", connected), Menu::Sequence, 3),
+    // The window's panes: the folders, and the panel beside the conversation.
+    checkable(keys(
+        frontend(menu(command("view.sidebar", "Sidebar", always), Menu::View, 0)),
+        &["Ctrl+Alt+S"],
+    )),
+    checkable(keys(
+        frontend(menu(command("view.picture", "Picture", always), Menu::View, 0)),
+        &["Ctrl+Alt+P"],
+    )),
+    checkable(keys(
+        frontend(menu(command("view.timeline", "Timeline", always), Menu::View, 0)),
+        &["Ctrl+Alt+T"],
+    )),
+    checkable(keys(
+        frontend(menu(command("view.followKerf", "Follow Kerf", always), Menu::View, 0)),
+        &["Ctrl+Alt+F"],
+    )),
     // The program viewer's switches.
     checkable(keys(
         frontend(menu(

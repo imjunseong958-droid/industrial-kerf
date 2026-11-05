@@ -105,8 +105,13 @@ void PreviewChip::follow(const QJsonObject &event) {
         }
     m_text->setText(version > 0 ? QStringLiteral("Previewing proposal v%1").arg(version) : QStringLiteral("Previewing proposal"));
     adjustSize();
-    setVisible(true);
+    setVisible(!m_suppressed);
     raise();
+}
+
+void PreviewChip::setSuppressed(bool suppressed) {
+    m_suppressed = suppressed;
+    setVisible(!suppressed && !m_text->text().isEmpty());
 }
 
 void PreviewChip::paintEvent(QPaintEvent *) {

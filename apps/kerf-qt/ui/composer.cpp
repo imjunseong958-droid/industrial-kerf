@@ -41,6 +41,10 @@ public:
         m_focused = focused;
         update();
     }
+    void setRadius(qreal radius) {
+        m_radius = radius;
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -48,11 +52,12 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(Qt::NoPen);
         p.setBrush(color(raised));
-        p.drawRoundedRect(QRectF(rect()), radius::card, radius::card);
-        ui::paintInsetLine(p, QRectF(rect()), radius::card, color(m_focused ? accent : line2));
+        p.drawRoundedRect(QRectF(rect()), m_radius, m_radius);
+        ui::paintInsetLine(p, QRectF(rect()), m_radius, color(m_focused ? accent : line2));
     }
 
 private:
+    qreal m_radius = radius::panel;
     bool m_focused = false;
 };
 
@@ -295,6 +300,8 @@ void FloatingList::leaveEvent(QEvent *) {
 
 Composer::Composer(QWidget *parent) : QFrame(parent) {
     setObjectName(QStringLiteral("chatComposer"));
+    // The box shows its focus; a ring on the text inside would be cut off by it.
+    setProperty("ringsOwnFields", true);
     // The app's sheet draws #chatComposer's old divider; the composer paints its own.
     setStyleSheet(QStringLiteral("QFrame#chatComposer { border: 0; background: transparent; }"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -315,12 +322,12 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_input->setFrameShape(QFrame::NoFrame);
     m_input->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_input->setFont(tokens::font(tokens::body));
+    m_input->setFont(tokens::font(tokens::reading));
     m_input->document()->setDocumentMargin(0);
-    m_input->setPlaceholderText(QStringLiteral("Comment or ask Kerf"));
+    m_input->setPlaceholderText(QStringLiteral("Ask Kerf, or leave a note"));
     m_input->setStyleSheet(QStringLiteral("QTextEdit#chatInput, QTextEdit#chatInput:focus, QTextEdit#chatInput:hover, "
                                           "QTextEdit#chatInput:disabled { background: transparent; border: 0; padding: 0; "
-                                          "color: %1; font-size: 13px; }")
+                                          "color: %1; font-size: 14px; }")
                                .arg(color(ink).name(QColor::HexRgb)));
     {
         QPalette palette = m_input->palette();
@@ -328,7 +335,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         palette.setColor(QPalette::Text, color(ink));
         m_input->setPalette(palette);
     }
-    m_input->setFixedHeight(20);
+    m_input->setFixedHeight(22);
     m_input->installEventFilter(this);
     connect(m_input->document(), &QTextDocument::contentsChanged, this, [this] {
         fitInput();
@@ -347,6 +354,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     auto *row = new QWidget;
     row->setFixedHeight(28);
     auto *rowLayout = new QHBoxLayout(row);
+    m_toolRow = rowLayout;
     rowLayout->setContentsMargins(0, 0, 0, 0);
     rowLayout->setSpacing(4);
     m_stamp = new StampButton;
@@ -362,6 +370,9 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_mention = tool(QStringLiteral("g-at"), QStringLiteral("Mention"), QStringLiteral("@"));
     m_draw = tool(QStringLiteral("g-annot"), QStringLiteral("Draw on frame"), QStringLiteral("D"));
     m_draw->setCheckable(true);
+    m_versions = tool(QStringLiteral("g-branch"), QStringLiteral("Try 3 versions at once"), QString());
+    m_versions->setObjectName(QStringLiteral("composerVersions"));
+    m_versions->setCheckable(true);
     connect(m_mention, &QAbstractButton::clicked, this, &Composer::startMention);
     connect(m_draw, &QAbstractButton::clicked, this, [this] {
         // The button shows the state; the click asks for the change.
@@ -570,19 +581,33 @@ void Composer::placePopovers() {
         QWidget *host = list->parentWidget();
         if (!host || !list->isVisible()) continue;
         const QPoint origin = host == this ? QPoint() : mapTo(host, QPoint());
-        list->placeAbove(origin.x() + 16, origin.x() + width() - 12, origin.y() + 4);
+        const QMargins margins = contentsMargins();
+        list->placeAbove(origin.x() + margins.left() + 16, origin.x() + width() - margins.right() - 12, origin.y() + 4);
         list->raise();
     }
 }
 
+void Composer::setRoomy() {
+    m_leastInput = 52;
+    static_cast<ComposerBox *>(m_box)->setRadius(16);
+    m_input->setStyleSheet(m_input->styleSheet().replace(QStringLiteral("font-size: 14px"), QStringLiteral("font-size: 15px")));
+    QFont font = m_input->font();
+    font.setPixelSize(15);
+    m_input->setFont(font);
+    fitInput();
+}
+
+bool Composer::versionsOn() const { return m_versions->isChecked() && !m_versions->isHidden(); }
+
 void Composer::fitInput() {
     m_input->document()->setTextWidth(m_input->viewport()->width());
-    const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), 20, 100);
+    const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), m_leastInput, 110);
     if (m_input->height() != lines) m_input->setFixedHeight(lines);
     m_input->setVerticalScrollBarPolicy(m_input->document()->size().height() > 100 ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
 }
 
 void Composer::paintEvent(QPaintEvent *) {
+    if (!m_divider) return;
     QPainter p(this);
     p.fillRect(QRect(0, 0, width(), 1), color(line));
 }

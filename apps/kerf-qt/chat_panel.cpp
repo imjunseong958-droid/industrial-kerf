@@ -2,6 +2,8 @@
 
 #include "components.h"
 #include "composer.h"
+#include "change_reel.h"
+#include "stage_motion.h"
 #include "design_tokens.h"
 #include "icons.h"
 #include "proposal_card.h"
@@ -21,6 +23,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -143,7 +146,7 @@ void ChatIconButton::paintEvent(QPaintEvent *) {
 ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("chatPanel"));
     setAttribute(Qt::WA_StyledBackground, false);
-    setAccessibleName(QStringLiteral("Comments"));
+    setAccessibleName(QStringLiteral("Conversation"));
     m_welcomeSince = QDateTime::currentDateTime();
 
     auto *layout = new QVBoxLayout(this);
@@ -220,8 +223,8 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
 
     // The Kerf welcome (no record): who Kerf is, and what to try.
     m_welcomeRow = new CommentRow(CommentRow::Kind::Kerf,
-                                  QStringLiteral("Mention @Kerf on any note, or describe an edit below. Each change comes back "
-                                                 "as a proposal you preview before it touches the cut"),
+                                  QStringLiteral("Tell me what to make or change. Each edit comes back as a proposal you can "
+                                                 "watch before it touches the cut"),
                                   m_welcomeSince, m_stash);
     m_welcomeRow->setObjectName(QStringLiteral("welcomeRow"));
     m_welcomeRow->setRole(QStringLiteral("agent"));
@@ -256,7 +259,7 @@ QWidget *ChatPanel::buildHeader() {
     layout->setSpacing(4);
     m_title = makeLabel(tokens::title, ink);
     m_title->setObjectName(QStringLiteral("chatTitle"));
-    m_title->setText(QStringLiteral("Comments"));
+    m_title->setText(QStringLiteral("Conversation"));
     layout->addWidget(m_title);
     layout->addStretch(1);
     m_more = new ChatIconButton(ChatIconButton::Glyph::More, 24);
@@ -575,10 +578,12 @@ QList<ReviewModel::ClipChange> ChatPanel::versionChanges(const ReviewModel::Prop
 }
 
 bool ChatPanel::repliesOpenByDefault(const ReviewModel::Thread &thread) const {
-    // Open while something waits on them: a pending proposal, a failure,
-    // one's own reply; folded once settled or when they are only notes.
+    // Open while something waits on them: a pending proposal, a failure, the
+    // answer to what one asked, one's own reply; folded once settled or when
+    // they are only someone else's notes.
     if (thread.resolved()) return false;
     if (!thread.openProposal.isEmpty()) return true;
+    if (m_model && m_model->isOwn(thread.root)) return true;
     for (const ReviewModel::Comment &reply : thread.replies)
         if (reply.error || (m_model && m_model->isOwn(reply))) return true;
     return false;
@@ -649,6 +654,7 @@ CommentRow *ChatPanel::buildRow(const ReviewModel::Comment &comment, const Revie
     row->setError(comment.error);
     row->setDrawing(comment.hasDrawing());
     row->setText(comment.body);
+    if (m_conversationLook) row->setLook(own ? CommentRow::Look::Request : kind == QLatin1String("kerf") ? CommentRow::Look::Answer : CommentRow::Look::Note);
     const bool record = thread.origin == ReviewModel::Origin::Record;
     if (root) {
         row->setMuted(thread.resolved());
@@ -691,12 +697,14 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
         if (proposal.hasVersion(it.key()) || it.key() == proposal.id) settledKey = it.key();
     if (!proposal.isOpen() && settledKey.isEmpty()) return nullptr;
     auto *card = new ProposalCard(proposal.id);
+    card->setCompact(m_conversationLook);
+    moves::fadeIn(card);
     if (m_acceptAction) card->setAcceptKey(ui::keyText(m_acceptAction->shortcut()));
     const QList<ReviewModel::Proposal> open = m_model->openProposals();
     const bool pinned = proposal.isOpen() && !open.isEmpty() && open.constFirst().id == proposal.id;
     CardState &state = m_cardState[proposal.id];
     if (!state.openSet) {
-        state.open = pinned;
+        state.open = pinned && !m_conversationLook;
         state.openSet = true;
     }
     QString shown = state.shown;
@@ -793,6 +801,11 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     card->setOpen(state.open);
     card->setScriptShown(state.script);
     card->setPreview(!m_previewProposal.isEmpty() && proposal.hasVersion(m_previewProposal));
+    {
+        double end = 0.0;
+        for (const ReviewModel::ClipChange &change : proposal.changes) end = std::max(end, change.removed ? change.oldEnd : change.newEnd);
+        card->setWatchLength(reel::total(reel::plan(proposal.changes, end, end)));
+    }
     card->setPrimary(pinned || proposal.blocking);
     const ReviewModel::Comment &root = thread.root;
     if (root.author.isPerson() && !m_model->isOwn(root) && thread.origin == ReviewModel::Origin::Record)
@@ -829,6 +842,7 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
         scheduleRebuild();
     });
     connect(card, &ProposalCard::acceptRequested, this, &ChatPanel::acceptRequested);
+    connect(card, &ProposalCard::watchRequested, this, [this, card] { emit changedPartsRequested(card->shownId()); });
     connect(card, &ProposalCard::rejectRequested, this, &ChatPanel::rejectRequested);
     if (state.open && card->hasColour() && !m_colourRequested.contains(versionId)) {
         m_colourRequested.insert(versionId);
@@ -881,7 +895,14 @@ void ChatPanel::rebuild() {
     }
     for (const ReviewModel::Thread &thread : threads) {
         if (thread.origin == ReviewModel::Origin::Welcome) continue;
+        // Held, as the picture or the versions' cards are showing them. A version's
+        // own thread names it first.
+        const bool version = QRegularExpression(QStringLiteral("^Version [A-Z]: ")).match(thread.root.body).hasMatch();
+        if (m_holdingProposals && (thread.origin == ReviewModel::Origin::Proposal || version)) continue;
+        // Decided, the note says how it came out.
+        if (version && m_versionsNote && thread.openProposal.isEmpty()) continue;
         auto *widget = new ThreadWidget(thread.id, first);
+        widget->setFlat(m_conversationLook);
         CommentRow *root = buildRow(thread.root, thread, true);
         widget->setRoot(root);
         root->setCurrent(m_model->isCurrent(thread.id));
@@ -942,6 +963,7 @@ void ChatPanel::placeLocalRows(bool &first) {
             return;
         }
         auto *thread = new ThreadWidget(QStringLiteral("local:%1").arg(m_threads.size()), first);
+        thread->setFlat(m_conversationLook);
         thread->setRoot(rows.constFirst());
         rows.constFirst()->show();
         for (qsizetype index = 1; index < rows.size(); ++index) {
@@ -1029,6 +1051,60 @@ ProposalCard *ChatPanel::card(const QString &proposalId) const {
 
 QList<ProposalCard *> ChatPanel::cards() const { return m_content->findChildren<ProposalCard *>(); }
 
+void ChatPanel::setConversationLook(bool on) {
+    if (on == m_conversationLook) return;
+    m_conversationLook = on;
+    m_welcomeRow->setLook(on ? CommentRow::Look::Answer : CommentRow::Look::Note);
+    scheduleRebuild();
+}
+
+void ChatPanel::setVersionsNote(const QString &request, const QString &answer) {
+    if (m_versionsNote) {
+        m_listLayout->removeWidget(m_versionsNote);
+        m_versionsNote->hide();
+        m_versionsNote->deleteLater();
+        m_versionsNote = nullptr;
+    }
+    if (!request.isEmpty()) {
+        auto *note = new ThreadWidget(QStringLiteral("versions"), m_threads.isEmpty(), m_content);
+        note->setFlat(true);
+        auto *asked = new CommentRow(CommentRow::Kind::User, request, QDateTime::currentDateTime());
+        asked->setLook(CommentRow::Look::Request);
+        note->setRoot(asked);
+        auto *line = new CommentRow(CommentRow::Kind::Kerf, answer.isEmpty() ? QStringLiteral("Making three versions at once. Pick the one you like.") : answer, QDateTime::currentDateTime());
+        line->setLook(CommentRow::Look::Answer);
+        note->addReply(line);
+        note->setRepliesShown(true);
+        m_listLayout->insertWidget(int(m_threads.size()), note);
+        note->show();
+        m_versionsNote = note;
+        moves::fadeIn(note);
+    }
+    syncContent();
+}
+
+void ChatPanel::setHoldingProposals(bool holding) {
+    if (holding == m_holdingProposals) return;
+    m_holdingProposals = holding;
+    scheduleRebuild();
+}
+
+void ChatPanel::setFootage(const QList<FootageTile> &tiles) {
+    if (tiles.isEmpty()) {
+        if (m_footage) m_footage->hide();
+        syncContent();
+        return;
+    }
+    if (!m_footage) {
+        m_footage = new FootageSheet(m_content);
+        m_listLayout->insertWidget(int(m_threads.size()), m_footage);
+    }
+    m_footage->setTiles(tiles);
+    m_footage->show();
+    syncContent();
+    if (m_follow) m_list->verticalScrollBar()->setValue(m_list->verticalScrollBar()->maximum());
+}
+
 void ChatPanel::syncContent() {
     // The scroll area sizes its content on a posted layout request; size it
     // now, so the scroll range is the content's before scrolling.
@@ -1112,6 +1188,10 @@ QString ChatPanel::pinBarProposal() const {
 }
 
 void ChatPanel::updatePinBar() {
+    if (m_holdingProposals) {
+        m_pinBar->hide();
+        return;
+    }
     const QList<ReviewModel::Proposal> open = m_model ? m_model->openProposals() : QList<ReviewModel::Proposal>{};
     if (open.isEmpty()) {
         m_pinIndex = 0;
@@ -1167,11 +1247,13 @@ CommentRow *ChatPanel::beginTurn(const QString &text, const QString &threadId, d
     turn.text = text;
     auto *row = new CommentRow(CommentRow::Kind::User, text, QDateTime::currentDateTime(), m_stash);
     row->setFps(m_fps);
+    if (m_conversationLook) row->setLook(CommentRow::Look::Request);
     if (threadId.isEmpty() && std::isfinite(at)) row->setMark(at, 0, m_fps);
     ui::setTip(row->timeLabel(), QStringLiteral("Unsaved · syncs on push"));
     connectRow(row);
     turn.rows << row;
     m_turns << turn;
+    moves::fadeIn(row);
     scheduleRebuild();
     scheduleFollow();
     return row;
@@ -1188,10 +1270,12 @@ CommentRow *ChatPanel::turnKerfRow(bool create) {
     if (turn.kerf || !create) return turn.kerf;
     auto *row = new CommentRow(CommentRow::Kind::Drafting, QString(), QDateTime(), m_stash);
     row->setFps(m_fps);
+    if (m_conversationLook) row->setLook(CommentRow::Look::Answer);
     row->setRole(QStringLiteral("agent"));
     connectRow(row);
     turn.kerf = row;
     turn.rows << row;
+    moves::fadeIn(row);
     scheduleRebuild();
     scheduleFollow();
     return row;
@@ -1752,12 +1836,25 @@ void ChatPanel::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF area(rect());
     p.setPen(Qt::NoPen);
-    p.setBrush(color(tokens::chrome));
-    p.drawRect(area);
+    // Clear over the window's room, whose light reaches behind it. On its own it
+    // fills its place.
+    if (!parentWidget() || isWindow()) {
+        p.setBrush(color(tokens::chrome));
+        p.drawRect(area);
+    }
+    // The header's hairline.
+    p.setBrush(color(tokens::line));
+    p.drawRect(QRectF(0, kHeaderHeight - tokens::layout::seam, width(), tokens::layout::seam));
 }
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
+    // With the room to itself the conversation keeps a column to read in.
+    const int inset = std::max(0, (width() - tokens::layout::conversationColumn) / 2);
+    const QMargins list = m_listLayout->contentsMargins();
+    m_listLayout->setContentsMargins(inset, list.top(), inset, list.bottom());
+    m_replyBar->setContentsMargins(inset, 0, inset, 0);
+    m_composer->setContentsMargins(inset, 0, inset, 0);
     QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
 }
 

@@ -170,8 +170,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(0, 40, 1240, 420), QRect(246, 40, 747, 420), QRect(1240, 40, 360, 960), QRect(0, 460, 1240, 540)},
-    {"916", QSize(1080, 1920), QRect(0, 40, 450, 800), QRect(0, 40, 450, 800), QRect(1240, 40, 360, 960), QRect(450, 40, 790, 960)},
+    {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(768, 52, 704, 396), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
+    {"916", QSize(1080, 1920), QRect(640, 40, 960, 614), QRect(954, 52, 332, 590), QRect(240, 40, 400, 960), QRect(640, 654, 960, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -255,7 +255,7 @@ private slots:
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
                 QVERIFY2(sheet.widget->isVisible(), sheet.name);
                 QCOMPARE(inWindow(sheet.widget, &window),
-                         QRect(1600 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
+                         QRect(format.conversation.right() + 1 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
                 // What is under it has not moved.
                 checkBase(window, format);
                 QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
@@ -273,7 +273,7 @@ private slots:
                 window.triggerCommand(QStringLiteral("workspace.%1").arg(QString::fromLatin1(tray.name)));
                 QCOMPARE(window.m_shell->tray(), tray.tray);
                 QVERIFY2(tray.widget->isVisible(), tray.name);
-                QCOMPARE(inWindow(tray.widget, &window), QRect(0, 656, 1600, 344));
+                QCOMPARE(inWindow(tray.widget, &window), QRect(240, 656, 1360, 344));
                 checkBase(window, format);
                 // Changing state rings no button: the keys go to the timeline.
                 for (ui::KitButton *button : window.findChildren<ui::KitButton *>())
@@ -457,14 +457,16 @@ private:
         const QList<CommentRow *> rows = chat->m_content->findChildren<CommentRow *>();
         QVERIFY(!rows.isEmpty());
         // (A row keeps the design's 8 to the list's edge at every width.)
+        // Within the column it keeps to read in, when it has more room than that.
+        const int inset = std::max(0, (chat->width() - tokens::layout::conversationColumn) / 2);
         for (const CommentRow *row : rows)
-            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8);
+            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8 - inset);
         const QList<ProposalCard *> cards = chat->m_content->findChildren<ProposalCard *>();
         for (const ProposalCard *card : cards) {
             if (!card->isVisibleTo(chat)) continue;
             // Its gutters are its row's own, not a max-width's.
             const int right = card->mapTo(chat->m_content, QPoint(card->width(), 0)).x();
-            QVERIFY2(right >= width - 16, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
+            QVERIFY2(right >= width - 16 - inset, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
         }
     }
 };

@@ -1,6 +1,7 @@
 #include "main_window.h"
 #include "comment_row.h"
 #include "review_link.h"
+#include "stage_motion.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
@@ -9,6 +10,8 @@
 #include "effects_panel.h"
 #include "presets_panel.h"
 #include "project_launcher.h"
+#include "change_reel.h"
+#include "project_sidebar.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "stage_shell.h"
@@ -220,12 +223,33 @@ void MainWindow::togglePlayback() {
     sendSimple(QJsonObject{{QStringLiteral("type"), m_playing ? QStringLiteral("pause") : QStringLiteral("play")} });
 }
 
+QJsonObject MainWindow::withClipNames(QJsonObject timeline, const QJsonArray &sources) {
+    QHash<QString, QJsonObject> sourceById;
+    for (const auto &value : sources) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
+    const QHash<QString, QString> names = sourceNames(sources);
+    QJsonArray displayTracks;
+    for (const auto &value : timeline.value("tracks").toArray()) {
+        auto track = value.toObject(); QJsonArray displayClips;
+        for (const auto &clipValue : track.value("clips").toArray()) {
+            auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
+            // Named after its media's file; a clip of media with no path
+            // keeps no stand-in name (the Inspector and the timeline fall
+            // back on their own).
+            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", names.value(source.value("id").toString()));
+            displayClips.append(clip);
+        }
+        track.insert("clips", displayClips); displayTracks.append(track);
+    }
+    timeline.insert("tracks", displayTracks);
+    return timeline;
+}
+
 void MainWindow::queueSeek(double time) {
     if (!m_connected) return;
     m_hasPendingHoverSeek = false;
     m_hoverSkimming = false;
     m_timeline->clearSkimmer();
-    m_pendingSeek = std::clamp(time, 0.0, m_duration);
+    m_pendingSeek = std::clamp(time, 0.0, std::max({m_duration, m_seekLimit, m_proposedDuration}));
     m_pendingSeekScrub = scrubFromShownFrame(m_pendingSeek);
     m_hasPendingSeek = true;
     m_pointerOwnsPlayhead = true;
@@ -925,6 +949,8 @@ void MainWindow::buildShell() {
     m_finishTray = new FinishTray(nullptr, m_bus);
     m_deliverTray = new DeliverTray(nullptr, m_bus);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
+    buildSidebar();
+    buildAgentViews();
     m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
     m_shell->setTrays(m_finishTray, m_deliverTray);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
@@ -1056,6 +1082,10 @@ void MainWindow::setupActions() {
         } else if (id == QStringLiteral("window.project")) {
             m_shell->toggleSheet(StageShell::Sheet::Media);
             syncPanelCommands();
+        } else if (id == QStringLiteral("view.sidebar") || id == QStringLiteral("view.picture") || id == QStringLiteral("view.timeline")) {
+            setPaneOpen(id, checked);
+        } else if (id == QStringLiteral("view.followKerf")) {
+            setFollowKerf(checked);
         }
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
@@ -1726,6 +1756,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
                               status == QStringLiteral("completed") || status == QStringLiteral("failed") ||
                               status == QStringLiteral("cancelled") || status == QStringLiteral("canceled");
         if (finished) showStatus(QStringLiteral("Export %1").arg(status), 6000);
+        // What was made goes home to its folder.
+        if (status == QStringLiteral("complete") || status == QStringLiteral("completed") || status == QStringLiteral("ready")) flyExportHome();
         if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
     } else if (type == QStringLiteral("analysis")) {
         // Analyses effects draw from, made in the background.
@@ -1736,6 +1768,12 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         const QString status = event.value(QStringLiteral("status")).toString();
         const QString message = event.value(QStringLiteral("message")).toString();
         if (!status.isEmpty()) m_previewStatus = status;
+        if (status != QStringLiteral("running") && m_cutRendering) {
+            m_cutRendering = false;
+            // The render is the picture now, if it is of the latest.
+            if (m_proposalId == m_previewedCut) m_motion->releaseStaying();
+            if (m_timeline->showsProposedCut() && m_proposalId != m_previewedCut) m_cutPreview.start();
+        }
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
             m_previewRequired = true;
             m_viewer->clearFrame();
@@ -1753,6 +1791,15 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             m_previewRequired = false;
             showStatus(message.isEmpty() ? QStringLiteral("Live preview") : QStringLiteral("Live preview: ") + message, 4000);
         }
+        // Playback reopened the program from its start: back to where it was.
+        if (status == QStringLiteral("exited")) {
+            m_returnAfterPreview = true;
+        } else if ((status == QStringLiteral("ready") || status == QStringLiteral("live")) &&
+                   event.value(QStringLiteral("proposalId")).toString().isEmpty() && m_returnAfterPreview) {
+            m_returnAfterPreview = false;
+            if (!m_changeReel->isActive()) queueSeek(m_playhead);
+        }
+        m_changeReel->followPreview(event);
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
@@ -1780,23 +1827,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // as typed operations.
     m_project = snapshot.value(QStringLiteral("timeline")).toObject();
     // Derive presentation fields once per snapshot, not on every repaint.
-    QHash<QString, QJsonObject> sourceById;
-    for (const auto &value : m_project.value("sources").toArray()) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
-    const QHash<QString, QString> names = sourceNames(m_project.value("sources").toArray());
-    QJsonArray displayTracks;
-    for (const auto &value : m_project.value("tracks").toArray()) {
-        auto track = value.toObject(); QJsonArray displayClips;
-        for (const auto &clipValue : track.value("clips").toArray()) {
-            auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
-            // Named after its media's file; a clip of media with no path
-            // keeps no stand-in name (the Inspector and the timeline fall
-            // back on their own).
-            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", names.value(source.value("id").toString()));
-            displayClips.append(clip);
-        }
-        track.insert("clips", displayClips); displayTracks.append(track);
-    }
-    m_project.insert("tracks", displayTracks);
+    m_project = withClipNames(m_project, m_project.value(QStringLiteral("sources")).toArray());
     m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     setProjectTitle(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
@@ -1815,7 +1846,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // A format change lays out again at once.
     m_shell->setAspect(m_viewer->pictureAspect());
     m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
-    m_timelineWiring->setWide(stage::isWide(m_viewer->pictureAspect()));
+    applyPanes();
     syncCanvasPreset(canvasSize);
     m_artwork->request(sources, m_projectDirectory);
     m_projectPanel->setSources(sources);
@@ -1828,6 +1859,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     // The pinned proposal's (the version its card shows), not just the first open one.
     m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
+    showProposedCut();
+    refreshCompare();
     m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();
@@ -1836,6 +1869,10 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_bus->setSnapshot(snapshot, m_project, m_fps, canvasSize);
     if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
     applyPendingLink();
+    followContentWithPanes();
+    followLiveProposal();
+    refreshCompare();
+    runStart();
 }
 
 QStringList MainWindow::projectSlugs() const {
@@ -1979,9 +2016,14 @@ void MainWindow::settleFocus() {
     // the keys on as if Tab were pressed, to whichever control comes next. The
     // timeline's keys only work from the timeline, so they go there, unless
     // someone is typing or working in a sheet or tray. This window's own focus
-    // child: a menu or dialog over it keeps its own.
-    if (!m_timeline || !m_timeline->isEnabled()) return;
+    // child: a menu or dialog over it keeps its own. With no timeline open the
+    // keys wait in the conversation.
     QWidget *holder = focusWidget();
+    if (m_shell && !m_shell->panes().timeline) {
+        if (!holder && m_chat) m_chat->focusComposer();
+        return;
+    }
+    if (!m_timeline || !m_timeline->isEnabled()) return;
     if (holder) {
         if (holder == m_timeline || qobject_cast<QAbstractSpinBox *>(holder) || qobject_cast<QLineEdit *>(holder)) return;
         if (const auto *text = qobject_cast<QPlainTextEdit *>(holder); text && !text->isReadOnly()) return;
@@ -2020,6 +2062,10 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("workspace.review"), tray == StageShell::Tray::None},
         {QStringLiteral("workspace.finish"), tray == StageShell::Tray::Finish},
         {QStringLiteral("workspace.deliver"), tray == StageShell::Tray::Deliver},
+        {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
+        {QStringLiteral("view.picture"), m_shell->panes().picture},
+        {QStringLiteral("view.timeline"), m_shell->panes().timeline},
+        {QStringLiteral("view.followKerf"), m_followKerf},
     };
     for (const auto &[id, checked] : states)
         if (QAction *action = m_commands->action(id)) {

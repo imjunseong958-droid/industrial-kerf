@@ -564,11 +564,34 @@ impl RuntimeClient {
         path: &str,
         base_revision: u64,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
+        self.import_request(actor, key, path, base_revision, false)
+    }
+
+    /// Add the file at `path` as media, without cutting it into the program.
+    pub fn add_media_request(
+        &self,
+        actor: &str,
+        key: &str,
+        path: &str,
+        base_revision: u64,
+    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
+        self.import_request(actor, key, path, base_revision, true)
+    }
+
+    fn import_request(
+        &self,
+        actor: &str,
+        key: &str,
+        path: &str,
+        base_revision: u64,
+        media_only: bool,
+    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
         match self.request(RuntimeRequest::Import {
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
             path: path.to_owned(),
+            media_only,
         })? {
             RuntimeResponse::Import {
                 state,

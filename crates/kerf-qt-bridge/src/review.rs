@@ -335,6 +335,11 @@ impl Turn {
         })
     }
 
+    /// The thread's root comment.
+    pub(crate) fn root(&self) -> &str {
+        &self.root
+    }
+
     /// One line of what the agent did: a finished tool call or a status.
     pub(crate) fn step(&mut self, line: &str) {
         let line = line.trim();

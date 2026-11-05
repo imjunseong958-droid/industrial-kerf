@@ -18,6 +18,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
+        version_aborts: std::sync::Mutex::new(Vec::new()),
         preview_busy: AtomicBool::new(false),
         abort: Mutex::new(None),
         frame: Mutex::new(None),

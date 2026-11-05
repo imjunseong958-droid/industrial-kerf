@@ -16,6 +16,8 @@ pub struct AgentTargetSummary {
     pub clips: Vec<String>,
     pub tracks: Vec<String>,
     pub jobs: Vec<String>,
+    /// Positions on the program the call looks at, as written.
+    pub times: Vec<String>,
 }
 
 /// Bounded, human-facing metadata extracted from a tool result. The canonical
@@ -28,6 +30,8 @@ pub struct ToolResultSummary {
     pub revision: Option<u64>,
     pub status: Option<String>,
     pub count: Option<usize>,
+    /// The proposal the call staged or added to.
+    pub proposal: Option<String>,
     pub error: Option<String>,
     pub truncated: bool,
 }
@@ -44,7 +48,27 @@ pub(crate) fn summarize_targets(value: &Value) -> AgentTargetSummary {
     let mut summary = AgentTargetSummary::default();
     let mut nodes = 0;
     collect_targets(value, None, &mut summary, &mut nodes);
+    collect_times(value, &mut summary);
     summary
+}
+
+/// `at` and `from` are positions on the program unless the call names media,
+/// whose own positions they are then.
+fn collect_times(value: &Value, summary: &mut AgentTargetSummary) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if object.contains_key("media") {
+        return;
+    }
+    let at = object.get("at").into_iter().flat_map(|at| match at {
+        Value::Array(values) => values.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+        other => other.as_str().into_iter().collect(),
+    });
+    let from = object.get("from").and_then(Value::as_str);
+    for time in at.chain(from) {
+        add_target(&mut summary.times, Some(time), MAX_AGENT_SUMMARY_ITEMS);
+    }
 }
 
 fn collect_targets(
@@ -158,6 +182,11 @@ fn collect_result_fields(value: &Value, summary: &mut ToolResultSummary, nodes: 
             for (key, value) in object {
                 match key.as_str() {
                     "revision" if summary.revision.is_none() => summary.revision = value.as_u64(),
+                    "proposal" if summary.proposal.is_none() => {
+                        summary.proposal = value
+                            .as_str()
+                            .map(|value| bounded_text(value, MAX_AGENT_SUMMARY_TEXT_BYTES))
+                    }
                     "status" if summary.status.is_none() => {
                         summary.status = value
                             .as_str()
@@ -234,5 +263,27 @@ impl ToolResultSummary {
             error: Some(compact_error(error)),
             ..Self::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod where_it_works_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_call_on_the_program_names_its_times() {
+        let times = summarize_targets(&json!({"at": ["4.5s", "96f"], "from": "1s"})).times;
+        assert_eq!(times, ["4.5s", "96f", "1s"]);
+        // Those are the media's own positions.
+        assert!(summarize_targets(&json!({"media": "m1", "at": ["4.5s"]}))
+            .times
+            .is_empty());
+    }
+
+    #[test]
+    fn a_result_names_its_proposal() {
+        let summary = summarize_tool_result(&json!({"status": "awaiting_review", "proposal": "p1"}));
+        assert_eq!(summary.proposal.as_deref(), Some("p1"));
     }
 }

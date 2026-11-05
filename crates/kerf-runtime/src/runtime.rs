@@ -1337,16 +1337,28 @@ impl Runtime {
         )
     }
 
-    pub fn import_media_request(
+    #[cfg(test)]
+    fn import_media_request(
         &mut self,
         actor: &str,
         key: &str,
         path: &str,
         base_revision: u64,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
+        self.import_request(actor, key, path, base_revision, false)
+    }
+
+    fn import_request(
+        &mut self,
+        actor: &str,
+        key: &str,
+        path: &str,
+        base_revision: u64,
+        media_only: bool,
+    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
         validate_request_identity(actor, key)?;
         let operation = format!("{actor}:{key}");
-        let fingerprint = format!("{actor}:{base_revision}:{path}");
+        let fingerprint = format!("{actor}:{base_revision}:{path}:{media_only}");
         if let Some(record) = self.state.imports.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
@@ -1366,11 +1378,18 @@ impl Runtime {
         let MediaFile { file, stored } = media_file(self.directory(), path)?;
         let file = file.to_string_lossy().into_owned();
         let probe = kerf_engine::probe::info(&file).ok();
-        let (ops, media_id, clip_id) =
-            kernel::import_media(&self.state.project, &stored, probe.as_ref())?;
+        let (ops, media_id, clip_id) = if media_only {
+            let (ops, media_id) = kernel::add_media(&self.state.project, &stored, probe.as_ref())?;
+            (ops, media_id, None)
+        } else {
+            let (ops, media_id, clip_id) =
+                kernel::import_media(&self.state.project, &stored, probe.as_ref())?;
+            (ops, media_id, Some(clip_id))
+        };
         let (mut candidate, change) =
             self.edit_candidate(kernel::apply_ops(&self.state.project, &ops)?);
-        let (media_id, clip_id) = (media_id.to_string(), clip_id.to_string());
+        let media_id = media_id.to_string();
+        let clip_id = clip_id.map(|clip| clip.to_string()).unwrap_or_default();
         let record = ImportRecord::new(
             fingerprint,
             candidate.revision,
@@ -1653,9 +1672,10 @@ impl Runtime {
                 idempotency_key,
                 base_revision,
                 path,
+                media_only,
             } => {
                 let (state, media_id, clip_id) =
-                    self.import_media_request(&actor, &idempotency_key, &path, base_revision)?;
+                    self.import_request(&actor, &idempotency_key, &path, base_revision, media_only)?;
                 Ok(RuntimeResponse::Import {
                     state,
                     media_id,
@@ -3128,6 +3148,26 @@ mod tests {
         assert!(document.contains("track A1 audio"), "{document}");
         assert_eq!(document.matches("link=").count(), 2, "{document}");
         assert!(edited.project.clip(clip.as_str()).is_some());
+    }
+
+    #[test]
+    fn media_can_join_a_project_without_going_on_the_timeline() {
+        let project = kernel::empty_project();
+        let probe = kerf_engine::ProbeInfo {
+            duration: Some(2.0),
+            width: Some(1280),
+            height: Some(720),
+            fps: Some(24.0),
+            has_audio: Some(true),
+            alpha: None,
+            video_codec: None,
+            audio_codec: None,
+        };
+        let (ops, media) = kernel::add_media(&project, "/media/a.mov", Some(&probe)).unwrap();
+        let edited = kernel::apply_ops(&project, &ops).unwrap();
+        let document = kernel::print(&edited.project);
+        assert!(document.contains(&format!("media {media} path=")), "{document}");
+        assert!(!document.contains("clip "), "{document}");
     }
 
     #[test]

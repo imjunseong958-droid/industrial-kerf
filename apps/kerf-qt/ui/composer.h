@@ -25,6 +25,7 @@
 #include <QWidget>
 
 class QAction;
+class QHBoxLayout;
 class QLabel;
 class QTextEdit;
 class QVariantAnimation;
@@ -150,16 +151,26 @@ public:
     StampButton *stamp() const { return m_stamp; }
     ui::IconButton *mentionButton() const { return m_mention; }
     ui::IconButton *drawButton() const { return m_draw; }
+    // On: Send has several agents make versions of the request.
+    ui::IconButton *versionsButton() const { return m_versions; }
+    bool versionsOn() const;
     QWidget *box() const { return m_box; }
     QLabel *errorLabel() const { return m_error; }
     FloatingList *suggestionsPopover() const { return m_suggestions; }
     FloatingList *mentionList() const { return m_mentions; }
+    // The row under the text, for a control that belongs beside its tools.
+    QHBoxLayout *toolRow() const { return m_toolRow; }
+    // The hairline over the composer, where it closes a list.
+    void setDivider(bool shown) { m_divider = shown; update(); }
+    // A larger box for when the composer is the whole of the window's work.
+    void setRoomy();
 
     // Where the popovers float: the panel. They are placed over the composer.
     void setOverlayParent(QWidget *parent);
     // The live playhead TC on the stamp.
     void setTimecode(const QString &timecode);
-    bool stamped() const { return m_stamp->isAttached(); }
+    // Attached and offered: with no picture open there is no time to stamp.
+    bool stamped() const { return m_stamp->isAttached() && !m_stamp->isHidden(); }
     void setStamped(bool stamped);
     // Kerf drafting: Send gives way to Stop.
     void setBusy(bool busy);
@@ -219,10 +230,14 @@ private:
     QString drawKey() const;
 
     QWidget *m_box = nullptr;
+    QHBoxLayout *m_toolRow = nullptr;
+    bool m_divider = true;
+    int m_leastInput = 22;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
     ui::IconButton *m_mention = nullptr;
     ui::IconButton *m_draw = nullptr;
+    ui::IconButton *m_versions = nullptr;
     SendButton *m_send = nullptr;
     SendButton *m_stop = nullptr;
     QLabel *m_error = nullptr;

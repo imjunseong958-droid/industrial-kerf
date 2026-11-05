@@ -1,13 +1,17 @@
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
+#include "home_window.h"
 #include "main_window.h"
 #include "project_launcher.h"
 #include "review_link.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QEventLoop>
+#include <QPixmap>
 #include <QPointer>
+#include <QRect>
 #include <QSettings>
 #include <QSize>
 #include <QStandardPaths>
@@ -18,10 +22,12 @@ namespace {
 // An editor window for `project`. It lives on the heap and is deleted when
 // closed; opening another project from it opens a new window first, so the
 // application keeps running.
-kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
+kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const QRect &geometry = QRect()) {
     kerf::ProjectLauncher::rememberProject(project);
     auto *window = new kerf::MainWindow(project, kerfd);
     window->setAttribute(Qt::WA_DeleteOnClose);
+    // In the place of the window it follows.
+    if (geometry.isValid()) window->setGeometry(geometry);
     QObject::connect(window, &kerf::MainWindow::projectOpenRequested, window, [window, kerfd](const QString &path) {
         openEditor(path, kerfd);
         window->close();
@@ -110,7 +116,7 @@ int main(int argc, char **argv) {
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
 
     // kerf:// review links raise (or open) their project's editor and seek.
-    QPointer<kerf::ProjectLauncher> choosing;
+    QPointer<QDialog> choosing;
     kerf::links::Router router(
         [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {
             // A link followed while the launcher waits stands for its choice.
@@ -130,14 +136,21 @@ int main(int argc, char **argv) {
         return false;
     };
 
-    // Without a project, choose one first. A smoke run shows the launcher
-    // and captures it instead of waiting for a choice.
+    // Without a project, start from the folders and a question. A smoke run
+    // shows that window and captures it instead of waiting for a choice.
     QPointer<QWidget> shown;
+    QString startRequest;
+    bool startImport = false;
+    QRect startGeometry;
+    QPixmap startLook;
+    QRect startBox;
+    QPointer<kerf::HomeWindow> chooser;
     if (project.isEmpty() && smoke) {
-        auto *launcher = new kerf::ProjectLauncher(kerfd);
-        launcher->setAttribute(Qt::WA_DeleteOnClose);
-        launcher->show();
-        shown = launcher;
+        auto *home = new kerf::HomeWindow(kerfd);
+        home->setAttribute(Qt::WA_DeleteOnClose);
+        if (windowSize.isValid() && !windowSize.isEmpty()) home->resize(windowSize);
+        home->show();
+        shown = home;
     } else if (project.isEmpty() && !links.isEmpty()) {
         // Opened for a link: its project is the one to show.
         for (const QString &link : std::as_const(links))
@@ -145,20 +158,44 @@ int main(int argc, char **argv) {
         links.clear();
     }
     if (!shown && project.isEmpty()) {
-        kerf::ProjectLauncher launcher(kerfd);
-        choosing = &launcher;
-        // Closing the launcher is not the last window closing.
+        chooser = new kerf::HomeWindow(kerfd);
+        choosing = chooser.data();
+        // Closing the window is not the last window closing.
         app.setQuitOnLastWindowClosed(false);
-        const bool chosen = launcher.exec() == QDialog::Accepted;
+        QEventLoop waiting;
+        QObject::connect(chooser, &kerf::HomeWindow::chosen, &waiting, &QEventLoop::quit);
+        QObject::connect(chooser, &QDialog::finished, &waiting, &QEventLoop::quit);
+        chooser->show();
+        waiting.exec();
         app.setQuitOnLastWindowClosed(true);
-        if (!chosen && !anyEditor()) return 0;
-        if (chosen) project = launcher.chosenPath();
+        const bool chosen = chooser->result() == QDialog::Accepted;
+        if (chosen) {
+            project = chooser->chosenPath();
+            startRequest = chooser->request();
+            startImport = chooser->startsProject();
+            startGeometry = chooser->geometry();
+            startLook = chooser->lastLook();
+            startBox = chooser->composerRect();
+        } else {
+            chooser->deleteLater();
+            if (!anyEditor()) return 0;
+        }
     }
     if (!shown && !project.isEmpty()) {
-        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd, startGeometry);
         if (!workspace.isEmpty()) window->openTray(workspace);
+        if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
+        if (!startLook.isNull()) window->takeOverFrom(startLook, startBox);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
+        // The editor is over it by now; nothing shows through at the hand-over.
+        if (chooser) {
+            QTimer::singleShot(200, chooser.data(), [chooser] {
+                if (!chooser) return;
+                chooser->hide();
+                chooser->deleteLater();
+            });
+        }
         if (renderPreview) {
             QTimer::singleShot(1500, window.data(), [window] {
                 QMetaObject::invokeMethod(window.data(), "renderPreview", Qt::DirectConnection);

@@ -155,10 +155,16 @@ QString AgentHud::detail() const {
 
 QString AgentHud::percentText() const { return QStringLiteral("%1%").arg(int(std::lround(m_progress * 100.0))); }
 
+void AgentHud::setQuiet(bool quiet) {
+    if (quiet == m_quiet) return;
+    m_quiet = quiet;
+    refresh();
+}
+
 void AgentHud::refresh() {
     m_bar->setValue(m_progress);
     const bool now = active();
-    setVisible(now);
+    setVisible(now && !m_quiet);
     if (now) raise();
     relayout();
     update();

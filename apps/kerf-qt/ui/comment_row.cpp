@@ -6,7 +6,9 @@
 
 #include <QEnterEvent>
 #include <QFontMetricsF>
+#include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QTextDocumentFragment>
 #include <QLabel>
 #include <QLocale>
 #include <QMouseEvent>
@@ -616,7 +618,7 @@ void CommentRow::build() {
     // The text, 2 under the name line.
     m_body = new QLabel;
     m_body->setObjectName(QStringLiteral("commentBody"));
-    m_body->setFont(tokens::font(tokens::body));
+    m_body->setFont(tokens::font(tokens::reading));
     m_body->setWordWrap(true);
     m_body->setTextFormat(Qt::RichText);
     m_body->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
@@ -787,7 +789,7 @@ void CommentRow::updateBody() {
 
 void CommentRow::setRing(bool shown, bool resolved) {
     m_ring->setResolved(resolved);
-    m_ring->setVisible(shown);
+    m_ring->setVisible(shown && m_look == Look::Note);
     m_ringRoom->setVisible(shown);
     m_resolveAction->setTip(resolved ? QStringLiteral("Reopen") : QStringLiteral("Resolve"));
     placeOverlays();
@@ -931,6 +933,7 @@ void CommentRow::setDrafting(bool drafting) {
     m_kind = drafting ? Kind::Drafting : (m_kind == Kind::Drafting ? Kind::Kerf : m_kind);
     m_stopped = false;
     m_nameLabel->setText(drafting ? QStringLiteral("Kerf is drafting") : m_name);
+    if (m_look == Look::Answer) m_nameLine->setVisible(drafting);
     m_dots->setVisible(drafting);
     m_metaLabel->setVisible(drafting && !m_metaLabel->text().isEmpty());
     m_stop->setText(QStringLiteral("Stop"));
@@ -1048,7 +1051,45 @@ void CommentRow::updateNameLine() {
     if (m_nameLayout) m_nameLayout->invalidate();
 }
 
+void CommentRow::setLook(Look look) {
+    if (look == m_look) return;
+    m_look = look;
+    m_avatar->setVisible(look == Look::Note);
+    if (look != Look::Note) m_ring->hide();
+    m_nameLine->setVisible(look == Look::Note || (look == Look::Answer && isDrafting()));
+    if (look == Look::Request) {
+        m_body->setContentsMargins(14, 9, 14, 9);
+    }
+    fitBubble();
+    update();
+}
+
+void CommentRow::fitBubble() {
+    if (m_look != Look::Request) return;
+    const int room = int((width() - 2 * kBleedX) * 0.82);
+    const QString plain = QTextDocumentFragment::fromHtml(m_body->text()).toPlainText();
+    const int wide = QFontMetrics(m_body->font()).horizontalAdvance(plain) + 28 + 2;
+    const int shown = std::clamp(wide, 1, std::max(1, room));
+    // Pushed over within its holder, which asks for no width of its own: the row
+    // can still narrow as the conversation gives way.
+    QWidget *holding = m_body->parentWidget();
+    if (!holding || !holding->layout()) return;
+    holding->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    QMargins margins = holding->layout()->contentsMargins();
+    margins.setLeft(std::max(0, width() - 2 * kBleedX - shown));
+    holding->layout()->setContentsMargins(margins);
+}
+
 void CommentRow::paintEvent(QPaintEvent *) {
+    if (m_look == Look::Request) {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x30, 0x30, 0x30));
+        const QPoint at = m_body->mapTo(this, QPoint());
+        p.drawRoundedRect(QRectF(at, m_body->size()), 14, 14);
+        return;
+    }
     const QColor fill = backgroundColor();
     if (fill.alpha() == 0) return;
     QPainter p(this);
@@ -1062,6 +1103,7 @@ void CommentRow::paintEvent(QPaintEvent *) {
 
 void CommentRow::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
+    fitBubble();
     placeOverlays();
 }
 
@@ -1119,6 +1161,10 @@ ThreadWidget::ThreadWidget(const QString &id, bool first, QWidget *parent) : QWi
     m_replyLayout->setSpacing(0);
     layout->addWidget(m_replies);
     m_replies->hide();
+}
+
+void ThreadWidget::setFlat(bool flat) {
+    m_replyLayout->setContentsMargins(flat ? 0 : CommentRow::kBodyLeft, 0, 0, 0);
 }
 
 void ThreadWidget::setRoot(CommentRow *row) {

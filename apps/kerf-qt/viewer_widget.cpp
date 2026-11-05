@@ -1,4 +1,10 @@
 #include "viewer_widget.h"
+
+#include "components.h"
+#include "design_tokens.h"
+#include "stage_shell.h"
+#include <QRadialGradient>
+#include <QVariantAnimation>
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "stage_shell.h"
@@ -245,7 +251,7 @@ QColor strokeColor(const QJsonObject &stroke) {
 
 ViewerWidget::ViewerWidget(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("viewer"));
-    setMinimumSize(320, 180);
+    setMinimumSize(tokens::layout::pictureColumnLeast, 180);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
     setAttribute(Qt::WA_OpaquePaintEvent);
@@ -267,16 +273,121 @@ bool ViewerWidget::motionAllowed() const {
 }
 
 void ViewerWidget::setFrame(const QImage &frame, double time) {
+    if (m_wipeArmed && !frame.isNull()) {
+        m_wipeArmed = false;
+        const int length = ui::motionDuration(tokens::motion::stage);
+        if (length > 0 && !m_wipeFrom.isNull()) {
+            if (!m_wipeRun) {
+                m_wipeRun = new QVariantAnimation(this);
+                m_wipeRun->setStartValue(0.0);
+                m_wipeRun->setEndValue(1.0);
+                m_wipeRun->setEasingCurve(tokens::easing());
+                connect(m_wipeRun, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+                    m_wipe = value.toReal();
+                    update();
+                });
+                connect(m_wipeRun, &QAbstractAnimation::finished, this, [this] {
+                    m_wipe = -1.0;
+                    m_wipeFrom = QImage();
+                    update();
+                });
+            }
+            m_wipeRun->setDuration(length);
+            m_wipeRun->start();
+        }
+    }
     m_frame = frame;
     m_time = time;
     m_scaled = QImage();
+    followGlow(frame);
     update();
 }
 
 void ViewerWidget::clearFrame() {
     m_frame = QImage();
     m_scaled = QImage();
+    followGlow(QImage());
     update();
+}
+
+void ViewerWidget::setCompareFrame(const QImage &before) {
+    m_compareFrame = before;
+    if (before.isNull()) {
+        if (m_compareSweep) m_compareSweep->stop();
+        update();
+        return;
+    }
+    if (!m_compareSweep && !ui::reducedMotion()) {
+        m_compareSweep = new QVariantAnimation(this);
+        m_compareSweep->setDuration(6800);
+        m_compareSweep->setLoopCount(-1);
+        m_compareSweep->setStartValue(0.28);
+        m_compareSweep->setKeyValueAt(0.5, 0.78);
+        m_compareSweep->setEndValue(0.28);
+        m_compareSweep->setEasingCurve(QEasingCurve::Linear);
+        connect(m_compareSweep, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            m_compareAt = value.toReal();
+            update();
+        });
+    }
+    if (m_compareSweep && m_compareSweep->state() != QAbstractAnimation::Running) m_compareSweep->start();
+    update();
+}
+
+void ViewerWidget::setFloating(bool floating) {
+    m_floating = floating;
+    update();
+}
+
+void ViewerWidget::setWorkChip(QWidget *chip) {
+    m_workChip = chip;
+    if (chip) chip->setParent(this);
+    placeOverlays();
+}
+
+void ViewerWidget::wipeToNextFrame() {
+    if (m_frame.isNull()) return;
+    m_wipeFrom = m_frame;
+    m_wipeArmed = true;
+}
+
+void ViewerWidget::followGlow(const QImage &frame) {
+    QColor target;
+    if (!frame.isNull()) {
+        // Often enough to follow the cuts, and never for every frame.
+        if (m_glowClock.isValid() && m_glowClock.elapsed() < 240) return;
+        m_glowClock.restart();
+        const QColor mean = frame.scaled(16, 9, Qt::IgnoreAspectRatio, Qt::FastTransformation)
+                                .scaled(1, 1, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                .pixelColor(0, 0);
+        target = mean;
+    }
+    if (target == m_glowTarget) return;
+    m_glowTarget = target;
+    const int length = ui::motionDuration(tokens::motion::stage);
+    if (length <= 0) {
+        m_glow = target;
+        emit lightChanged(m_glow);
+        update();
+        return;
+    }
+    if (!m_glowFade) {
+        m_glowFade = new QVariantAnimation(this);
+        connect(m_glowFade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            m_glow = value.value<QColor>();
+            emit lightChanged(m_glow);
+            if (!m_floating) update();
+        });
+    }
+    m_glowFade->stop();
+    QColor from = m_glow.isValid() ? m_glow : target;
+    QColor to = target.isValid() ? target : from;
+    if (!m_glow.isValid()) from.setAlphaF(0.0f);
+    if (!target.isValid()) to.setAlphaF(0.0f);
+    m_glowFade->setDuration(length);
+    m_glowFade->setStartValue(from);
+    m_glowFade->setEndValue(to);
+    m_glowFade->start();
 }
 
 void ViewerWidget::setLiveScrub(bool live) {
@@ -308,7 +419,7 @@ double ViewerWidget::aspect() const {
 
 bool ViewerWidget::verticalSequence() const { return !stage::isWide(aspect()); }
 
-QRectF ViewerWidget::videoRect() const { return QRectF(stage::fitted(rect(), aspect())); }
+QRectF ViewerWidget::videoRect() const { return QRectF(stage::fitted(stage::paddedSlot(rect()), aspect())); }
 
 QRectF ViewerWidget::pictureRect() const {
     const QRectF card = videoRect();
@@ -369,6 +480,11 @@ void ViewerWidget::placeOverlays() {
         const QRect picture = videoRect().toRect();
         m_chip->adjustSize();
         m_chip->move(picture.left() + kChipInset, picture.top() + kChipInset);
+        if (m_workChip) {
+            m_workChip->adjustSize();
+            m_workChip->move(picture.left() + kChipInset, picture.top() + kChipInset);
+            m_workChip->raise();
+        }
         m_chip->raise();
     }
 }
@@ -1078,13 +1194,25 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    // Black bars, where the region is not of the picture's shape.
-    p.fillRect(rect(), Qt::black);
+    // Black bars, where the region is not of the picture's shape; floating, the
+    // room shows there.
+    if (!m_floating) p.fillRect(rect(), Qt::black);
     const QRectF card = videoRect();
     const QRectF picture = pictureRect();
-    p.fillRect(card, theme.viewerCanvas);
+    // The picture's colour, lit around it.
+    if (!m_floating && m_glow.isValid() && m_glow.alphaF() > 0.0) {
+        QRadialGradient light(card.center(), std::max(rect().width(), rect().height()) * 0.62);
+        QColor core = m_glow;
+        core.setAlphaF(float(m_glow.alphaF() * 0.5));
+        QColor edge = m_glow;
+        edge.setAlphaF(0.0f);
+        light.setColorAt(0.25, core);
+        light.setColorAt(1.0, edge);
+        p.fillRect(rect(), light);
+    }
     QPainterPath viewport;
-    viewport.addRect(card);
+    viewport.addRoundedRect(card, tokens::layout::pictureRadius, tokens::layout::pictureRadius);
+    p.fillPath(viewport, theme.viewerCanvas);
     if (!m_frame.isNull()) {
         p.save();
         p.setClipPath(viewport);
@@ -1100,6 +1228,14 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         const QPointF topLeft(picture.center().x() - m_scaled.width() / dpr / 2.0,
                               picture.center().y() - m_scaled.height() / dpr / 2.0);
         p.drawImage(topLeft, m_scaled);
+        // What was showing, drawn back as what is showing wipes in over it.
+        if (m_wipe >= 0.0 && !m_wipeFrom.isNull()) {
+            const qreal edge = card.left() + card.width() * m_wipe;
+            p.setClipRect(QRectF(edge, card.top(), card.right() - edge, card.height()), Qt::IntersectClip);
+            p.drawImage(card, m_wipeFrom);
+            p.setClipPath(viewport);
+            p.fillRect(QRectF(edge - 1.0, card.top(), 2.0, card.height()), Qt::white);
+        }
         p.restore();
     } else {
         // Two quiet lines, wrapped inside the picture.
@@ -1121,6 +1257,35 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.setFont(detail);
         p.setPen(theme.viewerTextDim);
         p.drawText(QRectF(area.left(), top + titleBox.height() + gap, area.width(), detailBox.height()), flags, detailText);
+        p.restore();
+    }
+    if (!m_compareFrame.isNull() && !m_frame.isNull()) {
+        // What it was, to the left of the moving line; what it is, to its right.
+        const qreal edge = card.left() + card.width() * m_compareAt;
+        p.save();
+        p.setClipPath(viewport);
+        p.save();
+        p.setClipRect(QRectF(card.left(), card.top(), edge - card.left(), card.height()), Qt::IntersectClip);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        p.drawImage(picture, m_compareFrame);
+        p.restore();
+        for (int spread = 8; spread >= 1; --spread)
+            p.fillRect(QRectF(edge - spread, card.top(), spread * 2.0, card.height()), QColor(255, 255, 255, 12));
+        p.fillRect(QRectF(edge - 1.0, card.top(), 2.0, card.height()), Qt::white);
+        const QFont font = tokens::font(tokens::meta);
+        const QFontMetricsF metrics(font);
+        p.setFont(font);
+        const auto tag = [&](const QString &text, bool left, const QColor &fill) {
+            const qreal w = metrics.horizontalAdvance(text) + 16;
+            const QRectF box(left ? card.left() + 12 : card.right() - 12 - w, card.bottom() - 12 - 22, w, 22);
+            p.setPen(Qt::NoPen);
+            p.setBrush(fill);
+            p.drawRoundedRect(box, 6, 6);
+            p.setPen(Qt::white);
+            p.drawText(box, Qt::AlignCenter, text);
+        };
+        tag(QStringLiteral("Before"), true, QColor(0, 0, 0, 153));
+        tag(QStringLiteral("After"), false, tokens::color(tokens::accent));
         p.restore();
     }
     // Over the picture, inside its rect: the caption, the QC overlap box,

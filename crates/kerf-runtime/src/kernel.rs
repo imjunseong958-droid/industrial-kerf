@@ -483,6 +483,26 @@ pub(crate) fn apply_ops(project: &Project, ops: &[Op]) -> Result<Edited, Runtime
 
 // ---- media import -------------------------------------------------------------
 
+/// The operation that adds the media file at `path` (described by `probe`
+/// when it could be read), and its id, leaving the program as it is.
+pub(crate) fn add_media(
+    project: &Project,
+    path: &str,
+    probe: Option<&ProbeInfo>,
+) -> Result<(Vec<Op>, Id), RuntimeError> {
+    let sequence = project
+        .sequences
+        .first()
+        .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "the project has no sequence"))?;
+    let id = project.id_gen().next("m");
+    let media = match probe.map(|probe| media_from_probe(id.clone(), path, probe, sequence.rate)) {
+        Some(Ok(media)) => media,
+        _ => assumed_media(id, path, probe, sequence)?,
+    };
+    let id = media.id.clone();
+    Ok((vec![Op::AddMedia(media)], id))
+}
+
 /// The operations that add the media file at `path` (described by `probe`
 /// when it could be read) and cut all of it in at the end of the program.
 /// Picture goes on the first video track and sound, linked to it, on the

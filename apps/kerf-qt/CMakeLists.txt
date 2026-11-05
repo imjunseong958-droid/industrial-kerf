@@ -55,6 +55,8 @@ set(KERF_QT_SOURCES
     editor_style.h
     editor_theme.cpp
     editor_theme.h
+    home_window.cpp
+    home_window.h
     effects_panel.cpp
     effects_panel.h
     inspector_panel.cpp
@@ -101,7 +103,7 @@ endif()
 # MainWindow's members are split by region into main_window_<region>.cpp,
 # which go with main_window.cpp.
 file(GLOB KERF_QT_WINDOW_PARTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" main_window_*.cpp)
-set(KERF_QT_VARIANT_SOURCES main_window.cpp main_window.h ${KERF_QT_WINDOW_PARTS} project_launcher.cpp project_launcher.h)
+set(KERF_QT_VARIANT_SOURCES main_window.cpp main_window.h ${KERF_QT_WINDOW_PARTS} project_launcher.cpp project_launcher.h home_window.cpp home_window.h)
 set(KERF_QT_SHARED_SOURCES ${KERF_QT_SOURCES})
 list(REMOVE_ITEM KERF_QT_SHARED_SOURCES ${KERF_QT_VARIANT_SOURCES})
 add_library(kerf-qt-shared OBJECT ${KERF_QT_SHARED_SOURCES})

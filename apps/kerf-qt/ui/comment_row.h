@@ -230,6 +230,12 @@ public:
     // (the reader's request, Kerf's answer, a failure); Record is a review
     // log comment; Drafting is Kerf at work.
     enum class Kind { User, Kerf, Error, Record, Drafting };
+    // In a conversation with Kerf: what one asks is a bubble at the right, and
+    // what Kerf says is plain text, without a name over each line. Notes keep
+    // their review look, with who wrote them.
+    enum class Look { Note, Request, Answer };
+    void setLook(Look look);
+    Look look() const { return m_look; }
     // The background layer reaches this far past the content.
     static constexpr int kBleedX = 8;
     static constexpr int kBleedY = 6;
@@ -381,6 +387,8 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
 
 private:
+    Look m_look = Look::Note;
+    void fitBubble();
     void build();
     void updateBody();
     void updateSteps();
@@ -461,6 +469,8 @@ public:
     QWidget *replies() const { return m_replies; }
     void setRepliesShown(bool shown);
     bool repliesShown() const;
+    // Its replies at its own edge, for a conversation.
+    void setFlat(bool flat);
     // Every row, the root first.
     QList<CommentRow *> rows() const;
 

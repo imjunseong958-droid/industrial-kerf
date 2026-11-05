@@ -1229,14 +1229,14 @@ private slots:
             x = button->x();
         }
         // At the mockup's x: the tools at 176, Snap at 240, the zoom ending
-        // 12 from the edge of the 1240 wide panel; Play in ink, the rest ink2.
+        // 12 from the edge of the 960 wide panel; Play in ink, the rest ink2.
         QCOMPARE(tools->tools()->x(), 176);
         QCOMPARE(tools->snapButton()->x(), 240);
         QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
         QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
         auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
         QVERIFY(zoomOut);
-        QCOMPARE(zoomOut->geometry().center().x(), 1119);
+        QCOMPARE(zoomOut->geometry().center().x(), 839);
         QVERIFY(tools->zoomOutButton()->x() > tools->snapButton()->x());
         QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 12);
         // The transport runs the registry's playback commands.

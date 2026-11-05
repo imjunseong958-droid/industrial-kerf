@@ -1,7 +1,7 @@
 # Industrial Kerf
 
 Industrial Kerf is a native, agentic video editor. `kerf` opens the Qt6 editor by default,
-on its project launcher when no project is named;
+on its start window, the folders and a conversation, when no project is named;
 pass `--terminal` for the project-scoped terminal agent. `kerf-mcp` is the
 project-scoped MCP server and primary external-agent integration surface.
 External Claude, Cursor, and Codex-like clients connect through `kerf-mcp`

@@ -103,6 +103,8 @@ struct TypeStyle {
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, comment text, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // comment names
+constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
+constexpr TypeStyle reading{14, 22, 400, false};       // what is said in the conversation, and the composer
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: Comments, Source, clip name
 constexpr TypeStyle control{12, 16, 400, false};       // controls, labels, rows, chips
 constexpr TypeStyle controlStrong{12, 16, 500, false}; // buttons, dock names, segment on
@@ -189,6 +191,7 @@ constexpr int hover = 120;   // hover and colour changes, ms
 constexpr int fade = 160;    // popovers and fades
 constexpr int segment = 200; // the segmented control's sliding fill
 constexpr int move = 220;    // the kit's larger moves
+constexpr int stage = 850;   // the window's regions moving to a new arrangement
 // The one easing curve: cubic-bezier(.22, 1, .36, 1).
 constexpr qreal easeX1 = 0.22;
 constexpr qreal easeY1 = 1.0;
@@ -216,14 +219,22 @@ constexpr int bin = 272;        // the Media sheet's width
 constexpr int browser = 304;    // the Effects and titles sheet's width
 constexpr int band = 344;       // a tray's height
 // The minimal layout (ui/stage_shell.h).
-constexpr int rail = 360;               // the conversation, the content's full height at the right
-constexpr int railLeast = 300;          // its least width
-constexpr int workLeast = 600;          // what it leaves on its left before it gives way
+constexpr int sidebar = 240;            // the folders and conversations, at the left
+constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
+constexpr int rail = 400;               // the conversation, beside an open panel
+constexpr int railLeast = 320;          // its least width
+constexpr int workLeast = 600;          // what it leaves the panel before it gives way
+constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself
+constexpr int reelBar = 40;             // the strip over the picture while watching changes
 constexpr int timelineWideLeast = 260;  // the timeline's least height under a wide picture
 constexpr double timelineWideShare = 0.5625; // and its share of the content's height there
-constexpr int pictureTransport = 160;   // the transport's block under a vertical picture
+constexpr int pictureTransportLow = 88; // the transport's block under a picture with no timeline to carry it
+constexpr int picturePad = 12;          // around the picture in its slot
+constexpr int pictureRadius = 10;       // the picture's corners
+constexpr int reelReach = 120;          // how far the stage grows over the conversation while watching changes
 constexpr int pictureColumnLeast = 240; // a vertical picture's column, at least
-constexpr int timelineUprightLeast = 600; // the timeline's width beside a vertical picture, before the column has its least
+constexpr int timelineUprightLeast = 220; // and under a vertical one
+constexpr double timelineUprightShare = 0.36; // and its share of the height there
 constexpr int seam = 1;                // every seam is a 1 pt line
 } // namespace layout
 

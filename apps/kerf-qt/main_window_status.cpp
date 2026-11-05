@@ -99,7 +99,8 @@ void MainWindow::showStatus(const QString &message, int timeout) {
 void MainWindow::setConnection(const QString &status, const QString &message) {
     const bool wasConnected = m_connected;
     m_connected = status == QStringLiteral("ready");
-    m_connectionBanner->setVisible(!m_connected);
+    // Connecting is only said in the toolbar; this is for what went wrong.
+    m_connectionBanner->setVisible(status == QStringLiteral("disconnected"));
     m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
     m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
         : QStringLiteral("Project disconnected. %1").arg(message));
@@ -132,6 +133,8 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateChatControls();
     if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
+    // The first snapshot can come before this does.
+    if (m_connected) runStart();
     if (m_connected && !wasConnected) {
         startSession();
         // The timeline was disabled, which handed the keys to the next control.

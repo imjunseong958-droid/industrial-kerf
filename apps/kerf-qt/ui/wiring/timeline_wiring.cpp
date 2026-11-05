@@ -217,6 +217,7 @@ void TimelineWiring::handleEvent(const QString &type, const QJsonObject &json) {
         QJsonObject proposed = snapshot.value(QStringLiteral("proposalTimelines")).toObject().value(id).toObject();
         if (proposed.isEmpty() && snapshot.value(QStringLiteral("pendingProposal")).toObject().value(QStringLiteral("proposalId")).toString() == id)
             proposed = snapshot.value(QStringLiteral("proposalTimeline")).toObject();
+        proposed = MainWindow::withClipNames(proposed, snapshot.value(QStringLiteral("timeline")).toObject().value(QStringLiteral("sources")).toArray());
         timeline->setPreview(proposed.isEmpty() ? QString() : id, proposed);
     }
 }

@@ -4,6 +4,8 @@
 #include "editor_common.h"
 #include "test_friends.h"
 
+#include <QColor>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -37,6 +39,12 @@ public:
     void setFrame(const QImage &frame, double time);
     QImage frame() const { return m_frame; }
     void clearFrame();
+    // The next frame wipes in over this one, for a change of what is showing.
+    void wipeToNextFrame();
+    // A still of what the picture was: it wipes to and fro over what plays, with
+    // each side named. Null takes it away.
+    void setCompareFrame(const QImage &before);
+    bool isComparing() const { return !m_compareFrame.isNull(); }
     void setLiveScrub(bool live);
     // The engine's caption at the playhead (a `caption {text}` event).
     void setCaption(const QString &caption);
@@ -50,6 +58,13 @@ public:
 
     // The agent HUD and the preview chip, as children; each shows and hides itself.
     void setOverlays(QWidget *hud, QWidget *chip);
+    // A chip over the picture saying Kerf is at work, in the preview chip's place.
+    void setWorkChip(QWidget *chip);
+    // Over the window's room rather than on black: only the picture is painted,
+    // and the light it gives goes to lightChanged.
+    void setFloating(bool floating);
+    // The light of a picture that stands in for the frame.
+    void lightFrom(const QImage &image) { followGlow(image); }
     QWidget *hud() const { return m_hud; }
     QWidget *previewChip() const { return m_chip; }
 
@@ -126,6 +141,7 @@ public:
     static void setMotionOverride(int state);
 
 signals:
+    void lightChanged(const QColor &light);
     void scrubbed(double fraction);
     void scrubEnded();
     void editRequested(const QJsonArray &ops);
@@ -189,6 +205,21 @@ private:
 
     QImage m_frame;
     QImage m_scaled;
+    // The picture's colour, lit around it.
+    void followGlow(const QImage &frame);
+    bool m_floating = false;
+    QImage m_compareFrame;
+    qreal m_compareAt = 0.28;
+    QVariantAnimation *m_compareSweep = nullptr;
+    QPointer<QWidget> m_workChip;
+    QColor m_glow;
+    QColor m_glowTarget;
+    QElapsedTimer m_glowClock;
+    QVariantAnimation *m_glowFade = nullptr;
+    QImage m_wipeFrom;
+    bool m_wipeArmed = false;
+    qreal m_wipe = -1.0;
+    QVariantAnimation *m_wipeRun = nullptr;
     double m_time = 0.0;
     double m_width = 0.0;
     double m_height = 0.0;

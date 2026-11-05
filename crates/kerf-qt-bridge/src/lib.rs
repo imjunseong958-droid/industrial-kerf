@@ -81,6 +81,9 @@ enum Command {
     PreviewExit,
     Import {
         path: String,
+        /// Add it to the project's media without cutting it into the program.
+        #[serde(default, rename = "mediaOnly")]
+        media_only: bool,
     },
     /// Typed edits on the model, applied atomically.
     Edit {
@@ -112,6 +115,15 @@ enum Command {
         /// comment, and Kerf's answer as a reply.
         #[serde(default)]
         comment: Option<review::TurnComment>,
+        #[serde(flatten)]
+        settings: AgentSettings,
+    },
+    /// The same request made by several agents at once, each staging its own
+    /// proposal in its own thread: `agent_version` events follow each one.
+    AgentVersions {
+        text: String,
+        #[serde(default = "default_versions")]
+        count: usize,
         #[serde(flatten)]
         settings: AgentSettings,
     },
@@ -312,6 +324,8 @@ struct Shared {
     /// A viewer preview is rendering; exports go through `renders`.
     preview_busy: AtomicBool,
     abort: Mutex<Option<Arc<AtomicBool>>>,
+    /// The agents making versions of a request, while they run.
+    version_aborts: Mutex<Vec<Arc<AtomicBool>>>,
     frame: Mutex<Option<PlaybackFrame>>,
     seek: Mutex<Option<PendingSeek>>,
     project: Mutex<Option<MediaProject>>,
@@ -366,6 +380,8 @@ struct Bridge {
 struct AgentRequest {
     text: String,
     settings: AgentSettings,
+    /// More than none: this many agents make their own version of the request.
+    versions: usize,
     /// The person's own words and where the turn goes in the review log,
     /// when it is kept there.
     note: Option<(String, review::TurnComment)>,
@@ -678,16 +694,21 @@ fn runtime_worker(
             }
             // A shared project copies the file into media/ on another
             // thread, then imports the copy.
-            Command::Import { path } if media::needs_copy(&directory, Path::new(&path)) => {
-                media::copy_then(&shared, &path, &commands, &tx, media::probe, |path| {
-                    Command::Import { path }
+            Command::Import { path, media_only }
+                if media::needs_copy(&directory, Path::new(&path)) =>
+            {
+                media::copy_then(&shared, &path, &commands, &tx, media::probe, move |path| {
+                    Command::Import { path, media_only }
                 });
                 continue;
             }
-            Command::Import { path } => active_client.get_state().and_then(|state| {
-                active_client
-                    .import_media_request("ui", &operation, &path, state.revision)
-                    .map(|(state, _, _)| state)
+            Command::Import { path, media_only } => active_client.get_state().and_then(|state| {
+                if media_only {
+                    active_client.add_media_request("ui", &operation, &path, state.revision)
+                } else {
+                    active_client.import_media_request("ui", &operation, &path, state.revision)
+                }
+                .map(|(state, _, _)| state)
             }),
             Command::MediaReplace { media, path }
                 if media::needs_copy(&directory, Path::new(&path)) =>
@@ -1626,7 +1647,52 @@ by typing. End each turn by calling `suggest` with one to three next steps \
 they are likely to want: a variation on what you just did (another effect or \
 transition for that moment, stronger or subtler), the next part of the edit, \
 or checking the result. Labels are a few words; requests are what the person \
-would say. Do not repeat a step they just took.";
+would say. Do not repeat a step they just took.\n\n\
+The timeline shows your proposal as it grows, so they watch you work. Build a \
+longer edit in steps: stage the first part with `edit`, check it, then `extend` \
+the proposal with the next part, rather than one large script at the end.";
+
+fn default_versions() -> usize {
+    3
+}
+
+/// The most versions of a request made at once.
+const MAX_VERSIONS: usize = 3;
+const VERSION_KEYS: [&str; MAX_VERSIONS] = ["A", "B", "C"];
+const VERSION_ANGLES: [&str; MAX_VERSIONS] = [
+    "Stay closest to what was asked, in its most direct form.",
+    "Take a bolder approach: a different opening, structure, or pace.",
+    "Take the simplest approach: shorter, with fewer cuts and effects.",
+];
+
+/// What one agent is asked to make: its version of the person's request.
+fn version_prompt(text: &str, index: usize, count: usize) -> String {
+    format!(
+        "{text}\n\nMake version {key} of {count}; other agents are making the others at the same \
+         time, to compare. {angle} Do not ask questions. Stage it as one proposal with `edit` \
+         and do not change any other proposal. End with one line saying what makes this version \
+         different.",
+        key = VERSION_KEYS[index],
+        angle = VERSION_ANGLES[index],
+    )
+}
+
+/// Where a tool call is working, for the timeline and picture to follow.
+fn focus_event(name: &str, targets: &kerf_agent::AgentTargetSummary) -> Option<Value> {
+    (!targets.times.is_empty() || !targets.clips.is_empty()).then(|| {
+        json!({
+            "type": "agent_focus",
+            "tool": name,
+            "times": targets.times,
+            "clips": targets.clips,
+        })
+    })
+}
+
+/// Whether a finished tool call changed what the timeline shows.
+fn staged_proposal(summary: &kerf_agent::ToolResultSummary) -> bool {
+    summary.proposal.is_some() || summary.status.as_deref() == Some("awaiting_review")
+}
 
 /// Carry out a Kerf Cloud command, if any, then report the account:
 /// `{type: "cloud", access, account?, message?}`.
@@ -1688,6 +1754,140 @@ fn mcp_connection_status(line: &str) -> &'static str {
     }
 }
 
+/// Make `request.versions` versions of a request, each agent on its own thread.
+fn run_versions(
+    directory: &std::path::Path,
+    binary: &std::path::Path,
+    request: &AgentRequest,
+    tx: &SyncSender<Value>,
+    commands: &SyncSender<Command>,
+    shared: &Arc<Shared>,
+) {
+    let count = request.versions.min(MAX_VERSIONS);
+    thread::scope(|scope| {
+        for index in 0..count {
+            scope.spawn(move || {
+                run_version(directory, binary, request, index, count, tx, commands, shared)
+            });
+        }
+    });
+}
+
+/// One agent's version: its request and reply go in a thread of their own,
+/// and `agent_version` events say how it is going.
+#[allow(clippy::too_many_arguments)]
+fn run_version(
+    directory: &std::path::Path,
+    binary: &std::path::Path,
+    request: &AgentRequest,
+    index: usize,
+    count: usize,
+    tx: &SyncSender<Value>,
+    commands: &SyncSender<Command>,
+    shared: &Arc<Shared>,
+) {
+    let key = VERSION_KEYS[index];
+    let title = format!("Version {key}: {}", request.text.trim());
+    emit(
+        tx,
+        json!({"type":"agent_version","key":key,"state":"running","title":title}),
+    );
+    let finish = |state: &str, proposal: Option<&str>, message: Option<&str>| {
+        emit(
+            tx,
+            json!({
+                "type": "agent_version", "key": key, "state": state,
+                "proposalId": proposal, "message": message,
+            }),
+        );
+    };
+    let client = match RuntimeClient::new(directory) {
+        Ok(client) => client,
+        Err(err) => {
+            finish("failed", None, Some(&err.message));
+            return;
+        }
+    };
+    let person = review::person(directory);
+    let mut turn = match review::Turn::begin(
+        &client,
+        person,
+        &title,
+        review::TurnComment::default(),
+        shared,
+        tx,
+    ) {
+        Ok(turn) => turn,
+        Err(err) => {
+            finish("failed", None, Some(&err.message));
+            return;
+        }
+    };
+    emit(
+        tx,
+        json!({"type":"agent_version","key":key,"state":"running","thread":turn.root()}),
+    );
+    let mut proposal: Option<String> = None;
+    let mut stopped = false;
+    let result = (|| {
+        let mut session = new_agent(directory, binary, &request.settings, tx)?;
+        if let Ok(mut aborts) = shared.version_aborts.lock() {
+            aborts.push(session.abort_handle());
+        }
+        session
+            .run_with_events(&version_prompt(&request.text, index, count), |event| {
+                match event {
+                    AgentEvent::ToolCallStarted { name, .. } => emit(
+                        tx,
+                        json!({"type":"agent_version","key":key,"state":"running","status":name}),
+                    ),
+                    AgentEvent::ToolCallFinished {
+                        name, ok, summary, ..
+                    } => {
+                        turn.step(&format!(
+                            "{name} · {}{}",
+                            if ok { "done" } else { "failed" },
+                            summary
+                                .status
+                                .as_ref()
+                                .map(|status| format!(" · {status}"))
+                                .unwrap_or_default(),
+                        ));
+                        if staged_proposal(&summary) {
+                            if let Some(id) = &summary.proposal {
+                                proposal = Some(id.clone());
+                            }
+                            let _ = commands.try_send(Command::Refresh);
+                        }
+                    }
+                    AgentEvent::Done { text } => turn.done(&text),
+                    AgentEvent::Aborted => {
+                        stopped = true;
+                        turn.stopped();
+                    }
+                    AgentEvent::TextDelta(_) | AgentEvent::TurnStarted { .. } => {}
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>(())
+    })();
+    let outcome = match &result {
+        Ok(()) => review::Outcome::Done(String::new()),
+        Err(err) => review::Outcome::Failed(err.clone()),
+    };
+    if let Err(err) = turn.finish(&client, outcome, proposal.clone(), shared, tx) {
+        error(
+            tx,
+            format!("Kerf's reply was not kept as a note: {}", err.message),
+        );
+    }
+    match result {
+        Err(err) => finish("failed", proposal.as_deref(), Some(&err)),
+        Ok(()) if stopped => finish("stopped", proposal.as_deref(), None),
+        Ok(()) => finish("done", proposal.as_deref(), None),
+    }
+}
+
 fn agent_worker(
     directory: PathBuf,
     binary: PathBuf,
@@ -1704,6 +1904,17 @@ fn agent_worker(
         }
         emit(&tx, json!({"type":"agent_busy","busy":true}));
         emit(&tx, json!({"type":"agent_state","state":"running"}));
+        if request.versions > 0 {
+            run_versions(&directory, &binary, &request, &tx, &commands, &shared);
+            if let Ok(mut aborts) = shared.version_aborts.lock() {
+                aborts.clear();
+            }
+            emit(&tx, json!({"type":"agent_state","state":"completed"}));
+            shared.agent_busy.store(false, Ordering::SeqCst);
+            emit(&tx, json!({"type":"agent_busy","busy":false}));
+            let _ = commands.send(Command::Refresh);
+            continue;
+        }
         // A turn kept in the review log: the person's comment first, and
         // the open proposals, to find the one this turn stages.
         let mut kept = request.note.as_ref().and_then(|(prompt, comment)| {
@@ -1746,9 +1957,18 @@ fn agent_worker(
             }
             current
                 .run_with_events(&request.text, |event| {
+                    if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
+                        if let Some(focus) = focus_event(name, targets) {
+                            emit(&tx, focus);
+                        }
+                    }
                     if let AgentEvent::ToolCallFinished { summary, .. } = &event {
                         if summary.status.as_deref() == Some("awaiting_review") {
                             emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
+                        }
+                        // The proposal shows on the timeline as it grows.
+                        if staged_proposal(summary) {
+                            let _ = commands.try_send(Command::Refresh);
                         }
                     }
                     // The reply keeps finished tool calls and statuses as
@@ -1867,6 +2087,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         agent_busy: AtomicBool::new(false),
         preview_busy: AtomicBool::new(false),
         abort: Mutex::new(None),
+        version_aborts: Mutex::new(Vec::new()),
         frame: Mutex::new(None),
         seek: Mutex::new(None),
         project: Mutex::new(None),
@@ -1957,6 +2178,11 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
             abort.store(true, Ordering::SeqCst);
         }
     };
+    if let Ok(aborts) = bridge.shared.version_aborts.lock() {
+        for abort in aborts.iter() {
+            abort.store(true, Ordering::SeqCst);
+        }
+    };
 }
 
 /// Queue an edit or control message; `false` means it was not accepted.
@@ -1999,6 +2225,11 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             bridge.media.try_send(command).is_ok()
         }
         Command::Abort => {
+            if let Ok(aborts) = bridge.shared.version_aborts.lock() {
+                for abort in aborts.iter() {
+                    abort.store(true, Ordering::SeqCst);
+                }
+            }
             if let Ok(abort) = bridge.shared.abort.try_lock() {
                 if let Some(abort) = &*abort {
                     abort.store(true, Ordering::SeqCst);
@@ -2085,7 +2316,35 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                 .try_send(AgentRequest {
                     text,
                     settings,
+                    versions: 0,
                     note,
+                })
+                .is_err()
+            {
+                bridge.shared.agent_busy.store(false, Ordering::SeqCst);
+                false
+            } else {
+                true
+            }
+        }
+        Command::AgentVersions {
+            text,
+            count,
+            settings,
+        } => {
+            if text.trim().is_empty()
+                || count == 0
+                || bridge.shared.agent_busy.swap(true, Ordering::SeqCst)
+            {
+                return false;
+            }
+            if bridge
+                .prompts
+                .try_send(AgentRequest {
+                    text,
+                    settings,
+                    versions: count,
+                    note: None,
                 })
                 .is_err()
             {
@@ -2493,6 +2752,37 @@ mod tests {
             panic!("expected agent command");
         };
         assert!(settings.cloud);
+    }
+
+    #[test]
+    fn versions_are_asked_for_three_by_default_and_differ() {
+        use crate::{version_prompt, MAX_VERSIONS};
+        let Command::AgentVersions { text, count, .. } =
+            serde_json::from_value(json!({"type": "agent_versions", "text": "Open stronger"}))
+                .unwrap()
+        else {
+            panic!("expected versions");
+        };
+        assert_eq!((text.as_str(), count), ("Open stronger", 3));
+        let prompts: Vec<String> = (0..MAX_VERSIONS)
+            .map(|index| version_prompt("Open stronger", index, MAX_VERSIONS))
+            .collect();
+        assert!(prompts[0].starts_with("Open stronger"));
+        assert!(prompts[1].contains("version B of 3"));
+        assert_ne!(prompts[0], prompts[2]);
+    }
+
+    #[test]
+    fn a_tool_call_says_where_it_works() {
+        use crate::focus_event;
+        let targets = kerf_agent::AgentTargetSummary {
+            times: vec!["4.5s".into()],
+            ..Default::default()
+        };
+        let focus = focus_event("look", &targets).unwrap();
+        assert_eq!(focus["type"], "agent_focus");
+        assert_eq!(focus["times"], json!(["4.5s"]));
+        assert!(focus_event("look", &Default::default()).is_none());
     }
 
     #[test]

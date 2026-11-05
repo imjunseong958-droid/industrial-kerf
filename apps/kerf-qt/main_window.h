@@ -1,9 +1,12 @@
 #pragma once
 
+#include "compare_view.h"
 #include "editor_common.h"
+#include "review_model.h"
 #include "test_friends.h"
 
 #include <QAction>
+#include <QSet>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -68,7 +71,14 @@ class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class PreviewChip;
+class ChangeReel;
+class ChangeReelBar;
+class ProjectSidebar;
+class StageMotion;
 class StageShell;
+namespace ui {
+class IconButton;
+} // namespace ui
 class MediaArtwork;
 class TimelineWidget;
 class ViewerWidget;
@@ -106,6 +116,12 @@ public:
     bool linkPending() const { return m_linkPending; }
     // The tray to open in ("Finish", "Deliver"; anything else is the base state).
     void openTray(const QString &name);
+    // What to do once the project is connected: bring the folder's media in
+    // (a folder that was no project yet), then send Kerf the request.
+    void startWith(const QString &request, bool importFolder);
+    // Takes the place of a start window that looked like `look`, its request box
+    // flying from `box` to the conversation's.
+    void takeOverFrom(const QPixmap &look, const QRect &box);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -191,6 +207,9 @@ private slots:
     void updateAgentModelChoices();
     void loadAgentSettings();
     void saveAgentSettings();
+    // A timeline with its clips named after their media, where they have no name.
+    static QJsonObject withClipNames(QJsonObject timeline, const QJsonArray &sources);
+
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
@@ -344,6 +363,37 @@ private:
     // The regions' containers: the shell, the timeline's panel, the Inspector
     // column, the browser, the Finish and Deliver trays.
     StageShell *m_shell = nullptr;
+    ProjectSidebar *m_sidebar = nullptr;
+    ChangeReel *m_changeReel = nullptr;
+    ChangeReelBar *m_reelBar = nullptr;
+    StageMotion *m_motion = nullptr;
+    // The sheet of footage shown as Kerf starts on an empty project: what flies
+    // from it next, then the rest of the conversation's foot.
+    bool m_holdFlights = false;
+    class WorkChip *m_workChip = nullptr;
+    QList<ReviewModel::ClipChange> m_pendingFlights;
+    CompareView *m_compare = nullptr;
+    ui::IconButton *m_followButton = nullptr;
+    bool m_followKerf = true;
+    // How far a seek may go past the program: what a proposal makes can be longer.
+    double m_seekLimit = 0.0;
+    QSet<QString> m_liveChanges;
+    bool m_returnAfterPreview = false;
+    struct VersionRun {
+        QString key;
+        QString proposal = {};
+        QString thread = {};
+        QString status = {};
+        CompareView::State state = CompareView::State::Running;
+    };
+    QList<VersionRun> m_versionRuns;
+    bool m_versionsRunning = false;
+    ui::IconButton *m_sidebarButton = nullptr;
+    ui::IconButton *m_pictureButton = nullptr;
+    ui::IconButton *m_timelineButton = nullptr;
+    bool m_panesFollowContent = true;
+    QString m_startRequest;
+    bool m_startImport = false;
     QWidget *m_timelinePanel = nullptr;
     InspectorColumn *m_inspectorColumn = nullptr;
     BrowserPanel *m_browserPanel = nullptr;
@@ -365,6 +415,46 @@ private:
     // been pressed: after a tray or sheet closes, and as the window first
     // shows and first becomes active (m_focusSettled).
     void settleFocus();
+    // The sidebar and the panel beside the conversation.
+    void setPaneOpen(const QString &command, bool open);
+    void revealPanel(bool picture, bool timeline, const QRect &origin = QRect());
+    void applyPanes();
+    // The panel opens by itself once there is something to see, until one
+    // opens or closes a pane by hand.
+    void followContentWithPanes();
+    void refreshSidebar();
+    void buildSidebar();
+    // Kerf at work (main_window_agent.cpp).
+    void buildAgentViews();
+    void setFollowKerf(bool follow);
+    void showAgentAt(double seconds);
+    void followAgentFocus(const QJsonObject &event);
+    void followLiveProposal();
+    void endAgentFollow();
+    QList<ReviewModel::ClipChange> namedChanges(QList<ReviewModel::ClipChange> changes) const;
+    void watchChanges(const QString &proposalId);
+    bool sendVersions(const QString &text);
+    void followVersion(const QJsonObject &event);
+    void refreshCompare();
+    void useVersion(const QString &proposalId);
+    void showSheet();
+    void showProposedCut();
+    void goHome();
+    bool m_turnRendered = false;
+    void showCompare(bool shown);
+    void followReelCompare();
+    QString m_reelCompareAt;
+    QString m_lastVersionsRequest;
+    void quietenCutPreview();
+    void flyChange(const ReviewModel::ClipChange &change, int index);
+    void flushFlights();
+    QRect flightStart(const QString &source = QString());
+    QString sourceOfClip(const QString &clip) const;
+    void coverPicture(const QImage &image);
+    QRect toShell(const QWidget *widget, const QRect &rect) const;
+    QImage posterForClip(const QString &clip) const;
+    void flyExportHome();
+    void runStart();
     // Closes a sheet or tray that lies over the composer.
     void uncoverComposer();
     bool m_focusSettled = false;
@@ -373,6 +463,12 @@ private:
     void *m_bridge = nullptr;
     QTimer m_pollTimer;
     QTimer m_exactSeekTimer;
+    // The cut Kerf is proposing, shown while the program has none.
+    QTimer m_cutPreview;
+    QString m_previewedCut;
+    bool m_cutRendering = false;
+    double m_proposedDuration = 0.0;
+    bool m_sheetWanted = false;
     QJsonObject m_snapshot;
     QJsonObject m_project;
     // The last command handed to the bridge, for tests.

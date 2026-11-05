@@ -126,6 +126,9 @@ public:
     bool isOpen() const { return m_open; }
     void setScriptShown(bool shown);
     bool scriptShown() const;
+    // How long its changes take to watch, in seconds; none hides the button.
+    void setWatchLength(double seconds);
+    ui::Button *watchButton() const { return m_watch; }
     void setPreview(bool on);
     bool previewOn() const;
     // Accept is primary for the pinned or blocking proposal, else secondary.
@@ -141,6 +144,9 @@ public:
     // Settled: one line, accent ink for an accept, ink2 for a reject. Empty
     // text opens the card again.
     void setSettled(const QString &text, bool accepted);
+    // Small: what to do with it stays when its changes are folded, and watching
+    // is the first thing it offers.
+    void setCompact(bool compact);
     bool isSettled() const { return m_settled; }
 
     QWidget *pinHeader() const { return m_pinHeader; }
@@ -170,6 +176,7 @@ signals:
     void openToggled(bool open);
     void scriptToggled(bool shown);
     void previewToggled(bool on);
+    void watchRequested();
     void versionChosen(const QString &proposalId);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
@@ -179,6 +186,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    bool m_compact = false;
     void updateParts();
 
     QString m_id;
@@ -208,6 +216,9 @@ private:
     QLabel *m_colourLegend = nullptr;
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
+    ui::Button *m_watch = nullptr;
+    QWidget *m_watchBox = nullptr;
+    bool m_hasWatch = false;
     ui::CheckBox *m_preview = nullptr;
     ui::GhostButton *m_script = nullptr;
     QLabel *m_wait = nullptr;

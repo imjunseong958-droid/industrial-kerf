@@ -2,10 +2,11 @@
 
 This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
-second editable copy of the timeline. Its default screen is only the picture,
-the agent conversation and the timeline, filled edge to edge; Media, Effects
-and titles, the Inspector, Finish and Deliver open on demand. All of them are
-backed by the bridge event stream.
+second editable copy of the timeline. Work starts as a conversation: the folders
+at the left and Kerf beside them. The picture and the timeline open in a panel at
+the right once there is something to show; Media, Effects and titles, the
+Inspector, Finish and Deliver open on demand. All of them are backed by the
+bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
 repository root:
@@ -24,10 +25,10 @@ On macOS the build is an application bundle, `target/qt/kerf-qt.app`
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
-installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the project launcher instead
+installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
-it captures the launcher. `--window-size 1600x1000` sizes the window,
+it captures the start window. `--window-size 1600x1000` sizes the window,
 `--workspace Finish` opens it with that tray open (Finish, Deliver), and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
@@ -163,32 +164,88 @@ lie over the picture.
 
 ## The layout
 
-Only three regions stay on screen, flush, with one hairline between them and
-no cards, radii or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry,
-a pure function of the window's size and the picture's aspect). The toolbar is
-40 points tall. At a 1600 × 1000 window:
+**The start window.** With no project, Kerf asks one question beside the recent
+folders. Sending a request opens the chosen folder's editor with the request on
+its way to Kerf. A folder with no `project.kerf` becomes a project, with the media
+at its top level in its media and the timeline left empty. Open without asking opens the folder as it
+is, and New Project… is the Choose a Project window, for templates, presets and
+clones. A request Kerf cannot take yet (no connection set up) waits in the
+composer.
 
-| Sequence | Picture | Timeline | Conversation |
-|---|---|---|---|
-| Wide (aspect ≥ 1.2) | 1240 × 420 at (0, 40) | 1240 × 540 at (0, 460) | 360 × 960 at (1240, 40) |
-| 9:16 | 450 × 800 at (0, 40) | 790 × 960 at (450, 40) | 360 × 960 at (1240, 40) |
+**The regions** stay flush, with one hairline between them and no cards, radii
+or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
+of the window's size, the picture's aspect and which panes are open). The toolbar
+is 40 points tall. The sidebar is 240 wide and gives way in a window under 1100.
+With the panel closed the conversation has the rest of the window, its text in a
+720 wide column. With it open the conversation is 400 wide, giving way down to 320
+only when it would leave the panel under 600. At a 1600 × 1000 window:
 
-The conversation always has the content's full height at the right: 360 wide,
-giving way down to 300 only when it would leave under 600 on its left.
+| Sequence | Sidebar | Conversation | Picture | Timeline |
+|---|---|---|---|---|
+| Wide (aspect ≥ 1.2) | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 420 at (640, 40) | 960 × 540 at (640, 460) |
+| 9:16 | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 614 at (640, 40) | 960 × 346 at (640, 654) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
-its slot. A sequence narrower than 1.2 has three columns: the picture over a
-160 tall block with the playhead's timecode and the transport, the timeline at
-the content's full height, and the conversation. The timeline keeps 600 of
-width while the picture's column can give it up, down to 240; the picture then
-letterboxes in black. Track heights do not follow the timeline's height, so a
-big edit shows at once. Switching format lays out again at once, with no
-animation.
+its slot. One pane alone has the panel: a timeline with the transport in its
+strip, or a picture with the transport's block, 88 tall, under it.
 
-The toolbar holds the traffic lights' room, one ≡ button, the centred title and
-subtitle, the two format icons and the Export split. ≡ opens Media (⌘1),
-Effects and titles (⌘5), Inspector (⌘4), Scopes, loudness, QC, Deliver, Import…,
+A sequence narrower than 1.2 keeps the same arrangement: the picture fits inside
+its slot over a timeline with 36% of the height, at least 220. The picture keeps
+12 points inside its slot, with rounded corners and its colour lit around it.
+
+Track heights do not follow the timeline's height, so a big edit shows at once.
+Regions move to a new arrangement rather than jump to it (`ui/stage_shell.h`), and
+what is on screen becomes what comes next (`ui/stage_motion.h`). The conversation,
+the picture and the room are one surface with no line between them: the shell paints
+the room, the picture's light and its shadow, and the conversation and the picture's
+region are clear over it, so the picture floats. Kerf's footage gathers as named tiles
+in the conversation; the first grows into the picture over the conversation as it
+gives way, the timeline comes in out of the room, and each tile flies to its lane
+while the picture becomes that clip. While a first cut is only a proposal the timeline
+shows it, read-only, and its preview follows. Watching what changed, what the picture
+was wipes to and fro over what it now is, with the changed clips lifted off their
+lanes; versions are posters a little askew, fanned out from the picture over the
+timeline; and when Kerf has rendered what was asked, the picture goes back into the
+project's folder and the conversation has the room again. Under Reduce Motion
+everything is simply there.
+
+**The panel** opens by itself with the first thing to show: a clip on the
+timeline, or a proposal. After that, or once a pane is opened or closed by hand,
+it stays as it is left. Clicking a timecode or previewing a proposal in the
+conversation shows the picture, and Media and Effects show the panel, so a drag
+has somewhere to land. The toolbar's two pane buttons, ⌥⌘P and ⌥⌘T, open and close
+the picture and the timeline.
+
+**Watching Kerf work.** While Kerf works it refreshes the timeline after each
+`edit`, so its proposal grows there as it is built, and a blue Kerf cursor on the
+timeline shows where it is: what a tool looks at, or the newest change. With Follow
+Kerf on (⌥⌘F, the toolbar's eye; its choice is kept) the picture goes there too,
+unless something is playing.
+
+**Watching what changed** (`ui/change_reel.h`). A proposal card's Watch what changed
+plays only the stretches its changes touch, two seconds either side, one after
+another, with a strip over the picture: where you are, previous and next, Before
+and After, and Exit. After plays the proposal's rendered preview, and Before the
+program as it is.
+
+**Versions** (`ui/compare_view.h`). With the composer's branch button on, Send has
+three agents make their own version of the request at once. Each stages its own
+proposal in a thread of its own, and the versions lie over the timeline side by
+side, leaving the picture free: Watch plays what one changes, and Use this accepts
+it and rejects the others.
+
+**The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) lists the recent
+project folders that still exist, the current one unfolded to New conversation and
+its conversations, the review log's threads, titled by their first line. A
+conversation with a pending proposal says Review, a settled one Done, and the
+folder says Working while Kerf is. Choosing another folder opens it as File ▸ Open
+does.
+
+The toolbar holds the traffic lights' room, one ≡ button, the sidebar's button,
+the centred title and subtitle, the panes' two buttons, the two format icons and
+the Export split. ≡ opens Media (⌘1), Effects and titles (⌘5), Inspector (⌘4), the
+three panes, Scopes, loudness, QC, Deliver, Import…,
 Sequence settings…, Settings… and View: the mask tools, annotations, safe zones
 (off by default), viewer zoom, the keyboard's choice and the sync's rows. Every
 row is a registry command. The undo, redo, split, delete and import commands have
@@ -204,16 +261,16 @@ connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
 
 **Sheets.** Media (the bin and roles, 272 wide), Effects and titles (the browser,
-304) and the Inspector (its pages, Source among them, 304) are overlays at the
-window's right edge, at the conversation's top and of its height, with a left
-hairline and a close button at the end of their strip. One shows at a time; the
+304) and the Inspector (its pages, Source among them, 304) are overlays over the
+conversation, at its panel side, its top and of its height, with a left hairline
+and a close button at the end of their strip. One shows at a time; the
 same command toggles and Esc closes; asking Kerf (⇧⌘J, Ask Kerf on a row) closes
 one or a tray that lies over the composer. Selecting a clip opens nothing by itself. A
 sheet never covers the timeline, so a drag from Media or Effects reaches it.
 
 **Trays.** Finish (⌥⇧3: scopes, loudness and QC) and Deliver (⌥⇧4: masters,
-preflight, loudness and paperwork) are overlays 344 tall across the window's full
-width at the bottom; the picture and the conversation stay where they are
+preflight, loudness and paperwork) are overlays 344 tall across the content beside
+the sidebar, at the bottom; the picture and the conversation stay where they are
 underneath. Esc returns to the base state (⌥⇧2). The colour wheels are in the
 Inspector sheet while Finish is open, and the Inspector's Deliver pane while
 Deliver is.
@@ -229,8 +286,9 @@ menu. Under a wide sequence the default heights fit the lanes: V1 40, V2 28, eac
 track above them 20, sound 24. Vertical sequences keep 36 and 32. Comment marks
 and proposal bands stay on the ruler.
 
-**The conversation** is always open; ⇧⌘J puts the keys in its composer. Its header
-is "Comments" and a ⋯ menu with search, sort and the All, Open and Proposals
+**The conversation** is always open; ⇧⌘J puts the keys in its composer, and with
+no timeline open the keys start there. With no picture open its composer has no
+timecode stamp and no Draw on frame. Its header is "Conversation" and a ⋯ menu with search, sort and the All, Open and Proposals
 filter. Rows and proposal cards fill the panel's width at every width.
 
 Settings from before this layout (saved workspaces, the panel's width, device
@@ -272,7 +330,8 @@ project, keyed by the project's absolute path.
 ## Projects
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
-library. Started without one, Kerf opens the launcher, like an edit suite's
+library. Started without one, Kerf opens the start window (above). Its New
+Project… and File → New Project… open the launcher, like an edit suite's
 Choose a Project window, in the editor's dark graphite and blue accent.
 New Project offers Empty
 16:9 and Vertical 9:16 templates; Details sets the name,

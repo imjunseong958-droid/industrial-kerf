@@ -342,6 +342,18 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     auto *footer = new QHBoxLayout(m_footer);
     footer->setContentsMargins(0, 8, 0, 0);
     footer->setSpacing(8);
+    m_watch = new ui::Button(QString(), ui::Button::Kind::Secondary);
+    m_watch->setObjectName(QStringLiteral("proposalWatch"));
+    m_watch->setTip(QStringLiteral("Play only what this proposal changes"));
+    // Across the card, 8 under the changes.
+    m_watch->setMinimumWidth(0);
+    m_watch->setMaximumWidth(QWIDGETSIZE_MAX);
+    m_watch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(m_watch, &QAbstractButton::clicked, this, &ProposalCard::watchRequested);
+    m_watchBox = spaced(m_watch, 8);
+    m_watchBox->setObjectName(QStringLiteral("proposalWatchBox"));
+    m_watchBox->hide();
+    m_layout->addWidget(m_watchBox);
     m_preview = new ui::CheckBox(QStringLiteral("Preview"));
     m_preview->setTip(QStringLiteral("Preview the proposal on the program"));
     connect(m_preview, &QAbstractButton::toggled, this, &ProposalCard::previewToggled);
@@ -488,6 +500,12 @@ void ProposalCard::setScriptShown(bool shown) {
 
 bool ProposalCard::scriptShown() const { return m_script->isChecked(); }
 
+void ProposalCard::setWatchLength(double seconds) {
+    m_hasWatch = seconds > 0.0;
+    m_watch->setText(QStringLiteral("Watch what changed · %1 s").arg(int(std::ceil(seconds))));
+    updateParts();
+}
+
 void ProposalCard::setPreview(bool on) {
     const QSignalBlocker blocker(m_preview);
     m_preview->setChecked(on);
@@ -495,7 +513,7 @@ void ProposalCard::setPreview(bool on) {
 
 bool ProposalCard::previewOn() const { return m_preview->isChecked(); }
 
-void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
+void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary && !m_compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
 
 void ProposalCard::setAcceptTip(const QString &tip) {
     m_acceptTip = tip;
@@ -532,15 +550,24 @@ void ProposalCard::setSettled(const QString &text, bool accepted) {
     updateParts();
 }
 
+void ProposalCard::setCompact(bool compact) {
+    m_compact = compact;
+    m_watch->setKind(compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary);
+    m_accept->setKind(compact ? ui::Button::Kind::Secondary : ui::Button::Kind::Primary);
+    updateParts();
+}
+
 void ProposalCard::updateParts() {
     const bool card = !m_settled;
-    m_layout->setContentsMargins(card ? 12 : 0, card ? (m_pinned ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
-    m_pinHeader->setVisible(card && m_pinned);
+    const bool marked = m_pinned && !m_compact;
+    m_layout->setContentsMargins(card ? 12 : 0, card ? (marked ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
+    m_pinHeader->setVisible(card && marked);
     m_title->setVisible(card);
     m_second->setVisible(card);
     m_changes->setVisible(card && m_open);
     m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked());
-    m_footer->setVisible(card && m_open);
+    m_footer->setVisible(card && (m_open || m_compact));
+    m_watchBox->setVisible(card && (m_open || m_compact) && m_hasWatch);
     m_settledLabel->setVisible(m_settled);
     m_reject->setVisible(!m_guest);
     m_accept->setVisible(!m_guest);
@@ -557,7 +584,7 @@ void ProposalCard::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen);
     p.setBrush(color(raised));
     p.drawRoundedRect(area, radius::card, radius::card);
-    if (m_pinned) {
+    if (m_pinned && !m_compact) {
         // inset 0 2px 0 accent: a 2 pt stripe inside the top edge, following its corners.
         p.save();
         QPainterPath clip;

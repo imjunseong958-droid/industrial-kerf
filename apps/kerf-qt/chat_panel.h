@@ -17,6 +17,7 @@
 #include "test_friends.h"
 #include "comment_row.h"
 #include "review_model.h"
+#include "stage_motion.h"
 
 #include <QAbstractButton>
 #include <QDateTime>
@@ -242,6 +243,19 @@ public:
     QWidget *listContent() const { return m_content; }
     ReplyBar *replyBar() const { return m_replyBar; }
     Composer *composerWidget() const { return m_composer; }
+    // The footage Kerf chooses from, in the list under the latest row; none takes
+    // it away.
+    void setFootage(const QList<FootageTile> &tiles);
+    // While Kerf builds a first cut, the card waits for it to be done; the picture
+    // and the timeline are showing it.
+    void setHoldingProposals(bool holding);
+    // What one asks as a bubble and what Kerf says as plain text; the cards small,
+    // their changes folded.
+    void setConversationLook(bool on);
+    // What was asked for as versions, with a line for the cards that are making
+    // them; empty takes it away.
+    void setVersionsNote(const QString &request, const QString &answer = QString());
+    FootageSheet *footage() const { return m_footage; }
     // The registry's proposal.accept: every card's Accept tip names its key.
     void setAcceptAction(QAction *action);
     QFrame *composer() const;
@@ -271,6 +285,8 @@ signals:
     void rejectRequested(const QString &proposalId);
     // The Preview checkbox, or an older version chosen while previewing.
     void previewRequested(const QString &proposalId, bool on);
+    // A card's Watch what changed.
+    void changedPartsRequested(const QString &proposalId);
     // A card's Versions menu chose the version it shows.
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     // A colour card opened without its before/after frames.
@@ -403,6 +419,10 @@ private:
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
     QList<ThreadWidget *> m_threads;
+    FootageSheet *m_footage = nullptr;
+    bool m_holdingProposals = false;
+    bool m_conversationLook = false;
+    ThreadWidget *m_versionsNote = nullptr;
     QWidget *m_stash = nullptr;
     CommentRow *m_welcomeRow = nullptr;
     ReplyBar *m_replyBar = nullptr;

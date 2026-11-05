@@ -594,7 +594,7 @@ private slots:
         viewer.show();
         QVERIFY(QTest::qWaitForWindowExposed(&viewer));
         const QRectF card = viewer.videoRect();
-        QCOMPARE(card, QRectF(130, 0, 540, 960));
+        QCOMPARE(card, QRectF(136, 12, 527, 936));
         QSignalSpy scrubs(&viewer, &ViewerWidget::scrubbed);
         QSignalSpy ends(&viewer, &ViewerWidget::scrubEnded);
         QSignalSpy plays(&viewer, &ViewerWidget::playRequested);
