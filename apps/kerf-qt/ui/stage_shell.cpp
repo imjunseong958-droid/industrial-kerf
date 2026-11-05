@@ -81,12 +81,17 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     } else if (panes.timeline) {
         out.timeline = QRect(stageLeft, toolbar, stageWidth, h);
     }
-    // The strip floats over the picture's top.
-    if (panes.reel && !out.slot.isEmpty()) {
-        out.reel = QRect(out.slot.left() + picturePad, out.slot.top() + picturePad,
-                         std::min(out.slot.width() - 2 * picturePad, 460), reelBar);
-    }
     out.picture = out.slot.isEmpty() ? out.slot : fitted(paddedSlot(out.slot), shape);
+    // The strip floats over the picture's top: at its corner, or centred on an
+    // upright one narrower than it.
+    if (panes.reel && !out.slot.isEmpty()) {
+        const int strip = std::min(out.slot.width() - 2 * picturePad, 460);
+        const int least = out.slot.left() + picturePad;
+        const int most = out.slot.right() + 1 - picturePad - strip;
+        const int left = out.picture.width() >= strip + 2 * picturePad ? out.picture.left() + picturePad
+                                                                       : out.picture.center().x() - strip / 2;
+        out.reel = QRect(std::clamp(left, least, std::max(least, most)), out.picture.top() + picturePad, strip, reelBar);
+    }
     // A sheet lies over the conversation alone, at its panel side, so a drag
     // reaches the timeline.
     const auto sheet = [&](int width) {

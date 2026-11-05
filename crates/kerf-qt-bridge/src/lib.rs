@@ -1650,7 +1650,10 @@ or checking the result. Labels are a few words; requests are what the person \
 would say. Do not repeat a step they just took.\n\n\
 The timeline shows your proposal as it grows, so they watch you work. Build a \
 longer edit in steps: stage the first part with `edit`, check it, then `extend` \
-the proposal with the next part, rather than one large script at the end.";
+the proposal with the next part, rather than one large script at the end.\n\n\
+Asked for a vertical or square cut, set the format first in the same proposal \
+(`sequence set s1 size=1080x1920`) and frame footage of another shape to fill it; \
+the picture takes the proposal's format as it grows.";
 
 fn default_versions() -> usize {
     3

@@ -423,6 +423,7 @@ private:
     bool m_holdingProposals = false;
     bool m_conversationLook = false;
     ThreadWidget *m_versionsNote = nullptr;
+    int m_versionsNoteAt = 0;
     QWidget *m_stash = nullptr;
     CommentRow *m_welcomeRow = nullptr;
     ReplyBar *m_replyBar = nullptr;

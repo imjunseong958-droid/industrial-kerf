@@ -319,11 +319,11 @@ void ViewerWidget::setCompareFrame(const QImage &before) {
     }
     if (!m_compareSweep && !ui::reducedMotion()) {
         m_compareSweep = new QVariantAnimation(this);
-        m_compareSweep->setDuration(6800);
+        m_compareSweep->setDuration(tokens::motion::compareSweep);
         m_compareSweep->setLoopCount(-1);
-        m_compareSweep->setStartValue(0.28);
-        m_compareSweep->setKeyValueAt(0.5, 0.78);
-        m_compareSweep->setEndValue(0.28);
+        m_compareSweep->setStartValue(tokens::motion::compareFrom);
+        m_compareSweep->setKeyValueAt(0.5, tokens::motion::compareTo);
+        m_compareSweep->setEndValue(tokens::motion::compareFrom);
         m_compareSweep->setEasingCurve(QEasingCurve::Linear);
         connect(m_compareSweep, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
             m_compareAt = value.toReal();

@@ -12,6 +12,12 @@ silencing them with `#[allow]`.
 Run relevant tests with `cargo test -q`; run the full suite when shared
 behavior or a broad part of the codebase is affected.
 
+## Motion UI
+
+Before adding or changing UI animation in `apps/kerf-qt`, read
+`apps/kerf-qt/MOTION_UI.md`. Keep its scenes table current in the same change,
+and put new durations and distances in `tokens::motion`.
+
 ## Git/PR
 
 For new work, use a short-lived branch from the latest default branch.

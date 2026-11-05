@@ -42,8 +42,6 @@ void paintTileLabel(QPainter &p, const QRectF &box, const QString &label) {
 constexpr int kSheetSide = 16;
 constexpr int kSheetColumns = 4;
 constexpr int kSheetGap = 8;
-constexpr int kPopStagger = 70;
-constexpr int kPopLength = 460;
 
 } // namespace
 
@@ -59,7 +57,7 @@ void FootageSheet::setTiles(const QList<FootageTile> &tiles) {
     m_tiles = tiles;
     m_taken.clear();
     setFixedHeight(heightForWidth(width()));
-    const int length = ui::motionDuration(int(tiles.size()) * kPopStagger + kPopLength);
+    const int length = ui::motionDuration(int(tiles.size()) * tokens::motion::popStagger + tokens::motion::pop);
     m_pop.stop();
     if (length > 0) {
         m_pop.setDuration(length);
@@ -108,13 +106,13 @@ void FootageSheet::paintEvent(QPaintEvent *) {
     const qreal elapsed = popping ? m_pop.currentTime() : 1e9;
     static const QEasingCurve overshoot = [] {
         QEasingCurve curve(QEasingCurve::OutBack);
-        curve.setOvershoot(1.4);
+        curve.setOvershoot(tokens::motion::popOvershoot);
         return curve;
     }();
     for (int index = 0; index < m_tiles.size(); ++index) {
         const FootageTile &tile = m_tiles.at(index);
         if (m_taken.contains(tile.id)) continue;
-        const qreal t = std::clamp((elapsed - index * kPopStagger) / kPopLength, 0.0, 1.0);
+        const qreal t = std::clamp((elapsed - index * tokens::motion::popStagger) / tokens::motion::pop, 0.0, 1.0);
         if (t <= 0.0) continue;
         const QRectF home = tileRect(tile.id);
         const qreal scale = 0.8 + 0.2 * overshoot.valueForProgress(t);
@@ -138,7 +136,7 @@ WorkChip::WorkChip(QWidget *parent) : QWidget(parent) {
     hide();
     m_pulse.setStartValue(0.0);
     m_pulse.setEndValue(1.0);
-    m_pulse.setDuration(1200);
+    m_pulse.setDuration(tokens::motion::workPulse);
     m_pulse.setLoopCount(-1);
     connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this] { update(); });
 }
@@ -202,7 +200,7 @@ void StageMotion::releaseStaying() {
         running.flight.from = running.flight.to;
         running.flight.fromOpacity = running.flight.toOpacity;
         running.flight.toOpacity = 0.0;
-        running.flight.duration = 260;
+        running.flight.duration = tokens::motion::standInRelease;
         running.started = now;
     }
 }
@@ -230,7 +228,7 @@ void StageMotion::paintEvent(QPaintEvent *) {
     static const QEasingCurve soft = tokens::easing();
     static const QEasingCurve lively = [] {
         QEasingCurve curve(QEasingCurve::OutBack);
-        curve.setOvershoot(1.05);
+        curve.setOvershoot(tokens::motion::landOvershoot);
         return curve;
     }();
     for (const Running &running : std::as_const(m_flights)) {
@@ -253,9 +251,10 @@ void StageMotion::paintEvent(QPaintEvent *) {
         if (flight.image.isNull()) {
             p.fillRect(box, tokens::color(tokens::on));
         } else {
-            // It fills its box, as a clip's poster does.
+            // It fills its box, as a clip's poster does, unless it stands in for the picture.
+            if (flight.fit) p.fillRect(box, Qt::black);
             QSizeF shown = flight.image.size();
-            shown.scale(box.size(), Qt::KeepAspectRatioByExpanding);
+            shown.scale(box.size(), flight.fit ? Qt::KeepAspectRatio : Qt::KeepAspectRatioByExpanding);
             p.drawImage(QRectF(box.center() - QPointF(shown.width(), shown.height()) / 2.0, shown), flight.image);
         }
         if (!flight.label.isEmpty()) paintTileLabel(p, box, flight.label);

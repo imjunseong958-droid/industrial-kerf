@@ -36,9 +36,8 @@ constexpr int kMargin = 16;
 constexpr int kGap = 14;
 constexpr int kCardWidth = 250;
 constexpr qreal kCardShape = 1.36;
-constexpr qreal kTilt = 1.5;
-constexpr int kFan = 850;
-constexpr int kStagger = 110;
+constexpr int kUprightCardWidth = 216;
+constexpr qreal kUprightCardShape = 1.78;
 
 // A card a little askew, and how much of it shows. It leans the card and all that
 // is on it; a lean this small keeps its buttons under the pointer.
@@ -125,6 +124,11 @@ void ComparePoster::setImage(const QImage &image) {
     update();
 }
 
+void ComparePoster::setPlain(bool plain) {
+    m_plain = plain;
+    update();
+}
+
 void ComparePoster::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -138,6 +142,7 @@ void ComparePoster::paintEvent(QPaintEvent *) {
         shown.scale(size(), Qt::KeepAspectRatioByExpanding);
         p.drawImage(QRect(QPoint((width() - shown.width()) / 2, (height() - shown.height()) / 2), shown), m_image);
     }
+    if (m_plain) return;
     // What is written on it stays readable.
     QLinearGradient foot(0, height() * 0.35, 0, height());
     foot.setColorAt(0.0, QColor(0, 0, 0, 0));
@@ -209,7 +214,15 @@ CompareView::Card &CompareView::cardFor(const QString &key, bool *made) {
     return *m_byKey.insert(key, card);
 }
 
+void CompareView::setUpright(bool upright) {
+    if (upright == m_upright) return;
+    m_upright = upright;
+    placeCards(false);
+}
+
 void CompareView::setVersions(const QList<Version> &versions) {
+    // The one chosen is on its way: what it is now does not change that.
+    if (m_picking) return;
     QStringList keys;
     bool fresh = false;
     for (const Version &version : versions) {
@@ -223,7 +236,8 @@ void CompareView::setVersions(const QList<Version> &versions) {
             card.frame->show();
         }
         card.proposal = version.proposalId;
-        card.poster->setImage(version.poster);
+        // Once it has a picture it keeps one.
+        if (!version.poster.isNull()) card.poster->setImage(version.poster);
         QString status = version.status;
         if (status.isEmpty()) {
             switch (version.state) {
@@ -257,23 +271,24 @@ QRect CompareView::cardRect(int index, int count) const {
     const int shown = std::max(1, count);
     const int room = std::max(1, width() - 2 * kMargin - (shown - 1) * kGap);
     const int tall = std::max(1, height() - 2 * kMargin);
-    const int w = std::min({kCardWidth, room / shown, int(tall / kCardShape)});
-    const int h = std::min(tall, int(w * kCardShape));
+    const qreal cardShape = m_upright ? kUprightCardShape : kCardShape;
+    const int w = std::min({m_upright ? kUprightCardWidth : kCardWidth, room / shown, int(tall / cardShape)});
+    const int h = std::min(tall, int(w * cardShape));
     const int left = (width() - (shown * w + (shown - 1) * kGap)) / 2;
     return QRect(left + index * (w + kGap), (height() - h) / 2, w, h);
 }
 
 void CompareView::placeCards(bool animate) {
-    const int duration = animate ? ui::motionDuration(kFan) : 0;
+    const int duration = animate ? ui::motionDuration(motion::stage) : 0;
     const int count = int(m_keys.size());
     for (int index = 0; index < count; ++index) {
         QFrame *frame = m_byKey.value(m_keys.at(index)).frame;
         const QRect to = cardRect(index, count);
         // The outer ones lean out from the middle.
-        const qreal lean = (index - (count - 1) / 2.0) * kTilt;
+        const qreal lean = (index - (count - 1) / 2.0) * motion::cardLean;
         if (duration > 0) {
-            glide(frame, to, index * kStagger, duration);
-            if (CardLean *effect = leanOf(frame)) ease(effect, "angle", lean, index * kStagger, duration);
+            glide(frame, to, index * motion::fanStagger, duration);
+            if (CardLean *effect = leanOf(frame)) ease(effect, "angle", lean, index * motion::fanStagger, duration);
         } else {
             frame->setGeometry(to);
             if (CardLean *effect = leanOf(frame)) effect->setAngle(lean);
@@ -282,24 +297,35 @@ void CompareView::placeCards(bool animate) {
 }
 
 void CompareView::playPick(const QString &proposalId, const QRect &to, std::function<void()> done) {
-    const int duration = ui::motionDuration(kFan);
+    const int duration = ui::motionDuration(motion::stage);
     if (duration <= 0) {
         done();
         return;
     }
+    m_picking = true;
     for (const QString &key : std::as_const(m_keys)) {
         const Card &card = m_byKey[key];
         CardLean *effect = leanOf(card.frame);
         if (card.proposal == proposalId) {
             card.frame->raise();
+            // Only its picture goes on, and gives way to the real one as it lands.
+            for (QWidget *part : card.frame->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+                if (part != card.poster) part->hide();
+            card.poster->setPlain(true);
             glide(card.frame, to, 0, duration);
-            if (effect) ease(effect, "angle", 0.0, 0, duration);
+            if (effect) {
+                ease(effect, "angle", 0.0, 0, duration);
+                ease(effect, "level", 0.0, duration * 7 / 10, duration * 3 / 10);
+            }
         } else {
             glide(card.frame, card.frame->geometry().translated(0, 80), 0, duration);
             if (effect) ease(effect, "level", 0.0, 0, duration / 2);
         }
     }
-    QTimer::singleShot(duration, this, [done = std::move(done)] { done(); });
+    QTimer::singleShot(duration, this, [this, done = std::move(done)] {
+        m_picking = false;
+        done();
+    });
 }
 
 QStringList CompareView::keys() const { return m_keys; }

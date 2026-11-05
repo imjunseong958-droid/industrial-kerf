@@ -860,14 +860,14 @@ void TimelineWidget::setFocusClips(const QSet<QString> &clips) {
     m_focusLift = 0.0;
     const int length = ui::motionDuration(tk::motion::stage);
     if (clips.isEmpty() || length <= 0) {
-        m_focusLift = clips.isEmpty() ? 0.0 : 8.0;
+        m_focusLift = clips.isEmpty() ? 0.0 : tk::motion::clipLift;
         update();
         return;
     }
     auto *rise = new QVariantAnimation(this);
     rise->setDuration(length);
     rise->setStartValue(0.0);
-    rise->setEndValue(8.0);
+    rise->setEndValue(tk::motion::clipLift);
     rise->setEasingCurve(tk::easing());
     connect(rise, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
         m_focusLift = value.toReal();

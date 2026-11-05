@@ -29,6 +29,7 @@
 // picture from what it grows out of (setPanes' origin), the timeline up from
 // below. Under reduced motion, and while hidden, they are simply there.
 
+#include "design_tokens.h"
 #include "test_friends.h"
 
 #include <QList>
@@ -129,7 +130,7 @@ public:
     void setLight(const QColor &light);
     // How much of the room lies over the timeline, 0 to 1, eased there after
     // `delay` ms: it comes in out of the room, and falls back under other things.
-    void veilTimeline(qreal level, int delay = 0, int duration = 420);
+    void veilTimeline(qreal level, int delay = 0, int duration = tokens::motion::settle);
     qreal timelineVeil() const;
     bool isMoving() const { return m_moves != nullptr; }
     const stage::Panes &panes() const { return m_panes; }
