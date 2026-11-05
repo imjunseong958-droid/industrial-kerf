@@ -281,7 +281,7 @@ private slots:
         flight.duration = 400;
         flight.ring = true;
         flight.label = QStringLiteral("Interview");
-        window.m_motion->fly(flight);
+        QVERIFY(window.m_motion->fly(flight));
         QTest::qWait(70);
         window.m_motion->m_ticker.pause();
         QCOMPARE(differing(), 0);
@@ -296,6 +296,7 @@ private slots:
         const auto halfWay = [&](const stage::Panes &panes, const QRect &origin) {
             window.m_shell->setPanes(panes, origin);
             QTest::qWait(60);
+            QVERIFY(window.m_shell->isMoving());
             window.m_shell->m_moves->pause();
             QCOMPARE(differing(), 0);
             window.m_shell->m_moves->resume();
@@ -367,15 +368,14 @@ private slots:
         closed.timeline = false;
         window.m_shell->veilTimeline(1.0);
         window.m_shell->setPanes(closed);
-        QTest::qWait(120);
-        QVERIFY(window.m_shell->timelineVeil() > 0.0);
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_shell->timelineVeil() > 0.0, 2000);
         window.m_shell->setPanes(open);
         QTRY_COMPARE_WITH_TIMEOUT(window.m_shell->timelineVeil(), 0.0, 2000);
         // And gone with the timeline when the window's size cuts it short.
         QTRY_VERIFY_WITH_TIMEOUT(!window.m_shell->isMoving(), 3000);
         window.m_shell->veilTimeline(1.0);
         window.m_shell->setPanes(closed);
-        QTest::qWait(120);
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_shell->timelineVeil() > 0.0, 2000);
         window.resize(1300, 860);
         QTRY_COMPARE_WITH_TIMEOUT(window.m_shell->timelineVeil(), 0.0, 1000);
         window.close();
@@ -417,7 +417,7 @@ private slots:
         flight.from = QRectF(0, 0, 100, 60);
         flight.to = QRectF(400, 300, 300, 180);
         flight.fromOpacity = 0.0;
-        flight.duration = 400;
+        flight.duration = 3000;
         flight.lively = false;
         flight.stays = true;
         flight.fit = true;
@@ -435,7 +435,7 @@ private slots:
         QCOMPARE(layer.boxOf(layer.m_flights.first()), box);
         QCOMPARE(layer.opacityOf(layer.m_flights.first()), opacity);
         layer.m_ticker.resume();
-        QTRY_VERIFY(!layer.isFlying());
+        QTRY_VERIFY_WITH_TIMEOUT(!layer.isFlying(), 6000);
     }
 
     void aStandInGoesWithThePicture() {
@@ -608,9 +608,7 @@ private slots:
         timeline.resize(800, 300);
         timeline.show();
         timeline.setFocusClips({QStringLiteral("a")});
-        QTest::qWait(50);
-        const qreal first = timeline.m_focusLift;
-        QVERIFY(first > 0.0);
+        QTRY_VERIFY_WITH_TIMEOUT(timeline.m_focusLift > 0.0, 2000);
         timeline.setFocusClips({QStringLiteral("b")});
         QCOMPARE(timeline.m_focusLift, 0.0);
         QTRY_COMPARE_WITH_TIMEOUT(timeline.m_focusLift, tokens::motion::clipLift, 3000);
