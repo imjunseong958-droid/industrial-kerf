@@ -20,7 +20,7 @@ otherwise. Nothing else has to be kept in step with it.
 | Layer | Folder | What | Crates |
 |---|---|---|---|
 | 0 | `foundation` | The document, its language, and arithmetic everything shares | `kerf-model`, `kerf-lang`, `kerf-geom`, `kerf-color`, `kerf-text` |
-| 1 | `render` | Pictures and how they are drawn on | `kerf-raster`, `kerf-draw` |
+| 1 | `render` | Pictures and how they are drawn on | `kerf-raster`, `kerf-draw`, `kerf-gpu` |
 | 2 | `edit` | What a timeline does beyond its model: interchange, sharing | `kerf-interchange`, `kerf-collab` |
 | 2 | `effects` | The effects carried from FilmCraft and EffectCraft, all areas together | `kerf-fx`, `kerf-raster-fx` |
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
@@ -51,48 +51,61 @@ example.
 
 ## The engine
 
+A frame is drawn on the GPU when every part of it has a kernel, and on the CPU
+when any part does not (`kerf-compose/src/draw/gpu.rs`). The decision is for the
+whole frame and is made before anything is decoded. Footage goes up as the 8 bytes
+a pixel it decoded to, everything stays on the GPU, and only the finished bytes come
+back: moving a 4K float picture across for each effect would cost what the effect
+saves. `kerf_draw` stays the reference. Kernels are tested against it per value
+(`kerf-gpu`, `kerf-fx/src/filmcraft/gpu_tests.rs`) and per frame on real footage
+(`kerf-compose/tests/gpu.rs`). The kernels build on a background thread, and the
+CPU draws until they are ready. `KERF_GPU=0` turns all of this off.
+
 Measured on an Apple Silicon Mac with `examples/frame_bench.rs` in
 `kerf-compose`, on 4K H.264 test footage, decode included, median frame:
 
-| Scene | 1080p | 4K |
-|---|---|---|
-| Placed, nothing else | 61 fps | 15 fps |
-| One Lumetri | 32 fps | 8 fps |
-| Gaussian blur, radius 40 | 38 fps | 9 fps |
-| One glow | 14 fps | 3 fps |
-| Four layers | 31 fps | 6 fps |
+| Scene | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
+|---|---|---|---|---|
+| Placed, nothing else | 59 fps | 87 fps | 18 fps | 25 fps |
+| One Lumetri | 29 fps | 78 fps | 9 fps | 24 fps |
+| Gaussian blur, radius 40 | 33 fps | 42 fps | 8 fps | 15 fps |
+| Four layers | 31 fps | 53 fps | 9 fps | 15 fps |
+| One glow (no kernel yet) | 13 fps | 13 fps | 3 fps | 3 fps |
 
-Drawing is on the CPU (`rayon`, `f32` RGBA), and a frame's work is thrown away
-when it is shown. 1080p with one light effect plays. 4K with any effect does
-not, and neither does a stack of effects at any size. Three limits matter, in
-this order:
+A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title took
+3.3 s against 7.4 s, 46 dB from the CPU's after encoding.
 
-1. **No GPU.** EffectCraft's compositor (`gpu`, 33.7k lines including its WGSL)
-   left with its renderer. It compiled against EffectCraft's project model, so
-   it comes back piece by piece rather than whole. `FxOp` in `gpufx.rs` already
-   separates reading an effect's numbers from running them, which is the seam a
-   kernel needs.
-2. **Nothing is kept between frames.** A clip with no animation is drawn again
-   every frame. EffectCraft's layer cache (`render/src/cache.rs`, `disk_cache.rs`)
-   keyed a layer's pixels by a hash of exactly what they depend on.
-3. **Eight-bit input.** Footage decodes to 8-bit sRGB RGBA (`footage.rs`,
-   `Image::from_rgba8`). The working picture is float, but 10-bit, log, and HDR
-   footage has lost its range before anything sees it. No grade can bring that
-   back, so the color area depends on fixing it.
+**What the GPU draws:** media, nested sequences, solids, titles, captions; masks,
+crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes;
+`color.basic`, `blur.gaussian`, and the 29 kinds of operation in `FxOp`, Lumetri
+among them. **What sends a frame to the CPU:** the transitions carried from FilmCraft,
+adjustment layers, effects outside `FxOp` (glows, lights, keys, stylize, and the kept
+EffectCraft ones), and a Lumetri using a LUT or curves.
 
-The plan, in order:
+Three limits remain, in this order:
 
-- **E1. `crates/render/kerf-gpu`.** One wgpu device, a texture pool, upload and
-  readback, compositing, then `FxOp` kernels family by family. The CPU stays the
-  reference: a kernel is tested against it, and an effect without one runs on the
-  CPU, with the frame moved between them only where the stack changes sides.
-- **E2. Results kept.** A layer cache in memory, then on disk, keyed by content.
-- **E3. Deep input.** Decode at the source's depth, with its primaries and
-  transfer, into a scene-linear working space. On Apple, hand decoded surfaces to
-  the GPU without a copy. That needs `unsafe`, which the workspace forbids, so it
-  gets one small crate with the exception written down.
+1. **More of the frame on the GPU.** Each effect outside `FxOp` costs its whole
+   frame the GPU. Transitions and adjustment layers come first since they are the
+   most common, then glows and keys. EffectCraft's WGSL (`effectcraft/crates/gpu` at
+   `5c54866`) has kernels for many of them.
+2. **Nothing is kept between frames.** A clip with no animation is drawn again every
+   frame. EffectCraft's layer cache (`render/src/cache.rs`, `disk_cache.rs`) keyed a
+   layer's pixels by a hash of exactly what they depend on.
+3. **Eight-bit input.** Footage decodes to 8-bit sRGB RGBA (`footage.rs`). The working
+   picture is float, but 10-bit, log, and HDR footage has lost its range before
+   anything sees it. No grade can bring that back, so the color area depends on fixing
+   it: decode at the source's depth, with its primaries and transfer, into a
+   scene-linear working space. FilmCraft's `composite.wgsl` samples Y'CbCr planes and
+   PQ and HLG in the shader. On Apple, handing decoded surfaces to the GPU without a
+   copy needs `unsafe`, which the workspace forbids, so that gets one small crate with
+   the exception written down. Scaling footage is the other cost here: 4K footage in a
+   1080p sequence spends more converting (12 ms) than 4K shown whole (5 ms).
 
 ## The areas
+
+FilmCraft upstream, at the commit Kerf carried (`0f99661`), still holds work worth
+reading before writing it again: `crates/scopes`, `crates/audio-dsp`, and in
+`crates/render` the optical flow, multicam, color management, and sound mixing.
 
 Code that left is still in history. `5c54866` has all of EffectCraft's crates as
 they were before they were taken out; `91ae7f7` has inpainting, scopes, optical
@@ -118,7 +131,7 @@ corrections.
 
 To add: **scopes first**, carried from EffectCraft's `scopes.rs`, and given to the
 agent as numbers through `look` so that it can grade by measuring, which a person
-cannot do. Then color management (needs E3), the Lumetri presets, and layered
+cannot do. Then color management (needs deep input), the Lumetri presets, and layered
 grades as stacked effects.
 
 ### Motion
@@ -134,7 +147,7 @@ second document type, and an agent learns one model. To add, in order:
 3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable
    strokes).
 4. Text animators and variable fonts.
-5. Particles (EffectCraft's `fx_particles`, once E1 is in).
+5. Particles (EffectCraft's `fx_particles`).
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.
@@ -187,6 +200,6 @@ measurements, tracks as data, and check findings for what a viewer would notice.
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. These ideas are worth doing our own way: one kernel source
   run on the CPU and compiled to WGSL, which would end writing every effect twice;
-  decoded IOSurfaces as wgpu textures for E3; a fact sheet for footage (faces, the
+  decoded IOSurfaces as wgpu textures for deep input; a fact sheet for footage (faces, the
   subject, on-screen text, camera motion) beside what `kerfd` indexes now; and
   checks for clipped text, contrast, and safe areas.
