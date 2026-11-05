@@ -7,7 +7,7 @@
 # safe.
 # System libraries (Qt, FFmpeg) still come from their package manager.
 # The bridge is built optimized: the editor's live preview and its exports
-# draw frames inside it.
+# draw frames inside it. So is the editor, which draws every frame of its motion.
 set -euo pipefail
 
 kerf_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -35,9 +35,9 @@ build_qt() {
     esac
     if command -v brew >/dev/null 2>&1; then
         cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
-            -DKERF_BRIDGE_LIBRARY="$bridge"
+            -DCMAKE_BUILD_TYPE=Release -DKERF_BRIDGE_LIBRARY="$bridge"
     else
-        cmake -S apps/kerf-qt -B target/qt -DKERF_BRIDGE_LIBRARY="$bridge"
+        cmake -S apps/kerf-qt -B target/qt -DCMAKE_BUILD_TYPE=Release -DKERF_BRIDGE_LIBRARY="$bridge"
     fi
     cmake --build target/qt --parallel
 }
