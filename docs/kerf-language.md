@@ -124,6 +124,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   unique within the clip.
 - Clips sharing a `link=` group, such as a picture and its sound, edit
   together.
+- `set path="0,0 0.2,-0.1 0.4,0" along={0f:0 24f:1:ease}` moves a clip along a smooth curve
+  through those points, in the units of `x` and `y`, which it adds to. `along` is by distance
+  on the canvas, so an even `along` is an even speed. `orient=true` turns the clip to face the
+  way it is heading.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

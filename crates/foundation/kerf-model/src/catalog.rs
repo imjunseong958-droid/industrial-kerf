@@ -644,6 +644,13 @@ fn builtin_catalog() -> Catalog {
             .range(-10.0, 10.0)
             .unit("frame heights")
             .doc("Vertical offset of the clip center from the frame center; positive moves down."),
+        P::text("path", "").doc(
+            "A motion path: a smooth curve through `x,y x,y …`, in the units of x and y, added to them.",
+        ),
+        P::number("along", 0.0)
+            .range(0.0, 1.0)
+            .doc("How far along `path` the clip is, by distance; animate it to move."),
+        P::toggle("orient", false).doc("Turn the clip to face the way `path` heads."),
         P::number("scale", 1.0)
             .range(0.0, 100.0)
             .unit("×")

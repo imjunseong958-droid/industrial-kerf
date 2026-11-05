@@ -777,6 +777,9 @@ impl<'a> Graph<'a> {
                 return Err(ProgramError::unsupported(&clip.id, format!("`{name}`")));
             }
         }
+        if !matches!(p("path"), Param::Static(Value::Text(path)) if path.is_empty()) {
+            return Err(ProgramError::unsupported(&clip.id, "a motion path"));
+        }
         if let Param::Static(Value::Enum(blend)) | Param::Static(Value::Text(blend)) = p("blend") {
             if blend != "normal" {
                 return Err(ProgramError::unsupported(

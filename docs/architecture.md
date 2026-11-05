@@ -155,8 +155,8 @@ Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles, gener
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add, in order:
 
-1. Motion paths: positions that curve in space, on the Bezier keyframes that are in
-   (`kerf_model::Bezier`), and a graph editor in the panel. EffectCraft's `keyframe` has them.
+1. A graph editor in the panel, for the Bezier keyframes (`kerf_model::Bezier`) and motion paths
+   (`path=`, `along=`, `orient=`) that are in the language.
 2. 3D layers, cameras, and lights (EffectCraft's `render/three_d`), on the parenting that is
    in (`parent=`, `gen=null@1`).
 3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable

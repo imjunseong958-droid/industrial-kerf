@@ -33,8 +33,8 @@ use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, Param, ParamType, Params,
-    Project, Rate, Ratio, Rgba, Sequence, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, MotionPath, Param, ParamType,
+    Params, Project, Rate, Ratio, Rgba, Sequence, Time, Track, TrackKind, Value,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -168,6 +168,7 @@ struct Rig {
     /// The source's size in its own pixels.
     size: (u32, u32),
     fit: bool,
+    path: Option<MotionPath>,
     digest: Option<u64>,
 }
 
@@ -192,6 +193,7 @@ struct ClipPlan {
     shown: f64,
     blend: Blend,
     effects: Vec<Effect>,
+    path: Option<MotionPath>,
     /// A number for everything about the clip that does not change over time, wherever it starts.
     /// `None` when it draws on something the document does not hold: another track, a sound, a file.
     digest: Option<u64>,
@@ -1307,6 +1309,7 @@ impl<'a> Builder<'a> {
                         clip: plan.clip.clone(),
                         size: plan.size,
                         fit: plan.fit,
+                        path: plan.path.clone(),
                         digest: plan.digest,
                     },
                 )
@@ -1614,6 +1617,7 @@ impl<'a> Builder<'a> {
             Content::Caption { .. } => return Ok(None),
         };
         let animated = clip.parent.is_some()
+            || !matches!(param(clip, "path"), Param::Static(Value::Text(text)) if text.is_empty())
             || GEOMETRY
                 .iter()
                 .any(|name| matches!(param(clip, name), Param::Animated(_)));
@@ -1661,6 +1665,7 @@ impl<'a> Builder<'a> {
         let reads_sequence_time = effects
             .iter()
             .any(|effect| effect.fx.as_str().starts_with("text."));
+        let path = motion_path(clip, canvas);
         let mut plan = ClipPlan {
             clip: clip.clone(),
             name,
@@ -1673,6 +1678,7 @@ impl<'a> Builder<'a> {
             shown: 1.0,
             blend,
             effects,
+            path,
             digest,
             reads_sequence_time,
         };
@@ -1697,7 +1703,7 @@ impl<'a> Builder<'a> {
         }
         if matches!(plan.source, Source::Media { .. }) {
             // A parent can scale it past anything its own properties say.
-            let moved = clip.parent.is_some();
+            let moved = clip.parent.is_some() || plan.path.is_some();
             plan.shown = if moved { 1.0 } else { largest.clamp(1e-6, 1.0) };
             plan.letterboxed = !alpha && !moved && letterboxed(&plan, canvas);
             let deep = media
@@ -1752,8 +1758,32 @@ impl<'a> Builder<'a> {
 /// Where a clip's source pixels land on a `canvas` at clip time `time`,
 /// and how many canvas pixels a source pixel is across and down.
 fn place(plan: &ClipPlan, canvas: (f64, f64), time: Time) -> (Affine, Vec2) {
-    let numbers = GEOMETRY.map(|name| number(&param(&plan.clip, name).value_at(time)));
+    let numbers = geometry_numbers(&plan.clip, plan.path.as_ref(), time);
     placed(plan.size, plan.fit, !plan.animated, canvas, numbers)
+}
+
+/// The values of a clip's [`GEOMETRY`] at clip time `time`, with its motion path added in.
+fn geometry_numbers(clip: &Clip, path: Option<&MotionPath>, time: Time) -> [f64; 12] {
+    let mut numbers = GEOMETRY.map(|name| number(&param(clip, name).value_at(time)));
+    if let Some(path) = path {
+        let on = path.at(number(&param(clip, "along").value_at(time)));
+        numbers[10] += on.x;
+        numbers[11] += on.y;
+        if matches!(param(clip, "orient"), Param::Static(Value::Bool(true))) {
+            numbers[7] += on.heading;
+        }
+    }
+    numbers
+}
+
+/// A clip's motion path on a canvas of this shape, if it has one.
+fn motion_path(clip: &Clip, canvas: (u32, u32)) -> Option<MotionPath> {
+    let Param::Static(Value::Text(text)) = param(clip, "path") else {
+        return None;
+    };
+    let points = kerf_model::parse_path_points(&text).ok()?;
+    let aspect = f64::from(canvas.0) / f64::from(canvas.1.max(1));
+    Some(MotionPath::new(points, aspect))
 }
 
 /// [`place`] from the geometry's values: pixels of a source of `size`, fitted to the canvas when
@@ -1791,7 +1821,7 @@ fn placed(
 /// How a parent has moved its children at its clip time `time`: from where it would sit with no
 /// position, scale, or rotation of its own, to where it is.
 fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> Affine {
-    let numbers = GEOMETRY.map(|name| number(&param(&rig.clip, name).value_at(time)));
+    let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), time);
     let [l, r, t, b, _, _, _, _, ax, ay, _, _] = numbers;
     let rest = [l, r, t, b, 1.0, 1.0, 1.0, 0.0, ax, ay, 0.0, 0.0];
     let (now, _) = placed(rig.size, rig.fit, false, canvas, numbers);
