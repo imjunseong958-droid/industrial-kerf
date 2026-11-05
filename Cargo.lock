@@ -1142,6 +1142,7 @@ dependencies = [
  "kerf-core",
  "kerf-draw",
  "kerf-fx",
+ "kerf-image",
  "kerf-lang",
  "kerf-model",
  "tempfile",
@@ -1220,6 +1221,16 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "kerf-image"
+version = "0.1.0"
+dependencies = [
+ "kerf-draw",
+ "kerf-model",
+ "kerf-raster",
+ "rayon",
 ]
 
 [[package]]

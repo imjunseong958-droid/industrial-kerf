@@ -15,6 +15,8 @@ members = [
     # effects
     "crates/effects/kerf-fx",
     "crates/effects/kerf-raster-fx",
+    # image
+    "crates/image/kerf-image",
     # engine
     "crates/engine/kerf-core",
     "crates/engine/kerf-compose",

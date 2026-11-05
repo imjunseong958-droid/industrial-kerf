@@ -4,6 +4,7 @@
 //! effects Kerf keeps (`kerf-fx`), and media decoded by libav. `draw` says
 //! how each part of a sequence is drawn.
 
+mod domains;
 mod draw;
 mod footage;
 mod sound;

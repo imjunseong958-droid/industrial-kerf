@@ -427,3 +427,32 @@ fn looks_draw_as_the_effects_they_stand_for() {
     );
     assert!(left[0] >= left[2], "{left:?}");
 }
+
+#[test]
+fn a_filled_area_takes_the_picture_around_it() {
+    // A white square on a gray solid: the fill's mask, which cuts nothing, covers
+    // all of the square.
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip b1 gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#404040\n\
+         \x20 track V2 video\n\
+         \x20   clip t1 gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#ffffff\n\
+         \x20     mask k9 rect=0.4,0.4,0.6,0.6\n\
+         \x20 track V3 video\n\
+         \x20   clip a1 gen=adjustment@1 at=0f dur=24f\n\
+         \x20     mask k1 rect=0.3,0.3,0.7,0.7 mode=none\n\
+         \x20     fx image.fill@1 path=k1 method=smooth\n"
+    );
+    let center = |body: &str| pixel(&frame(body, 6, false), 160, 90);
+    assert!(
+        center(&body).iter().all(|channel| *channel < 96),
+        "{:?}",
+        center(&body)
+    );
+    // Naming no mask, it leaves the picture alone.
+    let unfilled = body.replace("path=k1 ", "");
+    assert!(center(&unfilled).iter().all(|channel| *channel > 200));
+}

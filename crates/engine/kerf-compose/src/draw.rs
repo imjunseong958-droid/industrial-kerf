@@ -20,11 +20,13 @@
 //!   picture in order, after its masks, and read its other frames, the
 //!   sequence's other tracks, and its sound tracks as they need.
 
+use crate::domains;
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{ComposeError, Frame};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
+use kerf_draw::effect::EffectRun;
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
 use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
@@ -631,7 +633,19 @@ impl Drawing {
                     blur::gaussian(picture, sigma, sigma, true);
                 }
                 id if kerf_fx::kept::kept(id) => self.kept(picture, plan, time, placed, index),
-                _ => self.filmcraft(picture, plan, time, placed, index, nested),
+                id => match domains::effect(id) {
+                    Some(area) => {
+                        let run = EffectRun {
+                            at: time,
+                            per_source: placed.per_source,
+                            seed: kerf_core::raster::seed(plan.clip.id.as_str())
+                                .wrapping_add(index as u32),
+                            masks: &plan.clip.masks,
+                        };
+                        area.apply(picture, effect, &run);
+                    }
+                    None => self.filmcraft(picture, plan, time, placed, index, nested),
+                },
             }
         }
     }
@@ -1378,7 +1392,10 @@ impl<'a> Builder<'a> {
             }
             match (def.engine, effect.fx.as_str()) {
                 (Engine::Graph, "color.basic" | "blur.gaussian") => effects.push(effect.clone()),
-                (Engine::Kerf, id) if filmcraft::catalog::carried(id).is_some() => {
+                (Engine::Kerf, id)
+                    if filmcraft::catalog::carried(id).is_some()
+                        || domains::effect(id).is_some() =>
+                {
                     effects.push(effect.clone())
                 }
                 (Engine::Raster, id) if kerf_fx::kept::kept(id) => effects.push(effect.clone()),

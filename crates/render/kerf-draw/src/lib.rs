@@ -11,6 +11,7 @@
 //!
 //! - [`Image`]: sampling, resampling through an [`Affine`], mixing.
 //! - [`blend`]: FilmCraft's 27 blend modes.
+//! - [`effect`]: how an area's effect runs on a clip's picture.
 //! - [`mask`]: a clip's masks as coverage, from the distance to each
 //!   outline.
 //! - [`blur`]: Gaussian blur by box passes.
@@ -24,6 +25,7 @@ pub mod blend;
 pub mod blur;
 pub mod color;
 pub mod correct;
+pub mod effect;
 pub mod image;
 pub mod mask;
 pub mod text;

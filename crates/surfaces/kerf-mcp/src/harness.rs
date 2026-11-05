@@ -267,7 +267,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
                     "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
-                    "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone."}
+                    "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone, or with `area`."},
+                    "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
                 },
                 "additionalProperties": false
             }),
@@ -370,6 +371,7 @@ struct LookInput {
     presets: bool,
     effect: Option<String>,
     effects: Option<String>,
+    area: Option<String>,
     media: Option<String>,
     #[serde(default)]
     at: Vec<String>,
@@ -699,12 +701,31 @@ impl KerfMcpRouter {
 
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
+        let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
         let input: LookInput = input(arguments)?;
+        let area = match input.area.as_deref() {
+            Some(name) => Some(kerf_model::Area::parse(name).ok_or_else(|| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("no area `{name}`: edit, color, motion, vfx, or image"),
+                )
+            })?),
+            None => None,
+        };
         if let Some(words) = &input.effects {
-            if !preset_only {
-                return Err(McpError::new("INVALID_ARGUMENTS", "use effects alone"));
+            if !(preset_only || area.is_some() && only_area_beside) {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "use effects alone, or with area",
+                ));
             }
-            return Ok(json!({"effects": find_fx(words)}));
+            return Ok(json!({"effects": find_fx(words, area)}));
+        }
+        if area.is_some() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "area narrows effects; pass effects too",
+            ));
         }
         if let Some(id) = &input.effect {
             if !preset_only {
@@ -720,6 +741,7 @@ impl KerfMcpRouter {
             return Ok(json!({
                 "effect": fx.id.as_str(),
                 "category": fx.category,
+                "area": fx.area().name(),
                 "engine": fx.engine.name(),
                 "reference": kerf_lang::fx_reference(fx),
             }));
@@ -1750,7 +1772,7 @@ const MAX_FOUND_FX: usize = 20;
 
 /// Catalog entries matching `words`, by how many of the words their id,
 /// category, and doc contain, then in catalog order.
-fn find_fx(words: &str) -> Vec<Value> {
+fn find_fx(words: &str, area: Option<kerf_model::Area>) -> Vec<Value> {
     let words: Vec<String> = words
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -1758,6 +1780,7 @@ fn find_fx(words: &str) -> Vec<Value> {
         .collect();
     let mut found: Vec<(usize, &kerf_model::FxDef)> = catalog()
         .all()
+        .filter(|fx| area.is_none_or(|area| fx.area() == area))
         .filter_map(|fx| {
             let haystack = format!("{} {} {}", fx.id, fx.category, fx.doc).to_lowercase();
             let whole: Vec<&str> = haystack
@@ -1790,6 +1813,7 @@ fn find_fx(words: &str) -> Vec<Value> {
                 "id": fx.id.as_str(),
                 "kind": fx.kind.name(),
                 "category": fx.category,
+                "area": fx.area().name(),
                 "doc": fx.doc,
             })
         })
