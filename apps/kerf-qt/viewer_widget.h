@@ -5,7 +5,6 @@
 #include "test_friends.h"
 
 #include <QColor>
-#include <QElapsedTimer>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -63,11 +62,8 @@ public:
     void setOverlays(QWidget *hud, QWidget *chip);
     // A chip over the picture saying Kerf is at work, in the preview chip's place.
     void setWorkChip(QWidget *chip);
-    // Over the window's room rather than on black: only the picture is painted,
-    // and the light it gives goes to lightChanged.
+    // Over the window's room rather than on black: only the picture is painted.
     void setFloating(bool floating);
-    // The light of a picture that stands in for the frame.
-    void lightFrom(const QImage &image) { followGlow(image); }
     QWidget *hud() const { return m_hud; }
     QWidget *previewChip() const { return m_chip; }
 
@@ -144,7 +140,6 @@ public:
     static void setMotionOverride(int state);
 
 signals:
-    void lightChanged(const QColor &light);
     void scrubbed(double fraction);
     void scrubEnded();
     void editRequested(const QJsonArray &ops);
@@ -212,17 +207,11 @@ private:
     void updateLine(qreal from, qreal to, int reach);
     QImage m_scaled;
     bool m_stageMoving = false;
-    // The picture's colour, lit around it.
-    void followGlow(const QImage &frame);
     bool m_floating = false;
     QImage m_compareFrame;
     qreal m_compareAt = tokens::motion::compareFrom;
     QVariantAnimation *m_compareSweep = nullptr;
     QPointer<QWidget> m_workChip;
-    QColor m_glow;
-    QColor m_glowTarget;
-    QElapsedTimer m_glowClock;
-    QVariantAnimation *m_glowFade = nullptr;
     QImage m_wipeFrom;
     bool m_wipeArmed = false;
     qreal m_wipe = -1.0;

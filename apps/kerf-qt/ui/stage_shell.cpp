@@ -607,60 +607,37 @@ void StageShell::veilTimeline(qreal level, int delay, int duration) {
 
 qreal StageShell::timelineVeil() const { return static_cast<Veil *>(m_veil)->level(); }
 
-void StageShell::setLight(const QColor &light) {
-    // As far as eight bits can show: most of a slow fade's frames change nothing.
-    if (light.isValid() == m_light.isValid() && light.rgba() == m_light.rgba()) return;
-    m_light = light;
-    updateRoom();
-}
-
-QRect StageShell::roomLit() const {
+QRect StageShell::shadowed() const {
     if (!m_picture || m_picture->isHidden() || m_compareShown) return {};
     const QRect picture = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
-    return picture.isEmpty() ? QRect() : picture.adjusted(-220, -150, 220, 150);
+    return picture.isEmpty() ? QRect() : picture.adjusted(-kShadowReach, -kShadowReach + kShadowDrop, kShadowReach, kShadowReach + kShadowDrop);
 }
 
 void StageShell::updateRoom() {
-    const QRect lit = roomLit();
-    QRegion dirty(lit);
-    dirty += m_roomLit;
-    m_roomLit = lit;
+    const QRect falling = shadowed();
+    QRegion dirty(falling);
+    dirty += m_shadowed;
+    m_shadowed = falling;
     if (!dirty.isEmpty()) update(dirty);
 }
 
 void StageShell::paintEvent(QPaintEvent *event) {
-    // One room: the conversation and the picture's region are clear over it, so
-    // the picture floats, its light reaching behind the conversation.
+    // One room: the conversation and the picture's region are clear over it, so the
+    // picture floats. The room stays neutral, whatever the picture shows, as colour
+    // around a picture changes how its colours look.
     QPainter p(this);
     p.fillRect(event->rect(), tokens::color(tokens::chrome));
-    m_roomLit = roomLit();
-    if (m_roomLit.isEmpty()) return;
-    const QRect shown = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
-    const QRectF picture = shown;
+    m_shadowed = shadowed();
+    if (m_shadowed.isEmpty()) return;
     // The picture covers what is under its middle: only its corners show any.
+    const QRect shown = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
     const int corner = tokens::layout::pictureRadius;
-    p.setClipRegion(QRegion(m_roomLit) - shown.adjusted(corner, corner, -corner, -corner));
-    if (m_light.isValid() && m_light.alphaF() > 0.0) {
-        const QRectF lit = picture.adjusted(-220, -150, 220, 150);
-        p.save();
-        p.translate(lit.center());
-        p.scale(lit.width() / 2.0, lit.height() / 2.0);
-        QRadialGradient light(QPointF(0, 0), 1.0);
-        QColor core = m_light;
-        core.setAlphaF(float(m_light.alphaF() * 0.55));
-        QColor edge = m_light;
-        edge.setAlphaF(0.0f);
-        light.setColorAt(0.4, core);
-        light.setColorAt(1.0, edge);
-        p.fillRect(QRectF(-1, -1, 2, 2), light);
-        p.restore();
-    }
+    p.setClipRegion(QRegion(m_shadowed) - shown.adjusted(corner, corner, -corner, -corner));
     // Its shadow, wide and soft under it.
     const QPixmap &tile = shadowTile(std::max(1.0, devicePixelRatioF()));
     const QMargins edges(kShadowCorner, kShadowCorner, kShadowCorner, kShadowCorner);
-    const QRect falling = shown.adjusted(-kShadowReach, -kShadowReach + kShadowDrop, kShadowReach, kShadowReach + kShadowDrop);
     const int cornerPixels = qRound(kShadowCorner * tile.devicePixelRatio());
-    qDrawBorderPixmap(&p, falling, edges, tile, tile.rect(), QMargins(cornerPixels, cornerPixels, cornerPixels, cornerPixels));
+    qDrawBorderPixmap(&p, m_shadowed, edges, tile, tile.rect(), QMargins(cornerPixels, cornerPixels, cornerPixels, cornerPixels));
 }
 
 bool StageShell::eventFilter(QObject *watched, QEvent *event) {
