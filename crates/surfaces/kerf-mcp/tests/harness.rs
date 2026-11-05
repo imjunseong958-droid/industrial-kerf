@@ -1009,6 +1009,71 @@ fn scopes_read_the_program_and_what_a_proposal_would_make_of_it() {
 }
 
 #[test]
+fn look_follows_a_point_and_gives_a_line_that_makes_a_clip_follow_it() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A white square crossing the picture, and a null to follow it, over the first second.
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "track add V2 video\ntrack add V3 video\noverwrite gen=solid dur=30f at=0f on=V2 as=sq\nset sq color=#ffffff scale=0.1 x={0f:-0.2 30f:0.2}\noverwrite gen=null dur=30f at=0f on=V3 as=n1"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    // Its top-left corner at the start: a tenth of the frame wide, centered, moved a fifth left.
+    let followed = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"x": 0.25, "y": 0.45, "clip": "n1"},
+            "from": "0f",
+            "to": "24f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(followed["lostAt"].is_null(), "{followed}");
+    assert_eq!(followed["frames"], 25);
+    let points = followed["points"].as_array().unwrap();
+    let last = points.last().unwrap();
+    // It moved 0.4 of the frame over 30 frames, so 0.32 over 24.
+    assert!(
+        (last["x"].as_f64().unwrap() - 0.57).abs() < 0.02,
+        "{followed}"
+    );
+    assert!(
+        (last["y"].as_f64().unwrap() - 0.45).abs() < 0.02,
+        "{followed}"
+    );
+    // A straight move is few keyframes, not one a frame.
+    assert!(points.len() < 10, "{followed}");
+    let script = followed["script"].as_str().unwrap();
+    assert!(script.starts_with("set n1 x={0f:"), "{script}");
+    // The line is one the language takes.
+    ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": format!("{script}\nset sq parent=n1")}),
+    );
+
+    for refused in [
+        json!({"track": {"x": 0.5, "y": 0.5}, "from": "0f"}),
+        json!({"track": {"x": 1.5, "y": 0.5}, "from": "0f", "to": "2f"}),
+        json!({"track": {"x": 0.5, "y": 0.5}, "from": "4f", "to": "2f"}),
+        json!({"track": {"x": 0.5, "y": 0.5, "clip": "nobody"}, "from": "0f", "to": "2f"}),
+        json!({"track": {"x": 0.5, "y": 0.5}, "from": "0f", "to": "2f", "media": "m1"}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;

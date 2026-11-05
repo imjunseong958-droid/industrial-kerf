@@ -12,7 +12,7 @@
 //! Frames are analysed in luma at a reduced resolution ([`GrayPyramid::from_image`] takes an
 //! integer box-downsampling factor). Coordinates follow [`Plane`]: pixel `i` covers `[i, i + 1)`.
 
-use kerf_raster::Image;
+use crate::Image;
 use rayon::prelude::*;
 
 use crate::plane::Plane;
