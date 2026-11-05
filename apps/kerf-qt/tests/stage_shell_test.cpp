@@ -19,6 +19,7 @@
 #include "ui/finish_tray.h"
 #include "ui/inspector_column.h"
 #include "ui/stage_shell.h"
+#include "ui/wiring/timeline_wiring.h"
 #include "viewer_widget.h"
 
 #include <QAbstractButton>
@@ -47,13 +48,15 @@ QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(wi
 // Nothing overlaps, nothing is left over: the regions fill the content.
 void expectFilled(const stage::Rects &r, const QSize &window, const char *what) {
     const QRect content(0, 40, window.width(), window.height() - 40);
-    for (const QRect &region : {r.slot, r.conversation, r.timeline})
+    for (const QRect &region : {r.slot, r.transport, r.conversation, r.timeline})
         QVERIFY2(region.isEmpty() || content.contains(region), what);
     QVERIFY2(!r.slot.intersects(r.conversation), what);
     QVERIFY2(!r.slot.intersects(r.timeline), what);
+    QVERIFY2(!r.slot.intersects(r.transport), what);
     QVERIFY2(!r.conversation.intersects(r.timeline), what);
-    const int area = r.slot.width() * r.slot.height() + r.conversation.width() * r.conversation.height() +
-                     r.timeline.width() * r.timeline.height();
+    QVERIFY2(!r.transport.intersects(r.timeline), what);
+    const int area = r.slot.width() * r.slot.height() + r.transport.width() * r.transport.height() +
+                     r.conversation.width() * r.conversation.height() + r.timeline.width() * r.timeline.height();
     QCOMPARE(area, content.width() * content.height());
     QVERIFY2(r.slot.isEmpty() || r.slot.contains(r.picture), what);
 }
@@ -78,21 +81,24 @@ private slots:
     void wideAtTheDesignSize() {
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide);
         QVERIFY(r.wide);
-        QCOMPARE(r.slot, QRect(0, 40, 1200, 615));
-        QCOMPARE(r.picture, QRect(53, 40, 1093, 615));
-        QCOMPARE(r.conversation, QRect(1200, 40, 400, 615));
-        QCOMPARE(r.timeline, QRect(0, 655, 1600, 345));
+        QCOMPARE(r.slot, QRect(0, 40, 1240, 420));
+        QCOMPARE(r.picture, QRect(246, 40, 747, 420));
+        QVERIFY(r.transport.isEmpty());
+        QCOMPARE(r.conversation, QRect(1240, 40, 360, 960));
+        QCOMPARE(r.timeline, QRect(0, 460, 1240, 540));
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
+    // Three columns: the picture over the transport, the timeline, the conversation.
     void verticalAtTheDesignSize() {
-        for (const auto &[aspect, width] : {std::pair{kPortrait, 540}, std::pair{kFeed, 768}, std::pair{1.0, 960}}) {
+        for (const auto &[aspect, width] : {std::pair{kPortrait, 450}, std::pair{kFeed, 640}, std::pair{1.0, 640}}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             QVERIFY(!r.wide);
-            QCOMPARE(r.slot, QRect(0, 40, width, 960));
-            QCOMPARE(r.picture, r.slot);
-            QCOMPARE(r.conversation, QRect(width, 40, 1600 - width, 960 - 344));
-            QCOMPARE(r.timeline, QRect(width, 40 + 960 - 344, 1600 - width, 344));
+            QCOMPARE(r.slot, QRect(0, 40, width, 800));
+            QCOMPARE(r.picture, stage::fitted(r.slot, aspect));
+            QCOMPARE(r.transport, QRect(0, 840, width, 160));
+            QCOMPARE(r.timeline, QRect(width, 40, 1240 - width, 960));
+            QCOMPARE(r.conversation, QRect(1240, 40, 360, 960));
             expectFilled(r, QSize(1600, 1000), "vertical");
         }
     }
@@ -104,16 +110,15 @@ private slots:
         QVERIFY(!stage::rects(QSize(1600, 1000), 1.19).wide);
     }
 
-    // The conversation stays 400, then gives way down to 300, the picture
-    // having the rest; the timeline takes what is left, at least 260.
+    // The conversation stays 360, then gives way down to 300; the timeline has
+    // its share of the height, at least 260, and what the picture does not use.
     void wideAtOtherWindowSizes() {
         // The least window.
         {
             const stage::Rects r = stage::rects(QSize(1080, 700), kWide);
-            QCOMPARE(r.conversation.width(), 400);
-            QCOMPARE(r.slot.width(), 680);
-            QCOMPARE(r.slot.height(), 323);
-            QCOMPARE(r.timeline, QRect(0, 363, 1080, 337));
+            QCOMPARE(r.conversation, QRect(720, 40, 360, 660));
+            QCOMPARE(r.slot, QRect(0, 40, 720, 289));
+            QCOMPARE(r.timeline, QRect(0, 329, 720, 371));
             expectFilled(r, QSize(1080, 700), "least");
         }
         // Narrow: the conversation gives way, to 300 and no further.
@@ -125,23 +130,30 @@ private slots:
             QCOMPARE(least.slot.width(), 500);
             expectFilled(least, QSize(800, 900), "narrow");
         }
-        // Large and short: the picture would leave the timeline under 260, so
-        // it shrinks and pillarboxes in black.
+        // Large: the picture pillarboxes in black in its slot.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kWide);
-            QCOMPARE(r.conversation.width(), 400);
-            QCOMPARE(r.slot, QRect(0, 40, 2160, 1140));
-            QCOMPARE(r.timeline, QRect(0, 1180, 2560, 260));
-            QCOMPARE(r.picture.height(), 1140);
-            QCOMPARE(r.picture.width(), 2027);
-            QCOMPARE(r.picture.left(), (2160 - 2027) / 2);
+            QCOMPARE(r.conversation.width(), 360);
+            QCOMPARE(r.slot, QRect(0, 40, 2200, 612));
+            QCOMPARE(r.timeline, QRect(0, 652, 2200, 788));
+            QCOMPARE(r.picture.height(), 612);
+            QCOMPARE(r.picture.width(), 1088);
+            QCOMPARE(r.picture.left(), (2200 - 1088) / 2);
             expectFilled(r, QSize(2560, 1440), "large");
         }
-        // Tall: the timeline has the rest.
+        // Short: the timeline keeps its least.
+        {
+            const stage::Rects r = stage::rects(QSize(1600, 500), kWide);
+            QCOMPARE(r.timeline.height(), 260);
+            QCOMPARE(r.slot.height(), 200);
+            expectFilled(r, QSize(1600, 500), "short");
+        }
+        // Tall: the picture is flush, and the timeline has the rest.
         {
             const stage::Rects r = stage::rects(QSize(1600, 1800), kWide);
-            QCOMPARE(r.slot, QRect(0, 40, 1200, 615));
-            QCOMPARE(r.timeline.height(), 1800 - 655);
+            QCOMPARE(r.picture.width(), 1240);
+            QCOMPARE(r.picture.height(), r.slot.height());
+            QCOMPARE(r.timeline.height(), 1760 - r.slot.height());
             expectFilled(r, QSize(1600, 1800), "tall");
         }
     }
@@ -150,50 +162,56 @@ private slots:
         const double scope = 2.39;
         const stage::Rects r = stage::rects(QSize(1600, 1000), scope);
         QVERIFY(r.wide);
-        QCOMPARE(r.slot, QRect(0, 40, 1200, 442));
-        QCOMPARE(r.picture.height(), 442);
-        QCOMPARE(r.conversation, QRect(1200, 40, 400, 442));
-        QCOMPARE(r.timeline, QRect(0, 482, 1600, 518));
+        QCOMPARE(r.slot, QRect(0, 40, 1240, 420));
+        QCOMPARE(r.picture.height(), 420);
+        QCOMPARE(r.conversation, QRect(1240, 40, 360, 960));
+        QCOMPARE(r.timeline, QRect(0, 460, 1240, 540));
         expectFilled(r, QSize(1600, 1000), "scope");
-        // Just over the line: tall enough to pillarbox at the design's size.
+        // Just over the line: pillarboxed at the design's size.
         const stage::Rects four = stage::rects(QSize(1600, 1000), 1.25);
-        QCOMPARE(four.slot, QRect(0, 40, 1200, 700));
-        QCOMPARE(four.picture.size(), QSize(875, 700));
-        QCOMPARE(four.picture.left(), 162);
-        QCOMPARE(four.timeline.height(), 260);
+        QCOMPARE(four.slot, QRect(0, 40, 1240, 420));
+        QCOMPARE(four.picture.size(), QSize(525, 420));
+        QCOMPARE(four.picture.left(), 357);
+        QCOMPARE(four.timeline.height(), 540);
         expectFilled(four, QSize(1600, 1000), "1.25");
     }
 
-    // The right side keeps at least 560; under that the picture shrinks and
-    // letterboxes. The timeline is 344, giving way down to 200.
+    // The timeline keeps 600 of width while the picture's column can give it
+    // up, down to 240; the picture then letterboxes.
     void verticalAtOtherWindowSizes() {
         // A square picture in a narrow window.
         {
             const stage::Rects r = stage::rects(QSize(1280, 800), 1.0);
-            QCOMPARE(r.conversation.left(), 720);
-            QCOMPARE(r.conversation.width(), 560);
-            QCOMPARE(r.slot, QRect(0, 40, 720, 760));
-            QCOMPARE(r.picture, QRect(0, 60, 720, 720));
+            QCOMPARE(r.conversation, QRect(920, 40, 360, 760));
+            QCOMPARE(r.slot, QRect(0, 40, 320, 600));
+            QCOMPARE(r.picture, QRect(0, 180, 320, 320));
+            QCOMPARE(r.transport, QRect(0, 640, 320, 160));
+            QCOMPARE(r.timeline, QRect(320, 40, 600, 760));
             expectFilled(r, QSize(1280, 800), "letterbox");
         }
         // Wide enough: flush.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kPortrait);
-            QCOMPARE(r.slot.height(), 1400);
-            QCOMPARE(r.slot.width(), 788);
+            QCOMPARE(r.slot, QRect(0, 40, 698, 1240));
             QCOMPARE(r.picture, r.slot);
-            QCOMPARE(r.timeline.height(), 344);
-            QCOMPARE(r.conversation.height(), 1400 - 344);
+            QCOMPARE(r.timeline, QRect(698, 40, 1502, 1400));
             expectFilled(r, QSize(2560, 1440), "large");
         }
-        // Short: the timeline gives way, to 200 and no further.
+        // Short: the column keeps its least, for the transport.
         {
-            const stage::Rects r = stage::rects(QSize(1600, 600), kPortrait);
-            QCOMPARE(r.timeline.height(), 260);
-            QCOMPARE(r.conversation.height(), 300);
-            const stage::Rects least = stage::rects(QSize(1600, 500), kPortrait);
-            QCOMPARE(least.timeline.height(), 200);
-            expectFilled(least, QSize(1600, 500), "short");
+            const stage::Rects r = stage::rects(QSize(1600, 500), kPortrait);
+            QCOMPARE(r.slot, QRect(0, 40, 240, 300));
+            QCOMPARE(r.picture.size(), QSize(169, 300));
+            QCOMPARE(r.transport, QRect(0, 340, 240, 160));
+            expectFilled(r, QSize(1600, 500), "short");
+        }
+        // Narrow: the column has its least, the timeline the rest.
+        {
+            const stage::Rects r = stage::rects(QSize(800, 900), kPortrait);
+            QCOMPARE(r.slot.width(), 240);
+            QCOMPARE(r.timeline, QRect(240, 40, 260, 860));
+            QCOMPARE(r.conversation.width(), 300);
+            expectFilled(r, QSize(800, 900), "narrow");
         }
     }
 
@@ -218,6 +236,57 @@ private slots:
             QVERIFY(!r.media.intersects(r.timeline));
             QVERIFY(!r.browser.intersects(r.timeline));
         }
+        // The conversation at its least: a sheet keeps to it.
+        const stage::Rects narrow = stage::rects(QSize(800, 900), kWide);
+        QCOMPARE(narrow.inspector, narrow.conversation);
+        QVERIFY(!narrow.inspector.intersects(narrow.timeline));
+    }
+
+    // The transport is in the strip over a wide sequence and under a vertical
+    // picture, with the playhead's timecode, and it works from either.
+    void theTransportFollowsTheFormat() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCoreApplication::processEvents();
+        TimelineToolStrip *strip = window.m_timelineWiring->tools();
+        PictureTransport *block = window.m_timelineWiring->pictureTransport();
+        ui::IconButton *play = strip->transportButton(TimelineToolStrip::Transport::Play);
+        QVERIFY(strip->isAncestorOf(play));
+        QCoreApplication::processEvents();
+        QCOMPARE(strip->tools()->x(), 176);
+
+        window.applySnapshot(snapshotOf(QSize(1080, 1920)));
+        QCoreApplication::processEvents();
+        QVERIFY(block->isAncestorOf(play));
+        QVERIFY(play->isVisible());
+        QCOMPARE(play->size(), QSize(24, 24));
+        // Under the timecode, centred in the block.
+        QCoreApplication::processEvents();
+        const QRect inBlock(play->mapTo(block, QPoint()), play->size());
+        QCOMPARE(inBlock.center().x(), block->width() / 2 - 1);
+        // The strip keeps the tools, from its start, the zoom at its end.
+        QCOMPARE(strip->tools()->x(), 12);
+        QCOMPARE(strip->zoomInButton()->geometry().right() + 1, strip->width() - 12);
+        window.m_bus->setPlayhead(2.0);
+        QCOMPARE(block->time(), timelineTimecode(2.0, window.m_bus->fps()));
+
+        // A square sequence is a vertical one here, and the block stays.
+        window.applySnapshot(snapshotOf(QSize(1080, 1080)));
+        QCoreApplication::processEvents();
+        QVERIFY(block->isAncestorOf(play));
+
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        QCoreApplication::processEvents();
+        QVERIFY(strip->isAncestorOf(play));
+        QVERIFY(play->isVisible());
+        QVERIFY(!block->isVisible());
+        QCoreApplication::processEvents();
+        QCOMPARE(strip->tools()->x(), 176);
+        window.close();
     }
 
     void fittedKeepsTheShape() {
@@ -243,12 +312,15 @@ private slots:
             QCOMPARE(inWindow(window.m_viewer, &window), r.slot);
             QCOMPARE(inWindow(window.m_chat, &window), r.conversation);
             QCOMPARE(inWindow(window.m_timelinePanel, &window), r.timeline);
+            PictureTransport *block = window.m_timelineWiring->pictureTransport();
+            QCOMPARE(block->isVisible(), !r.wide);
+            if (!r.wide) QCOMPARE(inWindow(block, &window), r.transport);
         };
         expectAt(16.0 / 9.0);
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
         // At once: no animation, nothing left to process.
         expectAt(9.0 / 16.0);
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 0, 540, 960));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 0, 450, 800));
         window.applySnapshot(snapshotOf(QSize(1080, 1350)));
         expectAt(4.0 / 5.0);
         window.resize(1280, 800);
@@ -257,7 +329,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1080)));
         expectAt(1.0);
         // The black is the picture's: letterboxed at this size.
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 20, 720, 720));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(0, 140, 320, 320));
         const QImage shot = window.m_viewer->grab().toImage();
         QCOMPARE(shot.pixelColor(QPoint(10, 4) * shot.devicePixelRatio()).rgb(), qRgb(0, 0, 0));
         window.close();
@@ -286,7 +358,7 @@ private slots:
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
             QCOMPARE(window.m_bus->workspace(), QStringLiteral("Review"));
             QVERIFY(window.m_chat->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), QRect(1200, 40, 400, 615));
+            QCOMPARE(inWindow(window.m_chat, &window), QRect(1240, 40, 360, 960));
             window.close();
         }
         settings.remove(QStringLiteral("workspace"));
@@ -459,12 +531,12 @@ private slots:
         QVERIFY(!inspector->isChecked());
     }
 
-    // Ask Kerf and ⇧⌘J at a wide format: what lies over the composer goes, so
-    // the text lands where it can be seen. A vertical format's tray leaves it.
+    // Ask Kerf and ⇧⌘J: what lies over the composer goes, so the text lands
+    // where it can be seen. At the bottom of the full-height conversation, a tray
+    // reaches it in every format.
     void askingUncoversTheComposer() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        // Short enough for a tray to reach the composer over a wide picture.
         window.resize(1600, 900);
         window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 30},
                                          {"timeline", QJsonObject{{"width", 1920}, {"height", 1080}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
@@ -482,8 +554,9 @@ private slots:
         window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 30},
                                          {"timeline", QJsonObject{{"width", 1080}, {"height", 1920}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
         window.triggerCommand(QStringLiteral("workspace.finish"));
-        emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
         QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
+        emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
+        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
         window.close();
     }
 

@@ -36,8 +36,6 @@ struct Source {
 constexpr Source kSources[] = {
     {"g-169", 16, 16, true, R"svg(<rect x="1" y="4" width="14" height="8" rx="1.5"/>)svg"},
     {"g-916", 16, 16, true, R"svg(<rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/>)svg"},
-    {"g-11", 16, 16, true, R"svg(<rect x="2" y="2" width="12" height="12" rx="1.5"/>)svg"},
-    {"g-45", 16, 16, true, R"svg(<rect x="3.6" y="2.5" width="8.8" height="11" rx="1.5"/>)svg"},
     {"g-comments", 16, 16, true, R"svg(<path d="M2.5 3.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H6l-3.5 2.5z"/>)svg"},
     {"g-mrect", 16, 16, true, R"svg(<rect x="2.5" y="3.5" width="11" height="9" rx="1" stroke-dasharray="2 1.5"/>)svg"},
     {"g-mell", 16, 16, true, R"svg(<ellipse cx="8" cy="8" rx="5.5" ry="4.5" stroke-dasharray="2 1.5"/>)svg"},

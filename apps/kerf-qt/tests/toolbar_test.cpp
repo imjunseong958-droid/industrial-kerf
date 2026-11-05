@@ -146,12 +146,12 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QToolBar *toolbar = window.m_toolbar;
         QCOMPARE(toolbar->height(), 40);
-        // One 28 pt ≡ button, then the four format icons and the Export split.
+        // One 28 pt ≡ button, then the two format icons and the Export split.
         auto *menuButton = window.findChild<ui::IconButton *>(QStringLiteral("appMenu"));
         QVERIFY(menuButton);
         QCOMPARE(menuButton, wiring->appMenuButton());
         QCOMPARE(menuButton->size(), QSize(28, 28));
-        QCOMPARE(window.m_formatBank->count(), 4);
+        QCOMPARE(window.m_formatBank->count(), 2);
         for (const char *gone : {"toolbar.file.import", "toolbar.edit.undo", "toolbar.edit.redo", "toolbar.clip.split", "toolbar.clip.delete",
                                  "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu"})
             QVERIFY2(!window.findChild<QWidget *>(QString::fromLatin1(gone)), gone);
@@ -224,7 +224,7 @@ private slots:
     }
 
     // The format segments: one per preset, 28 wide icons; a click sends the
-    // set-sequence edit through sequence.setFormat; ⌥1-4 do the same; a
+    // set-sequence edit through sequence.setFormat; ⌥1-2 do the same; a
     // custom size turns none on and the tooltip names it; offline, the
     // click goes back to the project's format.
     void toolbarFormatSegmentsSendTheCanvasOp() {
@@ -243,7 +243,7 @@ private slots:
         }
         QCOMPARE(ui::tipName(bank->segment(0)), QStringLiteral("Landscape 16:9 · 1920×1080"));
         QCOMPARE(ui::tipName(bank->segment(1)), QStringLiteral("Vertical 9:16 · 1080×1920"));
-        QCOMPARE(ui::tipName(bank->segment(3)), QStringLiteral("Portrait 4:5 · 1080×1350"));
+        QCOMPARE(bank->count(), 2);
         QCOMPARE(ui::tipShortcut(bank->segment(1)), QKeySequence(Qt::ALT | Qt::Key_2).toString(QKeySequence::NativeText));
 
         // Offline the click does not hold: the project's format stays on.
@@ -267,24 +267,30 @@ private slots:
         QTest::mouseClick(bank->segment(0), Qt::LeftButton);
         QVERIFY(window.m_lastCommand.isEmpty());
 
-        // ⌥3 is Square: the registry's sequence.setFormat.11, which the
+        // ⌥2 is Vertical: the registry's sequence.setFormat.916, which the
         // keymap owns (no window action of the toolbar's own is left).
-        QAction *square = window.m_commands->action(QStringLiteral("sequence.setFormat.11"));
-        QVERIFY(square);
-        QCOMPARE(square->shortcut(), QKeySequence(Qt::ALT | Qt::Key_3));
+        QAction *vertical = window.m_commands->action(QStringLiteral("sequence.setFormat.916"));
+        QVERIFY(vertical);
+        QCOMPARE(vertical->shortcut(), QKeySequence(Qt::ALT | Qt::Key_2));
         for (QAction *action : window.actions()) QVERIFY(!action->objectName().startsWith(QStringLiteral("format.")));
-        QCOMPARE(window.m_toolbarWiring->m_formatActions.size(), 4);
-        square->trigger();
-        const QJsonObject squareOp = window.m_lastCommand.value("ops").toArray().first().toObject();
-        QCOMPARE(QSize(squareOp.value("width").toInt(), squareOp.value("height").toInt()), QSize(1080, 1080));
+        QCOMPARE(window.m_toolbarWiring->m_formatActions.size(), 2);
+        vertical->trigger();
+        const QJsonObject verticalOp = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(QSize(verticalOp.value("width").toInt(), verticalOp.value("height").toInt()), QSize(1080, 1920));
 
         // A size no preset has: none on, the tooltip names it.
         window.syncCanvasPreset(QSize(1280, 720));
         QCOMPARE(bank->currentIndex(), -1);
         QVERIFY(bank->fillRect().isEmpty());
         QCOMPARE(bank->toolTip(), QStringLiteral("Custom · 1280 × 720"));
-        window.syncCanvasPreset(QSize(1080, 1350));
-        QCOMPARE(bank->currentIndex(), 3);
+        // 1:1 and 4:5 are such sizes.
+        for (const QSize &size : {QSize(1080, 1080), QSize(1080, 1350)}) {
+            window.syncCanvasPreset(size);
+            QCOMPARE(bank->currentIndex(), -1);
+            QVERIFY(bank->toolTip().startsWith(QStringLiteral("Custom · ")));
+        }
+        window.syncCanvasPreset(QSize(1080, 1920));
+        QCOMPARE(bank->currentIndex(), 1);
 
         // Disconnected, the segments are disabled.
         window.setConnection(QStringLiteral("disconnected"));

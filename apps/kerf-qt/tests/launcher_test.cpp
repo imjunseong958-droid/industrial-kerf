@@ -138,7 +138,7 @@ private slots:
         launcher.showPage(ProjectLauncher::NewProject);
         QCOMPARE(launcher.m_heading->text(), QStringLiteral("Choose a template"));
         QVERIFY(!launcher.m_details->isHidden());
-        QCOMPARE(launcher.m_templates->count(), 3);
+        QCOMPARE(launcher.m_templates->count(), 2);
         launcher.m_templates->setCurrentRow(1);
         launcher.m_location->setText(location);
         launcher.m_name->setText(QString());

@@ -9,7 +9,7 @@
 //   ToolbarSegments  the toolbar's .seg (28 tall): text or icon segments, a
 //                    sliding fill, and no segment on when nothing it offers is
 //                    current (a custom frame size)
-//   FormatBank       the format segments 16:9 / 9:16 / 1:1 / 4:5
+//   FormatBank       the format segments 16:9 / 9:16
 //   ExportButton     the Export split button: "Export  Master" and a chevron
 //
 // The hardware faceplate (FaceplateToolBar, FormatKey and the accent
@@ -50,7 +50,7 @@ QString sequenceLabel(const QSize &size, double fps);
 // ago", else the date ("4 Nov 2026"): how long ago `then` was at `now`.
 QString editedAgo(const QDateTime &then, const QDateTime &now);
 // The design's name for a format preset ("Landscape 16:9", "Vertical
-// 9:16", "Square 1:1", "Portrait 4:5"), and its tip with the size
+// 9:16"), and its tip with the size
 // ("Landscape 16:9 · 1920×1080").
 QString formatName(int presetIndex);
 QString formatTip(int presetIndex);
@@ -135,7 +135,7 @@ private:
 
 // ---------------------------------------------------------------- FormatBank
 
-// The format segments (icon w28): 16:9 (⌥1), 9:16 (⌥2), 1:1 (⌥3), 4:5 (⌥4),
+// The format segments (icon w28): 16:9 (⌥1), 9:16 (⌥2),
 // one per canvas preset, each tipped "Landscape 16:9 · 1920×1080". The
 // project's size turns its preset on; a size no preset has turns none on
 // and the bank's tooltip names it ("Custom · 1280 × 720").

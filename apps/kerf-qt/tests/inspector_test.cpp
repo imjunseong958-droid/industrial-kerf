@@ -1507,7 +1507,8 @@ private slots:
             {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProperties()},
             {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}}}},
             {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip("c1", 0, 0.5), clip("c2", 2, 0.25)}}}}}}}});
-        window.resize(1440, 900);
+        // Short enough for the open sections to scroll in the full-height sheet.
+        window.resize(1440, 700);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.selectClip(QStringLiteral("c1"));

@@ -123,7 +123,7 @@ QFont monoFont(int pixelSize, QFont::Weight weight = QFont::Normal);
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 
 // The frame sizes offered as presets, and how every format picker (the
-// toolbar's, the Inspector's Frame size) names a size: "1:1 · 1080 × 1080"
+// toolbar's, the Inspector's Frame size) names a size: "9:16 · 1080 × 1920"
 // (its shape as the window's subtitle names it, thin spaces round the ×),
 // "Custom · 1280 × 720" for any size that is not a preset.
 struct CanvasPreset {

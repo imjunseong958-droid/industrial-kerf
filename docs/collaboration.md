@@ -32,8 +32,8 @@ they are, and `kerf sync` in a terminal can still prompt.
 **From Preset**, and **Clone from GitHub**; **Open an Existing Project…**
 opens any project folder.
 
-New Project offers three templates: **Empty 16:9** (1920×1080),
-**Vertical 9:16** (1080×1920), and **Square 1:1** (1080×1080). Under
+New Project offers two templates: **Empty 16:9** (1920×1080) and
+**Vertical 9:16** (1080×1920). Under
 **Details** you set the name, the location, and the frame rate (23.976, 24,
 25, 29.97, 30, or 60; 30 by default), and whether to share it:
 

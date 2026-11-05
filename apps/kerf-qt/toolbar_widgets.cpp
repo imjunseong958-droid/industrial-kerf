@@ -58,9 +58,9 @@ QString editedAgo(const QDateTime &then, const QDateTime &now) {
 QString formatName(int presetIndex) {
     const QList<CanvasPreset> presets = canvasPresets();
     if (presetIndex < 0 || presetIndex >= presets.size()) return QString();
-    static const char *const names[] = {"Landscape", "Vertical", "Square", "Portrait"};
+    static const char *const names[] = {"Landscape", "Vertical"};
     const QString ratio = QString::fromLatin1(presets.at(presetIndex).ratio);
-    return presetIndex < 4 ? QStringLiteral("%1 %2").arg(QString::fromLatin1(names[presetIndex]), ratio) : ratio;
+    return QStringLiteral("%1 %2").arg(QString::fromLatin1(names[presetIndex]), ratio);
 }
 
 QString formatTip(int presetIndex) {
@@ -371,12 +371,11 @@ void ToolbarSegments::changeEvent(QEvent *event) {
 FormatBank::FormatBank(QWidget *parent) : ToolbarSegments(parent) {
     setObjectName(QStringLiteral("formatSegments"));
     setAccessibleName(QStringLiteral("Sequence format"));
-    static const char *const glyphs[] = {"g-169", "g-916", "g-11", "g-45"};
+    static const char *const glyphs[] = {"g-169", "g-916"};
     const QList<CanvasPreset> presets = canvasPresets();
     for (int i = 0; i < presets.size(); ++i) {
-        const QString glyph = i < 4 ? QString::fromLatin1(glyphs[i]) : QStringLiteral("g-169");
-        // The toolbar's ⌥1-4; ToolbarWiring names its actions' keys again.
-        addIconSegment(glyph, formatTip(i), QKeySequence(Qt::ALT | Qt::Key(Qt::Key_1 + i)).toString(QKeySequence::NativeText));
+        // The toolbar's ⌥1-2; ToolbarWiring names its actions' keys again.
+        addIconSegment(QString::fromLatin1(glyphs[i]), formatTip(i), QKeySequence(Qt::ALT | Qt::Key(Qt::Key_1 + i)).toString(QKeySequence::NativeText));
     }
     connect(this, &ToolbarSegments::activated, this, [this](int index) {
         const QSize size = format(index);

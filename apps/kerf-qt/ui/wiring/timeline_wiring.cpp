@@ -4,6 +4,7 @@
 #include "editor_bus.h"
 #include "main_window.h"
 #include "source_monitor_panel.h"
+#include "stage_shell.h"
 
 #include <QAction>
 #include <QEvent>
@@ -62,6 +63,13 @@ void TimelineWiring::attach() {
     // Each control stands for its registry command (bindCommands).
     bindCommands();
 
+    // The block under a vertical picture.
+    m_pictureTransport = new PictureTransport(m_window->m_shell);
+    m_window->m_shell->setTransport(m_pictureTransport);
+    connect(m_bus, &EditorBus::playheadChanged, this, &TimelineWiring::showTime);
+    connect(m_bus, &EditorBus::snapshotChanged, this, [this] { showTime(m_bus->playhead()); });
+    showTime(m_bus->playhead());
+
     // Monitoring only: the playback mix hears the soloed tracks alone.
     connect(timeline, &TimelineWidget::soloChanged, this, &TimelineWiring::sendSolo);
     // The timeline is enabled when the engine is ready (setConnection): a
@@ -98,6 +106,16 @@ void TimelineWiring::attach() {
     connect(m_own, &ReviewModel::changed, this, &TimelineWiring::refreshReview);
     connect(m_own, &ReviewModel::currentChanged, this, &TimelineWiring::refreshReview);
     followSharedReview();
+}
+
+void TimelineWiring::setWide(bool wide) {
+    if (!m_tools || wide == m_wide) return;
+    m_wide = wide;
+    m_tools->setTransportHost(wide ? nullptr : m_pictureTransport->transportRow());
+}
+
+void TimelineWiring::showTime(double seconds) {
+    m_pictureTransport->setTime(timelineTimecode(seconds, m_bus->fps()));
 }
 
 void TimelineWiring::sendSolo(const QStringList &tracks) {

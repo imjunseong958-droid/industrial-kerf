@@ -5,7 +5,7 @@
 // main_window_toolbar.cpp and main_window_status.cpp.
 //
 // The toolbar (mockup, minimal pass; 40 tall): the traffic lights' room, one
-// ≡ button (appMenu), the centred title and subtitle, the four format icons and
+// ≡ button (appMenu), the centred title and subtitle, the two format icons and
 // the Export split. Engine paths:
 //   ≡ menu              the registry's commands: window.project, window.effects,
 //                       window.inspector (the sheets), workspace.finish,
@@ -20,7 +20,7 @@
 //                       an error, which stay, else the sync's stage or a
 //                       render's progress (export, render_queue, preview), else
 //                       "Edited 2 min ago · rev 22"
-//   format ⌥1-4         the registry's sequence.setFormat.169/.916/.11/.45 ->
+//   format ⌥1-2         the registry's sequence.setFormat.169/.916 ->
 //                       sequence.setFormat {width, height} (edit set-sequence)
 //   sequence settings   sequence.settings (⌘0) -> SequenceSettingsDialog ->
 //                       edit {set-sequence {name?, width?, height?, start?,
@@ -201,7 +201,7 @@ private:
     QMenu *m_keymapMenu = nullptr;
     // The native menus, kept reachable where there is no menu bar.
     QHash<QString, QMenu *> m_menus;
-    QList<QAction *> m_formatActions; // ⌥1-4: the registry's sequence.setFormat.*
+    QList<QAction *> m_formatActions; // ⌥1-2: the registry's sequence.setFormat.*
     KeymapCustomiser *m_customiser = nullptr;
     QPointer<KeymapEditor> m_keymapEditor;
     QPointer<SequenceSettingsDialog> m_sequenceSettings;

@@ -155,7 +155,7 @@ scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The
-transport is in the timeline's strip: go to start, previous frame, Play (Space),
+transport is in the timeline's strip (under the picture for a vertical sequence): go to start, previous frame, Play (Space),
 next frame and go to end; the marks (I, O, Clear Marks ⇧⌘X) and Loop (⌘L) are keys and menu items,
 and the ruler shows the marks. A click on the picture plays or
 pauses. Captions, the QC overlap box, safe zones and the comments' drawings
@@ -168,23 +168,26 @@ no cards, radii or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry
 a pure function of the window's size and the picture's aspect). The toolbar is
 40 points tall. At a 1600 × 1000 window:
 
-| Sequence | Picture | Conversation | Timeline |
+| Sequence | Picture | Timeline | Conversation |
 |---|---|---|---|
-| Wide (aspect ≥ 1.2) | 1200 × 675 at (0, 40) | 400 × 675 at (1200, 40) | 1600 × 285 at (0, 715) |
-| 9:16 | 540 × 960 at (0, 40) | 1060 × 616 at (540, 40) | 1060 × 344 at (540, 656) |
-| 4:5 | 768 × 960 at (0, 40) | 832 × 616 at (768, 40) | 832 × 344 at (768, 656) |
-| 1:1 | 960 × 960 at (0, 40) | 640 × 616 at (960, 40) | 640 × 344 at (960, 656) |
+| Wide (aspect ≥ 1.2) | 1240 × 420 at (0, 40) | 1240 × 540 at (0, 460) | 360 × 960 at (1240, 40) |
+| 9:16 | 450 × 800 at (0, 40) | 790 × 960 at (450, 40) | 360 × 960 at (1240, 40) |
 
-At other sizes a wide sequence keeps the conversation 400 (300 at the least),
-the picture has the rest of the width, its height follows its aspect, and the
-timeline takes the remaining height, at least 200; below that the picture
-shrinks and pillarboxes in black. A vertical sequence has the content's height,
-the right side keeps at least 560 (then the picture shrinks and letterboxes in
-black), and the timeline is 344, at least 200. Switching format lays out again
-at once, with no animation.
+The conversation always has the content's full height at the right: 360 wide,
+giving way down to 300 only when it would leave under 600 on its left.
+
+Under a wide picture the timeline has 56% of the height, at least 260, and
+whatever the picture's aspect does not use; the picture pillarboxes in black in
+its slot. A sequence narrower than 1.2 has three columns: the picture over a
+160 tall block with the playhead's timecode and the transport, the timeline at
+the content's full height, and the conversation. The timeline keeps 600 of
+width while the picture's column can give it up, down to 240; the picture then
+letterboxes in black. Track heights do not follow the timeline's height, so a
+big edit shows at once. Switching format lays out again at once, with no
+animation.
 
 The toolbar holds the traffic lights' room, one ≡ button, the centred title and
-subtitle, the four format icons and the Export split. ≡ opens Media (⌘1),
+subtitle, the two format icons and the Export split. ≡ opens Media (⌘1),
 Effects and titles (⌘5), Inspector (⌘4), Scopes, loudness, QC, Deliver, Import…,
 Sequence settings…, Settings… and View: the mask tools, annotations, safe zones
 (off by default), viewer zoom, the keyboard's choice and the sync's rows. Every
@@ -272,7 +275,7 @@ A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
 Choose a Project window, in the editor's dark graphite and blue accent.
 New Project offers Empty
-16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
+16:9 and Vertical 9:16 templates; Details sets the name,
 location, frame rate, and sharing: Share with Git makes the folder a
 repository, and Create a private GitHub repository (offered once the GitHub
 CLI is signed in, naming the account) or a remote URL publishes it. Recent lists the projects opened
@@ -453,9 +456,10 @@ it says what Kerf is working on (with Stop) or names the pinned proposal
 (with Reject and Accept), and Details opens the panel again.
 
 Use the project-format picker in the toolbar to switch between 16:9
-(1920 × 1080), 9:16 (1080 × 1920), 1:1 (1080 × 1080) and 4:5 (1080 × 1350). It
-names the format as the window's subtitle and the Inspector's Frame size do
-("1:1 · 1080 × 1080"), and any other size as "Custom · 1280 × 720". The viewer fits either canvas
+(1920 × 1080) and 9:16 (1080 × 1920). It names the format as the window's
+subtitle and the Inspector's Frame size do ("9:16 · 1080 × 1920"), and any other
+size, set with Frame size's or Sequence settings' Custom, as
+"Custom · 1280 × 720". The viewer fits either canvas
 inside the available panel without cropping and keeps preview captions inside
 the video safe area.
 
@@ -503,7 +507,7 @@ and its geometry, comments and the review model, Inspector, timeline, bin and
 browser, Source, toolbar, status, Finish, Deliver, the kit, theme, launcher,
 wiring guards, kerf:// links), each fed bridge events shaped as kerfd sends them,
 and `MockupParityTest` checks the whole editor against the design at 1600 × 1000
-in every format (16:9, 9:16, 1:1, 4:5), with each sheet and tray and a preview.
+in 16:9, 9:16 and the custom shapes 1:1 and 4:5, with each sheet and tray and a preview.
 With `KERF_SCREENSHOT_DIR` set, it saves each state under the mockup's query state
 (`169.png`, `916-inspector.png`, `45-finish.png`, `11-preview.png`, …), and the
 region galleries save theirs (`editor-<format>-dark.png`,

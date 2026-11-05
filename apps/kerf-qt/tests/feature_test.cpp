@@ -86,15 +86,16 @@ private slots:
         QCOMPARE(dialog.result(), int(QDialog::Accepted));
         // A custom size: its W × H only then editable.
         QVERIFY(!dialog.widthField()->isEnabled());
-        dialog.formatControl()->setCurrentIndex(4, false);
-        emit dialog.formatControl()->activated(4);
+        dialog.formatControl()->setCurrentIndex(2, false);
+        emit dialog.formatControl()->activated(2);
         QVERIFY(dialog.widthField()->isEnabled());
         dialog.widthField()->setValue(1280);
         dialog.heightField()->setValue(720);
         QCOMPARE(dialog.op(), (QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"width", 1280}, {"height", 720}}));
-        // The 1:1 preset puts its size in the fields.
-        emit dialog.formatControl()->activated(2);
-        QCOMPARE(dialog.chosenSize(), QSize(1080, 1080));
+        // The 9:16 preset puts its size in the fields.
+        dialog.formatControl()->setCurrentIndex(1, false);
+        emit dialog.formatControl()->activated(1);
+        QCOMPARE(dialog.chosenSize(), QSize(1080, 1920));
         QCOMPARE(dialog.widthField()->value(), 1080);
         // A start that is no timecode cannot go.
         dialog.startField()->setText(QStringLiteral("10:00"));

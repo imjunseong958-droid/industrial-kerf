@@ -2431,7 +2431,13 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
         button->setAccessibleName(name);
         return button;
     };
-    // The transport first, 4 apart; Play in ink.
+    // The transport first, 4 apart; Play in ink. A group, so it can move under
+    // a vertical picture (setTransportHost).
+    m_transportGroup = new QWidget(this);
+    m_transportGroup->setObjectName(QStringLiteral("timelineTransport"));
+    auto *transport = new QHBoxLayout(m_transportGroup);
+    transport->setContentsMargins(0, 0, kTransportGap, 0);
+    transport->setSpacing(4);
     for (int index = 0; index < kTransports; ++index) {
         const TransportInfo &info = kTransportInfo[index];
         const Transport which = Transport(index);
@@ -2439,10 +2445,9 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
         m_transport[index]->setCheckable(false);
         connect(m_transport[index], &QAbstractButton::clicked, this, [this, which] { emit transportRequested(which); });
         m_transport[index]->setInkAtRest(which == Transport::Play);
-        if (index) layout->addSpacing(4);
-        layout->addWidget(m_transport[index], 0, Qt::AlignVCenter);
+        transport->addWidget(m_transport[index], 0, Qt::AlignVCenter);
     }
-    layout->addSpacing(28);
+    layout->addWidget(m_transportGroup, 0, Qt::AlignVCenter);
     m_tools = new ui::SegmentedControl(this);
     m_tools->setObjectName(QStringLiteral("timelineToolSegments"));
     for (const ToolInfo &info : kTools)
@@ -2555,6 +2560,20 @@ void TimelineToolStrip::followSnap(bool enabled, const QString &reason, const QS
     m_snap->setTip(tipWithReason(tr("Snap"), enabled, reason), shortcut);
 }
 
+void TimelineToolStrip::setTransportHost(QBoxLayout *host) {
+    auto *strip = static_cast<QBoxLayout *>(layout());
+    m_transportGroup->layout()->setContentsMargins(0, 0, host ? 0 : kTransportGap, 0);
+    if (host) {
+        strip->removeWidget(m_transportGroup);
+        host->addWidget(m_transportGroup, 0, Qt::AlignHCenter);
+    } else {
+        if (QLayout *held = m_transportGroup->parentWidget() == this ? nullptr : m_transportGroup->parentWidget()->layout())
+            held->removeWidget(m_transportGroup);
+        strip->insertWidget(0, m_transportGroup, 0, Qt::AlignVCenter);
+    }
+    m_transportGroup->show();
+}
+
 void TimelineToolStrip::followTransport(Transport which, bool enabled, const QString &reason, const QString &shortcut) {
     ui::IconButton *button = m_transport[int(which)];
     button->setEnabled(enabled);
@@ -2610,6 +2629,31 @@ int TimelineToolStrip::position(double pixelsPerSecond, double least) {
 double TimelineToolStrip::scaleAt(int position, double least) {
     const double span = std::log(TimelineWidget::kMaxScale / least);
     return least * std::exp(span * std::clamp(position, 0, kSteps) / double(kSteps));
+}
+
+PictureTransport::PictureTransport(QWidget *parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("pictureTransport"));
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(tk::space::s12);
+    layout->addStretch(1);
+    m_time = new QLabel(this);
+    m_time->setObjectName(QStringLiteral("pictureTransportTime"));
+    m_time->setFont(tk::font(tk::timecodeLarge));
+    m_time->setAlignment(Qt::AlignCenter);
+    m_time->setStyleSheet(QStringLiteral("color: %1;").arg(C(tk::ink).name()));
+    layout->addWidget(m_time);
+    m_row = new QVBoxLayout;
+    m_row->setContentsMargins(0, 0, 0, 0);
+    layout->addLayout(m_row);
+    layout->addStretch(1);
+}
+
+void PictureTransport::setTime(const QString &time) { m_time->setText(time); }
+
+void PictureTransport::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.fillRect(rect(), C(tk::chrome));
 }
 
 } // namespace kerf

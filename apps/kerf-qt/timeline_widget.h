@@ -18,11 +18,13 @@
 #include "editor_common.h"
 #include "test_friends.h"
 
+#include <QBoxLayout>
 #include <QHash>
 #include <QImage>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -577,6 +579,25 @@ private:
     int m_lanesPainted = 0;
 };
 
+// The block under a vertical picture: the playhead's timecode over the strip's
+// transport (TimelineWiring moves it here for a vertical sequence).
+class PictureTransport final : public QWidget {
+    Q_OBJECT
+    KERF_TEST_FRIENDS
+public:
+    explicit PictureTransport(QWidget *parent = nullptr);
+    QBoxLayout *transportRow() const { return m_row; }
+    void setTime(const QString &time);
+    QString time() const { return m_time->text(); }
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QLabel *m_time = nullptr;
+    QBoxLayout *m_row = nullptr;
+};
+
 // The timeline's strip (mockup .tbar), 28 tall, padded 12: the transport, the
 // Selection and Razor tools (the others remain on keys and in the menu), Snap,
 // and at the far end the zoom: Zoom out, a 64 pt slider, Zoom in. The slider
@@ -598,6 +619,9 @@ public:
     ui::SegmentedControl *tools() const { return m_tools; }
     ui::IconButton *snapButton() const { return m_snap; }
     ui::IconButton *transportButton(Transport which) const { return m_transport[int(which)]; }
+    // Moves the transport into `host` (under a vertical picture), or back to the
+    // start of this strip with nullptr. It keeps its signals and tips.
+    void setTransportHost(QBoxLayout *host);
     ui::Slider *slider() const { return m_slider; }
     ui::IconButton *zoomOutButton() const { return m_out; }
     ui::IconButton *zoomInButton() const { return m_in; }
@@ -642,6 +666,8 @@ private:
     TimelineWidget *m_timeline;
     ui::SegmentedControl *m_tools = nullptr;
     ui::IconButton *m_snap = nullptr;
+    static constexpr int kTransportGap = 28; // from the transport to the tools
+    QWidget *m_transportGroup = nullptr;
     ui::IconButton *m_transport[kTransports] = {};
     bool m_playing = false;
     QList<QPointer<QShortcut>> m_shortcuts;
