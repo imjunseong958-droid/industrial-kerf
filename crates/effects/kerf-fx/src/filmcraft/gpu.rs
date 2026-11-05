@@ -418,7 +418,7 @@ fn stage(gpu: &'static Gpu) -> Option<&'static Stage> {
 
 /// Whether `gpu` can run effects.
 pub fn available(gpu: &'static Gpu) -> bool {
-    stage(gpu).is_some()
+    stage(gpu).is_some() && super::vfx::gpu::available(gpu)
 }
 
 /// `ops` run in order on `picture`, or `None` when the kernels did not build.

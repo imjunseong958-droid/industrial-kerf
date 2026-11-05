@@ -60,6 +60,8 @@ pub struct Gpu {
     halve: wgpu::ComputePipeline,
     composite: wgpu::ComputePipeline,
     correct: wgpu::ComputePipeline,
+    by_weight: wgpu::ComputePipeline,
+    plus: wgpu::ComputePipeline,
     finish_layout: wgpu::BindGroupLayout,
     finish: wgpu::ComputePipeline,
     dummy: wgpu::TextureView,
@@ -209,6 +211,7 @@ impl Gpu {
             kernel("composite"),
             kernel("correct"),
         );
+        let (by_weight, plus) = (kernel("by_weight"), kernel("plus"));
         let finish_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kerf-finish"),
             source: wgpu::ShaderSource::Wgsl(include_str!("finish.wgsl").into()),
@@ -269,6 +272,8 @@ impl Gpu {
             halve,
             composite,
             correct,
+            by_weight,
+            plus,
             finish_layout,
             finish,
             dummy,
@@ -555,6 +560,72 @@ impl<'a> Frame<'a> {
         );
         self.used.push((key, texture.clone()));
         texture
+    }
+
+    /// A copy of `picture` that later commands may change.
+    pub fn copy(&mut self, picture: &Picture) -> Picture {
+        let out = self.take(picture.w, picture.h);
+        self.encoder.copy_texture_to_texture(
+            picture.texture.as_image_copy(),
+            out.texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: picture.w,
+                height: picture.h,
+                depth_or_array_layers: 1,
+            },
+        );
+        out
+    }
+
+    /// `adjusted` over `canvas`, weighed at each pixel by the alpha of `weight` and by `opacity`,
+    /// as an adjustment layer mixes.
+    pub fn mix_weighted(
+        &mut self,
+        canvas: Picture,
+        adjusted: Picture,
+        weight: &Picture,
+        opacity: f32,
+        mode: Blend,
+    ) -> Picture {
+        let gpu = self.gpu;
+        let size = (canvas.w, canvas.h);
+        let weighed = |invert: bool| Uniforms {
+            a: [0, u32::from(invert), 0, 0],
+            p: [opacity, 0.0, 0.0, 0.0],
+            ..Uniforms::default()
+        };
+        let top = self.kernel(
+            &gpu.by_weight,
+            &weighed(false),
+            &adjusted.view,
+            Some(&weight.view),
+            size,
+        );
+        self.release(adjusted);
+        if mode != Blend::Normal {
+            let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            let out = self.composite(canvas, &top, &Affine::IDENTITY, whole, 1.0, mode);
+            self.release(top);
+            return out;
+        }
+        let under = self.kernel(
+            &gpu.by_weight,
+            &weighed(true),
+            &canvas.view,
+            Some(&weight.view),
+            size,
+        );
+        self.release(canvas);
+        let out = self.kernel(
+            &gpu.plus,
+            &Uniforms::default(),
+            &under.view,
+            Some(&top.view),
+            size,
+        );
+        self.release(under);
+        self.release(top);
+        out
     }
 
     /// A transparent picture.

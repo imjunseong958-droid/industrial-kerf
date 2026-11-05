@@ -5,6 +5,7 @@
 
 use super::*;
 use kerf_fx::filmcraft::gpufx::FxOp;
+use kerf_fx::filmcraft::instance::GpuEffect;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
@@ -20,7 +21,7 @@ fn ready_gpu() -> Option<&'static Gpu> {
 
 /// One effect of a clip as a kernel.
 enum Op {
-    Effect(FxOp),
+    Effect(GpuEffect),
     Correct(Correction),
 }
 
@@ -135,22 +136,16 @@ impl Drawing {
                     return false;
                 }
             }
-            self.gpu_shape(sequence, plan, time, scale)
-                .filter(|shape| gpu.fits(shape.source.0, shape.source.1))
-                .and_then(|shape| self.gpu_ops(sequence, plan, time, at, scale, &shape))
-                .is_some()
+            let shape = self.gpu_shape(sequence, plan, time, scale);
+            gpu.fits(shape.source.0, shape.source.1)
+                && self
+                    .gpu_ops(sequence, plan, time, at, scale, &shape)
+                    .is_some()
         })
     }
 
-    /// The numbers [`Drawing::input`] works out for a clip's picture. `None` for an adjustment
-    /// layer, which has no picture of its own.
-    fn gpu_shape(
-        &self,
-        sequence: &SequencePlan,
-        plan: &ClipPlan,
-        time: Time,
-        scale: f64,
-    ) -> Option<Shape> {
+    /// The numbers [`Drawing::input`] works out for a clip's picture.
+    fn gpu_shape(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time, scale: f64) -> Shape {
         let canvas = output_size(sequence.width, sequence.height, scale);
         let (source, per_source) = match &plan.source {
             Source::Media { .. } => {
@@ -167,10 +162,19 @@ impl Drawing {
                 (size, size.0 as f64 / f64::from(inner.width))
             }
             Source::Solid(_) | Source::Title(_) => (canvas, scale),
-            Source::Adjustment => return None,
+            // It works on the canvas beneath it, unplaced.
+            Source::Adjustment => {
+                return Shape {
+                    source: canvas,
+                    source_per: scale,
+                    size: canvas,
+                    per_source: scale,
+                    to_output: Affine::IDENTITY,
+                }
+            }
         };
         let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-        Some(if plan.letterboxed {
+        if plan.letterboxed {
             Shape {
                 source,
                 source_per: per_source,
@@ -186,7 +190,7 @@ impl Drawing {
                 per_source,
                 to_output: place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
             }
-        })
+        }
     }
 
     /// A clip's effects as kernels, or `None` when any of them has none.
@@ -214,11 +218,11 @@ impl Drawing {
                     let (across, down) =
                         blur::gaussian_radii(shape.size.0, shape.size.1, sigma, sigma);
                     let radii = |radii: Vec<usize>| radii.into_iter().map(|r| r as u32).collect();
-                    ops.push(Op::Effect(FxOp::Gaussian {
+                    ops.push(Op::Effect(GpuEffect::Op(FxOp::Gaussian {
                         rx: radii(across),
                         ry: radii(down),
                         repeat: true,
-                    }));
+                    })));
                 }
                 id if kerf_fx::kept::kept(id) || domains::effect(id).is_some() => return None,
                 _ => {
@@ -251,7 +255,7 @@ impl Drawing {
                         env: None,
                         frame_rate: sequence.rate.fps(),
                     };
-                    let op = filmcraft::instance::gpu_op(&instance, &run, shape.size)?;
+                    let op = filmcraft::instance::gpu_effect(&instance, &run, shape.size)?;
                     ops.push(Op::Effect(op));
                 }
             }
@@ -329,8 +333,11 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
-        let shape = self.gpu_shape(sequence, plan, time, scale)?;
+        let shape = self.gpu_shape(sequence, plan, time, scale);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
+        if matches!(plan.source, Source::Adjustment) {
+            return self.gpu_adjust(frame, canvas, (sequence, plan, time, scale), &ops);
+        }
         // Media that cannot be read draws nothing, as on the CPU.
         let Some(picture) = self.gpu_source(frame, sequence, plan, time, scale, &shape)? else {
             return Some(canvas);
@@ -369,7 +376,7 @@ impl Drawing {
         }
         for op in &ops {
             picture = match op {
-                Op::Effect(op) => filmcraft::gpu::run(frame, picture, std::slice::from_ref(op))?,
+                Op::Effect(op) => op.run(frame, picture)?,
                 Op::Correct(correction) => frame.correct(picture, correction),
             };
         }
@@ -402,6 +409,54 @@ impl Drawing {
         );
         frame.release(picture);
         Some(canvas)
+    }
+
+    /// An adjustment layer, as [`Drawing::adjust`] draws it: its effects on the picture beneath
+    /// it, weighed against that picture by its opacity, masks, and frame.
+    fn gpu_adjust(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        canvas: GpuPicture,
+        placed: (&SequencePlan, &ClipPlan, Time, f64),
+        ops: &[Op],
+    ) -> Option<GpuPicture> {
+        let (sequence, plan, time, scale) = placed;
+        let (w, h) = (canvas.w as usize, canvas.h as usize);
+        let mut adjusted = frame.copy(&canvas);
+        for op in ops {
+            adjusted = match op {
+                Op::Effect(op) => op.run(frame, adjusted)?,
+                Op::Correct(correction) => frame.correct(adjusted, correction),
+            };
+        }
+        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let mut weight = frame.filled(canvas.w, canvas.h, [1.0; 4]);
+        let masks = mask::prepare(&plan.clip.masks, size, scale, time);
+        if let Some(covered) = mask::coverage(&masks, w, h) {
+            weight = frame.multiply(weight, &covered);
+        }
+        let place = Affine::scale(scale, scale)
+            .then_apply(&self.geometry(sequence, plan, time))
+            .then_apply(&Affine::scale(1.0 / scale, 1.0 / scale));
+        let crop = crop_rect(plan, time, size, scale, (w, h));
+        if crop.is_some() || !identity(&place) {
+            let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
+            let empty = frame.clear(canvas.w, canvas.h);
+            let placed = frame.composite(
+                empty,
+                &weight,
+                &place,
+                crop.unwrap_or(whole),
+                1.0,
+                Blend::Normal,
+            );
+            frame.release(weight);
+            weight = placed;
+        }
+        let opacity = number(&param(&plan.clip, "opacity").value_at(time)) as f32;
+        let out = frame.mix_weighted(canvas, adjusted, &weight, opacity, plan.blend);
+        frame.release(weight);
+        Some(out)
     }
 
     /// A clip's picture before its masks and effects. `None` when the frame has to go to the CPU,

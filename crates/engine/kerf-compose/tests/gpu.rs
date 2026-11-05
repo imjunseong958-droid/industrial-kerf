@@ -105,6 +105,35 @@ fn scenes() -> Vec<(&'static str, String)> {
             format!("{CLIP}  track V2 video\n    clip t1 gen=title@1 at=0f dur=24f\n      set text=\"KERF\" size=0.25\n"),
         ),
     ];
+    let adjustment = |body: &str| {
+        format!("{CLIP}      set scale=0.9\n  track V2 video\n    clip a1 gen=adjustment@1 at=0f dur=24f\n{body}")
+    };
+    scenes.extend([
+        ("adjusted", adjustment("      fx color.tint amount=60\n")),
+        ("adjusted faint", adjustment("      set opacity=0.5\n      fx color.lumetri exposure=0.4\n")),
+        ("adjusted masked", adjustment("      mask k1 ellipse=0.5,0.5,0.3,0.3 feather=20\n      fx blur.gaussian radius=16\n")),
+        ("adjusted moved", adjustment("      set scale=0.5 x=0.1 rotation=10\n      fx channel.invert\n")),
+        ("adjusted blended", adjustment("      set blend=screen opacity=0.7\n      fx color.basic exposure=0.5\n")),
+        ("glow", clip("      fx light.wonderglow threshold=30 radius=30\n")),
+        ("glint", clip("      fx light.glint threshold=60\n")),
+        ("split", clip("      fx light.rgbsplit amount=8\n")),
+        ("wave", clip("      fx distort.wavewarp height=8 width=60\n")),
+        ("noise", clip("      fx noise.noise amount=30 grain_size=2\n")),
+    ]);
+    for look in [
+        "look.dreamy",
+        "look.glitch",
+        "look.vhs",
+        "look.noir",
+        "look.sparkle",
+        "look.shake",
+        "look.flash",
+    ] {
+        scenes.push((look, clip(&format!("      fx {look}\n"))));
+    }
+    for look in ["look.whip", "look.flash-cut"] {
+        scenes.push((look, format!("  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx={look} dur=12f\n")));
+    }
     for mode in [
         "add",
         "multiply",
@@ -166,9 +195,8 @@ fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     );
     let time = Rate::FPS_24.time_of(6);
     let refused = [
-        format!("{CLIP}      fx light.wonderglow\n"),
+        format!("{CLIP}      fx light.leaks\n"),
         "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=push@1 dur=12f\n".to_owned(),
-        format!("{CLIP}  track V2 video\n    clip a1 gen=adjustment@1 at=0f dur=24f\n      fx color.tint amount=40\n"),
     ];
     for body in refused {
         let document = format!("{media}{body}");
