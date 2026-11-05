@@ -103,6 +103,26 @@ impl Image {
         out
     }
 
+    /// This picture over black as 16-bit little-endian RGBA with `signal` making each pixel's code
+    /// values, 0 to 1, for an HDR master.
+    pub fn to_signal16_over_black(&self, signal: impl Fn([f32; 3]) -> [f32; 3] + Sync) -> Vec<u8> {
+        let mut out = vec![0u8; self.w * self.h * 8];
+        out.par_chunks_mut(self.w * 8)
+            .zip(self.px.par_chunks(self.w * 4))
+            .for_each(|(out, row)| {
+                for (bytes, pixel) in out.chunks_exact_mut(8).zip(row.chunks_exact(4)) {
+                    let clean = |v: f32| if v.is_nan() { 0.0 } else { v };
+                    let codes = signal([clean(pixel[0]), clean(pixel[1]), clean(pixel[2])]);
+                    for (channel, value) in codes.into_iter().enumerate() {
+                        let code = (value.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+                        bytes[channel * 2..channel * 2 + 2].copy_from_slice(&code.to_le_bytes());
+                    }
+                    bytes[6..8].copy_from_slice(&u16::MAX.to_le_bytes());
+                }
+            });
+        out
+    }
+
     /// This picture over black as 16-bit little-endian sRGB-encoded RGBA, for a master that keeps
     /// more than 8 bits.
     pub fn to_rgba16_over_black(&self) -> Vec<u8> {

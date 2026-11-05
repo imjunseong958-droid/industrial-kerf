@@ -80,7 +80,7 @@ media replace <id> <same arguments as media add>
                                         swap the file behind a media id; clips keep their timing and
                                         must still fit (length, streams, transition handles)
 media relink <id> path="…"  ·  media remove <id>
-sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>]  ·  sequence set|remove <id> …
+sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
 `snap=pause|cut [within=<amount>]` on trim, split, insert, and overwrite

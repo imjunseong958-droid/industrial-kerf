@@ -10,11 +10,10 @@
 //! (only when an HDR or log source enters an SDR working space and Auto Tone Map is on) → gamut
 //! compression (only when the source gamut is wider than the working gamut).
 //!
-//! **Output** ([`OutputTransform`]): working linear → display-referred SDR BT.709 for monitors
-//! (tone mapping from HDR working spaces, gamut mapping from wide gamut), or → encoded PQ/HLG
-//! signal for HDR exports. Out-of-gamut colours there are desaturated towards their luminance
-//! just enough to fit ([`desaturate_into_gamut`]), so in-gamut colours (e.g. BT.709 content in a
-//! BT.2020 working space) come back exactly.
+//! **Output** ([`HdrOutput`]): the working picture of an HDR sequence → display-referred SDR
+//! BT.709 for monitors and SDR files (tone mapping and gamut mapping), or → encoded PQ/HLG signal
+//! for HDR files. Out-of-gamut colours there are desaturated towards their luminance just enough
+//! to fit ([`desaturate_into_gamut`]), so in-gamut colours (e.g. BT.709 content) come back exactly.
 //!
 //! **Tone mapping** is the ITU-R BT.2390 EETF (Hermite knee in the PQ domain) applied to
 //! max(R,G,B) and used as a ratio on RGB, so hue and saturation are preserved. **Gamut
@@ -237,6 +236,35 @@ impl InputTransform {
         InputTransform { source: src, table: DecodeTable::for_curve(curve, range), matrix: to_f32(&m), identity_matrix, hlg, tone, compress, desaturate }
     }
 
+    /// Source → the working picture of an HDR sequence: BT.709 primaries, as everywhere, with what
+    /// lies past them kept as values below 0 and above 1, for [`HdrOutput`] to deliver. Log media,
+    /// which can run far past any display, is tone mapped to the HDR peak.
+    pub fn extended(src: ColorSpace, range: Range) -> Self {
+        let curve = src.curve();
+        let matrix = gamut_matrix(src.gamut(), Gamut::Bt709);
+        let hlg = (curve == Curve::Hlg).then(|| {
+            let l = Gamut::Bt2020.luma();
+            ([l[0] as f32, l[1] as f32, l[2] as f32], (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32)
+        });
+        let tone = match curve {
+            Curve::Log(log) => {
+                let peak = (log.peak_linear() * REFERENCE_WHITE_NITS).clamp(REFERENCE_WHITE_NITS, LOG_PEAK_NITS);
+                (peak > HDR_PEAK_NITS).then(|| ToneMap::new(peak, HDR_PEAK_NITS))
+            }
+            _ => None,
+        };
+        InputTransform {
+            source: src,
+            table: DecodeTable::for_curve(curve, range),
+            matrix: to_f32(&matrix),
+            identity_matrix: src.gamut() == Gamut::Bt709,
+            hlg,
+            tone,
+            compress: false,
+            desaturate: None,
+        }
+    }
+
     /// The per-pixel stage (input: the table's output).
     #[inline]
     pub fn apply(&self, mut c: [f32; 3]) -> [f32; 3] {
@@ -276,6 +304,65 @@ impl InputTransform {
     /// Signal → working linear for one RGB triple (table + pixel stage).
     pub fn convert(&self, rgb: [f32; 3]) -> [f32; 3] {
         self.apply(rgb.map(|v| self.table.lookup(v)))
+    }
+}
+
+/// The working picture of an HDR sequence on its way out.
+#[derive(Clone, Debug)]
+pub struct HdrOutput {
+    /// PQ; otherwise HLG.
+    pub pq: bool,
+    /// BT.709 primaries to BT.2020.
+    pub to_bt2020: [[f32; 3]; 3],
+    pub bt2020_luma: [f32; 3],
+    pub bt709_luma: [f32; 3],
+    /// From the HDR peak to SDR white.
+    pub tone: ToneMap,
+    /// The HLG OOTF's scale from working units, and its gamma.
+    pub hlg_scale: f32,
+    pub hlg_gamma: f32,
+}
+
+impl HdrOutput {
+    /// For a sequence in `space`; `None` when that is not an HDR signal.
+    pub fn new(space: ColorSpace) -> Option<Self> {
+        let pq = match space.curve() {
+            Curve::Pq => true,
+            Curve::Hlg => false,
+            _ => return None,
+        };
+        let weights = |gamut: Gamut| gamut.luma().map(|v| v as f32);
+        Some(HdrOutput {
+            pq,
+            to_bt2020: to_f32(&gamut_matrix(Gamut::Bt709, Gamut::Bt2020)),
+            bt2020_luma: weights(Gamut::Bt2020),
+            bt709_luma: weights(Gamut::Bt709),
+            tone: ToneMap::new(HDR_PEAK_NITS, REFERENCE_WHITE_NITS),
+            hlg_scale: (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32,
+            hlg_gamma: HLG_GAMMA as f32,
+        })
+    }
+
+    /// Working → the signal of an HDR file, full range, BT.2020.
+    pub fn signal(&self, c: [f32; 3]) -> [f32; 3] {
+        let c = desaturate_into_gamut(crate::spaces::apply3(&self.to_bt2020, c), self.bt2020_luma);
+        if self.pq {
+            return c.map(|v| pq_inverse_eotf(v * REFERENCE_WHITE_NITS as f32 / 10_000.0));
+        }
+        // The inverse of the OOTF in `InputTransform::apply`, for a 1000 cd/m² display.
+        let l = self.bt2020_luma;
+        let luma = l[0] * c[0] + l[1] * c[1] + l[2] * c[2];
+        if luma <= 0.0 {
+            return [0.0; 3];
+        }
+        let scene = (luma / self.hlg_scale).powf(1.0 / self.hlg_gamma);
+        let scale = scene.powf(1.0 - self.hlg_gamma) / self.hlg_scale;
+        c.map(|v| crate::hlg_oetf((v * scale).min(1.0)))
+    }
+
+    /// Working → linear SDR BT.709, for monitors and SDR files.
+    pub fn sdr(&self, c: [f32; 3]) -> [f32; 3] {
+        desaturate_into_gamut(self.tone.apply(c), self.bt709_luma)
     }
 }
 
@@ -438,5 +525,46 @@ mod tests {
         let red = t.convert([1.0, 0.0, 0.0]);
         // 709 red in 2020 (BT.2087)
         assert!((red[0] - 0.6274).abs() < 1e-3 && (red[1] - 0.0691).abs() < 1e-3 && (red[2] - 0.0164).abs() < 1e-3);
+    }
+
+    #[test]
+    fn hdr_output_undoes_hdr_input() {
+        for space in [ColorSpace::Rec2100Pq, ColorSpace::Rec2100Hlg] {
+            let input = InputTransform::extended(space, Range::Full);
+            let output = HdrOutput::new(space).expect("HDR");
+            for c in [[1.0, 1.0, 1.0], [0.2, 0.5, 0.1], [4.0, 3.0, 2.0], [0.02, 0.02, 0.03]] {
+                let back = input.convert(output.signal(c));
+                for k in 0..3 {
+                    assert!((back[k] - c[k]).abs() < 2e-2 * (1.0 + c[k]), "{space:?} {c:?} came back {back:?}");
+                }
+            }
+        }
+        assert!(HdrOutput::new(ColorSpace::Rec709).is_none());
+    }
+
+    #[test]
+    fn sdr_white_lands_where_bt2408_says() {
+        let white = [1.0, 1.0, 1.0];
+        let pq = HdrOutput::new(ColorSpace::Rec2100Pq).expect("PQ").signal(white)[0];
+        assert!((pq - 0.58).abs() < 0.005, "{pq}");
+        let hlg = HdrOutput::new(ColorSpace::Rec2100Hlg).expect("HLG").signal(white)[0];
+        assert!((hlg - 0.75).abs() < 0.01, "{hlg}");
+    }
+
+    #[test]
+    fn wide_colors_survive_the_trip_through_the_working_picture() {
+        // Pure BT.2020 green lies outside BT.709, so it goes negative in the working picture.
+        let input = InputTransform::extended(ColorSpace::Rec2100Pq, Range::Full);
+        let output = HdrOutput::new(ColorSpace::Rec2100Pq).expect("PQ");
+        let signal = [0.1, 0.6, 0.1];
+        let working = input.convert(signal);
+        assert!(working[0] < 0.0, "{working:?}");
+        let back = output.signal(working);
+        for k in 0..3 {
+            assert!((back[k] - signal[k]).abs() < 0.01, "{back:?}");
+        }
+        // For a monitor it fits inside BT.709, and highlights come down to SDR white.
+        assert!(output.sdr(working).iter().all(|v| *v >= 0.0));
+        assert!(output.sdr([4.9, 4.9, 4.9])[0] <= 1.001);
     }
 }

@@ -28,7 +28,9 @@ use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::EffectRun;
 use kerf_draw::text::{self, Justify, Text};
+use kerf_color::HdrOutput;
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
+use rayon::prelude::*;
 use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
@@ -57,6 +59,8 @@ type Result<T> = std::result::Result<T, ComposeError>;
 
 /// A program ready to draw.
 pub(crate) struct Drawing {
+    /// How the program leaves, when it is an HDR sequence.
+    hdr: Option<HdrOutput>,
     /// The program's sequence first, then the sequences nested in it.
     sequences: Vec<SequencePlan>,
     pictures: Pictures,
@@ -249,6 +253,7 @@ impl Drawing {
             clips: Vec::new(),
             nesting: vec![top.id.clone()],
             effects: Vec::new(),
+            hdr: HdrOutput::new(top.color).is_some(),
         };
         // The program's sequence is planned first, so it is the first.
         builder.sequences.push(None);
@@ -257,6 +262,7 @@ impl Drawing {
         let library =
             filmcraft::instance::library(&builder.effects).map_err(ComposeError::Invalid)?;
         Ok(Self {
+            hdr: HdrOutput::new(top.color),
             sequences: builder
                 .sequences
                 .into_iter()
@@ -315,15 +321,19 @@ impl Drawing {
             return frame;
         }
         let image = self.draw(0, at, scale);
+        let rgba = match &self.hdr {
+            Some(output) => image.to_signal16_over_black(|c| output.signal(c)),
+            None => image.to_rgba16_over_black(),
+        };
         Frame {
             width: image.w as u32,
             height: image.h as u32,
-            rgba: image.to_rgba16_over_black(),
+            rgba,
         }
     }
 
     fn draw_frame(&self, at: Time, scale: f64) -> Frame {
-        if scale >= 1.0 {
+        if scale >= 1.0 && self.hdr.is_none() {
             if let Some(frame) = self.plain_frame(at) {
                 return frame;
             }
@@ -332,7 +342,13 @@ impl Drawing {
         if let Some(frame) = self.gpu_frame(at, scale) {
             return frame;
         }
-        let image = self.draw(0, at, scale);
+        let mut image = self.draw(0, at, scale);
+        if let Some(output) = &self.hdr {
+            image.px.par_chunks_mut(4).for_each(|pixel| {
+                let sdr = output.sdr([pixel[0], pixel[1], pixel[2]]);
+                pixel[..3].copy_from_slice(&sdr);
+            });
+        }
         Frame {
             width: image.w as u32,
             height: image.h as u32,
@@ -344,6 +360,7 @@ impl Drawing {
     pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
         let mut hash = DefaultHasher::new();
         scale.clamp(1.0 / 16.0, 1.0).to_bits().hash(&mut hash);
+        self.hdr.as_ref().map(|output| output.pq).hash(&mut hash);
         self.captions.hash(&mut hash);
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
@@ -1240,6 +1257,8 @@ struct Builder<'a> {
     nesting: Vec<Id>,
     /// The effects of every clip planned, for the LUT files they name.
     effects: Vec<Effect>,
+    /// The program is an HDR sequence, so footage keeps what SDR could not show.
+    hdr: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -1553,7 +1572,7 @@ impl<'a> Builder<'a> {
                     alpha: video.alpha,
                     deep: video
                         .is_deep()
-                        .then(|| crate::footage::input_transform(video.color)),
+                        .then(|| crate::footage::input_transform(video.color, self.hdr)),
                     source_in: *source_in,
                     speed: *speed,
                     duration: clip.duration,

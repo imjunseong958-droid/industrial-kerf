@@ -18,7 +18,7 @@
 use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
-    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size, pinned,
+    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_sequence_color, parse_size, pinned,
     sequence_fields, sequence_line, take_mask_shape, take_role, take_sync, word_or_quote,
 };
 use crate::facts::{Facts, NoFacts, Snap};
@@ -502,6 +502,7 @@ impl Script<'_> {
                         rate,
                         size: fields.take_with("size", parse_size)?,
                         sample_rate: fields.take_with("audio", parse_sample_rate)?,
+                        color: fields.take_with("color", parse_sequence_color)?,
                         start: fields.take_with("start", |t| {
                             parse_timecode(t, start_rate).map_err(|e| e.to_string())
                         })?,
@@ -1683,6 +1684,9 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             }
             if let Some(sample_rate) = change.sample_rate {
                 write!(text, " audio={sample_rate}").unwrap();
+            }
+            if let Some(color) = change.color {
+                write!(text, " color={}", color.id()).unwrap();
             }
             if let Some((start, drop_frame)) = change.start {
                 let rate = change

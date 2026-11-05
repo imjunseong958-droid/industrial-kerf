@@ -115,6 +115,12 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   hand-written script, takes this Kerf's. A version newer than this Kerf's
   is an error, and an older one it still reads is drawn by the current one
   with a warning ([looks.md](looks.md#versions)).
+- `sequence` takes `color=rec2100-pq` or `color=rec2100-hlg` to finish in HDR (the default is
+  Rec.709, which is not written). 1.0 stays SDR white at 203 cd/m², so SDR clips keep their
+  look and HDR footage keeps its highlights. The ProRes master carries the HDR signal; the
+  monitor, stills, scopes, and H.264 files get it tone mapped to Rec.709. The program's own
+  sequence decides this for what is nested in it. For now `color.lumetri`, `color.levels`, and
+  `color.tint` clip highlights to SDR white there, even at their defaults.
 - `mask` lines are a picture clip's masks, combined in order. The outline is
   one of `rect=left,top,right,bottom`, `ellipse=x,y,radius across,radius
   down`, or `points="x,y x,y …"` (with `closed=false` for an open path), in

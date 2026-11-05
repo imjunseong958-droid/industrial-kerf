@@ -416,6 +416,7 @@ pub(crate) fn empty_project() -> Project {
         width: 1920,
         height: 1080,
         sample_rate: 48_000,
+        color: Default::default(),
         start: Time::ZERO,
         tracks: Vec::new(),
         markers: Vec::new(),
@@ -1624,6 +1625,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                     rate,
                     size,
                     sample_rate: None,
+                    color: None,
                     start,
                 },
             }

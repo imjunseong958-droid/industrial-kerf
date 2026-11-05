@@ -544,6 +544,7 @@ fn merge_sequence(
         ),
         width,
         height,
+        color: pick("color", &base.color, &ours.color, &theirs.color, clashes),
         sample_rate: pick(
             "sample rate",
             &base.sample_rate,
@@ -1528,6 +1529,7 @@ fn sequence_changes(before: &Sequence, after: &Sequence) -> Vec<String> {
         &before.sample_rate,
         &after.sample_rate,
     );
+    differs(&mut fields, "color", &before.color, &after.color);
     differs(&mut fields, "start", &before.start, &after.start);
     fields
 }

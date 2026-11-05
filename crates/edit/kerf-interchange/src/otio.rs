@@ -329,6 +329,7 @@ pub fn from_timeline(
         width,
         height,
         sample_rate: 48_000,
+        color: Default::default(),
         start: rate.time_of(timeline.start),
         tracks: Vec::new(),
         markers: Vec::new(),

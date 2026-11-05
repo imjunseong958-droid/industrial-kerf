@@ -655,7 +655,20 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
     })
 }
 
-/// `[name=] rate= size= [audio=] [start=]`, with no tracks.
+/// A sequence's `color=`: Rec.709 or an HDR signal, which is what a finished file can be.
+pub(crate) fn parse_sequence_color(text: &str) -> Result<kerf_model::ColorSpace, String> {
+    use kerf_model::ColorSpace;
+    match ColorSpace::from_id(text) {
+        Some(color @ (ColorSpace::Rec709 | ColorSpace::Rec2100Pq | ColorSpace::Rec2100Hlg)) => {
+            Ok(color)
+        }
+        _ => Err(format!(
+            "`{text}` is not a sequence color; use rec709, rec2100-pq, or rec2100-hlg"
+        )),
+    }
+}
+
+/// `[name=] rate= size= [audio=] [color=] [start=]`, with no tracks.
 pub(crate) fn sequence_fields(fields: &mut Fields<'_>, id: Id) -> Result<Sequence, Diagnostic> {
     let line = fields.line();
     let name = fields.take_text("name")?.unwrap_or_default().to_owned();
@@ -668,6 +681,9 @@ pub(crate) fn sequence_fields(fields: &mut Fields<'_>, id: Id) -> Result<Sequenc
     let sample_rate = fields
         .take_with("audio", parse_sample_rate)?
         .unwrap_or(48_000);
+    let color = fields
+        .take_with("color", parse_sequence_color)?
+        .unwrap_or_default();
     let (start, drop_frame) = fields
         .take_with("start", |text| {
             parse_timecode(text, rate).map_err(|e| e.to_string())
@@ -681,6 +697,7 @@ pub(crate) fn sequence_fields(fields: &mut Fields<'_>, id: Id) -> Result<Sequenc
         width,
         height,
         sample_rate,
+        color,
         start,
         tracks: Vec::new(),
         markers: Vec::new(),
@@ -917,8 +934,13 @@ pub(crate) fn media_line(media: &Media) -> String {
 
 pub(crate) fn sequence_line(sequence: &Sequence) -> String {
     let clock = Clock::of_sequence(sequence);
+    let color = if sequence.color == kerf_model::ColorSpace::default() {
+        String::new()
+    } else {
+        format!(" color={}", sequence.color.id())
+    };
     format!(
-        "sequence {} name={} rate={} size={}x{} audio={} start={}",
+        "sequence {} name={} rate={} size={}x{} audio={}{color} start={}",
         sequence.id,
         quote(&sequence.name),
         sequence.rate,
@@ -1572,5 +1594,21 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
             let errors = parse_document(text, Catalog::builtin()).unwrap_err();
             assert!(errors[0].message.contains(needle), "{text:?}: {errors:?}");
         }
+    }
+
+    #[test]
+    fn a_sequence_color_is_written_only_when_it_is_not_rec709() {
+        let text = |color: &str| {
+            format!("kerf 1\nproject name=\"t\"\nsequence s1 name=\"\" rate=24 size=64x36 audio=48000{color} start=00:00:00:00\n")
+        };
+        let hdr = parse_document(&text(" color=rec2100-pq"), Catalog::builtin()).expect("parses");
+        assert_eq!(hdr.project.sequences[0].color, kerf_model::ColorSpace::Rec2100Pq);
+        let printed = print_document(&hdr.project, Catalog::builtin(), PrintOptions::default());
+        assert!(printed.contains("audio=48000 color=rec2100-pq start="), "{printed}");
+        let plain = parse_document(&text(""), Catalog::builtin()).expect("parses");
+        assert!(!print_document(&plain.project, Catalog::builtin(), PrintOptions::default())
+            .contains("color="));
+        // Log is something footage is in, not something a file is finished in.
+        assert!(parse_document(&text(" color=slog3"), Catalog::builtin()).is_err());
     }
 }

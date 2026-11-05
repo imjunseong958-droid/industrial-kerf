@@ -102,6 +102,8 @@ pub struct Sequence {
     pub width: u32,
     pub height: u32,
     pub sample_rate: u32,
+    /// What it is finished in: Rec.709, or an HDR signal.
+    pub color: ColorSpace,
     /// Timecode of the first frame, conventionally 01:00:00:00.
     pub start: Time,
     pub tracks: Vec<Track>,
@@ -890,6 +892,7 @@ mod tests {
             width: 320,
             height: 180,
             sample_rate: 48_000,
+            color: Default::default(),
             start: Time::ZERO,
             tracks: vec![track],
             markers: Vec::new(),

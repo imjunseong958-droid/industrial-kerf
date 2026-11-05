@@ -1971,6 +1971,7 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
                 width: 320,
                 height: 180,
                 sample_rate: 48_000,
+                color: Default::default(),
                 start: Time::ZERO,
                 tracks: Vec::new(),
                 markers: Vec::new(),

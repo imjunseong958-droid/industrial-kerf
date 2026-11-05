@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use kerf_compose::{ComposeOptions, Compositor, Frame};
-use kerf_model::{Rate, Time};
+use kerf_model::{ColorSpace, Rate, Time};
 use serde::{Deserialize, Serialize};
 
 use crate::encoder::{
@@ -132,6 +132,11 @@ fn hardware_or_software_codec(
 /// range, with the frames tagged so the encoder writes the tags too.
 const MASTER_CONVERT: &str = "scale=out_color_matrix=bt709:out_range=tv,\
     setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv";
+/// The same for an HDR master, whose frames come as its signal.
+const MASTER_CONVERT_PQ: &str = "scale=out_color_matrix=bt2020nc:out_range=tv,\
+    setparams=colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084:range=tv";
+const MASTER_CONVERT_HLG: &str = "scale=out_color_matrix=bt2020nc:out_range=tv,\
+    setparams=colorspace=bt2020nc:color_primaries=bt2020:color_trc=arib-std-b67:range=tv";
 
 /// The review copy's video bit rate.
 pub const REVIEW_BITRATE: &str = "12M";
@@ -242,7 +247,7 @@ struct Encoding {
     output: Vec<String>,
 }
 
-fn encoding(opts: &RenderOptions) -> Result<Encoding> {
+fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
     let plain = |video| Encoding {
         video,
         pix_fmt: "yuv420p",
@@ -276,21 +281,30 @@ fn encoding(opts: &RenderOptions) -> Result<Encoding> {
         }
         RenderPreset::ProRes422Hq => {
             let (video, pix_fmt) = prores_hq_args(opts.prefer_hardware, opts.force_software);
+            let (matrix, primaries, transfer, convert) = match color {
+                ColorSpace::Rec2100Pq => ("bt2020nc", "bt2020", "smpte2084", MASTER_CONVERT_PQ),
+                ColorSpace::Rec2100Hlg => {
+                    ("bt2020nc", "bt2020", "arib-std-b67", MASTER_CONVERT_HLG)
+                }
+                _ => ("bt709", "bt709", "bt709", MASTER_CONVERT),
+            };
             let mut output: Vec<String> = [
                 "-c:a",
                 "pcm_s24le",
                 "-colorspace",
-                "bt709",
+                matrix,
                 "-color_primaries",
-                "bt709",
+                primaries,
                 "-color_trc",
-                "bt709",
+                transfer,
                 "-color_range",
                 "tv",
                 // The ProRes frame headers carry the tags too, whichever
                 // way the picture was drawn.
                 "-bsf:v",
-                "prores_metadata=color_primaries=bt709:color_trc=bt709:colorspace=bt709",
+                &format!(
+                    "prores_metadata=color_primaries={primaries}:color_trc={transfer}:colorspace={matrix}"
+                ),
                 "-f",
                 "mov",
             ]
@@ -303,7 +317,7 @@ fn encoding(opts: &RenderOptions) -> Result<Encoding> {
             Ok(Encoding {
                 video,
                 pix_fmt,
-                convert: Some(MASTER_CONVERT),
+                convert: Some(convert),
                 output,
             })
         }
@@ -477,7 +491,14 @@ pub fn render_program_args(
             ..ProgramOptions::default()
         },
     )?;
-    let encoding = encoding(opts)?;
+    if kerf_core::program::program_sequence(project, sequence)
+        .is_ok_and(|top| top.color != ColorSpace::default())
+    {
+        return Err(EngineError::msg(
+            "the FFmpeg graph draws in Rec.709; an HDR sequence needs the compositor",
+        ));
+    }
+    let encoding = encoding(opts, ColorSpace::default())?;
     let mut args = crate::ffmpeg::program_decode_prefix(&compiled.argv);
     args.extend(compiled.argv.iter().skip(1).cloned());
     args.extend(encoding.video);
@@ -597,7 +618,9 @@ fn composited_render(
         ((f64::from(canvas.0) * scale).round() as u32).max(1),
         ((f64::from(canvas.1) * scale).round() as u32).max(1),
     );
-    let encoding = encoding(opts)?;
+    let color = kerf_core::program::program_sequence(project, sequence)
+        .map_or(ColorSpace::default(), |top| top.color);
+    let encoding = encoding(opts, color)?;
     // A deeper file is worth deeper frames: 8 bits would only be stretched to fill it.
     let deep = encoding.pix_fmt != "yuv420p";
     let mut args: Vec<String> = sound.argv.iter().skip(1).cloned().collect();

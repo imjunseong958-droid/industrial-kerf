@@ -578,6 +578,7 @@ pub fn instantiate(
                     rate: Some(sequence.rate),
                     size: Some((sequence.width, sequence.height)),
                     sample_rate: Some(sequence.sample_rate),
+                    color: Some(sequence.color),
                     start: Some((sequence.start, sequence.drop_frame)),
                 },
             });
