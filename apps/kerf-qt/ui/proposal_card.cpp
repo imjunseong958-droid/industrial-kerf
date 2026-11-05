@@ -342,6 +342,12 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     auto *footer = new QHBoxLayout(m_footer);
     footer->setContentsMargins(0, 8, 0, 0);
     footer->setSpacing(8);
+    m_watch = new ui::Button(QString(), ui::Button::Kind::Secondary);
+    m_watch->setObjectName(QStringLiteral("proposalWatch"));
+    m_watch->setTip(QStringLiteral("Play only what this proposal changes"));
+    m_watch->hide();
+    connect(m_watch, &QAbstractButton::clicked, this, &ProposalCard::watchRequested);
+    m_layout->addWidget(m_watch);
     m_preview = new ui::CheckBox(QStringLiteral("Preview"));
     m_preview->setTip(QStringLiteral("Preview the proposal on the program"));
     connect(m_preview, &QAbstractButton::toggled, this, &ProposalCard::previewToggled);
@@ -488,6 +494,12 @@ void ProposalCard::setScriptShown(bool shown) {
 
 bool ProposalCard::scriptShown() const { return m_script->isChecked(); }
 
+void ProposalCard::setWatchLength(double seconds) {
+    m_hasWatch = seconds > 0.0;
+    m_watch->setText(QStringLiteral("Watch what changed · %1 s").arg(int(std::ceil(seconds))));
+    updateParts();
+}
+
 void ProposalCard::setPreview(bool on) {
     const QSignalBlocker blocker(m_preview);
     m_preview->setChecked(on);
@@ -541,6 +553,7 @@ void ProposalCard::updateParts() {
     m_changes->setVisible(card && m_open);
     m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked());
     m_footer->setVisible(card && m_open);
+    m_watch->setVisible(card && m_open && m_hasWatch);
     m_settledLabel->setVisible(m_settled);
     m_reject->setVisible(!m_guest);
     m_accept->setVisible(!m_guest);

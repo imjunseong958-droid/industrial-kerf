@@ -65,6 +65,7 @@ public:
     bool accept(const QString &proposalId);
     bool reject(const QString &proposalId);
     bool preview(const QString &proposalId, bool on);
+    bool previewRange(const QString &proposalId, double start, double duration);
     bool requestColour(const QString &versionId);
     bool exportComments(const QString &format, const QString &path = QString());
     bool convertToMarker(const QString &commentId);

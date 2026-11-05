@@ -2,6 +2,7 @@
 
 #include "components.h"
 #include "composer.h"
+#include "change_reel.h"
 #include "design_tokens.h"
 #include "icons.h"
 #include "proposal_card.h"
@@ -793,6 +794,11 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     card->setOpen(state.open);
     card->setScriptShown(state.script);
     card->setPreview(!m_previewProposal.isEmpty() && proposal.hasVersion(m_previewProposal));
+    {
+        double end = 0.0;
+        for (const ReviewModel::ClipChange &change : proposal.changes) end = std::max(end, change.removed ? change.oldEnd : change.newEnd);
+        card->setWatchLength(reel::total(reel::plan(proposal.changes, end, end)));
+    }
     card->setPrimary(pinned || proposal.blocking);
     const ReviewModel::Comment &root = thread.root;
     if (root.author.isPerson() && !m_model->isOwn(root) && thread.origin == ReviewModel::Origin::Record)
@@ -829,6 +835,7 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
         scheduleRebuild();
     });
     connect(card, &ProposalCard::acceptRequested, this, &ChatPanel::acceptRequested);
+    connect(card, &ProposalCard::watchRequested, this, [this, card] { emit changedPartsRequested(card->shownId()); });
     connect(card, &ProposalCard::rejectRequested, this, &ChatPanel::rejectRequested);
     if (state.open && card->hasColour() && !m_colourRequested.contains(versionId)) {
         m_colourRequested.insert(versionId);

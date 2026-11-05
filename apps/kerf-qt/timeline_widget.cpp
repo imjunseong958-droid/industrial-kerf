@@ -842,6 +842,13 @@ bool TimelineWidget::event(QEvent *event) {
     return true;
 }
 
+void TimelineWidget::setAgentCursor(double seconds) {
+    if (std::isnan(seconds) && std::isnan(m_agentCursor)) return;
+    if (seconds == m_agentCursor) return;
+    m_agentCursor = seconds;
+    update();
+}
+
 void TimelineWidget::paintEvent(QPaintEvent *event) {
     QPainter p(this);
     const QRegion region = event->region();
@@ -2078,6 +2085,17 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     if (skimming) {
         const int skimX = static_cast<int>(std::floor(timeToX(m_skimmerTime)));
         p.fillRect(QRect(skimX, origin.y() + kRulerMarkerRow, 1, height() - origin.y() - kRulerMarkerRow), C(tk::ink2));
+    }
+    if (!std::isnan(m_agentCursor)) {
+        const int agentX = static_cast<int>(std::floor(timeToX(m_agentCursor)));
+        const int top = origin.y() + kRulerMarkerRow;
+        p.fillRect(QRect(agentX, top, 2, height() - top), C(tk::accentInk));
+        const QString name = QStringLiteral("Kerf");
+        p.setFont(tk::font(tk::metaStrong));
+        const QRect label(agentX + 2, top, p.fontMetrics().horizontalAdvance(name) + 8, 16);
+        p.fillRect(label, C(tk::accentInk));
+        p.setPen(C(tk::surround));
+        p.drawText(label, Qt::AlignCenter, name);
     }
     // The playhead's head, 9 x 12 at the ruler's 13 (the kit's playhead-head).
     icons::paint(p, QStringLiteral("playhead-head"), QRectF(playX - 4, origin.y() + 13, 9, 12), C(tk::playhead), 12);

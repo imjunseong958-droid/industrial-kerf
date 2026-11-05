@@ -176,7 +176,7 @@ private slots:
         QStringList rows;
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
         const QStringList expected{QStringLiteral("Media"), QStringLiteral("Effects and titles"), QStringLiteral("Inspector"), QStringLiteral("|"),
-                                   QStringLiteral("Sidebar"), QStringLiteral("Picture"), QStringLiteral("Timeline"), QStringLiteral("|"),
+                                   QStringLiteral("Sidebar"), QStringLiteral("Picture"), QStringLiteral("Timeline"), QStringLiteral("Follow Kerf"), QStringLiteral("|"),
                                    QStringLiteral("Scopes, loudness, QC"), QStringLiteral("Deliver"), QStringLiteral("|"),
                                    QStringLiteral("Import…"), QStringLiteral("Sequence settings…"), QStringLiteral("Settings…"), QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);

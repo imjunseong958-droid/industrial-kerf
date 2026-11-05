@@ -9,6 +9,7 @@
 #include "effects_panel.h"
 #include "presets_panel.h"
 #include "project_launcher.h"
+#include "change_reel.h"
 #include "project_sidebar.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
@@ -226,7 +227,7 @@ void MainWindow::queueSeek(double time) {
     m_hasPendingHoverSeek = false;
     m_hoverSkimming = false;
     m_timeline->clearSkimmer();
-    m_pendingSeek = std::clamp(time, 0.0, m_duration);
+    m_pendingSeek = std::clamp(time, 0.0, std::max(m_duration, m_seekLimit));
     m_pendingSeekScrub = scrubFromShownFrame(m_pendingSeek);
     m_hasPendingSeek = true;
     m_pointerOwnsPlayhead = true;
@@ -927,6 +928,7 @@ void MainWindow::buildShell() {
     m_deliverTray = new DeliverTray(nullptr, m_bus);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
     buildSidebar();
+    buildAgentViews();
     m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
     m_shell->setTrays(m_finishTray, m_deliverTray);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
@@ -1060,6 +1062,8 @@ void MainWindow::setupActions() {
             syncPanelCommands();
         } else if (id == QStringLiteral("view.sidebar") || id == QStringLiteral("view.picture") || id == QStringLiteral("view.timeline")) {
             setPaneOpen(id, checked);
+        } else if (id == QStringLiteral("view.followKerf")) {
+            setFollowKerf(checked);
         }
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
@@ -1757,6 +1761,7 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             m_previewRequired = false;
             showStatus(message.isEmpty() ? QStringLiteral("Live preview") : QStringLiteral("Live preview: ") + message, 4000);
         }
+        m_changeReel->followPreview(event);
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
@@ -1841,6 +1846,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
     applyPendingLink();
     followContentWithPanes();
+    followLiveProposal();
+    refreshCompare();
     runStart();
 }
 
@@ -2034,6 +2041,7 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
         {QStringLiteral("view.picture"), m_shell->panes().picture},
         {QStringLiteral("view.timeline"), m_shell->panes().timeline},
+        {QStringLiteral("view.followKerf"), m_followKerf},
     };
     for (const auto &[id, checked] : states)
         if (QAction *action = m_commands->action(id)) {

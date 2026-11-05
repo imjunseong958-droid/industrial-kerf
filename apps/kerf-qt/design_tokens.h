@@ -223,6 +223,7 @@ constexpr int rail = 400;               // the conversation, beside an open pane
 constexpr int railLeast = 320;          // its least width
 constexpr int workLeast = 600;          // what it leaves the panel before it gives way
 constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself
+constexpr int reelBar = 40;             // the strip over the picture while watching changes
 constexpr int timelineWideLeast = 260;  // the timeline's least height under a wide picture
 constexpr double timelineWideShare = 0.5625; // and its share of the content's height there
 constexpr int pictureTransport = 160;   // the transport's block under a vertical picture

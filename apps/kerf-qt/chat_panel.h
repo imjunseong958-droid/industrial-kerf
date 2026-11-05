@@ -271,6 +271,8 @@ signals:
     void rejectRequested(const QString &proposalId);
     // The Preview checkbox, or an older version chosen while previewing.
     void previewRequested(const QString &proposalId, bool on);
+    // A card's Watch what changed.
+    void changedPartsRequested(const QString &proposalId);
     // A card's Versions menu chose the version it shows.
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     // A colour card opened without its before/after frames.

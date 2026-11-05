@@ -126,6 +126,9 @@ public:
     bool isOpen() const { return m_open; }
     void setScriptShown(bool shown);
     bool scriptShown() const;
+    // How long its changes take to watch, in seconds; none hides the button.
+    void setWatchLength(double seconds);
+    ui::Button *watchButton() const { return m_watch; }
     void setPreview(bool on);
     bool previewOn() const;
     // Accept is primary for the pinned or blocking proposal, else secondary.
@@ -170,6 +173,7 @@ signals:
     void openToggled(bool open);
     void scriptToggled(bool shown);
     void previewToggled(bool on);
+    void watchRequested();
     void versionChosen(const QString &proposalId);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
@@ -208,6 +212,8 @@ private:
     QLabel *m_colourLegend = nullptr;
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
+    ui::Button *m_watch = nullptr;
+    bool m_hasWatch = false;
     ui::CheckBox *m_preview = nullptr;
     ui::GhostButton *m_script = nullptr;
     QLabel *m_wait = nullptr;

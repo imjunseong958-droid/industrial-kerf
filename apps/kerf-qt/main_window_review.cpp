@@ -283,6 +283,14 @@ bool ReviewWiring::post() {
     const double at = w->m_playhead;
     const QJsonArray drawing = composer->drawing();
     bool sent = false;
+    if (composer->versionsOn() && parent.isEmpty()) {
+        if (w->m_agentBusy || !w->sendVersions(text)) return false;
+        composer->versionsButton()->setChecked(false);
+        composer->clear();
+        m_panel->setReplyTarget(QString());
+        w->updateChatControls();
+        return true;
+    }
     if (review::addressesKerf(text)) {
         if (w->m_agentBusy) return false;
         // About the replied thread's mark, or the playhead.
@@ -422,6 +430,13 @@ bool ReviewWiring::preview(const QString &proposalId, bool on) {
         command.insert(QStringLiteral("duration"), length);
     }
     return m_bus->send(command);
+}
+
+bool ReviewWiring::previewRange(const QString &proposalId, double start, double duration) {
+    return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")},
+                                   {QStringLiteral("proposalId"), proposalId},
+                                   {QStringLiteral("start"), start},
+                                   {QStringLiteral("duration"), duration}});
 }
 
 bool ReviewWiring::requestColour(const QString &versionId) {
@@ -857,7 +872,10 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
         m_chat->setTurnBusy(busy);
-        if (!busy) m_chat->finishTurn();
+        if (!busy) {
+            m_chat->finishTurn();
+            endAgentFollow();
+        }
         updateChatControls();
             updateCommandStates();
     } else if (type == QStringLiteral("agent_state")) {
@@ -872,6 +890,10 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         }
     } else if (type == QStringLiteral("agent_next")) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
+    } else if (type == QStringLiteral("agent_focus")) {
+        followAgentFocus(event);
+    } else if (type == QStringLiteral("agent_version")) {
+        followVersion(event);
     } else {
         return false;
     }

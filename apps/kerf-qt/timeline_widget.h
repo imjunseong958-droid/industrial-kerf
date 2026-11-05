@@ -141,6 +141,9 @@ public:
     double fps() const { return m_fps; }
     void setArtwork(MediaArtwork *artwork);
     void clearSkimmer();
+    // Where Kerf is working, drawn over the lanes with its name; NaN for nowhere.
+    void setAgentCursor(double seconds);
+    double agentCursor() const { return m_agentCursor; }
     void setTool(TimelineTool tool);
     TimelineTool tool() const { return m_tool; }
     // Dragged edges snap to clip edges, markers, the playhead, and the start.
@@ -531,6 +534,7 @@ private:
     double m_fps = 24.0;
     double m_playhead = 0.0;
     double m_skimmerTime = 0.0;
+    double m_agentCursor = std::numeric_limits<double>::quiet_NaN();
     double m_hoverFrame = -1.0;
     double m_zoom = 1.0;
     int m_fitWidth = 0;

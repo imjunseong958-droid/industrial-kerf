@@ -45,9 +45,11 @@ struct Panes {
     bool sidebar = true;
     bool picture = true;
     bool timeline = true;
+    // Watching a proposal's changes: a strip over the picture.
+    bool reel = false;
     bool panelOpen() const { return picture || timeline; }
     bool operator==(const Panes &other) const {
-        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline;
+        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline && reel == other.reel;
     }
 };
 
@@ -60,6 +62,7 @@ struct Rects {
     bool wide = true;
     QRect sidebar;
     QRect panel;
+    QRect reel;
     QRect slot;
     QRect picture;
     QRect transport;
@@ -90,6 +93,12 @@ public:
 
     void setRegions(QWidget *picture, QWidget *conversation, QWidget *timeline);
     void setSidebar(QWidget *sidebar);
+    // The strip over the picture while watching a proposal's changes.
+    void setReelBar(QWidget *bar);
+    // The versions of a request, over the timeline while they show.
+    void setCompare(QWidget *compare);
+    void setCompareShown(bool shown);
+    bool compareShown() const { return m_compareShown; }
     // The block under the picture; hidden while the timeline's strip carries
     // the transport.
     void setTransport(QWidget *transport);
@@ -141,6 +150,9 @@ private:
     bool takesEscape(QObject *watched, QEvent *event);
     bool m_filtering = false;
     QWidget *m_sidebar = nullptr;
+    QWidget *m_reelBar = nullptr;
+    QWidget *m_compare = nullptr;
+    bool m_compareShown = false;
     QWidget *m_picture = nullptr;
     QWidget *m_conversation = nullptr;
     QWidget *m_timeline = nullptr;

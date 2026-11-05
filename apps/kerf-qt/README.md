@@ -203,6 +203,24 @@ conversation shows the picture, and Media and Effects show the panel, so a drag
 has somewhere to land. The toolbar's two pane buttons, ⌥⌘P and ⌥⌘T, open and close
 the picture and the timeline.
 
+**Watching Kerf work.** While Kerf works it refreshes the timeline after each
+`edit`, so its proposal grows there as it is built, and a blue Kerf cursor on the
+timeline shows where it is: what a tool looks at, or the newest change. With Follow
+Kerf on (⌥⌘F, the toolbar's eye; its choice is kept) the picture goes there too,
+unless something is playing.
+
+**Watching what changed** (`ui/change_reel.h`). A proposal card's Watch what changed
+plays only the stretches its changes touch, two seconds either side, one after
+another, with a strip over the picture: where you are, previous and next, Before
+and After, and Exit. After plays the proposal's rendered preview, and Before the
+program as it is.
+
+**Versions** (`ui/compare_view.h`). With the composer's branch button on, Send has
+three agents make their own version of the request at once. Each stages its own
+proposal in a thread of its own, and the versions lie over the timeline side by
+side, leaving the picture free: Watch plays what one changes, and Use this accepts
+it and rejects the others.
+
 **The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) lists the recent
 project folders that still exist, the current one unfolded to New conversation and
 its conversations, the review log's threads, titled by their first line. A

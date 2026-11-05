@@ -1112,6 +1112,10 @@ pub static COMMANDS: &[Command] = &[
         frontend(menu(command("view.timeline", "Timeline", always), Menu::View, 0)),
         &["Ctrl+Alt+T"],
     )),
+    checkable(keys(
+        frontend(menu(command("view.followKerf", "Follow Kerf", always), Menu::View, 0)),
+        &["Ctrl+Alt+F"],
+    )),
     // The program viewer's switches.
     checkable(keys(
         frontend(menu(

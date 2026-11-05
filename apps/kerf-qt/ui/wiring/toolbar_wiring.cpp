@@ -152,6 +152,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     row->addStretch(1);
 
     // The right group: the panel's panes, the format, then Export.
+    w->m_followButton = paneButton(QStringLiteral("g-eye"), "paneFollowKerf", QStringLiteral("Follow Kerf"), QStringLiteral("view.followKerf"));
+    w->m_followButton->setOn(w->m_followKerf);
+    row->addWidget(w->m_followButton);
     w->m_pictureButton = paneButton(QStringLiteral("g-picture"), "panePicture", QStringLiteral("Picture"), QStringLiteral("view.picture"));
     row->addWidget(w->m_pictureButton);
     w->m_timelineButton = paneButton(QStringLiteral("g-timeline"), "paneTimeline", QStringLiteral("Timeline"), QStringLiteral("view.timeline"));
@@ -234,7 +237,8 @@ void ToolbarWiring::syncCommands() {
     // The panes' buttons name their commands' keys.
     for (const auto &[button, id, name] : {std::tuple<ui::IconButton *, QString, QString>{w->m_sidebarButton, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar")},
                                            {w->m_pictureButton, QStringLiteral("view.picture"), QStringLiteral("Picture")},
-                                           {w->m_timelineButton, QStringLiteral("view.timeline"), QStringLiteral("Timeline")}})
+                                           {w->m_timelineButton, QStringLiteral("view.timeline"), QStringLiteral("Timeline")},
+                                           {w->m_followButton, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf")}})
         if (button) button->setTip(name, nativeKeys(commands->action(id)));
     // The format segments name the keys of the registry's ⌥1-2.
     if (FormatBank *bank = w->m_formatBank)
@@ -367,6 +371,7 @@ void ToolbarWiring::buildAppMenu() {
     addCommandItem(menu, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar"), "appMenu.sidebar");
     addCommandItem(menu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
     addCommandItem(menu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
+    addCommandItem(menu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
     menu->addSeparator();
     addCommandItem(menu, QStringLiteral("workspace.finish"), QStringLiteral("Scopes, loudness, QC"), "appMenu.finish");
     addCommandItem(menu, QStringLiteral("workspace.deliver"), QStringLiteral("Deliver"), "appMenu.deliver");
@@ -498,7 +503,7 @@ void ToolbarWiring::layoutTitle() {
     const QFontMetrics subMetrics(subtitle->font());
     // The room between the groups, and the title's own width.
     const QWidget *leftEnd = w->m_sidebarButton ? static_cast<QWidget *>(w->m_sidebarButton) : m_appButton;
-    const QWidget *rightStart = w->m_pictureButton ? static_cast<QWidget *>(w->m_pictureButton) : w->m_formatBank;
+    const QWidget *rightStart = w->m_followButton ? static_cast<QWidget *>(w->m_followButton) : w->m_formatBank;
     const int left = leftEnd->mapTo(toolbar, QPoint(leftEnd->width(), 0)).x() + kTitleClearance;
     const int right = rightStart->mapTo(toolbar, QPoint(0, 0)).x() - kTitleClearance;
     const int natural = std::max(metrics.horizontalAdvance(full), subMetrics.horizontalAdvance(sub)) + 2;

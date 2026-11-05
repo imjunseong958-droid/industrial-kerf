@@ -363,6 +363,9 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_mention = tool(QStringLiteral("g-at"), QStringLiteral("Mention"), QStringLiteral("@"));
     m_draw = tool(QStringLiteral("g-annot"), QStringLiteral("Draw on frame"), QStringLiteral("D"));
     m_draw->setCheckable(true);
+    m_versions = tool(QStringLiteral("g-branch"), QStringLiteral("Try 3 versions at once"), QString());
+    m_versions->setObjectName(QStringLiteral("composerVersions"));
+    m_versions->setCheckable(true);
     connect(m_mention, &QAbstractButton::clicked, this, &Composer::startMention);
     connect(m_draw, &QAbstractButton::clicked, this, [this] {
         // The button shows the state; the click asks for the change.
@@ -576,6 +579,8 @@ void Composer::placePopovers() {
         list->raise();
     }
 }
+
+bool Composer::versionsOn() const { return m_versions->isChecked() && !m_versions->isHidden(); }
 
 void Composer::fitInput() {
     m_input->document()->setTextWidth(m_input->viewport()->width());

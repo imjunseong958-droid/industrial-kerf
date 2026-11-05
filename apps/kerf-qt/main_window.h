@@ -1,9 +1,11 @@
 #pragma once
 
+#include "compare_view.h"
 #include "editor_common.h"
 #include "test_friends.h"
 
 #include <QAction>
+#include <QSet>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -68,6 +70,8 @@ class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class PreviewChip;
+class ChangeReel;
+class ChangeReelBar;
 class ProjectSidebar;
 class StageShell;
 namespace ui {
@@ -352,6 +356,22 @@ private:
     // column, the browser, the Finish and Deliver trays.
     StageShell *m_shell = nullptr;
     ProjectSidebar *m_sidebar = nullptr;
+    ChangeReel *m_changeReel = nullptr;
+    ChangeReelBar *m_reelBar = nullptr;
+    CompareView *m_compare = nullptr;
+    ui::IconButton *m_followButton = nullptr;
+    bool m_followKerf = true;
+    // How far a seek may go past the program: what a proposal makes can be longer.
+    double m_seekLimit = 0.0;
+    QSet<QString> m_liveChanges;
+    struct VersionRun {
+        QString key;
+        QString proposal = {};
+        QString thread = {};
+        QString status = {};
+        CompareView::State state = CompareView::State::Running;
+    };
+    QList<VersionRun> m_versionRuns;
     ui::IconButton *m_sidebarButton = nullptr;
     ui::IconButton *m_pictureButton = nullptr;
     ui::IconButton *m_timelineButton = nullptr;
@@ -388,6 +408,18 @@ private:
     void followContentWithPanes();
     void refreshSidebar();
     void buildSidebar();
+    // Kerf at work (main_window_agent.cpp).
+    void buildAgentViews();
+    void setFollowKerf(bool follow);
+    void showAgentAt(double seconds);
+    void followAgentFocus(const QJsonObject &event);
+    void followLiveProposal();
+    void endAgentFollow();
+    void watchChanges(const QString &proposalId);
+    bool sendVersions(const QString &text);
+    void followVersion(const QJsonObject &event);
+    void refreshCompare();
+    void useVersion(const QString &proposalId);
     void runStart();
     // Closes a sheet or tray that lies over the composer.
     void uncoverComposer();

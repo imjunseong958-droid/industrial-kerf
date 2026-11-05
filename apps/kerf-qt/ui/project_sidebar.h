@@ -58,7 +58,7 @@ class ProjectSidebar final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    enum class State { Idle, Review, Settled };
+    enum class State { Idle, Working, Review, Settled };
     struct Conversation {
         QString id;
         QString title;

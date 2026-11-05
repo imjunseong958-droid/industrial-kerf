@@ -17,7 +17,10 @@
 #include "ui/deliver_tray.h"
 #include "ui/editor_bus.h"
 #include "ui/finish_tray.h"
+#include "ui/change_reel.h"
+#include "ui/compare_view.h"
 #include "ui/composer.h"
+#include "ui/wiring/review_wiring.h"
 #include "ui/inspector_column.h"
 #include "ui/project_sidebar.h"
 #include "ui/stage_shell.h"
@@ -40,6 +43,8 @@
 #include <QSet>
 #include <QSettings>
 #include <QTest>
+
+#include <cmath>
 
 namespace kerf {
 
@@ -866,6 +871,177 @@ private slots:
         const QString sent = QString::fromUtf8(QJsonDocument(window.m_lastCommand).toJson());
         QVERIFY2(sent.contains(QStringLiteral("take.MOV")), qPrintable(sent));
         QVERIFY(!sent.contains(QStringLiteral("note.txt")));
+    }
+
+    void theReelPlansWhatChangedWithHandles() {
+        ReviewModel::ClipChange trim;
+        trim.clip = QStringLiteral("c1");
+        trim.name = QStringLiteral("sea");
+        trim.trimmed = true;
+        trim.oldStart = 10;
+        trim.oldEnd = 14;
+        trim.newStart = 10;
+        trim.newEnd = 12;
+        ReviewModel::ClipChange near = trim;
+        near.name = QStringLiteral("road");
+        near.oldStart = 12;
+        near.oldEnd = 16;
+        near.newStart = 12;
+        near.newEnd = 16;
+        ReviewModel::ClipChange added;
+        added.clip = QStringLiteral("c9");
+        added.name = QStringLiteral("cta");
+        added.added = true;
+        added.newStart = 40;
+        added.newEnd = 45;
+        const QList<reel::Segment> segments = reel::plan({added, trim, near}, 50, 45);
+        QCOMPARE(segments.size(), 2);
+        QCOMPARE(segments.at(0).after, 8.0);
+        QCOMPARE(segments.at(0).afterEnd, 18.0);
+        QCOMPARE(segments.at(0).title, QStringLiteral("Trim sea and 1 more"));
+        QCOMPARE(segments.at(1).after, 38.0);
+        // The end keeps to what there is.
+        QCOMPARE(segments.at(1).afterEnd, 45.0);
+        QCOMPARE(segments.at(1).before, 38.0);
+        QCOMPARE(reel::total(segments), 17.0);
+    }
+
+    void aToolsPositionsAreRead() {
+        QCOMPARE(reel::parseTime(QStringLiteral("4.5s"), 24, 0), 4.5);
+        QCOMPARE(reel::parseTime(QStringLiteral("96f"), 24, 0), 4.0);
+        QCOMPARE(reel::parseTime(QStringLiteral("01:00:04:12"), 24, 3600), 4.5);
+        QVERIFY(reel::parseTime(QStringLiteral("soon"), 24, 0) < 0);
+    }
+
+    void theReelPlaysEachSideInTurn() {
+        QStringList calls;
+        ChangeReel::Host host;
+        host.preview = [&calls](const QString &id, double start, double duration) {
+            calls << QStringLiteral("preview %1 %2 %3").arg(id).arg(start).arg(duration);
+            return true;
+        };
+        host.exitPreview = [&calls] { calls << QStringLiteral("exit"); };
+        host.seek = [&calls](double seconds, double) { calls << QStringLiteral("seek %1").arg(seconds); };
+        host.play = [&calls](bool on) { calls << (on ? QStringLiteral("play") : QStringLiteral("pause")); };
+        ChangeReel watching(host);
+        reel::Segment one;
+        one.after = 2;
+        one.afterEnd = 6;
+        one.before = 3;
+        one.beforeEnd = 7;
+        reel::Segment two;
+        two.after = 20;
+        two.afterEnd = 24;
+        two.before = 21;
+        two.beforeEnd = 25;
+        QVERIFY(watching.start(QStringLiteral("p1"), {one, two}));
+        QVERIFY(watching.isWaiting());
+        QVERIFY(calls.contains(QStringLiteral("preview p1 2 22")));
+        calls.clear();
+        watching.followPreview(QJsonObject{{"status", "running"}});
+        QVERIFY(watching.isWaiting());
+        watching.followPreview(QJsonObject{{"status", "ready"}, {"proposalId", "p1"}});
+        QVERIFY(!watching.isWaiting());
+        QCOMPARE(calls, QStringList({QStringLiteral("seek 2"), QStringLiteral("play")}));
+        calls.clear();
+        watching.followPlayhead(3.0);
+        QVERIFY(calls.isEmpty());
+        // The end of a segment moves on, with no new render: it is in this one.
+        watching.followPlayhead(6.0);
+        QCOMPARE(watching.index(), 1);
+        QVERIFY(calls.contains(QStringLiteral("seek 20")));
+        calls.clear();
+        // Before plays the program.
+        watching.setSide(ChangeReel::Side::Before);
+        QVERIFY(calls.contains(QStringLiteral("exit")));
+        QVERIFY(watching.isWaiting());
+        calls.clear();
+        watching.followPreview(QJsonObject{{"status", "exited"}});
+        QTRY_VERIFY(!watching.isWaiting());
+        QVERIFY(calls.contains(QStringLiteral("seek 21")));
+        // The last one ends it, still open.
+        watching.followPlayhead(25.0);
+        QVERIFY(watching.isFinished());
+        QVERIFY(watching.isActive());
+        watching.stop();
+        QVERIFY(!watching.isActive());
+    }
+
+    void watchingLeavesARoomOverThePicture() {
+        stage::Panes panes;
+        panes.reel = true;
+        const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, panes);
+        QCOMPARE(r.reel, QRect(640, 40, 960, 40));
+        QCOMPARE(r.slot, QRect(640, 80, 960, 380));
+    }
+
+    void thePictureFollowsKerf() {
+        QSettings().remove(QStringLiteral("layout"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        window.handleEvent(QJsonObject{{"type", "agent_focus"}, {"tool", "look"}, {"times", QJsonArray{"2s"}}});
+        QCOMPARE(window.m_timeline->agentCursor(), 2.0);
+        QCOMPARE(window.m_playhead, 2.0);
+        // Not following: the cursor moves, the picture stays.
+        window.m_commands->action(QStringLiteral("view.followKerf"))->trigger();
+        QVERIFY(!window.m_followKerf);
+        QVERIFY(!window.m_followButton->isOn());
+        window.handleEvent(QJsonObject{{"type", "agent_focus"}, {"tool", "look"}, {"times", QJsonArray{"3s"}}});
+        QCOMPARE(window.m_timeline->agentCursor(), 3.0);
+        QCOMPARE(window.m_playhead, 2.0);
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QVERIFY(std::isnan(window.m_timeline->agentCursor()));
+        QSettings().remove(QStringLiteral("layout"));
+        window.close();
+    }
+
+    void versionsRunSideBySideAndOneIsUsed() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QList<QJsonObject> sent;
+        window.m_bus->setSender([&sent](const QJsonObject &command) {
+            sent << command;
+            return true;
+        });
+        Composer *composer = window.m_chat->composerWidget();
+        composer->versionsButton()->click();
+        QVERIFY(composer->versionsOn());
+        composer->fill(QStringLiteral("Open stronger"));
+        QVERIFY(window.m_reviewWiring->post());
+        QCOMPARE(sent.last().value("type").toString(), QStringLiteral("agent_versions"));
+        QCOMPARE(sent.last().value("text").toString(), QStringLiteral("Open stronger"));
+        QVERIFY(!composer->versionsOn());
+        QVERIFY(window.m_shell->compareShown());
+        QVERIFY(window.m_compare->isVisible());
+        QCOMPARE(inWindow(window.m_compare, &window), inWindow(window.m_timelinePanel, &window));
+        for (const char *key : {"A", "B", "C"})
+            window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", key}, {"state", "running"}});
+        QCOMPARE(window.m_compare->keys(), QStringList({"A", "B", "C"}));
+        QCOMPARE(window.m_compare->statusText("B"), QStringLiteral("Working"));
+        QVERIFY(!window.m_compare->useButton("A")->isEnabled());
+        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "A"}, {"state", "done"}, {"proposalId", "pa"}});
+        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "B"}, {"state", "done"}, {"proposalId", "pb"}});
+        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "C"}, {"state", "failed"}, {"message", "No key"}});
+        QVERIFY(window.m_compare->useButton("A")->isEnabled());
+        QVERIFY(!window.m_compare->useButton("C")->isEnabled());
+        QCOMPARE(window.m_compare->statusText("C"), QStringLiteral("No key"));
+        // Used: it is accepted, and the versions are done with.
+        window.m_compare->useButton("A")->click();
+        QVERIFY(!window.m_shell->compareShown());
+        QVERIFY(std::any_of(sent.cbegin(), sent.cend(), [](const QJsonObject &command) {
+            return command.value("proposalId").toString() == QStringLiteral("pb") && command.value("type").toString().contains(QStringLiteral("reject"));
+        }));
+        QCOMPARE(sent.last().value("proposalId").toString(), QStringLiteral("pa"));
+        window.close();
     }
 };
 

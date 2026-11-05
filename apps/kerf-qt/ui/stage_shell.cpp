@@ -73,6 +73,11 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     } else if (panes.timeline) {
         out.timeline = out.panel;
     }
+    if (panes.reel && !out.slot.isEmpty()) {
+        const int bar = std::min(out.slot.height(), reelBar);
+        out.reel = QRect(out.slot.left(), out.slot.top(), out.slot.width(), bar);
+        out.slot.setTop(out.slot.top() + bar);
+    }
     out.picture = fitted(out.slot, shape);
     // A sheet lies over the conversation alone, at its panel side, so a drag
     // reaches the timeline.
@@ -139,6 +144,24 @@ void StageShell::setRegions(QWidget *picture, QWidget *conversation, QWidget *ti
 void StageShell::setSidebar(QWidget *sidebar) {
     m_sidebar = sidebar;
     if (sidebar) sidebar->setParent(this);
+    place();
+}
+
+void StageShell::setReelBar(QWidget *bar) {
+    m_reelBar = bar;
+    if (bar) bar->setParent(this);
+    place();
+}
+
+void StageShell::setCompare(QWidget *compare) {
+    m_compare = compare;
+    if (compare) compare->setParent(this);
+    place();
+}
+
+void StageShell::setCompareShown(bool shown) {
+    if (shown == m_compareShown) return;
+    m_compareShown = shown;
     place();
 }
 
@@ -211,7 +234,7 @@ void StageShell::setPanes(const stage::Panes &panes) {
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
     stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
-    for (QRect *rect : {&out.sidebar, &out.panel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector, &out.tray})
+    for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector, &out.tray})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
 }
@@ -291,6 +314,10 @@ void StageShell::place() {
     placeRegion(m_conversation, r.conversation);
     placeRegion(m_timeline, r.timeline);
     placeRegion(m_transport, r.transport);
+    placeRegion(m_reelBar, r.reel);
+    // The versions lie over the timeline, and leave the picture free.
+    placeRegion(m_compare, m_compareShown ? (r.timeline.isEmpty() ? r.panel : r.timeline) : QRect());
+    if (m_compare && m_compareShown) m_compare->raise();
     // One hairline between the regions, drawn inside the edge of what lies
     // right of or under it.
     const auto placeSeam = [](QWidget *seam, const QRect &rect) {

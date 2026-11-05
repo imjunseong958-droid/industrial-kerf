@@ -151,6 +151,9 @@ public:
     StampButton *stamp() const { return m_stamp; }
     ui::IconButton *mentionButton() const { return m_mention; }
     ui::IconButton *drawButton() const { return m_draw; }
+    // On: Send has several agents make versions of the request.
+    ui::IconButton *versionsButton() const { return m_versions; }
+    bool versionsOn() const;
     QWidget *box() const { return m_box; }
     QLabel *errorLabel() const { return m_error; }
     FloatingList *suggestionsPopover() const { return m_suggestions; }
@@ -231,6 +234,7 @@ private:
     StampButton *m_stamp = nullptr;
     ui::IconButton *m_mention = nullptr;
     ui::IconButton *m_draw = nullptr;
+    ui::IconButton *m_versions = nullptr;
     SendButton *m_send = nullptr;
     SendButton *m_stop = nullptr;
     QLabel *m_error = nullptr;

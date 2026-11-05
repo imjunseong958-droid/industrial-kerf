@@ -222,7 +222,8 @@ void ProjectSidebar::rebuild() {
             child->setObjectName(QStringLiteral("sidebarConversation"));
             ui::setTip(child, conversation.title);
             child->setCurrent(conversation.id == m_currentConversation);
-            if (conversation.state == State::Review) child->setTrailing(QStringLiteral("Review"), tokens::color(accentInk));
+            if (conversation.state == State::Working) child->setTrailing(QStringLiteral("Working"), tokens::color(accentInk));
+            else if (conversation.state == State::Review) child->setTrailing(QStringLiteral("Review"), tokens::color(accentInk));
             else if (conversation.state == State::Settled) child->setTrailing(QStringLiteral("Done"), tokens::color(ink3));
             const QString id = conversation.id;
             connect(child, &QAbstractButton::clicked, this, [this, id] { emit conversationChosen(id); });

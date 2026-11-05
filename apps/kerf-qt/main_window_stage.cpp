@@ -214,7 +214,8 @@ void MainWindow::applyPanes() {
     const stage::Panes &panes = m_shell->panes();
     for (const auto &[button, open] : {std::pair<ui::IconButton *, bool>{m_sidebarButton, panes.sidebar},
                                        {m_pictureButton, panes.picture},
-                                       {m_timelineButton, panes.timeline}})
+                                       {m_timelineButton, panes.timeline},
+                                       {m_followButton, m_followKerf}})
         if (button) button->setOn(open);
     // A note stamps and draws on the picture.
     if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) {
@@ -246,7 +247,11 @@ void MainWindow::refreshSidebar() {
             conversation.id = thread.id;
             conversation.title = thread.root.body.section(QLatin1Char('\n'), 0, 0).trimmed();
             if (conversation.title.isEmpty()) conversation.title = QStringLiteral("Proposal");
-            conversation.state = !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
+            const bool working = std::any_of(m_versionRuns.cbegin(), m_versionRuns.cend(), [&thread](const VersionRun &run) {
+                return run.thread == thread.id && run.state == CompareView::State::Running;
+            });
+            conversation.state = working                        ? ProjectSidebar::State::Working
+                                 : !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
                                  : thread.resolved()            ? ProjectSidebar::State::Settled
                                                                 : ProjectSidebar::State::Idle;
             conversations << conversation;
