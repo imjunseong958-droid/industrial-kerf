@@ -53,6 +53,7 @@ pub fn draw_frame(
         &ComposeOptions {
             sequence: sequence.map(str::to_owned),
             captions: true,
+            ..Default::default()
         },
     )?;
     Ok(compositor.frame(at, scale))

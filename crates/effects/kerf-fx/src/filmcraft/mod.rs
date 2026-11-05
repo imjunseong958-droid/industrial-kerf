@@ -9,6 +9,7 @@
 
 pub mod catalog;
 pub mod effects;
+pub mod gpu;
 pub mod gpufx;
 pub mod graphics;
 pub mod instance;

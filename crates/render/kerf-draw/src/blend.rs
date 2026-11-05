@@ -336,10 +336,10 @@ pub fn composite_placed(
     dst.px
         .par_chunks_mut(w * 4)
         .enumerate()
-        .skip(placement.rows.start)
-        .take(placement.rows.len())
+        .skip(placement.at.rows.start)
+        .take(placement.at.rows.len())
         .for_each(|(y, row)| {
-            for x in placement.columns.clone() {
+            for x in placement.at.columns.clone() {
                 if let Some(sample) = placement.sample(x, y) {
                     mix(
                         &mut row[x * 4..x * 4 + 4],

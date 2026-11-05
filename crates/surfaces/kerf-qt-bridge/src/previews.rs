@@ -219,6 +219,7 @@ fn compose(
         &ComposeOptions {
             sequence: Some(sequence.id.to_string()),
             captions: false,
+            ..Default::default()
         },
     )
     .ok()?;

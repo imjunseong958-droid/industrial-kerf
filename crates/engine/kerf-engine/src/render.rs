@@ -447,6 +447,7 @@ pub fn renderable(
             &ComposeOptions {
                 sequence: sequence.map(str::to_owned),
                 captions: true,
+                ..Default::default()
             },
         )?;
         compile_program(project, catalog, &options)?;
@@ -665,6 +666,7 @@ where
         &ComposeOptions {
             sequence: sequence.map(str::to_owned),
             captions: true,
+            ..Default::default()
         },
     )?;
     let render = composited_render(project, sequence, range, opts, compositor.size())?;

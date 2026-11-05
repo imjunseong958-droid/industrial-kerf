@@ -22,7 +22,7 @@
 
 use crate::domains;
 use crate::footage::{frame_count, ClipSource, Pictures};
-use crate::{ComposeError, Frame};
+use crate::{Accel, ComposeError, Frame};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
@@ -38,6 +38,8 @@ use kerf_model::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+
+mod gpu;
 
 /// Nested sequences deeper than this are refused, as the graph refuses
 /// them.
@@ -59,6 +61,7 @@ pub(crate) struct Drawing {
     /// The sound of media files, decoded for the effects that draw it.
     sounds: crate::sound::Sounds,
     captions: bool,
+    accel: Accel,
     /// The LUT files FilmCraft's effects name.
     library: filmcraft::project::Project,
 }
@@ -207,6 +210,7 @@ impl Drawing {
         catalog: &Catalog,
         sequence: Option<&str>,
         captions: bool,
+        accel: Accel,
     ) -> Result<Self> {
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
@@ -237,6 +241,7 @@ impl Drawing {
             pictures: Pictures::new(builder.clips),
             sounds: crate::sound::Sounds::default(),
             captions,
+            accel,
             library,
         })
     }
@@ -269,7 +274,11 @@ impl Drawing {
                 return frame;
             }
         }
-        let image = self.draw(0, at, scale.clamp(1.0 / 16.0, 1.0));
+        let scale = scale.clamp(1.0 / 16.0, 1.0);
+        if let Some(frame) = self.gpu_frame(at, scale) {
+            return frame;
+        }
+        let image = self.draw(0, at, scale);
         Frame {
             width: image.w as u32,
             height: image.h as u32,
@@ -319,21 +328,8 @@ impl Drawing {
         }
         if self.captions {
             for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
-                let size = (f64::from(plan.height) * 0.045).max(12.0) * scale;
-                let text = Text {
-                    text: &caption.text,
-                    font: "sans-serif",
-                    size: size as f32,
-                    color: Rgba::WHITE,
-                    justify: Justify::Center,
-                    outline: Some((
-                        Rgba {
-                            a: 217,
-                            ..Rgba::BLACK
-                        },
-                        (size * 0.06) as f32,
-                    )),
-                };
+                let text_size = caption_size(plan, scale);
+                let text = caption_text(caption, text_size);
                 text::draw(&mut canvas, &text, [w as f32 / 2.0, h as f32 * 0.95], 1.0);
             }
         }
@@ -575,19 +571,7 @@ impl Drawing {
                 Arc::new(Image::filled(cw, ch, premultiplied(*color))),
                 scale,
             ),
-            Source::Title(title) => {
-                let mut image = Image::new(cw, ch);
-                let text = Text {
-                    text: &title.text,
-                    font: &title.font,
-                    size: (title.size * ch as f64).max(1.0) as f32,
-                    color: title.color,
-                    justify: title.justify,
-                    outline: None,
-                };
-                text::draw(&mut image, &text, [cw as f32 / 2.0, ch as f32 / 2.0], 0.5);
-                (Arc::new(image), scale)
-            }
+            Source::Title(title) => (Arc::new(title_on(title, (cw, ch))), scale),
             Source::Adjustment => return None,
         })
     }
@@ -794,6 +778,57 @@ impl Drawing {
             composite(canvas, &adjusted, 1.0, plan.blend);
         }
     }
+}
+
+/// A title drawn on a transparent `w` × `h` picture.
+fn title_on(title: &TitlePlan, (w, h): (usize, usize)) -> Image {
+    let mut image = Image::new(w, h);
+    let text = Text {
+        text: &title.text,
+        font: &title.font,
+        size: (title.size * h as f64).max(1.0) as f32,
+        color: title.color,
+        justify: title.justify,
+        outline: None,
+    };
+    text::draw(&mut image, &text, [w as f32 / 2.0, h as f32 / 2.0], 0.5);
+    image
+}
+
+/// The size a caption's text is drawn at.
+fn caption_size(sequence: &SequencePlan, scale: f64) -> f64 {
+    (f64::from(sequence.height) * 0.045).max(12.0) * scale
+}
+
+/// A caption's text, as it is burned in.
+fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
+    Text {
+        text: &caption.text,
+        font: "sans-serif",
+        size: size as f32,
+        color: Rgba::WHITE,
+        justify: Justify::Center,
+        outline: Some((
+            Rgba {
+                a: 217,
+                ..Rgba::BLACK
+            },
+            (size * 0.06) as f32,
+        )),
+    }
+}
+
+/// A caption drawn on a transparent `w` × `h` picture.
+fn caption_on(
+    caption: &CaptionPlan,
+    sequence: &SequencePlan,
+    scale: f64,
+    (w, h): (usize, usize),
+) -> Image {
+    let mut image = Image::new(w, h);
+    let text = caption_text(caption, caption_size(sequence, scale));
+    text::draw(&mut image, &text, [w as f32 / 2.0, h as f32 * 0.95], 1.0);
+    image
 }
 
 /// A clip's picture as its effects get it.

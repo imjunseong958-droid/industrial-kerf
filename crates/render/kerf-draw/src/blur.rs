@@ -11,6 +11,22 @@ pub fn gaussian(image: &mut Image, sigma_x: f32, sigma_y: f32, repeat_edge: bool
     if image.w == 0 || image.h == 0 {
         return;
     }
+    let (across, down) = gaussian_radii(image.w, image.h, sigma_x, sigma_y);
+    for radius in across {
+        box_rows(&mut image.px, image.w, radius, repeat_edge);
+    }
+    if !down.is_empty() {
+        let mut turned = transpose(image);
+        for radius in down {
+            box_rows(&mut turned.px, turned.w, radius, repeat_edge);
+        }
+        *image = transpose(&turned);
+    }
+}
+
+/// The box radii [`gaussian`] passes a `w` × `h` picture through, across and
+/// down.
+pub fn gaussian_radii(w: usize, h: usize, sigma_x: f32, sigma_y: f32) -> (Vec<usize>, Vec<usize>) {
     // Past a few picture sizes every radius blurs to the same flat picture.
     let cap = |sigma: f32, length: usize| {
         if sigma.is_finite() {
@@ -26,17 +42,7 @@ pub fn gaussian(image: &mut Image, sigma_x: f32, sigma_y: f32, repeat_edge: bool
             Vec::new()
         }
     };
-    let (across, down) = (radii(cap(sigma_x, image.w)), radii(cap(sigma_y, image.h)));
-    for radius in across {
-        box_rows(&mut image.px, image.w, radius, repeat_edge);
-    }
-    if !down.is_empty() {
-        let mut turned = transpose(image);
-        for radius in down {
-            box_rows(&mut turned.px, turned.w, radius, repeat_edge);
-        }
-        *image = transpose(&turned);
-    }
+    (radii(cap(sigma_x, w)), radii(cap(sigma_y, h)))
 }
 
 /// Box radii for an `n`-pass box blur close to a Gaussian of `sigma`

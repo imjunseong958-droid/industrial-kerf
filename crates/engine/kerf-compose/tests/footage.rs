@@ -45,6 +45,7 @@ fn compositor(dir: &Path, tracks: &str) -> Compositor {
         &ComposeOptions {
             sequence: None,
             captions: false,
+            ..Default::default()
         },
     )
     .expect("composes")
@@ -144,6 +145,7 @@ fn audio_waveform_draws_the_sound_track_it_names() {
         let options = ComposeOptions {
             sequence: None,
             captions: false,
+            ..Default::default()
         };
         let frame = Compositor::new(&project, Catalog::builtin(), &options)
             .unwrap()

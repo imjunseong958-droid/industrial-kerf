@@ -2,10 +2,10 @@
 //!
 //! ```text
 //! ffmpeg -f lavfi -i testsrc2=s=3840x2160:r=24:d=4 -pix_fmt yuv420p clip.mp4
-//! cargo run --release -p kerf-compose --example frame_bench -- clip.mp4
+//! cargo run --release -p kerf-compose --example frame_bench -- clip.mp4 [scene]
 //! ```
 
-use kerf_compose::{ComposeOptions, Compositor};
+use kerf_compose::{Accel, ComposeOptions, Compositor};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 use std::time::Instant;
@@ -14,6 +14,8 @@ use std::time::Instant;
 const FRAMES: i64 = 9;
 
 const SCENES: &[(&str, &str)] = &[
+    // Decoding alone: what no drawing can go below.
+    ("plain", ""),
     ("placed", "      set scale=0.9\n"),
     ("lumetri", "      fx color.lumetri@2 exposure=0.5\n"),
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
@@ -32,8 +34,13 @@ fn time(document: &str, frames: i64) -> (f64, f64) {
     let project = parse_document(document, Catalog::builtin())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
-    let compositor =
-        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).expect("draws");
+    // Wait for the kernels rather than timing the CPU while they build. `KERF_GPU=0` measures the
+    // CPU, and so does a frame the kernels cannot draw.
+    let options = ComposeOptions {
+        accel: Accel::Always,
+        ..ComposeOptions::default()
+    };
+    let compositor = Compositor::new(&project, Catalog::builtin(), &options).expect("draws");
     let mut times: Vec<f64> = (0..frames)
         .map(|index| {
             let began = Instant::now();
@@ -49,6 +56,8 @@ fn time(document: &str, frames: i64) -> (f64, f64) {
 
 fn main() {
     let clip = std::env::args().nth(1).expect("a clip to draw");
+    // Only the scenes whose names hold this.
+    let only = std::env::args().nth(2).unwrap_or_default();
     let media = format!("media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160\n");
     println!(
         "{:<10} {:>9} {:>11} {:>8}",
@@ -59,7 +68,7 @@ fn main() {
             "kerf 1\nproject name=\"bench\"\n{media}sequence s1 rate=24 size={width}x{height} audio=48000\n"
         );
         let clip_line = "    clip c1 media=m1 src=0f at=0f dur=48f\n";
-        for (name, body) in SCENES {
+        for (name, body) in SCENES.iter().filter(|(name, _)| name.contains(&only)) {
             let document = format!("{head}  track V1 video\n{clip_line}{body}");
             let (_, median) = time(&document, FRAMES);
             println!(
@@ -67,6 +76,9 @@ fn main() {
                 format!("{width}x{height}"),
                 1000.0 / median
             );
+        }
+        if !"4 layers".contains(&only) {
+            continue;
         }
         let layers: String = (1..=4)
             .rev()

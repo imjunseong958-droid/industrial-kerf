@@ -162,10 +162,10 @@ impl Image {
         out.px
             .par_chunks_mut(w * 4)
             .enumerate()
-            .skip(placement.rows.start)
-            .take(placement.rows.len())
+            .skip(placement.at.rows.start)
+            .take(placement.at.rows.len())
             .for_each(|(y, row)| {
-                for x in placement.columns.clone() {
+                for x in placement.at.columns.clone() {
                     if let Some(sample) = placement.sample(x, y) {
                         row[x * 4..x * 4 + 4].copy_from_slice(&sample);
                     }
@@ -183,14 +183,11 @@ impl Image {
         m: &Affine,
         rect: Rect,
     ) -> Option<Placement<'_>> {
-        let inverse = m.inverse()?;
+        m.inverse()?;
         if rect.w <= 0.0 || rect.h <= 0.0 || self.w == 0 || self.h == 0 {
             return None;
         }
-        let sx = (m.a * m.a + m.b * m.b).sqrt();
-        let sy = (m.c * m.c + m.d * m.d).sqrt();
-        let minify = 1.0 / sx.min(sy).max(1e-6);
-        if minify >= 2.0 && self.w >= 4 && self.h >= 4 {
+        if Landing::halves((self.w, self.h), m) {
             // Shrinking to under half: from a picture halved first.
             let half = self.downsample2();
             let m = m.then_apply(&Affine::scale(2.0, 2.0));
@@ -198,28 +195,9 @@ impl Image {
             let placement = half.placement(w, h, &m, rect)?.owned();
             return Some(placement);
         }
-        // Only the rows and columns the picture lands on.
-        let bounds = m.bounds(&rect);
-        let y0 = (bounds.y.floor().max(0.0) as usize).min(h);
-        let y1 = (bounds.bottom().ceil().max(0.0) as usize).min(h);
-        let x0 = (bounds.x.floor().max(0.0) as usize).min(w);
-        let x1 = (bounds.right().ceil().max(0.0) as usize).min(w);
         Some(Placement {
             image: std::borrow::Cow::Borrowed(self),
-            inverse,
-            rect,
-            // Distances across the picture, in its pixels, over these, are
-            // distances in new pixels.
-            across: inverse.a.hypot(inverse.c).max(1e-12),
-            down: inverse.b.hypot(inverse.d).max(1e-12),
-            // Colors come from the pixels inside the crop.
-            lo: [rect.x.floor().max(0.0), rect.y.floor().max(0.0)],
-            hi: [
-                rect.right().ceil().min(self.w as f64),
-                rect.bottom().ceil().min(self.h as f64),
-            ],
-            rows: y0..y1.max(y0),
-            columns: x0..x1.max(x0),
+            at: Landing::new((self.w, self.h), (w, h), m, rect)?,
         })
     }
 
@@ -322,32 +300,81 @@ impl Image {
     }
 }
 
-/// A picture placed in another, sampled at the other's pixels.
-pub(crate) struct Placement<'a> {
-    image: std::borrow::Cow<'a, Image>,
-    inverse: Affine,
-    rect: Rect,
-    across: f64,
-    down: f64,
-    lo: [f64; 2],
-    hi: [f64; 2],
+/// Where a picture lands in another: the numbers that place it, whichever
+/// processor then samples it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Landing {
+    /// The other picture's pixels to this one's.
+    pub inverse: Affine,
+    /// The part of this picture that shows, in its pixels.
+    pub rect: Rect,
+    /// Distances across and down this picture, in its pixels, over these,
+    /// are distances in the other's.
+    pub across: f64,
+    pub down: f64,
+    /// Colors come from the pixels inside the crop.
+    pub lo: [f64; 2],
+    pub hi: [f64; 2],
     /// The rows and columns of the other picture it can land on.
     pub rows: std::ops::Range<usize>,
     pub columns: std::ops::Range<usize>,
+}
+
+impl Landing {
+    /// `rect` of a picture of `size` placed through `m`, its pixels to those
+    /// of a picture of `canvas`. `None` when nothing can land.
+    pub fn new(
+        size: (usize, usize),
+        canvas: (usize, usize),
+        m: &Affine,
+        rect: Rect,
+    ) -> Option<Self> {
+        let inverse = m.inverse()?;
+        if rect.w <= 0.0 || rect.h <= 0.0 || size.0 == 0 || size.1 == 0 {
+            return None;
+        }
+        let (w, h) = canvas;
+        let bounds = m.bounds(&rect);
+        let y0 = (bounds.y.floor().max(0.0) as usize).min(h);
+        let y1 = (bounds.bottom().ceil().max(0.0) as usize).min(h);
+        let x0 = (bounds.x.floor().max(0.0) as usize).min(w);
+        let x1 = (bounds.right().ceil().max(0.0) as usize).min(w);
+        Some(Self {
+            inverse,
+            rect,
+            across: inverse.a.hypot(inverse.c).max(1e-12),
+            down: inverse.b.hypot(inverse.d).max(1e-12),
+            lo: [rect.x.floor().max(0.0), rect.y.floor().max(0.0)],
+            hi: [
+                rect.right().ceil().min(size.0 as f64),
+                rect.bottom().ceil().min(size.1 as f64),
+            ],
+            rows: y0..y1.max(y0),
+            columns: x0..x1.max(x0),
+        })
+    }
+
+    /// Whether a picture of `size` placed through `m` shrinks to under half,
+    /// and so is sampled from itself at half its size.
+    pub fn halves(size: (usize, usize), m: &Affine) -> bool {
+        let sx = (m.a * m.a + m.b * m.b).sqrt();
+        let sy = (m.c * m.c + m.d * m.d).sqrt();
+        let minify = 1.0 / sx.min(sy).max(1e-6);
+        minify >= 2.0 && size.0 >= 4 && size.1 >= 4
+    }
+}
+
+/// A picture placed in another, sampled at the other's pixels.
+pub(crate) struct Placement<'a> {
+    image: std::borrow::Cow<'a, Image>,
+    pub at: Landing,
 }
 
 impl Placement<'_> {
     fn owned(self) -> Placement<'static> {
         Placement {
             image: std::borrow::Cow::Owned(self.image.into_owned()),
-            inverse: self.inverse,
-            rect: self.rect,
-            across: self.across,
-            down: self.down,
-            lo: self.lo,
-            hi: self.hi,
-            rows: self.rows,
-            columns: self.columns,
+            at: self.at,
         }
     }
 
@@ -356,19 +383,20 @@ impl Placement<'_> {
     #[inline]
     pub fn sample(&self, x: usize, y: usize) -> Option<[f32; 4]> {
         let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-        let m = &self.inverse;
+        let at = &self.at;
+        let m = &at.inverse;
         let (u, v) = (m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f);
-        let rect = &self.rect;
+        let rect = &at.rect;
         let edge = |inside: f64, scale: f64| (inside / scale + 0.5).clamp(0.0, 1.0);
-        let covered = edge(u - rect.x, self.across)
-            * edge(rect.right() - u, self.across)
-            * edge(v - rect.y, self.down)
-            * edge(rect.bottom() - v, self.down);
+        let covered = edge(u - rect.x, at.across)
+            * edge(rect.right() - u, at.across)
+            * edge(v - rect.y, at.down)
+            * edge(rect.bottom() - v, at.down);
         if covered <= 0.0 {
             return None;
         }
-        let [lo_x, lo_y] = self.lo;
-        let [hi_x, hi_y] = self.hi;
+        let [lo_x, lo_y] = at.lo;
+        let [hi_x, hi_y] = at.hi;
         let sample = self.image.sample_bilinear_clamped(
             u.clamp(lo_x + 0.5, (hi_x - 0.5).max(lo_x + 0.5)) as f32,
             v.clamp(lo_y + 0.5, (hi_y - 0.5).max(lo_y + 0.5)) as f32,

@@ -166,6 +166,7 @@ pub fn picture_qc_with_progress(
         &ComposeOptions {
             sequence: sequence.map(str::to_owned),
             captions: true,
+            ..Default::default()
         },
     )?;
     let canvas = compositor.size();
