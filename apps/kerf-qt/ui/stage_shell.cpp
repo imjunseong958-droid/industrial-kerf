@@ -9,11 +9,15 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QPainter>
+#include <QPixmap>
 #include <QPlainTextEdit>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QTextEdit>
 #include <QTimer>
 #include <QVariantAnimation>
+
+#include <qdrawutil.h>
 
 #include <algorithm>
 #include <cmath>
@@ -129,6 +133,34 @@ protected:
 };
 
 QWidget *seam(QWidget *parent, const char *name) { return new Seam(parent, name); }
+
+constexpr int kShadowReach = 50;  // how far the shadow goes past the picture
+constexpr int kShadowDrop = 18;   // and how far it falls below it
+constexpr int kShadowSteps = 10;  // the layers it is built of
+constexpr int kShadowCorner = kShadowReach + tokens::layout::pictureRadius; // what a corner of it takes
+
+// The picture's shadow, wide and soft, for any size of picture: its corners and
+// edges, drawn once, and laid out around the picture in each frame.
+const QPixmap &shadowTile(qreal ratio) {
+    static QPixmap tile;
+    if (!tile.isNull() && qFuzzyCompare(tile.devicePixelRatio(), ratio)) return tile;
+    const int side = 2 * kShadowCorner + 2;
+    QImage image(QSize(side, side) * ratio, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(ratio);
+    image.fill(Qt::transparent);
+    QPainter p(&image);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 12));
+    const QRectF picture(kShadowReach, kShadowReach, side - 2 * kShadowReach, side - 2 * kShadowReach);
+    for (int step = kShadowSteps; step >= 1; --step) {
+        const qreal out = qreal(step * kShadowReach) / kShadowSteps;
+        p.drawRoundedRect(picture.adjusted(-out, -out, out, out), tokens::layout::pictureRadius + out, tokens::layout::pictureRadius + out);
+    }
+    p.end();
+    tile = QPixmap::fromImage(image);
+    return tile;
+}
 
 // The room's colour over a region, as much as `level`.
 class Veil final : public QWidget {
@@ -294,8 +326,12 @@ void StageShell::setAspect(double aspect) {
 
 void StageShell::setPanes(const stage::Panes &panes, const QRect &pictureOrigin) {
     if (panes == m_panes) return;
+    // Back while it was still falling away, the timeline comes out of the room
+    // again, unless what opened it says otherwise after this.
+    const bool timelineBack = panes.timeline && !m_panes.timeline && static_cast<Veil *>(m_veil)->level() > 0.0;
     m_panes = panes;
     transition(pictureOrigin);
+    if (timelineBack) veilTimeline(0.0);
     emit panesChanged();
 }
 
@@ -305,15 +341,27 @@ void StageShell::setMotion(QWidget *motion) {
     place();
 }
 
+bool StageShell::stopMoves() {
+    if (!m_moves) return false;
+    m_moves->stop();
+    m_moves->deleteLater();
+    m_moves = nullptr;
+    return true;
+}
+
+void StageShell::settle() {
+    // Gone with what it lay over.
+    if (m_timeline && !m_timeline->isVisible()) static_cast<Veil *>(m_veil)->hold(0.0);
+    emit transitionFinished();
+}
+
 void StageShell::transition(const QRect &pictureOrigin) {
     const int duration = ui::motionDuration(tokens::motion::stage);
-    if (m_moves) {
-        m_moves->stop();
-        m_moves->deleteLater();
-        m_moves = nullptr;
-    }
+    const bool cutShort = stopMoves();
     if (duration <= 0 || !isVisible()) {
         place();
+        if (cutShort) settle();
+        emit pictureMoved(rects().picture);
         return;
     }
     QWidget *const regions[] = {m_sidebar, m_picture, m_conversation, m_timeline, m_transport, m_reelBar};
@@ -353,7 +401,11 @@ void StageShell::transition(const QRect &pictureOrigin) {
         region->setGeometry(move.from);
         moves << move;
     }
-    if (moves.isEmpty()) return;
+    emit pictureMoved(rects().picture);
+    if (moves.isEmpty()) {
+        if (cutShort) settle();
+        return;
+    }
     for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn}) seam->hide();
     m_moves = new QVariantAnimation(this);
     m_moves->setDuration(duration);
@@ -362,7 +414,6 @@ void StageShell::transition(const QRect &pictureOrigin) {
     m_moves->setEasingCurve(tokens::easing());
     connect(m_moves, &QVariantAnimation::valueChanged, this, [this, moves](const QVariant &value) {
         const qreal at = value.toReal();
-        update();
         for (const Move &move : moves) {
             if (!move.widget) continue;
             const auto mix = [at](int a, int b) { return int(std::lround(a + (b - a) * at)); };
@@ -370,14 +421,13 @@ void StageShell::transition(const QRect &pictureOrigin) {
                                      mix(move.from.width(), move.to.width()), mix(move.from.height(), move.to.height()));
             if (move.widget == m_timeline) m_veil->setGeometry(m_timeline->geometry());
         }
+        updateRoom();
     });
     connect(m_moves, &QAbstractAnimation::finished, this, [this] {
         if (m_moves) m_moves->deleteLater();
         m_moves = nullptr;
         place();
-        // Gone with what it lay over.
-        if (m_timeline && !m_timeline->isVisible()) static_cast<Veil *>(m_veil)->hold(0.0);
-        emit transitionFinished();
+        settle();
     });
     emit transitionStarted();
     m_moves->start();
@@ -539,15 +589,14 @@ void StageShell::place() {
         banner->raise();
         top += height;
     }
+    updateRoom();
 }
 
 void StageShell::resizeEvent(QResizeEvent *) {
-    if (m_moves) {
-        m_moves->stop();
-        m_moves->deleteLater();
-        m_moves = nullptr;
-    }
+    const bool cutShort = stopMoves();
     place();
+    if (cutShort) settle();
+    emit pictureMoved(rects().picture);
 }
 
 void StageShell::veilTimeline(qreal level, int delay, int duration) {
@@ -559,9 +608,24 @@ void StageShell::veilTimeline(qreal level, int delay, int duration) {
 qreal StageShell::timelineVeil() const { return static_cast<Veil *>(m_veil)->level(); }
 
 void StageShell::setLight(const QColor &light) {
-    if (light == m_light) return;
+    // As far as eight bits can show: most of a slow fade's frames change nothing.
+    if (light.isValid() == m_light.isValid() && light.rgba() == m_light.rgba()) return;
     m_light = light;
-    update();
+    updateRoom();
+}
+
+QRect StageShell::roomLit() const {
+    if (!m_picture || m_picture->isHidden() || m_compareShown) return {};
+    const QRect picture = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
+    return picture.isEmpty() ? QRect() : picture.adjusted(-220, -150, 220, 150);
+}
+
+void StageShell::updateRoom() {
+    const QRect lit = roomLit();
+    QRegion dirty(lit);
+    dirty += m_roomLit;
+    m_roomLit = lit;
+    if (!dirty.isEmpty()) update(dirty);
 }
 
 void StageShell::paintEvent(QPaintEvent *event) {
@@ -569,10 +633,13 @@ void StageShell::paintEvent(QPaintEvent *event) {
     // the picture floats, its light reaching behind the conversation.
     QPainter p(this);
     p.fillRect(event->rect(), tokens::color(tokens::chrome));
-    if (!m_picture || m_picture->isHidden() || m_compareShown) return;
-    const QRectF picture = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
-    if (picture.isEmpty()) return;
-    p.setRenderHint(QPainter::Antialiasing, true);
+    m_roomLit = roomLit();
+    if (m_roomLit.isEmpty()) return;
+    const QRect shown = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
+    const QRectF picture = shown;
+    // The picture covers what is under its middle: only its corners show any.
+    const int corner = tokens::layout::pictureRadius;
+    p.setClipRegion(QRegion(m_roomLit) - shown.adjusted(corner, corner, -corner, -corner));
     if (m_light.isValid() && m_light.alphaF() > 0.0) {
         const QRectF lit = picture.adjusted(-220, -150, 220, 150);
         p.save();
@@ -589,12 +656,11 @@ void StageShell::paintEvent(QPaintEvent *event) {
         p.restore();
     }
     // Its shadow, wide and soft under it.
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, 12));
-    for (int step = 10; step >= 1; --step) {
-        const qreal out = step * 5.0;
-        p.drawRoundedRect(picture.adjusted(-out, -out + 18, out, out + 18), tokens::layout::pictureRadius + out, tokens::layout::pictureRadius + out);
-    }
+    const QPixmap &tile = shadowTile(std::max(1.0, devicePixelRatioF()));
+    const QMargins edges(kShadowCorner, kShadowCorner, kShadowCorner, kShadowCorner);
+    const QRect falling = shown.adjusted(-kShadowReach, -kShadowReach + kShadowDrop, kShadowReach, kShadowReach + kShadowDrop);
+    const int cornerPixels = qRound(kShadowCorner * tile.devicePixelRatio());
+    qDrawBorderPixmap(&p, falling, edges, tile, tile.rect(), QMargins(cornerPixels, cornerPixels, cornerPixels, cornerPixels));
 }
 
 bool StageShell::eventFilter(QObject *watched, QEvent *event) {

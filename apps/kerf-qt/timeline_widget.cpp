@@ -857,6 +857,7 @@ void TimelineWidget::setFocusClips(const QSet<QString> &clips) {
     if (clips == m_focusClips) return;
     m_focusClips = clips;
     // Those looked at rise off their lanes.
+    if (m_focusRise) m_focusRise->stop();
     m_focusLift = 0.0;
     const int length = ui::motionDuration(tk::motion::stage);
     if (clips.isEmpty() || length <= 0) {
@@ -864,16 +865,22 @@ void TimelineWidget::setFocusClips(const QSet<QString> &clips) {
         update();
         return;
     }
-    auto *rise = new QVariantAnimation(this);
-    rise->setDuration(length);
-    rise->setStartValue(0.0);
-    rise->setEndValue(tk::motion::clipLift);
-    rise->setEasingCurve(tk::easing());
-    connect(rise, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
-        m_focusLift = value.toReal();
-        update();
-    });
-    rise->start(QAbstractAnimation::DeleteWhenStopped);
+    if (!m_focusRise) {
+        m_focusRise = new QVariantAnimation(this);
+        m_focusRise->setStartValue(0.0);
+        m_focusRise->setEndValue(tk::motion::clipLift);
+        m_focusRise->setEasingCurve(tk::easing());
+        connect(m_focusRise, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            // The whole timeline is drawn again for it, and most of the rise's frames
+            // move it less than can be seen.
+            const qreal lift = value.toReal();
+            if (std::abs(lift - m_focusLift) < 0.25 && lift < tk::motion::clipLift) return;
+            m_focusLift = lift;
+            update();
+        });
+    }
+    m_focusRise->setDuration(length);
+    m_focusRise->start();
 }
 
 QRect TimelineWidget::laneRect(const QString &track, double start, double end) const {

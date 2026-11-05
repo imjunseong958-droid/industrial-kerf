@@ -209,6 +209,9 @@ constexpr int timelineLead = 150; // how long before the stage lands the timelin
 constexpr int cutSettle = 500;    // edits being quiet before a proposed cut renders
 constexpr int workPulse = 1200;   // the working chip's dot, once
 constexpr int compareSweep = 6800; // the before/after wipe, there and back
+constexpr int workPulseSteps = 24; // the dot's redraws in a pulse: it is slow, and need not be drawn every frame
+constexpr int lightLeast = 14;     // how far (of 255) the picture's colour goes before the room's light follows it
+constexpr int posterMost = 1280;   // the widest a poster is kept while it moves about
 // How far things go.
 constexpr qreal compareFrom = 0.28;   // the wipe's line, across the picture
 constexpr qreal compareTo = 0.78;

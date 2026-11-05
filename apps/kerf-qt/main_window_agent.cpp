@@ -102,13 +102,14 @@ void MainWindow::buildAgentViews() {
     connect(m_viewer, &ViewerWidget::lightChanged, m_shell, &StageShell::setLight);
     m_workChip = new WorkChip;
     m_viewer->setWorkChip(m_workChip);
-    // The picture rescales fast while the stage moves, and flights wait for the
-    // timeline to have reached where they land.
-    connect(m_shell, &StageShell::transitionStarted, this, [this] { m_viewer->setLiveScrub(true); });
+    // The picture is not rescaled in each frame while the stage moves, and flights
+    // wait for the timeline to have reached where they land.
+    connect(m_shell, &StageShell::transitionStarted, this, [this] { m_viewer->setStageMoving(true); });
     connect(m_shell, &StageShell::transitionFinished, this, [this] {
-        m_viewer->setLiveScrub(false);
+        m_viewer->setStageMoving(false);
         flushFlights();
     });
+    connect(m_shell, &StageShell::pictureMoved, m_motion, &StageMotion::followPicture);
     connect(m_changeReel, &ChangeReel::sideChanging, this, [this] { m_viewer->wipeToNextFrame(); });
 
     m_cutPreview.setSingleShot(true);

@@ -16,7 +16,6 @@
 #include <QList>
 #include <QPixmap>
 #include <QRectF>
-#include <QTimer>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -52,22 +51,37 @@ public:
 
     // False under reduced motion, when nothing flies.
     bool fly(const Flight &flight);
-    // Those that stay fade where they are.
+    // Those that stay fade where they are; one still on its way lands first.
     void releaseStaying();
+    // The picture has moved: what stands in for it goes with it. With no picture
+    // there is nothing to stand in for.
+    void followPicture(const QRect &picture);
     bool isFlying() const { return !m_flights.isEmpty(); }
     int flightCount() const { return int(m_flights.size()); }
+    // Whether it still draws frames: not when all that is left holds still.
+    bool isTicking() const { return m_ticker.state() == QAbstractAnimation::Running; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    void tick();
-    QElapsedTimer m_clock;
-    QTimer m_timer;
     struct Running {
         Flight flight;
         qint64 started = 0;
+        // What it last drew over, and whether it has been drawn at rest.
+        QRect drawn;
+        bool atRest = false;
     };
+    void tick();
+    void wake();
+    QRectF boxOf(const Running &running) const;
+    qreal opacityOf(const Running &running) const;
+    QElapsedTimer m_clock;
+    // Frames come from the clock all animations share, so a flight and the regions
+    // under it move in the same frames. One time for a frame: what is marked to
+    // be drawn is what is drawn.
+    QVariantAnimation m_ticker;
+    qint64 m_now = 0;
     QList<Running> m_flights;
 };
 
@@ -120,16 +134,18 @@ protected:
 
 private:
     QVariantAnimation m_pulse;
+    int m_pulseStep = 0;
 };
 
 namespace moves {
 
 // Fades `widget` in from nothing, whenever it is first shown here.
 void fadeIn(QWidget *widget, int delay = 0, int duration = tokens::motion::appear);
-// Moves `widget` up into place as it fades in; for what is not in a layout that
-// will move it again.
+// Moves `widget` up into place as it fades in. It is drawn there, not put there,
+// so a layout that moves it meanwhile is not undone.
 void rise(QWidget *widget, int delay = 0, int distance = 14, int duration = tokens::motion::rise);
-// Eases `widget` to `level` of its opacity; 1 takes the effect away again.
+// Eases `widget` to `level` of its opacity, from wherever it has got to; 1 takes
+// the effect away again.
 void dim(QWidget *widget, qreal level, int duration = tokens::motion::settle);
 
 } // namespace moves

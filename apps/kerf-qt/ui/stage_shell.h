@@ -156,7 +156,10 @@ signals:
     void trayChanged(StageShell::Tray tray);
     void panesChanged();
     void transitionStarted();
+    // Every start has an end, also when the move is cut short.
     void transitionFinished();
+    // Where the picture is going has changed; empty when there is none.
+    void pictureMoved(const QRect &picture);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -171,6 +174,16 @@ private:
     };
     void place();
     void transition(const QRect &pictureOrigin = QRect());
+    // Stops the move under way, if there is one, and says so.
+    bool stopMoves();
+    // What a move leaves behind it, however it ended.
+    void settle();
+    // The room's light and the picture's shadow go this far around the picture;
+    // empty when neither is painted.
+    QRect roomLit() const;
+    // Marks the room where it was and is lit, not all of it: all that lies clear
+    // over it is drawn again with it.
+    void updateRoom();
     // While a sheet or tray is open Esc is theirs, ahead of the window's own
     // shortcuts on Esc, outside text fields, menus and dialogs.
     void followEscape();
@@ -180,6 +193,7 @@ private:
     QWidget *m_reelBar = nullptr;
     QWidget *m_motion = nullptr;
     QColor m_light;
+    QRect m_roomLit;
     QWidget *m_veil = nullptr;
     QVariantAnimation *m_moves = nullptr;
     QWidget *m_compare = nullptr;

@@ -48,6 +48,7 @@ protected:
 
 private:
     QImage m_image;
+    qint64 m_source = 0;
     bool m_plain = false;
 };
 
@@ -102,7 +103,9 @@ private:
         QString proposal;
     };
     Card &cardFor(const QString &key, bool *made);
-    void placeCards(bool animate);
+    // Sends each card to where it rests, those in `fresh` one after another. A card
+    // on its way goes on there; it is not started over or put there at once.
+    void placeCards(bool animate, const QStringList &fresh = {});
 
     ui::IconButton *m_close = nullptr;
     QRect m_origin;

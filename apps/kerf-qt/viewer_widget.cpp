@@ -283,8 +283,9 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
                 m_wipeRun->setEndValue(1.0);
                 m_wipeRun->setEasingCurve(tokens::easing());
                 connect(m_wipeRun, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+                    const qreal from = m_wipe;
                     m_wipe = value.toReal();
-                    update();
+                    updateLine(from, m_wipe, 2);
                 });
                 connect(m_wipeRun, &QAbstractAnimation::finished, this, [this] {
                     m_wipe = -1.0;
@@ -292,6 +293,9 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
                     update();
                 });
             }
+            // A new one starts over, rather than going on from where the last had got.
+            m_wipeRun->stop();
+            m_wipe = 0.0;
             m_wipeRun->setDuration(length);
             m_wipeRun->start();
         }
@@ -310,8 +314,17 @@ void ViewerWidget::clearFrame() {
     update();
 }
 
+void ViewerWidget::updateLine(qreal from, qreal to, int reach) {
+    // A line crossing the picture changes only what it crosses.
+    const QRectF card = videoRect();
+    const qreal left = card.left() + card.width() * std::min(from, to);
+    const qreal right = card.left() + card.width() * std::max(from, to);
+    update(QRectF(left - reach, card.top(), right - left + 2 * reach, card.height()).toAlignedRect());
+}
+
 void ViewerWidget::setCompareFrame(const QImage &before) {
-    m_compareFrame = before;
+    // In the format it draws fastest in, as it is drawn for as long as it is watched.
+    m_compareFrame = before.isNull() || before.format() == QImage::Format_RGB32 ? before : before.convertToFormat(QImage::Format_RGB32);
     if (before.isNull()) {
         if (m_compareSweep) m_compareSweep->stop();
         update();
@@ -326,8 +339,10 @@ void ViewerWidget::setCompareFrame(const QImage &before) {
         m_compareSweep->setEndValue(tokens::motion::compareFrom);
         m_compareSweep->setEasingCurve(QEasingCurve::Linear);
         connect(m_compareSweep, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            const qreal from = m_compareAt;
             m_compareAt = value.toReal();
-            update();
+            // The line has a soft glow either side of it.
+            updateLine(from, m_compareAt, 10);
         });
     }
     if (m_compareSweep && m_compareSweep->state() != QAbstractAnimation::Running) m_compareSweep->start();
@@ -361,6 +376,11 @@ void ViewerWidget::followGlow(const QImage &frame) {
                                 .scaled(1, 1, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                                 .pixelColor(0, 0);
         target = mean;
+        // A cut moves the light; a picture moving about inside a shot does not. Each
+        // change lights the whole room for a stage's length, so it is not for less.
+        if (m_glowTarget.isValid() && std::max({std::abs(target.red() - m_glowTarget.red()), std::abs(target.green() - m_glowTarget.green()),
+                                                std::abs(target.blue() - m_glowTarget.blue())}) < tokens::motion::lightLeast)
+            return;
     }
     if (target == m_glowTarget) return;
     m_glowTarget = target;
@@ -394,6 +414,12 @@ void ViewerWidget::setLiveScrub(bool live) {
     if (m_liveScrub == live) return;
     m_liveScrub = live;
     m_scaled = QImage();
+    update();
+}
+
+void ViewerWidget::setStageMoving(bool moving) {
+    if (m_stageMoving == moving) return;
+    m_stageMoving = moving;
     update();
 }
 
@@ -615,7 +641,7 @@ QPointF ViewerWidget::fromFrame(const QPointF &fraction) const {
 }
 
 void ViewerWidget::resizeEvent(QResizeEvent *) {
-    m_scaled = QImage();
+    if (!m_stageMoving) m_scaled = QImage();
     placeOverlays();
 }
 
@@ -1219,15 +1245,28 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         const qreal dpr = m_liveScrub ? 1.0 : std::max(1.0, devicePixelRatioF());
         const QSize target(std::max(1, static_cast<int>(std::round(picture.width() * dpr))),
                            std::max(1, static_cast<int>(std::round(picture.height() * dpr))));
-        if (m_scaled.isNull() || m_scaled.size() != target || m_scaledFast != m_liveScrub) {
-            m_scaled = m_frame.scaled(target, Qt::KeepAspectRatio,
-                                      m_liveScrub ? Qt::FastTransformation : Qt::SmoothTransformation);
+        const bool fast = m_liveScrub || m_stageMoving;
+        // On the move what it has will do, unless it is far too small by now: making
+        // it again costs far more than drawing it, in the frames that show it least.
+        const bool enough = m_stageMoving && !m_scaled.isNull() && m_scaled.width() * 10 >= target.width() * 7;
+        if (!enough && (m_scaled.isNull() || m_scaled.size() != target || (m_scaledFast && !fast) || (!m_scaledFast && m_liveScrub))) {
+            m_scaled = m_frame.scaled(target, Qt::KeepAspectRatio, fast ? Qt::FastTransformation : Qt::SmoothTransformation)
+                           .convertToFormat(QImage::Format_RGB32);
+            m_scaledDpr = dpr;
             m_scaled.setDevicePixelRatio(dpr);
-            m_scaledFast = m_liveScrub;
+            m_scaledFast = fast;
         }
-        const QPointF topLeft(picture.center().x() - m_scaled.width() / dpr / 2.0,
-                              picture.center().y() - m_scaled.height() / dpr / 2.0);
-        p.drawImage(topLeft, m_scaled);
+        if (m_stageMoving) {
+            // Its size is the picture's, as it goes.
+            const QSizeF shown = QSizeF(m_scaled.size()).scaled(picture.size(), Qt::KeepAspectRatio);
+            p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            p.drawImage(QRectF(picture.center() - QPointF(shown.width(), shown.height()) / 2.0, shown), m_scaled);
+            p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        } else {
+            const QPointF topLeft(picture.center().x() - m_scaled.width() / m_scaledDpr / 2.0,
+                                  picture.center().y() - m_scaled.height() / m_scaledDpr / 2.0);
+            p.drawImage(topLeft, m_scaled);
+        }
         // What was showing, drawn back as what is showing wipes in over it.
         if (m_wipe >= 0.0 && !m_wipeFrom.isNull()) {
             const qreal edge = card.left() + card.width() * m_wipe;

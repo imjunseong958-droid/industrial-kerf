@@ -96,23 +96,34 @@ protected:
     }
 };
 
-void glide(QWidget *widget, const QRect &to, int delay, int duration) {
-    auto *move = new QPropertyAnimation(widget, "geometry", widget);
-    move->setDuration(duration);
-    move->setEndValue(to);
-    move->setEasingCurve(tokens::easing());
-    QTimer::singleShot(delay, move, [move, widget] {
-        move->setStartValue(widget->geometry());
-        move->start(QAbstractAnimation::DeleteWhenStopped);
-    });
+// Moves on `target`, one to a property: two at once would fight over each frame.
+// Each is its child, waiting or running, until it has ended.
+QPropertyAnimation *moveUnder(QObject *target, const QByteArray &property) {
+    const QList<QPropertyAnimation *> moves = target->findChildren<QPropertyAnimation *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QPropertyAnimation *move : moves)
+        if (move->propertyName() == property && !move->property("ended").toBool()) return move;
+    return nullptr;
 }
 
 void ease(QObject *target, const char *property, const QVariant &to, int delay, int duration) {
+    if (QPropertyAnimation *under = moveUnder(target, property)) {
+        under->setProperty("ended", true);
+        under->stop();
+        under->deleteLater();
+    }
     auto *change = new QPropertyAnimation(target, property, target);
     change->setDuration(duration);
     change->setEndValue(to);
     change->setEasingCurve(tokens::easing());
+    QObject::connect(change, &QAbstractAnimation::finished, change, [change] { change->setProperty("ended", true); });
+    // From wherever it has got to by then.
     QTimer::singleShot(delay, change, [change] { change->start(QAbstractAnimation::DeleteWhenStopped); });
+}
+
+// Where it rests now: a move under way goes on to there.
+void settle(QObject *target, const char *property, const QVariant &to, const std::function<void()> &atOnce) {
+    if (QPropertyAnimation *under = moveUnder(target, property)) under->setEndValue(to);
+    else atOnce();
 }
 
 } // namespace
@@ -120,7 +131,12 @@ void ease(QObject *target, const char *property, const QVariant &to, int delay, 
 ComparePoster::ComparePoster(QWidget *parent) : QWidget(parent) {}
 
 void ComparePoster::setImage(const QImage &image) {
-    m_image = image;
+    // The same picture comes again with each change of state.
+    if (image.cacheKey() == m_source) return;
+    m_source = image.cacheKey();
+    // Redrawn in each frame of the fan, whatever size it came in.
+    QImage ready = image.width() > motion::posterMost ? image.scaledToWidth(motion::posterMost, Qt::SmoothTransformation) : image;
+    m_image = ready.convertToFormat(QImage::Format_RGB32);
     update();
 }
 
@@ -224,13 +240,13 @@ void CompareView::setVersions(const QList<Version> &versions) {
     // The one chosen is on its way: what it is now does not change that.
     if (m_picking) return;
     QStringList keys;
-    bool fresh = false;
+    QStringList fresh;
     for (const Version &version : versions) {
         keys << version.key;
         bool made = false;
         Card &card = cardFor(version.key, &made);
         if (made) {
-            fresh = true;
+            fresh << version.key;
             // It starts as the picture.
             card.frame->setGeometry(m_origin.isValid() ? m_origin : QRect(width() / 2, height() / 2, 1, 1));
             card.frame->show();
@@ -264,7 +280,7 @@ void CompareView::setVersions(const QList<Version> &versions) {
         card.frame->deleteLater();
     }
     m_keys = keys;
-    placeCards(fresh);
+    placeCards(!fresh.isEmpty(), fresh);
 }
 
 QRect CompareView::cardRect(int index, int count) const {
@@ -278,21 +294,27 @@ QRect CompareView::cardRect(int index, int count) const {
     return QRect(left + index * (w + kGap), (height() - h) / 2, w, h);
 }
 
-void CompareView::placeCards(bool animate) {
+void CompareView::placeCards(bool animate, const QStringList &fresh) {
+    // The chosen card has somewhere else to be.
+    if (m_picking) return;
     const int duration = animate ? ui::motionDuration(motion::stage) : 0;
     const int count = int(m_keys.size());
+    int arriving = 0;
     for (int index = 0; index < count; ++index) {
         QFrame *frame = m_byKey.value(m_keys.at(index)).frame;
         const QRect to = cardRect(index, count);
+        CardLean *effect = leanOf(frame);
         // The outer ones lean out from the middle.
         const qreal lean = (index - (count - 1) / 2.0) * motion::cardLean;
-        if (duration > 0) {
-            glide(frame, to, index * motion::fanStagger, duration);
-            if (CardLean *effect = leanOf(frame)) ease(effect, "angle", lean, index * motion::fanStagger, duration);
-        } else {
-            frame->setGeometry(to);
-            if (CardLean *effect = leanOf(frame)) effect->setAngle(lean);
+        const bool on = moveUnder(frame, "geometry") != nullptr;
+        if (duration > 0 && !on && frame->geometry() != to) {
+            const int delay = fresh.contains(m_keys.at(index)) ? arriving++ * motion::fanStagger : 0;
+            ease(frame, "geometry", to, delay, duration);
+            if (effect) ease(effect, "angle", lean, delay, duration);
+            continue;
         }
+        settle(frame, "geometry", to, [frame, to] { frame->setGeometry(to); });
+        if (effect) settle(effect, "angle", lean, [effect, lean] { effect->setAngle(lean); });
     }
 }
 
@@ -303,6 +325,7 @@ void CompareView::playPick(const QString &proposalId, const QRect &to, std::func
         return;
     }
     m_picking = true;
+    // ease() takes over from whatever each card was doing.
     for (const QString &key : std::as_const(m_keys)) {
         const Card &card = m_byKey[key];
         CardLean *effect = leanOf(card.frame);
@@ -312,13 +335,13 @@ void CompareView::playPick(const QString &proposalId, const QRect &to, std::func
             for (QWidget *part : card.frame->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != card.poster) part->hide();
             card.poster->setPlain(true);
-            glide(card.frame, to, 0, duration);
+            ease(card.frame, "geometry", to, 0, duration);
             if (effect) {
                 ease(effect, "angle", 0.0, 0, duration);
                 ease(effect, "level", 0.0, duration * 7 / 10, duration * 3 / 10);
             }
         } else {
-            glide(card.frame, card.frame->geometry().translated(0, 80), 0, duration);
+            ease(card.frame, "geometry", card.frame->geometry().translated(0, 80), 0, duration);
             if (effect) ease(effect, "level", 0.0, 0, duration / 2);
         }
     }

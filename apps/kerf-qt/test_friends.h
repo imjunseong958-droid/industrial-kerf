@@ -19,6 +19,7 @@ class KitTest;
 class LauncherTest;
 class LinkTest;
 class MockupParityTest;
+class MotionTest;
 class ReviewModelTest;
 class SourceTest;
 class StageShellTest;
@@ -48,6 +49,7 @@ struct Access;
     friend class ::kerf::LauncherTest;                                                                                 \
     friend class ::kerf::LinkTest;                                                                                     \
     friend class ::kerf::MockupParityTest;                                                                             \
+    friend class ::kerf::MotionTest;                                                                                    \
     friend class ::kerf::ReviewModelTest;                                                                              \
     friend class ::kerf::SourceTest;                                                                                   \
     friend class ::kerf::StageShellTest;                                                                                \

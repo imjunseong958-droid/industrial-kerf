@@ -46,6 +46,9 @@ public:
     void setCompareFrame(const QImage &before);
     bool isComparing() const { return !m_compareFrame.isNull(); }
     void setLiveScrub(bool live);
+    // While the window's regions move, the picture it has is drawn to size, smooth
+    // enough to move, rather than made again in each frame.
+    void setStageMoving(bool moving);
     // The engine's caption at the playhead (a `caption {text}` event).
     void setCaption(const QString &caption);
     QString caption() const { return m_caption; }
@@ -204,7 +207,11 @@ private:
     void removeSelectedMask();
 
     QImage m_frame;
+    // Marks what a line across the picture crossed in going `from` `to`, as shares
+    // of the picture, and `reach` points either side.
+    void updateLine(qreal from, qreal to, int reach);
     QImage m_scaled;
+    bool m_stageMoving = false;
     // The picture's colour, lit around it.
     void followGlow(const QImage &frame);
     bool m_floating = false;
@@ -231,6 +238,7 @@ private:
     bool m_skimming = false;
     bool m_liveScrub = false;
     bool m_scaledFast = false;
+    qreal m_scaledDpr = 1.0;
     QString m_caption;
 
     bool m_annotationsShown = true;
