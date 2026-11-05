@@ -1,0 +1,30 @@
+[package]
+name = "kerf-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Project-scoped MCP stdio router for the native Kerf runtime"
+
+[lib]
+name = "kerf_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kerf-mcp"
+path = "src/bin/kerf-mcp.rs"
+
+[dependencies]
+base64 = "0.23"
+kerf-agent = { path = "../../surfaces/kerf-agent" }
+kerf-engine = { path = "../../engine/kerf-engine" }
+kerf-lang = { path = "../../foundation/kerf-lang" }
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-runtime = { path = "../../surfaces/kerf-runtime" }
+kerf-skills = { path = "../../surfaces/kerf-skills" }
+kerf-text = { path = "../../foundation/kerf-text" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

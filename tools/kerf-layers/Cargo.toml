@@ -1,0 +1,10 @@
+[package]
+name = "kerf-layers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Checks that Kerf's crates depend only on what their folder allows"
+publish = false
+
+[lints]
+workspace = true

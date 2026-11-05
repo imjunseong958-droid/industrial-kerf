@@ -1,0 +1,9 @@
+[package]
+name = "kerf-lang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Text form of Kerf projects: the canonical .kerf document and the edit script"
+
+[dependencies]
+kerf-model = { path = "../../foundation/kerf-model" }

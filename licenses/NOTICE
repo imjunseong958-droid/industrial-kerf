@@ -16,6 +16,6 @@ source, are not covered by the licenses above, and are not carried here.
 
 Third-party material
 
-Inter font (crates/kerf-text/fonts/Inter-*.ttf) — OFL-1.1. See OFL-Inter.txt.
-Noto Serif font (crates/kerf-text/fonts/NotoSerif-Regular.ttf) — OFL-1.1. See OFL-NotoSerif.txt.
-JetBrains Mono font (crates/kerf-text/fonts/JetBrainsMono-Regular.ttf) — OFL-1.1. See OFL-JetBrainsMono.txt.
+Inter font (crates/foundation/kerf-text/fonts/Inter-*.ttf) — OFL-1.1. See OFL-Inter.txt.
+Noto Serif font (crates/foundation/kerf-text/fonts/NotoSerif-Regular.ttf) — OFL-1.1. See OFL-NotoSerif.txt.
+JetBrains Mono font (crates/foundation/kerf-text/fonts/JetBrainsMono-Regular.ttf) — OFL-1.1. See OFL-JetBrainsMono.txt.

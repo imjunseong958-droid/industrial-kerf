@@ -383,7 +383,7 @@ frame-exact timeline (positions in frames of the sequence, media times in
 frames of the media) and invokes the configured native or external adapter
 through a small JSON bridge, reporting what the conversion leaves out.
 OpenTimelineIO conversion uses the bundled
-`crates/kerf-interchange/python/otio_bridge.py` and requires an environment
+`crates/edit/kerf-interchange/python/otio_bridge.py` and requires an environment
 with `opentimelineio` plus the requested adapter installed.
 
 ## Verification

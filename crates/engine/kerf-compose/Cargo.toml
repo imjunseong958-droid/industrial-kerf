@@ -1,0 +1,18 @@
+[package]
+name = "kerf-compose"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kerf's compositor: a sequence drawn frame by frame in linear light, with footage decoded by libav"
+
+[dependencies]
+kerf-core = { path = "../../engine/kerf-core" }
+kerf-draw = { path = "../../render/kerf-draw" }
+kerf-fx = { path = "../../effects/kerf-fx" }
+kerf-model = { path = "../../foundation/kerf-model" }
+ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-scaling"] }
+thiserror = "2"
+
+[dev-dependencies]
+kerf-lang = { path = "../../foundation/kerf-lang" }
+tempfile = "3"

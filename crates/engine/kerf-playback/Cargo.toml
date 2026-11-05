@@ -1,0 +1,33 @@
+[package]
+name = "kerf-playback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native Kerf playback controller, timeline mapper, and in-process libav decoder"
+rust-version = "1.95"
+
+[lib]
+name = "kerf_playback"
+path = "src/lib.rs"
+
+[features]
+default = ["native-audio"]
+native-audio = ["dep:cpal", "dep:windows-sys"]
+
+[dependencies]
+cpal = { version = "0.15.3", optional = true }
+kerf-compose = { path = "../../engine/kerf-compose" }
+kerf-core = { path = "../../engine/kerf-core" }
+kerf-fx = { path = "../../effects/kerf-fx" }
+kerf-model = { path = "../../foundation/kerf-model" }
+ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }
+serde_json = "1"
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Com"] }
+
+[dev-dependencies]
+kerf-lang = { path = "../../foundation/kerf-lang" }
+kerf-model = { path = "../../foundation/kerf-model" }
+tempfile = "3"
