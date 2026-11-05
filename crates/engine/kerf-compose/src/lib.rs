@@ -1,0 +1,94 @@
+//! Kerf's compositor: a sequence drawn frame by frame from Kerf's model, in
+//! linear light, with the drawing carried from FilmCraft (`kerf-draw`), the
+//! transitions and effects carried from FilmCraft and the EffectCraft
+//! effects Kerf keeps (`kerf-fx`), and media decoded by libav. `draw` says
+//! how each part of a sequence is drawn.
+
+mod domains;
+mod draw;
+mod footage;
+mod sound;
+
+use kerf_model::{Catalog, Project, Rate, Time};
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ComposeError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{entity}: {what} cannot be drawn yet")]
+    Unsupported { entity: String, what: String },
+}
+
+impl ComposeError {
+    /// The clip, transition, or sequence the error is about.
+    pub fn entity(&self) -> Option<&str> {
+        match self {
+            Self::Unsupported { entity, .. } => Some(entity),
+            Self::Invalid(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ComposeOptions {
+    /// The sequence to draw; the first one when absent.
+    pub sequence: Option<String>,
+    /// Draw captions into the picture, as a render burns them in. A viewer
+    /// that shows captions itself leaves them out.
+    pub captions: bool,
+}
+
+/// One frame of straight RGBA, row by row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// A sequence ready to draw.
+pub struct Compositor {
+    drawing: draw::Drawing,
+}
+
+impl Compositor {
+    pub fn new(
+        project: &Project,
+        catalog: &Catalog,
+        options: &ComposeOptions,
+    ) -> Result<Self, ComposeError> {
+        Ok(Self {
+            drawing: draw::Drawing::new(
+                project,
+                catalog,
+                options.sequence.as_deref(),
+                options.captions,
+            )?,
+        })
+    }
+
+    /// The canvas, made even as a render makes it.
+    pub fn size(&self) -> (u32, u32) {
+        self.drawing.size()
+    }
+
+    pub fn rate(&self) -> Rate {
+        self.drawing.rate()
+    }
+
+    pub fn duration(&self) -> Time {
+        self.drawing.duration()
+    }
+
+    /// The picture at sequence time `at` over black, at `scale` of the
+    /// canvas (1 is full size).
+    pub fn frame(&self, at: Time, scale: f64) -> Frame {
+        self.drawing.frame(at, scale)
+    }
+
+    /// Media that could not be read, each with why. Their clips draw
+    /// nothing.
+    pub fn problems(&self) -> Vec<String> {
+        self.drawing.problems()
+    }
+}

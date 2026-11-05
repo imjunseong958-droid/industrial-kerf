@@ -1,29 +1,39 @@
 [workspace]
 members = [
-    "crates/kerf-core",
-    "crates/kerf-model",
-    "crates/kerf-fx",
-    "crates/kerf-compose",
-    "crates/kerf-lang",
-    "crates/kerf-engine",
-    "crates/kerf-playback",
-    "crates/kerf-runtime",
-    "crates/kerf-qt-bridge",
-    "crates/kerf-commands",
-    "crates/kerf-cloud",
-    "crates/kerf-skills",
-    "crates/kerf-fetcher",
-    "crates/kerf-interchange",
-    "crates/kerf-agent",
-    "crates/kerf-mcp",
-    "crates/kerf-cli",
-    "crates/kerf-collab",
-    "crates/kerf-draw",
-    "crates/kerf-color",
-    "crates/kerf-geom",
-    "crates/kerf-text",
-    "crates/kerf-raster",
-    "crates/kerf-raster-fx",
+    # foundation
+    "crates/foundation/kerf-model",
+    "crates/foundation/kerf-lang",
+    "crates/foundation/kerf-geom",
+    "crates/foundation/kerf-color",
+    "crates/foundation/kerf-text",
+    # render
+    "crates/render/kerf-raster",
+    "crates/render/kerf-draw",
+    # edit
+    "crates/edit/kerf-interchange",
+    "crates/edit/kerf-collab",
+    # effects
+    "crates/effects/kerf-fx",
+    "crates/effects/kerf-raster-fx",
+    # image
+    "crates/image/kerf-image",
+    # engine
+    "crates/engine/kerf-core",
+    "crates/engine/kerf-compose",
+    "crates/engine/kerf-playback",
+    "crates/engine/kerf-engine",
+    # surfaces
+    "crates/surfaces/kerf-runtime",
+    "crates/surfaces/kerf-agent",
+    "crates/surfaces/kerf-mcp",
+    "crates/surfaces/kerf-skills",
+    "crates/surfaces/kerf-commands",
+    "crates/surfaces/kerf-cli",
+    "crates/surfaces/kerf-qt-bridge",
+    "crates/surfaces/kerf-cloud",
+    "crates/surfaces/kerf-fetcher",
+    # tools
+    "tools/kerf-layers",
 ]
 resolver = "2"
 

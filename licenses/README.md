@@ -16,13 +16,14 @@ on, and Kerf does not follow upstream.
 
 | Where | What it carries |
 |---|---|
-| `crates/kerf-raster-fx` | The 24 EffectCraft effects Kerf keeps, with the tracking and plane code they run on |
-| `crates/kerf-raster` | EffectCraft's raster images, warps, and blurs |
-| `crates/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
-| `crates/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
-| `crates/kerf-text` | FilmCraft's text engine |
-| `crates/kerf-draw` | FilmCraft's renderer, in Kerf's terms |
-| `crates/kerf-fx/src/filmcraft`, `crates/kerf-fx/src/transitions` | FilmCraft's video effects and transitions |
+| `crates/effects/kerf-raster-fx` | The 24 EffectCraft effects Kerf keeps, with the tracking and plane code they run on |
+| `crates/render/kerf-raster` | EffectCraft's raster images, warps, and blurs |
+| `crates/image/kerf-image/src/fill.rs` | EffectCraft's hole filling |
+| `crates/foundation/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
+| `crates/foundation/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
+| `crates/foundation/kerf-text` | FilmCraft's text engine |
+| `crates/render/kerf-draw` | FilmCraft's renderer, in Kerf's terms |
+| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions |
 
 That code is MIT OR Apache-2.0, at your option: `LICENSE-MIT-ArtCraft` and
 `LICENSE-APACHE-2.0`. The ArtCraft name, wordmark, and logos are trademarks
@@ -30,7 +31,7 @@ outside that license and are not carried.
 
 ## Fonts
 
-`crates/kerf-text/fonts` holds these fonts, unmodified. The text engine
+`crates/foundation/kerf-text/fonts` holds these fonts, unmodified. The text engine
 embeds them with `include_bytes!`.
 
 | Font | Author | Source | License |

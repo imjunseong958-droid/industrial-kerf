@@ -104,7 +104,7 @@ int lightnessAt(const QImage &image, const QPointF &at);
 void showAssistant(MainWindow &window);
 
 // The catalog's clip properties and generators, as a snapshot carries
-// them (crates/kerf-model catalog.rs), for the Inspector's tests.
+// them (crates/foundation/kerf-model catalog.rs), for the Inspector's tests.
 QJsonObject catalogProperties();
 
 // The catalog's generators and their parameters.

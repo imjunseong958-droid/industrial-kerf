@@ -1,0 +1,14 @@
+[package]
+name = "kerf-draw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kerf's drawing: pictures in premultiplied linear light, and the blending, masks, blur, color, and text drawn on them"
+
+# The drawing here is carried from FilmCraft's renderer in Kerf's terms.
+[dependencies]
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-color = { path = "../../foundation/kerf-color" }
+kerf-geom = { path = "../../foundation/kerf-geom" }
+kerf-text = { path = "../../foundation/kerf-text" }
+rayon = "1"

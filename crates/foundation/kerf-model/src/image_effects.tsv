@@ -1,0 +1,7 @@
+# The image area's effects (crates/image/kerf-image), written by hand: effect,
+# id, category, name, when to use it; then each parameter.
+effect	image.fill	Image	Fill Area	Removes what a mask outlines (a logo, a stray object, a boom) by filling it from the rest of the picture. Draw the mask with mode=none so the picture stays whole for it. Works frame by frame: right for stills and locked-off shots; on a moving shot the fill changes between frames. A large area takes seconds a frame.
+	mask	path				The mask outlining the area to fill.
+	enum	method	object	object|smooth		object matches texture from the picture; smooth blends the area's edges across it, for skies and walls, and is faster.
+	number	expand	2	0..100	px	Grows the area past the mask, in source pixels, to leave no edge behind.
+	number	patch	7	3..31	px	The size of the patches object compares.

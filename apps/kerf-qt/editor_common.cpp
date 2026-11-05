@@ -99,7 +99,7 @@ QString mcpExecutable(const QString &projectDirectory) {
     for (const QString &root : roots) {
         QDir directory(root);
         do {
-            if (directory.exists(QStringLiteral("crates/kerf-mcp/Cargo.toml"))) {
+            if (directory.exists(QStringLiteral("crates/surfaces/kerf-mcp/Cargo.toml"))) {
                 candidates << directory.filePath(QStringLiteral("target/release/") + binary)
                            << directory.filePath(QStringLiteral("target/debug/") + binary);
                 break;

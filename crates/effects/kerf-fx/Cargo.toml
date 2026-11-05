@@ -1,0 +1,18 @@
+[package]
+name = "kerf-fx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kerf's effects and transitions: the video effects and transitions carried from FilmCraft, and the EffectCraft effects Kerf keeps"
+
+# The EffectCraft effects Kerf keeps live in `kerf-raster-fx`; a change to
+# their parameters means regenerating the catalog table (see
+# `raster_catalog_is_current`).
+[dependencies]
+kerf-draw = { path = "../../render/kerf-draw" }
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-color = { path = "../../foundation/kerf-color" }
+kerf-geom = { path = "../../foundation/kerf-geom" }
+kerf-text = { path = "../../foundation/kerf-text" }
+kerf-raster-fx = { path = "../../effects/kerf-raster-fx" }
+rayon = "1"

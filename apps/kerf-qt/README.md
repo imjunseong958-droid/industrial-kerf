@@ -81,7 +81,7 @@ per region, run together by `tests/test_main.cpp`) build into
 `kerf-qt-tests` instead.
 
 Menus, shortcuts, the toolbar, the player's controls, and timeline gestures
-run commands from the registry in `crates/kerf-commands`. Each
+run commands from the registry in `crates/surfaces/kerf-commands`. Each
 command is one `QAction` whose label, shortcuts, and enabled state come
 from the registry; an unavailable command says why in its tooltip and the
 toolbar's subtitle. Edit → Keyboard Shortcuts switches between the Kerf, Premiere

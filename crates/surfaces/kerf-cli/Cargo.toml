@@ -1,0 +1,26 @@
+[package]
+name = "kerf-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native terminal agent and project workflow CLI for Kerf"
+
+[[bin]]
+name = "kerf"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+kerf-agent = { path = "../../surfaces/kerf-agent" }
+kerf-collab = { path = "../../edit/kerf-collab" }
+kerf-engine = { path = "../../engine/kerf-engine" }
+kerf-fetcher = { path = "../../surfaces/kerf-fetcher" }
+kerf-mcp = { path = "../../surfaces/kerf-mcp" }
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-runtime = { path = "../../surfaces/kerf-runtime" }
+kerf-skills = { path = "../../surfaces/kerf-skills" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

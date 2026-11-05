@@ -1,0 +1,16 @@
+[package]
+name = "kerf-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kerf's image tools: what an editor once took a picture to a photo editor for"
+
+# fill.rs is carried from EffectCraft (see licenses/README.md).
+[dependencies]
+kerf-draw = { path = "../../render/kerf-draw" }
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-raster = { path = "../../render/kerf-raster" }
+rayon.workspace = true
+
+[lints]
+workspace = true
