@@ -7,11 +7,11 @@ use kerf_compose::{ComposeOptions, Compositor};
 use kerf_model::{Catalog, Project, Time};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Write `frame` to `path` as a PNG.
 pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
-    let mut child = Command::new(resolve_ffmpeg_bin())
+    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-s"])
         .arg(format!("{}x{}", frame.width, frame.height))

@@ -1,0 +1,75 @@
+name: Windows package
+
+# The Qt editor as a zip that runs on its own (scripts/package-kerf-windows.ps1),
+# kept as this run's artifact. By hand (Actions > Windows package > Run workflow),
+# and when what makes the package changes. It publishes nothing.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/package-kerf-windows.ps1"
+      - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/CMakeLists.txt"
+      - ".github/workflows/windows-package.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/package-kerf-windows.ps1"
+      - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/CMakeLists.txt"
+      - ".github/workflows/windows-package.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The FFmpeg and Qt the Windows job in rust-runtime.yml tests against.
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          $version = '9.0.2'
+          $sha256 = '4d2060a8b34a940aa47d785142055bb92a63053781e55f2ace4546edd519a8f5'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.7z'
+          $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$version/ffmpeg-$version-full_build-shared.7z" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $version archive does not match its checksum" }
+          7z x $archive "-o$target" | Out-Null
+          $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$root" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
+          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.*"
+          arch: win64_msvc2022_64
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build, pack and run the package
+        shell: pwsh
+        run: scripts/package-kerf-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: industrial-kerf-windows-x64
+          path: |
+            target/package/*.zip
+            target/package/*.zip.sha256
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error

@@ -19,8 +19,24 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// A command for a console tool, for what runs inside the editor as well as
+/// kerfd. The editor has no console, so on Windows each such tool it starts
+/// would otherwise open a window of its own.
+#[cfg(windows)]
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(program);
+    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(windows))]
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    Command::new(program)
+}
+
 fn bin_exists(candidate: &str) -> bool {
-    Command::new(candidate)
+    hidden_command(candidate)
         .arg("-version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -115,7 +131,7 @@ pub fn cached_encoder_listing() -> Result<&'static str> {
 }
 
 pub fn run(bin: &str, args: &[String]) -> Result<CommandOutput> {
-    let output = Command::new(bin)
+    let output = hidden_command(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -150,7 +166,7 @@ pub fn run(bin: &str, args: &[String]) -> Result<CommandOutput> {
 }
 
 pub fn run_allow_failure(bin: &str, args: &[String]) -> Result<CommandOutput> {
-    let output = Command::new(bin)
+    let output = hidden_command(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

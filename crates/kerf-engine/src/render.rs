@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::thread;
@@ -668,7 +668,7 @@ where
         },
     )?;
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
-    let mut child = Command::new(resolve_ffmpeg_bin())
+    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(&render.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -814,7 +814,7 @@ pub(crate) fn run_ffmpeg_with_progress<F>(
 where
     F: FnMut(f64),
 {
-    let mut command = Command::new(resolve_ffmpeg_bin());
+    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     command.args(args);
     let finished = sidecar::run(command, cancellation, |line| {
         let Some(seconds) = extract_time(line).and_then(parse_time_seconds) else {

@@ -389,7 +389,7 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         as u32)
         .max(2)
         & !1;
-    let output = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+    let output = kerf_engine::ffmpeg::hidden_command(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-ss"])
         .arg(kerf_engine::program::secs(source))
         .arg("-i")

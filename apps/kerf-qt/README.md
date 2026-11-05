@@ -23,6 +23,12 @@ On macOS the build is an application bundle, `target/qt/kerf-qt.app`
 `target/qt/kerf-qt.app/Contents/MacOS/kerf-qt` where these examples run
 `target/qt/kerf-qt`.
 
+On Windows, `scripts/package-kerf-windows.ps1` makes a zip that runs on its own:
+the editor, `kerfd`, `kerf`, `kerf-mcp`, and the Qt, FFmpeg and C++ runtime libraries
+beside them. The script's help says what it needs; the **Windows package** workflow
+runs it and keeps the zip as an artifact. The package is a folder, with no
+installer, so Windows does not open `kerf://` links with it.
+
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
 installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead

@@ -1,0 +1,21 @@
+Industrial Kerf is MIT licensed (LICENSE). This package also carries the
+following, unmodified, each under its own terms.
+
+Qt 6 (the Qt*.dll files and the plugins folders)
+  LGPL-3.0, dynamically linked.
+  https://www.qt.io/licensing  Source: https://download.qt.io/official_releases/qt/
+
+FFmpeg (ffmpeg.exe, ffprobe.exe, and the av*, sw* and postproc DLLs)
+  The terms depend on the build this package was made from. A build with
+  GPL parts, such as libx264, is GPL-licensed as a whole.
+  FFmpeg-LICENSE.txt is the licence the build came with, when it had one.
+  https://ffmpeg.org/legal.html  Source: https://ffmpeg.org/download.html
+
+Microsoft Visual C++ Runtime (msvcp140*.dll, vcruntime140*.dll, concrt140.dll)
+  Redistributable under the Visual Studio licence terms.
+
+Inter and JetBrains Mono (compiled into kerf-qt.exe)
+  SIL OFL 1.1. See fonts\.
+
+Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine
+  See licenses\NOTICE.

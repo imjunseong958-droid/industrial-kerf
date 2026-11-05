@@ -411,7 +411,7 @@ pub fn make_proxy(
         return Ok(Some(entry.path(PROXY_FILE)));
     }
     let partial = entry.path("proxy.partial.mp4");
-    let mut command = std::process::Command::new(crate::ffmpeg::resolve_ffmpeg_bin());
+    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
     command
         .args(crate::ffmpeg::video_decode_prefix())
         .args(["-hide_banner", "-nostats", "-y", "-i"])

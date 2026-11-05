@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::thread;
 
 const BAKE_FILE: &str = "frames.mkv";
@@ -165,7 +165,7 @@ fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken)
     let partial = entry.path("frames.partial.mkv");
 
     let ffmpeg = crate::ffmpeg::resolve_ffmpeg_bin();
-    let mut decoder = Command::new(ffmpeg)
+    let mut decoder = crate::ffmpeg::hidden_command(ffmpeg)
         .args(["-hide_banner", "-nostats", "-v", "error", "-ss"])
         .arg(crate::program::secs(job.from))
         .arg("-i")
@@ -179,7 +179,7 @@ fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut encoder = match Command::new(ffmpeg)
+    let mut encoder = match crate::ffmpeg::hidden_command(ffmpeg)
         .args(["-hide_banner", "-nostats", "-v", "error", "-y"])
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-s"])
         .arg(format!("{width}x{height}"))
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn a_child_that_fills_its_stderr_still_finishes() {
         // Far more than a pipe holds, before the stdout it is read for.
-        let mut child = Command::new("sh")
+        let mut child = std::process::Command::new("sh")
             .args(["-c", "i=0; while [ $i -lt 4000 ]; do echo \"error while decoding MB $i\" >&2; i=$((i+1)); done; echo done"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
