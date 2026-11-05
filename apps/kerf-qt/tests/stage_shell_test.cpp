@@ -1049,14 +1049,14 @@ private slots:
     }
 
     void motionUiTokensHoldTogether() {
-        using namespace tokens::motion;
+        namespace motion = tokens::motion;
         // A timeline starts in before the stage lands, and a flight's stand-in
         // appears before it lands.
-        QVERIFY(timelineLead < stage);
-        QVERIFY(appear < flight);
-        QVERIFY(flightLand < flight);
-        QVERIFY(chatBehind > 0.0 && chatBehind < 1.0);
-        QVERIFY(timelineBehind > 0.0 && timelineBehind < 1.0);
+        QVERIFY(motion::timelineLead < motion::stage);
+        QVERIFY(motion::appear < motion::flight);
+        QVERIFY(motion::flightLand < motion::flight);
+        QVERIFY(motion::chatBehind > 0.0 && motion::chatBehind < 1.0);
+        QVERIFY(motion::timelineBehind > 0.0 && motion::timelineBehind < 1.0);
     }
 
     void theStripSitsOnAnUprightPicture() {
