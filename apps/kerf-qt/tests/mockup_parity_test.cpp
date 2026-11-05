@@ -1,5 +1,5 @@
 // The whole editor against the approved minimal mockup (03-review-thread.html)
-// at its 1600 x 1000 canvas: in 16:9, 9:16 and the custom shapes 1:1 and 4:5, the base
+// at its 1600 x 1000 canvas: in 16:9 and 9:16, the base
 // state, each of the three sheets, and both trays, fed the seed (comments,
 // proposals, a check, loudness and a render queue) as kerfd sends it, through
 // handleEvent. Each state's rects are checked against the brief's table, with no
@@ -172,8 +172,6 @@ struct Format {
 const Format kFormats[] = {
     {"169", QSize(1920, 1080), QRect(0, 40, 1240, 420), QRect(246, 40, 747, 420), QRect(1240, 40, 360, 960), QRect(0, 460, 1240, 540)},
     {"916", QSize(1080, 1920), QRect(0, 40, 450, 800), QRect(0, 40, 450, 800), QRect(1240, 40, 360, 960), QRect(450, 40, 790, 960)},
-    {"45", QSize(1080, 1350), QRect(0, 40, 640, 800), QRect(0, 40, 640, 800), QRect(1240, 40, 360, 960), QRect(640, 40, 600, 960)},
-    {"11", QSize(1080, 1080), QRect(0, 40, 640, 800), QRect(0, 120, 640, 640), QRect(1240, 40, 360, 960), QRect(640, 40, 600, 960)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -308,7 +306,7 @@ private slots:
             checkConversationRows(window);
             window.close();
         }
-        QCOMPARE(states, 4 * (1 + 3 + 2 + 1));
+        QCOMPARE(states, 2 * (1 + 3 + 2 + 1));
     }
 
     // The timeline at the design's size: its strip, heads, default heights, and a

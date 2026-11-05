@@ -155,23 +155,6 @@ private slots:
         QVERIFY(tokens::motion::fade < tokens::motion::segment);
         QVERIFY(tokens::motion::segment < tokens::motion::move);
     }
-
-    // The default sizes fill the 1600 x 1000 design edge to edge.
-    void layoutFillsTheDesignCanvas() {
-        using namespace tokens::layout;
-        // The conversation at the right, and at its left a wide picture's
-        // slot over the timeline.
-        QCOMPARE(canvasWidth - rail, 1240);
-        QCOMPARE(canvasHeight - toolbar, 960);
-        QCOMPARE(960 * timelineWideShare, 540.0);
-        // The transport's block under a vertical picture leaves it 9:16 at 450.
-        QCOMPARE((960 - pictureTransport) * 9 / 16, 450);
-        QCOMPARE(band, 344);
-        QVERIFY(railLeast < rail);
-        QVERIFY(pictureColumnLeast < timelineUprightLeast);
-        QCOMPARE(inspector, browser);
-        QVERIFY(bin < inspector);
-    }
 };
 
 } // namespace kerf

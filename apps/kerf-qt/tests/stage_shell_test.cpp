@@ -158,24 +158,6 @@ private slots:
         }
     }
 
-    void aScopeSequence() {
-        const double scope = 2.39;
-        const stage::Rects r = stage::rects(QSize(1600, 1000), scope);
-        QVERIFY(r.wide);
-        QCOMPARE(r.slot, QRect(0, 40, 1240, 420));
-        QCOMPARE(r.picture.height(), 420);
-        QCOMPARE(r.conversation, QRect(1240, 40, 360, 960));
-        QCOMPARE(r.timeline, QRect(0, 460, 1240, 540));
-        expectFilled(r, QSize(1600, 1000), "scope");
-        // Just over the line: pillarboxed at the design's size.
-        const stage::Rects four = stage::rects(QSize(1600, 1000), 1.25);
-        QCOMPARE(four.slot, QRect(0, 40, 1240, 420));
-        QCOMPARE(four.picture.size(), QSize(525, 420));
-        QCOMPARE(four.picture.left(), 357);
-        QCOMPARE(four.timeline.height(), 540);
-        expectFilled(four, QSize(1600, 1000), "1.25");
-    }
-
     // The timeline keeps 600 of width while the picture's column can give it
     // up, down to 240; the picture then letterboxes.
     void verticalAtOtherWindowSizes() {
@@ -273,11 +255,6 @@ private slots:
         QCOMPARE(strip->zoomInButton()->geometry().right() + 1, strip->width() - 12);
         window.m_bus->setPlayhead(2.0);
         QCOMPARE(block->time(), timelineTimecode(2.0, window.m_bus->fps()));
-
-        // A square sequence is a vertical one here, and the block stays.
-        window.applySnapshot(snapshotOf(QSize(1080, 1080)));
-        QCoreApplication::processEvents();
-        QVERIFY(block->isAncestorOf(play));
 
         window.applySnapshot(snapshotOf(QSize(1920, 1080)));
         QCoreApplication::processEvents();

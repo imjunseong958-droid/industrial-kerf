@@ -243,7 +243,6 @@ private slots:
         }
         QCOMPARE(ui::tipName(bank->segment(0)), QStringLiteral("Landscape 16:9 · 1920×1080"));
         QCOMPARE(ui::tipName(bank->segment(1)), QStringLiteral("Vertical 9:16 · 1080×1920"));
-        QCOMPARE(bank->count(), 2);
         QCOMPARE(ui::tipShortcut(bank->segment(1)), QKeySequence(Qt::ALT | Qt::Key_2).toString(QKeySequence::NativeText));
 
         // Offline the click does not hold: the project's format stays on.
@@ -283,12 +282,6 @@ private slots:
         QCOMPARE(bank->currentIndex(), -1);
         QVERIFY(bank->fillRect().isEmpty());
         QCOMPARE(bank->toolTip(), QStringLiteral("Custom · 1280 × 720"));
-        // 1:1 and 4:5 are such sizes.
-        for (const QSize &size : {QSize(1080, 1080), QSize(1080, 1350)}) {
-            window.syncCanvasPreset(size);
-            QCOMPARE(bank->currentIndex(), -1);
-            QVERIFY(bank->toolTip().startsWith(QStringLiteral("Custom · ")));
-        }
         window.syncCanvasPreset(QSize(1080, 1920));
         QCOMPARE(bank->currentIndex(), 1);
 

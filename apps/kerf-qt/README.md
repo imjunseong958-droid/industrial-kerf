@@ -507,9 +507,9 @@ and its geometry, comments and the review model, Inspector, timeline, bin and
 browser, Source, toolbar, status, Finish, Deliver, the kit, theme, launcher,
 wiring guards, kerf:// links), each fed bridge events shaped as kerfd sends them,
 and `MockupParityTest` checks the whole editor against the design at 1600 × 1000
-in 16:9, 9:16 and the custom shapes 1:1 and 4:5, with each sheet and tray and a preview.
+in 16:9 and 9:16, with each sheet and tray and a preview.
 With `KERF_SCREENSHOT_DIR` set, it saves each state under the mockup's query state
-(`169.png`, `916-inspector.png`, `45-finish.png`, `11-preview.png`, …), and the
+(`169.png`, `916-inspector.png`, `169-finish.png`, `916-preview.png`, …), and the
 region galleries save theirs (`editor-<format>-dark.png`,
 `inspector-<pane>.png`, the launcher's pages, the comments panel's states).
 The pictures in them are the tests' procedural footage (`test_footage.h`:
