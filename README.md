@@ -37,6 +37,12 @@ minutes after the last request instead; `KERFD_IDLE_TIMEOUT`, in the
 environment `kerfd` starts with, sets that wait in seconds, and `0` turns it
 off. The next request starts it again.
 
+The code is split by what it does: `crates/foundation`, `render`, one folder per
+area (`edit`, `effects`, `image`, and in time `color`, `motion`, `vfx`), `engine`,
+and `surfaces`. A crate's folder says what it may depend on, and areas may not
+depend on each other, so each can be rewritten alone
+([architecture and roadmap](docs/architecture.md)).
+
 Renders, playback, and previews read the model. A render job and a proposal
 preview carry the `.kerf` document with media paths resolved against the
 project, and the render compiler lowers its first sequence to one FFmpeg

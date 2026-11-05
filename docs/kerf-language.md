@@ -44,6 +44,13 @@ in stack order beside FilmCraft's effects. Any other id EffectCraft had is
 an error that names what to use instead (`stylize.glow` is
 `light.wonderglow@1` now).
 
+`image.fill` removes what a mask outlines by filling it from the rest of the
+picture. Give the mask `mode=none`, so the picture stays whole for it:
+`mask c1 add k1 rect=0.4,0.4,0.6,0.6 mode=none`, then `fx c1 add image.fill
+path=k1`. `method=object` matches texture, and `method=smooth` blends the edges
+across, for skies and walls. It works frame by frame, so a moving shot's fill
+changes between frames; identical frames, as a still has, reuse one fill.
+
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
 flashes, glitches, film and VHS looks, title pop-ins, and whips and zooms
