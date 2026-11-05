@@ -192,6 +192,32 @@ constexpr int fade = 160;    // popovers and fades
 constexpr int segment = 200; // the segmented control's sliding fill
 constexpr int move = 220;    // the kit's larger moves
 constexpr int stage = 850;   // the window's regions moving to a new arrangement
+// Motion UI: what each scene takes (MOTION_UI.md says which is which).
+constexpr int settle = 420;       // falling back or coming forward: dims, the veil
+constexpr int appear = 320;       // a thing fading in where it is
+constexpr int rise = 620;         // a thing moving up into place
+constexpr int riseStagger = 90;   // between the start window's parts
+constexpr int flight = 720;       // a tile going to where it lands
+constexpr int flightLand = 240;   // its fade once landed, over what it became
+constexpr int flightStagger = 160;
+constexpr int standInRelease = 260; // what stood in for the picture, fading
+constexpr int handOver = 460;     // the start window fading over the editor
+constexpr int pop = 460;          // a footage tile appearing
+constexpr int popStagger = 70;
+constexpr int fanStagger = 110;   // between the version cards
+constexpr int timelineLead = 150; // how long before the stage lands the timeline starts in
+constexpr int cutSettle = 500;    // edits being quiet before a proposed cut renders
+constexpr int workPulse = 1200;   // the working chip's dot, once
+constexpr int compareSweep = 6800; // the before/after wipe, there and back
+// How far things go.
+constexpr qreal compareFrom = 0.28;   // the wipe's line, across the picture
+constexpr qreal compareTo = 0.78;
+constexpr qreal chatBehind = 0.28;    // the conversation while the picture is watched
+constexpr qreal timelineBehind = 0.6; // the room over the timeline under version cards
+constexpr qreal cardLean = 1.5;       // degrees between version cards
+constexpr qreal clipLift = 8.0;       // points a watched clip rises off its lane
+constexpr qreal landOvershoot = 1.05; // a flight going past where it lands
+constexpr qreal popOvershoot = 1.4;   // a tile going past its size
 // The one easing curve: cubic-bezier(.22, 1, .36, 1).
 constexpr qreal easeX1 = 0.22;
 constexpr qreal easeY1 = 1.0;

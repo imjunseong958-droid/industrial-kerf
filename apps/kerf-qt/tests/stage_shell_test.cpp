@@ -1035,6 +1035,30 @@ private slots:
         QCOMPARE(window.m_proposedDuration, 0.0);
     }
 
+    void theBeforeStillComesAndGoes() {
+        ViewerWidget viewer;
+        viewer.resize(640, 360);
+        viewer.setProjectInfo(1920, 1080);
+        QVERIFY(!viewer.isComparing());
+        QImage before(16, 9, QImage::Format_RGB32);
+        before.fill(Qt::blue);
+        viewer.setCompareFrame(before);
+        QVERIFY(viewer.isComparing());
+        viewer.setCompareFrame(QImage());
+        QVERIFY(!viewer.isComparing());
+    }
+
+    void motionUiTokensHoldTogether() {
+        using namespace tokens::motion;
+        // A timeline starts in before the stage lands, and a flight's stand-in
+        // appears before it lands.
+        QVERIFY(timelineLead < stage);
+        QVERIFY(appear < flight);
+        QVERIFY(flightLand < flight);
+        QVERIFY(chatBehind > 0.0 && chatBehind < 1.0);
+        QVERIFY(timelineBehind > 0.0 && timelineBehind < 1.0);
+    }
+
     void theStripSitsOnAnUprightPicture() {
         stage::Panes panes;
         panes.reel = true;

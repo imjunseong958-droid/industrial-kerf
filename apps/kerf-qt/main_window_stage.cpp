@@ -261,7 +261,7 @@ void MainWindow::followContentWithPanes() {
     }
     if (!ui::reducedMotion() && isVisible()) {
         m_shell->veilTimeline(1.0, 0, 0);
-        m_shell->veilTimeline(0.0, tokens::motion::stage - 150, 420);
+        m_shell->veilTimeline(0.0, tokens::motion::stage - tokens::motion::timelineLead, tokens::motion::settle);
         m_holdFlights = true;
         QTimer::singleShot(tokens::motion::stage, this, [this] {
             m_holdFlights = false;

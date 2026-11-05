@@ -208,7 +208,8 @@ was wipes to and fro over what it now is, with the changed clips lifted off thei
 lanes; versions are posters a little askew, fanned out from the picture over the
 timeline; and when Kerf has rendered what was asked, the picture goes back into the
 project's folder and the conversation has the room again. Under Reduce Motion
-everything is simply there.
+everything is simply there. [`MOTION_UI.md`](MOTION_UI.md) lists each scene and what to
+reuse; start there when adding one.
 
 **The panel** opens by itself with the first thing to show: a clip on the
 timeline, or a proposal. After that, or once a pane is opened or closed by hand,

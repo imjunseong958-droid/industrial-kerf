@@ -35,10 +35,6 @@
 
 namespace kerf {
 
-namespace {
-constexpr int kFlightLength = 720;
-} // namespace
-
 using namespace window_parts;
 
 void MainWindow::buildAgentViews() {
@@ -74,7 +70,7 @@ void MainWindow::buildAgentViews() {
         // The strip has its own Exit.
         quietenCutPreview();
         // The conversation falls back while the picture is looked at.
-        moves::dim(m_chat, active ? 0.28 : 1.0);
+        moves::dim(m_chat, active ? tokens::motion::chatBehind : 1.0);
         if (!active) m_timeline->setFocusClips({});
         stage::Panes panes = m_shell->panes();
         panes.reel = active;
@@ -116,7 +112,7 @@ void MainWindow::buildAgentViews() {
     connect(m_changeReel, &ChangeReel::sideChanging, this, [this] { m_viewer->wipeToNextFrame(); });
 
     m_cutPreview.setSingleShot(true);
-    m_cutPreview.setInterval(500);
+    m_cutPreview.setInterval(tokens::motion::cutSettle);
     connect(&m_cutPreview, &QTimer::timeout, this, [this] {
         if (m_proposalId.isEmpty() || !m_timeline->showsProposedCut() || m_changeReel->isActive()) return;
         // One renders at a time; the latest follows when it is done.
@@ -185,9 +181,9 @@ void MainWindow::flyChange(const ReviewModel::ClipChange &change, int index) {
     flight.image = posterForClip(change.clip);
     flight.from = flightStart(source);
     flight.to = toShell(m_timeline, lane);
-    flight.delay = index * 160;
-    flight.duration = kFlightLength;
-    flight.tail = 240;
+    flight.delay = index * tokens::motion::flightStagger;
+    flight.duration = tokens::motion::flight;
+    flight.tail = tokens::motion::flightLand;
     flight.ring = true;
     flight.radius = tokens::radius::small;
     const QJsonObject tracks = withClipNames(proposalTimelineFor(m_snapshot, m_proposalId), m_project.value(QStringLiteral("sources")).toArray());
@@ -196,7 +192,7 @@ void MainWindow::flyChange(const ReviewModel::ClipChange &change, int index) {
             if (value.toObject().value(QStringLiteral("id")).toString() == change.clip) flight.label = value.toObject().value(QStringLiteral("name")).toString();
     if (!m_motion->fly(flight)) return;
     const QImage poster = flight.image;
-    QTimer::singleShot(flight.delay + kFlightLength / 2, this, [this, poster] { coverPicture(poster); });
+    QTimer::singleShot(flight.delay + tokens::motion::flight / 2, this, [this, poster] { coverPicture(poster); });
 }
 
 // While the cut is only a proposal the picture shows each clip as it lands, ahead
@@ -209,7 +205,7 @@ void MainWindow::coverPicture(const QImage &image) {
     cover.from = m_shell->rects().picture;
     cover.to = cover.from;
     cover.fromOpacity = 0.0;
-    cover.duration = 320;
+    cover.duration = tokens::motion::appear;
     cover.lively = false;
     cover.stays = true;
     cover.fit = true;
@@ -272,7 +268,7 @@ void MainWindow::flyExportHome() {
     home.fromOpacity = 0.9;
     home.toOpacity = 0.2;
     home.lively = false;
-    home.duration = 720;
+    home.duration = tokens::motion::flight;
     home.radius = tokens::layout::pictureRadius;
     m_motion->fly(home);
 }
@@ -281,7 +277,7 @@ void MainWindow::takeOverFrom(const QPixmap &look, const QRect &box) {
     if (ui::reducedMotion()) return;
     // The window it follows, laid over this one and fading; the request box
     // goes on to where this one's is.
-    moves::fadeIn(m_chat, 120, 420);
+    moves::fadeIn(m_chat, tokens::motion::hover, tokens::motion::settle);
     QTimer::singleShot(0, this, [this, look, box] {
         const QPoint shift = m_shell->mapTo(this, QPoint());
         const QRect window = rect().translated(-shift);
@@ -290,7 +286,7 @@ void MainWindow::takeOverFrom(const QPixmap &look, const QRect &box) {
         room.from = window;
         room.to = window;
         room.toOpacity = 0.0;
-        room.duration = 460;
+        room.duration = tokens::motion::handOver;
         room.lively = false;
         room.radius = 0;
         m_motion->fly(room);
@@ -543,8 +539,8 @@ void MainWindow::followVersion(const QJsonObject &event) {
 // The picture gives way to the cards, and the timeline falls back under them.
 void MainWindow::showCompare(bool shown) {
     m_shell->setCompareShown(shown);
-    moves::dim(m_viewer, shown ? 0.0 : 1.0, 320);
-    m_shell->veilTimeline(shown ? 0.6 : 0.0);
+    moves::dim(m_viewer, shown ? 0.0 : 1.0, tokens::motion::appear);
+    m_shell->veilTimeline(shown ? tokens::motion::timelineBehind : 0.0);
     // The cards say what the conversation would.
     m_chat->setVersionsNote(shown && !m_lastVersionsRequest.isEmpty() ? m_lastVersionsRequest : QString());
     quietenCutPreview();

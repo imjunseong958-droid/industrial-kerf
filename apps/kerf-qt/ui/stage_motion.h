@@ -8,6 +8,7 @@
 // All of it stands aside under reduced motion: a flight then never starts and
 // the end of it is simply there.
 
+#include "design_tokens.h"
 #include "test_friends.h"
 
 #include <QElapsedTimer>
@@ -30,7 +31,7 @@ public:
         QRectF from;
         QRectF to;
         int delay = 0;
-        int duration = 620;
+        int duration = tokens::motion::rise;
         qreal radius = 6;
         qreal fromOpacity = 1.0;
         qreal toOpacity = 1.0;
@@ -124,12 +125,12 @@ private:
 namespace moves {
 
 // Fades `widget` in from nothing, whenever it is first shown here.
-void fadeIn(QWidget *widget, int delay = 0, int duration = 320);
+void fadeIn(QWidget *widget, int delay = 0, int duration = tokens::motion::appear);
 // Moves `widget` up into place as it fades in; for what is not in a layout that
 // will move it again.
-void rise(QWidget *widget, int delay = 0, int distance = 14, int duration = 620);
+void rise(QWidget *widget, int delay = 0, int distance = 14, int duration = tokens::motion::rise);
 // Eases `widget` to `level` of its opacity; 1 takes the effect away again.
-void dim(QWidget *widget, qreal level, int duration = 420);
+void dim(QWidget *widget, qreal level, int duration = tokens::motion::settle);
 
 } // namespace moves
 

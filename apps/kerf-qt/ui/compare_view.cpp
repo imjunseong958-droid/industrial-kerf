@@ -38,9 +38,6 @@ constexpr int kCardWidth = 250;
 constexpr qreal kCardShape = 1.36;
 constexpr int kUprightCardWidth = 216;
 constexpr qreal kUprightCardShape = 1.78;
-constexpr qreal kTilt = 1.5;
-constexpr int kFan = 850;
-constexpr int kStagger = 110;
 
 // A card a little askew, and how much of it shows. It leans the card and all that
 // is on it; a lean this small keeps its buttons under the pointer.
@@ -282,16 +279,16 @@ QRect CompareView::cardRect(int index, int count) const {
 }
 
 void CompareView::placeCards(bool animate) {
-    const int duration = animate ? ui::motionDuration(kFan) : 0;
+    const int duration = animate ? ui::motionDuration(motion::stage) : 0;
     const int count = int(m_keys.size());
     for (int index = 0; index < count; ++index) {
         QFrame *frame = m_byKey.value(m_keys.at(index)).frame;
         const QRect to = cardRect(index, count);
         // The outer ones lean out from the middle.
-        const qreal lean = (index - (count - 1) / 2.0) * kTilt;
+        const qreal lean = (index - (count - 1) / 2.0) * motion::cardLean;
         if (duration > 0) {
-            glide(frame, to, index * kStagger, duration);
-            if (CardLean *effect = leanOf(frame)) ease(effect, "angle", lean, index * kStagger, duration);
+            glide(frame, to, index * motion::fanStagger, duration);
+            if (CardLean *effect = leanOf(frame)) ease(effect, "angle", lean, index * motion::fanStagger, duration);
         } else {
             frame->setGeometry(to);
             if (CardLean *effect = leanOf(frame)) effect->setAngle(lean);
@@ -300,7 +297,7 @@ void CompareView::placeCards(bool animate) {
 }
 
 void CompareView::playPick(const QString &proposalId, const QRect &to, std::function<void()> done) {
-    const int duration = ui::motionDuration(kFan);
+    const int duration = ui::motionDuration(motion::stage);
     if (duration <= 0) {
         done();
         return;

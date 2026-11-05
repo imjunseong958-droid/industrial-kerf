@@ -259,10 +259,10 @@ void HomeWindow::showEvent(QShowEvent *event) {
 void HomeWindow::enter() {
     // The room comes together: the question, the box, then what to try.
     moves::rise(m_heading, 0);
-    moves::rise(m_composer, 90);
-    moves::rise(m_ideaRow, 180);
-    moves::rise(m_openOnly, 260);
-    moves::fadeIn(m_sidebar, 0, 420);
+    moves::rise(m_composer, motion::riseStagger);
+    moves::rise(m_ideaRow, 2 * motion::riseStagger);
+    moves::rise(m_openOnly, 3 * motion::riseStagger);
+    moves::fadeIn(m_sidebar, 0, motion::settle);
 }
 
 QRect HomeWindow::composerRect() const { return QRect(m_composer->box()->mapTo(this, QPoint()), m_composer->box()->size()); }

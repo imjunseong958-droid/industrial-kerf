@@ -209,7 +209,7 @@ private:
     void followGlow(const QImage &frame);
     bool m_floating = false;
     QImage m_compareFrame;
-    qreal m_compareAt = 0.28;
+    qreal m_compareAt = tokens::motion::compareFrom;
     QVariantAnimation *m_compareSweep = nullptr;
     QPointer<QWidget> m_workChip;
     QColor m_glow;
