@@ -353,11 +353,14 @@ def first_pass():
                 time.sleep(.005)
             else:
                 raise AssertionError('Latest seek frame did not arrive')
+            asked = len(observed)
             send({'type': 'agent', 'text': 'Rename this project and show me the proposal.',
                   'focus': {'scope': 'clip', 'clip': clip['id'], 'fromFrame': 0, 'toFrame': 30}})
-            proposal_state = state()
+            # The proposal shows as soon as it is staged, with the turn still running.
+            proposal_state = wait(lambda event: event['type'] == 'state' and event['snapshot'].get('pendingProposal'))['snapshot']
             proposal = proposal_state['pendingProposal']
             assert proposal, observed[-10:]
+            wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False, since=asked)
             # The request reached the model with its focus, and the state carries
             # the timeline the proposal would make.
             assert f"Focus: clip {clip['id']} (0f–30f)" in json.dumps(requests[0]['messages'], ensure_ascii=False)
@@ -366,7 +369,7 @@ def first_pass():
             proposal_id = proposal.get('id', proposal.get('proposalId'))
             assert proposal_id, proposal
             send({'type': 'accept', 'proposalId': proposal_id, 'revision': proposal_state['revision']})
-            accepted = state()
+            accepted = wait(lambda event: event['type'] == 'state' and event['snapshot']['revision'] > proposal_state['revision'])['snapshot']
             assert sorted(marker.get('label') for marker in accepted['timeline']['markers']) == ['Agent reviewed', 'external'], accepted['timeline']['markers']
             send({'type': 'agent', 'text': 'Keep the previous change.'})
             wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
