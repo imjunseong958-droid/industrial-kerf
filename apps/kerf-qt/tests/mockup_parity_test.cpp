@@ -1,5 +1,5 @@
 // The whole editor against the approved minimal mockup (03-review-thread.html)
-// at its 1600 x 1000 canvas: in every format (16:9, 9:16, 1:1, 4:5), the base
+// at its 1600 x 1000 canvas: in 16:9 and 9:16, the base
 // state, each of the three sheets, and both trays, fed the seed (comments,
 // proposals, a check, loudness and a render queue) as kerfd sends it, through
 // handleEvent. Each state's rects are checked against the brief's table, with no
@@ -168,13 +168,10 @@ struct Format {
     QRect timeline;
 };
 
-// The minimal mockup's layout() at 1600 x 1000, in window coordinates; 16:9
-// with the timeline lifted over the mockup's.
+// The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(0, 40, 1200, 615), QRect(53, 40, 1093, 615), QRect(1200, 40, 400, 615), QRect(0, 655, 1600, 345)},
-    {"916", QSize(1080, 1920), QRect(0, 40, 540, 960), QRect(0, 40, 540, 960), QRect(540, 40, 1060, 616), QRect(540, 656, 1060, 344)},
-    {"45", QSize(1080, 1350), QRect(0, 40, 768, 960), QRect(0, 40, 768, 960), QRect(768, 40, 832, 616), QRect(768, 656, 832, 344)},
-    {"11", QSize(1080, 1080), QRect(0, 40, 960, 960), QRect(0, 40, 960, 960), QRect(960, 40, 640, 616), QRect(960, 656, 640, 344)},
+    {"169", QSize(1920, 1080), QRect(0, 40, 1240, 420), QRect(246, 40, 747, 420), QRect(1240, 40, 360, 960), QRect(0, 460, 1240, 540)},
+    {"916", QSize(1080, 1920), QRect(0, 40, 450, 800), QRect(0, 40, 450, 800), QRect(1240, 40, 360, 960), QRect(450, 40, 790, 960)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -237,7 +234,9 @@ private slots:
                 const QImage shot = window.grab().toImage();
                 const int chrome = tokens::color(tokens::chrome).red();
                 QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() > chrome);
-                QVERIFY(shot.pixelColor(format.timeline.left() + 100, format.timeline.top()).red() > chrome);
+                // Over the timeline under a wide picture, at its left beside a vertical one.
+                const QPoint timelineSeam = format.timeline.top() > 40 ? format.timeline.topLeft() + QPoint(100, 0) : format.timeline.topLeft() + QPoint(0, 100);
+                QVERIFY(shot.pixelColor(timelineSeam).red() > chrome);
             }
             QVERIFY(save(fmt));
 
@@ -307,7 +306,7 @@ private slots:
             checkConversationRows(window);
             window.close();
         }
-        QCOMPARE(states, 4 * (1 + 3 + 2 + 1));
+        QCOMPARE(states, 2 * (1 + 3 + 2 + 1));
     }
 
     // The timeline at the design's size: its strip, heads, default heights, and a

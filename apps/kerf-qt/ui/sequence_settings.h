@@ -5,7 +5,7 @@
 // kerfd as one `set-sequence` edit with only what changed.
 //
 //   Name          {name}
-//   Format        16:9, 9:16, 1:1, 4:5 or a custom W × H   {width, height}
+//   Format        16:9, 9:16 or a custom W × H   {width, height}
 //   Start         the start timecode, `;` before the frames for drop-frame
 //                 {start: "01:00:00:00"}
 //   Frame rate    {rate: {num, den}} (rows matched to the snapshot's rate

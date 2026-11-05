@@ -251,7 +251,7 @@ QFont monoFont(int pixelSize, QFont::Weight weight) {
 }
 
 QList<CanvasPreset> canvasPresets() {
-    return {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1080, 1080}, {"4:5", 1080, 1350}};
+    return {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}};
 }
 
 QString canvasSizeLabel(const QSize &size) {

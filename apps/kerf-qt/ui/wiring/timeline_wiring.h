@@ -52,6 +52,10 @@ public:
     // call once only.
     void attach();
     TimelineToolStrip *tools() const { return m_tools; }
+    PictureTransport *pictureTransport() const { return m_pictureTransport; }
+    // The transport is in the strip over a wide sequence, and under the
+    // picture of a vertical one.
+    void setWide(bool wide);
     // The review the timeline reads: the bus's when set, else its own.
     ReviewModel *review() const;
 
@@ -71,6 +75,7 @@ private:
     void bindCommands();
     void followCommands();
     void sendSolo(const QStringList &tracks);
+    void showTime(double seconds);
     void followSharedReview();
     void handleEvent(const QString &type, const QJsonObject &json);
     QString currentThread() const;
@@ -79,6 +84,8 @@ private:
     MainWindow *m_window = nullptr;
     EditorBus *m_bus = nullptr;
     QPointer<TimelineToolStrip> m_tools;
+    PictureTransport *m_pictureTransport = nullptr; // the shell's child
+    bool m_wide = true;
     ReviewModel *m_own = nullptr;
     QPointer<ReviewModel> m_shared;
     QList<QMetaObject::Connection> m_sharedConnections;

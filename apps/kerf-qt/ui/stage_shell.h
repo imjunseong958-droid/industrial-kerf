@@ -10,17 +10,19 @@
 // the picture's aspect; StageShell places its children by it. A format change
 // lays out again at once, with no animation.
 //
+//   The conversation runs the content's full height at the right, 360 wide; it
+//   gives way down to 300 only when it would leave under 600 on its left.
 //   Wide (aspect >= 1.2), at 1600 x 1000:
-//     picture 1200 x 675 at (0, 40), conversation 400 x 675 at (1200, 40),
-//     timeline 1600 x 285 at (0, 715).
-//     The conversation stays 400 (300 at the least), the picture has the rest
-//     of the width, its height follows its aspect, and the timeline takes what
-//     is left, at least 200; under that the picture shrinks and pillarboxes.
+//     picture slot 1240 x 420 at (0, 40), timeline 1240 x 540 at (0, 460),
+//     conversation 360 x 960 at (1240, 40).
+//     The timeline has 56% of the height, at least 260, and whatever the
+//     picture's aspect leaves; the picture pillarboxes in black in its slot.
 //   Vertical (aspect < 1.2), at 1600 x 1000:
-//     picture at full content height at (0, 40): 540, 768 or 960 x 960; the
-//     conversation at its right edge, 616 tall, over the timeline, 344 tall.
-//     The right side keeps at least 560; under that the picture shrinks and
-//     letterboxes. The timeline gives way down to 200.
+//     three columns: the picture at (0, 40) over the transport's 160 tall block,
+//     450, 640 or 640 wide, the timeline at the content's full height, the rest
+//     of the width, and the conversation. The timeline keeps 600 of width while
+//     the picture's column can give it up, down to 240; the picture then
+//     letterboxes in black.
 
 #include "test_friends.h"
 
@@ -35,12 +37,14 @@ namespace kerf {
 namespace stage {
 
 // The picture's slot (`picture` is the frame inside it, in black bars when
-// the slot is not of its shape), the conversation and the timeline, the three
-// sheets and the tray.
+// the slot is not of its shape), the transport's block under a vertical picture
+// (empty under a wide one, whose transport is in the timeline's strip), the
+// conversation and the timeline, the three sheets and the tray.
 struct Rects {
     bool wide = true;
     QRect slot;
     QRect picture;
+    QRect transport;
     QRect conversation;
     QRect timeline;
     QRect media;
@@ -67,6 +71,8 @@ public:
     explicit StageShell(QWidget *parent = nullptr);
 
     void setRegions(QWidget *picture, QWidget *conversation, QWidget *timeline);
+    // The block under a vertical picture; hidden under a wide one.
+    void setTransport(QWidget *transport);
     void setSheets(QWidget *media, QWidget *browser, QWidget *inspector);
     void setTrays(QWidget *finish, QWidget *deliver);
     // Bars that take over the top of the content while they show (the
@@ -114,12 +120,14 @@ private:
     QWidget *m_picture = nullptr;
     QWidget *m_conversation = nullptr;
     QWidget *m_timeline = nullptr;
+    QWidget *m_transport = nullptr;
     QWidget *m_sheets[3] = {};
     QWidget *m_trays[2] = {};
     QList<QWidget *> m_banners;
     // The hairlines between the regions and at a sheet's left and a tray's top.
     QWidget *m_seamUpright = nullptr;
     QWidget *m_seamAcross = nullptr;
+    QWidget *m_seamColumn = nullptr;
     QWidget *m_seamSheet = nullptr;
     QWidget *m_seamTray = nullptr;
     double m_aspect = 16.0 / 9.0;

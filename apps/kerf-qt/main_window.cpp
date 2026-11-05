@@ -1815,6 +1815,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // A format change lays out again at once.
     m_shell->setAspect(m_viewer->pictureAspect());
     m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
+    m_timelineWiring->setWide(stage::isWide(m_viewer->pictureAspect()));
     syncCanvasPreset(canvasSize);
     m_artwork->request(sources, m_projectDirectory);
     m_projectPanel->setSources(sources);

@@ -85,7 +85,6 @@ struct TemplateInfo {
 constexpr TemplateInfo kTemplates[] = {
     {"standard", "Empty 16:9", "16:9", 1920, 1080},
     {"vertical", "Vertical 9:16", "9:16", 1080, 1920},
-    {"square", "Square 1:1", "1:1", 1080, 1080},
 };
 
 QJsonObject callJson(char *(*function)(const char *), const QJsonObject &argument) {

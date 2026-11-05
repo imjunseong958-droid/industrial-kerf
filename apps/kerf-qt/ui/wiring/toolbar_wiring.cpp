@@ -153,7 +153,7 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     // One's own keys go on before anything reads the registry's (and back
     // on whenever it loads a keymap).
     m_customiser = new KeymapCustomiser(w->m_commands, this);
-    // ⌥1-4 choose the format, as its segments do: the registry's commands,
+    // ⌥1-2 choose the format, as its segments do: the registry's commands,
     // whose keys work anywhere in the window.
     for (const QString &id : formatCommands())
         if (QAction *action = w->m_commands->action(id)) {
@@ -212,15 +212,14 @@ void ToolbarWiring::syncCommands() {
         w->m_exportButton->setExportEnabled(enabled, enabled || reason.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, reason),
                                             isMaster ? nativeKeys(master) : QString());
     }
-    // The format segments name the keys of the registry's ⌥1-4.
+    // The format segments name the keys of the registry's ⌥1-2.
     if (FormatBank *bank = w->m_formatBank)
         for (int i = 0; i < m_formatActions.size() && i < bank->count(); ++i)
             bank->setSegmentTip(i, formatTip(i), nativeKeys(m_formatActions.at(i)));
 }
 
 QStringList ToolbarWiring::formatCommands() {
-    return {QStringLiteral("sequence.setFormat.169"), QStringLiteral("sequence.setFormat.916"), QStringLiteral("sequence.setFormat.11"),
-            QStringLiteral("sequence.setFormat.45")};
+    return {QStringLiteral("sequence.setFormat.169"), QStringLiteral("sequence.setFormat.916")};
 }
 
 void ToolbarWiring::installCommands() {

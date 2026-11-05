@@ -1072,7 +1072,7 @@ pub static COMMANDS: &[Command] = &[
         ))),
         &["Ctrl+Shift+T"],
     ),
-    // The toolbar's four formats, as its segments name them; each asks
+    // The toolbar's two formats, as its segments name them; each asks
     // `sequence.setFormat` for its size.
     keys(
         frontend(menu(
@@ -1089,22 +1089,6 @@ pub static COMMANDS: &[Command] = &[
             3,
         )),
         &["Alt+2"],
-    ),
-    keys(
-        frontend(menu(
-            command("sequence.setFormat.11", "Square 1:1", always),
-            Menu::Sequence,
-            3,
-        )),
-        &["Alt+3"],
-    ),
-    keys(
-        frontend(menu(
-            command("sequence.setFormat.45", "Portrait 4:5", always),
-            Menu::Sequence,
-            3,
-        )),
-        &["Alt+4"],
     ),
     keys(
         frontend(menu(
@@ -2020,8 +2004,6 @@ mod tests {
             "keyboard.customise",
             "sequence.setFormat.169",
             "sequence.setFormat.916",
-            "sequence.setFormat.11",
-            "sequence.setFormat.45",
             "bin.search",
             "bin.toggleView",
             "browser.search",
@@ -2043,8 +2025,6 @@ mod tests {
         for (index, (id, label)) in [
             ("sequence.setFormat.169", "Landscape 16:9"),
             ("sequence.setFormat.916", "Vertical 9:16"),
-            ("sequence.setFormat.11", "Square 1:1"),
-            ("sequence.setFormat.45", "Portrait 4:5"),
         ]
         .into_iter()
         .enumerate()
@@ -2070,8 +2050,6 @@ mod tests {
             [
                 "sequence.setFormat.169",
                 "sequence.setFormat.916",
-                "sequence.setFormat.11",
-                "sequence.setFormat.45",
                 "sequence.settings",
                 "qc.run"
             ]

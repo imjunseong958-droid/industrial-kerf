@@ -231,7 +231,7 @@ SequenceSettingsDialog::SequenceSettingsDialog(const QJsonObject &timeline, QWid
     grid->addWidget(rowLabel(QStringLiteral("Name")), row, 0);
     grid->addWidget(m_name, row++, 1);
 
-    // Format: the four presets, or a size of one's own.
+    // Format: the presets, or a size of one's own.
     m_format = new ui::SegmentedControl;
     m_format->setObjectName(QStringLiteral("sequenceFormat"));
     const QList<CanvasPreset> presets = canvasPresets();

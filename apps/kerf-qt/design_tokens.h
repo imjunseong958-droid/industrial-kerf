@@ -112,6 +112,7 @@ constexpr TypeStyle timecode{12, 16, 400, true};       // timecodes in rows and 
 constexpr TypeStyle timecodeStrong{12, 16, 500, true}; // the transport's current timecode
 constexpr TypeStyle monoSmall{11, 16, 400, true};      // counts, shortcuts, units, ticks
 constexpr TypeStyle monoLarge{13, 20, 500, true};      // timeline corner timecode, loudness stats
+constexpr TypeStyle timecodeLarge{20, 24, 500, true};  // the timecode under a vertical picture
 constexpr TypeStyle caption{15, 20, 400, false};       // caption on the picture
 constexpr TypeStyle badge{11, 12, 400, true};          // bin duration badge
 
@@ -213,15 +214,16 @@ constexpr int strip = 28;       // the sheets' strips, the timeline's
 constexpr int inspector = 304;  // the Inspector sheet's width
 constexpr int bin = 272;        // the Media sheet's width
 constexpr int browser = 304;    // the Effects and titles sheet's width
-constexpr int band = 344;       // a tray's height, and the timeline's beside a vertical picture
+constexpr int band = 344;       // a tray's height
 // The minimal layout (ui/stage_shell.h).
-constexpr int conversationWide = 400;  // the conversation beside a wide picture
-constexpr int conversationLeast = 300; // its least width there, and its least height over the timeline
-constexpr int leastPicture = 600;      // a wide picture's width before the conversation gives way
-constexpr int timelineLeast = 200;     // the timeline's least height beside a vertical picture
-constexpr int timelineWideLeast = 260; // its least height under a wide picture
-constexpr int timelineLift = 60;       // how far it comes up over a wide picture's full height
-constexpr int rightLeast = 560;        // what a vertical picture leaves on its right, at least
+constexpr int rail = 360;               // the conversation, the content's full height at the right
+constexpr int railLeast = 300;          // its least width
+constexpr int workLeast = 600;          // what it leaves on its left before it gives way
+constexpr int timelineWideLeast = 260;  // the timeline's least height under a wide picture
+constexpr double timelineWideShare = 0.5625; // and its share of the content's height there
+constexpr int pictureTransport = 160;   // the transport's block under a vertical picture
+constexpr int pictureColumnLeast = 240; // a vertical picture's column, at least
+constexpr int timelineUprightLeast = 600; // the timeline's width beside a vertical picture, before the column has its least
 constexpr int seam = 1;                // every seam is a 1 pt line
 } // namespace layout
 
