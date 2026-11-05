@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStderr, Command, Stdio};
+use std::process::{Child, ChildStderr, Stdio};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -982,7 +982,7 @@ fn decode_waveform_buckets(
     let sample_rate = WAVEFORM_SAMPLE_RATE.to_string();
     let start = start.to_string();
     let duration = duration.to_string();
-    let mut child = Command::new(resolve_ffmpeg_bin())
+    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -1416,7 +1416,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn waveform_stderr_is_drained_while_stdout_is_read() {
-        let mut child = Command::new("sh")
+        let mut child = std::process::Command::new("sh")
             .args([
                 "-c",
                 "head -c 131072 /dev/zero >&2; printf '\\000\\000\\000\\000'; exit 1",

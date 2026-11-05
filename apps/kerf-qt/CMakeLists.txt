@@ -132,6 +132,10 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
 endif()
+if(WIN32)
+    # A window of its own, with no console behind it.
+    set_target_properties(kerf-qt PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 target_link_libraries(kerf-qt PRIVATE kerf-qt-shared)
 kerf_copy_runtime_dlls(kerf-qt)
 

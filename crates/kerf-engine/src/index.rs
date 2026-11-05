@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 const SCENES: &str = "scenes.txt";
 const ENVELOPE: &str = "envelope.txt";
@@ -139,7 +138,7 @@ pub fn media_index(
     if !graph.is_empty() {
         // FFmpeg writes the metadata files into the entry, named plainly so
         // no path needs escaping inside the filter graph.
-        let mut command = Command::new(resolve_ffmpeg_bin());
+        let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
         command
             .current_dir(&entry.directory)
             .args(video_decode_prefix())

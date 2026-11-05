@@ -11,7 +11,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 
 use kerf_compose::{ComposeOptions, Compositor};
@@ -176,7 +176,7 @@ pub fn picture_qc_with_progress(
     );
     let times = frame_times(rate, duration);
     let args = qc_args(size, rate);
-    let mut command = Command::new(resolve_ffmpeg_bin());
+    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     if dir.is_dir() {
         command.current_dir(dir);
     }

@@ -1,0 +1,99 @@
+name: Windows package
+
+# The Qt editor as a zip that runs on its own (scripts/package-kerf-windows.ps1) and
+# the complete source of it (scripts/collect-kerf-windows-sources.sh), kept as this
+# run's artifacts. The zip is GPL because of its FFmpeg: publish the two together.
+# By hand (Actions > Windows package > Run workflow), and when what makes the package
+# changes. It publishes nothing.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/package-kerf-windows.ps1"
+      - "scripts/collect-kerf-windows-sources.sh"
+      - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/CMakeLists.txt"
+      - ".github/workflows/windows-package.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/package-kerf-windows.ps1"
+      - "scripts/collect-kerf-windows-sources.sh"
+      - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/CMakeLists.txt"
+      - ".github/workflows/windows-package.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The FFmpeg and Qt in the package. BtbN's builds, as they pin the commit of each
+  # library they build, which its source needs; see rust-runtime.yml.
+  FFMPEG_BUILDS_TAG: autobuild-2026-09-30-13-08
+  FFMPEG_BUILDS_COMMIT: 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+  FFMPEG_NAME: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
+  FFMPEG_SHA256: 3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696
+  FFMPEG_COMMIT: 2a571b606854520cf89804d8030c8b328e621689
+  QT_VERSION: 6.10.3
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg archive does not match its checksum" }
+          7z x $archive "-o$env:RUNNER_TEMP" | Out-Null
+          "FFMPEG_DIR=$(Join-Path $env:RUNNER_TEMP $env:FFMPEG_NAME)" >> $env:GITHUB_ENV
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
+          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build, pack and run the package
+        shell: pwsh
+        run: scripts/package-kerf-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: industrial-kerf-windows-x64
+          path: |
+            target/package/*.zip
+            target/package/*.zip.sha256
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+
+  sources:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Collect the source of the package
+        run: scripts/collect-kerf-windows-sources.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: industrial-kerf-windows-x64-source
+          path: |
+            target/package-source/*.tar
+            target/package-source/*.tar.sha256
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error

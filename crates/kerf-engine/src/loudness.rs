@@ -10,7 +10,6 @@
 //! `f64::NEG_INFINITY`, and JSON writes it as `null`.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -165,7 +164,7 @@ pub fn measure_program_with_progress(
     )?;
     let duration = compiled.duration.seconds();
     let args = measure_args(&compiled.argv)?;
-    let mut command = Command::new(resolve_ffmpeg_bin());
+    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     if dir.is_dir() {
         command.current_dir(dir);
     }
