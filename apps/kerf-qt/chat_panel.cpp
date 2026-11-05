@@ -221,8 +221,8 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
 
     // The Kerf welcome (no record): who Kerf is, and what to try.
     m_welcomeRow = new CommentRow(CommentRow::Kind::Kerf,
-                                  QStringLiteral("Mention @Kerf on any note, or describe an edit below. Each change comes back "
-                                                 "as a proposal you preview before it touches the cut"),
+                                  QStringLiteral("Tell me what to make or change. Each edit comes back as a proposal you can "
+                                                 "watch before it touches the cut"),
                                   m_welcomeSince, m_stash);
     m_welcomeRow->setObjectName(QStringLiteral("welcomeRow"));
     m_welcomeRow->setRole(QStringLiteral("agent"));
@@ -1761,6 +1761,9 @@ void ChatPanel::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen);
     p.setBrush(color(tokens::chrome));
     p.drawRect(area);
+    // The header's hairline.
+    p.setBrush(color(tokens::line));
+    p.drawRect(QRectF(0, kHeaderHeight - tokens::layout::seam, width(), tokens::layout::seam));
 }
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {

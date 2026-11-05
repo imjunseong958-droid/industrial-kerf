@@ -19,14 +19,13 @@
 //     picture slot 960 x 420 at the top, timeline 960 x 540 under it. The
 //     timeline has 56% of the height, at least 260, and whatever the picture's
 //     aspect leaves; the picture pillarboxes in black in its slot.
-//   Vertical (aspect < 1.2):
-//     the picture over the transport's 160 tall block, 360 wide, beside the
-//     timeline at the panel's full height. The timeline keeps 600 of width while
-//     the picture's column can give it up, down to 240; the picture then
-//     letterboxes in black.
-//   One pane alone has the panel: a picture with the transport's block under
-//   it (88 tall under a wide picture), or a timeline with the transport in its
-//   own strip.
+//   One pane alone has the panel: a picture with the transport's block 88 tall
+//   under it, or a timeline with the transport in its own strip.
+//   Vertical (aspect < 1.2), the panel goes: the picture over the transport's
+//   112 tall block is a column at the window's right, 477 x 848 at 1600 x 1000,
+//   as wide as its aspect wants while it leaves 480 on its left, down to 240.
+//   The rest of the width holds the conversation over the timeline, whose
+//   share is 30% of the height, at least 200.
 
 #include "test_friends.h"
 
@@ -61,7 +60,7 @@ struct Panes {
 struct Rects {
     bool wide = true;
     QRect sidebar;
-    QRect panel;
+    QRect panel; // what lies right of the conversation
     QRect reel;
     QRect slot;
     QRect picture;

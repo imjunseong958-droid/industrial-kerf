@@ -183,16 +183,18 @@ only when it would leave the panel under 600. At a 1600 × 1000 window:
 | Sequence | Sidebar | Conversation | Picture | Timeline |
 |---|---|---|---|---|
 | Wide (aspect ≥ 1.2) | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 420 at (640, 40) | 960 × 540 at (640, 460) |
-| 9:16 | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 360 × 800 at (640, 40) | 600 × 960 at (1000, 40) |
+| 9:16 | 240 × 960 at (0, 40) | 883 × 672 at (240, 40) | 477 × 848 at (1123, 40) | 883 × 288 at (240, 712) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
-its slot. A sequence narrower than 1.2 has two columns in the panel: the picture
-over a 160 tall block with the playhead's timecode and the transport, and the
-timeline at the content's full height. The timeline keeps 600 of width while the
-picture's column can give it up, down to 240; the picture then letterboxes in
-black. One pane alone has the panel: a timeline with the transport in its strip,
-or a picture with the transport's block under it (88 tall under a wide picture).
+its slot. One pane alone has the panel: a timeline with the transport in its
+strip, or a picture with the transport's block, 88 tall, under it.
+
+A sequence narrower than 1.2 is laid out for a phone: the picture is a column at
+the window's right, over a 112 tall block with the playhead's timecode and the
+transport, as wide as its aspect wants while it leaves 480 on its left, down to
+240, where it letterboxes in black. The rest of the width holds the conversation
+over the timeline, which has 30% of the height, at least 200.
 Track heights do not follow the timeline's height, so a big edit shows at once.
 Switching format lays out again at once, with no animation.
 

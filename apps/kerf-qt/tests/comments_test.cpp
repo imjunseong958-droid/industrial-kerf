@@ -488,7 +488,7 @@ private slots:
         CommentRow *welcome = panel.welcomeRow();
         QCOMPARE(welcome->name(), QStringLiteral("Kerf"));
         QCOMPARE(welcome->roleLabel()->text(), QStringLiteral("agent"));
-        QVERIFY(welcome->text().startsWith(QStringLiteral("Mention @Kerf")));
+        QVERIFY(welcome->text().startsWith(QStringLiteral("Tell me what to make")));
         // c-0300: Mina's settled note, its replies folded, Accepted in rev 20.
         CommentRow *road = panel.threadWidget("c-0300")->root();
         QCOMPARE(road->name(), QStringLiteral("Mina Park"));
@@ -1299,7 +1299,7 @@ private slots:
         // An agent that can take requests reads the design's placeholder.
         window.m_cloudAccess = QStringLiteral("ready");
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
     }
 
     // Old callers of the conversation: appendConversation and the agent
