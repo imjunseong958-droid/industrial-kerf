@@ -306,3 +306,29 @@ fn a_file_encoded_with_the_bt2020_matrix_decodes_with_it() {
         assert!(r > 245 && g < 12 && b < 12, "[{fields}] {r} {g} {b}");
     }
 }
+
+#[test]
+fn a_sixteen_bit_frame_holds_what_an_eight_bit_one_rounds_off() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let ten = ramp(dir.path(), "ten.mov", "yuv422p10le", "prores_ks");
+    let document = document(&ten, " bits=10", "      fx color.levels in_white=48\n");
+    for accel in [Accel::Never, Accel::Always] {
+        let compositor = compositor(&document, accel);
+        let (eight, sixteen) = (compositor.frame(at(6), 1.0), compositor.frame16(at(6), 1.0));
+        assert_eq!(sixteen.rgba.len(), eight.rgba.len() * 2);
+        let row = (sixteen.height / 2 * sixteen.width) as usize;
+        let codes: Vec<u16> = (row..row + sixteen.width as usize)
+            .map(|pixel| u16::from_le_bytes([sixteen.rgba[pixel * 8], sixteen.rgba[pixel * 8 + 1]]))
+            .collect();
+        // It says the same thing, more finely.
+        for (x, code) in codes.iter().enumerate() {
+            let byte = eight.rgba[(row + x) * 4];
+            assert!(u16::from(byte).abs_diff(code / 257) <= 1, "{byte} {code}");
+        }
+        // An 8-bit frame stretched to 16 bits would be multiples of 257.
+        let finer = codes.iter().filter(|code| **code % 257 != 0).count();
+        assert!(finer > codes.len() / 2, "{accel:?}: {finer}");
+        // An untouched alpha, and the whole range.
+        assert_eq!(&sixteen.rgba[6..8], &[255, 255]);
+    }
+}

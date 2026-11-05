@@ -56,7 +56,8 @@ pub struct ComposeOptions {
     pub keep_frames: bool,
 }
 
-/// One frame of straight RGBA, row by row.
+/// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
+/// [`Compositor::frame16`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub width: u32,
@@ -104,6 +105,12 @@ impl Compositor {
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
         self.drawing.frame(at, scale)
+    }
+
+    /// The picture at sequence time `at` over black, at `scale` of the canvas, as 16-bit
+    /// little-endian RGBA, for a master that keeps more than 8 bits. Not kept.
+    pub fn frame16(&self, at: Time, scale: f64) -> Frame {
+        self.drawing.frame16(at, scale)
     }
 
     /// A number for everything the frame at sequence time `at` depends on: two frames with the same
