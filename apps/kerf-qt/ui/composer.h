@@ -25,6 +25,7 @@
 #include <QWidget>
 
 class QAction;
+class QHBoxLayout;
 class QLabel;
 class QTextEdit;
 class QVariantAnimation;
@@ -154,12 +155,17 @@ public:
     QLabel *errorLabel() const { return m_error; }
     FloatingList *suggestionsPopover() const { return m_suggestions; }
     FloatingList *mentionList() const { return m_mentions; }
+    // The row under the text, for a control that belongs beside its tools.
+    QHBoxLayout *toolRow() const { return m_toolRow; }
+    // The hairline over the composer, where it closes a list.
+    void setDivider(bool shown) { m_divider = shown; update(); }
 
     // Where the popovers float: the panel. They are placed over the composer.
     void setOverlayParent(QWidget *parent);
     // The live playhead TC on the stamp.
     void setTimecode(const QString &timecode);
-    bool stamped() const { return m_stamp->isAttached(); }
+    // Attached and offered: with no picture open there is no time to stamp.
+    bool stamped() const { return m_stamp->isAttached() && !m_stamp->isHidden(); }
     void setStamped(bool stamped);
     // Kerf drafting: Send gives way to Stop.
     void setBusy(bool busy);
@@ -219,6 +225,8 @@ private:
     QString drawKey() const;
 
     QWidget *m_box = nullptr;
+    QHBoxLayout *m_toolRow = nullptr;
+    bool m_divider = true;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
     ui::IconButton *m_mention = nullptr;

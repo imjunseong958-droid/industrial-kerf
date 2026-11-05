@@ -8,6 +8,7 @@
 // turn takes their place.
 
 #include "main_window.h"
+#include "project_sidebar.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
@@ -590,6 +591,7 @@ void MainWindow::updateChatControls() {
     m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
     m_abortButton->setEnabled(m_agentBusy);
     m_chat->updateComposer(m_agentBusy);
+    if (m_sidebar) m_sidebar->setWorking(m_agentBusy);
     updateComposerHint();
     m_chat->setConnected(m_connected);
     updateChatStatus();

@@ -1,6 +1,7 @@
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
+#include "home_window.h"
 #include "main_window.h"
 #include "project_launcher.h"
 #include "review_link.h"
@@ -110,7 +111,7 @@ int main(int argc, char **argv) {
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
 
     // kerf:// review links raise (or open) their project's editor and seek.
-    QPointer<kerf::ProjectLauncher> choosing;
+    QPointer<QDialog> choosing;
     kerf::links::Router router(
         [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {
             // A link followed while the launcher waits stands for its choice.
@@ -130,14 +131,17 @@ int main(int argc, char **argv) {
         return false;
     };
 
-    // Without a project, choose one first. A smoke run shows the launcher
-    // and captures it instead of waiting for a choice.
+    // Without a project, start from the folders and a question. A smoke run
+    // shows that window and captures it instead of waiting for a choice.
     QPointer<QWidget> shown;
+    QString startRequest;
+    bool startImport = false;
     if (project.isEmpty() && smoke) {
-        auto *launcher = new kerf::ProjectLauncher(kerfd);
-        launcher->setAttribute(Qt::WA_DeleteOnClose);
-        launcher->show();
-        shown = launcher;
+        auto *home = new kerf::HomeWindow(kerfd);
+        home->setAttribute(Qt::WA_DeleteOnClose);
+        if (windowSize.isValid() && !windowSize.isEmpty()) home->resize(windowSize);
+        home->show();
+        shown = home;
     } else if (project.isEmpty() && !links.isEmpty()) {
         // Opened for a link: its project is the one to show.
         for (const QString &link : std::as_const(links))
@@ -145,18 +149,23 @@ int main(int argc, char **argv) {
         links.clear();
     }
     if (!shown && project.isEmpty()) {
-        kerf::ProjectLauncher launcher(kerfd);
-        choosing = &launcher;
-        // Closing the launcher is not the last window closing.
+        kerf::HomeWindow home(kerfd);
+        choosing = &home;
+        // Closing the window is not the last window closing.
         app.setQuitOnLastWindowClosed(false);
-        const bool chosen = launcher.exec() == QDialog::Accepted;
+        const bool chosen = home.exec() == QDialog::Accepted;
         app.setQuitOnLastWindowClosed(true);
         if (!chosen && !anyEditor()) return 0;
-        if (chosen) project = launcher.chosenPath();
+        if (chosen) {
+            project = home.chosenPath();
+            startRequest = home.request();
+            startImport = home.startsProject();
+        }
     }
     if (!shown && !project.isEmpty()) {
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
         if (!workspace.isEmpty()) window->openTray(workspace);
+        if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
         if (renderPreview) {

@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <utility>
 
 namespace kerf {
@@ -125,6 +126,19 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         ui::popupMenu(m_appMenu, m_appButton);
     });
     row->addWidget(m_appButton);
+    const auto paneButton = [w](const QString &icon, const char *name, const QString &accessible, const QString &command) {
+        auto *button = new ui::IconButton(icon, ui::IconButton::Size::S28);
+        button->setObjectName(QString::fromLatin1(name));
+        button->setAccessibleName(accessible);
+        button->setCheckable(true);
+        button->setFocusPolicy(Qt::TabFocus);
+        connect(button, &QAbstractButton::clicked, w, [w, command] {
+            if (QAction *action = w->m_commands->action(command)) action->trigger();
+        });
+        return button;
+    };
+    w->m_sidebarButton = paneButton(QStringLiteral("g-sidebar"), "paneSidebar", QStringLiteral("Sidebar"), QStringLiteral("view.sidebar"));
+    row->addWidget(w->m_sidebarButton);
     if (!w->menuBar()->isNativeMenuBar()) {
         // The native menus live in the ≡ menu; their keys go on working.
         for (const QString &name : w->m_commands->menuNames()) {
@@ -137,7 +151,12 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     }
     row->addStretch(1);
 
-    // The right group: the format, then Export.
+    // The right group: the panel's panes, the format, then Export.
+    w->m_pictureButton = paneButton(QStringLiteral("g-picture"), "panePicture", QStringLiteral("Picture"), QStringLiteral("view.picture"));
+    row->addWidget(w->m_pictureButton);
+    w->m_timelineButton = paneButton(QStringLiteral("g-timeline"), "paneTimeline", QStringLiteral("Timeline"), QStringLiteral("view.timeline"));
+    row->addWidget(w->m_timelineButton);
+    row->addSpacing(12 - row->spacing());
     w->m_formatBank = new FormatBank;
     connect(w->m_formatBank, &FormatBank::formatChosen, w, &MainWindow::canvasPresetChanged);
     w->m_formatBank->installEventFilter(this);
@@ -212,6 +231,11 @@ void ToolbarWiring::syncCommands() {
         w->m_exportButton->setExportEnabled(enabled, enabled || reason.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, reason),
                                             isMaster ? nativeKeys(master) : QString());
     }
+    // The panes' buttons name their commands' keys.
+    for (const auto &[button, id, name] : {std::tuple<ui::IconButton *, QString, QString>{w->m_sidebarButton, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar")},
+                                           {w->m_pictureButton, QStringLiteral("view.picture"), QStringLiteral("Picture")},
+                                           {w->m_timelineButton, QStringLiteral("view.timeline"), QStringLiteral("Timeline")}})
+        if (button) button->setTip(name, nativeKeys(commands->action(id)));
     // The format segments name the keys of the registry's ⌥1-2.
     if (FormatBank *bank = w->m_formatBank)
         for (int i = 0; i < m_formatActions.size() && i < bank->count(); ++i)
@@ -339,6 +363,10 @@ void ToolbarWiring::buildAppMenu() {
     addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
     addCommandItem(menu, QStringLiteral("window.effects"), QStringLiteral("Effects and titles"), "appMenu.effects");
     addCommandItem(menu, QStringLiteral("window.inspector"), QStringLiteral("Inspector"), "appMenu.inspector");
+    menu->addSeparator();
+    addCommandItem(menu, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar"), "appMenu.sidebar");
+    addCommandItem(menu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
+    addCommandItem(menu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
     menu->addSeparator();
     addCommandItem(menu, QStringLiteral("workspace.finish"), QStringLiteral("Scopes, loudness, QC"), "appMenu.finish");
     addCommandItem(menu, QStringLiteral("workspace.deliver"), QStringLiteral("Deliver"), "appMenu.deliver");
@@ -469,8 +497,10 @@ void ToolbarWiring::layoutTitle() {
     const QFontMetrics metrics(title->font());
     const QFontMetrics subMetrics(subtitle->font());
     // The room between the groups, and the title's own width.
-    const int left = m_appButton->mapTo(toolbar, QPoint(m_appButton->width(), 0)).x() + kTitleClearance;
-    const int right = w->m_formatBank->mapTo(toolbar, QPoint(0, 0)).x() - kTitleClearance;
+    const QWidget *leftEnd = w->m_sidebarButton ? static_cast<QWidget *>(w->m_sidebarButton) : m_appButton;
+    const QWidget *rightStart = w->m_pictureButton ? static_cast<QWidget *>(w->m_pictureButton) : w->m_formatBank;
+    const int left = leftEnd->mapTo(toolbar, QPoint(leftEnd->width(), 0)).x() + kTitleClearance;
+    const int right = rightStart->mapTo(toolbar, QPoint(0, 0)).x() - kTitleClearance;
     const int natural = std::max(metrics.horizontalAdvance(full), subMetrics.horizontalAdvance(sub)) + 2;
     const int width = std::min(natural, std::max(0, right - left));
     // Centred on the window (the toolbar spans it); moved aside when a group

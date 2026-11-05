@@ -470,7 +470,7 @@ private slots:
     void seedRendersTheMockup() {
         Seeded seed;
         ChatPanel &panel = seed.panel;
-        QCOMPARE(panel.title()->text(), QStringLiteral("Comments"));
+        QCOMPARE(panel.title()->text(), QStringLiteral("Conversation"));
         QCOMPARE(seed.model.counts().all, 7);
         QCOMPARE(seed.model.counts().open, 4);
         QCOMPARE(seed.model.counts().proposals, 2);

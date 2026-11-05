@@ -170,8 +170,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(0, 40, 1240, 420), QRect(246, 40, 747, 420), QRect(1240, 40, 360, 960), QRect(0, 460, 1240, 540)},
-    {"916", QSize(1080, 1920), QRect(0, 40, 450, 800), QRect(0, 40, 450, 800), QRect(1240, 40, 360, 960), QRect(450, 40, 790, 960)},
+    {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(746, 40, 747, 420), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
+    {"916", QSize(1080, 1920), QRect(640, 40, 360, 800), QRect(640, 120, 360, 640), QRect(240, 40, 400, 960), QRect(1000, 40, 600, 960)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -255,7 +255,7 @@ private slots:
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
                 QVERIFY2(sheet.widget->isVisible(), sheet.name);
                 QCOMPARE(inWindow(sheet.widget, &window),
-                         QRect(1600 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
+                         QRect(format.conversation.right() + 1 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
                 // What is under it has not moved.
                 checkBase(window, format);
                 QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
@@ -273,7 +273,7 @@ private slots:
                 window.triggerCommand(QStringLiteral("workspace.%1").arg(QString::fromLatin1(tray.name)));
                 QCOMPARE(window.m_shell->tray(), tray.tray);
                 QVERIFY2(tray.widget->isVisible(), tray.name);
-                QCOMPARE(inWindow(tray.widget, &window), QRect(0, 656, 1600, 344));
+                QCOMPARE(inWindow(tray.widget, &window), QRect(240, 656, 1360, 344));
                 checkBase(window, format);
                 // Changing state rings no button: the keys go to the timeline.
                 for (ui::KitButton *button : window.findChildren<ui::KitButton *>())

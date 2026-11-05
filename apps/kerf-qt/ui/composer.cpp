@@ -347,6 +347,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     auto *row = new QWidget;
     row->setFixedHeight(28);
     auto *rowLayout = new QHBoxLayout(row);
+    m_toolRow = rowLayout;
     rowLayout->setContentsMargins(0, 0, 0, 0);
     rowLayout->setSpacing(4);
     m_stamp = new StampButton;
@@ -570,7 +571,8 @@ void Composer::placePopovers() {
         QWidget *host = list->parentWidget();
         if (!host || !list->isVisible()) continue;
         const QPoint origin = host == this ? QPoint() : mapTo(host, QPoint());
-        list->placeAbove(origin.x() + 16, origin.x() + width() - 12, origin.y() + 4);
+        const QMargins margins = contentsMargins();
+        list->placeAbove(origin.x() + margins.left() + 16, origin.x() + width() - margins.right() - 12, origin.y() + 4);
         list->raise();
     }
 }
@@ -583,6 +585,7 @@ void Composer::fitInput() {
 }
 
 void Composer::paintEvent(QPaintEvent *) {
+    if (!m_divider) return;
     QPainter p(this);
     p.fillRect(QRect(0, 0, width(), 1), color(line));
 }

@@ -103,6 +103,7 @@ struct TypeStyle {
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, comment text, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // comment names
+constexpr TypeStyle display{24, 32, 500, false};       // the start window's question
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: Comments, Source, clip name
 constexpr TypeStyle control{12, 16, 400, false};       // controls, labels, rows, chips
 constexpr TypeStyle controlStrong{12, 16, 500, false}; // buttons, dock names, segment on
@@ -216,12 +217,16 @@ constexpr int bin = 272;        // the Media sheet's width
 constexpr int browser = 304;    // the Effects and titles sheet's width
 constexpr int band = 344;       // a tray's height
 // The minimal layout (ui/stage_shell.h).
-constexpr int rail = 360;               // the conversation, the content's full height at the right
-constexpr int railLeast = 300;          // its least width
-constexpr int workLeast = 600;          // what it leaves on its left before it gives way
+constexpr int sidebar = 240;            // the folders and conversations, at the left
+constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
+constexpr int rail = 400;               // the conversation, beside an open panel
+constexpr int railLeast = 320;          // its least width
+constexpr int workLeast = 600;          // what it leaves the panel before it gives way
+constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself
 constexpr int timelineWideLeast = 260;  // the timeline's least height under a wide picture
 constexpr double timelineWideShare = 0.5625; // and its share of the content's height there
 constexpr int pictureTransport = 160;   // the transport's block under a vertical picture
+constexpr int pictureTransportLow = 88; // and under a wide picture with no timeline to carry it
 constexpr int pictureColumnLeast = 240; // a vertical picture's column, at least
 constexpr int timelineUprightLeast = 600; // the timeline's width beside a vertical picture, before the column has its least
 constexpr int seam = 1;                // every seam is a 1 pt line

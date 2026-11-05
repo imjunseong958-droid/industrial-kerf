@@ -68,7 +68,11 @@ class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class PreviewChip;
+class ProjectSidebar;
 class StageShell;
+namespace ui {
+class IconButton;
+} // namespace ui
 class MediaArtwork;
 class TimelineWidget;
 class ViewerWidget;
@@ -106,6 +110,9 @@ public:
     bool linkPending() const { return m_linkPending; }
     // The tray to open in ("Finish", "Deliver"; anything else is the base state).
     void openTray(const QString &name);
+    // What to do once the project is connected: bring the folder's media in
+    // (a folder that was no project yet), then send Kerf the request.
+    void startWith(const QString &request, bool importFolder);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -344,6 +351,13 @@ private:
     // The regions' containers: the shell, the timeline's panel, the Inspector
     // column, the browser, the Finish and Deliver trays.
     StageShell *m_shell = nullptr;
+    ProjectSidebar *m_sidebar = nullptr;
+    ui::IconButton *m_sidebarButton = nullptr;
+    ui::IconButton *m_pictureButton = nullptr;
+    ui::IconButton *m_timelineButton = nullptr;
+    bool m_panesFollowContent = true;
+    QString m_startRequest;
+    bool m_startImport = false;
     QWidget *m_timelinePanel = nullptr;
     InspectorColumn *m_inspectorColumn = nullptr;
     BrowserPanel *m_browserPanel = nullptr;
@@ -365,6 +379,16 @@ private:
     // been pressed: after a tray or sheet closes, and as the window first
     // shows and first becomes active (m_focusSettled).
     void settleFocus();
+    // The sidebar and the panel beside the conversation.
+    void setPaneOpen(const QString &command, bool open);
+    void revealPanel(bool picture, bool timeline);
+    void applyPanes();
+    // The panel opens by itself once there is something to see, until one
+    // opens or closes a pane by hand.
+    void followContentWithPanes();
+    void refreshSidebar();
+    void buildSidebar();
+    void runStart();
     // Closes a sheet or tray that lies over the composer.
     void uncoverComposer();
     bool m_focusSettled = false;

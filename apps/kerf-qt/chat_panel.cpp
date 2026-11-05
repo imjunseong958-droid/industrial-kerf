@@ -143,7 +143,7 @@ void ChatIconButton::paintEvent(QPaintEvent *) {
 ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("chatPanel"));
     setAttribute(Qt::WA_StyledBackground, false);
-    setAccessibleName(QStringLiteral("Comments"));
+    setAccessibleName(QStringLiteral("Conversation"));
     m_welcomeSince = QDateTime::currentDateTime();
 
     auto *layout = new QVBoxLayout(this);
@@ -256,7 +256,7 @@ QWidget *ChatPanel::buildHeader() {
     layout->setSpacing(4);
     m_title = makeLabel(tokens::title, ink);
     m_title->setObjectName(QStringLiteral("chatTitle"));
-    m_title->setText(QStringLiteral("Comments"));
+    m_title->setText(QStringLiteral("Conversation"));
     layout->addWidget(m_title);
     layout->addStretch(1);
     m_more = new ChatIconButton(ChatIconButton::Glyph::More, 24);
@@ -1758,6 +1758,12 @@ void ChatPanel::paintEvent(QPaintEvent *) {
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
+    // With the room to itself the conversation keeps a column to read in.
+    const int inset = std::max(0, (width() - tokens::layout::conversationColumn) / 2);
+    const QMargins list = m_listLayout->contentsMargins();
+    m_listLayout->setContentsMargins(inset, list.top(), inset, list.bottom());
+    m_replyBar->setContentsMargins(inset, 0, inset, 0);
+    m_composer->setContentsMargins(inset, 0, inset, 0);
     QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
 }
 

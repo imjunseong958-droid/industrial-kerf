@@ -9,6 +9,7 @@
 #include "effects_panel.h"
 #include "presets_panel.h"
 #include "project_launcher.h"
+#include "project_sidebar.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "stage_shell.h"
@@ -925,6 +926,7 @@ void MainWindow::buildShell() {
     m_finishTray = new FinishTray(nullptr, m_bus);
     m_deliverTray = new DeliverTray(nullptr, m_bus);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
+    buildSidebar();
     m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
     m_shell->setTrays(m_finishTray, m_deliverTray);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
@@ -1056,6 +1058,8 @@ void MainWindow::setupActions() {
         } else if (id == QStringLiteral("window.project")) {
             m_shell->toggleSheet(StageShell::Sheet::Media);
             syncPanelCommands();
+        } else if (id == QStringLiteral("view.sidebar") || id == QStringLiteral("view.picture") || id == QStringLiteral("view.timeline")) {
+            setPaneOpen(id, checked);
         }
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
@@ -1815,7 +1819,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // A format change lays out again at once.
     m_shell->setAspect(m_viewer->pictureAspect());
     m_timeline->setWideSequence(stage::isWide(m_viewer->pictureAspect()));
-    m_timelineWiring->setWide(stage::isWide(m_viewer->pictureAspect()));
+    applyPanes();
     syncCanvasPreset(canvasSize);
     m_artwork->request(sources, m_projectDirectory);
     m_projectPanel->setSources(sources);
@@ -1836,6 +1840,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_bus->setSnapshot(snapshot, m_project, m_fps, canvasSize);
     if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
     applyPendingLink();
+    followContentWithPanes();
+    runStart();
 }
 
 QStringList MainWindow::projectSlugs() const {
@@ -1979,9 +1985,14 @@ void MainWindow::settleFocus() {
     // the keys on as if Tab were pressed, to whichever control comes next. The
     // timeline's keys only work from the timeline, so they go there, unless
     // someone is typing or working in a sheet or tray. This window's own focus
-    // child: a menu or dialog over it keeps its own.
-    if (!m_timeline || !m_timeline->isEnabled()) return;
+    // child: a menu or dialog over it keeps its own. With no timeline open the
+    // keys wait in the conversation.
     QWidget *holder = focusWidget();
+    if (m_shell && !m_shell->panes().timeline) {
+        if (!holder && m_chat) m_chat->focusComposer();
+        return;
+    }
+    if (!m_timeline || !m_timeline->isEnabled()) return;
     if (holder) {
         if (holder == m_timeline || qobject_cast<QAbstractSpinBox *>(holder) || qobject_cast<QLineEdit *>(holder)) return;
         if (const auto *text = qobject_cast<QPlainTextEdit *>(holder); text && !text->isReadOnly()) return;
@@ -2020,6 +2031,9 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("workspace.review"), tray == StageShell::Tray::None},
         {QStringLiteral("workspace.finish"), tray == StageShell::Tray::Finish},
         {QStringLiteral("workspace.deliver"), tray == StageShell::Tray::Deliver},
+        {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
+        {QStringLiteral("view.picture"), m_shell->panes().picture},
+        {QStringLiteral("view.timeline"), m_shell->panes().timeline},
     };
     for (const auto &[id, checked] : states)
         if (QAction *action = m_commands->action(id)) {

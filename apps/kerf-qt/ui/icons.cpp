@@ -107,6 +107,11 @@ constexpr Source kSources[] = {
     {"g-fx", 16, 16, true, R"svg(<path d="M2.5 4.5h11M2.5 11.5h11"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/>)svg"},
     {"g-user", 16, 16, true, R"svg(<circle cx="8" cy="5.75" r="2.75"/><path d="M2.75 13.5a5.25 5.25 0 0 1 10.5 0"/>)svg"},
     {"g-cdr", 16, 16, true, R"svg(<path d="M3.5 2.5v5a2 2 0 0 0 2 2h7"/><path d="M10 7l2.5 2.5L10 12"/>)svg"},
+    {"g-folder", 16, 16, true, R"svg(<path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.500a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/>)svg"},
+    {"g-plus", 16, 16, true, R"svg(<path d="M8 3.5v9M3.5 8h9"/>)svg"},
+    {"g-sidebar", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6.5 3v10"/>)svg"},
+    {"g-picture", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="7" rx="1.5"/><path d="M2.5 12.750h11"/>)svg"},
+    {"g-timeline", 16, 16, true, R"svg(<rect x="2.5" y="3.500" width="7" height="3.500" rx="1"/><rect x="6.5" y="9" width="7" height="3.500" rx="1"/>)svg"},
     // Drawn outside the 16-unit set.
     {"playhead-head", 9, 12, false, R"svg(<path d="M.5 .5h8v7L4.5 11.5.5 7.5z" fill="#e5484d" stroke="#0e0e0e" stroke-width="1"/>)svg"},
     {"checkbox-check", 16, 16, true, R"svg(<path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="#a8a8a8" stroke-width="1.75"/>)svg"},

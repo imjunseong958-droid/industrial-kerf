@@ -1,28 +1,32 @@
 #pragma once
 
-// The window's content (the minimal layout): only the picture, the agent
-// conversation and the timeline stay on screen, flush, with one hairline
-// between them. Everything else opens on demand: the three sheets over the
-// conversation, one at a time, and the Finish and Deliver trays over the
+// The window's content. It starts as a conversation: the folders and
+// conversations at the left, the conversation beside them. The picture and the
+// timeline are the panel at the right, opened when there is something to see
+// and closed at will. Everything else opens on demand: the three sheets over
+// the conversation, one at a time, and the Finish and Deliver trays over the
 // bottom. Review is the base state.
 //
-// stage::rects() is the geometry, a pure function of the window's size and
-// the picture's aspect; StageShell places its children by it. A format change
-// lays out again at once, with no animation.
+// stage::rects() is the geometry, a pure function of the window's size, the
+// picture's aspect and which panes are open; StageShell places its children by
+// it. A format change lays out again at once, with no animation.
 //
-//   The conversation runs the content's full height at the right, 360 wide; it
-//   gives way down to 300 only when it would leave under 600 on its left.
-//   Wide (aspect >= 1.2), at 1600 x 1000:
-//     picture slot 1240 x 420 at (0, 40), timeline 1240 x 540 at (0, 460),
-//     conversation 360 x 960 at (1240, 40).
-//     The timeline has 56% of the height, at least 260, and whatever the
-//     picture's aspect leaves; the picture pillarboxes in black in its slot.
-//   Vertical (aspect < 1.2), at 1600 x 1000:
-//     three columns: the picture at (0, 40) over the transport's 160 tall block,
-//     450, 640 or 640 wide, the timeline at the content's full height, the rest
-//     of the width, and the conversation. The timeline keeps 600 of width while
+//   The sidebar is 240 wide, and gives way in a window under 1100.
+//   With the panel closed the conversation has the rest. With it open the
+//   conversation is 400 wide, giving way down to 320 only when it would leave
+//   the panel under 600. At 1600 x 1000, the panel is 960 x 960 at (640, 40):
+//   Wide (aspect >= 1.2):
+//     picture slot 960 x 420 at the top, timeline 960 x 540 under it. The
+//     timeline has 56% of the height, at least 260, and whatever the picture's
+//     aspect leaves; the picture pillarboxes in black in its slot.
+//   Vertical (aspect < 1.2):
+//     the picture over the transport's 160 tall block, 360 wide, beside the
+//     timeline at the panel's full height. The timeline keeps 600 of width while
 //     the picture's column can give it up, down to 240; the picture then
 //     letterboxes in black.
+//   One pane alone has the panel: a picture with the transport's block under
+//   it (88 tall under a wide picture), or a timeline with the transport in its
+//   own strip.
 
 #include "test_friends.h"
 
@@ -36,12 +40,26 @@ namespace kerf {
 
 namespace stage {
 
-// The picture's slot (`picture` is the frame inside it, in black bars when
-// the slot is not of its shape), the transport's block under a vertical picture
-// (empty under a wide one, whose transport is in the timeline's strip), the
-// conversation and the timeline, the three sheets and the tray.
+// Which panes the window shows. The conversation always shows.
+struct Panes {
+    bool sidebar = true;
+    bool picture = true;
+    bool timeline = true;
+    bool panelOpen() const { return picture || timeline; }
+    bool operator==(const Panes &other) const {
+        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline;
+    }
+};
+
+// The sidebar, the panel (empty when closed), the picture's slot (`picture` is
+// the frame inside it, in black bars when the slot is not of its shape), the
+// transport's block under the picture (empty when the timeline's strip carries
+// the transport), the conversation and the timeline, the three sheets and the
+// tray. A pane that is closed has an empty rect.
 struct Rects {
     bool wide = true;
+    QRect sidebar;
+    QRect panel;
     QRect slot;
     QRect picture;
     QRect transport;
@@ -54,7 +72,7 @@ struct Rects {
 };
 
 // The geometry in window coordinates; `toolbar` is the height over the content.
-Rects rects(const QSize &window, double aspect, int toolbar = 40);
+Rects rects(const QSize &window, double aspect, int toolbar = 40, const Panes &panes = {});
 // The largest rect of `aspect` inside `slot`, centred.
 QRect fitted(const QRect &slot, double aspect);
 inline bool isWide(double aspect) { return aspect >= 1.2; }
@@ -71,7 +89,9 @@ public:
     explicit StageShell(QWidget *parent = nullptr);
 
     void setRegions(QWidget *picture, QWidget *conversation, QWidget *timeline);
-    // The block under a vertical picture; hidden under a wide one.
+    void setSidebar(QWidget *sidebar);
+    // The block under the picture; hidden while the timeline's strip carries
+    // the transport.
     void setTransport(QWidget *transport);
     void setSheets(QWidget *media, QWidget *browser, QWidget *inspector);
     void setTrays(QWidget *finish, QWidget *deliver);
@@ -84,6 +104,8 @@ public:
 
     void setAspect(double aspect);
     double aspect() const { return m_aspect; }
+    void setPanes(const stage::Panes &panes);
+    const stage::Panes &panes() const { return m_panes; }
     // The geometry as this widget places it, in its own coordinates.
     stage::Rects rects() const;
 
@@ -104,6 +126,7 @@ public:
 signals:
     void sheetChanged(StageShell::Sheet sheet);
     void trayChanged(StageShell::Tray tray);
+    void panesChanged();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -117,6 +140,7 @@ private:
     void followEscape();
     bool takesEscape(QObject *watched, QEvent *event);
     bool m_filtering = false;
+    QWidget *m_sidebar = nullptr;
     QWidget *m_picture = nullptr;
     QWidget *m_conversation = nullptr;
     QWidget *m_timeline = nullptr;
@@ -125,12 +149,14 @@ private:
     QWidget *m_trays[2] = {};
     QList<QWidget *> m_banners;
     // The hairlines between the regions and at a sheet's left and a tray's top.
+    QWidget *m_seamSidebar = nullptr;
     QWidget *m_seamUpright = nullptr;
     QWidget *m_seamAcross = nullptr;
     QWidget *m_seamColumn = nullptr;
     QWidget *m_seamSheet = nullptr;
     QWidget *m_seamTray = nullptr;
     double m_aspect = 16.0 / 9.0;
+    stage::Panes m_panes;
     Sheet m_sheet = Sheet::None;
     Tray m_tray = Tray::None;
 };

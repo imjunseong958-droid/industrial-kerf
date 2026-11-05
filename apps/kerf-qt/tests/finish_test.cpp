@@ -719,7 +719,8 @@ private slots:
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
-        window.resize(1600, 1000);
+        // The tray runs beside the sidebar: 1600 wide, as its design is.
+        window.resize(1840, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.m_commands->action(QStringLiteral("workspace.finish"))->trigger();

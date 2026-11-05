@@ -245,7 +245,7 @@ QColor strokeColor(const QJsonObject &stroke) {
 
 ViewerWidget::ViewerWidget(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("viewer"));
-    setMinimumSize(320, 180);
+    setMinimumSize(tokens::layout::pictureColumnLeast, 180);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
     setAttribute(Qt::WA_OpaquePaintEvent);
