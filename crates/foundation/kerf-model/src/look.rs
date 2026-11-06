@@ -943,6 +943,7 @@ pub fn expr(text: &str) -> Result<Expr, String> {
 fn literal(expr: &Expr, kind: Kind, rate: Rate) -> Option<f64> {
     let env = Env {
         values: BTreeMap::new(),
+        keys: BTreeMap::new(),
         times: BTreeSet::new(),
         rate,
         span: None,
@@ -1036,8 +1037,60 @@ impl Look {
         Ok(())
     }
 
+    /// Whether `param` may animate. The keys of an animated parameter become keys of each value
+    /// that uses it, so each value has to be a straight line in it, for the same keys with the
+    /// same interpolation to draw it exactly: a number, scaled and added to, alone in its
+    /// expression, outside the look's own keyframes, and going to something that animates. A
+    /// transition has no clip for the keys to count from.
+    fn animates(&self, param: &ParamDef, catalog: &Catalog) -> bool {
+        if param.ty != ParamType::Number || self.on == On::Transition {
+            return false;
+        }
+        let name = param.name.as_str();
+        let alone = |e: &Expr| {
+            self.params
+                .iter()
+                .all(|other| other.def.name == name || degree(e, &other.def.name) == Some(0))
+        };
+        let straight = |value: &Val, keyed: bool| match value {
+            Val::Expr(e) => match degree(e, name) {
+                Some(0) => true,
+                Some(1) => keyed && alone(e),
+                _ => false,
+            },
+            Val::Keys(keys) => keys
+                .iter()
+                .all(|key| degree(&key.at, name) == Some(0) && degree(&key.value, name) == Some(0)),
+            Val::Word(word) => keyed || word.strip_prefix('$') != Some(name),
+        };
+        self.lines.iter().all(|line| match line {
+            Line::Set { prop, value, .. } => straight(
+                value,
+                catalog
+                    .prop(Domain::Video, prop)
+                    .is_some_and(|def| def.animatable),
+            ),
+            Line::Fx { fx, params, .. } => {
+                let def = catalog.fx(fx.as_str());
+                params.iter().all(|(target, value)| {
+                    let keyed = def
+                        .and_then(|def| def.find(target))
+                        .is_some_and(|param| param.animatable);
+                    straight(value, keyed)
+                })
+            }
+            Line::Mask { params, .. } => params.iter().all(|(target, value)| {
+                let keyed = catalog
+                    .mask_props()
+                    .iter()
+                    .any(|prop| prop.name == *target && prop.animatable);
+                straight(value, keyed)
+            }),
+        })
+    }
+
     /// The catalog definition that lists the look.
-    pub fn def(&self) -> FxDef {
+    pub fn def(&self, catalog: &Catalog) -> FxDef {
         let kind = match self.on {
             On::Transition => FxKind::Transition,
             On::Clip | On::Title => FxKind::Effect,
@@ -1051,7 +1104,15 @@ impl Look {
         .category(&self.category)
         .version(self.version, self.version);
         def.engine = Engine::Look;
-        def.params = self.params.iter().map(|p| p.def.clone()).collect();
+        def.params = self
+            .params
+            .iter()
+            .map(|p| {
+                let mut param = p.def.clone();
+                param.animatable = self.animates(&p.def, catalog);
+                param
+            })
+            .collect();
         def
     }
 
@@ -1118,6 +1179,24 @@ impl Look {
     }
 }
 
+/// How `e` goes with the parameter `name`: `Some(0)` not at all, `Some(1)` as a straight line, and
+/// `None` as a curve, from multiplying the parameter by itself or dividing by it.
+fn degree(e: &Expr, name: &str) -> Option<u32> {
+    match e {
+        Expr::Param(param) => Some(u32::from(param == name)),
+        Expr::Neg(inner) => degree(inner, name),
+        Expr::Op(op, a, b) => {
+            let (a, b) = (degree(a, name)?, degree(b, name)?);
+            match op {
+                '+' | '-' => Some(a.max(b)),
+                '*' => Some(a + b).filter(|sum| *sum <= 1),
+                _ => (b == 0).then_some(a),
+            }
+        }
+        _ => Some(0),
+    }
+}
+
 /// The kind an expression gives, from its parameters' kinds.
 fn kind_of(e: &Expr, kinds: &BTreeMap<&str, Option<Kind>>) -> Result<Kind, String> {
     Ok(match e {
@@ -1175,8 +1254,11 @@ fn combine(op: char, a: Kind, b: Kind) -> Result<Kind, String> {
 // ---------------------------------------------------------------- expanding
 
 /// Parameter values and the rate frames count at, while a look expands.
+#[derive(Clone)]
 struct Env {
     values: BTreeMap<String, Value>,
+    /// The parameters that animate, and their keys.
+    keys: BTreeMap<String, Vec<Keyframe>>,
     /// The parameters whose numbers are times.
     times: BTreeSet<String>,
     rate: Rate,
@@ -1243,7 +1325,26 @@ impl Env {
     /// A value as a parameter for `def`.
     fn param(&self, value: &Val, def: &ParamDef, clip_start: f64) -> Result<Param, String> {
         match value {
-            Val::Expr(e) => Ok(Param::Static(Value::Number(self.number(e)?))),
+            Val::Expr(e) => {
+                let Some((name, keys)) = self
+                    .keys
+                    .iter()
+                    .find(|(name, _)| degree(e, name) != Some(0))
+                else {
+                    return Ok(Param::Static(Value::Number(self.number(e)?)));
+                };
+                let mut env = self.clone();
+                keys.iter()
+                    .map(|key| {
+                        env.values.insert(name.clone(), key.value.clone());
+                        Ok(Keyframe {
+                            value: Value::Number(env.number(e)?),
+                            ..key.clone()
+                        })
+                    })
+                    .collect::<Result<_, String>>()
+                    .map(Param::Animated)
+            }
             Val::Keys(keys) => {
                 let mut out: Vec<Keyframe> = Vec::new();
                 for key in keys {
@@ -1275,6 +1376,9 @@ impl Env {
             }
             Val::Word(word) => {
                 if let Some(name) = word.strip_prefix('$') {
+                    if let Some(keys) = self.keys.get(name) {
+                        return Ok(Param::Animated(keys.clone()));
+                    }
                     return self
                         .values
                         .get(name)
@@ -1312,10 +1416,13 @@ fn env(
     rate: Rate,
     span: Option<(f64, f64)>,
     anchor: Option<Anchor>,
+    catalog: &Catalog,
 ) -> Result<Env, String> {
     let mut values = BTreeMap::new();
+    let mut animated = BTreeMap::new();
     let defaults = Env {
         values: BTreeMap::new(),
+        keys: BTreeMap::new(),
         times: BTreeSet::new(),
         rate,
         span: None,
@@ -1336,11 +1443,12 @@ fn env(
                 Value::Number(marker.at.seconds() - start)
             }
             Some(Param::Static(value)) => value.clone(),
-            Some(Param::Animated(_)) => {
-                return Err(format!(
-                    "`{}`: a look's parameters do not animate",
-                    param.def.name
-                ))
+            Some(Param::Animated(keys)) => {
+                if !look.animates(&param.def, catalog) {
+                    return Err(format!("`{}` cannot be animated", param.def.name));
+                }
+                animated.insert(param.def.name.clone(), keys.clone());
+                continue;
             }
             None => match &param.default {
                 Some(e) => Value::Number(defaults.number(e)?),
@@ -1357,6 +1465,7 @@ fn env(
         .collect();
     Ok(Env {
         values,
+        keys: animated,
         times,
         rate,
         span,
@@ -1571,7 +1680,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                 let cut = track.clips[from].end();
                 let (before, after) = transition.split_at_cut(rate);
                 let span = ((cut - before).seconds(), (cut + after).seconds());
-                let env = env(look, &transition.params, rate, Some(span), None)
+                let env = env(look, &transition.params, rate, Some(span), None, catalog)
                     .map_err(|e| format!("`{}`: {e}", transition.id))?;
                 for (side, index) in [(Side::A, from), (Side::B, to)] {
                     let clip = &mut track.clips[index];
@@ -1641,7 +1750,7 @@ fn flatten(
         return Err(format!("`{}` is a look for titles", look.id));
     }
     let anchor = (clip.start.seconds(), markers);
-    let env = env(look, &effect.params, rate, None, Some(anchor))?;
+    let env = env(look, &effect.params, rate, None, Some(anchor), catalog)?;
     let taken: Vec<Id> = clip.masks.iter().map(|m| m.name.clone()).collect();
     parts(
         look,
@@ -1809,7 +1918,7 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
         assert_eq!(look.params.len(), 3);
         assert_eq!(look.params[1].def.ty, ParamType::Time);
         assert_eq!(look.lines.len(), 3);
-        let def = look.def();
+        let def = look.def(Catalog::builtin());
         assert_eq!(
             (def.engine, def.kind, def.version),
             (Engine::Look, FxKind::Effect, 1)
@@ -1843,6 +1952,40 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
     }
 
     #[test]
+    fn a_number_animates_only_where_it_stays_a_straight_line() {
+        let look = read(
+            r#"kerf-look 1
+look look.test.lines version=1 name="Lines" category="Fun" on=clip
+  doc "What animates and what does not."
+  param scaled number default=1
+  param bare number default=1
+  param squared number default=1
+  param divides number default=1
+  param first number default=1
+  param second number default=1
+  param keyed number default=1
+  param hit time default=0f
+  set scale=1+0.5*$scaled
+  fx blur.gaussian@1 radius=$bare
+  set rotation=$squared*$squared
+  set x=1/$divides
+  set y=$first+$second
+  fx blur.directional@2 length={$hit:0 $hit+12f:$keyed}
+"#,
+            "lines.kerflook",
+        )
+        .unwrap();
+        let def = look.def(Catalog::builtin());
+        let animates = |name: &str| def.find(name).unwrap().animatable;
+        for name in ["scaled", "bare"] {
+            assert!(animates(name), "{name}");
+        }
+        for name in ["squared", "divides", "first", "second", "keyed", "hit"] {
+            assert!(!animates(name), "{name}");
+        }
+    }
+
+    #[test]
     fn expressions_read_and_combine_kinds() {
         let e = expr("$hit+2f*(1+$n)/2").unwrap();
         let kinds = BTreeMap::from([("hit", Some(Kind::Time)), ("n", Some(Kind::Number))]);
@@ -1853,6 +1996,7 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
                 ("n".into(), Value::Number(1.0)),
                 ("hit".into(), Value::Number(0.5)),
             ]),
+            keys: BTreeMap::new(),
             times: BTreeSet::from(["hit".to_owned()]),
             rate: Rate::FPS_24,
             span: None,

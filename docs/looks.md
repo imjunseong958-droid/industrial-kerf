@@ -73,7 +73,12 @@ preset applied to new music can move such markers onto its beats
   an optional `range=` and `doc=`. Times are relative to the clip, like
   keyframe times, or name a marker; frames in a `param` line count at 30 a second for the
   catalog's ranges, and at the sequence's rate when the look expands. A
-  look's parameters do not animate; its keyframes do.
+  number animates, `amount={0f:0 24f:1:ease}`, where the look's lines keep
+  it a straight line through its keys: scaled and added to, alone in its
+  expression, outside the look's own keyframes, and going to something that
+  animates. The same keys land on each value it reaches, so the look draws
+  as if each of them were keyed by hand. Other parameters do not animate,
+  nor do a transition's, and a document that tries is refused.
 - **`set`** lines change the clip's properties, combined with the clip's own
   so a look rides on top of the edit: `x`, `y`, and `rotation` add; `scale`,
   `scale_x`, `scale_y`, and `opacity` multiply. Other properties are not

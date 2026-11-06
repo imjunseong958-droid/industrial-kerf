@@ -253,6 +253,9 @@ impl Drawing {
         let mut ops = Vec::with_capacity(plan.effects.len());
         let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
         for effect in &plan.effects {
+            if filmcraft::instance::leaves_alone(effect, time, self.working()) {
+                continue;
+            }
             // Bringing a whole picture under 1 goes by its peak, which only the CPU knows before it
             // draws; each pixel under 1 needs no such thing.
             let way = if self.hdr.is_some() {

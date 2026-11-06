@@ -65,6 +65,33 @@ pub fn instance(
     })
 }
 
+/// Whether `effect` at clip time `at` leaves any picture as it is, as a grade does at no amount, so
+/// that drawing can go on as if it were not there, down to the byte.
+pub fn leaves_alone(effect: &Effect, at: Time, working: kerf_color::WorkingSpace) -> bool {
+    if !matches!(effect.fx.as_str(), "color.lumetri" | "color.levels") {
+        return false;
+    }
+    let on = Picture {
+        size: (1, 1),
+        per_source: 1.0,
+    };
+    let Some(instance) = instance(effect, at, on, &|_| None) else {
+        return false;
+    };
+    let cx = super::effects::FxCtx {
+        t: tick(at),
+        px_scale: 1.0,
+        seconds: at.seconds(),
+        timecode: "",
+        clip_name: "",
+        project: None,
+        env: None,
+        frame_rate: 24.0,
+        working,
+    };
+    super::gpufx::FxOp::eval(&instance, &cx, 1, 1).is_some_and(|op| op.leaves_alone())
+}
+
 /// What a FilmCraft effect knows beyond its parameters as it runs.
 pub struct Run<'a> {
     /// The sequence's working color space, which Lumetri grades in.

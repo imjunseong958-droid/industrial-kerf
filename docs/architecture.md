@@ -175,7 +175,15 @@ Processed's crossed curves did too, and Legal Range is `color.levels`. Wheels an
 a second pass of Lumetri's GPU kernel, as the CPU's reference does them after the rest, so Sepia at 4K
 takes 39 ms a frame where the CPU took 236.
 
-To add: layered grades as stacked effects.
+Grades stack as plain `fx` lines, with no new words. Each runs on what the line above drew, which is
+byte for byte what a grade gives on a clip of a sequence holding the other. `amount` animates because a
+number a look's lines only scale stays a straight line through its keys, so the keys land as they are on
+each value it reaches (`Look::animates`); a number inside the look's own keyframes does not, and is refused.
+A Lumetri or Levels with all its numbers at rest does not run (`FxOp::leaves_alone`), on either the CPU or the
+GPU, since the way to display encoding and back can move a byte, so a grade at 0 is not there. Three grades
+take 19 ms a frame at 1080p and 56 ms at 4K (128 and 471 on the CPU). Three at 0 take 12 and 27 ms: the same
+bytes as a clip with none, which at 4K has a shortcut of its own (`plain_frame`, 6 ms), since `untouched`
+reads the document and not the frame.
 
 ### Motion
 
