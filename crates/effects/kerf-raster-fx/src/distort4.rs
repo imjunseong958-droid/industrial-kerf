@@ -64,7 +64,7 @@ fn median(v: &mut [f64]) -> f64 {
 /// `detail` (Pixel Motion Detail, 0..1; 0.2 = the standard grid) scales the number of motion
 /// vectors the Pixel Motion method measures: more vectors follow finer local motion.
 fn measure(cur: &Image, prev: Option<&Image>, next: Option<&Image>, scale: f64, detailed: bool, per_row: bool, detail: f64) -> Option<Flow> {
-    use crate::klt::{GrayPyramid, LkOpts, analysis_factor, track};
+    use kerf_raster::klt::{GrayPyramid, LkOpts, analysis_factor, track};
     let factor = analysis_factor(cur.width, cur.height, if detailed { 640 } else { 320 });
     let pc = GrayPyramid::from_image(cur, factor, 4);
     let (w, h) = (pc.width(), pc.height());

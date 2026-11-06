@@ -18,6 +18,8 @@ members = [
     "crates/effects/kerf-raster-fx",
     # color
     "crates/color/kerf-scopes",
+    # vfx
+    "crates/vfx/kerf-track",
     # image
     "crates/image/kerf-image",
     # engine

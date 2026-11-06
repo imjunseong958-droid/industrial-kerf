@@ -22,6 +22,7 @@ kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-scopes = { path = "../../color/kerf-scopes" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
+kerf-track = { path = "../../vfx/kerf-track" }
 kerf-text = { path = "../../foundation/kerf-text" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

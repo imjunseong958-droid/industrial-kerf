@@ -1,0 +1,12 @@
+[package]
+name = "kerf-track"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Following what moves in a picture"
+
+[dependencies]
+kerf-raster = { path = "../../render/kerf-raster" }
+
+[lints]
+workspace = true

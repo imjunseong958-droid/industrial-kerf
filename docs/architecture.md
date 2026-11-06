@@ -25,7 +25,8 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `effects` | The effects carried from FilmCraft and EffectCraft, all areas together | `kerf-fx`, `kerf-raster-fx` |
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
 | 2 | `color` | Measuring a grade; the grading effects themselves are in `effects` for now | `kerf-scopes` |
-| 2 | `motion`, `vfx` | Reserved: each gets its folder with its first crate | |
+| 2 | `vfx` | Following what moves in a picture; keys and mattes are in `effects` for now | `kerf-track` |
+| 2 | `motion` | Reserved: it gets its folder with its first crate | |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
 | 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher` |
 
@@ -172,11 +173,14 @@ keyframes, and an agent writes them gladly; a look covers the reusable case.
 Has: keys, track mattes, blurs, glows, distortions, warp stabilizer, restoration,
 360°.
 
-To add, in order: optical flow; a point and planar tracker whose data clips and
-masks can follow (EffectCraft's `track`); roto with the swappable model interface
-of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; `image.fill`
-over time, by flow (`fill_sequence`), so that it holds on a moving shot; the camera
-solver.
+`crates/vfx/kerf-track` follows a point of the picture (pyramidal Lucas-Kanade with a
+forward-backward check), and `look` gives the result as keyframes (`track`), so that what
+follows is plain text in the document, and a null and `parent=` do the rest.
+
+To add, in order: optical flow; planar tracking, for corner pins and screen replacements
+(EffectCraft's `track`); roto with the swappable model interface of its `segment`, for a
+Magnetic Mask or Object Matte of Kerf's own; `image.fill` over time, by flow
+(`fill_sequence`), so that it holds on a moving shot; the camera solver.
 
 ### Image
 
