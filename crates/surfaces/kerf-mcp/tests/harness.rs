@@ -1229,6 +1229,70 @@ fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
 }
 
 #[test]
+fn look_reads_an_hdr_sequences_scopes_by_its_signal() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A white solid is SDR white in a sequence of either kind, which only one of them can say.
+    let script =
+        "track add V2 video\noverwrite gen=solid dur=12f at=0f on=V2 as=w\nset w color=#ffffff";
+    let added = ok(&router, "edit", json!({"script": script}));
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let read = |proposal: &str| {
+        ok(
+            &router,
+            "look",
+            json!({"scopes": true, "at": ["2f"], "proposal": proposal}),
+        )["readings"][0]["scopes"]
+            .clone()
+    };
+    let sdr = read(proposal);
+    assert_eq!(sdr["luma"]["max"], 100.0, "{sdr}");
+    assert!(sdr.get("hdr").is_none(), "{sdr}");
+    let extended = ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": "sequence set s1 color=rec2100-pq"}),
+    );
+    let proposal = extended["proposal"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{extended}"));
+    let hdr = read(proposal);
+    let held = &hdr["hdr"];
+    assert!(
+        (hdr["luma"]["max"].as_f64().unwrap() - 58.07).abs() < 1.0,
+        "{hdr}"
+    );
+    assert!(
+        (held["peakNits"].as_f64().unwrap() - 203.0).abs() < 5.0,
+        "{hdr}"
+    );
+    assert!(
+        (held["referenceWhite"].as_f64().unwrap() - 58.07).abs() < 0.1,
+        "{hdr}"
+    );
+    assert_eq!(held["outsideBt709"], 0.0, "{hdr}");
+    // And a push past white reads as light a monitor's picture could not say.
+    let extended = ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": "fx w add color.lumetri exposure=1"}),
+    );
+    let proposal = extended["proposal"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{extended}"));
+    let pushed = read(proposal);
+    assert!(
+        pushed["hdr"]["peakNits"].as_f64().unwrap() > 300.0,
+        "{pushed}"
+    );
+    assert_eq!(pushed["hdr"]["overWhite"], 1.0, "{pushed}");
+}
+
+#[test]
 fn look_says_which_text_is_too_faint_from_the_frames() {
     let Some((_directory, router)) = router() else {
         return;

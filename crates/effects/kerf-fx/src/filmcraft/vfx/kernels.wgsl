@@ -507,14 +507,38 @@ fn radial_zoom(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, p, sum / weights);
 }
 
-// `Image::to_unit`: each pixel brought under 1.
+// How much of a color is left when it is pulled inside BT.709 toward the gray of its own brightness:
+// 1 for one it can hold, and 0 for one with no light in it to keep (`Image::to_gamut`).
+fn color_left(c: vec3<f32>) -> f32 {
+    let lowest = min(min(c.r, c.g), c.b);
+    if lowest >= 0.0 { return 1.0; }
+    let gray = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    if gray <= 0.0 { return 0.0; }
+    return gray / (gray - lowest);
+}
+
+fn pulled_inside(c: vec3<f32>, left: f32) -> vec3<f32> {
+    if left >= 1.0 { return c; }
+    if left <= 0.0 { return vec3(0.0); }
+    let gray = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    return vec3(gray) + (c - vec3(gray)) * left;
+}
+
+fn put_outside(c: vec3<f32>, left: f32) -> vec3<f32> {
+    if left >= 1.0 || left <= 0.0 { return c; }
+    let gray = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    return vec3(gray) + (c - vec3(gray)) / left;
+}
+
+// `Image::to_unit`: each pixel brought inside BT.709 and under 1.
 @compute @workgroup_size(16, 16)
 fn to_unit(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }
     let p = vec2<i32>(id.xy);
     let c = textureLoad(src, p, 0);
-    let gain = max(max(max(c.r, c.g), c.b), 1.0);
-    textureStore(dst, p, vec4(c.rgb / gain, c.a));
+    let held = pulled_inside(c.rgb, color_left(c.rgb));
+    let gain = max(max(max(held.r, held.g), held.b), 1.0);
+    textureStore(dst, p, vec4(held / gain, c.a));
 }
 
 // `Image::from_unit`: `src` put back by what `aux`, as it was before `to_unit`, says.
@@ -524,6 +548,27 @@ fn from_unit(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = vec2<i32>(id.xy);
     let c = textureLoad(src, p, 0);
     let before = textureLoad(aux, p, 0);
-    let gain = max(max(max(before.r, before.g), before.b), 1.0);
-    textureStore(dst, p, vec4(c.rgb * gain, c.a));
+    let left = color_left(before.rgb);
+    let held = pulled_inside(before.rgb, left);
+    let gain = max(max(max(held.r, held.g), held.b), 1.0);
+    textureStore(dst, p, vec4(put_outside(c.rgb * gain, left), c.a));
+}
+
+// `Image::to_gamut`: each pixel brought inside BT.709.
+@compute @workgroup_size(16, 16)
+fn to_gamut(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    textureStore(dst, p, vec4(pulled_inside(c.rgb, color_left(c.rgb)), c.a));
+}
+
+// `Image::from_gamut`: `src` put back by what `aux`, as it was before `to_gamut`, says.
+@compute @workgroup_size(16, 16)
+fn from_gamut(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let before = textureLoad(aux, p, 0);
+    textureStore(dst, p, vec4(put_outside(c.rgb, color_left(before.rgb)), c.a));
 }
