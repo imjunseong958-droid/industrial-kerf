@@ -67,6 +67,8 @@ pub struct Gpu {
     plus: wgpu::ComputePipeline,
     finish_layout: wgpu::BindGroupLayout,
     finish: wgpu::ComputePipeline,
+    finish16_layout: wgpu::BindGroupLayout,
+    finish16: wgpu::ComputePipeline,
     dummy: wgpu::TextureView,
     pool: Mutex<Pool>,
     /// Held while kernels build: a device's error scopes nest, so two at once would cross.
@@ -288,6 +290,31 @@ impl Gpu {
             compilation_options: Default::default(),
             cache: None,
         });
+        let finish16_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("kerf-finish16"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("finish16.wgsl").into()),
+        });
+        let finish16_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("kerf-finish16"),
+            entries: &[
+                texture_entry(1),
+                storage_entry(2, wgpu::TextureFormat::Rgba16Uint),
+            ],
+        });
+        let finish16_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("kerf-finish16"),
+                bind_group_layouts: &[Some(&finish16_layout)],
+                immediate_size: 0,
+            });
+        let finish16 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("finish16"),
+            layout: Some(&finish16_pipeline_layout),
+            module: &finish16_module,
+            entry_point: Some("finish"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         if let Some(error) = now(scope.pop()) {
             eprintln!("kerf-gpu: kernels did not build: {error}");
             return None;
@@ -329,6 +356,8 @@ impl Gpu {
             plus,
             finish_layout,
             finish,
+            finish16_layout,
+            finish16,
             dummy,
             pool: Mutex::default(),
             building: Mutex::new(()),
@@ -981,7 +1010,16 @@ impl<'a> Frame<'a> {
     /// Submit the frame and read `picture` back as sRGB-encoded RGBA bytes over black. `None` when
     /// the device failed, and the CPU should draw the frame.
     pub fn finish(mut self, picture: &Picture) -> Option<Vec<u8>> {
-        let bytes = self.finish_to_rgba8(picture);
+        let bytes = self.finish_encoded(picture, false);
+        if self.gpu.failed.load(Ordering::Relaxed) {
+            return None;
+        }
+        bytes
+    }
+
+    /// [`Frame::finish`] at 16 bits a component, little-endian.
+    pub fn finish16(mut self, picture: &Picture) -> Option<Vec<u8>> {
+        let bytes = self.finish_encoded(picture, true);
         if self.gpu.failed.load(Ordering::Relaxed) {
             return None;
         }
@@ -1008,20 +1046,35 @@ impl<'a> Frame<'a> {
         Some(rows)
     }
 
-    fn finish_to_rgba8(&mut self, picture: &Picture) -> Option<Vec<u8>> {
+    fn finish_encoded(&mut self, picture: &Picture, deep: bool) -> Option<Vec<u8>> {
         let gpu = self.gpu;
         let (w, h) = (picture.w, picture.h);
+        let (format, per_pixel, layout, pipeline) = if deep {
+            (
+                wgpu::TextureFormat::Rgba16Uint,
+                8,
+                &gpu.finish16_layout,
+                &gpu.finish16,
+            )
+        } else {
+            (
+                wgpu::TextureFormat::Rgba8Unorm,
+                4,
+                &gpu.finish_layout,
+                &gpu.finish,
+            )
+        };
         let key = (
             w,
             h,
-            wgpu::TextureFormat::Rgba8Unorm,
+            format,
             wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
         );
         let target = gpu.texture(key);
         let target_view = target.create_view(&Default::default());
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("kerf-finish"),
-            layout: &gpu.finish_layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1040,15 +1093,15 @@ impl<'a> Frame<'a> {
                     label: Some("kerf-finish"),
                     timestamp_writes: None,
                 });
-            pass.set_pipeline(&gpu.finish);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
         }
-        let row = align_row(w * 4);
+        let row = align_row(w * per_pixel);
         let buffer = self.staging(u64::from(row) * u64::from(h));
         self.copy_out(&target, &buffer, row, (w, h));
         self.used.push((key, target));
-        let tight = w as usize * 4;
+        let tight = (w * per_pixel) as usize;
         self.submit_and_map(buffer, |data| {
             let mut out = Vec::with_capacity(tight * h as usize);
             for line in data.chunks_exact(row as usize) {
@@ -1327,6 +1380,26 @@ mod tests {
             let out = frame.correct(picture, &correction);
             let floats = frame.read_floats(&out).expect("read back");
             assert_close(&floats, &cpu.px, 4e-3, &format!("{case:?}"));
+        }
+    }
+
+    #[test]
+    fn sixteen_bit_frames_come_back_as_the_cpu_makes_them() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        let source = test_picture(37, 11, 0.3);
+        let cpu = source.to_rgba16_over_black();
+        let mut frame = gpu.frame();
+        let picture = frame.image(&source);
+        let bytes = frame.finish16(&picture).expect("finished");
+        assert_eq!(bytes.len(), cpu.len());
+        for (g, c) in bytes.chunks_exact(2).zip(cpu.chunks_exact(2)) {
+            let (g, c) = (
+                u16::from_le_bytes([g[0], g[1]]),
+                u16::from_le_bytes([c[0], c[1]]),
+            );
+            assert!(g.abs_diff(c) <= 16, "{g} against {c}");
         }
     }
 

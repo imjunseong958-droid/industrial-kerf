@@ -41,6 +41,20 @@ struct Shape {
 impl Drawing {
     /// The frame at `at`, when the GPU draws it.
     pub(super) fn gpu_frame(&self, at: Time, scale: f64) -> Option<Frame> {
+        self.gpu_frame_as(at, scale, |frame, canvas| frame.finish(canvas))
+    }
+
+    /// The frame at `at` at 16 bits a component, when the GPU draws it.
+    pub(super) fn gpu_frame16(&self, at: Time, scale: f64) -> Option<Frame> {
+        self.gpu_frame_as(at, scale, |frame, canvas| frame.finish16(canvas))
+    }
+
+    fn gpu_frame_as(
+        &self,
+        at: Time,
+        scale: f64,
+        finish: impl FnOnce(GpuFrame<'static>, &GpuPicture) -> Option<Vec<u8>>,
+    ) -> Option<Frame> {
         let plan = &self.sequences[0];
         let (w, h) = output_size(plan.width, plan.height, scale);
         if self.accel == Accel::Auto && w * h < SMALLEST_PIXELS {
@@ -52,7 +66,7 @@ impl Drawing {
         }
         let mut frame = gpu.frame();
         let canvas = self.gpu_draw(&mut frame, 0, at, scale)?;
-        let rgba = frame.finish(&canvas)?;
+        let rgba = finish(frame, &canvas)?;
         Some(Frame {
             width: w as u32,
             height: h as u32,

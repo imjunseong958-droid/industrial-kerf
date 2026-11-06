@@ -551,6 +551,8 @@ struct CompositedRender {
     /// The share of the canvas drawn, and the frame size that gives.
     scale: f64,
     size: (u32, u32),
+    /// Frames go to FFmpeg at 16 bits a component.
+    deep: bool,
 }
 
 /// The frames of `[from, to)` of a sequence (all of it when no range) and
@@ -595,6 +597,9 @@ fn composited_render(
         ((f64::from(canvas.0) * scale).round() as u32).max(1),
         ((f64::from(canvas.1) * scale).round() as u32).max(1),
     );
+    let encoding = encoding(opts)?;
+    // A deeper file is worth deeper frames: 8 bits would only be stretched to fill it.
+    let deep = encoding.pix_fmt != "yuv420p";
     let mut args: Vec<String> = sound.argv.iter().skip(1).cloned().collect();
     let picture = args.iter().filter(|arg| *arg == "-i").count();
     let at = args
@@ -607,7 +612,7 @@ fn composited_render(
             "-f".to_owned(),
             "rawvideo".to_owned(),
             "-pix_fmt".to_owned(),
-            "rgba".to_owned(),
+            if deep { "rgba64le" } else { "rgba" }.to_owned(),
             "-s".to_owned(),
             format!("{}x{}", size.0, size.1),
             "-framerate".to_owned(),
@@ -617,7 +622,6 @@ fn composited_render(
         ],
     );
     args.extend(["-map".to_owned(), format!("{picture}:v")]);
-    let encoding = encoding(opts)?;
     args.extend(encoding.video);
     let mut filters = Vec::new();
     if size.0 % 2 == 1 || size.1 % 2 == 1 {
@@ -642,6 +646,7 @@ fn composited_render(
         times,
         scale,
         size,
+        deep,
     })
 }
 
@@ -689,7 +694,13 @@ where
     let drawn = draw_in_order(
         total,
         RENDER_DRAWERS,
-        |index| compositor.frame(render.times[index], render.scale),
+        |index| {
+            if render.deep {
+                compositor.frame16(render.times[index], render.scale)
+            } else {
+                compositor.frame(render.times[index], render.scale)
+            }
+        },
         |frame| {
             if (frame.width, frame.height) != render.size {
                 return Err(EngineError::msg(format!(

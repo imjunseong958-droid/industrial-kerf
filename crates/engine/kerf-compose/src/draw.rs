@@ -293,6 +293,20 @@ impl Drawing {
         frame
     }
 
+    /// See [`Compositor::frame16`](crate::Compositor::frame16).
+    pub fn frame16(&self, at: Time, scale: f64) -> Frame {
+        let scale = scale.clamp(1.0 / 16.0, 1.0);
+        if let Some(frame) = self.gpu_frame16(at, scale) {
+            return frame;
+        }
+        let image = self.draw(0, at, scale);
+        Frame {
+            width: image.w as u32,
+            height: image.h as u32,
+            rgba: image.to_rgba16_over_black(),
+        }
+    }
+
     fn draw_frame(&self, at: Time, scale: f64) -> Frame {
         if scale >= 1.0 {
             if let Some(frame) = self.plain_frame(at) {
