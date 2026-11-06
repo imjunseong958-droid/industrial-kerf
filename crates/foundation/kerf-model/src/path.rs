@@ -193,6 +193,52 @@ mod tests {
         }
     }
 
+    /// `pathsAreTheCompositorsPaths` in the Qt editor's `graph_test.cpp` holds the curve the
+    /// picture draws to this same table.
+    #[test]
+    fn paths_read_the_table_the_picture_is_held_to() {
+        const WIDE: f64 = 16.0 / 9.0;
+        const TALL: f64 = 9.0 / 16.0;
+        const CURVED: &str = "0,0 0.2,0.3 0.5,-0.1 0.8,0.2";
+        const LONG: &str = "-0.4,0.1 0.1,-0.3 0.2,0.25 0.45,0.05 0.3,-0.2";
+        const TABLE: &[(&str, f64, f64, f64, f64, f64)] = &[
+            ("0,0 1,0", 1.0, 0.25, 0.25, 0.0, 0.0),
+            (CURVED, WIDE, 0.0, 0.0, 0.0, 40.186380),
+            (CURVED, WIDE, 0.2, 0.138852744, 0.255491011, 37.182011),
+            (CURVED, WIDE, 0.5, 0.377158462, 0.044861162, -46.192624),
+            (CURVED, WIDE, 0.8, 0.637278976, -0.006712763, 34.546793),
+            (CURVED, WIDE, 1.0, 0.8, 0.2, 29.384498),
+            ("0,0 0.01,0 0.02,0 1,0", 1.0, 0.5, 0.499950046, 0.0, 0.0),
+            (
+                "0,0 0.5,0 0.5,0.5",
+                2.0,
+                0.5,
+                0.381055017,
+                -0.061333311,
+                0.422966,
+            ),
+            (
+                "0,0 0.5,0 0.5,0.5",
+                2.0,
+                0.9,
+                0.508284207,
+                0.348099501,
+                99.522964,
+            ),
+            (LONG, TALL, 0.1, -0.251897404, -0.034195522, -59.751285),
+            (LONG, TALL, 0.37, 0.146873937, -0.219570365, 84.473801),
+            (LONG, TALL, 0.66, 0.182237509, 0.237851333, 68.262319),
+            (LONG, TALL, 0.95, 0.354996038, -0.127356395, -115.521511),
+            ("0.3,0.3 0.3,0.3", 1.0, 0.5, 0.3, 0.3, 0.0),
+        ];
+        for (text, aspect, along, x, y, heading) in TABLE {
+            let point = path(text, *aspect).at(*along);
+            close(point.x, *x, 1e-6);
+            close(point.y, *y, 1e-6);
+            close(point.heading, *heading, 1e-3);
+        }
+    }
+
     #[test]
     fn it_passes_through_every_point_and_ends_where_it_should() {
         let curved = path("0,0 0.2,0.3 0.5,-0.1 0.8,0.2", 16.0 / 9.0);

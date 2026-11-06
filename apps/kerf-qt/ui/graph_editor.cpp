@@ -15,9 +15,11 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace kerf {
 
@@ -36,6 +38,12 @@ constexpr double kGrab = 7.0;
 constexpr double kDiamond = 4.5;
 // A hand that wobbles while clicking has not moved anything.
 constexpr double kDragStart = 3.0;
+// The fewest frames the plot shows across, however far it zooms.
+constexpr double kFewestFrames = 8.0;
+constexpr double kZoomPerNotch = 1.25;
+constexpr double kPanPerNotch = 48.0;
+// A framed key stands this share of what is framed in from the edge.
+constexpr double kFrameMargin = 0.1;
 
 // Tick spacing, in frames, that leaves `room` points between labels.
 qint64 tickStep(double pointsPerFrame, double room) {
@@ -44,6 +52,18 @@ qint64 tickStep(double pointsPerFrame, double room) {
         for (const qint64 base : {1, 2, 5})
             if (double(base * scale) * pointsPerFrame >= room) return base * scale;
     return step * 1000000;
+}
+
+// The F key, whichever input source is on. With Hangul or Cyrillic it arrives as
+// a letter of that alphabet, and only the key's own code says which key it is.
+bool isFKey(const QKeyEvent *event) {
+    if (event->key() == Qt::Key_F) return true;
+#ifdef Q_OS_MACOS
+    constexpr quint32 kVK_ANSI_F = 0x03;
+    return event->key() > 0x7f && event->key() < Qt::Key_Escape && event->nativeVirtualKey() == kVK_ANSI_F;
+#else
+    return false;
+#endif
 }
 
 QPainterPath diamond(QPointF at, double size) {
@@ -73,6 +93,18 @@ GraphEditor::GraphEditor(QWidget *parent, EditorBus *bus) : QWidget(parent), m_b
     m_meta->setObjectName(QStringLiteral("graphMeta"));
     bar->addWidget(m_meta);
     bar->addStretch();
+    auto *frame = new ui::Button(QStringLiteral("Frame"));
+    frame->setObjectName(QStringLiteral("graphFrame"));
+    frame->setToolTip(QStringLiteral("Show the selected keys (F)"));
+    frame->setFocusPolicy(Qt::NoFocus);
+    bar->addWidget(frame);
+    connect(frame, &QAbstractButton::clicked, this, &GraphEditor::frameSelection);
+    auto *fit = new ui::Button(QStringLiteral("Fit"));
+    fit->setObjectName(QStringLiteral("graphFit"));
+    fit->setToolTip(QStringLiteral("Show the whole clip (Shift+F)"));
+    fit->setFocusPolicy(Qt::NoFocus);
+    bar->addWidget(fit);
+    connect(fit, &QAbstractButton::clicked, this, &GraphEditor::showWholeClip);
     m_curve = new ui::Button(QStringLiteral("Curve"));
     m_curve->setObjectName(QStringLiteral("graphCurve"));
     m_curve->setFocusPolicy(Qt::NoFocus);
@@ -103,19 +135,36 @@ GraphEditor::GraphEditor(QWidget *parent, EditorBus *bus) : QWidget(parent), m_b
 
 // ------------------------------------------------------------ the document
 
+void GraphEditor::setEffectCatalog(const QJsonArray &catalog) {
+    m_effectParams.clear();
+    for (const QJsonValue &value : catalog) {
+        const QJsonObject def = value.toObject();
+        m_effectParams.insert(def.value(QStringLiteral("id")).toString(), def.value(QStringLiteral("params")).toArray());
+    }
+    rebuild();
+}
+
 void GraphEditor::rebuild() {
     if (m_drag != Drag::None) return;
     const QString channelId = m_channel >= 0 && m_channel < m_channels.size() ? m_channels.at(m_channel).id() : QString();
     const qint64 keyFrame = channelId.isEmpty() || m_key < 0 || m_key >= m_channels.at(m_channel).keys.size()
                                 ? -1
                                 : m_channels.at(m_channel).keys.at(m_key).frame;
+    // What is selected is a number and a frame, which outlast the lists they are in.
+    QHash<QString, QList<qint64>> selectedFrames;
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it)
+        for (const int key : it.value())
+            if (it.key() < m_channels.size() && key < m_channels.at(it.key()).keys.size())
+                selectedFrames[m_channels.at(it.key()).id()].append(m_channels.at(it.key()).keys.at(key).frame);
     const QString previous = m_clipId;
+    const bool showedWhole = m_viewSpan >= wholeSpan();
     m_clipId.clear();
     m_channels.clear();
     QString name;
     if (m_bus && !m_bus->selection().isEmpty()) {
         const QString wanted = m_bus->selection().last();
-        for (const QJsonValue &track : m_bus->timeline().value(QStringLiteral("tracks")).toArray())
+        const QJsonObject project = m_bus->timeline();
+        for (const QJsonValue &track : project.value(QStringLiteral("tracks")).toArray())
             for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
                 const QJsonObject clip = value.toObject();
                 if (clip.value(QStringLiteral("id")).toString() != wanted) continue;
@@ -124,20 +173,44 @@ void GraphEditor::rebuild() {
                 m_duration = std::max<qint64>(1, qint64(clip.value(QStringLiteral("durationFrames")).toDouble()));
                 m_channels = graph::channelsOf(clip);
                 name = clip.value(QStringLiteral("name")).toString(wanted);
+                // What the document would refuse, a drag does not ask for.
+                const QString type = track.toObject().value(QStringLiteral("type")).toString();
+                const QJsonArray effects = clip.value(QStringLiteral("effects")).toArray();
+                for (Channel &channel : m_channels) {
+                    switch (channel.kind) {
+                    case Channel::Kind::Prop:
+                        graph::holdToCatalog(channel, project.value(QStringLiteral("properties")).toObject().value(type).toArray());
+                        graph::holdToCatalog(channel, project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray());
+                        break;
+                    case Channel::Kind::Effect:
+                        graph::holdToCatalog(channel, m_effectParams.value(effects.at(channel.index).toObject().value(QStringLiteral("fx")).toString()));
+                        break;
+                    case Channel::Kind::Mask:
+                        graph::holdToCatalog(channel, project.value(QStringLiteral("maskProperties")).toArray());
+                        break;
+                    }
+                }
             }
     }
     m_channel = -1;
     m_key = -1;
+    m_selected.clear();
     if (m_clipId == previous)
-        for (int index = 0; index < m_channels.size(); ++index)
-            if (m_channels.at(index).id() == channelId) {
-                m_channel = index;
-                const QList<Key> &keys = m_channels.at(index).keys;
-                for (int key = 0; key < keys.size(); ++key)
-                    if (keys.at(key).frame == keyFrame) m_key = key;
-            }
+        for (int index = 0; index < m_channels.size(); ++index) {
+            const QString id = m_channels.at(index).id();
+            const QList<Key> &keys = m_channels.at(index).keys;
+            const QList<qint64> frames = selectedFrames.value(id);
+            for (int key = 0; key < keys.size(); ++key)
+                if (frames.contains(keys.at(key).frame)) m_selected[index].append(key);
+            if (id != channelId) continue;
+            m_channel = index;
+            for (int key = 0; key < keys.size(); ++key)
+                if (keys.at(key).frame == keyFrame && isSelected(index, key)) m_key = key;
+        }
     if (m_channel < 0 && !m_channels.isEmpty()) m_channel = 0;
     fitRanges();
+    if (m_clipId != previous || showedWhole) setView(0.0, wholeSpan());
+    else setView(m_viewStart, m_viewSpan);
     shell::setTextStyle(m_meta, tokens::meta, tokens::ink3);
     m_meta->setText(m_clipId.isEmpty() ? QString() : QStringLiteral("%1 · %2 frames").arg(name).arg(m_duration));
     updateBar();
@@ -163,28 +236,94 @@ void GraphEditor::updateBar() {
     m_curve->setEnabled(m_channel >= 0 && m_key >= 0);
 }
 
-void GraphEditor::commit(int channel) {
-    if (channel < 0 || channel >= m_channels.size()) return;
-    emit editRequested(QJsonArray{graph::editOf(m_clipId, m_channels.at(channel), graph::keysJson(m_channels.at(channel).keys))});
+void GraphEditor::commit(const QList<int> &channels) {
+    QJsonArray ops;
+    for (const int channel : channels)
+        if (channel >= 0 && channel < m_channels.size())
+            ops.append(graph::editOf(m_clipId, m_channels.at(channel), graph::keysJson(m_channels.at(channel).keys)));
+    if (!ops.isEmpty()) emit editRequested(ops);
 }
 
 void GraphEditor::selectKey(int channel, int key) {
     m_channel = channel;
     m_key = key;
+    m_selected.clear();
+    if (key >= 0) m_selected[channel] = {key};
     updateBar();
     update();
 }
 
-void GraphEditor::removeSelectedKey() {
-    if (m_channel < 0 || m_key < 0) return;
-    Channel &channel = m_channels[m_channel];
-    const double value = channel.keys.at(m_key).value;
-    channel.keys.removeAt(m_key);
+bool GraphEditor::isSelected(int channel, int key) const {
+    const auto found = m_selected.constFind(channel);
+    return found != m_selected.cend() && found.value().contains(key);
+}
+
+int GraphEditor::selectedCount() const {
+    int count = 0;
+    for (const QList<int> &keys : m_selected) count += int(keys.size());
+    return count;
+}
+
+void GraphEditor::takeOutOfSelection(int channel, int key) {
+    const auto found = m_selected.find(channel);
+    if (found == m_selected.end()) return;
+    found.value().removeAll(key);
+    if (found.value().isEmpty()) m_selected.erase(found);
+    // Another selected key stands in as the one in hand.
+    if (m_selected.contains(channel)) {
+        m_key = m_selected.value(channel).last();
+    } else if (!m_selected.isEmpty()) {
+        m_channel = m_selected.firstKey();
+        m_key = m_selected.first().last();
+    } else {
+        m_key = -1;
+    }
+    updateBar();
+    update();
+}
+
+void GraphEditor::selectInBox() {
+    const QRectF box = QRectF(m_pressed, m_boxTo).normalized();
+    const QRectF area = plot();
+    m_selected = m_boxBase;
+    for (int channel = 0; channel < m_channels.size(); ++channel) {
+        const QList<Key> &keys = m_channels.at(channel).keys;
+        for (int key = 0; key < keys.size(); ++key) {
+            const QPointF at = keyPoint(channel, key);
+            if (!box.contains(at) || at.x() < area.left() || at.x() > area.right() || isSelected(channel, key)) continue;
+            m_selected[channel].append(key);
+            std::sort(m_selected[channel].begin(), m_selected[channel].end());
+        }
+    }
+    // The number in hand when it began stays so while the box catches any of its keys.
+    if (m_selected.contains(m_boxChannel)) {
+        m_channel = m_boxChannel;
+        m_key = m_selected.value(m_channel).last();
+    } else if (!m_selected.isEmpty()) {
+        m_channel = m_selected.firstKey();
+        m_key = m_selected.first().last();
+    } else {
+        m_channel = m_boxChannel;
+        m_key = -1;
+    }
+    updateBar();
+}
+
+void GraphEditor::removeSelectedKeys() {
+    if (m_selected.isEmpty()) return;
+    QJsonArray ops;
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
+        Channel &channel = m_channels[it.key()];
+        // All its keys gone: the value of the first of them stays, still.
+        const double value = channel.keys.at(it.value().first()).value;
+        for (auto key = it.value().crbegin(); key != it.value().crend(); ++key) channel.keys.removeAt(*key);
+        ops.append(graph::editOf(m_clipId, channel, channel.keys.isEmpty() ? QJsonValue(value) : graph::keysJson(channel.keys)));
+    }
+    m_selected.clear();
     m_key = -1;
     updateBar();
     update();
-    // The last key gone: the value it had stays, still.
-    emit editRequested(QJsonArray{graph::editOf(m_clipId, channel, channel.keys.isEmpty() ? QJsonValue(value) : graph::keysJson(channel.keys))});
+    emit editRequested(ops);
 }
 
 void GraphEditor::addKey(int index, qint64 frame) {
@@ -197,15 +336,48 @@ void GraphEditor::addKey(int index, qint64 frame) {
     const QString interp = place > 0 ? channel.keys.at(place - 1).interp : QStringLiteral("linear");
     channel.keys.insert(place, Key{frame, graph::valueAt(channel.keys, double(frame)), interp});
     selectKey(index, place);
-    commit(index);
+    commit({index});
 }
 
 void GraphEditor::setInterp(const QString &interp) {
-    if (m_channel < 0 || m_key < 0) return;
-    m_channels[m_channel].keys[m_key].interp = interp;
+    if (m_selected.isEmpty()) return;
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it)
+        for (const int key : it.value()) m_channels[it.key()].keys[key].interp = interp;
     fitRanges();
     update();
-    commit(m_channel);
+    commit(m_selected.keys());
+}
+
+void GraphEditor::setView(double start, double span) {
+    const double whole = wholeSpan();
+    m_viewSpan = std::clamp(span, std::min(kFewestFrames, whole), whole);
+    m_viewStart = std::clamp(start, 0.0, whole - m_viewSpan);
+    update();
+}
+
+void GraphEditor::showWholeClip() { setView(0.0, wholeSpan()); }
+
+void GraphEditor::frameSelection() {
+    if (m_selected.isEmpty()) return showWholeClip();
+    qint64 first = std::numeric_limits<qint64>::max();
+    qint64 last = std::numeric_limits<qint64>::min();
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
+        const QList<Key> &keys = m_channels.at(it.key()).keys;
+        first = std::min(first, keys.at(it.value().first()).frame);
+        last = std::max(last, keys.at(it.value().last()).frame);
+    }
+    double reach = double(last - first);
+    if (selectedCount() == 1) {
+        // One key in the middle, with the key nearest it for company so its curve can be read,
+        // and never so far out that framing it does not bring it closer.
+        const QList<Key> &keys = m_channels.at(m_channel).keys;
+        double nearest = wholeSpan();
+        if (m_key > 0) nearest = std::min(nearest, double(keys.at(m_key).frame - keys.at(m_key - 1).frame));
+        if (m_key + 1 < keys.size()) nearest = std::min(nearest, double(keys.at(m_key + 1).frame - keys.at(m_key).frame));
+        reach = std::min(2.0 * nearest, wholeSpan() / 2.0);
+    }
+    const double span = std::max(reach, kFewestFrames) * (1.0 + 2.0 * kFrameMargin);
+    setView((double(first) + double(last) - span) / 2.0, span);
 }
 
 void GraphEditor::populateCurveMenu(QMenu *menu) {
@@ -222,7 +394,8 @@ void GraphEditor::populateCurveMenu(QMenu *menu) {
         connect(action, &QAction::triggered, this, [this, name] { setInterp(name); });
     }
     menu->addSeparator();
-    connect(menu->addAction(QStringLiteral("Delete Key")), &QAction::triggered, this, &GraphEditor::removeSelectedKey);
+    connect(menu->addAction(selectedCount() > 1 ? QStringLiteral("Delete Keys") : QStringLiteral("Delete Key")), &QAction::triggered, this,
+            &GraphEditor::removeSelectedKeys);
 }
 
 // ---------------------------------------------------------------- geometry
@@ -236,12 +409,12 @@ QRectF GraphEditor::plot() const {
 
 double GraphEditor::xOf(double frame) const {
     const QRectF area = plot();
-    return area.left() + frame * area.width() / double(std::max<qint64>(1, m_duration - 1));
+    return area.left() + (frame - m_viewStart) * area.width() / m_viewSpan;
 }
 
 double GraphEditor::frameOf(double x) const {
     const QRectF area = plot();
-    return (x - area.left()) * double(std::max<qint64>(1, m_duration - 1)) / area.width();
+    return m_viewStart + (x - area.left()) * m_viewSpan / area.width();
 }
 
 double GraphEditor::yOf(int channel, double value) const {
@@ -266,10 +439,13 @@ std::pair<int, int> GraphEditor::keyAt(QPointF point) const {
     // The selected channel's keys come first, since they are on top.
     std::pair<int, int> found{-1, -1};
     double best = kGrab;
+    const QRectF area = plot();
     const auto look = [&](int channel) {
         const QList<Key> &keys = m_channels.at(channel).keys;
         for (int key = 0; key < keys.size(); ++key) {
             const QPointF at(xOf(double(keys.at(key).frame)), yOf(channel, keys.at(key).value));
+            // A key zoomed out of the plot is not there to take.
+            if (at.x() < area.left() || at.x() > area.right()) continue;
             const double distance = QLineF(at, point).length();
             if (distance < best) {
                 best = distance;
@@ -299,7 +475,7 @@ QPointF GraphEditor::rulerPoint(double frame) const { return {xOf(frame), kBar +
 QPointF GraphEditor::plotPoint(int channel, double frame, double value) const { return {xOf(frame), yOf(channel, value)}; }
 
 std::optional<std::pair<QPointF, QPointF>> GraphEditor::handlePoints() const {
-    if (m_channel < 0 || m_key < 0) return std::nullopt;
+    if (m_channel < 0 || m_key < 0 || selectedCount() > 1) return std::nullopt;
     const QList<Key> &keys = m_channels.at(m_channel).keys;
     if (m_key + 1 >= keys.size()) return std::nullopt;
     const Key &left = keys.at(m_key);
@@ -348,10 +524,11 @@ void GraphEditor::paintEvent(QPaintEvent *) {
 
     // The ruler and the grid.
     const QRectF area = plot();
-    const double perFrame = area.width() / double(std::max<qint64>(1, m_duration - 1));
+    const double perFrame = area.width() / m_viewSpan;
     const qint64 step = tickStep(perFrame, 56.0);
     painter.setFont(tokens::font(tokens::monoSmall));
-    for (qint64 frame = 0; frame < m_duration; frame += step) {
+    const qint64 lastFrame = std::min(m_duration - 1, qint64(std::floor(m_viewStart + m_viewSpan)));
+    for (qint64 frame = qint64(std::ceil(m_viewStart / double(step))) * step; frame <= lastFrame; frame += step) {
         const double x = xOf(double(frame));
         painter.setPen(QColor::fromRgba(tokens::line));
         painter.drawLine(QLineF(x, area.top(), x, area.bottom()));
@@ -369,23 +546,30 @@ void GraphEditor::paintEvent(QPaintEvent *) {
         }
     }
 
-    // The curves, the selected one last.
+    // The curves, the selected one last; what is zoomed out of the plot stays out of it.
     painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.save();
+    painter.setClipRect(area.adjusted(-kDiamond - 1.0, -kInset, kDiamond + 1.0, kInset));
     const auto drawCurve = [&](int index) {
         const QList<Key> &keys = m_channels.at(index).keys;
         const bool selected = index == m_channel;
         QPainterPath path;
-        path.moveTo(area.left(), yOf(index, keys.first().value));
-        for (double x = xOf(double(keys.first().frame)); x < xOf(double(keys.last().frame)); x += 2.0)
+        path.moveTo(area.left(), yOf(index, graph::valueAt(keys, frameOf(area.left()))));
+        // Along the plot, with a corner at each key it passes.
+        qsizetype next = 0;
+        for (double x = area.left() + 2.0; x < area.right(); x += 2.0) {
+            for (; next < keys.size() && xOf(double(keys.at(next).frame)) <= x; ++next)
+                if (xOf(double(keys.at(next).frame)) >= area.left()) path.lineTo(keyPoint(index, int(next)));
             path.lineTo(x, yOf(index, graph::valueAt(keys, frameOf(x))));
-        path.lineTo(xOf(double(keys.last().frame)), yOf(index, keys.last().value));
-        path.lineTo(area.right(), yOf(index, keys.last().value));
+        }
+        path.lineTo(area.right(), yOf(index, graph::valueAt(keys, frameOf(area.right()))));
         painter.setPen(QPen(QColor::fromRgba(selected ? tokens::ink : tokens::track2), selected ? 1.5 : 1.0));
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(path);
         for (int key = 0; key < keys.size(); ++key) {
             const QPointF at = keyPoint(index, key);
-            const bool on = selected && key == m_key;
+            if (at.x() < area.left() || at.x() > area.right()) continue;
+            const bool on = isSelected(index, key);
             painter.fillPath(diamond(at, on ? kDiamond + 1.0 : kDiamond), QColor::fromRgba(on ? tokens::accent : selected ? tokens::overlay::keyframe : tokens::track2));
         }
     };
@@ -405,12 +589,22 @@ void GraphEditor::paintEvent(QPaintEvent *) {
         painter.drawEllipse(handles->first, 3.5, 3.5);
         painter.drawEllipse(handles->second, 3.5, 3.5);
     }
+    painter.restore();
+
+    // The box being dragged out.
+    if (m_drag == Drag::Box && m_changed) {
+        QColor fill = QColor::fromRgba(tokens::accent);
+        fill.setAlphaF(0.15);
+        painter.setPen(QPen(QColor::fromRgba(tokens::accent), 1.0));
+        painter.setBrush(fill);
+        painter.drawRect(QRectF(m_pressed, m_boxTo).normalized());
+    }
 
     // The playhead.
     if (m_bus) {
         const double frame = (m_bus->playhead() - m_clipStart) * m_bus->fps();
         m_playheadX = xOf(frame);
-        if (frame >= 0.0 && frame <= double(m_duration)) {
+        if (frame >= 0.0 && frame <= double(m_duration) && m_playheadX >= area.left() && m_playheadX <= area.right()) {
             painter.setRenderHint(QPainter::Antialiasing, false);
             painter.setPen(QColor::fromRgba(tokens::playhead));
             painter.drawLine(QLineF(m_playheadX, kBar, m_playheadX, height()));
@@ -443,7 +637,13 @@ void GraphEditor::mousePressEvent(QMouseEvent *event) {
     const QPointF point = event->position();
     m_pressed = point;
     m_changed = false;
-    if (event->button() != Qt::LeftButton || !message().isEmpty()) return;
+    if (!message().isEmpty()) return;
+    if (event->button() == Qt::MiddleButton) {
+        m_drag = Drag::Pan;
+        m_panFrom = m_viewStart;
+        return;
+    }
+    if (event->button() != Qt::LeftButton) return;
     if (const int row = channelAt(point); row >= 0) {
         selectKey(row, -1);
         return;
@@ -465,15 +665,64 @@ void GraphEditor::mousePressEvent(QMouseEvent *event) {
             return;
         }
     }
+    const bool shift = event->modifiers() & Qt::ShiftModifier;
     const auto [channel, key] = keyAt(point);
     if (channel >= 0) {
-        selectKey(channel, key);
+        m_shiftPress = shift;
+        m_pressedSelected = isSelected(channel, key);
+        if (!m_pressedSelected) {
+            if (shift) {
+                m_selected[channel].append(key);
+                std::sort(m_selected[channel].begin(), m_selected[channel].end());
+            } else {
+                selectKey(channel, key);
+            }
+        }
+        m_channel = channel;
+        m_key = key;
+        updateBar();
+        update();
         m_grabbed = m_channels.at(channel).keys.at(key);
-        m_drag = Drag::Key;
+        m_before = m_channels;
+        m_drag = Drag::Keys;
         m_held = keyPoint(channel, key) - point;
         return;
     }
-    if (m_key >= 0) selectKey(m_channel, -1);
+    // A box can start in the margin, since a key can sit on the plot's edge.
+    if (!plot().adjusted(-kInset, -kInset, kInset, kInset).contains(point)) return;
+    m_drag = Drag::Box;
+    m_boxTo = point;
+    m_boxChannel = m_channel;
+    m_boxBase = shift ? m_selected : QMap<int, QList<int>>{};
+    if (!shift && !m_selected.isEmpty()) selectKey(m_channel, -1);
+}
+
+void GraphEditor::moveSelection(QPointF point, Qt::KeyboardModifiers modifiers, QPointF pointer) {
+    // The key in hand leads, and the rest go as far as it does.
+    qint64 frames = std::llround(frameOf(point.x())) - m_grabbed.frame;
+    double down = point.y() - yOf(m_channel, m_grabbed.value);
+    if (modifiers & Qt::ShiftModifier) {
+        // Along whichever way it has gone further.
+        const QPointF gone = pointer - m_pressed;
+        if (std::abs(gone.x()) > std::abs(gone.y())) down = 0.0;
+        else frames = 0;
+    }
+    // The tightest neighbour stops them all, so that they keep their spacing.
+    qint64 back = std::numeric_limits<qint64>::min();
+    qint64 forward = std::numeric_limits<qint64>::max();
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
+        const auto [low, high] = graph::roomToMove(m_before.at(it.key()).keys, it.value(), m_duration);
+        back = std::max(back, low);
+        forward = std::min(forward, high);
+    }
+    frames = std::clamp(frames, back, forward);
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
+        // Each number on its own scale: the same distance up the plot for all.
+        const double rest = yOf(it.key(), 0.0);
+        const double value = down == 0.0 ? 0.0 : valueOf(it.key(), rest + down);
+        const Channel &before = m_before.at(it.key());
+        m_channels[it.key()].keys = graph::shifted(before.keys, it.value(), frames, value, before.low, before.high);
+    }
 }
 
 void GraphEditor::mouseMoveEvent(QMouseEvent *event) {
@@ -483,26 +732,27 @@ void GraphEditor::mouseMoveEvent(QMouseEvent *event) {
         seekTo(pointer.x());
         return;
     }
+    if (m_drag == Drag::Pan) {
+        setView(m_panFrom - (pointer.x() - m_pressed.x()) * m_viewSpan / plot().width(), m_viewSpan);
+        return;
+    }
     if (!m_changed && QLineF(pointer, m_pressed).length() < kDragStart) return;
     const QPointF point = pointer + m_held;
     switch (m_drag) {
     case Drag::None:
-    case Drag::Ruler: return;
-    case Drag::Key: {
-        qint64 frame = std::llround(frameOf(point.x()));
-        double value = valueOf(m_channel, point.y());
-        if (event->modifiers() & Qt::ShiftModifier) {
-            // Along whichever way it has gone further.
-            const QPointF gone = pointer - m_pressed;
-            if (std::abs(gone.x()) > std::abs(gone.y())) value = m_grabbed.value;
-            else frame = m_grabbed.frame;
-        }
-        Channel &channel = m_channels[m_channel];
-        channel.keys = graph::moved(channel.keys, m_key, frame, value, m_duration);
+    case Drag::Ruler:
+    case Drag::Pan: return;
+    case Drag::Box:
+        m_boxTo = pointer;
+        m_changed = true;
+        selectInBox();
+        update();
+        return;
+    case Drag::Keys:
+        moveSelection(point, event->modifiers(), pointer);
         m_changed = true;
         update();
         return;
-    }
     case Drag::Handle1:
     case Drag::Handle2: {
         Channel &channel = m_channels[m_channel];
@@ -529,15 +779,49 @@ void GraphEditor::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void GraphEditor::mouseReleaseEvent(QMouseEvent *) {
-    const bool changed = m_changed && (m_drag == Drag::Key || m_drag == Drag::Handle1 || m_drag == Drag::Handle2);
+    const Drag drag = m_drag;
+    const bool changed = m_changed;
     m_drag = Drag::None;
     m_changed = false;
-    if (changed) {
+    m_before.clear();
+    if (drag == Drag::Box) update();
+    if (drag == Drag::Keys && !changed && m_pressedSelected) {
+        // It was a click on what was already selected.
+        if (m_shiftPress) takeOutOfSelection(m_channel, m_key);
+        else if (selectedCount() > 1) selectKey(m_channel, m_key);
+    }
+    if (changed && (drag == Drag::Keys || drag == Drag::Handle1 || drag == Drag::Handle2)) {
         // The plot keeps still during a drag; the new reach is fitted after it.
         fitRanges();
         update();
-        commit(m_channel);
+        commit(drag == Drag::Keys ? m_selected.keys() : QList<int>{m_channel});
     }
+}
+
+void GraphEditor::wheelEvent(QWheelEvent *event) {
+    if (!message().isEmpty()) {
+        event->ignore();
+        return;
+    }
+    event->accept();
+    const QPoint angle = event->angleDelta();
+    const QPoint pixels = event->pixelDelta();
+    const bool shift = event->modifiers() & Qt::ShiftModifier;
+    const QRectF area = plot();
+    // Sideways pans, and so does up and down with Shift where the platform has not turned it.
+    if (shift || std::abs(angle.x()) > std::abs(angle.y())) {
+        const int notches = angle.x() != 0 ? angle.x() : angle.y();
+        const int moved = pixels.x() != 0 ? pixels.x() : pixels.y();
+        const double points = moved != 0 ? double(moved) : double(notches) * kPanPerNotch / 120.0;
+        setView(m_viewStart - points * m_viewSpan / area.width(), m_viewSpan);
+        return;
+    }
+    // The fingers lifted: zoom stops where they left it.
+    if (event->phase() == Qt::ScrollMomentum || angle.y() == 0) return;
+    const double x = std::clamp(event->position().x(), area.left(), area.right());
+    const double frame = frameOf(x);
+    const double span = std::clamp(m_viewSpan * std::pow(kZoomPerNotch, -double(angle.y()) / 120.0), std::min(kFewestFrames, wholeSpan()), wholeSpan());
+    setView(frame - (x - area.left()) * span / area.width(), span);
 }
 
 void GraphEditor::mouseDoubleClickEvent(QMouseEvent *event) {
@@ -549,7 +833,12 @@ void GraphEditor::mouseDoubleClickEvent(QMouseEvent *event) {
 void GraphEditor::contextMenuEvent(QContextMenuEvent *event) {
     const auto [channel, key] = keyAt(QPointF(event->pos()));
     if (channel < 0) return;
-    selectKey(channel, key);
+    if (isSelected(channel, key)) {
+        m_channel = channel;
+        m_key = key;
+    } else {
+        selectKey(channel, key);
+    }
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     populateCurveMenu(menu);
@@ -557,8 +846,13 @@ void GraphEditor::contextMenuEvent(QContextMenuEvent *event) {
 }
 
 void GraphEditor::keyPressEvent(QKeyEvent *event) {
-    if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && m_key >= 0) {
-        removeSelectedKey();
+    if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selected.isEmpty()) {
+        removeSelectedKeys();
+        return;
+    }
+    if (isFKey(event) && message().isEmpty() && (event->modifiers() & ~Qt::ShiftModifier) == Qt::NoModifier) {
+        if (event->modifiers() & Qt::ShiftModifier) showWholeClip();
+        else frameSelection();
         return;
     }
     QWidget::keyPressEvent(event);

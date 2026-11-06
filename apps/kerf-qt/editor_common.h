@@ -278,6 +278,9 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
 // scaled, rotated about its anchor, and moved. It maps fractions of the
 // `picture`-pixel picture (0, 0 its top left, 1, 1 its bottom right), the
 // space masks are drawn in, to canvas pixels.
+// Where on the canvas a clip's motion path has its 0,0, as a share of the canvas:
+// where the clip would be with no path, at `clipTime`.
+QPointF pathOrigin(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime);
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
                             double clipTime);
 

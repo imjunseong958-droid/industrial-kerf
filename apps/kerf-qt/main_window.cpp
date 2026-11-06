@@ -950,6 +950,10 @@ void MainWindow::buildShell() {
     m_finishTray = new FinishTray(nullptr, m_bus);
     m_deliverTray = new DeliverTray(nullptr, m_bus);
     m_graphEditor = new GraphEditor(nullptr, m_bus);
+    if (char *catalog = kerf_fx_catalog_all()) {
+        m_graphEditor->setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
+        kerf_bridge_string_free(catalog);
+    }
     connect(m_graphEditor, &GraphEditor::editRequested, this, &MainWindow::sendEdit);
     connect(m_graphEditor, &GraphEditor::seekRequested, this, &MainWindow::queueSeek);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);

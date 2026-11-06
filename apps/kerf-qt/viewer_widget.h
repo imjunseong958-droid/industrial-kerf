@@ -135,6 +135,18 @@ public:
     void selectMask(const QString &name);
     QString selectedMask() const { return m_selectedMask; }
 
+    // The motion path of picture clip `clip`, as its `path=` reads: `origin` is
+    // where on the canvas its 0,0 is, as a share of the canvas, and `along` how
+    // far along the clip is now. Dragging a point writes `path=` as one edit. An
+    // empty clip or a path that does not read shows none.
+    void setMotionPath(const QString &clip, const QString &text, QPointF origin, double along);
+    bool showsMotionPath() const { return !m_pathClip.isEmpty(); }
+    // Its points, the curve through them, and where the clip is on it, all in
+    // widget points as drawn.
+    QList<QPointF> motionPathPoints() const;
+    QList<QPointF> motionPathCurve() const;
+    QPointF motionPathMarker() const;
+
     // Tests: -1 fades where something shows them (not on the offscreen
     // platform, not under reduced motion), 0 never, 1 always.
     static void setMotionOverride(int state);
@@ -177,6 +189,13 @@ private:
     // Fractions of the clip's picture to widget pixels.
     QTransform pictureToWidget() const;
     QPointF picturePoint(const QPointF &widget) const;
+    // A point of the motion path, in shares of the canvas from its origin, to
+    // widget points and back.
+    QPointF pathToWidget(const QPointF &point) const;
+    QPointF pathPoint(const QPointF &widget) const;
+    // The path point under the pointer, or -1.
+    int pathPointAt(const QPointF &widget) const;
+    void paintMotionPath(QPainter &p);
     // Widget points to fractions of the frame, and back.
     QPointF frameFraction(const QPointF &widget) const;
     QPointF fromFrame(const QPointF &fraction) const;
@@ -262,6 +281,18 @@ private:
     int m_dragHandle = -1;
     QPointF m_dragFrom;
     QJsonObject m_dragOriginal;
+
+    QString m_pathClip;
+    QList<QPointF> m_pathPoints;
+    QPointF m_pathOrigin;
+    double m_pathAlong = 0.0;
+    // The point in hand, what the path was before it, and from the pointer to
+    // the point, which keeps it from jumping there.
+    int m_pathDrag = -1;
+    QList<QPointF> m_pathBefore;
+    QPointF m_pathHeld;
+    QPointF m_pathPressed;
+    bool m_pathMoved = false;
 };
 
 class RegionPicker final : public QWidget {

@@ -1,6 +1,7 @@
 #include "editor_common.h"
 #include "design_tokens.h"
 #include "editor_theme.h"
+#include "graph_model.h"
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -927,14 +928,39 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
     if (keys.isEmpty()) return fallback;
     const auto at = [&keys](int index) { return keys.at(index).toObject().value(QStringLiteral("at")).toDouble(); };
     const auto valueOf = [&keys](int index) { return keys.at(index).toObject().value(QStringLiteral("value")).toDouble(); };
+    const auto interp = [&keys](int index) { return keys.at(index).toObject().value(QStringLiteral("interp")).toString(QStringLiteral("linear")); };
     if (clipTime <= at(0)) return valueOf(0);
     for (int index = 1; index < keys.size(); ++index) {
         if (clipTime > at(index)) continue;
         const double span = at(index) - at(index - 1);
         const double t = span > 0.0 ? (clipTime - at(index - 1)) / span : 1.0;
-        return valueOf(index - 1) + (valueOf(index) - valueOf(index - 1)) * t;
+        return valueOf(index - 1) + (valueOf(index) - valueOf(index - 1)) * graph::curve(interp(index - 1), t);
     }
     return valueOf(keys.size() - 1);
+}
+
+namespace {
+
+// What a picture of the cropped size fills on the canvas, before the clip's own
+// scale.
+QSizeF fittedSize(const QSizeF &cropped, bool fit, const QSizeF &canvas) {
+    if (!fit) return cropped;
+    return {std::max(1.0, std::min(std::round(canvas.height() * cropped.width() / cropped.height()), canvas.width())),
+            std::max(1.0, std::min(std::round(canvas.width() * cropped.height() / cropped.width()), canvas.height()))};
+}
+
+} // namespace
+
+QPointF pathOrigin(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime) {
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    const auto prop = [&](const char *name, double fallback) {
+        return propertyAt(props, QString::fromLatin1(name), clipTime, fallback);
+    };
+    const double width = std::max(1.0, picture.width()) * std::max(1e-6, 1.0 - prop("crop_l", 0.0) - prop("crop_r", 0.0));
+    const double height = std::max(1.0, picture.height()) * std::max(1e-6, 1.0 - prop("crop_t", 0.0) - prop("crop_b", 0.0));
+    const QSizeF filled = fittedSize({width, height}, fit, canvas);
+    return {0.5 + prop("x", 0.0) + prop("anchor_x", 0.0) * filled.width() / std::max(1.0, canvas.width()),
+            0.5 + prop("y", 0.0) + prop("anchor_y", 0.0) * filled.height() / std::max(1.0, canvas.height())};
 }
 
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
@@ -948,17 +974,22 @@ QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool
     const double sw = std::max(1.0, picture.width()), sh = std::max(1.0, picture.height());
     const double cw = canvas.width(), ch = canvas.height();
     const double width = sw * std::max(1e-6, 1.0 - l - r), height = sh * std::max(1e-6, 1.0 - t - b);
-    double fw = width, fh = height;
-    if (fit) {
-        fw = std::max(1.0, std::min(std::round(ch * width / height), cw));
-        fh = std::max(1.0, std::min(std::round(cw * height / width), ch));
+    const QSizeF filled = fittedSize({width, height}, fit, canvas);
+    const double fw = filled.width(), fh = filled.height();
+    // The motion path adds to where it would be, and `orient` to how it is turned.
+    double x = prop("x", 0.0), y = prop("y", 0.0), rotation = prop("rotation", 0.0);
+    if (const auto points = graph::parsePath(props.value(QStringLiteral("path")).toString())) {
+        const auto on = graph::MotionPath(*points, cw / std::max(1.0, ch)).at(prop("along", 0.0));
+        x += on.x;
+        y += on.y;
+        if (props.value(QStringLiteral("orient")).toBool()) rotation += on.heading;
     }
     const double scale = prop("scale", 1.0);
     const double kx = scale * prop("scale_x", 1.0), ky = scale * prop("scale_y", 1.0);
     const double ax = prop("anchor_x", 0.0), ay = prop("anchor_y", 0.0);
     QTransform placement;
-    placement.translate(cw / 2.0 + prop("x", 0.0) * cw + ax * fw, ch / 2.0 + prop("y", 0.0) * ch + ay * fh);
-    placement.rotate(prop("rotation", 0.0));
+    placement.translate(cw / 2.0 + x * cw + ax * fw, ch / 2.0 + y * ch + ay * fh);
+    placement.rotate(rotation);
     placement.scale(fw / width * kx, fh / height * ky);
     placement.translate(-(sw * l + width * (0.5 + ax)), -(sh * t + height * (0.5 + ay)));
     placement.scale(sw, sh);

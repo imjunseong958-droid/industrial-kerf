@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace kerf::graph {
@@ -156,6 +157,16 @@ QList<Channel> channelsOf(const QJsonObject &clip) {
     return channels;
 }
 
+void holdToCatalog(Channel &channel, const QJsonArray &defs) {
+    for (const QJsonValue &value : defs) {
+        const QJsonObject def = value.toObject();
+        if (def.value(QStringLiteral("name")).toString() != channel.name) continue;
+        channel.low = def.value(QStringLiteral("min")).toDouble(channel.low);
+        channel.high = def.value(QStringLiteral("max")).toDouble(channel.high);
+        return;
+    }
+}
+
 QJsonValue keysJson(const QList<Key> &keys) {
     QJsonArray list;
     for (const Key &key : keys)
@@ -185,6 +196,144 @@ QList<Key> moved(QList<Key> keys, int index, qint64 frame, double value, qint64 
     keys[index].frame = std::clamp(frame, low, std::max(low, high));
     keys[index].value = value;
     return keys;
+}
+
+std::pair<qint64, qint64> roomToMove(const QList<Key> &keys, const QList<int> &indices, qint64 duration) {
+    qint64 back = std::numeric_limits<qint64>::min();
+    qint64 forward = std::numeric_limits<qint64>::max();
+    const auto taken = [&indices](int index) { return indices.contains(index); };
+    for (const int index : indices) {
+        if (index < 0 || index >= keys.size()) continue;
+        // The nearest key not moving with it, either way, sets its limit.
+        if (index == 0) back = std::max(back, -keys.at(index).frame);
+        else if (!taken(index - 1)) back = std::max(back, keys.at(index - 1).frame + 1 - keys.at(index).frame);
+        if (index + 1 == keys.size()) forward = std::min(forward, duration - 1 - keys.at(index).frame);
+        else if (!taken(index + 1)) forward = std::min(forward, keys.at(index + 1).frame - 1 - keys.at(index).frame);
+    }
+    return {std::min<qint64>(back, 0), std::max<qint64>(forward, 0)};
+}
+
+QList<Key> shifted(QList<Key> keys, const QList<int> &indices, qint64 frames, double value, double low, double high) {
+    for (const int index : indices) {
+        if (index < 0 || index >= keys.size()) continue;
+        keys[index].frame += frames;
+        // A drag means a pixel's worth: the document need not hold more than four places of it.
+        const double moved = value == 0.0 ? keys.at(index).value : std::round((keys.at(index).value + value) * 10000.0) / 10000.0;
+        keys[index].value = std::clamp(moved, low, high);
+    }
+    return keys;
+}
+
+// ------------------------------------------------------------- motion paths
+
+namespace {
+
+constexpr int kPathSamples = 32; // kerf_model's path::SAMPLES
+constexpr double kPathLimit = 10.0;
+
+QPointF lerped(QPointF a, QPointF b, double at, double low, double high) {
+    const double k = (at - low) / (high - low);
+    return a + (b - a) * k;
+}
+
+} // namespace
+
+std::optional<QList<QPointF>> parsePath(const QString &text) {
+    QList<QPointF> points;
+    for (const QString &point : text.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        const QStringList parts = point.split(QLatin1Char(','));
+        if (parts.size() != 2) return std::nullopt;
+        bool xOk = false;
+        bool yOk = false;
+        const double x = parts.at(0).toDouble(&xOk);
+        const double y = parts.at(1).toDouble(&yOk);
+        if (!xOk || !yOk || !std::isfinite(x) || !std::isfinite(y) || std::abs(x) > kPathLimit || std::abs(y) > kPathLimit) return std::nullopt;
+        points.append({x, y});
+    }
+    if (points.size() < 2) return std::nullopt;
+    return points;
+}
+
+QString pathText(const QList<QPointF> &points) {
+    const auto text = [](double value) {
+        const double rounded = std::round(std::clamp(value, -kPathLimit, kPathLimit) * 10000.0) / 10000.0;
+        return QString::number(rounded == 0.0 ? 0.0 : rounded, 'g', 7);
+    };
+    QStringList parts;
+    for (const QPointF &point : points) parts << QStringLiteral("%1,%2").arg(text(point.x()), text(point.y()));
+    return parts.join(QLatin1Char(' '));
+}
+
+MotionPath::MotionPath(const QList<QPointF> &points, double aspect) : m_points(points), m_aspect(aspect) {
+    const qsizetype total = (m_points.size() - 1) * kPathSamples;
+    m_distances.reserve(total + 1);
+    m_distances.append(0.0);
+    QPointF last = curve(0.0);
+    double walked = 0.0;
+    for (qsizetype sample = 1; sample <= total; ++sample) {
+        const QPointF at = curve(double(sample) / kPathSamples);
+        walked += std::hypot((at.x() - last.x()) * m_aspect, at.y() - last.y());
+        m_distances.append(walked);
+        last = at;
+    }
+}
+
+QPointF MotionPath::curve(double u) const {
+    const qsizetype last = m_points.size() - 1;
+    const qsizetype span = std::min<qsizetype>(qsizetype(std::floor(u)), last - 1);
+    const double t = std::clamp(u - double(span), 0.0, 1.0);
+    const QPointF p1 = m_points.at(span);
+    const QPointF p2 = m_points.at(span + 1);
+    // Past the ends, a point continuing straight on.
+    const QPointF p0 = span == 0 ? 2.0 * p1 - p2 : m_points.at(span - 1);
+    const QPointF p3 = span + 2 > last ? 2.0 * p2 - p1 : m_points.at(span + 2);
+    // Knots a square root of the distance apart, on the canvas.
+    const auto gap = [this](QPointF a, QPointF b) {
+        return std::max(std::sqrt(std::hypot((a.x() - b.x()) * m_aspect, a.y() - b.y())), 1e-9);
+    };
+    const double t0 = 0.0;
+    const double t1 = t0 + gap(p0, p1);
+    const double t2 = t1 + gap(p1, p2);
+    const double t3 = t2 + gap(p2, p3);
+    const double at = t1 + (t2 - t1) * t;
+    // Barry and Goldman's pyramid.
+    const QPointF a1 = lerped(p0, p1, at, t0, t1);
+    const QPointF a2 = lerped(p1, p2, at, t1, t2);
+    const QPointF a3 = lerped(p2, p3, at, t2, t3);
+    const QPointF b1 = lerped(a1, a2, at, t0, t2);
+    const QPointF b2 = lerped(a2, a3, at, t1, t3);
+    return lerped(b1, b2, at, t1, t2);
+}
+
+double MotionPath::atDistance(double along) const {
+    const double total = m_distances.last();
+    if (total <= 0.0) return 0.0;
+    const double wanted = std::clamp(along, 0.0, 1.0) * total;
+    const auto found = std::lower_bound(m_distances.cbegin(), m_distances.cend(), wanted);
+    const qsizetype next = std::clamp<qsizetype>(found - m_distances.cbegin(), 1, m_distances.size() - 1);
+    const double low = m_distances.at(next - 1);
+    const double high = m_distances.at(next);
+    const double within = high > low ? (wanted - low) / (high - low) : 0.0;
+    return (double(next - 1) + within) / kPathSamples;
+}
+
+MotionPath::Point MotionPath::at(double along) const {
+    const double u = atDistance(along);
+    const QPointF here = curve(u);
+    const double last = double(m_points.size() - 1);
+    constexpr double kStep = 1e-3;
+    const QPointF before = curve(std::max(u - kStep, 0.0));
+    const QPointF after = curve(std::min(u + kStep, last));
+    const double heading = std::atan2(after.y() - before.y(), (after.x() - before.x()) * m_aspect) * 180.0 / M_PI;
+    return {here.x(), here.y(), heading};
+}
+
+QList<QPointF> MotionPath::samples() const {
+    QList<QPointF> line;
+    const qsizetype total = (m_points.size() - 1) * kPathSamples;
+    line.reserve(total + 1);
+    for (qsizetype sample = 0; sample <= total; ++sample) line.append(curve(double(sample) / kPathSamples));
+    return line;
 }
 
 } // namespace kerf::graph
