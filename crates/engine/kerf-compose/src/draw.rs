@@ -23,14 +23,13 @@
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{domains, frames};
 use crate::{Accel, ComposeError, Frame};
+use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::EffectRun;
 use kerf_draw::text::{self, Justify, Text};
-use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
-use rayon::prelude::*;
 use kerf_fx::filmcraft::{self, catalog::Headroom, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
@@ -38,12 +37,14 @@ use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, MotionPath, Param, ParamType,
     Params, Project, Rate, Rgba, Sequence, Speed, Time, Track, TrackKind, Value,
 };
+use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod gpu;
+mod three_d;
 
 /// Nested sequences deeper than this are refused, as the graph refuses
 /// them.
@@ -211,6 +212,8 @@ struct ClipPlan {
     plain: bool,
     /// Any of the properties that place it animate.
     animated: bool,
+    /// Placed in depth, seen by the sequence's camera.
+    three_d: bool,
     /// The most of its size it is ever shown at, when under 1: its frames
     /// are decoded at that size.
     shown: f64,
@@ -568,7 +571,7 @@ impl Drawing {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = Image::new(w, h);
-        for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
+        for track in self.in_order(plan, at, scale, angle) {
             self.track(&mut canvas, plan, track, at, scale);
         }
         if self.captions {
@@ -579,6 +582,61 @@ impl Drawing {
             }
         }
         canvas
+    }
+
+    /// The tracks to draw, with adjacent ones showing clips in depth put far to near.
+    fn in_order<'p>(
+        &self,
+        plan: &'p SequencePlan,
+        at: Time,
+        scale: f64,
+        angle: Option<&Id>,
+    ) -> Vec<&'p TrackPlan> {
+        let mut tracks: Vec<&TrackPlan> = plan
+            .tracks
+            .iter()
+            .filter(|track| track.drawn(angle))
+            .collect();
+        fn in_depth(track: &TrackPlan, at: Time) -> Option<&ClipPlan> {
+            track
+                .shown
+                .iter()
+                .find(|shown| shown.shows(at) && shown.plan.three_d)
+                .map(|shown| &shown.plan)
+        }
+        if !tracks.iter().any(|track| in_depth(track, at).is_some()) {
+            return tracks;
+        }
+        let size = output_size(plan.width, plan.height, scale);
+        let scene = three_d::Scene::at(plan, at, size);
+        let depth = |track: &TrackPlan| {
+            in_depth(track, at).map(|clip| {
+                let place = Affine::scale(scale, scale).then_apply(&self.geometry(
+                    plan,
+                    clip,
+                    at - clip.clip.start,
+                ));
+                scene.depth(clip, &place, at - clip.clip.start)
+            })
+        };
+        let mut start = 0;
+        while start < tracks.len() {
+            if depth(tracks[start]).is_none() {
+                start += 1;
+                continue;
+            }
+            let mut end = start + 1;
+            while end < tracks.len() && depth(tracks[end]).is_some() {
+                end += 1;
+            }
+            // Stable, so that clips at one depth stack as their tracks do.
+            tracks[start..end].sort_by(|a, b| {
+                let (a, b) = (depth(a).unwrap_or(0.0), depth(b).unwrap_or(0.0));
+                b.total_cmp(&a)
+            });
+            start = end;
+        }
+        tracks
     }
 
     /// A track of `sequence` at its time `at` over `canvas`.
@@ -722,6 +780,13 @@ impl Drawing {
             _ => 1.0,
         };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
+        if plan.three_d {
+            let scene = three_d::Scene::at(sequence, at, (w, h));
+            let projected =
+                three_d::project(&scene, plan, &picture, (&to_output, crop), time, (w, h));
+            composite(canvas, &projected, opacity, blend);
+            return;
+        }
         match crop {
             None if (picture.w, picture.h) == (w, h) && identity(&to_output) => {
                 composite(canvas, &picture, opacity, blend);
@@ -1780,7 +1845,7 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
-                "null" => (Source::Nothing, canvas, false, true),
+                "null" | "camera" | "light" => (Source::Nothing, canvas, false, true),
                 other => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
             },
             Content::Caption { .. } => return Ok(None),
@@ -1790,6 +1855,7 @@ impl<'a> Builder<'a> {
             || GEOMETRY
                 .iter()
                 .any(|name| matches!(param(clip, name), Param::Animated(_)));
+        let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)));
         let mut effects = Vec::new();
         for effect in clip.effects.iter().filter(|effect| effect.enabled) {
             let def = self.catalog.fx(effect.fx.as_str()).ok_or_else(|| {
@@ -1844,6 +1910,7 @@ impl<'a> Builder<'a> {
             letterboxed: false,
             plain: false,
             animated,
+            three_d,
             shown: 1.0,
             blend,
             effects,
@@ -1872,7 +1939,7 @@ impl<'a> Builder<'a> {
         }
         if matches!(plan.source, Source::Media { .. }) {
             // A parent can scale it past anything its own properties say.
-            let moved = clip.parent.is_some() || plan.path.is_some();
+            let moved = clip.parent.is_some() || plan.path.is_some() || three_d;
             plan.shown = if moved { 1.0 } else { largest.clamp(1e-6, 1.0) };
             plan.letterboxed = !alpha && !moved && letterboxed(&plan, canvas);
             let deep = media

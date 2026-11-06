@@ -164,8 +164,8 @@ impl Drawing {
                 return false;
             }
             let plan = &shown.plan;
-            // Frames between frames are made on the CPU.
-            if plan.clip.retime != kerf_model::Retime::Frames {
+            // Frames between frames are made on the CPU, and so are clips in depth.
+            if plan.clip.retime != kerf_model::Retime::Frames || plan.three_d {
                 return false;
             }
             let time = at - plan.clip.start;

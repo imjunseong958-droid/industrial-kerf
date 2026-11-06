@@ -166,6 +166,14 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   Gain is keyframed from the sequence's start. Sound effects (`audio.compressor`, `audio.gate`,
   `audio.deesser`, `audio.denoise`, `audio.delay`, `audio.reverb`, `audio.eq`, `audio.eq3`,
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
+- `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
+  is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
+  showing (`x y z pan tilt roll fov`, animatable, and `parent=` works), and at its defaults a clip at
+  z=0 looks as it does in 2D. `gen=light@1` (`kind=point|ambient|directional color intensity`, with
+  `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
+  light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near.
+  Clips that cross are not cut where they meet, and there are no shadows or depth of field yet.
+  Frames with a clip in depth draw on the CPU.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

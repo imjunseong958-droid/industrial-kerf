@@ -651,6 +651,19 @@ fn builtin_catalog() -> Catalog {
             .range(0.0, 1.0)
             .doc("How far along `path` the clip is, by distance; animate it to move."),
         P::toggle("orient", false).doc("Turn the clip to face the way `path` heads."),
+        P::toggle("three_d", false).doc("Place the clip in depth, seen by the sequence's camera."),
+        P::number("z", 0.0)
+            .range(-1000.0, 1000.0)
+            .unit("frame heights")
+            .doc("With `three_d`, how far away the clip is; negative comes toward the viewer."),
+        P::number("rotate_x", 0.0)
+            .range(-36000.0, 36000.0)
+            .unit("degrees")
+            .doc("With `three_d`, the clip tipped about the line across its middle."),
+        P::number("rotate_y", 0.0)
+            .range(-36000.0, 36000.0)
+            .unit("degrees")
+            .doc("With `three_d`, the clip turned about the line down its middle."),
         P::number("scale", 1.0)
             .range(0.0, 100.0)
             .unit("×")
@@ -928,6 +941,32 @@ fn builtin_catalog() -> Catalog {
             "Applies its effects to every layer beneath it.",
         )
         .category("Utility"),
+        FxDef::new(
+            "camera",
+            FxKind::Generator,
+            Domain::Video,
+            "What `three_d` clips are seen through: the topmost one showing, from its `x`, `y`, and `z`. At its defaults a clip at z=0 looks as it would in 2D.",
+        )
+        .category("Utility")
+        .param(P::number("pan", 0.0).range(-3600.0, 3600.0).unit("degrees"))
+        .param(P::number("tilt", 0.0).range(-3600.0, 3600.0).unit("degrees"))
+        .param(P::number("roll", 0.0).range(-3600.0, 3600.0).unit("degrees"))
+        .param(
+            P::number("fov", 40.0)
+                .range(1.0, 170.0)
+                .unit("degrees")
+                .doc("Field of view down the frame; smaller zooms in."),
+        ),
+        FxDef::new(
+            "light",
+            FxKind::Generator,
+            Domain::Video,
+            "Lights `three_d` clips: `x`, `y`, and `z` are where a point light is, or which way a directional one shines. With no light showing, they show as they are.",
+        )
+        .category("Utility")
+        .param(P::choice("kind", &["point", "ambient", "directional"]))
+        .param(P::color("color", Rgba::WHITE))
+        .param(P::number("intensity", 1.0).range(0.0, 100.0)),
         FxDef::new(
             "null",
             FxKind::Generator,
