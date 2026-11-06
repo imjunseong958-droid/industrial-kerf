@@ -1120,6 +1120,9 @@ impl Drawing {
         let density = placed.scale / placed.to_output.determinant().abs().sqrt().max(1e-6);
         let nested = upto < plan.effects.len();
         for (index, effect) in plan.effects[..upto].iter().enumerate() {
+            if filmcraft::instance::leaves_alone(effect, time, self.working()) {
+                continue;
+            }
             let value = |name: &str| effect_number(effect, name, time);
             let held = self.hold_headroom(picture, effect);
             match effect.fx.as_str() {

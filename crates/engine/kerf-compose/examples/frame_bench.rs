@@ -28,6 +28,14 @@ const SCENES: &[(&str, &str)] = &[
     ("grade steel-blue", "      fx look.grade.steel-blue@1\n"),
     ("grade sepia", "      fx look.grade.sepia@1\n"),
     (
+        "grade stack of 3",
+        "      fx look.grade.teal-warm@1 amount=0.6\n      fx look.grade.golden-dusk@1 amount={0f:0.2 48f:1}\n      fx look.grade.sepia@1 amount=0.4\n",
+    ),
+    (
+        "grade stack of 3 at 0",
+        "      fx look.grade.teal-warm@1 amount=0\n      fx look.grade.golden-dusk@1 amount=0\n      fx look.grade.sepia@1 amount=0\n",
+    ),
+    (
         "heal found",
         "      fx image.heal@1 points=\"0.4,0.5 0.5,0.52\" radius=0.03\n",
     ),

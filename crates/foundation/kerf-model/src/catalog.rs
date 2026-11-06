@@ -607,7 +607,7 @@ impl Catalog {
             Some(def) => {
                 let oldest = def.reads_from.min(look.version);
                 if look.version > def.version {
-                    let mut newest = look.def();
+                    let mut newest = look.def(self);
                     newest.reads_from = oldest;
                     self.fx.insert(look.id.clone(), newest);
                 } else if let Some(def) = self.fx.get_mut(&look.id) {
@@ -615,7 +615,7 @@ impl Catalog {
                 }
             }
             None => {
-                self.fx.insert(look.id.clone(), look.def());
+                self.fx.insert(look.id.clone(), look.def(self));
             }
         }
         self.looks.insert(key, look);

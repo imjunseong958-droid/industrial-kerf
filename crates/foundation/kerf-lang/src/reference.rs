@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 const GRAMMAR: &str = r#"# Kerf edit script
 
 A project is a `.kerf` document. Change it with a script: one operation per
-line, applied in order and atomically. Later lines see what earlier lines did.
+line, applied in order and atomically.
 
 ## Times
 - Positions are sequence timecode (`01:00:04:12`, drop-frame `01:00:04;12`)
@@ -175,21 +175,18 @@ pub fn reference(catalog: &Catalog) -> String {
 }
 
 const KERF_TRANSITIONS: &str = "## Transitions from FilmCraft
-A video editor's transitions, drawn from both clips across the cut: pushes,
-slides, whips, zooms, flashes, light leaks, glitches, irises, and more.
-Written like any transition (`transition add from=c1 to=c2 fx=push@1
-dur=12f direction=from-east`); `look` with `effect: \"<id>\"` lists one's
-parameters. A direction names the side the incoming clip enters from, and a
-center is `center_x`/`center_y` in fractions of the frame.";
+A video editor's transitions, drawn from both clips across the cut. Written
+like any transition (`transition add from=c1 to=c2 fx=push@1 dur=12f
+direction=from-east`). A direction names the side the incoming clip enters
+from, and a center is `center_x`/`center_y` in fractions of the frame.";
 
 const KERF_EFFECTS: &str = "## Effects from FilmCraft
 A video editor's effects, run in stack order on a clip's picture after its
 masks: Lumetri grades and color correction, blurs, keys and track mattes,
-glows and light leaks, distortions, moves that animate over the clip,
-burn-ins, and 360° effects. Written like any effect (`fx c1 add
-color.lumetri@2 exposure=0.5`); `look` with `effect: \"<id>\"` lists one's
-parameters. A point is `<name>_x`/`<name>_y` across the picture (0 to 1),
-an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT
+glows and light leaks, distortions, moves, burn-ins, and 360° effects.
+Written like any effect (`fx c1 add color.lumetri@2 exposure=0.5`); `look`
+with `effect: \"<id>\"` lists the parameters of one, or of a transition. A
+point is `<name>_x`/`<name>_y` across the picture (0 to 1), an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT
 is a quoted `.cube` or `.3dl` path, and another track is its id
 (`matte=V2`), read even while it is hidden. Sizes are the clip's source
 pixels. An id at version 2 was an EffectCraft effect that FilmCraft's
@@ -201,8 +198,12 @@ a few parameters (`docs/looks.md`). A clip takes one like any effect (`fx c1
 add look.shake@1 intensity=0.7 hit=12f`), a title the Titles ones, and a cut
 the Transitions ones like any transition. A time parameter is a time in the
 clip (`12f`, `0.5s`). The document keeps the one line; `fx c1 flatten 1`
-replaces the look at that place with what it expands to, for hand tuning.
-A project's own looks are `.kerf/looks/*.kerflook` files.";
+replaces the look at that place with what it expands to. A project's own
+looks are `.kerf/looks/*.kerflook` files.
+
+Grades (`look.grade.*`) stack as `fx` lines, each on what the line above drew,
+so order matters, and each with its own `amount`, which animates
+(`amount={0f:0 24f:1:ease}`). At 0 a grade is not there, to the byte.";
 
 const RASTER: &str = "## Effects kept from EffectCraft
 The EffectCraft effects Kerf keeps, which FilmCraft has nothing like:
@@ -212,9 +213,8 @@ audio visualizers. They run in stack order beside FilmCraft's effects. A
 file parameter is a quoted path, relative to the project; a sound parameter
 names a sound track whose sound the effect draws (`audioLayer=A1`); a mask
 parameter names one of the clip's masks (`path=k1`). `look` with
-`effects: \"<words>\"` finds entries by the look or moment you want, each
-with when to use it, and `look` with `effect: \"<id>\"` lists one entry's
-parameters. An id EffectCraft had that Kerf no longer does is an error
+`effects: \"<words>\"` finds entries by the look or moment you want, and with
+`effect: \"<id>\"` lists one's parameters. An id EffectCraft had that Kerf no longer does is an error
 that names what to use instead.";
 
 /// One catalog definition as the reference lists it: its id, domain, and

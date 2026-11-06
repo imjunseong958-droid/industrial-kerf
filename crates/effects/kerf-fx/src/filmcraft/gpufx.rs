@@ -203,6 +203,8 @@ pub enum FxOp {
         look_k: f32,
         wheels: Option<Wheels>,
         gpu_capable: bool,
+        /// No LUT, curve, sharpening, HSL secondary, or HDR Specular: these numbers are all it does.
+        plain: bool,
     },
 }
 
@@ -669,12 +671,12 @@ impl FxOp {
 
                 let hsl_on = b(e, "hsl_on");
 
-                let gpu_capable = !is_hdr
-                    && !has_input_lut
+                let plain = !has_input_lut
                     && !has_look_lut
                     && sharpen.abs() <= 1e-3
                     && !has_curves
                     && !hsl_on;
+                let gpu_capable = !is_hdr && plain;
                 let look_k = if look > 0 {
                     f(e, "look_intensity", cx) / 100.0
                 } else {
@@ -751,6 +753,7 @@ impl FxOp {
                     look_k,
                     wheels,
                     gpu_capable,
+                    plain: plain && (!is_hdr || bf("hdr_specular") == 0.0),
                 }
             }
             _ => return None,
@@ -765,6 +768,44 @@ impl FxOp {
             y0: t * h,
             y1: h * (1.0 - b),
             feather: feather.max(0.0),
+        }
+    }
+
+    /// Whether it leaves every picture as it is, so it need not run. Running it would not be quite
+    /// the same: the way to display encoding and back can move a value across a rounding.
+    pub fn leaves_alone(&self) -> bool {
+        match self {
+            FxOp::Levels { ib, iw, ob, ow, g } => {
+                [*ib, *ob] == [0.0; 2] && [*iw, *ow, *g] == [1.0; 3]
+            }
+            FxOp::Lumetri {
+                gains,
+                exposure,
+                contrast,
+                hl,
+                sh,
+                wh,
+                bl,
+                sat,
+                creative_on,
+                faded,
+                vib,
+                st,
+                ht,
+                va,
+                look_k,
+                wheels,
+                plain,
+                ..
+            } => {
+                *plain
+                    && *gains == [1.0; 3]
+                    && [*exposure, *sat] == [1.0; 2]
+                    && [*contrast, *hl, *sh, *wh, *bl, *faded, *vib, *va, *look_k] == [0.0; 9]
+                    && (!creative_on || (*st == [0.5; 3] && *ht == [0.5; 3]))
+                    && wheels.is_none()
+            }
+            _ => false,
         }
     }
 

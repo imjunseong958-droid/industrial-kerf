@@ -61,8 +61,21 @@ rect={0f:0.1,0.4,0.2,0.6 24f:0.6,0.4,0.7,0.6} mode=none`. Identical frames, as a
 fill.
 
 `look.grade.*` are grades, one line each: `fx c1 add look.grade.golden-dusk@1 amount=0.6`. They are
-Cinematic, Film, Mono, and Technical; `look` with `effects: "<words>"` finds one by the mood. `amount=0`
-leaves the picture alone, and `fx c1 flatten 1` opens one up as the `color.lumetri` it is.
+Cinematic, Film, Mono, and Technical; `look` with `effects: "<words>"` finds one by the mood. `fx c1
+flatten 1` opens one up as the `color.lumetri` it is.
+
+Grades stack as plain `fx` lines. Each grades what the line above it drew, so the order is the answer,
+and each has its own `amount`, which animates:
+
+```
+clip c1 media=m1 src=0f at=0f dur=48f
+  fx look.grade.teal-warm@1 amount=0.6
+  fx look.grade.sepia@1 amount={0f:0 48f:1:ease}
+```
+
+`amount=0` leaves the picture as if that grade were not there, down to the byte, and on a frame where an
+animated `amount` comes to 0 too. `fx c1 move 2 to=1` swaps them, and `fx c1 flatten 2` opens up the
+second where it stands, with the amount's keys on each number it scales.
 
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
@@ -71,8 +84,8 @@ through a cut. They are listed there too and written like any effect or
 transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
 from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
 clip, or the id of a marker in its sequence to land on (`hit=beat1`). The document keeps the one line and the look expands when it draws;
-`fx c1 flatten 1` replaces it with what it expands to. A project's own looks
-are `.kerf/looks/*.kerflook` files.
+`fx c1 flatten 1` replaces it with what it expands to. A number that a look's lines only scale animates like any
+effect's; `look` with `effect` marks it `animatable`. A project's own looks are `.kerf/looks/*.kerflook` files.
 
 A track parameter names another picture track of the sequence, whose
 picture the effect reads even while the track is hidden, as a track matte
