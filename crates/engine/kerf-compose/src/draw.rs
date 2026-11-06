@@ -2968,11 +2968,8 @@ mod tests {
             plan.fit = fit;
             let sequence = &drawing.sequences[0];
             let plan = &sequence.tracks[1].shown[0].plan;
-            let scene = three_d::Scene::at(
-                sequence,
-                Time::ZERO,
-                (canvas.0 as usize, canvas.1 as usize),
-            );
+            let scene =
+                three_d::Scene::at(sequence, Time::ZERO, (canvas.0 as usize, canvas.1 as usize));
             let (w, h) = (f64::from(size.0), f64::from(size.1));
             let place = drawing.geometry(sequence, plan, Time::ZERO);
             let plane = three_d::Plane::of(&scene, plan, (w, h), &place, Time::ZERO);
