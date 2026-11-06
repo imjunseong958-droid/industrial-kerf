@@ -258,6 +258,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
+                    "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, the same `outline`, and with `clip` a mask line for that clip. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "clip": {"type": "string"}}},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
@@ -384,6 +385,8 @@ struct LookInput {
     #[serde(default)]
     scopes: bool,
     track: Option<TrackInput>,
+    #[serde(default)]
+    sync: Vec<String>,
     sheet: Option<usize>,
     from: Option<String>,
     to: Option<String>,
@@ -838,6 +841,10 @@ impl KerfMcpRouter {
                 "INVALID_ARGUMENTS",
                 "`sequence` chooses program frames or what a sequence says; not with `media`",
             ));
+        }
+        if !input.sync.is_empty() {
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.line_up(&project, revision, &input.sync);
         }
         if input.track.is_some() && (input.media.is_some() || !input.at.is_empty()) {
             return Err(McpError::new(
@@ -1419,6 +1426,85 @@ impl KerfMcpRouter {
             frames.push(value);
         }
         Ok(json!({"sequence": sequence.id.to_string(), "revision": revision, "frames": frames}))
+    }
+
+    /// How recordings fall against each other by their sound, and a sequence with a camera on each
+    /// track for them to be a multicam of.
+    fn line_up(&self, project: &Project, revision: u64, ids: &[String]) -> Result<Value, McpError> {
+        let invalid = |message: String| McpError::new("INVALID_ARGUMENTS", message);
+        if ids.len() < 2 {
+            return Err(invalid("`sync` lines up two or more media".to_owned()));
+        }
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let mut media = Vec::with_capacity(ids.len());
+        for id in ids {
+            let found = resolved
+                .media(id)
+                .ok_or_else(|| invalid(format!("no media `{id}`")))?;
+            if found.audio.is_none() {
+                return Err(invalid(format!("`{id}` has no sound to line up by")));
+            }
+            media.push(found);
+        }
+        let paths: Vec<&std::path::Path> = media
+            .iter()
+            .map(|media| std::path::Path::new(&media.path))
+            .collect();
+        let found = kerf_engine::sync::align_sound(&paths)
+            .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        let first = media[0];
+        let rate = first.rate;
+        // Times start with whichever began first.
+        let earliest = found.iter().map(|a| a.offset).fold(0.0, f64::min);
+        let frame_of = |seconds: f64| {
+            rate.frames_round(
+                kerf_model::Time::from_seconds(seconds).unwrap_or(kerf_model::Time::ZERO),
+            )
+        };
+        let mut id = "multicam".to_owned();
+        let mut number = 1;
+        while project.sequence(&id).is_some() {
+            number += 1;
+            id = format!("multicam{number}");
+        }
+        let (width, height) = first
+            .video
+            .map_or((1920, 1080), |video| (video.width, video.height));
+        let mut lines = vec![
+            format!("sequence add {id} rate={rate} size={width}x{height} name=\"Multicam\""),
+            format!("use {id}"),
+        ];
+        let mut rows = Vec::with_capacity(ids.len());
+        for (index, (media, alignment)) in media.iter().zip(&found).enumerate() {
+            let at = frame_of(alignment.offset - earliest);
+            let camera = index + 1;
+            let dur = rate.frames_round(media.duration).max(1);
+            let mut targets = Vec::new();
+            if media.video.is_some() {
+                lines.push(format!("track add V{camera} video"));
+                targets.push(format!("V{camera}"));
+            }
+            lines.push(format!("track add A{camera} audio"));
+            targets.push(format!("A{camera}"));
+            lines.push(format!(
+                "overwrite media={} src=0f at={at}f dur={dur}f on={}",
+                media.id,
+                targets.join(",")
+            ));
+            rows.push(json!({
+                "media": media.id.as_str(),
+                "offset": (alignment.offset * 1000.0).round() / 1000.0,
+                "at": format!("{at}f"),
+                "confidence": (alignment.confidence * 100.0).round() / 100.0,
+            }));
+        }
+        Ok(json!({
+            "revision": revision,
+            "recordings": rows,
+            "sequence": id,
+            "script": lines.join("\n"),
+        }))
     }
 
     /// Where a point of the program's picture goes over `from`–`to`.

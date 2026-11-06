@@ -5,7 +5,7 @@ use super::{
     place, program_sequence, samples, sound_filters, Crossfade, Graph, ProgramError, Result, Shown,
 };
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Catalog, Clip, Content, Id, Project, Sequence, Time, TrackKind};
+use kerf_model::{Catalog, Clip, Content, Id, Project, Sequence, Time};
 
 /// How long a nested sound plays on past its end through effects on the
 /// clips holding it, for their ringing to fade out as it does in a render.
@@ -161,8 +161,9 @@ impl<'a> Graph<'a> {
         holders: &mut Vec<Layer>,
         sounds: &mut Vec<ProgramSound>,
     ) -> Result<()> {
+        let angle = holders.last().and_then(|holder| holder.clip.angle.clone());
         for track in &sequence.tracks {
-            if track.kind != TrackKind::Audio || !track.enabled || track.muted {
+            if !super::heard(track, angle.as_ref()) {
                 continue;
             }
             let (items, _) = self.shown(track, sequence.rate)?;

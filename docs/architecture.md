@@ -150,8 +150,10 @@ commands drifted by up to 0.39 s when measured), so `kerf_compose::ramps` makes 
 waveform-similarity overlap-add into a WAV in the temp folder, in sync within 10 ms by construction
 (80 s of stereo in 142 ms in a release build),
 and the graph and the live mixer play that as plain media. Native playback hands a ramp's picture to
-the compositor. To add, in order: multicam; sound beyond gain and fades, with effects and buses. A
-timeline's own tools stay in `kerf-model` and `kerf-lang`.
+the compositor. A multicam is a sequence with a camera on each track, and a clip of it shows one
+(`angle=V2`), since a composition is a sequence and this needs no second document type; `look` with
+`sync` lines recordings up by the rise of their loudness (`kerf_engine::sync`). To add: sound beyond
+gain and fades, with effects and buses. A timeline's own tools stay in `kerf-model` and `kerf-lang`.
 
 ### Color
 

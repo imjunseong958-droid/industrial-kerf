@@ -420,3 +420,51 @@ fn nested_sound_plays_through_the_clips_holding_it() {
         cut.filters
     );
 }
+
+#[test]
+fn an_angle_plays_one_sound_track_of_a_sequence() {
+    let catalog = Catalog::builtin();
+    let document = |angle: &str| {
+        format!("kerf 1\nproject name=\"t\"\nmedia m path=\"a.mov\" rate=24 dur=96f audio=2ch@48000\nmedia n path=\"b.mov\" rate=24 dur=96f audio=2ch@48000\nsequence s1 rate=24 size=64x36 audio=48000\n  track A1 audio\n    clip c1 seq=mc src=0f at=0f dur=24f{angle}\nsequence mc rate=24 size=64x36 audio=48000\n  track A1 audio\n    clip a media=m src=0f at=0f dur=48f\n  track A2 audio muted=true\n    clip b media=n src=0f at=0f dur=48f\n")
+    };
+    let heard = |angle: &str| {
+        let project = kerf_lang::parse_document(&document(angle), catalog)
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let sounds = program_sound(&project, catalog, None).expect("sounds");
+        let compiled = compile_program(
+            &project,
+            catalog,
+            &ProgramOptions {
+                audio_only: true,
+                ..ProgramOptions::default()
+            },
+        )
+        .expect("compiles");
+        (
+            sounds
+                .iter()
+                .map(|sound| sound.path.clone())
+                .collect::<Vec<_>>(),
+            compiled.argv.iter().any(|arg| arg == "b.mov"),
+        )
+    };
+    assert_eq!(heard(""), (vec!["a.mov".to_owned()], false));
+    assert_eq!(heard(" angle=A1"), (vec!["a.mov".to_owned()], false));
+    // The camera with its track muted is heard when asked for.
+    assert_eq!(heard(" angle=A2"), (vec!["b.mov".to_owned()], true));
+}
+
+#[test]
+fn the_graph_refuses_a_picture_angle_by_name() {
+    let catalog = Catalog::builtin();
+    let project = kerf_lang::parse_document(
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 seq=mc src=0f at=0f dur=24f angle=V1\nsequence mc rate=24 size=64x36 audio=48000\n  track V1 video\n    clip a gen=solid@1 at=0f dur=48f\n",
+        catalog,
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let refused = compile_program(&project, catalog, &ProgramOptions::default())
+        .expect_err("the graph draws no angle");
+    assert!(refused.to_string().contains("angle"), "{refused}");
+}

@@ -35,6 +35,7 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one.
+- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. `look` with `sync` lines cameras up by sound.
 - `speed={0f:1 24f:1 36f:1/4}` changes speed over a clip, keyframes as above but with no overshoot.
 
 ## Versions
@@ -296,6 +297,6 @@ mod tests {
         // Kept effects are listed by id; their parameters come from `look`.
         assert!(text.contains("- Blur & Sharpen: `blur.bilateral`"));
         assert!(!text.contains("Blend With Original"));
-        assert!(text.len() < 17 * 1024, "{}", text.len());
+        assert!(text.len() < 18 * 1024, "{}", text.len());
     }
 }

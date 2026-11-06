@@ -640,6 +640,7 @@ fn merge_clip(
     };
     let parent = pick("parent", &b.parent, &o.parent, &t.parent, clashes);
     let retime = pick("retime", &b.retime, &o.retime, &t.retime, clashes);
+    let angle = pick("angle", &b.angle, &o.angle, &t.angle, clashes);
     let effects = pick("effects", &b.effects, &o.effects, &t.effects, clashes);
     Placed {
         sequence,
@@ -653,6 +654,7 @@ fn merge_clip(
             name,
             parent,
             retime,
+            angle,
             link,
             props,
             masks,
@@ -1640,6 +1642,7 @@ fn clip_changes(
     differs(&mut fields, "link", &before.link, &after.link);
     differs(&mut fields, "parent", &before.parent, &after.parent);
     differs(&mut fields, "retime", &before.retime, &after.retime);
+    differs(&mut fields, "angle", &before.angle, &after.angle);
     param_changes(&mut fields, &before.props, &after.props);
     differs(&mut fields, "masks", &before.masks, &after.masks);
     differs(&mut fields, "effects", &before.effects, &after.effects);

@@ -19,6 +19,7 @@ pub mod render;
 pub mod resources;
 pub mod sidecar;
 pub mod still;
+pub mod sync;
 pub mod transcription;
 
 pub use encoder::{
