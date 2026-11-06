@@ -949,51 +949,81 @@ QSizeF fittedSize(const QSizeF &cropped, bool fit, const QSizeF &canvas) {
             std::max(1.0, std::min(std::round(canvas.width() * cropped.height() / cropped.width()), canvas.height()))};
 }
 
+// A clip's geometry at `clipTime`: the compositor's `GEOMETRY`.
+struct Geometry {
+    double cropL = 0.0, cropR = 0.0, cropT = 0.0, cropB = 0.0;
+    double scale = 1.0, scaleX = 1.0, scaleY = 1.0, rotation = 0.0;
+    double anchorX = 0.0, anchorY = 0.0, x = 0.0, y = 0.0;
+};
+
+Geometry geometryAt(const QJsonObject &clip, double clipTime) {
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    const auto prop = [&](const char *name, double fallback) { return propertyAt(props, QString::fromLatin1(name), clipTime, fallback); };
+    return {prop("crop_l", 0.0), prop("crop_r", 0.0), prop("crop_t", 0.0), prop("crop_b", 0.0), prop("scale", 1.0), prop("scale_x", 1.0),
+            prop("scale_y", 1.0), prop("rotation", 0.0), prop("anchor_x", 0.0), prop("anchor_y", 0.0), prop("x", 0.0), prop("y", 0.0)};
+}
+
+// The same with its motion path added in (kerf-compose `geometry_numbers`): the
+// path adds to where it would be, and `orient` to how it is turned.
+Geometry movedGeometryAt(const QJsonObject &clip, const QSizeF &canvas, double clipTime) {
+    Geometry geometry = geometryAt(clip, clipTime);
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    if (const auto points = graph::parsePath(props.value(QStringLiteral("path")).toString())) {
+        const auto on = graph::MotionPath(*points, canvas.width() / std::max(1.0, canvas.height()))
+                            .at(propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
+        geometry.x += on.x;
+        geometry.y += on.y;
+        if (props.value(QStringLiteral("orient")).toBool()) geometry.rotation += on.heading;
+    }
+    return geometry;
+}
+
+// Where a source of `picture` pixels lands on the canvas, in canvas pixels
+// (kerf-compose `placed`).
+QTransform placed(const Geometry &g, const QSizeF &picture, bool fit, const QSizeF &canvas) {
+    const double sw = std::max(1.0, picture.width()), sh = std::max(1.0, picture.height());
+    const double width = sw * std::max(1e-6, 1.0 - g.cropL - g.cropR), height = sh * std::max(1e-6, 1.0 - g.cropT - g.cropB);
+    const QSizeF filled = fittedSize({width, height}, fit, canvas);
+    const double fw = filled.width(), fh = filled.height();
+    QTransform placement;
+    placement.translate(canvas.width() / 2.0 + g.x * canvas.width() + g.anchorX * fw, canvas.height() / 2.0 + g.y * canvas.height() + g.anchorY * fh);
+    placement.rotate(g.rotation);
+    placement.scale(fw / width * g.scale * g.scaleX, fh / height * g.scale * g.scaleY);
+    placement.translate(-(sw * g.cropL + width * (0.5 + g.anchorX)), -(sh * g.cropT + height * (0.5 + g.anchorY)));
+    return placement;
+}
+
 } // namespace
 
-QPointF pathOrigin(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime) {
-    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    const auto prop = [&](const char *name, double fallback) {
-        return propertyAt(props, QString::fromLatin1(name), clipTime, fallback);
-    };
-    const double width = std::max(1.0, picture.width()) * std::max(1e-6, 1.0 - prop("crop_l", 0.0) - prop("crop_r", 0.0));
-    const double height = std::max(1.0, picture.height()) * std::max(1e-6, 1.0 - prop("crop_t", 0.0) - prop("crop_b", 0.0));
+QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                         const QTransform &parents) {
+    const Geometry g = geometryAt(clip, clipTime);
+    const double width = std::max(1.0, picture.width()) * std::max(1e-6, 1.0 - g.cropL - g.cropR);
+    const double height = std::max(1.0, picture.height()) * std::max(1e-6, 1.0 - g.cropT - g.cropB);
     const QSizeF filled = fittedSize({width, height}, fit, canvas);
-    return {0.5 + prop("x", 0.0) + prop("anchor_x", 0.0) * filled.width() / std::max(1.0, canvas.width()),
-            0.5 + prop("y", 0.0) + prop("anchor_y", 0.0) * filled.height() / std::max(1.0, canvas.height())};
+    const double cw = std::max(1.0, canvas.width()), ch = std::max(1.0, canvas.height());
+    const QPointF origin(0.5 + g.x + g.anchorX * filled.width() / cw, 0.5 + g.y + g.anchorY * filled.height() / ch);
+    return QTransform::fromTranslate(origin.x(), origin.y()) * QTransform::fromScale(cw, ch) * parents * QTransform::fromScale(1.0 / cw, 1.0 / ch);
 }
 
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
                             double clipTime) {
-    // The compositor's geometry (kerf-compose `Scene::geometry`).
-    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    const auto prop = [&](const char *name, double fallback) {
-        return propertyAt(props, QString::fromLatin1(name), clipTime, fallback);
-    };
-    const double l = prop("crop_l", 0.0), r = prop("crop_r", 0.0), t = prop("crop_t", 0.0), b = prop("crop_b", 0.0);
-    const double sw = std::max(1.0, picture.width()), sh = std::max(1.0, picture.height());
-    const double cw = canvas.width(), ch = canvas.height();
-    const double width = sw * std::max(1e-6, 1.0 - l - r), height = sh * std::max(1e-6, 1.0 - t - b);
-    const QSizeF filled = fittedSize({width, height}, fit, canvas);
-    const double fw = filled.width(), fh = filled.height();
-    // The motion path adds to where it would be, and `orient` to how it is turned.
-    double x = prop("x", 0.0), y = prop("y", 0.0), rotation = prop("rotation", 0.0);
-    if (const auto points = graph::parsePath(props.value(QStringLiteral("path")).toString())) {
-        const auto on = graph::MotionPath(*points, cw / std::max(1.0, ch)).at(prop("along", 0.0));
-        x += on.x;
-        y += on.y;
-        if (props.value(QStringLiteral("orient")).toBool()) rotation += on.heading;
-    }
-    const double scale = prop("scale", 1.0);
-    const double kx = scale * prop("scale_x", 1.0), ky = scale * prop("scale_y", 1.0);
-    const double ax = prop("anchor_x", 0.0), ay = prop("anchor_y", 0.0);
-    QTransform placement;
-    placement.translate(cw / 2.0 + x * cw + ax * fw, ch / 2.0 + y * ch + ay * fh);
-    placement.rotate(rotation);
-    placement.scale(fw / width * kx, fh / height * ky);
-    placement.translate(-(sw * l + width * (0.5 + ax)), -(sh * t + height * (0.5 + ay)));
-    placement.scale(sw, sh);
-    return placement;
+    // The compositor's geometry (kerf-compose `Scene::geometry`), in fractions of the picture.
+    const QTransform source = QTransform::fromScale(std::max(1.0, picture.width()), std::max(1.0, picture.height()));
+    return source * placed(movedGeometryAt(clip, canvas, clipTime), picture, fit, canvas);
+}
+
+QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime) {
+    const Geometry now = movedGeometryAt(parent, canvas, clipTime);
+    Geometry rest;
+    rest.cropL = now.cropL;
+    rest.cropR = now.cropR;
+    rest.cropT = now.cropT;
+    rest.cropB = now.cropB;
+    rest.anchorX = now.anchorX;
+    rest.anchorY = now.anchorY;
+    const QTransform before = placed(rest, picture, fit, canvas);
+    return before.isInvertible() ? before.inverted() * placed(now, picture, fit, canvas) : QTransform{};
 }
 
 QPainterPath maskPath(const QJsonObject &mask) {

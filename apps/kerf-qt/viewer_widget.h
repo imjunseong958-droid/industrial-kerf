@@ -135,17 +135,23 @@ public:
     void selectMask(const QString &name);
     QString selectedMask() const { return m_selectedMask; }
 
-    // The motion path of picture clip `clip`, as its `path=` reads: `origin` is
-    // where on the canvas its 0,0 is, as a share of the canvas, and `along` how
-    // far along the clip is now. Dragging a point writes `path=` as one edit. An
-    // empty clip or a path that does not read shows none.
-    void setMotionPath(const QString &clip, const QString &text, QPointF origin, double along);
+    // The motion path of picture clip `clip`, as its `path=` reads: `placement`
+    // takes its points to shares of the canvas (pathPlacement), and `along` is how
+    // far along the clip is now. An empty clip, a path that does not read, or a
+    // placement that flattens it shows none.
+    //
+    // Dragging a point moves it, a double-click on the curve adds one there, and
+    // Delete removes the one clicked, down to the two a path needs; each writes
+    // `path=` as one edit.
+    void setMotionPath(const QString &clip, const QString &text, const QTransform &placement, double along);
     bool showsMotionPath() const { return !m_pathClip.isEmpty(); }
     // Its points, the curve through them, and where the clip is on it, all in
     // widget points as drawn.
     QList<QPointF> motionPathPoints() const;
     QList<QPointF> motionPathCurve() const;
     QPointF motionPathMarker() const;
+    // The point Delete would remove, or -1.
+    int selectedPathPoint() const { return m_pathSelected; }
 
     // Tests: -1 fades where something shows them (not on the offscreen
     // platform, not under reduced motion), 0 never, 1 always.
@@ -170,6 +176,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void leaveEvent(QEvent *) override;
     void paintEvent(QPaintEvent *) override;
@@ -195,6 +202,12 @@ private:
     QPointF pathPoint(const QPointF &widget) const;
     // The path point under the pointer, or -1.
     int pathPointAt(const QPointF &widget) const;
+    // How far along the path's curve (as MotionPath::curve takes it) the pointer
+    // is, within reach of it, or -1.
+    double pathCurveAt(const QPointF &widget) const;
+    void selectPathPoint(int point);
+    void writePath();
+    void removeSelectedPathPoint();
     void paintMotionPath(QPainter &p);
     // Widget points to fractions of the frame, and back.
     QPointF frameFraction(const QPointF &widget) const;
@@ -284,8 +297,9 @@ private:
 
     QString m_pathClip;
     QList<QPointF> m_pathPoints;
-    QPointF m_pathOrigin;
+    QTransform m_pathPlacement;
     double m_pathAlong = 0.0;
+    int m_pathSelected = -1;
     // The point in hand, what the path was before it, and from the pointer to
     // the point, which keeps it from jumping there.
     int m_pathDrag = -1;

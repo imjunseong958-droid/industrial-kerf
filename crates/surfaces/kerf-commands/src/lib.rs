@@ -741,6 +741,12 @@ pub static COMMANDS: &[Command] = &[
         Menu::Edit,
         2,
     )),
+    // Offered on a clip that has no path, where it can start one.
+    frontend(command(
+        "clip.startPath",
+        "Start Motion Path",
+        has_video_selection,
+    )),
     // The searches of the bin and of the effects browser; each brings its
     // panel forward first.
     keys(

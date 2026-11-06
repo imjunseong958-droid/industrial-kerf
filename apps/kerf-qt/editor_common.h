@@ -277,12 +277,19 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
 // fitted to the canvas when `fit` (media and nested sequences), cropped,
 // scaled, rotated about its anchor, and moved. It maps fractions of the
 // `picture`-pixel picture (0, 0 its top left, 1, 1 its bottom right), the
-// space masks are drawn in, to canvas pixels.
-// Where on the canvas a clip's motion path has its 0,0, as a share of the canvas:
-// where the clip would be with no path, at `clipTime`.
-QPointF pathOrigin(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime);
+// space masks are drawn in, to canvas pixels, before any parent.
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
                             double clipTime);
+// How a parent has moved its children at its clip time `clipTime`, in canvas
+// pixels: from where it would sit with no position, scale, or rotation of its
+// own, to where it is (kerf-compose `parent_motion`). A clip's picture goes
+// through each of its parents in turn, nearest first.
+QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime);
+// Where a clip's motion path lands: from shares of the canvas from the path's
+// 0,0 to shares of the canvas, the path's 0,0 being where the clip would be with
+// no path at `clipTime`, and `parents` what its parents do, in canvas pixels.
+QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                         const QTransform &parents);
 
 // A snapshot mask's outline, in fractions of the clip's picture; open
 // paths are not closed.

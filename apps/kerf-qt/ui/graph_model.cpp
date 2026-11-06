@@ -228,7 +228,7 @@ QList<Key> shifted(QList<Key> keys, const QList<int> &indices, qint64 frames, do
 
 namespace {
 
-constexpr int kPathSamples = 32; // kerf_model's path::SAMPLES
+constexpr int kPathSamples = MotionPath::kSamplesPerSpan;
 constexpr double kPathLimit = 10.0;
 
 QPointF lerped(QPointF a, QPointF b, double at, double low, double high) {
@@ -262,6 +262,13 @@ QString pathText(const QList<QPointF> &points) {
     QStringList parts;
     for (const QPointF &point : points) parts << QStringLiteral("%1,%2").arg(text(point.x()), text(point.y()));
     return parts.join(QLatin1Char(' '));
+}
+
+QList<QPointF> withPointOn(QList<QPointF> points, double aspect, double u) {
+    const QPointF on = MotionPath(points, aspect).curve(u);
+    const qsizetype span = std::clamp<qsizetype>(qsizetype(std::floor(u)), 0, points.size() - 2);
+    points.insert(span + 1, on);
+    return points;
 }
 
 MotionPath::MotionPath(const QList<QPointF> &points, double aspect) : m_points(points), m_aspect(aspect) {

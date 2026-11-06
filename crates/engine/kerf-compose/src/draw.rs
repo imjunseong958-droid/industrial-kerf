@@ -2575,6 +2575,104 @@ impl Frames {
 mod tests {
     use super::*;
 
+    /// The same table holds the editor's overlay to this, in `graph_test.cpp`
+    /// (`parentsMoveAsTheCompositorMovesThem`).
+    #[test]
+    fn a_parents_motion_is_where_the_table_says() {
+        type Row = (
+            &'static str,
+            (u32, u32),
+            bool,
+            (f64, f64),
+            (f64, f64),
+            (f64, f64),
+        );
+        const HD: (u32, u32) = (1920, 1080);
+        const HD_F: (f64, f64) = (1920.0, 1080.0);
+        let table: [Row; 7] = [
+            (
+                "x=-0.25 y=0.1",
+                HD,
+                false,
+                HD_F,
+                (1200.0, 540.0),
+                (720.0, 648.0),
+            ),
+            (
+                "rotation=90",
+                HD,
+                false,
+                HD_F,
+                (1200.0, 540.0),
+                (960.0, 780.0),
+            ),
+            (
+                "scale=0.5",
+                HD,
+                false,
+                HD_F,
+                (1200.0, 300.0),
+                (1080.0, 420.0),
+            ),
+            (
+                "scale_x=2 rotation=30 anchor_x=0.25 anchor_y=-0.5 x=0.1",
+                HD,
+                false,
+                HD_F,
+                (100.0, 900.0),
+                (-1138.948082142, -560.577136594),
+            ),
+            (
+                "crop_l=0.2 crop_t=0.1 scale=1.5 y=-0.2",
+                (1280, 720),
+                true,
+                HD_F,
+                (640.0, 200.0),
+                (480.0, -186.0),
+            ),
+            (
+                "rotation=45 anchor_x=0.5 scale=0.75",
+                (1000, 500),
+                true,
+                (1080.0, 1920.0),
+                (540.0, 960.0),
+                (793.621753619, 673.621753619),
+            ),
+            (
+                "path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.5 orient=true scale=0.8",
+                HD,
+                false,
+                HD_F,
+                (1000.0, 500.0),
+                (1462.428694397, 793.07977502),
+            ),
+        ];
+        for (set, size, fit, canvas, from, to) in table {
+            let document = format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=1920x1080 audio=48000\n  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n      set {set}\n"
+            );
+            let project = kerf_lang::parse_document(&document, Catalog::builtin())
+                .unwrap_or_else(|errors| panic!("{set}: {errors:?}"))
+                .project;
+            let clip = project.sequences[0].tracks[0].clips[0].clone();
+            let shape = (canvas.0 as u32, canvas.1 as u32);
+            let path = motion_path(&clip, shape);
+            let rig = Rig {
+                clip,
+                size,
+                fit,
+                path,
+                digest: None,
+            };
+            let moved = parent_motion(&rig, canvas, Time::ZERO);
+            let at = moved.apply(Vec2::new(from.0, from.1));
+            assert!(
+                (at.x - to.0).abs() < 1e-6 && (at.y - to.1).abs() < 1e-6,
+                "{set}: {at:?} against {to:?}"
+            );
+        }
+    }
+
     #[test]
     fn nested_sequences_show_their_own_frames() {
         let rate = Rate::FPS_24;

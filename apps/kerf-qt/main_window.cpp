@@ -1012,6 +1012,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("file.applyPreset"), [this] { importEditingPreset(); }},
         {QStringLiteral("app.quit"), [this] { if (close()) QApplication::quit(); }},
         {QStringLiteral("clip.focusRegion"), [this] { focusRegion(); }},
+        {QStringLiteral("clip.startPath"), [this] { startMotionPath(); }},
         {QStringLiteral("sequence.renderPreview"), [this] { renderPreview(); }},
         {QStringLiteral("playback.toggle"), [this] { togglePlayback(); }},
         {QStringLiteral("playback.goToStart"), [this] { seekToStart(); }},
@@ -1939,11 +1940,12 @@ QJsonObject MainWindow::selectedClipObject() const {
     return {};
 }
 
-QSizeF MainWindow::selectedPictureSize(bool *fit) const {
+QSizeF MainWindow::selectedPictureSize(bool *fit) const { return pictureSizeOf(selectedClipObject(), selectedTrackType(), fit); }
+
+QSizeF MainWindow::pictureSizeOf(const QJsonObject &clip, const QString &trackType, bool *fit) const {
     // A picture clip draws media, a nested sequence, or a generator.
-    const QJsonObject clip = selectedClipObject();
     const QString kind = clip.value(QStringLiteral("kind")).toString();
-    if (clip.isEmpty() || selectedTrackType() != QStringLiteral("video") || kind == QStringLiteral("caption")) return {};
+    if (clip.isEmpty() || trackType != QStringLiteral("video") || kind == QStringLiteral("caption")) return {};
     *fit = kind == QStringLiteral("media") || kind == QStringLiteral("sequence");
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     if (kind == QStringLiteral("media")) {
