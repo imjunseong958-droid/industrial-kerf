@@ -188,6 +188,19 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and
   `trim_offset`. A color with alpha `#ffffff00` is none.
+  `fx shape.outline@1` combines another outline with it, in order, by `mode=add|subtract|intersect|difference`,
+  with the same `kind`, `width`, `height`, `round`, `sides`, `inner`, `points`, and `smooth`, and `x`, `y`
+  (frame heights from the clip's center) and `rotation` to place it. It goes only on a `gen=shape` clip, and is
+  part of the shape rather than a filter on its picture, so the fill and stroke follow what the outlines come
+  to, around every hole. `offset` then grows that, or with a negative shrinks it, keeping corners square; on an
+  open path it makes the region around the line. `taper_start` and `taper_end` are how much of the stroke's
+  length (of what the trim leaves) it takes to widen from nothing and narrow to nothing. All of these animate:
+
+  ```
+  clip c1 gen=shape@1 at=0f dur=48f
+    set width=0.8 height=0.5 offset={0f:0 24f:0.02} stroke_width=0.01 taper_end=0.2
+    fx shape.outline@1 mode=subtract kind=ellipse width=0.2 height=0.2 x={0f:-0.2 24f:0.2}
+  ```
 - `gen=particles@1` emits from the clip's center: `rate`, `life`, `velocity`, `vary`, `direction`,
   `spread`, `gravity`, `size`, `size_end`, `color`, `color_end`, `soft`, `area_width`, `area_height`,
   `seed`. Each particle follows a formula from its birth, so any frame can be drawn first and looks

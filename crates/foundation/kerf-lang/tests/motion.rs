@@ -34,6 +34,77 @@ fn they_round_trip() {
     }
 }
 
+const OUTLINES: &str = r##"kerf 1
+project name="t"
+sequence s1 rate=24 size=1280x720 audio=48000
+  track V1 video
+    clip c1 gen=shape@1 at=0f dur=48f
+      set kind=rect offset={0f:0 24f:0.02} stroke_width=0.02 taper_end=0.25 taper_start={0f:0 24f:0.5}
+      fx shape.outline@1 height=0.1 kind=ellipse mode=subtract rotation={0f:0 24f:90} width=0.1 x={0f:-0.1 24f:0.1} y=0.05
+      fx shape.outline@1 kind=path points="0,0 0.2,0 0.1,0.2" smooth=true
+"##;
+
+fn refused(document: &str, word: &str) {
+    let errors = match parse_document(document, Catalog::builtin()) {
+        Ok(_) => panic!("took {document}"),
+        Err(errors) => errors,
+    };
+    assert!(format!("{errors:?}").contains(word), "{word}: {errors:?}");
+}
+
+#[test]
+fn outlines_round_trip_with_what_animates() {
+    let once =
+        parse_document(OUTLINES, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in [
+        "fx shape.outline@1",
+        "mode=subtract",
+        "offset={",
+        "taper_start={",
+        "taper_end=0.25",
+        "x={",
+        "rotation={",
+        "points=\"0,0 0.2,0 0.1,0.2\"",
+    ] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+}
+
+#[test]
+fn a_bad_outline_or_stroke_is_refused_when_the_document_reads() {
+    refused(&OUTLINES.replace("mode=subtract", "mode=blend"), "mode");
+    refused(&OUTLINES.replace("kind=ellipse", "kind=blob"), "kind");
+    refused(
+        &OUTLINES.replace("offset={0f:0 24f:0.02}", "offset=99"),
+        "offset",
+    );
+    refused(
+        &OUTLINES.replace("taper_end=0.25", "taper_end=2"),
+        "taper_end",
+    );
+    refused(
+        &OUTLINES.replace("taper_end=0.25", "taper_end=-0.5"),
+        "taper_end",
+    );
+    refused(&OUTLINES.replace("y=0.05", "y=101"), "`y`");
+    refused(&OUTLINES.replace("0,0 0.2,0 0.1,0.2", "0,0 x,1"), "points");
+    // Two points hold no area.
+    refused(&OUTLINES.replace("0,0 0.2,0 0.1,0.2", "0,0 0.2,0"), "three");
+    // Only a shape has outlines to combine.
+    for generator in ["solid", "title"] {
+        refused(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=1280x720 audio=48000\n  track V1 video\n    clip c1 gen={generator}@1 at=0f dur=48f\n      fx shape.outline@1 kind=ellipse\n"
+            ),
+            "gen=shape",
+        );
+    }
+}
+
 #[test]
 fn a_kind_that_is_not_one_is_refused_with_a_reason() {
     let wrong = DOCUMENT.replace("kind=path", "kind=blob");

@@ -20,6 +20,26 @@ const SCENES: &[(&str, &str)] = &[
         "gen=shape@1 at=0f dur=96f\n      set kind=star sides=7 width=0.9 height=0.9 stroke_width=0.01 stroke=#ff0000",
     ),
     (
+        "rect minus circle",
+        "gen=shape@1 at=0f dur=96f\n      set width=1 height=0.8\n      fx shape.outline@1 mode=subtract kind=ellipse width=0.5 height=0.5 x={0f:-0.3 96f:0.3}",
+    ),
+    (
+        "three outlines",
+        "gen=shape@1 at=0f dur=96f\n      set kind=star sides=9 width=0.9 height=0.9 stroke_width=0.005\n      fx shape.outline@1 kind=ellipse width=0.5 height=0.5 x=0.3\n      fx shape.outline@1 mode=subtract kind=ellipse width=0.3 height=0.3 x={0f:-0.3 96f:0.3}",
+    ),
+    (
+        "offset ellipse",
+        "gen=shape@1 at=0f dur=96f\n      set kind=ellipse width=0.5 height=0.5 offset={0f:0 96f:0.2}",
+    ),
+    (
+        "offset star",
+        "gen=shape@1 at=0f dur=96f\n      set kind=star sides=7 width=0.6 height=0.6 offset={0f:-0.02 96f:0.05} stroke_width=0.005",
+    ),
+    (
+        "tapered stroke",
+        "gen=shape@1 at=0f dur=96f\n      set kind=ellipse width=0.9 height=0.9 fill=#ffffff00 stroke_width=0.02 trim_end={0f:0 48f:1} taper_start=0.5 taper_end=0.5",
+    ),
+    (
         "5000 particles",
         "gen=particles@1 at=0f dur=96f\n      set rate=2500 life=2 velocity=0.5 spread=360 size=0.006",
     ),

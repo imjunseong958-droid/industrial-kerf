@@ -1249,17 +1249,27 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
 
 /// A generator's numbers at clip time `time`.
 struct Reading<'a> {
-    clip: &'a Clip,
+    params: Option<&'a kerf_model::Params>,
     def: Option<&'a FxDef>,
     time: Time,
 }
 
-impl Reading<'_> {
-    fn value(&self, name: &str) -> Option<Value> {
-        let Content::Generator { params, .. } = &self.clip.content else {
-            return None;
+impl<'a> Reading<'a> {
+    /// A generator's numbers at `time`, from its clip.
+    fn generator(clip: &'a Clip, name: &str, time: Time) -> Self {
+        let params = match &clip.content {
+            Content::Generator { params, .. } => Some(params),
+            _ => None,
         };
-        match params.get(name) {
+        Self {
+            params,
+            def: Catalog::builtin().fx(name),
+            time,
+        }
+    }
+
+    fn value(&self, name: &str) -> Option<Value> {
+        match self.params?.get(name) {
             Some(param) => Some(param.value_at(self.time)),
             None => self
                 .def
@@ -1298,46 +1308,12 @@ fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) ->
     let center = [w as f64 / 2.0, height / 2.0];
     match motion {
         Motion::Shape => {
-            let read = Reading {
-                clip,
-                def: Catalog::builtin().fx("shape"),
-                time,
-            };
+            let read = Reading::generator(clip, "shape", time);
             let size = |name: &str| (read.number(name) * height) as f32;
-            let (width, tall) = (size("width"), size("height"));
-            let figure = match read.word("kind").as_str() {
-                "ellipse" => kerf_motion::Figure::Ellipse {
-                    width,
-                    height: tall,
-                },
-                "polygon" => kerf_motion::Figure::Polygon {
-                    width,
-                    height: tall,
-                    sides: read.number("sides").round().max(3.0) as u32,
-                },
-                "star" => kerf_motion::Figure::Star {
-                    width,
-                    height: tall,
-                    points: read.number("sides").round().max(2.0) as u32,
-                    inner: read.number("inner") as f32,
-                },
-                "path" => kerf_motion::Figure::Path {
-                    points: kerf_model::parse_points(&read.word("points"))
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|point| [(point[0] * height) as f32, (point[1] * height) as f32])
-                        .collect(),
-                    closed: read.on("closed"),
-                    smooth: read.on("smooth"),
-                },
-                _ => kerf_motion::Figure::Rect {
-                    width,
-                    height: tall,
-                    round: size("round"),
-                },
-            };
             kerf_motion::Shape {
-                figure,
+                figure: figure_of(&read, height),
+                outlines: outlines_of(clip, height, time),
+                offset: size("offset"),
                 fill: read.color("fill"),
                 stroke: read.color("stroke"),
                 stroke_width: size("stroke_width"),
@@ -1346,25 +1322,18 @@ fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) ->
                     read.number("trim_end") as f32,
                     read.number("trim_offset") as f32,
                 ),
+                taper: (
+                    read.number("taper_start") as f32,
+                    read.number("taper_end") as f32,
+                ),
             }
             .draw(&mut image, [center[0] as f32, center[1] as f32]);
         }
         Motion::Particles => {
-            let read = Reading {
-                clip,
-                def: Catalog::builtin().fx("particles"),
-                time,
-            };
+            let read = Reading::generator(clip, "particles", time);
             // Who is alive and where they are comes from the rate and the rest at the start, since
             // a particle's way is worked out from its birth.
-            let start = Reading {
-                time: Time::ZERO,
-                ..Reading {
-                    clip,
-                    def: read.def,
-                    time,
-                }
-            };
+            let start = Reading::generator(clip, "particles", Time::ZERO);
             kerf_motion::Emitter {
                 rate: start.number("rate"),
                 life: start.number("life"),
@@ -1387,6 +1356,72 @@ fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) ->
         }
     }
     image
+}
+
+/// An outline's numbers as the shape draws them, in pixels of a picture `height` high.
+fn figure_of(read: &Reading, height: f64) -> kerf_motion::Figure {
+    let size = |name: &str| (read.number(name) * height) as f32;
+    let (width, tall) = (size("width"), size("height"));
+    match read.word("kind").as_str() {
+        "ellipse" => kerf_motion::Figure::Ellipse {
+            width,
+            height: tall,
+        },
+        "polygon" => kerf_motion::Figure::Polygon {
+            width,
+            height: tall,
+            sides: read.number("sides").round().max(3.0) as u32,
+        },
+        "star" => kerf_motion::Figure::Star {
+            width,
+            height: tall,
+            points: read.number("sides").round().max(2.0) as u32,
+            inner: read.number("inner") as f32,
+        },
+        "path" => kerf_motion::Figure::Path {
+            points: kerf_model::parse_points(&read.word("points"))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|point| [(point[0] * height) as f32, (point[1] * height) as f32])
+                .collect(),
+            closed: read.on("closed"),
+            smooth: read.on("smooth"),
+        },
+        _ => kerf_motion::Figure::Rect {
+            width,
+            height: tall,
+            round: size("round"),
+        },
+    }
+}
+
+/// A shape clip's further outlines, in the order its `fx shape.outline` lines give them.
+fn outlines_of(clip: &Clip, height: f64, time: Time) -> Vec<kerf_motion::Outline> {
+    clip.effects
+        .iter()
+        .filter(|effect| effect.enabled && effect.fx == kerf_model::SHAPE_OUTLINE)
+        .map(|effect| {
+            let read = Reading {
+                params: Some(&effect.params),
+                def: Catalog::builtin().fx(kerf_model::SHAPE_OUTLINE),
+                time,
+            };
+            kerf_motion::Outline {
+                combine: match read.word("mode").as_str() {
+                    "subtract" => kerf_motion::Combine::Subtract,
+                    "intersect" => kerf_motion::Combine::Intersect,
+                    "difference" => kerf_motion::Combine::Difference,
+                    _ => kerf_motion::Combine::Add,
+                },
+                figure: figure_of(&read, height),
+                at: [
+                    (read.number("x") * height) as f32,
+                    (read.number("y") * height) as f32,
+                ],
+                rotation: read.number("rotation") as f32,
+            }
+        })
+        .collect()
 }
 
 /// The size a caption's text is drawn at.
@@ -2063,6 +2098,8 @@ impl<'a> Builder<'a> {
             }
             match (def.engine, effect.fx.as_str()) {
                 (Engine::Graph, "color.basic" | "blur.gaussian") => effects.push(effect.clone()),
+                // Part of the shape: `motion_on` reads it where it draws.
+                (Engine::Graph, kerf_model::SHAPE_OUTLINE) => {}
                 (Engine::Kerf, id)
                     if filmcraft::catalog::carried(id).is_some()
                         || domains::effect(id).is_some() =>
