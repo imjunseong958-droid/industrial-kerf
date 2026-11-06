@@ -7,6 +7,8 @@ description = "Following what moves in a picture"
 
 [dependencies]
 kerf-raster = { path = "../../render/kerf-raster" }
+kerf-segment = { path = "../kerf-segment" }
+rayon = { workspace = true }
 
 [lints]
 workspace = true

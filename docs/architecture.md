@@ -25,7 +25,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `effects` | The effects carried from FilmCraft and EffectCraft, all areas together | `kerf-fx`, `kerf-raster-fx` |
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
 | 2 | `color` | Measuring a grade; the grading effects themselves are in `effects` for now | `kerf-scopes` |
-| 2 | `vfx` | Following what moves in a picture; keys and mattes are in `effects` for now | `kerf-track` |
+| 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track`, `kerf-segment` |
 | 2 | `motion` | Reserved: it gets its folder with its first crate | |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
 | 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher` |
@@ -194,9 +194,15 @@ tilting for 48 frames at 320x180, a corner is at worst 0.57 pixels off, 1.75 wit
 Mask outlines animate (`MaskShape::Moving`), and `image.fill method=video` with one removes what
 moves: each frame's hole comes from the outline at that moment.
 
-To add, in order: roto with the swappable
-model interface of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; the camera
-solver. Optical flow is in
+Given points on an object, `look` cuts it out and follows it (`kerf_track::roto`, a graph cut carried
+forward by optical flow, in the same `track`), and what it finds is a moving mask of 40 corners, not a
+matte kept beside the document. A trained model is optional and swappable (`kerf_segment::MaskModel`):
+it only sharpens the cut's prior, and one that disagrees with the flow is left out for that frame.
+MobileSAM runs in plain Rust; its weights are never bundled, and `look` names the file to fetch. On a
+disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at
+least 0.994; camouflaged so colour says nothing, 0.005 alone and 0.966 with a model standing in.
+
+To add: soft edges, which a polygon cannot hold (`feather=` approximates them); the camera solver. Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.
 
 ### Image

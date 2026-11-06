@@ -1158,6 +1158,78 @@ fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
 }
 
 #[test]
+fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A white square crossing the red shot.
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "track add V2 video\noverwrite gen=solid dur=30f at=0f on=V2 as=sq\nset sq color=#ffffff scale=0.3 x={0f:-0.2 30f:0.2}"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let followed = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"inside": [[0.3, 0.5]], "outside": [[0.05, 0.05]], "clip": "sq"},
+            "from": "0f",
+            "to": "24f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(followed["lostAt"].is_null(), "{followed}");
+    assert_eq!(followed["frames"], 25);
+    // A square 0.3 of the frame each way covers 0.09 of it.
+    let area = followed["area"].as_f64().unwrap();
+    assert!((area - 0.09).abs() < 0.01, "{followed}");
+    let script = followed["script"].as_str().unwrap();
+    assert!(
+        script.starts_with("mask sq add object points={0f:"),
+        "{script}"
+    );
+    ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": script}),
+    );
+    // Where it ends, it has moved with the square: 0.32 of the frame to the right, at its middle.
+    let outline = followed["outline"].as_str().unwrap();
+    let last = outline
+        .trim_matches(['{', '}'])
+        .split(' ')
+        .next_back()
+        .and_then(|key| key.split(':').nth(1))
+        .unwrap();
+    let corners: Vec<[f64; 2]> = last
+        .split(';')
+        .map(|corner| {
+            let (x, y) = corner.split_once(',').unwrap();
+            [x.parse().unwrap(), y.parse().unwrap()]
+        })
+        .collect();
+    let middle = corners.iter().map(|c| c[0]).sum::<f64>() / corners.len() as f64;
+    assert!((middle - 0.62).abs() < 0.02, "{middle}: {followed}");
+    for refused in [
+        json!({"track": {"inside": [[0.5, 0.5]], "x": 0.5, "y": 0.5}, "from": "0f", "to": "2f"}),
+        json!({"track": {"outside": [[0.5, 0.5]]}, "from": "0f", "to": "2f"}),
+        json!({"track": {"inside": [[1.5, 0.5]]}, "from": "0f", "to": "2f"}),
+        json!({"track": {"x": 0.5, "y": 0.5, "model": "mobilesam"}, "from": "0f", "to": "2f"}),
+        json!({"track": {"inside": [[0.5, 0.5]], "model": "nobody"}, "from": "0f", "to": "2f"}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;
