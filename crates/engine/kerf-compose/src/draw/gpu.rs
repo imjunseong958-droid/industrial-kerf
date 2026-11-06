@@ -1,0 +1,447 @@
+//! A frame drawn on the GPU: the same walk as the CPU's, through the sequence's tracks and each
+//! clip's picture, masks, effects, and placing, with the numbers worked out by the same functions.
+//! [`Drawing::gpu_can_draw`] decides for a whole frame before anything is decoded, and whatever it
+//! refuses (transitions, adjustment layers, effects without a kernel) the CPU draws.
+
+use super::*;
+use kerf_fx::filmcraft::gpufx::FxOp;
+use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
+
+/// Frames with fewer pixels than this gain nothing: the CPU draws them before a GPU round trip is
+/// over.
+const SMALLEST_PIXELS: usize = 640 * 360;
+
+/// The device, once it and every kernel are built.
+fn ready_gpu() -> Option<&'static Gpu> {
+    kerf_gpu::shared().filter(|gpu| filmcraft::gpu::available(gpu))
+}
+
+/// One effect of a clip as a kernel.
+enum Op {
+    Effect(FxOp),
+    Correct(Correction),
+}
+
+/// What a clip's picture is before its effects, in numbers.
+struct Shape {
+    /// The size it decodes at or is drawn at.
+    source: (usize, usize),
+    /// How many of those pixels a source pixel is.
+    source_per: f64,
+    /// The size its effects see: the canvas when letterboxed.
+    size: (usize, usize),
+    /// How many of the pixels its effects see a source pixel is.
+    per_source: f64,
+    to_output: Affine,
+}
+
+impl Drawing {
+    /// The frame at `at`, when the GPU draws it.
+    pub(super) fn gpu_frame(&self, at: Time, scale: f64) -> Option<Frame> {
+        let plan = &self.sequences[0];
+        let (w, h) = output_size(plan.width, plan.height, scale);
+        if self.accel == Accel::Auto && w * h < SMALLEST_PIXELS {
+            return None;
+        }
+        let gpu = self.gpu()?;
+        if !self.gpu_can_draw(gpu, 0, at, scale) {
+            return None;
+        }
+        let mut frame = gpu.frame();
+        let canvas = self.gpu_draw(&mut frame, 0, at, scale)?;
+        let rgba = frame.finish(&canvas)?;
+        Some(Frame {
+            width: w as u32,
+            height: h as u32,
+            rgba,
+        })
+    }
+
+    fn gpu(&self) -> Option<&'static Gpu> {
+        match self.accel {
+            Accel::Never => None,
+            Accel::Always => ready_gpu(),
+            // Building the kernels takes a second or two, which a viewer should not wait for: the
+            // CPU draws until they are ready.
+            Accel::Auto => {
+                static WARMING: Once = Once::new();
+                static READY: AtomicBool = AtomicBool::new(false);
+                WARMING.call_once(|| {
+                    std::thread::spawn(|| {
+                        READY.store(ready_gpu().is_some(), Ordering::Release);
+                    });
+                });
+                if READY.load(Ordering::Acquire) {
+                    ready_gpu()
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Whether the GPU would draw the frame at `at`.
+    pub(crate) fn draws_on_gpu(&self, at: Time, scale: f64) -> bool {
+        self.gpu()
+            .is_some_and(|gpu| self.gpu_can_draw(gpu, 0, at, scale.clamp(1.0 / 16.0, 1.0)))
+    }
+
+    /// Whether the kernels can draw sequence `index` at its time `at`.
+    fn gpu_can_draw(&self, gpu: &Gpu, index: usize, at: Time, scale: f64) -> bool {
+        let plan = &self.sequences[index];
+        let (w, h) = output_size(plan.width, plan.height, scale);
+        if !gpu.fits(w, h) {
+            return false;
+        }
+        plan.tracks
+            .iter()
+            .filter(|track| track.shows)
+            .all(|track| self.gpu_can_draw_track(gpu, plan, track, at, scale))
+    }
+
+    fn gpu_can_draw_track(
+        &self,
+        gpu: &Gpu,
+        sequence: &SequencePlan,
+        track: &TrackPlan,
+        at: Time,
+        scale: f64,
+    ) -> bool {
+        track.shown.iter().enumerate().all(|(index, shown)| {
+            if !shown.shows(at) {
+                return true;
+            }
+            // A transition mixes two clips with its own arithmetic, on the CPU.
+            let mixed = track.pairs.iter().any(|pair| {
+                pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
+            });
+            if mixed {
+                return false;
+            }
+            let plan = &shown.plan;
+            let time = at - plan.clip.start;
+            if let Source::Nested {
+                sequence: nested,
+                source_in,
+                speed,
+                duration,
+            } = &plan.source
+            {
+                let inner = &self.sequences[*nested];
+                let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                if !self.gpu_can_draw(gpu, *nested, shown, scale) {
+                    return false;
+                }
+            }
+            self.gpu_shape(sequence, plan, time, scale)
+                .filter(|shape| gpu.fits(shape.source.0, shape.source.1))
+                .and_then(|shape| self.gpu_ops(sequence, plan, time, at, scale, &shape))
+                .is_some()
+        })
+    }
+
+    /// The numbers [`Drawing::input`] works out for a clip's picture. `None` for an adjustment
+    /// layer, which has no picture of its own.
+    fn gpu_shape(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+    ) -> Option<Shape> {
+        let canvas = output_size(sequence.width, sequence.height, scale);
+        let (source, per_source) = match &plan.source {
+            Source::Media { .. } => {
+                let factor = plan.shown * scale;
+                let w = ((f64::from(plan.size.0) * factor).round() as usize).max(1);
+                let h = ((f64::from(plan.size.1) * factor).round() as usize).max(1);
+                ((w, h), w as f64 / f64::from(plan.size.0))
+            }
+            Source::Nested {
+                sequence: nested, ..
+            } => {
+                let inner = &self.sequences[*nested];
+                let size = output_size(inner.width, inner.height, scale);
+                (size, size.0 as f64 / f64::from(inner.width))
+            }
+            Source::Solid(_) | Source::Title(_) => (canvas, scale),
+            Source::Adjustment => return None,
+        };
+        let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        Some(if plan.letterboxed {
+            Shape {
+                source,
+                source_per: per_source,
+                size: canvas,
+                per_source: place.determinant().abs().sqrt(),
+                to_output: Affine::IDENTITY,
+            }
+        } else {
+            Shape {
+                source,
+                source_per: per_source,
+                size: source,
+                per_source,
+                to_output: place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
+            }
+        })
+    }
+
+    /// A clip's effects as kernels, or `None` when any of them has none.
+    fn gpu_ops(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        at: Time,
+        scale: f64,
+        shape: &Shape,
+    ) -> Option<Vec<Op>> {
+        let mut ops = Vec::with_capacity(plan.effects.len());
+        let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
+        for effect in &plan.effects {
+            match effect.fx.as_str() {
+                "color.basic" => {
+                    let correction = Correction::new(&|name| effect_number(effect, name, time));
+                    if !correction.is_identity() {
+                        ops.push(Op::Correct(correction));
+                    }
+                }
+                "blur.gaussian" => {
+                    let sigma = (effect_number(effect, "radius", time) / 2.0 * density) as f32;
+                    let (across, down) =
+                        blur::gaussian_radii(shape.size.0, shape.size.1, sigma, sigma);
+                    let radii = |radii: Vec<usize>| radii.into_iter().map(|r| r as u32).collect();
+                    ops.push(Op::Effect(FxOp::Gaussian {
+                        rx: radii(across),
+                        ry: radii(down),
+                        repeat: true,
+                    }));
+                }
+                id if kerf_fx::kept::kept(id) || domains::effect(id).is_some() => return None,
+                _ => {
+                    let track = |id: &str| {
+                        sequence
+                            .tracks
+                            .iter()
+                            .position(|track| track.id == id)
+                            .map(|place| place + 1)
+                    };
+                    let on = Picture {
+                        size: shape.size,
+                        per_source: shape.per_source as f32,
+                    };
+                    let Some(instance) = filmcraft::instance::instance(effect, time, on, &track)
+                    else {
+                        continue;
+                    };
+                    if filmcraft::vfx::is_temporal(&instance.effect) {
+                        return None;
+                    }
+                    let timecode =
+                        format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
+                    let run = filmcraft::instance::Run {
+                        at: time,
+                        per_source: shape.per_source as f32,
+                        timecode: &timecode,
+                        clip_name: &plan.name,
+                        library: &self.library,
+                        env: None,
+                        frame_rate: sequence.rate.fps(),
+                    };
+                    let op = filmcraft::instance::gpu_op(&instance, &run, shape.size)?;
+                    ops.push(Op::Effect(op));
+                }
+            }
+        }
+        Some(ops)
+    }
+
+    /// Sequence `index` at its time `at`, transparent where nothing is.
+    fn gpu_draw(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        index: usize,
+        at: Time,
+        scale: f64,
+    ) -> Option<GpuPicture> {
+        let plan = &self.sequences[index];
+        let (w, h) = output_size(plan.width, plan.height, scale);
+        let mut canvas = frame.clear(w as u32, h as u32);
+        for track in plan.tracks.iter().filter(|track| track.shows) {
+            for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
+                canvas = self.gpu_layer(frame, canvas, plan, shown, at, scale)?;
+            }
+            for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
+                let opacity = f64::from(dip.color.a) / 255.0
+                    * (1.0 - (2.0 * progress(at, dip.from, dip.to) - 1.0).abs());
+                let solid = frame.filled(
+                    w as u32,
+                    h as u32,
+                    premultiplied(Rgba {
+                        a: 255,
+                        ..dip.color
+                    }),
+                );
+                let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
+                canvas = frame.composite(
+                    canvas,
+                    &solid,
+                    &Affine::IDENTITY,
+                    whole,
+                    opacity as f32,
+                    Blend::Normal,
+                );
+                frame.release(solid);
+            }
+        }
+        if self.captions {
+            for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
+                let drawn = caption_on(caption, plan, scale, (w, h));
+                let picture = frame.image(&drawn);
+                let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
+                canvas = frame.composite(
+                    canvas,
+                    &picture,
+                    &Affine::IDENTITY,
+                    whole,
+                    1.0,
+                    Blend::Normal,
+                );
+                frame.release(picture);
+            }
+        }
+        Some(canvas)
+    }
+
+    /// A clip over `canvas` at sequence time `at`, as [`Drawing::layer`] draws it.
+    fn gpu_layer(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        canvas: GpuPicture,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        at: Time,
+        scale: f64,
+    ) -> Option<GpuPicture> {
+        let plan = &shown.plan;
+        let clip = &plan.clip;
+        let time = at - clip.start;
+        let shape = self.gpu_shape(sequence, plan, time, scale)?;
+        let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
+        // Media that cannot be read draws nothing, as on the CPU.
+        let Some(picture) = self.gpu_source(frame, sequence, plan, time, scale, &shape)? else {
+            return Some(canvas);
+        };
+        let mut picture = picture;
+        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let source_per = shape.source_per;
+        let mut crop = crop_rect(
+            plan,
+            time,
+            size,
+            source_per,
+            (picture.w as usize, picture.h as usize),
+        );
+        if plan.letterboxed {
+            let place =
+                Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+            let m = place.then_apply(&Affine::scale(1.0 / source_per, 1.0 / source_per));
+            let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+            let boxed = frame.filled(canvas.w, canvas.h, [0.0, 0.0, 0.0, 1.0]);
+            let boxed = frame.composite(
+                boxed,
+                &picture,
+                &m,
+                crop.take().unwrap_or(whole),
+                1.0,
+                Blend::Normal,
+            );
+            frame.release(picture);
+            picture = boxed;
+        } else {
+            let masks = mask::prepare(&clip.masks, size, source_per, time);
+            if let Some(covered) = mask::coverage(&masks, picture.w as usize, picture.h as usize) {
+                picture = frame.multiply(picture, &covered);
+            }
+        }
+        for op in &ops {
+            picture = match op {
+                Op::Effect(op) => filmcraft::gpu::run(frame, picture, std::slice::from_ref(op))?,
+                Op::Correct(correction) => frame.correct(picture, correction),
+            };
+        }
+        let reveal = shown
+            .reveal
+            .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
+        if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
+            let covered = wipe::coverage(
+                picture.w as usize,
+                picture.h as usize,
+                angle,
+                softness,
+                progress,
+            );
+            picture = frame.multiply(picture, &covered);
+        }
+        let fade = match reveal {
+            Some((Reveal::Dissolve, progress)) => progress,
+            _ => 1.0,
+        };
+        let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
+        let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+        let canvas = frame.composite(
+            canvas,
+            &picture,
+            &shape.to_output,
+            crop.unwrap_or(whole),
+            opacity,
+            plan.blend,
+        );
+        frame.release(picture);
+        Some(canvas)
+    }
+
+    /// A clip's picture before its masks and effects. `None` when the frame has to go to the CPU,
+    /// and `Some(None)` when the clip draws nothing.
+    fn gpu_source(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+        shape: &Shape,
+    ) -> Option<Option<GpuPicture>> {
+        let (cw, ch) = output_size(sequence.width, sequence.height, scale);
+        Some(Some(match &plan.source {
+            Source::Media { picture } => {
+                let (w, h) = shape.source;
+                let Some((decoded, stride, alpha)) =
+                    self.pictures.bytes(*picture, time, (w as u32, h as u32))
+                else {
+                    return Some(None);
+                };
+                if (decoded.width() as usize, decoded.height() as usize) != (w, h) {
+                    return None;
+                }
+                frame.rgba8(decoded.data(0), w as u32, h as u32, stride, alpha)
+            }
+            Source::Nested {
+                sequence: nested,
+                source_in,
+                speed,
+                duration,
+            } => {
+                let inner = &self.sequences[*nested];
+                let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                self.gpu_draw(frame, *nested, shown, scale)?
+            }
+            Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
+            Source::Title(title) => frame.image(&title_on(title, (cw, ch))),
+            Source::Adjustment => return None,
+        }))
+    }
+}

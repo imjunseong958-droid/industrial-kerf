@@ -11,17 +11,17 @@
 /// them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Correction {
-    exposure: f32,
+    pub exposure: f32,
     /// What exposure multiplies by.
-    gain: f32,
-    contrast: f32,
-    brightness: f32,
-    saturation: f32,
-    gamma: f32,
+    pub gain: f32,
+    pub contrast: f32,
+    pub brightness: f32,
+    pub saturation: f32,
+    pub gamma: f32,
     /// Color balance shadows for red, green, and blue.
-    shadows: [f32; 3],
-    highlights: f32,
-    vibrance: f32,
+    pub shadows: [f32; 3],
+    pub highlights: f32,
+    pub vibrance: f32,
 }
 
 impl Correction {
@@ -56,14 +56,16 @@ impl Correction {
         self.exposure == 0.0 && !self.eq() && !self.balance() && self.vibrance == 0.0
     }
 
-    fn eq(&self) -> bool {
+    /// Whether it changes anything through `eq`.
+    pub fn eq(&self) -> bool {
         self.contrast != 1.0
             || self.brightness != 0.0
             || self.saturation != 1.0
             || self.gamma != 1.0
     }
 
-    fn balance(&self) -> bool {
+    /// Whether it changes anything through `colorbalance`.
+    pub fn balance(&self) -> bool {
         self.shadows.iter().any(|s| *s != 0.0) || self.highlights != 0.0
     }
 

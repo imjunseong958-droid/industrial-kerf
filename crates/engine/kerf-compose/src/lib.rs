@@ -29,6 +29,18 @@ impl ComposeError {
     }
 }
 
+/// Where frames are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Accel {
+    /// On the GPU when it can draw the frame and the frame is large enough to gain from it.
+    #[default]
+    Auto,
+    /// On the CPU, the reference.
+    Never,
+    /// On the GPU whenever it can draw the frame, whatever its size.
+    Always,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ComposeOptions {
     /// The sequence to draw; the first one when absent.
@@ -36,6 +48,7 @@ pub struct ComposeOptions {
     /// Draw captions into the picture, as a render burns them in. A viewer
     /// that shows captions itself leaves them out.
     pub captions: bool,
+    pub accel: Accel,
 }
 
 /// One frame of straight RGBA, row by row.
@@ -63,6 +76,7 @@ impl Compositor {
                 catalog,
                 options.sequence.as_deref(),
                 options.captions,
+                options.accel,
             )?,
         })
     }
@@ -84,6 +98,13 @@ impl Compositor {
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
         self.drawing.frame(at, scale)
+    }
+
+    /// Whether the GPU would draw the frame at sequence time `at`, at `scale` of the canvas: every
+    /// part of it has a kernel, and there is a GPU to run them. A frame that is one clip untouched
+    /// is the decoded picture itself and draws on neither.
+    pub fn draws_on_gpu(&self, at: Time, scale: f64) -> bool {
+        self.drawing.draws_on_gpu(at, scale)
     }
 
     /// Media that could not be read, each with why. Their clips draw

@@ -32,5 +32,5 @@ pub mod text;
 pub mod wipe;
 
 pub use blend::Blend;
-pub use image::Image;
+pub use image::{Image, Landing};
 pub use kerf_geom::{Affine, Rect, Vec2};

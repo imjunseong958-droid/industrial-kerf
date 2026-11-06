@@ -9,6 +9,7 @@ members = [
     # render
     "crates/render/kerf-raster",
     "crates/render/kerf-draw",
+    "crates/render/kerf-gpu",
     # edit
     "crates/edit/kerf-interchange",
     "crates/edit/kerf-collab",

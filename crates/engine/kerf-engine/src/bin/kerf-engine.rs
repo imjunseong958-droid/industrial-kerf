@@ -659,6 +659,7 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         &kerf_compose::ComposeOptions {
             sequence: args.sequence.clone(),
             captions: args.captions,
+            ..Default::default()
         },
     )?;
     let rate = compositor.rate();

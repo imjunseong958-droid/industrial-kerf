@@ -18,6 +18,7 @@ fn compositor(body: &str, captions: bool) -> Result<Compositor, ComposeError> {
         &ComposeOptions {
             sequence: None,
             captions,
+            ..Default::default()
         },
     )
 }

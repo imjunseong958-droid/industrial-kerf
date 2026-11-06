@@ -98,6 +98,26 @@ pub fn apply(picture: &mut kerf_draw::Image, instance: &EffectInstance, run: &Ru
     super::effects::apply(picture, instance, &cx);
 }
 
+/// `instance` on a picture of `size` as one GPU op, when the GPU can run it as `apply` would.
+pub fn gpu_op(
+    instance: &EffectInstance,
+    run: &Run,
+    (w, h): (usize, usize),
+) -> Option<super::gpufx::FxOp> {
+    let cx = super::effects::FxCtx {
+        t: tick(run.at),
+        px_scale: run.per_source,
+        seconds: run.at.seconds(),
+        timecode: run.timecode,
+        clip_name: run.clip_name,
+        project: Some(run.library),
+        env: None,
+        frame_rate: run.frame_rate,
+        working: kerf_color::WorkingSpace::Rec709,
+    };
+    super::gpufx::FxOp::eval(instance, &cx, w, h).filter(super::gpufx::FxOp::gpu_ok)
+}
+
 /// Run a clip's carried FilmCraft `effects` on an 8-bit RGBA `picture` of `size` alone, as a
 /// preview of them does: without the clip's other frames or the sequence's other tracks, at clip
 /// time `at`, with `per_source` of its pixels to a source pixel.

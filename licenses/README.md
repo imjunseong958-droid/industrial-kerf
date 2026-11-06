@@ -23,7 +23,8 @@ on, and Kerf does not follow upstream.
 | `crates/foundation/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
 | `crates/foundation/kerf-text` | FilmCraft's text engine |
 | `crates/render/kerf-draw` | FilmCraft's renderer, in Kerf's terms |
-| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions |
+| `crates/render/kerf-gpu/src/picture.wgsl` | FilmCraft's blend modes and dissolve pattern in WGSL |
+| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions, with its GPU effect kernels (`filmcraft/gpu.rs`, `fx.wgsl`) |
 
 That code is MIT OR Apache-2.0, at your option: `LICENSE-MIT-ArtCraft` and
 `LICENSE-APACHE-2.0`. The ArtCraft name, wordmark, and logos are trademarks

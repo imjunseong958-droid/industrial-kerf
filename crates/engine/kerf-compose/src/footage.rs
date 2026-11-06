@@ -217,6 +217,8 @@ pub(crate) struct Pictures {
     clips: Vec<ClipSource>,
     pool: DecoderPool,
     cache: Mutex<FrameCache<Picture>>,
+    /// The frames the GPU draws from, as they decoded.
+    decoded: Mutex<FrameCache<frame::Video>>,
 }
 
 impl Pictures {
@@ -225,6 +227,7 @@ impl Pictures {
             clips,
             pool: DecoderPool::new(),
             cache: Mutex::new(FrameCache::new(CACHE_BUDGET, picture_bytes)),
+            decoded: Mutex::new(FrameCache::new(CACHE_BUDGET, decoded_bytes)),
         }
     }
 
@@ -252,6 +255,32 @@ impl Pictures {
         ));
         lock(&self.cache).insert(key, picture.clone());
         Some(picture)
+    }
+
+    /// The frame clip `index` shows at clip time `at`, decoded at `size`, as
+    /// the 8-bit straight RGBA it decodes to: `(rgba, stride, alpha)`.
+    pub fn bytes(
+        &self,
+        index: usize,
+        at: Time,
+        size: (u32, u32),
+    ) -> Option<(Arc<frame::Video>, u32, bool)> {
+        let clip = self.clips.get(index)?;
+        let frame = clip.frame_at_time(at);
+        let size = (size.0.max(1), size.1.max(1));
+        let key = (clip.path.clone(), frame, size);
+        // Not held while decoding: other frames go on.
+        let kept = lock(&self.decoded).get(&key);
+        let decoded = match kept {
+            Some(decoded) => decoded,
+            None => {
+                let decoded = Arc::new(self.pool.picture(clip, frame, size)?);
+                lock(&self.decoded).insert(key, decoded.clone());
+                decoded
+            }
+        };
+        let stride = decoded.stride(0) as u32;
+        Some((decoded, stride, clip.alpha))
     }
 
     /// The frame clip `index` shows at clip time `at`, opaque RGBA at its
@@ -327,6 +356,10 @@ impl<T> FrameCache<T> {
             }
         }
     }
+}
+
+fn decoded_bytes(decoded: &frame::Video) -> usize {
+    decoded.stride(0) * decoded.height() as usize
 }
 
 fn picture_bytes(picture: &Picture) -> usize {
