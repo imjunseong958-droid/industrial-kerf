@@ -220,6 +220,7 @@ fn compose(
             sequence: Some(sequence.id.to_string()),
             captions: false,
             keep_frames: true,
+            frame_folder: kerf_compose::default_frame_folder(),
             ..Default::default()
         },
     )

@@ -4,6 +4,7 @@
 //! effects Kerf keeps (`kerf-fx`), and media decoded by libav. `draw` says
 //! how each part of a sequence is drawn.
 
+mod disk;
 mod domains;
 mod draw;
 mod footage;
@@ -55,7 +56,12 @@ pub struct ComposeOptions {
     /// same picture. Worth it where frames are asked for again, as playback and previews do, and
     /// not for a render, which only passes through them.
     pub keep_frames: bool,
+    /// A folder to keep frames in between sessions and renders, by what they depend on:
+    /// [`default_frame_folder`] for the user's own.
+    pub frame_folder: Option<std::path::PathBuf>,
 }
+
+pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
 
 /// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
 /// [`Compositor::frame16`].
@@ -85,6 +91,7 @@ impl Compositor {
                 options.captions,
                 options.accel,
                 options.keep_frames,
+                options.frame_folder.as_deref().map(disk::open),
             )?,
         })
     }
@@ -109,7 +116,7 @@ impl Compositor {
     }
 
     /// The picture at sequence time `at` over black, at `scale` of the canvas, as 16-bit
-    /// little-endian RGBA, for a master that keeps more than 8 bits. Not kept.
+    /// little-endian RGBA, for a master that keeps more than 8 bits. Kept only on disk.
     pub fn frame16(&self, at: Time, scale: f64) -> Frame {
         self.drawing.frame16(at, scale)
     }
@@ -119,6 +126,11 @@ impl Compositor {
     /// the frame depends on more than the document says, such as a LUT file or another track.
     pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
         self.drawing.frame_key(at, scale)
+    }
+
+    /// Wait for the frames asked to be kept on disk to be there.
+    pub fn flush_frames(&self) {
+        self.drawing.flush_frames();
     }
 
     /// Whether the frame at sequence time `at` is kept, and would not be drawn.

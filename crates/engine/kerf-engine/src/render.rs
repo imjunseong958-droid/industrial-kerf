@@ -695,6 +695,8 @@ where
         &ComposeOptions {
             sequence: sequence.map(str::to_owned),
             captions: true,
+            // Rendering again after a small edit draws only what it changed.
+            frame_folder: kerf_compose::default_frame_folder(),
             ..Default::default()
         },
     )?;
@@ -742,6 +744,7 @@ where
         cancellation,
     );
     drop(stdin);
+    compositor.flush_frames();
     if drawn.is_err() {
         let _ = child.kill();
     }
