@@ -26,7 +26,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
 | 2 | `color` | Measuring a grade; the grading effects themselves are in `effects` for now | `kerf-scopes` |
 | 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track`, `kerf-segment` |
-| 2 | `motion` | Reserved: it gets its folder with its first crate | |
+| 2 | `motion` | Motion graphics drawn from numbers | `kerf-motion` |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
 | 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher` |
 
@@ -173,8 +173,9 @@ layered grades as stacked effects.
 
 ### Motion
 
-Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles, generators, 15 looks, and
-clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
+Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with reveals by character or
+word, shapes with trimmed strokes and particles worked out from their birth (`kerf-motion`, so any frame
+can be drawn first), generators, 15 looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render/three_d/adv` at
 `5c54866` has what to carry next: intersecting planes, shadows, and depth of field.
 
@@ -183,10 +184,7 @@ second document type, and an agent learns one model. To add, in order:
 
 1. A graph editor in the panel, for the Bezier keyframes (`kerf_model::Bezier`) and motion paths
    (`path=`, `along=`, `orient=`) that are in the language.
-3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable
-   strokes).
-4. Text animators and variable fonts.
-5. Particles (EffectCraft's `fx_particles`).
+2. More of shapes, from EffectCraft's `path` (booleans, offsets, variable strokes), and variable fonts.
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.

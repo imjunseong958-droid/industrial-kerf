@@ -174,6 +174,16 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near.
   Clips that cross are not cut where they meet, and there are no shadows or depth of field yet.
   Frames with a clip in depth draw on the CPU.
+- `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
+  `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
+  sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and
+  `trim_offset`. A color with alpha `#ffffff00` is none.
+- `gen=particles@1` emits from the clip's center: `rate`, `life`, `velocity`, `vary`, `direction`,
+  `spread`, `gravity`, `size`, `size_end`, `color`, `color_end`, `soft`, `area_width`, `area_height`,
+  `seed`. Each particle follows a formula from its birth, so any frame can be drawn first and looks
+  the same every time. How they move is read at the clip's start; how they look animates.
+- A `title` comes in with `reveal={0f:0 24f:1}`, by `reveal_by=char|word`, `reveal_soft` of them at a
+  time, from a look of `from_x`, `from_y`, `from_scale`, `from_rotation`, and `from_opacity`.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

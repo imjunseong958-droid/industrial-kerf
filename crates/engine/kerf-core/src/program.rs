@@ -619,6 +619,9 @@ impl<'a> Graph<'a> {
                             ffmpeg_color(fill)
                         ))
                     }
+                    "title" if params.contains_key("reveal") => {
+                        return Err(ProgramError::unsupported(&clip.id, "a title's reveal"))
+                    }
                     "title" => Source::Generated(format!(
                         "color=c=black@0:s={width}x{height}:r={color}:d={span},format=rgba,{}",
                         self.title(clip, params, height)?

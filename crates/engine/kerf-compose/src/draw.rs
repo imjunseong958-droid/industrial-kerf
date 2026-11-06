@@ -241,6 +241,7 @@ enum Source {
     },
     Solid(Rgba),
     Title(TitlePlan),
+    Motion(Motion),
     Adjustment,
     /// A null: it draws nothing, and other clips move with it.
     Nothing,
@@ -253,6 +254,28 @@ struct TitlePlan {
     size: f64,
     color: Rgba,
     justify: Justify,
+    /// How it comes in, when it does.
+    reveal: Option<Box<Reveals>>,
+}
+
+/// A title's reveal, as its parameters say.
+struct Reveals {
+    reveal: Param,
+    by_word: bool,
+    soft: Param,
+    /// Across and down, in frame heights.
+    from: [Param; 2],
+    scale: Param,
+    /// In degrees.
+    rotation: Param,
+    opacity: Param,
+}
+
+/// A shape or particles, drawn from their parameters at the moment.
+#[derive(Clone, Copy, PartialEq)]
+enum Motion {
+    Shape,
+    Particles,
 }
 
 impl Drawing {
@@ -885,7 +908,11 @@ impl Drawing {
                 Arc::new(Image::filled(cw, ch, premultiplied(*color))),
                 scale,
             ),
-            Source::Title(title) => (Arc::new(title_on(title, (cw, ch))), scale),
+            Source::Title(title) => (Arc::new(title_on(title, (cw, ch), time)), scale),
+            Source::Motion(motion) => (
+                Arc::new(motion_on(*motion, &plan.clip, (cw, ch), time)),
+                scale,
+            ),
             Source::Adjustment | Source::Nothing => return None,
         })
     }
@@ -1180,7 +1207,7 @@ fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
 }
 
 /// A title drawn on a transparent `w` × `h` picture.
-fn title_on(title: &TitlePlan, (w, h): (usize, usize)) -> Image {
+fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
     let mut image = Image::new(w, h);
     let text = Text {
         text: &title.text,
@@ -1190,7 +1217,175 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize)) -> Image {
         justify: title.justify,
         outline: None,
     };
-    text::draw(&mut image, &text, [w as f32 / 2.0, h as f32 / 2.0], 0.5);
+    let at = [w as f32 / 2.0, h as f32 / 2.0];
+    let Some(reveal) = &title.reveal else {
+        text::draw(&mut image, &text, at, 0.5);
+        return image;
+    };
+    let read = |param: &Param| number(&param.value_at(time));
+    let (progress, soft) = (read(&reveal.reveal), read(&reveal.soft).max(0.01));
+    let down = h as f64;
+    let (from_x, from_y, from_scale, from_rotation, from_opacity) = (
+        read(&reveal.from[0]) * down,
+        read(&reveal.from[1]) * down,
+        read(&reveal.scale),
+        read(&reveal.rotation).to_radians(),
+        read(&reveal.opacity),
+    );
+    let look = |piece: usize, pieces: usize| {
+        let coming = ((progress * (pieces as f64 + soft) - piece as f64) / soft).clamp(0.0, 1.0);
+        let along = coming * coming * (3.0 - 2.0 * coming);
+        let away = 1.0 - along;
+        text::Piece {
+            offset: [(from_x * away) as f32, (from_y * away) as f32],
+            scale: (from_scale + (1.0 - from_scale) * along) as f32,
+            rotation: (from_rotation * away) as f32,
+            opacity: (from_opacity + (1.0 - from_opacity) * along) as f32,
+        }
+    };
+    text::draw_pieces(&mut image, &text, at, 0.5, reveal.by_word, &look);
+    image
+}
+
+/// A generator's numbers at clip time `time`.
+struct Reading<'a> {
+    clip: &'a Clip,
+    def: Option<&'a FxDef>,
+    time: Time,
+}
+
+impl Reading<'_> {
+    fn value(&self, name: &str) -> Option<Value> {
+        let Content::Generator { params, .. } = &self.clip.content else {
+            return None;
+        };
+        match params.get(name) {
+            Some(param) => Some(param.value_at(self.time)),
+            None => self
+                .def
+                .and_then(|def| def.find(name))
+                .map(|def| def.default.clone()),
+        }
+    }
+
+    fn number(&self, name: &str) -> f64 {
+        self.value(name).and_then(|value| value.as_number()).unwrap_or(0.0)
+    }
+
+    fn color(&self, name: &str) -> [f32; 4] {
+        match self.value(name) {
+            Some(Value::Color(color)) => premultiplied(color),
+            _ => [0.0; 4],
+        }
+    }
+
+    fn word(&self, name: &str) -> String {
+        match self.value(name) {
+            Some(Value::Enum(word) | Value::Text(word)) => word,
+            _ => String::new(),
+        }
+    }
+
+    fn on(&self, name: &str) -> bool {
+        matches!(self.value(name), Some(Value::Bool(true)))
+    }
+}
+
+/// A shape or particles on a transparent canvas of `(w, h)`.
+fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) -> Image {
+    let mut image = Image::new(w, h);
+    let height = h as f64;
+    let center = [w as f64 / 2.0, height / 2.0];
+    match motion {
+        Motion::Shape => {
+            let read = Reading {
+                clip,
+                def: Catalog::builtin().fx("shape"),
+                time,
+            };
+            let size = |name: &str| (read.number(name) * height) as f32;
+            let (width, tall) = (size("width"), size("height"));
+            let figure = match read.word("kind").as_str() {
+                "ellipse" => kerf_motion::Figure::Ellipse {
+                    width,
+                    height: tall,
+                },
+                "polygon" => kerf_motion::Figure::Polygon {
+                    width,
+                    height: tall,
+                    sides: read.number("sides").round().max(3.0) as u32,
+                },
+                "star" => kerf_motion::Figure::Star {
+                    width,
+                    height: tall,
+                    points: read.number("sides").round().max(2.0) as u32,
+                    inner: read.number("inner") as f32,
+                },
+                "path" => kerf_motion::Figure::Path {
+                    points: kerf_model::parse_path_points(&read.word("points"))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|point| [(point[0] * height) as f32, (point[1] * height) as f32])
+                        .collect(),
+                    closed: read.on("closed"),
+                    smooth: read.on("smooth"),
+                },
+                _ => kerf_motion::Figure::Rect {
+                    width,
+                    height: tall,
+                    round: size("round"),
+                },
+            };
+            kerf_motion::Shape {
+                figure,
+                fill: read.color("fill"),
+                stroke: read.color("stroke"),
+                stroke_width: size("stroke_width"),
+                trim: (
+                    read.number("trim_start") as f32,
+                    read.number("trim_end") as f32,
+                    read.number("trim_offset") as f32,
+                ),
+            }
+            .draw(&mut image, [center[0] as f32, center[1] as f32]);
+        }
+        Motion::Particles => {
+            let read = Reading {
+                clip,
+                def: Catalog::builtin().fx("particles"),
+                time,
+            };
+            // Who is alive and where they are comes from the rate and the rest at the start, since
+            // a particle's way is worked out from its birth.
+            let start = Reading {
+                time: Time::ZERO,
+                ..Reading {
+                    clip,
+                    def: read.def,
+                    time,
+                }
+            };
+            kerf_motion::Emitter {
+                rate: start.number("rate"),
+                life: start.number("life"),
+                velocity: start.number("velocity") * height,
+                vary: start.number("vary"),
+                direction: start.number("direction"),
+                spread: start.number("spread"),
+                gravity: start.number("gravity") * height,
+                size: (read.number("size") * height, read.number("size_end") * height),
+                color: (read.color("color"), read.color("color_end")),
+                soft: read.number("soft"),
+                origin: center,
+                area: [
+                    read.number("area_width") * height,
+                    read.number("area_height") * height,
+                ],
+                seed: read.number("seed").round() as u64,
+            }
+            .draw(&mut image, time.seconds());
+        }
+    }
     image
 }
 
@@ -1845,6 +2040,8 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
+                "shape" => (Source::Motion(Motion::Shape), canvas, false, true),
+                "particles" => (Source::Motion(Motion::Particles), canvas, false, true),
                 "null" | "camera" | "light" => (Source::Nothing, canvas, false, true),
                 other => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
             },
@@ -1987,6 +2184,24 @@ impl<'a> Builder<'a> {
                 Value::Enum(align) if align == "left" => Justify::Left,
                 Value::Enum(align) if align == "right" => Justify::Right,
                 _ => Justify::Center,
+            },
+            reveal: {
+                let raw = |name: &str| {
+                    params
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| Param::Static(def.find(name).expect("title parameter").default.clone()))
+                };
+                // Left at rest, it draws as plain text does.
+                params.contains_key("reveal").then(|| Box::new(Reveals {
+                    reveal: raw("reveal"),
+                    by_word: matches!(params.get("reveal_by"), Some(Param::Static(Value::Enum(by))) if by == "word"),
+                    soft: raw("reveal_soft"),
+                    from: [raw("from_x"), raw("from_y")],
+                    scale: raw("from_scale"),
+                    rotation: raw("from_rotation"),
+                    opacity: raw("from_opacity"),
+                }))
             },
         })
     }

@@ -1255,6 +1255,7 @@ dependencies = [
  "kerf-image",
  "kerf-lang",
  "kerf-model",
+ "kerf-motion",
  "kerf-raster",
  "lz4_flex",
  "rayon",
@@ -1405,6 +1406,14 @@ name = "kerf-model"
 version = "0.1.0"
 dependencies = [
  "kerf-color",
+]
+
+[[package]]
+name = "kerf-motion"
+version = "0.1.0"
+dependencies = [
+ "kerf-draw",
+ "rayon",
 ]
 
 [[package]]
