@@ -222,12 +222,19 @@ fn a_check_reports_its_rows_and_keeps_failing_findings_as_qc_comments() {
     assert_eq!(row("caption.reading_speed")["passed"], false);
     assert!(row("text.safe_area").get("commentId").is_none());
 
+    // The check writes its comments one at a time, and the state poll can send
+    // the list between two writes, so an earlier list may hold only some of
+    // them. `done` names them all.
+    let written: Vec<&Value> = done["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|finding| finding.get("commentId"))
+        .collect();
     let items = editor.comments("the qc comments", |items| {
-        items
+        written
             .iter()
-            .filter(|item| item["author"]["kind"] == "qc")
-            .count()
-            >= 2
+            .all(|id| items.iter().any(|item| item["id"] == **id))
     });
     let media = items
         .iter()
