@@ -355,7 +355,7 @@ pub fn composite_placed(
 
 /// Mix the premultiplied color `sp` (its opacity applied) into pixel `d` at (`x`, `y`).
 #[inline]
-fn mix(d: &mut [f32], mut sp: [f32; 4], x: usize, y: usize, mode: Blend) {
+pub fn mix(d: &mut [f32], mut sp: [f32; 4], x: usize, y: usize, mode: Blend) {
     let sa = sp[3];
     if sa <= 0.0 {
         return;

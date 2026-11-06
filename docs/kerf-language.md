@@ -181,9 +181,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   showing (`x y z pan tilt roll fov`, animatable, and `parent=` works), and at its defaults a clip at
   z=0 looks as it does in 2D. `gen=light@1` (`kind=point|ambient|directional color intensity`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
-  light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near.
-  Clips that cross are not cut where they meet, and there are no shadows or depth of field yet.
-  Frames with a clip in depth draw on the CPU.
+  light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near,
+  and two clips that cross are each cut where they meet, with nothing to say: a clip in a transition or a dip keeps its place whole.
+  There are no shadows or depth of field yet. Frames with a clip in depth draw on the CPU.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

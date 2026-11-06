@@ -1,7 +1,7 @@
 //! How long the compositor takes to draw a frame of what it draws from numbers alone.
 //!
 //! ```text
-//! cargo run --release -p kerf-compose --example motion_bench
+//! cargo run --release -p kerf-compose --example motion_bench [word]
 //! ```
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};
@@ -62,11 +62,21 @@ const SCENES: &[(&str, &str)] = &[
         r#"gen=title@1 at=0f dur=96f
       set text="A line of words that comes in" size=0.08 reveal={0f:0 48f:1} from_y=0.05 from_rotation=20"#,
     ),
+    (
+        "3d apart",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ff0000 three_d=true scale=0.6 z=0.2 rotate_y=20\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.4 z=-0.3 rotate_y=-20",
+    ),
+    (
+        "3d crossing",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ff0000 three_d=true scale=0.6 z=0.1 rotate_y=45\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.6 rotate_y=-30",
+    ),
 ];
 
 fn main() {
+    // A word on the command line picks the scenes with it in their names.
+    let wanted = std::env::args().nth(1).unwrap_or_default();
     println!("{:<18}{:>12}{:>12}", "scene", "1080p ms", "4K ms");
-    for (name, clip) in SCENES {
+    for (name, clip) in SCENES.iter().filter(|(name, _)| name.contains(&wanted)) {
         let mut line = format!("{name:<18}");
         for (w, h) in [(1920, 1080), (3840, 2160)] {
             let text = format!(

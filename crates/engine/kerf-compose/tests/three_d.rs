@@ -238,3 +238,172 @@ fn a_frame_in_depth_goes_to_the_cpu_and_its_key_knows_the_camera() {
         compositor("x=0.1").frame_key(at, 1.0)
     );
 }
+
+/// Two clips in depth over nothing: a red one, then a blue one.
+fn crossing(red: &str, blue: &str) -> String {
+    format!(
+        "  track V1 video\n    clip r gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true {red}\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true {blue}\n"
+    )
+}
+
+/// Where along a line of pixels the colour goes from mostly one to mostly the other.
+fn flips(colors: impl Iterator<Item = [u8; 3]>) -> Vec<u32> {
+    let mut last = None;
+    let mut found = Vec::new();
+    for (place, [r, _, b]) in colors.enumerate() {
+        if r < 128 && b < 128 {
+            continue;
+        }
+        let red = r > b;
+        if last.is_some_and(|last| last != red) {
+            found.push(place as u32);
+        }
+        last = Some(red);
+    }
+    found
+}
+
+fn across_row(frame: &Frame, y: u32) -> Vec<u32> {
+    flips((0..frame.width).map(|x| pixel(frame, x, y)))
+}
+
+fn down_column(frame: &Frame, x: u32) -> Vec<u32> {
+    flips((0..frame.height).map(|y| pixel(frame, x, y)))
+}
+
+#[test]
+fn clips_turned_about_y_are_cut_where_they_meet() {
+    // Red is 18 pixels back and turned 45 degrees, right side nearer; blue is flat at z = 0. Red's
+    // plane comes to z = 0 at 18 / tan 45 = 18 pixels right of its middle, and z = 0 lands on the
+    // frame as it does in 2D: at x = 160 + 18. To its left blue is in front, and to its right red.
+    let frame = frame(&crossing("scale=0.5 z=0.1 rotate_y=45", "scale=0.5"), 0);
+    assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
+    assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
+    let found = across_row(&frame, 90);
+    assert!(found.iter().any(|x| x.abs_diff(178) <= 1), "{found:?}");
+    // At each height, since the line of it is upright.
+    for y in [60, 75, 105, 120] {
+        let found = across_row(&frame, y);
+        assert!(found.iter().any(|x| x.abs_diff(178) <= 1), "{y}: {found:?}");
+    }
+}
+
+#[test]
+fn the_clips_trade_sides_whichever_track_is_on_top() {
+    // Either way round the same line, and the same colour each side of it.
+    let frame = frame(
+        "  track V1 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.5\n  track V2 video\n    clip r gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.5 z=0.1 rotate_y=45\n",
+        0,
+    );
+    assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
+    assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
+}
+
+#[test]
+fn clips_turned_about_x_are_cut_along_a_row() {
+    // Red is 18 pixels near and turned 45 degrees, its foot going back: it comes to z = 0 at
+    // 18 / tan 45 = 18 pixels below its middle, so at y = 90 + 18, with red above that and blue below.
+    let frame = frame(&crossing("scale=0.5 z=-0.1 rotate_x=45", "scale=0.5"), 0);
+    assert_eq!(pixel(&frame, 160, 100), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 160, 116), [0, 0, 255]);
+    let found = down_column(&frame, 160);
+    assert!(found.iter().any(|y| y.abs_diff(108) <= 1), "{found:?}");
+}
+
+#[test]
+fn the_line_falls_where_two_turned_planes_meet() {
+    // Neither flat: where the rays first find the two planes at one depth, by the plane equations.
+    let eye = [0.0, 0.0, -90.0 / 20f64.to_radians().tan()];
+    let focal = -eye[2];
+    let plane = |(cx, z): (f64, f64), yaw: f64| {
+        let (s, c) = yaw.to_radians().sin_cos();
+        // A point of it, and the way it faces: turned about y by `yaw`.
+        ([cx, 0.0, z], [s, 0.0, c])
+    };
+    let red = plane((0.0, 9.0), 35.0);
+    let blue = plane((16.0, -9.0), -40.0);
+    let depth = |(point, normal): ([f64; 3], [f64; 3]), x: f64, y: f64| {
+        let ray = [x, y, focal];
+        let toward: f64 = (0..3).map(|i| ray[i] * normal[i]).sum();
+        let along: f64 = (0..3).map(|i| (point[i] - eye[i]) * normal[i]).sum::<f64>() / toward;
+        along * focal
+    };
+    // Bisect along a row for where the two depths are equal.
+    let (mut left, mut right) = (-40.0, 60.0);
+    let gap = |x: f64| depth(red, x, 0.5) - depth(blue, x, 0.5);
+    assert!(gap(left) * gap(right) < 0.0, "{} {}", gap(left), gap(right));
+    for _ in 0..50 {
+        let middle: f64 = (left + right) / 2.0;
+        if gap(left) * gap(middle) <= 0.0 {
+            right = middle;
+        } else {
+            left = middle;
+        }
+    }
+    let wanted = 160.0 + left;
+    let drawn = frame(
+        &crossing(
+            "scale=0.6 z=0.05 rotate_y=35",
+            "scale=0.6 z=-0.05 x=0.05 rotate_y=-40",
+        ),
+        0,
+    );
+    let found = across_row(&drawn, 90);
+    assert!(
+        found.iter().any(|x| (f64::from(*x) - wanted).abs() <= 1.5),
+        "{found:?} against {wanted}"
+    );
+}
+
+#[test]
+fn clips_that_do_not_cross_stack_as_they_did() {
+    // Parallel, on one plane, or only their planes meeting off their ends: the nearer whole, in
+    // front of the other whole, or the later track where they are as near.
+    let parallel = frame(&crossing("scale=0.6 z=0.2", "scale=0.3 z=-0.2"), 0);
+    assert_eq!(pixel(&parallel, 160, 90), [0, 0, 255]);
+    let reversed = frame(&crossing("scale=0.3 z=-0.2", "scale=0.6 z=0.2"), 0);
+    assert_eq!(pixel(&reversed, 160, 90), [255, 0, 0]);
+    let same = frame(&crossing("scale=0.6", "scale=0.3"), 0);
+    assert_eq!(pixel(&same, 160, 90), [0, 0, 255]);
+}
+
+#[test]
+fn a_cut_shares_the_pixels_it_goes_through() {
+    // Along the line each pixel it goes through is part of both, which keeps it from being jagged.
+    // Here the line falls 18.45 pixels along, most of the way across the pixel from 178 to 179.
+    let frame = frame(&crossing("scale=0.5 z=0.1025 rotate_y=45", "scale=0.5"), 0);
+    let mixed: Vec<[u8; 3]> = (170..186)
+        .map(|x| pixel(&frame, x, 90))
+        .filter(|[r, _, b]| *r > 20 && *b > 20)
+        .collect();
+    assert_eq!(mixed.len(), 1, "{mixed:?}");
+    // A band a single pixel wide, not a blur, and not one colour only.
+    assert!(mixed[0][0] > 60 && mixed[0][2] > 60, "{mixed:?}");
+}
+
+#[test]
+fn opacity_and_what_shows_through_go_by_the_cut() {
+    // Half opaque, red in front lets blue through on the right, and blue in front on the left has
+    // red's half behind it.
+    let frame = frame(
+        &crossing("scale=0.5 z=0.1 rotate_y=45 opacity=0.5", "scale=0.5"),
+        0,
+    );
+    let right = pixel(&frame, 195, 90);
+    assert!(right[0] > 100 && right[2] > 100, "{right:?}");
+    assert_eq!(pixel(&frame, 150, 90), [0, 0, 255]);
+}
+
+#[test]
+fn three_clips_cross_in_the_order_of_each_pixel() {
+    let frame = frame(
+        &format!(
+            "{}  track V3 video\n    clip g gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.5 z=0.3\n",
+            crossing("scale=0.5 z=0.1 rotate_y=45", "scale=0.5"),
+        ),
+        0,
+    );
+    // Green is behind both of them wherever they are, whatever its track.
+    assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
+    assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
+}
