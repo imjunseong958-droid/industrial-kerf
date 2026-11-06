@@ -922,10 +922,34 @@ fn builtin_catalog() -> Catalog {
             "title",
             FxKind::Generator,
             Domain::Video,
-            "A line of text. Position it with x and y.",
+            "A line of text. Position it with x and y. `reveal` animates it character by character or word by word, from the look the `from_` numbers give.",
         )
         .category("Generate")
         .param(P::text("text", "").doc("The text to show."))
+        .param(
+            P::number("reveal", 1.0)
+                .range(0.0, 1.0)
+                .doc("How far through the text it has come in; animate 0 to 1."),
+        )
+        .param(P::choice("reveal_by", &["char", "word"]))
+        .param(
+            P::number("reveal_soft", 3.0)
+                .range(0.01, 1000.0)
+                .doc("How many characters or words are coming in at once."),
+        )
+        .param(
+            P::number("from_x", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("from_y", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(P::number("from_scale", 1.0).range(0.0, 100.0))
+        .param(P::number("from_rotation", 0.0).range(-36000.0, 36000.0).unit("degrees"))
+        .param(P::number("from_opacity", 0.0).range(0.0, 1.0))
         .param(P::text("font", "sans-serif"))
         .param(
             P::number("size", 0.08)
@@ -941,6 +965,124 @@ fn builtin_catalog() -> Catalog {
             "Applies its effects to every layer beneath it.",
         )
         .category("Utility"),
+        FxDef::new(
+            "shape",
+            FxKind::Generator,
+            Domain::Video,
+            "A shape, filled and stroked. Its stroke can be trimmed along its length, for a line that draws itself on.",
+        )
+        .category("Generate")
+        .param(P::choice("kind", &["rect", "ellipse", "polygon", "star", "path"]))
+        .param(
+            P::number("width", 0.3)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("height", 0.3)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("round", 0.0)
+                .range(0.0, 10.0)
+                .unit("frame heights")
+                .doc("A rect's corners."),
+        )
+        .param(
+            P::number("sides", 5.0)
+                .range(2.0, 200.0)
+                .doc("A polygon's sides, or a star's points."),
+        )
+        .param(
+            P::number("inner", 0.5)
+                .range(0.0, 1.0)
+                .doc("How far out a star's inner corners are."),
+        )
+        .param(P::text("points", "").doc(
+            "A path's points, \"x,y x,y …\", in frame heights from the clip's center.",
+        ))
+        .param(P::toggle("closed", true).doc("Whether a path joins up and fills."))
+        .param(P::toggle("smooth", false).doc("A path through its points in a curve."))
+        .param(P::color("fill", Rgba::WHITE))
+        .param(P::color("stroke", Rgba::WHITE))
+        .param(
+            P::number("stroke_width", 0.0)
+                .range(0.0, 10.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("trim_start", 0.0)
+                .range(0.0, 1.0)
+                .doc("Where along its length the stroke starts."),
+        )
+        .param(
+            P::number("trim_end", 1.0)
+                .range(0.0, 1.0)
+                .doc("Where along its length the stroke ends; animate it to draw on."),
+        )
+        .param(
+            P::number("trim_offset", 0.0)
+                .range(-100.0, 100.0)
+                .doc("The trimmed part moved along the length."),
+        ),
+        FxDef::new(
+            "particles",
+            FxKind::Generator,
+            Domain::Video,
+            "Particles from a point or an area. Each follows a formula from its birth, so any frame can be drawn first and looks the same every time.",
+        )
+        .category("Generate")
+        .param(P::number("rate", 50.0).range(0.0, 100_000.0).unit("a second"))
+        .param(P::number("life", 1.5).range(0.01, 600.0).unit("seconds"))
+        .param(
+            P::number("velocity", 0.4)
+                .range(0.0, 1000.0)
+                .unit("frame heights a second"),
+        )
+        .param(P::number("vary", 0.3).range(0.0, 1.0).doc("How much velocity differs."))
+        .param(
+            P::number("direction", -90.0)
+                .range(-36000.0, 36000.0)
+                .unit("degrees")
+                .doc("The way they leave, clockwise from right; -90 is up."),
+        )
+        .param(P::number("spread", 60.0).range(0.0, 360.0).unit("degrees"))
+        .param(
+            P::number("gravity", 0.0)
+                .range(-1000.0, 1000.0)
+                .unit("frame heights a second a second")
+                .doc("Pulling down; negative floats up."),
+        )
+        .param(
+            P::number("size", 0.01)
+                .range(0.0, 10.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("size_end", 0.01)
+                .range(0.0, 10.0)
+                .unit("frame heights"),
+        )
+        .param(P::color("color", Rgba::WHITE))
+        .param(P::color("color_end", Rgba { a: 0, ..Rgba::WHITE }))
+        .param(
+            P::number("soft", 0.5)
+                .range(0.0, 1.0)
+                .doc("How much of each fades to its edge."),
+        )
+        .param(
+            P::number("area_width", 0.0)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("How wide an area they are born in."),
+        )
+        .param(
+            P::number("area_height", 0.0)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(P::number("seed", 1.0).range(0.0, 1_000_000.0)),
         FxDef::new(
             "camera",
             FxKind::Generator,

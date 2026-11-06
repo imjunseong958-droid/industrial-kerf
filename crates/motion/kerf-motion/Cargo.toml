@@ -1,0 +1,13 @@
+[package]
+name = "kerf-motion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Motion graphics drawn from numbers: shapes and particles"
+
+[dependencies]
+kerf-draw = { path = "../../render/kerf-draw" }
+rayon = { workspace = true }
+
+[lints]
+workspace = true

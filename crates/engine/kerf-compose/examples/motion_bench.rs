@@ -1,0 +1,67 @@
+//! How long the compositor takes to draw a frame of what it draws from numbers alone.
+//!
+//! ```text
+//! cargo run --release -p kerf-compose --example motion_bench
+//! ```
+
+use kerf_compose::{Accel, ComposeOptions, Compositor};
+use kerf_lang::parse_document;
+use kerf_model::{Catalog, Rate};
+use std::time::Instant;
+
+const SCENES: &[(&str, &str)] = &[
+    ("rect", "gen=shape@1 at=0f dur=96f\n      set width=1 height=0.5"),
+    (
+        "ellipse stroke",
+        "gen=shape@1 at=0f dur=96f\n      set kind=ellipse width=0.9 height=0.9 fill=#ffffff00 stroke_width=0.02 trim_end={0f:0 48f:1}",
+    ),
+    (
+        "star",
+        "gen=shape@1 at=0f dur=96f\n      set kind=star sides=7 width=0.9 height=0.9 stroke_width=0.01 stroke=#ff0000",
+    ),
+    (
+        "5000 particles",
+        "gen=particles@1 at=0f dur=96f\n      set rate=2500 life=2 velocity=0.5 spread=360 size=0.006",
+    ),
+    (
+        "40000 particles",
+        "gen=particles@1 at=0f dur=96f\n      set rate=20000 life=2 velocity=0.5 spread=360 size=0.004",
+    ),
+    (
+        "title reveal",
+        r#"gen=title@1 at=0f dur=96f
+      set text="A line of words that comes in" size=0.08 reveal={0f:0 48f:1} from_y=0.05 from_rotation=20"#,
+    ),
+];
+
+fn main() {
+    println!("{:<18}{:>12}{:>12}", "scene", "1080p ms", "4K ms");
+    for (name, clip) in SCENES {
+        let mut line = format!("{name:<18}");
+        for (w, h) in [(1920, 1080), (3840, 2160)] {
+            let text = format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size={w}x{h} audio=48000\n  track V1 video\n    clip c1 {clip}\n"
+            );
+            let project = parse_document(&text, Catalog::builtin())
+                .unwrap_or_else(|errors| panic!("{errors:?}"))
+                .project;
+            let options = ComposeOptions {
+                accel: Accel::Never,
+                frame_folder: None,
+                ..ComposeOptions::default()
+            };
+            let compositor =
+                Compositor::new(&project, Catalog::builtin(), &options).expect("composes");
+            let mut times: Vec<f64> = (0..9)
+                .map(|step| {
+                    let begun = Instant::now();
+                    compositor.frame(Rate::FPS_24.time_of(40 + step), 1.0);
+                    begun.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            line += &format!("{:>12.1}", times[4]);
+        }
+        println!("{line}");
+    }
+}

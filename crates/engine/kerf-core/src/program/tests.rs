@@ -468,3 +468,26 @@ fn the_graph_refuses_a_picture_angle_by_name() {
         .expect_err("the graph draws no angle");
     assert!(refused.to_string().contains("angle"), "{refused}");
 }
+
+#[test]
+fn the_graph_refuses_what_only_the_compositor_draws_by_name() {
+    let catalog = Catalog::builtin();
+    for (clip, name) in [
+        ("gen=shape@1 at=0f dur=24f", "shape"),
+        ("gen=particles@1 at=0f dur=24f", "particles"),
+        (
+            "gen=title@1 at=0f dur=24f\n      set text=\"a\" reveal={0f:0 12f:1}",
+            "reveal",
+        ),
+    ] {
+        let project = kerf_lang::parse_document(
+            &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 {clip}\n"),
+            catalog,
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let refused = compile_program(&project, catalog, &ProgramOptions::default())
+            .expect_err("the graph draws none of these");
+        assert!(refused.to_string().contains(name), "{refused}");
+    }
+}

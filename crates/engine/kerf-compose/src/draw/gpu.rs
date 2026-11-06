@@ -208,7 +208,7 @@ impl Drawing {
                 let size = output_size(inner.width, inner.height, scale);
                 (size, size.0 as f64 / f64::from(inner.width))
             }
-            Source::Solid(_) | Source::Title(_) => (canvas, scale),
+            Source::Solid(_) | Source::Title(_) | Source::Motion(_) => (canvas, scale),
             // It works on the canvas beneath it, unplaced.
             Source::Adjustment | Source::Nothing => {
                 return Shape {
@@ -580,7 +580,8 @@ impl Drawing {
                 self.gpu_draw(frame, *nested, shown, scale, angle.as_ref())?
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
-            Source::Title(title) => frame.image(&title_on(title, (cw, ch))),
+            Source::Title(title) => frame.image(&title_on(title, (cw, ch), time)),
+            Source::Motion(motion) => frame.image(&motion_on(*motion, &plan.clip, (cw, ch), time)),
             Source::Adjustment | Source::Nothing => return None,
         }))
     }
