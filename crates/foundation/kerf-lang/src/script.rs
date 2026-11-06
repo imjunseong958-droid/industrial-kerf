@@ -100,7 +100,7 @@ pub fn apply_script_with(
     })
 }
 
-const COMMANDS: &str = "use, media, sequence, track, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, captions, link, unlink";
+const COMMANDS: &str = "use, media, sequence, track, bus, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, captions, link, unlink";
 
 struct Script<'c> {
     project: Project,
@@ -278,6 +278,7 @@ impl Script<'_> {
             "media" => self.media(fields),
             "sequence" => self.sequence_command(fields),
             "track" => self.track(fields),
+            "bus" => self.bus(fields),
             "insert" => self.place(fields, true),
             "overwrite" => self.place(fields, false),
             "delete" | "ripple-delete" | "unlink" => {
@@ -526,6 +527,146 @@ impl Script<'_> {
         Ok(vec![op])
     }
 
+    /// `bus add|set|remove <id> …` and `bus fx <id> add|set|remove …`.
+    fn bus(&mut self, mut fields: Fields<'_>) -> Parsed {
+        let line = fields.line();
+        let s = self.current(line)?;
+        let sequence = self.project.sequences[s].id.clone();
+        let rate = self.project.sequences[s].rate;
+        let action = fields.word(1, "add, set, remove, or fx")?;
+        let id = fields.id(2, "a bus id")?;
+        let defs = self.catalog.props(Domain::Audio);
+        let take_to = |fields: &mut Fields<'_>| -> Parsed<Option<Option<Id>>> {
+            fields
+                .take_text("to")?
+                .map(|to| (!to.is_empty()).then(|| Id::new(to)).transpose())
+                .transpose()
+                .map_err(|_| line.error(1, "`to=` names a bus"))
+        };
+        match action {
+            "add" => {
+                let mut bus = kerf_model::Bus::new(id.clone());
+                bus.name = fields.take_text("name")?.map(str::to_owned);
+                bus.to = take_to(&mut fields)?.flatten();
+                bus.params = params(&mut fields, defs, &id, rate)?;
+                fields.finish(3)?;
+                Ok(vec![Op::AddBus { sequence, bus }])
+            }
+            "set" => {
+                let name = fields
+                    .take_text("name")?
+                    .map(|n| (!n.is_empty()).then(|| n.to_owned()));
+                let to = take_to(&mut fields)?;
+                let mut changes = Vec::new();
+                if let Some(reset) = fields.take("reset") {
+                    for property in fields.text(reset)?.split(',') {
+                        changes.push((property.to_owned(), None));
+                    }
+                }
+                changes.extend(
+                    params(&mut fields, defs, &id, rate)?
+                        .into_iter()
+                        .map(|(k, v)| (k, Some(v))),
+                );
+                fields.finish(3)?;
+                Ok(vec![Op::SetBus {
+                    sequence,
+                    bus: id,
+                    change: kerf_model::BusChange {
+                        name,
+                        to,
+                        params: changes,
+                    },
+                }])
+            }
+            "remove" => {
+                fields.finish(3)?;
+                Ok(vec![Op::RemoveBus { sequence, bus: id }])
+            }
+            "fx" => self.bus_fx(fields, sequence, id, rate),
+            other => Err(line.error(1, format!("bus {other}? use add, set, remove, or fx"))),
+        }
+    }
+
+    fn bus_fx(&mut self, mut fields: Fields<'_>, sequence: Id, bus: Id, rate: Rate) -> Parsed {
+        let line = fields.line();
+        let action = fields.word(3, "add, set, or remove")?;
+        let target = fields.word(4, "an effect")?;
+        let column = fields.positional()[4].column;
+        let change = match action {
+            "add" => {
+                let (fx, version) = parse_fx_ref(target).map_err(|m| line.error(column, m))?;
+                let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+                    line.error(column, kerf_model::catalog::unknown("effect", fx.as_str()))
+                })?;
+                let version = pinned(def, version).map_err(|m| line.error(column, m))?;
+                let index = fields.take_with("at", position_index)?;
+                let enabled = fields.take_bool("enabled")?.unwrap_or(true);
+                let params = params(&mut fields, &def.params, &fx, rate)?;
+                kerf_model::BusFx::Add {
+                    effect: Effect {
+                        fx,
+                        version,
+                        enabled,
+                        params,
+                    },
+                    index,
+                }
+            }
+            "set" | "remove" => {
+                let found = self
+                    .project
+                    .sequence(sequence.as_str())
+                    .and_then(|s| s.bus(bus.as_str()))
+                    .ok_or_else(|| line.error(1, format!("no bus `{bus}`")))?;
+                let index = position_index(target)
+                    .ok()
+                    .or_else(|| {
+                        found
+                            .effects
+                            .iter()
+                            .position(|effect| effect.fx.as_str() == target)
+                    })
+                    .filter(|index| *index < found.effects.len())
+                    .ok_or_else(|| {
+                        line.error(column, format!("`{bus}` has no effect `{target}`"))
+                    })?;
+                if action == "remove" {
+                    kerf_model::BusFx::Remove { index }
+                } else {
+                    let fx = found.effects[index].fx.clone();
+                    let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+                        line.error(column, kerf_model::catalog::unknown("effect", fx.as_str()))
+                    })?;
+                    let enabled = fields.take_bool("enabled")?;
+                    let mut changes = Vec::new();
+                    if let Some(reset) = fields.take("reset") {
+                        for property in fields.text(reset)?.split(',') {
+                            changes.push((property.to_owned(), None));
+                        }
+                    }
+                    changes.extend(
+                        params(&mut fields, &def.params, &fx, rate)?
+                            .into_iter()
+                            .map(|(k, v)| (k, Some(v))),
+                    );
+                    kerf_model::BusFx::Set {
+                        index,
+                        enabled,
+                        params: changes,
+                    }
+                }
+            }
+            other => return Err(line.error(1, format!("bus fx {other}? use add, set, or remove"))),
+        };
+        fields.finish(5)?;
+        Ok(vec![Op::BusFx {
+            sequence,
+            bus,
+            change,
+        }])
+    }
+
     fn track(&mut self, mut fields: Fields<'_>) -> Parsed {
         let line = fields.line();
         let s = self.current(line)?;
@@ -582,6 +723,11 @@ impl Script<'_> {
                 enabled: fields.take_bool("enabled")?,
                 locked: fields.take_bool("locked")?,
                 muted: fields.take_bool("muted")?,
+                bus: fields
+                    .take_text("bus")?
+                    .map(|bus| (!bus.is_empty()).then(|| Id::new(bus)).transpose())
+                    .transpose()
+                    .map_err(|_| line.error(1, "`bus=` names a bus"))?,
             };
             if change != TrackChange::default() {
                 ops.push(Op::SetTrack {
@@ -1630,6 +1776,10 @@ fn context_of(op: &Op) -> Option<&Id> {
         | Op::Lift { sequence, .. }
         | Op::Extract { sequence, .. }
         | Op::Blade { sequence, .. }
+        | Op::AddBus { sequence, .. }
+        | Op::SetBus { sequence, .. }
+        | Op::RemoveBus { sequence, .. }
+        | Op::BusFx { sequence, .. }
         | Op::AddMarker { sequence, .. } => Some(sequence),
         _ => None,
     }
@@ -1741,8 +1891,114 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             }
             text
         }
+        Op::AddBus { sequence, bus } => {
+            let rate = sequence_clock(sequence).unwrap_or(fallback).rate;
+            let mut text = format!("bus add {}", bus.id);
+            if let Some(name) = &bus.name {
+                write!(text, " name={}", quote(name)).unwrap();
+            }
+            if let Some(to) = &bus.to {
+                write!(text, " to={to}").unwrap();
+            }
+            text.push_str(&params_text(
+                &bus.params,
+                catalog.props(Domain::Audio),
+                rate,
+            ));
+            text
+        }
+        Op::SetBus {
+            sequence,
+            bus,
+            change,
+        } => {
+            let rate = sequence_clock(sequence).unwrap_or(fallback).rate;
+            let mut text = format!("bus set {bus}");
+            if let Some(name) = &change.name {
+                write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap();
+            }
+            match &change.to {
+                Some(Some(to)) => write!(text, " to={to}").unwrap(),
+                Some(None) => text.push_str(" to=\"\""),
+                None => {}
+            }
+            let resets: Vec<&str> = change
+                .params
+                .iter()
+                .filter(|(_, value)| value.is_none())
+                .map(|(name, _)| name.as_str())
+                .collect();
+            if !resets.is_empty() {
+                write!(text, " reset={}", resets.join(",")).unwrap();
+            }
+            for (name, value) in &change.params {
+                if let Some(value) = value {
+                    write!(text, " {name}={}", crate::text::print_param(value, rate)).unwrap();
+                }
+            }
+            text
+        }
+        Op::RemoveBus { bus, .. } => format!("bus remove {bus}"),
+        Op::BusFx {
+            sequence,
+            bus,
+            change,
+        } => {
+            let rate = sequence_clock(sequence).unwrap_or(fallback).rate;
+            match change {
+                kerf_model::BusFx::Add { effect, index } => {
+                    let mut text = format!(
+                        "bus fx {bus} add {}",
+                        print_fx_ref(&effect.fx, effect.version)
+                    );
+                    if let Some(index) = index {
+                        write!(text, " at={}", index + 1).unwrap();
+                    }
+                    if !effect.enabled {
+                        text.push_str(" enabled=false");
+                    }
+                    if let Some(def) = catalog.fx(effect.fx.as_str()) {
+                        text.push_str(&params_text(&effect.params, def.params.as_slice(), rate));
+                    }
+                    text
+                }
+                kerf_model::BusFx::Set {
+                    index,
+                    enabled,
+                    params,
+                } => {
+                    let mut text = format!("bus fx {bus} set {}", index + 1);
+                    if let Some(enabled) = enabled {
+                        write!(text, " enabled={enabled}").unwrap();
+                    }
+                    let resets: Vec<&str> = params
+                        .iter()
+                        .filter(|(_, value)| value.is_none())
+                        .map(|(name, _)| name.as_str())
+                        .collect();
+                    if !resets.is_empty() {
+                        write!(text, " reset={}", resets.join(",")).unwrap();
+                    }
+                    for (name, value) in params {
+                        if let Some(value) = value {
+                            write!(text, " {name}={}", crate::text::print_param(value, rate))
+                                .unwrap();
+                        }
+                    }
+                    text
+                }
+                kerf_model::BusFx::Remove { index } => {
+                    format!("bus fx {bus} remove {}", index + 1)
+                }
+            }
+        }
         Op::SetTrack { track, change, .. } => {
             let mut text = format!("track set {track}");
+            match &change.bus {
+                Some(Some(bus)) => write!(text, " bus={bus}").unwrap(),
+                Some(None) => text.push_str(" bus=\"\""),
+                None => {}
+            }
             if let Some(name) = &change.name {
                 write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap();
             }

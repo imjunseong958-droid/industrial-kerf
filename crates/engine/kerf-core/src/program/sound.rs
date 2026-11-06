@@ -6,6 +6,7 @@ use super::{
 };
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Catalog, Clip, Content, Id, Project, Sequence, Time};
+use std::sync::Arc;
 
 /// How long a nested sound plays on past its end through effects on the
 /// clips holding it, for their ringing to fade out as it does in a render.
@@ -26,8 +27,25 @@ pub struct ProgramSound {
     pub path: String,
     pub start: Time,
     pub end: Time,
+    /// The bus of the program it feeds, by its place in `buses`.
+    pub bus: Option<usize>,
+    /// That bus by id, until the list is made.
+    program_bus: Option<Id>,
+    /// The program's buses, each before the one it feeds, shared by its sounds.
+    pub buses: Arc<Vec<LiveBus>>,
     /// The media clip, then each sequence clip it is nested in, outward.
     layers: Vec<Layer>,
+}
+
+/// A bus of the program as a mixer plays it: a stream of its own, since what it does may hear the
+/// sum of what feeds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveBus {
+    /// From the sum, stereo at [`SAMPLE_RATE`](super::SAMPLE_RATE), timed from the program's start.
+    /// Empty for one that changes nothing.
+    pub filters: String,
+    /// The bus it feeds, by place; `None` for the mix.
+    pub to: Option<usize>,
 }
 
 /// A clip as its track plays it.
@@ -41,6 +59,9 @@ struct Layer {
     fade_out: Option<Crossfade>,
     /// The length of its media or nested sequence.
     length: Option<Time>,
+    /// The buses it goes through inside a nested sequence, in order. They run per sound, which is
+    /// exact for what is linear and near for what is not. The program's own are the mixer's.
+    route: Vec<kerf_model::Bus>,
 }
 
 impl Layer {
@@ -94,13 +115,19 @@ impl ProgramSound {
             let Some(portion) = layer.shown().portion(layer.length, window.0, window.1) else {
                 return Ok(None);
             };
-            let filters = sound_filters(
+            let mut filters = sound_filters(
                 catalog,
                 &layer.clip,
                 layer.fade_in,
                 layer.fade_out,
                 &portion,
             )?;
+            for bus in &layer.route {
+                let more = super::bus_filters(catalog, bus, portion.lo)?;
+                if !more.is_empty() {
+                    filters = format!("{filters},{more}");
+                }
+            }
             window = Graph::source_window(&layer.clip, portion.decode, portion.hi)
                 .expect("sound clips have a source");
             steps.push((filters, portion.lo, window));
@@ -122,6 +149,19 @@ impl ProgramSound {
     }
 }
 
+/// The buses a track of a nested sequence goes through, from the one it feeds outward.
+fn route_of(sequence: &Sequence, first: Option<&Id>) -> Vec<kerf_model::Bus> {
+    let mut route = Vec::new();
+    let mut at = first.and_then(|id| sequence.bus(id.as_str()));
+    while let Some(bus) =
+        at.filter(|bus| !route.iter().any(|seen: &kerf_model::Bus| seen.id == bus.id))
+    {
+        route.push(bus.clone());
+        at = bus.to.as_ref().and_then(|id| sequence.bus(id.as_str()));
+    }
+    route
+}
+
 /// The sound of `sequence` (the first when `None`) clip by clip: every
 /// media clip a render of it mixes, in order of start.
 ///
@@ -135,15 +175,31 @@ pub fn program_sound(
     let sequence = program_sequence(project, sequence)?;
     let mut graph = Graph::new(project, catalog, sequence.rate);
     let whole = (Time::ZERO, sequence.duration());
+    let order = sequence.buses_in_order();
+    let place_of = |id: &Id| order.iter().position(|bus| bus.id == *id);
+    let buses = order
+        .iter()
+        .map(|bus| {
+            Ok(LiveBus {
+                filters: super::bus_filters(catalog, bus, Time::ZERO)?,
+                to: bus.to.as_ref().and_then(place_of),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut sounds = Vec::new();
     graph.sounds(
         sequence,
         whole,
-        Time::ZERO,
-        whole,
+        (Time::ZERO, whole),
         &mut Vec::new(),
         &mut sounds,
+        &mut None,
     )?;
+    let buses = Arc::new(buses);
+    for sound in &mut sounds {
+        sound.buses = buses.clone();
+        sound.bus = sound.program_bus.take().as_ref().and_then(place_of);
+    }
     sounds.sort_by_key(|sound| sound.start);
     Ok(sounds)
 }
@@ -156,11 +212,12 @@ impl<'a> Graph<'a> {
         &mut self,
         sequence: &'a Sequence,
         (from, to): (Time, Time),
-        offset: Time,
-        heard: (Time, Time),
+        (offset, heard): (Time, (Time, Time)),
         holders: &mut Vec<Layer>,
         sounds: &mut Vec<ProgramSound>,
+        feeds: &mut Option<Id>,
     ) -> Result<()> {
+        let top = holders.is_empty();
         let angle = holders.last().and_then(|holder| holder.clip.angle.clone());
         for track in &sequence.tracks {
             if !super::heard(track, angle.as_ref()) {
@@ -186,6 +243,16 @@ impl<'a> Graph<'a> {
                     fade_in: Crossfade::of(item.fade_in),
                     fade_out: Crossfade::of(item.fade_out),
                     length: self.source_length(clip),
+                    route: if top {
+                        Vec::new()
+                    } else {
+                        route_of(sequence, track.bus.as_ref())
+                    },
+                };
+                let feeding = if top {
+                    track.bus.clone()
+                } else {
+                    feeds.clone()
                 };
                 match &clip.content {
                     Content::Media { media, .. } => {
@@ -200,6 +267,9 @@ impl<'a> Graph<'a> {
                             path: media.path.clone(),
                             start: heard.0,
                             end: heard.1,
+                            bus: None,
+                            buses: Arc::default(),
+                            program_bus: feeding,
                             layers: std::iter::once(layer)
                                 .chain(holders.iter().rev().cloned())
                                 .collect(),
@@ -215,7 +285,15 @@ impl<'a> Graph<'a> {
                         let inner = offset + portion.decode - start;
                         self.nesting.push(nested.id.clone());
                         holders.push(layer);
-                        self.sounds(nested, (start, end), inner, heard, holders, sounds)?;
+                        let mut feeding = feeding;
+                        self.sounds(
+                            nested,
+                            (start, end),
+                            (inner, heard),
+                            holders,
+                            sounds,
+                            &mut feeding,
+                        )?;
                         holders.pop();
                         self.nesting.pop();
                     }

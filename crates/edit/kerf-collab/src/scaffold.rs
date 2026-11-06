@@ -150,6 +150,7 @@ pub fn initial_project(name: &str, template: Template, rate: Rate) -> Project {
         sample_rate: 48_000,
         color: Default::default(),
         start: Time::ZERO,
+        buses: Vec::new(),
         tracks: Vec::new(),
         markers: Vec::new(),
     });

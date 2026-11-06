@@ -79,6 +79,35 @@ pub struct TrackChange {
     pub enabled: Option<bool>,
     pub locked: Option<bool>,
     pub muted: Option<bool>,
+    /// `Some(None)` sends it to the sequence's mix.
+    pub bus: Option<Option<Id>>,
+}
+
+/// What [`Op::SetBus`] changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BusChange {
+    pub name: Option<Option<String>>,
+    /// `Some(None)` sends it to the sequence's mix.
+    pub to: Option<Option<Id>>,
+    /// `None` resets a property.
+    pub params: Vec<(String, Option<Param>)>,
+}
+
+/// A change to a bus's effects, with [`Op::BusFx`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum BusFx {
+    Add {
+        effect: Effect,
+        index: Option<usize>,
+    },
+    Set {
+        index: usize,
+        enabled: Option<bool>,
+        params: Vec<(String, Option<Param>)>,
+    },
+    Remove {
+        index: usize,
+    },
 }
 
 /// A track's role and sync lock, set with [`Op::SetTrackRole`].
@@ -125,6 +154,25 @@ pub enum Op {
     },
     RemoveSequence {
         sequence: Id,
+    },
+    AddBus {
+        sequence: Id,
+        bus: crate::model::Bus,
+    },
+    SetBus {
+        sequence: Id,
+        bus: Id,
+        change: BusChange,
+    },
+    /// Remove a bus. What fed it goes to where it went.
+    RemoveBus {
+        sequence: Id,
+        bus: Id,
+    },
+    BusFx {
+        sequence: Id,
+        bus: Id,
+        change: BusFx,
     },
     AddTrack {
         sequence: Id,
@@ -491,6 +539,105 @@ impl Editor<'_> {
                 track.enabled = change.enabled.unwrap_or(track.enabled);
                 track.locked = change.locked.unwrap_or(track.locked);
                 track.muted = change.muted.unwrap_or(track.muted);
+                if let Some(bus) = &change.bus {
+                    track.bus.clone_from(bus);
+                }
+                Ok(())
+            }
+            Op::AddBus { sequence, bus } => {
+                let s = self.sequence(sequence)?;
+                let found = &mut self.project.sequences[s];
+                if found.bus(bus.id.as_str()).is_some() {
+                    return Err(fail(
+                        "bus.duplicate",
+                        format!("`{sequence}` already has a bus `{}`", bus.id),
+                    ));
+                }
+                found.buses.push(bus.clone());
+                Ok(())
+            }
+            Op::SetBus {
+                sequence,
+                bus,
+                change,
+            } => {
+                let at = self.bus_at(sequence, bus)?;
+                let found = &mut self.project.sequences[at.0].buses[at.1];
+                if let Some(name) = &change.name {
+                    found.name.clone_from(name);
+                }
+                if let Some(to) = &change.to {
+                    found.to.clone_from(to);
+                }
+                for (name, value) in &change.params {
+                    match value {
+                        Some(value) => found.params.insert(name.clone(), value.clone()),
+                        None => found.params.remove(name),
+                    };
+                }
+                Ok(())
+            }
+            Op::RemoveBus { sequence, bus } => {
+                let at = self.bus_at(sequence, bus)?;
+                let found = &mut self.project.sequences[at.0];
+                let gone = found.buses.remove(at.1);
+                for track in found
+                    .tracks
+                    .iter_mut()
+                    .filter(|t| t.bus.as_ref() == Some(bus))
+                {
+                    track.bus.clone_from(&gone.to);
+                }
+                for other in found
+                    .buses
+                    .iter_mut()
+                    .filter(|b| b.to.as_ref() == Some(bus))
+                {
+                    other.to.clone_from(&gone.to);
+                }
+                Ok(())
+            }
+            Op::BusFx {
+                sequence,
+                bus,
+                change,
+            } => {
+                let at = self.bus_at(sequence, bus)?;
+                let found = &mut self.project.sequences[at.0].buses[at.1];
+                let missing = |index: &usize| {
+                    fail("bus.effect", format!("`{bus}` has no effect {}", index + 1))
+                };
+                match change {
+                    BusFx::Add { effect, index } => {
+                        let index = index
+                            .unwrap_or(found.effects.len())
+                            .min(found.effects.len());
+                        found.effects.insert(index, effect.clone());
+                    }
+                    BusFx::Set {
+                        index,
+                        enabled,
+                        params,
+                    } => {
+                        let effect = found
+                            .effects
+                            .get_mut(*index)
+                            .ok_or_else(|| missing(index))?;
+                        effect.enabled = enabled.unwrap_or(effect.enabled);
+                        for (name, value) in params {
+                            match value {
+                                Some(value) => effect.params.insert(name.clone(), value.clone()),
+                                None => effect.params.remove(name),
+                            };
+                        }
+                    }
+                    BusFx::Remove { index } => {
+                        if *index >= found.effects.len() {
+                            return Err(missing(index));
+                        }
+                        found.effects.remove(*index);
+                    }
+                }
                 Ok(())
             }
             Op::SetTrackRole {
@@ -2105,6 +2252,16 @@ impl Editor<'_> {
         }
         self.project.media.remove(index);
         Ok(())
+    }
+
+    fn bus_at(&mut self, sequence: &Id, bus: &Id) -> Result<(usize, usize), Diagnostic> {
+        let s = self.sequence(sequence)?;
+        let index = self.project.sequences[s]
+            .buses
+            .iter()
+            .position(|found| found.id == *bus)
+            .ok_or_else(|| fail("bus.unknown", format!("`{sequence}` has no bus `{bus}`")))?;
+        Ok((s, index))
     }
 
     fn set_sequence(&mut self, sequence: &Id, change: &SequenceChange) -> Outcome {

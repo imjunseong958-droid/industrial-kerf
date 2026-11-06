@@ -333,6 +333,7 @@ fn compose_generator(
     let (width_px, height_px) =
         like.map_or((1920, 1080), |sequence| (sequence.width, sequence.height));
     let sequence = Sequence {
+        buses: Vec::new(),
         id: Id::new("preview").ok()?,
         name: String::new(),
         rate,

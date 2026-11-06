@@ -81,6 +81,7 @@ fn scene() -> Project {
         reel: None,
     });
     project.sequences.push(Sequence {
+        buses: Vec::new(),
         id: id("s1"),
         name: "Main".into(),
         rate: Rate::FPS_24,

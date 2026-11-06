@@ -108,8 +108,35 @@ pub struct Sequence {
     pub color: ColorSpace,
     /// Timecode of the first frame, conventionally 01:00:00:00.
     pub start: Time,
+    /// Where sound tracks are mixed before the sequence's own mix.
+    pub buses: Vec<Bus>,
     pub tracks: Vec<Track>,
     pub markers: Vec<Marker>,
+}
+
+/// Sound tracks mixed together, then through gain, pan, and effects of their own, on to another bus
+/// or the sequence's mix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bus {
+    pub id: Id,
+    pub name: Option<String>,
+    /// The bus it feeds; `None` for the sequence's mix.
+    pub to: Option<Id>,
+    /// Gain and pan (`Catalog::props(Domain::Audio)`), keyframed from the sequence's start.
+    pub params: Params,
+    pub effects: Vec<Effect>,
+}
+
+impl Bus {
+    pub fn new(id: Id) -> Self {
+        Self {
+            id,
+            name: None,
+            to: None,
+            params: Params::new(),
+            effects: Vec::new(),
+        }
+    }
 }
 
 impl Sequence {
@@ -125,6 +152,29 @@ impl Sequence {
 
     pub fn track(&self, id: &str) -> Option<&Track> {
         self.tracks.iter().find(|track| track.id == id)
+    }
+
+    pub fn bus(&self, id: &str) -> Option<&Bus> {
+        self.buses.iter().find(|bus| bus.id == id)
+    }
+
+    /// Its buses with each before the one it feeds, as a mix needs them; ones feeding each other in
+    /// a loop, which validation refuses, come last.
+    pub fn buses_in_order(&self) -> Vec<&Bus> {
+        let mut order: Vec<&Bus> = Vec::with_capacity(self.buses.len());
+        let mut left: Vec<&Bus> = self.buses.iter().collect();
+        while !left.is_empty() {
+            let (ready, rest): (Vec<&Bus>, Vec<&Bus>) = left
+                .iter()
+                .partition(|bus| !left.iter().any(|other| other.to.as_ref() == Some(&bus.id)));
+            if ready.is_empty() {
+                order.extend(rest);
+                break;
+            }
+            order.extend(ready);
+            left = rest;
+        }
+        order
     }
 
     pub fn marker(&self, id: &str) -> Option<&Marker> {
@@ -179,6 +229,8 @@ pub struct Track {
     /// in sync with them. Off, the track holds still unless the edit is on
     /// it. Absent from a document means on.
     pub sync_locked: bool,
+    /// The bus a sound track feeds; `None` for the sequence's mix.
+    pub bus: Option<Id>,
     /// Ordered by start and never overlapping.
     pub clips: Vec<Clip>,
     pub transitions: Vec<Transition>,
@@ -218,6 +270,7 @@ impl Track {
             muted: false,
             role: None,
             sync_locked: true,
+            bus: None,
             clips: Vec::new(),
             transitions: Vec::new(),
         }
@@ -1061,6 +1114,7 @@ mod tests {
             reel: None,
         });
         project.sequences.push(Sequence {
+            buses: Vec::new(),
             id: Id::new("s1").unwrap(),
             name: "s1".into(),
             rate: Rate::FPS_24,

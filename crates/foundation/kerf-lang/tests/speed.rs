@@ -82,3 +82,53 @@ fn splitting_and_trimming_a_ramp_print_what_reads_back_the_same() {
     let read = parse_document(&text, Catalog::builtin()).expect("reads back");
     assert_eq!(read.project, edited);
 }
+
+#[test]
+fn buses_run_from_a_script_and_print_back_as_they_ran() {
+    let project = project();
+    let script = "bus add music gain=-6\nbus fx music add audio.limiter@1 limit_db=-3\nbus add all\nbus set music to=all gain=-3 reset=pan\ntrack set A1 bus=music\nbus fx music set 1 limit_db=-2\nbus fx music remove 1";
+    let applied = apply_script(&project, Catalog::builtin(), script).expect("runs");
+    let sequence = &applied.project.sequences[0];
+    let music = sequence.bus("music").expect("the bus");
+    assert_eq!(music.to.as_ref().map(|to| to.as_str()), Some("all"));
+    assert!(music.effects.is_empty());
+    assert_eq!(
+        sequence
+            .track("A1")
+            .expect("the track")
+            .bus
+            .as_ref()
+            .map(|b| b.as_str()),
+        Some("music")
+    );
+    let printed = print_ops(&project, Catalog::builtin(), &applied.ops);
+    let again = apply_script(&project, Catalog::builtin(), &printed).expect("runs again");
+    assert_eq!(again.project, applied.project, "{printed}");
+    // Taking one out sends what fed it where it went.
+    let removed = apply_script(&applied.project, Catalog::builtin(), "bus remove music")
+        .expect("runs")
+        .project;
+    assert_eq!(
+        removed.sequences[0]
+            .track("A1")
+            .expect("the track")
+            .bus
+            .as_ref()
+            .map(|b| b.as_str()),
+        Some("all")
+    );
+    for bad in [
+        "bus add x to=nowhere",
+        "bus set nowhere gain=-3",
+        "track set A1 bus=nowhere",
+        "track set V1 bus=x",
+        "bus add x\nbus add y to=x\nbus set x to=y",
+        "bus add x\nbus fx x add color.basic@1",
+        "bus add x\nbus fx x set 4 enabled=false",
+    ] {
+        assert!(
+            apply_script(&project, Catalog::builtin(), bad).is_err(),
+            "{bad}"
+        );
+    }
+}
