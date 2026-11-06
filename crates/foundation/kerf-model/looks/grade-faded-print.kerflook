@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.faded-print version=1 name="Faded Print" category="Film grades" on=clip
+  doc "Lifted blacks, softer contrast, and muted color; an old print or a quiet memory."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 faded_film=45*$amount contrast=-10*$amount creative_sat=100-15*$amount

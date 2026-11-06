@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.sepia version=1 name="Sepia Tone" category="Mono grades" on=clip
+  doc "Monochrome toned warm brown; old photographs and period flashbacks."
+  param amount number default=1 range=0..1 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 look=monochrome look_intensity=100*$amount wheel_midtones_x=0.303*$amount wheel_midtones_y=0.175*$amount wheel_highlights_x=0.141*$amount wheel_highlights_y=0.141*$amount

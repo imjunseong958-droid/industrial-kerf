@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.steel-blue version=1 name="Steel Blue" category="Cinematic grades" on=clip
+  doc "Cool, muted, and punchy; thrillers and technology."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 temperature=-25*$amount saturation=100-20*$amount contrast=25*$amount

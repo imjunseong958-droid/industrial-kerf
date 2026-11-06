@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.legal-range version=1 name="Legal Range" category="Technical grades" on=clip
+  doc "Squeezes full-range levels into 16 to 235, for delivery to broadcast."
+  param amount number default=1 range=0..1 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.levels@2 out_black=16*$amount out_white=255-20*$amount

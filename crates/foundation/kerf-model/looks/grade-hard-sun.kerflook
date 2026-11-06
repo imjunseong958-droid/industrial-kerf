@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.hard-sun version=1 name="Hard Sun" category="Cinematic grades" on=clip
+  doc "High contrast with held highlights and deep shadows; deserts, sport, and midday."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 contrast=45*$amount shadows=-20*$amount highlights=-25*$amount vibrance=15*$amount

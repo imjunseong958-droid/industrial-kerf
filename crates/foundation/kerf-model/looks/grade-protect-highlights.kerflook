@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.protect-highlights version=1 name="Protect Highlights" category="Technical grades" on=clip
+  doc "Pulls highlights and whites down; a bright sky or a hot window."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 highlights=-40*$amount whites=-15*$amount

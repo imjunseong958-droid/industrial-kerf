@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.half-saturation version=1 name="Half Saturation" category="Technical grades" on=clip
+  doc "Saturation at half; at an amount of 2, none."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 saturation=100-50*$amount

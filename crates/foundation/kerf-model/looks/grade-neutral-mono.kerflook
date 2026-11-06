@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.neutral-mono version=1 name="Neutral Mono" category="Mono grades" on=clip
+  doc "Plain black and white."
+  param amount number default=1 range=0..1 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 saturation=100-100*$amount

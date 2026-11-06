@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.lift-shadows version=1 name="Lift Shadows" category="Technical grades" on=clip
+  doc "Opens up the shadows; a dark face or an underexposed interior."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 shadows=40*$amount blacks=10*$amount

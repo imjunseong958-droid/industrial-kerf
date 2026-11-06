@@ -373,6 +373,9 @@ impl FxDef {
         if self.id.as_str() == "distort.transform" {
             return Area::Motion;
         }
+        if self.id.as_str().starts_with("look.grade.") {
+            return Area::Color;
+        }
         match self.id.as_str().split('.').next().unwrap_or_default() {
             "color" | "channel" => Area::Color,
             "image" => Area::Image,
@@ -604,6 +607,78 @@ static MADE: Mutex<Vec<&'static Catalog>> = Mutex::new(Vec::new());
 /// The looks bundled with Kerf: ordinary look files.
 const BUNDLED_LOOKS: &[(&str, &str)] = &[
     ("dreamy.kerflook", include_str!("../looks/dreamy.kerflook")),
+    (
+        "grade-teal-warm.kerflook",
+        include_str!("../looks/grade-teal-warm.kerflook"),
+    ),
+    (
+        "grade-night-exterior.kerflook",
+        include_str!("../looks/grade-night-exterior.kerflook"),
+    ),
+    (
+        "grade-golden-dusk.kerflook",
+        include_str!("../looks/grade-golden-dusk.kerflook"),
+    ),
+    (
+        "grade-steel-blue.kerflook",
+        include_str!("../looks/grade-steel-blue.kerflook"),
+    ),
+    (
+        "grade-hard-sun.kerflook",
+        include_str!("../looks/grade-hard-sun.kerflook"),
+    ),
+    (
+        "grade-faded-print.kerflook",
+        include_str!("../looks/grade-faded-print.kerflook"),
+    ),
+    (
+        "grade-silver-retention.kerflook",
+        include_str!("../looks/grade-silver-retention.kerflook"),
+    ),
+    (
+        "grade-cross-processed.kerflook",
+        include_str!("../looks/grade-cross-processed.kerflook"),
+    ),
+    (
+        "grade-warm-negative.kerflook",
+        include_str!("../looks/grade-warm-negative.kerflook"),
+    ),
+    (
+        "grade-neutral-mono.kerflook",
+        include_str!("../looks/grade-neutral-mono.kerflook"),
+    ),
+    (
+        "grade-hard-mono.kerflook",
+        include_str!("../looks/grade-hard-mono.kerflook"),
+    ),
+    (
+        "grade-sepia.kerflook",
+        include_str!("../looks/grade-sepia.kerflook"),
+    ),
+    (
+        "grade-cold-mono.kerflook",
+        include_str!("../looks/grade-cold-mono.kerflook"),
+    ),
+    (
+        "grade-lift-shadows.kerflook",
+        include_str!("../looks/grade-lift-shadows.kerflook"),
+    ),
+    (
+        "grade-protect-highlights.kerflook",
+        include_str!("../looks/grade-protect-highlights.kerflook"),
+    ),
+    (
+        "grade-half-saturation.kerflook",
+        include_str!("../looks/grade-half-saturation.kerflook"),
+    ),
+    (
+        "grade-boost-vibrance.kerflook",
+        include_str!("../looks/grade-boost-vibrance.kerflook"),
+    ),
+    (
+        "grade-legal-range.kerflook",
+        include_str!("../looks/grade-legal-range.kerflook"),
+    ),
     ("film.kerflook", include_str!("../looks/film.kerflook")),
     (
         "flash-cut.kerflook",
@@ -1302,6 +1377,8 @@ mod tests {
         assert_eq!(area("title"), Area::Motion);
         assert_eq!(area("distort.transform"), Area::Motion);
         assert_eq!(area("image.fill"), Area::Image);
+        assert_eq!(area("look.film"), Area::Motion);
+        assert_eq!(area("look.grade.sepia"), Area::Color);
         // Only utilities and sound fall through to the edit area: a new
         // group of effects has to say where it belongs.
         for fx in catalog.all().filter(|fx| {

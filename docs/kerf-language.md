@@ -60,6 +60,10 @@ area hides from the frames around it along the motion, for anything that moves, 
 rect={0f:0.1,0.4,0.2,0.6 24f:0.6,0.4,0.7,0.6} mode=none`. Identical frames, as a still has, reuse one
 fill.
 
+`look.grade.*` are grades, one line each: `fx c1 add look.grade.golden-dusk@1 amount=0.6`. They are
+Cinematic, Film, Mono, and Technical; `look` with `effects: "<words>"` finds one by the mood. `amount=0`
+leaves the picture alone, and `fx c1 flatten 1` opens one up as the `color.lumetri` it is.
+
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
 flashes, glitches, film and VHS looks, title pop-ins, and whips and zooms

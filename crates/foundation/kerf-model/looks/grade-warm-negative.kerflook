@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.warm-negative version=1 name="Warm Negative" category="Film grades" on=clip
+  doc "A warm print stock with a gentle roll-off; nostalgia and portraits."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 look=warm-film look_intensity=100*$amount temperature=10*$amount
