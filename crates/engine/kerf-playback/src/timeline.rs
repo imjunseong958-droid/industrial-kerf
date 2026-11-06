@@ -731,6 +731,9 @@ impl NativeCheck<'_> {
         {
             return Some("effects");
         }
+        if clip.angle.is_some() {
+            return Some("a multicam angle");
+        }
         // Masks cut a media picture live, but not a nested sequence's.
         if matches!(clip.content, Content::Sequence { .. }) && clip.masks.iter().any(kerf_fx::cuts)
         {

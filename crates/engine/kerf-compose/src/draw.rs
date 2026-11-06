@@ -233,6 +233,8 @@ enum Source {
         source_in: Time,
         speed: Speed,
         duration: Time,
+        /// The one track of it to show.
+        angle: Option<Id>,
     },
     Solid(Rgba),
     Title(TitlePlan),
@@ -448,6 +450,17 @@ impl Drawing {
 
     /// Hash everything sequence `index` at its time `at` draws from.
     fn hash_sequence(&self, hash: &mut DefaultHasher, index: usize, at: Time) -> Option<()> {
+        self.hash_sequence_of(hash, index, at, None)
+    }
+
+    /// [`Drawing::hash_sequence`], of the one track `angle` when it names one.
+    fn hash_sequence_of(
+        &self,
+        hash: &mut DefaultHasher,
+        index: usize,
+        at: Time,
+        angle: Option<&Id>,
+    ) -> Option<()> {
         let plan = &self.sequences[index];
         (
             plan.width,
@@ -456,7 +469,7 @@ impl Drawing {
             plan.drop_frame,
         )
             .hash(hash);
-        for track in plan.tracks.iter().filter(|track| track.shows) {
+        for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
             for (place, shown) in track.shown.iter().enumerate() {
                 if !shown.shows(at) {
                     continue;
@@ -485,11 +498,12 @@ impl Drawing {
                     source_in,
                     speed,
                     duration,
+                    angle,
                 } = &clip.source
                 {
                     let inner = &self.sequences[*nested];
                     let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-                    self.hash_sequence(hash, *nested, shown)?;
+                    self.hash_sequence_of(hash, *nested, shown, angle.as_ref())?;
                 }
                 for pair in track.pairs.iter().filter(|pair| {
                     pair.start <= at && at < pair.end && (pair.from == place || pair.to == place)
@@ -546,10 +560,15 @@ impl Drawing {
     /// Sequence `index` at its time `at`, at `scale` of its canvas,
     /// transparent where nothing is.
     fn draw(&self, index: usize, at: Time, scale: f64) -> Image {
+        self.draw_of(index, at, scale, None)
+    }
+
+    /// [`Drawing::draw`], of the one track `angle` when it names one.
+    fn draw_of(&self, index: usize, at: Time, scale: f64, angle: Option<&Id>) -> Image {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = Image::new(w, h);
-        for track in plan.tracks.iter().filter(|track| track.shows) {
+        for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
             self.track(&mut canvas, plan, track, at, scale);
         }
         if self.captions {
@@ -789,10 +808,11 @@ impl Drawing {
                 source_in,
                 speed,
                 duration,
+                angle,
             } => {
                 let inner = &self.sequences[*nested];
                 let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-                let image = self.draw(*nested, shown, scale);
+                let image = self.draw_of(*nested, shown, scale, angle.as_ref());
                 let per_source = image.w as f64 / f64::from(inner.width);
                 (Arc::new(image), per_source)
             }
@@ -1340,6 +1360,17 @@ impl FxEnv for ClipEnv<'_> {
     }
 }
 
+impl TrackPlan {
+    /// Whether it is drawn: as it says, unless a clip holding its sequence names one track, which
+    /// is drawn even when hidden, as the angles of a multicam sequence may be.
+    fn drawn(&self, angle: Option<&Id>) -> bool {
+        match angle {
+            Some(angle) => self.id == *angle,
+            None => self.shows,
+        }
+    }
+}
+
 impl Shown {
     fn shows(&self, at: Time) -> bool {
         self.from <= at && at < self.to
@@ -1728,6 +1759,7 @@ impl<'a> Builder<'a> {
                         source_in: *source_in,
                         speed: speed.clone(),
                         duration: clip.duration,
+                        angle: clip.angle.clone(),
                     },
                     kerf_core::program::canvas(inner),
                     true,

@@ -156,6 +156,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   keep what plays where it was, by moving the keyframes with the clip and keeping those that fall
   outside it, so trimming back brings back what was there. An EDL gets the speed overall; the
   FFmpeg graph (`KERF_GRAPH_RENDER=1`) cannot draw a ramp's picture.
+- `angle=` on a clip of a nested sequence shows that one track of it, even if hidden, or on a sound
+  track plays that one sound track, even if muted: a multicam is a sequence with a camera on each
+  track. `set c1 angle=V3` switches it, `angle=""` shows them all, and `split` cuts between them.
+  `look` with `sync: ["m1", "m2"]` lines recordings up by their sound and gives a script that builds
+  that sequence.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

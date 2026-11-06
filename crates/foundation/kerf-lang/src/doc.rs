@@ -316,6 +316,7 @@ impl Parser<'_> {
             }
             clip.retime = retime;
         }
+        clip.angle = fields.take_id("angle")?;
         fields.finish(2)?;
         self.record(&clip.id, line);
         if let Some(link) = &clip.link {
@@ -1196,6 +1197,9 @@ fn print_clip(
     }
     if clip.retime != kerf_model::Retime::default() {
         write!(out, " retime={}", clip.retime.id()).unwrap();
+    }
+    if let Some(angle) = &clip.angle {
+        write!(out, " angle={angle}").unwrap();
     }
     if let Some(name) = &clip.name {
         write!(out, " name={}", quote(name)).unwrap();

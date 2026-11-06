@@ -1044,7 +1044,9 @@ impl Script<'_> {
                     .into_iter()
                     .flat_map(|g| g.params.iter().map(|p| p.name.as_str())),
             );
-            names.extend(["name", "enabled", "caption", "parent", "retime", "reset"]);
+            names.extend([
+                "name", "enabled", "caption", "parent", "retime", "angle", "reset",
+            ]);
             names.join(", ")
         };
         let mut changes = Vec::new();
@@ -1066,6 +1068,13 @@ impl Script<'_> {
             } else {
                 Some(Id::new(text).map_err(|error| fields.error(parent, error.to_string()))?)
             }));
+        }
+        if let Some(angle) = fields.take_text("angle")? {
+            let angle = (!angle.is_empty())
+                .then(|| Id::new(angle))
+                .transpose()
+                .map_err(|_| line.error(1, format!("`{angle}` is not a track id")))?;
+            changes.push(ClipChange::Angle(angle));
         }
         if let Some(retime) = fields.take_with("retime", parse_retime)? {
             changes.push(ClipChange::Retime(retime));
@@ -1926,6 +1935,8 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                     )
                     .unwrap(),
                     ClipChange::Retime(retime) => write!(text, " retime={}", retime.id()).unwrap(),
+                    ClipChange::Angle(Some(angle)) => write!(text, " angle={angle}").unwrap(),
+                    ClipChange::Angle(None) => text.push_str(" angle=\"\""),
                     ClipChange::Caption(caption) => {
                         write!(text, " caption={}", quote(caption)).unwrap()
                     }

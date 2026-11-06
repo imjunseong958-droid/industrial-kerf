@@ -1230,6 +1230,75 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
 }
 
 #[test]
+fn look_lines_recordings_up_by_their_sound_and_gives_a_multicam() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    // The same claps recorded by two cameras of different colors, the second begun 1.5 s later.
+    let camera = |name: &str, color: &str, start: f64, duration: f64| {
+        let made = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:s=160x90:r=30:d={duration}"))
+            .args(["-f", "lavfi", "-i"])
+            .arg(format!(
+                "aevalsrc='0.8*sin(2*PI*700*t)*(lt(mod(t+{start}\\,1.3)\\,0.05)+lt(mod(t+{start}\\,1.7)\\,0.03))':s=48000:d={duration}"
+            ))
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+            .arg(directory.path().join(name))
+            .output()
+            .expect("ffmpeg");
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+    };
+    camera("a.mp4", "red", 0.0, 8.0);
+    camera("b.mp4", "blue", 1.5, 5.0);
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "media add ma path=\"a.mp4\" rate=30 dur=240f video=160x90 audio=1ch@48000\nmedia add mb path=\"b.mp4\" rate=30 dur=150f video=160x90 audio=1ch@48000"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let found = ok(
+        &router,
+        "look",
+        json!({"sync": ["ma", "mb"], "proposal": proposal}),
+    );
+    let rows = found["recordings"].as_array().unwrap();
+    assert_eq!(rows[0]["at"], "0f", "{found}");
+    assert!(
+        (rows[1]["offset"].as_f64().unwrap() - 1.5).abs() < 0.04,
+        "{found}"
+    );
+    assert_eq!(rows[1]["at"], "45f", "{found}");
+    assert!(rows[1]["confidence"].as_f64().unwrap() > 0.2, "{found}");
+    assert_eq!(found["sequence"], "multicam");
+    // What it gives builds the sequence, and a clip of it shows one camera, then the other.
+    let script = found["script"].as_str().unwrap();
+    let built = ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": format!("{script}\nuse s1\ntrack add V9 video\noverwrite seq=multicam src=60f at=0f dur=30f on=V9 as=cam\nset cam angle=V1\nsplit cam at=15f as=cam2\nset cam2 angle=V2")}),
+    );
+    assert!(built.get("proposal").is_some(), "{built}");
+    for refused in [
+        json!({"sync": ["ma"]}),
+        json!({"sync": ["ma", "nobody"], "proposal": proposal}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;

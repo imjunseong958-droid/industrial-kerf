@@ -278,6 +278,9 @@ pub struct Clip {
     pub parent: Option<Id>,
     /// What a clip of footage shows between the frames of its file.
     pub retime: Retime,
+    /// On a clip of a nested sequence, the one track of it that shows or is heard, as a cut of a
+    /// multicam sequence shows one camera.
+    pub angle: Option<Id>,
     /// Intrinsic properties from the catalog; absent means default.
     pub props: Params,
     /// Masks on a picture clip, combined in order.
@@ -349,6 +352,7 @@ impl Clip {
             link: None,
             parent: None,
             retime: Retime::default(),
+            angle: None,
             props: Params::new(),
             masks: Vec::new(),
             effects: Vec::new(),

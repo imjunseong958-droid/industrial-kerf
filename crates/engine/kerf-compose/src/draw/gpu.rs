@@ -82,7 +82,7 @@ impl Drawing {
             return None;
         }
         let mut frame = gpu.frame();
-        let canvas = self.gpu_draw(&mut frame, 0, at, scale)?;
+        let canvas = self.gpu_draw(&mut frame, 0, at, scale, None)?;
         let rgba = finish(frame, &canvas)?;
         Some(Frame {
             width: w as u32,
@@ -122,6 +122,17 @@ impl Drawing {
 
     /// Whether the kernels can draw sequence `index` at its time `at`.
     fn gpu_can_draw(&self, gpu: &Gpu, index: usize, at: Time, scale: f64) -> bool {
+        self.gpu_can_draw_of(gpu, index, at, scale, None)
+    }
+
+    fn gpu_can_draw_of(
+        &self,
+        gpu: &Gpu,
+        index: usize,
+        at: Time,
+        scale: f64,
+        angle: Option<&kerf_model::Id>,
+    ) -> bool {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         if !gpu.fits(w, h) {
@@ -129,7 +140,7 @@ impl Drawing {
         }
         plan.tracks
             .iter()
-            .filter(|track| track.shows)
+            .filter(|track| track.drawn(angle))
             .all(|track| self.gpu_can_draw_track(gpu, plan, track, at, scale))
     }
 
@@ -163,11 +174,12 @@ impl Drawing {
                 source_in,
                 speed,
                 duration,
+                angle,
             } = &plan.source
             {
                 let inner = &self.sequences[*nested];
                 let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-                if !self.gpu_can_draw(gpu, *nested, shown, scale) {
+                if !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
                     return false;
                 }
             }
@@ -332,11 +344,12 @@ impl Drawing {
         index: usize,
         at: Time,
         scale: f64,
+        angle: Option<&kerf_model::Id>,
     ) -> Option<GpuPicture> {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = frame.clear(w as u32, h as u32);
-        for track in plan.tracks.iter().filter(|track| track.shows) {
+        for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
             for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
                 canvas = self.gpu_layer(frame, canvas, plan, shown, at, scale)?;
             }
@@ -560,10 +573,11 @@ impl Drawing {
                 source_in,
                 speed,
                 duration,
+                angle,
             } => {
                 let inner = &self.sequences[*nested];
                 let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-                self.gpu_draw(frame, *nested, shown, scale)?
+                self.gpu_draw(frame, *nested, shown, scale, angle.as_ref())?
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
             Source::Title(title) => frame.image(&title_on(title, (cw, ch))),

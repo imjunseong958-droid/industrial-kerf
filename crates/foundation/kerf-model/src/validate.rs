@@ -518,6 +518,7 @@ impl Validator<'_> {
     }
 
     fn clip(&mut self, sequence: &Sequence, track: &Track, clip: &Clip) {
+        self.angle(track, clip);
         self.masks(track, clip);
         let id = &clip.id;
         let domain = track.kind.domain();
@@ -825,6 +826,30 @@ impl Validator<'_> {
             self.source_length(clip)? - source_out
         };
         Some(clip.time_after(handle))
+    }
+
+    /// An angle is a track of the sequence the clip holds, of the kind the clip plays on.
+    fn angle(&mut self, track: &Track, clip: &Clip) {
+        let Some(angle) = &clip.angle else {
+            return;
+        };
+        let id = &clip.id;
+        let problem = match &clip.content {
+            Content::Sequence { sequence, .. } => match self.project.sequence(sequence.as_str()) {
+                Some(nested) => match nested.track(angle.as_str()) {
+                    Some(found) if found.kind == track.kind => None,
+                    Some(_) => Some(format!(
+                        "clip `{id}`: `{angle}` of `{sequence}` is not the kind of track it plays on"
+                    )),
+                    None => Some(format!("clip `{id}`: `{sequence}` has no track `{angle}`")),
+                },
+                None => None,
+            },
+            _ => Some(format!("clip `{id}` holds no sequence to show one track of")),
+        };
+        if let Some(problem) = problem {
+            self.error("clip.angle", id, problem);
+        }
     }
 
     fn nesting(&mut self) {

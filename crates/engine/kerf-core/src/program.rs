@@ -164,7 +164,7 @@ pub fn compile_program(
         ));
         Some(graph.captions(sequence, from, to, finished))
     };
-    let audio = graph.mix(sequence, from, to)?;
+    let audio = graph.mix(sequence, from, to, None)?;
     let (width, height) = canvas(sequence);
     let filter_complex = graph.parts.join(";\n");
     let mut argv = vec!["ffmpeg".to_owned(), "-y".to_owned()];
@@ -567,6 +567,9 @@ impl<'a> Graph<'a> {
         let clip = item.clip;
         if !clip.masks.is_empty() {
             return Err(ProgramError::unsupported(&clip.id, "masks"));
+        }
+        if clip.angle.is_some() {
+            return Err(ProgramError::unsupported(&clip.id, "a multicam angle"));
         }
         let (width, height) = canvas(sequence);
         let length = portion.hi - portion.decode;
@@ -1097,7 +1100,13 @@ impl<'a> Graph<'a> {
     // ---- sound -------------------------------------------------------------------
 
     /// The sound of a sequence window: stereo at [`SAMPLE_RATE`], starting at 0.
-    fn mix(&mut self, sequence: &'a Sequence, from: Time, to: Time) -> Result<String> {
+    fn mix(
+        &mut self,
+        sequence: &'a Sequence,
+        from: Time,
+        to: Time,
+        angle: Option<&Id>,
+    ) -> Result<String> {
         let duration = to - from;
         let bed = self.label("bed");
         self.parts.push(format!(
@@ -1106,7 +1115,7 @@ impl<'a> Graph<'a> {
         ));
         let mut inputs = vec![bed];
         for track in &sequence.tracks {
-            if track.kind != TrackKind::Audio || !track.enabled || track.muted {
+            if !heard(track, angle) {
                 continue;
             }
             let (items, _) = self.shown(track, sequence.rate)?;
@@ -1160,7 +1169,7 @@ impl<'a> Graph<'a> {
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
                     .expect("nested clips have a source");
                 self.nesting.push(nested.id.clone());
-                let label = self.mix(nested, start, end)?;
+                let label = self.mix(nested, start, end, clip.angle.as_ref())?;
                 self.nesting.pop();
                 label
             }
@@ -1289,6 +1298,18 @@ impl Crossfade {
 /// decoded samples timed from the first one; a nested sequence's reads the
 /// sequence's mix from the time decoded. `fade_in` and `fade_out` are the
 /// crossfades it plays through.
+/// Whether `track` is heard in a mix: as it says, unless a clip holding its sequence names one track,
+/// which is heard even when muted, as the sound of a camera not in use may be.
+fn heard(track: &kerf_model::Track, angle: Option<&Id>) -> bool {
+    if track.kind != TrackKind::Audio {
+        return false;
+    }
+    match angle {
+        Some(angle) => track.id == *angle,
+        None => track.enabled && !track.muted,
+    }
+}
+
 pub fn sound_filters(
     catalog: &Catalog,
     clip: &Clip,

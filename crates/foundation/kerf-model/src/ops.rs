@@ -58,6 +58,8 @@ pub enum ClipChange {
     /// The clip it moves with, or none.
     Parent(Option<Id>),
     Retime(crate::Retime),
+    /// The one track of a nested sequence it shows; `None` for all of them.
+    Angle(Option<Id>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1856,6 +1858,16 @@ impl Editor<'_> {
                         ));
                     }
                     target.retime = *retime;
+                }
+                ClipChange::Angle(angle) => {
+                    let target = self.project.clip_at_mut(at);
+                    if !matches!(target.content, Content::Sequence { .. }) {
+                        return Err(fail(
+                            "clip.domain",
+                            format!("`{clip}` holds no sequence to show one track of"),
+                        ));
+                    }
+                    target.angle.clone_from(angle);
                 }
                 ClipChange::Caption(text) => match &mut self.project.clip_at_mut(at).content {
                     Content::Caption { text: current } => current.clone_from(text),
