@@ -12,6 +12,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 
 class QComboBox;
 
@@ -275,11 +276,17 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
 
 // Where a clip's picture lands on the canvas, as the compositor places it:
 // fitted to the canvas when `fit` (media and nested sequences), cropped,
-// scaled, rotated about its anchor, and moved. It maps fractions of the
-// `picture`-pixel picture (0, 0 its top left, 1, 1 its bottom right), the
-// space masks are drawn in, to canvas pixels, before any parent.
-QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
-                            double clipTime);
+// scaled, rotated about its anchor, moved, and moved again by what `parents` do,
+// in canvas pixels. It maps fractions of the `picture`-pixel picture (0, 0 its
+// top left, 1, 1 its bottom right), the space masks are drawn in, to canvas
+// pixels.
+//
+// A clip with `three_d=true` is then seen through the topmost camera `timeline`
+// shows at that moment, or the default one, which makes the map projective (see
+// inSight). One edge on to the camera, or wholly behind it, gives a placement that
+// is not invertible: there is nothing to draw on.
+QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                            const QTransform &parents = QTransform{}, const QJsonObject &timeline = QJsonObject{});
 // How a parent has moved its children at its clip time `clipTime`, in canvas
 // pixels: from where it would sit with no position, scale, or rotation of its
 // own, to where it is (kerf-compose `parent_motion`). A clip's picture goes
@@ -288,8 +295,23 @@ QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool f
 // Where a clip's motion path lands: from shares of the canvas from the path's
 // 0,0 to shares of the canvas, the path's 0,0 being where the clip would be with
 // no path at `clipTime`, and `parents` what its parents do, in canvas pixels.
+//
+// In depth the path lies in a plane square to the world at the clip's `z`, as a
+// clip turns about its own middle, and is seen as picturePlacement says. What is
+// keyed (`z`, the turns, the camera) goes by this moment. An anchor off the
+// clip's middle swings out of that plane by a fixed amount as the clip turns, so
+// the path moves with it; under `orient` that amount differs at each point, which
+// no one map shows, so that clip's placement is not invertible either.
 QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
-                         const QTransform &parents);
+                         const QTransform &parents, const QJsonObject &timeline = QJsonObject{});
+
+// Whether `placement` truly shows `point`. A placement in depth takes what is on or
+// behind its camera somewhere all the same, which QTransform::map cannot tell from
+// the real thing, and the camera sees nothing nearer than the compositor's `NEAR`.
+// A flat placement shows everything.
+bool inSight(const QTransform &placement, const QPointF &point);
+// The point `placement` lands at `seen`. Beyond a plane's horizon nothing does.
+std::optional<QPointF> pointInSight(const QTransform &placement, const QPointF &seen);
 
 // A snapshot mask's outline, in fractions of the clip's picture; open
 // paths are not closed.

@@ -993,24 +993,169 @@ QTransform placed(const Geometry &g, const QSizeF &picture, bool fit, const QSiz
     return placement;
 }
 
+// Fractions of the picture to canvas pixels, flat: the compositor's geometry
+// (kerf-compose `Drawing::geometry`).
+QTransform flatPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime, const QTransform &parents) {
+    const QTransform source = QTransform::fromScale(std::max(1.0, picture.width()), std::max(1.0, picture.height()));
+    return source * placed(movedGeometryAt(clip, canvas, clipTime), picture, fit, canvas) * parents;
+}
+
+// The nearest a camera sees, in frame heights, and what it sees at rest
+// (kerf-compose `three_d.rs`).
+constexpr double kNearest = 0.001;
+constexpr double kRestingFov = 40.0;
+
+// A point or a way in the compositor's world: x right, y down, and z away from
+// the viewer, in canvas pixels, with 0, 0, 0 the middle of the canvas.
+struct World {
+    double x = 0.0, y = 0.0, z = 0.0;
+    World operator+(const World &other) const { return {x + other.x, y + other.y, z + other.z}; }
+    World operator-(const World &other) const { return {x - other.x, y - other.y, z - other.z}; }
+    World operator*(double by) const { return {x * by, y * by, z * by}; }
+};
+
+double dot(const World &a, const World &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+World cross(const World &a, const World &b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+// Turned about x by `pitch` and then about y by `yaw`, in degrees.
+World turned(const World &a, double pitch, double yaw) {
+    const double sp = std::sin(qDegreesToRadians(pitch)), cp = std::cos(qDegreesToRadians(pitch));
+    const double sy = std::sin(qDegreesToRadians(yaw)), cy = std::cos(qDegreesToRadians(yaw));
+    const double y = a.y * cp - a.z * sp, z = a.y * sp + a.z * cp;
+    return {a.x * cy + z * sy, y, -a.x * sy + z * cy};
+}
+
+// What a placement is when there is nothing to place on: not invertible.
+QTransform unseen() { return QTransform(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); }
+
+// How a sequence is seen at a moment (kerf-compose `Scene::at`).
+struct Camera {
+    World eye, right, down, forward;
+    double focal = 1.0, width = 1.0, height = 1.0;
+
+    // Where (a, b) of the plane `origin + a * across + b * below` lands, in canvas
+    // pixels. Its third row is how far along the camera's way that is, in frame
+    // heights, which is what makes behind it negative and inSight possible.
+    QTransform sees(const World &origin, const World &across, const World &below) const {
+        const World from = origin - eye;
+        const World perpendicular = cross(across, below);
+        const double area = std::sqrt(dot(perpendicular, perpendicular));
+        // Edge on it is a line at most a pixel wide, and the compositor's rays miss it.
+        if (area <= 0.0 || std::abs(dot(from, perpendicular)) / area < kNearest * height) return unseen();
+        const World sideways = right * focal + forward * (width / 2.0);
+        const World downwards = down * focal + forward * (height / 2.0);
+        const auto row = [this](const World &of, const World &way) { return dot(of, way) / height; };
+        return QTransform(row(across, sideways), row(across, downwards), row(across, forward),
+                          row(below, sideways), row(below, downwards), row(below, forward),
+                          row(from, sideways), row(from, downwards), row(from, forward));
+    }
+};
+
+// `timeline`'s topmost camera showing at `at` seconds, or the default one.
+Camera cameraAt(const QJsonObject &timeline, const QSizeF &canvas, double at) {
+    // Times come as seconds in doubles, a hair off the frames they name.
+    constexpr double kSameMoment = 1e-9;
+    QJsonObject shown;
+    for (const QJsonValue &track : timeline.value(QStringLiteral("tracks")).toArray()) {
+        if (!track.toObject().value(QStringLiteral("enabled")).toBool(true)) continue;
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("fx")).toString() != QStringLiteral("camera") || !clip.value(QStringLiteral("enabled")).toBool(true)) continue;
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            if (start - kSameMoment <= at && at < start + clip.value(QStringLiteral("duration")).toDouble() - kSameMoment) shown = clip;
+        }
+    }
+    const QJsonObject props = shown.value(QStringLiteral("props")).toObject();
+    const double clipTime = at - shown.value(QStringLiteral("timelineStart")).toDouble();
+    const auto read = [&](const char *name, double otherwise) { return propertyAt(props, QString::fromLatin1(name), clipTime, otherwise); };
+    Camera camera;
+    camera.width = std::max(1.0, canvas.width());
+    camera.height = std::max(1.0, canvas.height());
+    const auto distance = [&camera](double fov) { return camera.height / 2.0 / std::tan(qDegreesToRadians(std::clamp(fov, 1.0, 170.0)) / 2.0); };
+    camera.eye = {read("x", 0.0) * camera.width, read("y", 0.0) * camera.height, read("z", 0.0) * camera.height - distance(kRestingFov)};
+    camera.focal = distance(read("fov", kRestingFov));
+    const double pitch = read("tilt", 0.0), yaw = read("pan", 0.0), roll = qDegreesToRadians(read("roll", 0.0));
+    camera.forward = turned({0.0, 0.0, 1.0}, pitch, yaw);
+    const World levelRight = turned({1.0, 0.0, 0.0}, pitch, yaw);
+    const World levelDown = cross(camera.forward, levelRight);
+    camera.right = levelRight * std::cos(roll) + levelDown * std::sin(roll);
+    camera.down = levelDown * std::cos(roll) - levelRight * std::sin(roll);
+    return camera;
+}
+
+bool isInDepth(const QJsonObject &clip) { return clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool(); }
+
+// A clip's own numbers in depth at `clipTime`.
+struct Depth {
+    double z = 0.0, pitch = 0.0, yaw = 0.0;
+};
+
+Depth depthAt(const QJsonObject &clip, const QSizeF &canvas, double clipTime) {
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    return {propertyAt(props, QStringLiteral("z"), clipTime, 0.0) * std::max(1.0, canvas.height()), propertyAt(props, QStringLiteral("rotate_x"), clipTime, 0.0),
+            propertyAt(props, QStringLiteral("rotate_y"), clipTime, 0.0)};
+}
+
 } // namespace
 
 QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
-                         const QTransform &parents) {
+                         const QTransform &parents, const QJsonObject &timeline) {
     const Geometry g = geometryAt(clip, clipTime);
     const double width = std::max(1.0, picture.width()) * std::max(1e-6, 1.0 - g.cropL - g.cropR);
     const double height = std::max(1.0, picture.height()) * std::max(1e-6, 1.0 - g.cropT - g.cropB);
     const QSizeF filled = fittedSize({width, height}, fit, canvas);
     const double cw = std::max(1.0, canvas.width()), ch = std::max(1.0, canvas.height());
     const QPointF origin(0.5 + g.x + g.anchorX * filled.width() / cw, 0.5 + g.y + g.anchorY * filled.height() / ch);
-    return QTransform::fromTranslate(origin.x(), origin.y()) * QTransform::fromScale(cw, ch) * parents * QTransform::fromScale(1.0 / cw, 1.0 / ch);
+    const QTransform onCanvas = QTransform::fromTranslate(origin.x(), origin.y()) * QTransform::fromScale(cw, ch) * parents;
+    const QTransform toShares = QTransform::fromScale(1.0 / cw, 1.0 / ch);
+    if (!isInDepth(clip)) return onCanvas * toShares;
+    // The path says where the anchor goes, and the clip turns about its middle.
+    const QTransform flat = flatPlacement(clip, picture, fit, canvas, clipTime, parents);
+    const QPointF anchor(g.cropL + (1.0 - g.cropL - g.cropR) * (0.5 + g.anchorX), g.cropT + (1.0 - g.cropT - g.cropB) * (0.5 + g.anchorY));
+    const QPointF toMiddle = flat.map(QPointF(0.5, 0.5)) - flat.map(anchor);
+    const Depth depth = depthAt(clip, canvas, clipTime);
+    const World swung = turned({-toMiddle.x(), -toMiddle.y(), 0.0}, depth.pitch, depth.yaw) + World{toMiddle.x(), toMiddle.y(), 0.0};
+    if (dot(swung, swung) > 1e-12 && clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("orient")).toBool()) return unseen();
+    const Camera camera = cameraAt(timeline, canvas, clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime);
+    const World plane = World{-cw / 2.0, -ch / 2.0, depth.z} + swung;
+    return onCanvas * camera.sees(plane, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}) * toShares;
 }
 
-QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
-                            double clipTime) {
-    // The compositor's geometry (kerf-compose `Scene::geometry`), in fractions of the picture.
-    const QTransform source = QTransform::fromScale(std::max(1.0, picture.width()), std::max(1.0, picture.height()));
-    return source * placed(movedGeometryAt(clip, canvas, clipTime), picture, fit, canvas);
+QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                            const QTransform &parents, const QJsonObject &timeline) {
+    const QTransform flat = flatPlacement(clip, picture, fit, canvas, clipTime, parents);
+    if (!isInDepth(clip)) return flat;
+    // As `Plane::of` lifts it, about its middle at its `z`.
+    const Depth depth = depthAt(clip, canvas, clipTime);
+    const QPointF middle = flat.map(QPointF(0.5, 0.5));
+    const World across = turned({flat.m11(), flat.m12(), 0.0}, depth.pitch, depth.yaw);
+    const World below = turned({flat.m21(), flat.m22(), 0.0}, depth.pitch, depth.yaw);
+    const World origin = World{middle.x() - canvas.width() / 2.0, middle.y() - canvas.height() / 2.0, depth.z} - across * 0.5 - below * 0.5;
+    const QTransform seen = cameraAt(timeline, canvas, clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime).sees(origin, across, below);
+    const std::array<QPointF, 4> corners{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    const bool shows = std::any_of(corners.cbegin(), corners.cend(), [&seen](const QPointF &corner) { return inSight(seen, corner); });
+    return shows ? seen : unseen();
+}
+
+bool inSight(const QTransform &placement, const QPointF &point) {
+    return placement.m13() * point.x() + placement.m23() * point.y() + placement.m33() >= kNearest;
+}
+
+std::optional<QPointF> pointInSight(const QTransform &placement, const QPointF &seen) {
+    bool invertible = false;
+    const QTransform back = placement.inverted(&invertible);
+    if (!invertible) return std::nullopt;
+    // The inverse's third row is one over how far along the camera's way the point is,
+    // so nothing or less past the horizon, where QTransform::map would make do with
+    // a near limit of its own.
+    constexpr double kHorizon = 1e-6;
+    if (back.m13() * seen.x() + back.m23() * seen.y() + back.m33() <= kHorizon) return std::nullopt;
+    const QPointF point = back.map(seen);
+    if (!inSight(placement, point)) return std::nullopt;
+    return point;
 }
 
 QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime) {

@@ -89,6 +89,9 @@ QList<Key> shifted(QList<Key> keys, const QList<int> &indices, qint64 frames, do
 std::optional<QList<QPointF>> parsePath(const QString &text);
 // `points` as `path=` writes them, each held to what the document allows.
 QString pathText(const QList<QPointF> &points);
+// Whether `path=` can say `point` as it is: pathText holds each axis apart, which
+// sends anything further out somewhere else.
+bool pathHolds(const QPointF &point);
 // `points` with one more, on their curve `u` points along, which is as close to
 // the curve they drew as a curve through points can stay: `path=` has no handles.
 QList<QPointF> withPointOn(QList<QPointF> points, double aspect, double u);

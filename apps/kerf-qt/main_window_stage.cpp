@@ -108,8 +108,8 @@ void MainWindow::stepFrames(int frames) {
 void MainWindow::updateViewerMasks() {
     bool fit = false;
     const QSizeF picture = m_connected ? selectedPictureSize(&fit) : QSizeF();
-    for (QAction *action : m_maskTools) action->setEnabled(!picture.isEmpty());
     if (picture.isEmpty()) {
+        for (QAction *action : m_maskTools) action->setEnabled(false);
         m_viewer->setMasks(QString(), QJsonArray{}, QTransform{});
         m_viewer->setMotionPath(QString(), QString(), QTransform{}, 0.0);
         return;
@@ -119,12 +119,13 @@ void MainWindow::updateViewerMasks() {
                                        clip.value(QStringLiteral("duration")).toDouble());
     const QSizeF canvas(resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray()));
     const QTransform parents = parentsMotion(clip, canvas, clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime);
-    m_viewer->setMasks(m_selectedClip, clip.value(QStringLiteral("masks")).toArray(),
-                       picturePlacement(clip, picture, fit, canvas, clipTime) * parents);
+    const QTransform placement = picturePlacement(clip, picture, fit, canvas, clipTime, parents, m_project);
+    // A picture that cannot be seen cannot be drawn on.
+    for (QAction *action : m_maskTools) action->setEnabled(placement.isInvertible());
+    m_viewer->setMasks(m_selectedClip, clip.value(QStringLiteral("masks")).toArray(), placement);
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    // A clip in depth lands by its plane and the camera, which this cannot draw.
-    m_viewer->setMotionPath(props.value(QStringLiteral("three_d")).toBool() ? QString() : m_selectedClip, props.value(QStringLiteral("path")).toString(),
-                            pathPlacement(clip, picture, fit, canvas, clipTime, parents), propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
+    m_viewer->setMotionPath(m_selectedClip, props.value(QStringLiteral("path")).toString(),
+                            pathPlacement(clip, picture, fit, canvas, clipTime, parents, m_project), propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
 }
 
 QTransform MainWindow::parentsMotion(const QJsonObject &clip, const QSizeF &canvas, double at) const {
@@ -161,7 +162,7 @@ void MainWindow::startMotionPath() {
     // From where the clip is, a quarter of the canvas towards the middle of it.
     const double clipTime = std::clamp(m_playhead - clip.value(QStringLiteral("timelineStart")).toDouble(), 0.0,
                                        clip.value(QStringLiteral("duration")).toDouble());
-    const double from = pathPlacement(clip, picture, fit, canvas, clipTime, QTransform{}).map(QPointF()).x();
+    const double from = pathPlacement(clip, picture, fit, canvas, clipTime, QTransform{}, m_project).map(QPointF()).x();
     QJsonObject props{{QStringLiteral("path"), graph::pathText({{0.0, 0.0}, {from > 0.5 ? -0.25 : 0.25, 0.0}})}};
     // Along it over the clip, unless something already says how far along it is.
     if (!clip.value(QStringLiteral("props")).toObject().contains(QStringLiteral("along"))) {
@@ -174,7 +175,7 @@ void MainWindow::startMotionPath() {
 bool MainWindow::canStartMotionPath(const QJsonObject &clip) const {
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
     bool fit = false;
-    return !selectedPictureSize(&fit).isEmpty() && props.value(QStringLiteral("path")).toString().isEmpty() && !props.value(QStringLiteral("three_d")).toBool();
+    return !selectedPictureSize(&fit).isEmpty() && props.value(QStringLiteral("path")).toString().isEmpty();
 }
 
 void MainWindow::setSafeZones(bool shown) {

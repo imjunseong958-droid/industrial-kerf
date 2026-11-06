@@ -2890,6 +2890,121 @@ mod tests {
         }
     }
 
+    /// The same table holds the editor's overlays to this, in `graph_test.cpp`
+    /// (`clipsInDepthLandAsTheCompositorDrawsThem`). Each row is a camera, a parent, a clip, its
+    /// picture's size and whether it is fitted, and the canvas; then a point of the picture, in
+    /// fractions of it, and where on the canvas it lands, or that no pixel shows it. A row with a path
+    /// names the clip's anchor, which the path says the place of.
+    #[test]
+    fn a_clip_in_depth_lands_where_the_table_says() {
+        type Row = (
+            &'static str,
+            &'static str,
+            &'static str,
+            (u32, u32),
+            bool,
+            (u32, u32),
+            (f64, f64),
+            Option<(f64, f64)>,
+        );
+        #[rustfmt::skip]
+        let table: [Row; 23] = [
+            ("", "", "three_d=true", (1920, 1080), false, (1920, 1080), (0.25, 0.75), Some((480.0, 810.0))),
+            ("", "", "three_d=true z=1", (1920, 1080), false, (1920, 1080), (0.0, 0.0), Some((404.425304296, 227.489233666))),
+            ("", "", "three_d=true z=-0.5 x=0.25 y=-0.25 scale=0.5", (1920, 1080), false, (1920, 1080), (1.0, 1.0), Some((2469.363321845, 540.0))),
+            ("", "", "three_d=true rotate_y=60", (1920, 1080), false, (1920, 1080), (0.0, 0.0), Some((652.380423425, 193.927976353))),
+            ("", "", "three_d=true rotate_y=60", (1920, 1080), false, (1920, 1080), (1.0, 1.0), Some((2051.824322445, 1768.30236275))),
+            ("", "", "three_d=true z=0.4 rotate_x=-35 rotate_y=20 scale=0.6 rotation=30 x=0.15", (1920, 1080), false, (1920, 1080), (0.1, 0.9), Some((813.293244888, 536.56976567))),
+            ("x=0.1 y=-0.1 z=-0.2", "", "three_d=true z=0.5", (1920, 1080), false, (1920, 1080), (0.75, 0.25), Some((1150.784280848, 432.683842023))),
+            ("pan=15 tilt=-10 roll=20 fov=60", "", "three_d=true rotate_y=-25", (1920, 1080), false, (1920, 1080), (0.9, 0.1), Some((925.135566674, 137.609390156))),
+            ("", "", "three_d=true crop_l=0.2 crop_t=0.1 anchor_x=0.25 rotate_y=30", (1920, 1080), false, (1920, 1080), (0.6, 0.6), Some((932.497292288, 597.735845172))),
+            ("tilt=5", "", "three_d=true rotate_x=25 scale=0.75", (1280, 720), true, (1080, 1920), (0.2, 0.8), Some((300.339390717, 1313.504377609))),
+            ("", "x=-0.1 rotation=20", "three_d=true z=0.5 rotate_y=30 x=0.2", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1083.787134162, 636.289297037))),
+            ("pan=10", "", "three_d=true z=1 rotate_y=40 path=\"0,0 0.2,0.3 0.5,-0.1\" along=0", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((698.394625114, 540.0))),
+            ("pan=10", "", "three_d=true z=1 rotate_y=40 path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.5", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((980.39775465, 708.363349572))),
+            ("pan=10", "", "three_d=true z=1 rotate_y=40 path=\"0,0 0.2,0.3 0.5,-0.1\" along=1", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1235.761146107, 480.464694441))),
+            ("", "", "three_d=true z=0.5 rotate_y=40 anchor_x=0.25 path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.25", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((1461.484615779, 736.839478992))),
+            ("", "", "three_d=true z=0.5 rotate_y=40 anchor_x=0.25 path=\"0,0 0.2,0.3 0.5,-0.1\" along=1", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((2108.520888367, 446.575181565))),
+            ("", "x=-0.1 scale=0.8", "three_d=true z=0.5 path=\"0,0 0.2,0.3\" along=1", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1044.45932111, 730.033472497))),
+            ("", "", "three_d=true rotate_y=30 orient=true path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.5", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1448.468778868, 836.127664149))),
+            ("", "", "three_d=true z=-5", (1920, 1080), false, (1920, 1080), (0.5, 0.5), None),
+            ("", "", "three_d=true rotate_y=90", (1920, 1080), false, (1920, 1080), (0.75, 0.5), None),
+            ("", "", "three_d=true x=0.1 rotate_y=90", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((1243.825954944, 540.0))),
+            ("pan=80", "", "three_d=true", (1920, 1080), false, (1920, 1080), (0.0, 0.5), None),
+            ("pan=80", "", "three_d=true", (1920, 1080), false, (1920, 1080), (1.0, 0.5), Some((-636.292895473, 540.0))),
+        ];
+        for (camera, rig, set, size, fit, canvas, from, to) in table {
+            let line = |set: &str| {
+                if set.is_empty() {
+                    String::new()
+                } else {
+                    format!("      set {set}\n")
+                }
+            };
+            let parent = if rig.is_empty() { "" } else { " parent=n1" };
+            let document = format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size={}x{} audio=48000\n  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n{}  track V2 video\n    clip c1 gen=solid@1 at=0f dur=48f{parent}\n      set {set}\n  track V3 video\n    clip cam gen=camera@1 at=0f dur=48f\n{}",
+                canvas.0,
+                canvas.1,
+                line(rig),
+                line(camera),
+            );
+            let project = kerf_lang::parse_document(&document, Catalog::builtin())
+                .unwrap_or_else(|errors| panic!("{set}: {errors:?}"))
+                .project;
+            let mut drawing = Drawing::new(
+                &project,
+                Catalog::builtin(),
+                None,
+                false,
+                Accel::Auto,
+                false,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{set}: {error}"));
+            // What is planned for a solid, but for what a piece of media would be.
+            let plan = &mut drawing.sequences[0].tracks[1].shown[0].plan;
+            plan.size = size;
+            plan.fit = fit;
+            let sequence = &drawing.sequences[0];
+            let plan = &sequence.tracks[1].shown[0].plan;
+            let scene =
+                three_d::Scene::at(sequence, Time::ZERO, (canvas.0 as usize, canvas.1 as usize));
+            let (w, h) = (f64::from(size.0), f64::from(size.1));
+            let place = drawing.geometry(sequence, plan, Time::ZERO);
+            let plane = three_d::Plane::of(&scene, plan, (w, h), &place, Time::ZERO);
+            let wanted = (from.0 * w, from.1 * h);
+            match to {
+                Some(to) => {
+                    let (hit, _) = scene
+                        .meets(&plane, to)
+                        .unwrap_or_else(|| panic!("{camera} {set}: nothing at {to:?}"));
+                    let (u, v) = plane.at(hit);
+                    assert!(
+                        (u - wanted.0).abs() < 1e-6 && (v - wanted.1).abs() < 1e-6,
+                        "{camera} {set}: {to:?} shows {u},{v}, not {wanted:?}"
+                    );
+                }
+                None => {
+                    for (x, y) in (0..canvas.0)
+                        .step_by(4)
+                        .flat_map(|x| (0..canvas.1).step_by(4).map(move |y| (x, y)))
+                    {
+                        let Some((hit, _)) = scene.meets(&plane, (f64::from(x), f64::from(y)))
+                        else {
+                            continue;
+                        };
+                        let (u, v) = plane.at(hit);
+                        assert!(
+                            (u / w - from.0).hypot(v / h - from.1) > 0.02,
+                            "{camera} {set}: {x},{y} shows {u},{v}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn nested_sequences_show_their_own_frames() {
         let rate = Rate::FPS_24;

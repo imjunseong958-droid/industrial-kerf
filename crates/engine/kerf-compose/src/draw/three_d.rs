@@ -210,6 +210,30 @@ impl Scene {
         }
     }
 
+    /// Where the ray through the place `(x, y)` of the output picture meets `plane`, and how far along
+    /// the camera's way that is: nowhere if it runs along the plane, or meets it no nearer than the
+    /// camera sees or behind it.
+    #[inline]
+    pub(super) fn meets(&self, plane: &Plane, (x, y): (f64, f64)) -> Option<(Vector, f64)> {
+        let ray = add(
+            add(
+                times(self.right, x - self.center.0),
+                times(self.down, y - self.center.1),
+            ),
+            times(self.forward, self.focal),
+        );
+        let toward = dot(ray, plane.normal);
+        if toward.abs() < 1e-12 {
+            return None;
+        }
+        let along = dot(minus(plane.origin, self.eye), plane.normal) / toward;
+        let ahead = along * dot(ray, self.forward);
+        if ahead < NEAR * self.height {
+            return None;
+        }
+        Some((add(self.eye, times(ray, along)), ahead))
+    }
+
     /// How far each pixel of a plane spreads, from its depths along the camera's way.
     fn blur_radii(&self, depth: &[f32]) -> Vec<f32> {
         let (focus, aperture) = (self.focus as f32, self.aperture as f32);
@@ -354,7 +378,7 @@ impl Plane {
     }
 
     /// Where a point of the plane is in the picture's own terms, which need not be square.
-    fn at(&self, hit: Vector) -> (f64, f64) {
+    pub(super) fn at(&self, hit: Vector) -> (f64, f64) {
         let from = minus(hit, self.origin);
         (
             dot(cross(from, self.down), self.perpendicular) / self.area,
@@ -500,30 +524,14 @@ fn projected(
     };
     let mut out = Image::new(w, h);
     let crop = crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
-    let near = NEAR * scene.height;
     let draw_row = |y: usize, row: &mut [f32], mut depth: Option<&mut [f32]>| {
         for x in 0..w {
-            let (sx, sy) = (
-                x as f64 + 0.5 - scene.center.0,
-                y as f64 + 0.5 - scene.center.1,
-            );
-            let ray = add(
-                add(times(scene.right, sx), times(scene.down, sy)),
-                times(scene.forward, scene.focal),
-            );
-            let toward = dot(ray, plane.normal);
-            if toward.abs() < 1e-12 {
+            let Some((hit, ahead)) = scene.meets(&plane, (x as f64 + 0.5, y as f64 + 0.5)) else {
                 continue;
-            }
-            let along = dot(minus(plane.origin, scene.eye), plane.normal) / toward;
-            let ahead = along * dot(ray, scene.forward);
-            if ahead < near {
-                continue;
-            }
+            };
             if let Some(depth) = depth.as_deref_mut() {
                 depth[x] = ahead as f32;
             }
-            let hit = add(scene.eye, times(ray, along));
             let (u, v) = plane.at(hit);
             if u < crop.x - 1.0
                 || v < crop.y - 1.0

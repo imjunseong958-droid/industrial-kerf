@@ -16,6 +16,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <optional>
+
 class QGraphicsOpacityEffect;
 class QVariantAnimation;
 
@@ -128,7 +130,8 @@ public:
 
     // The masks of picture clip `clip` as its snapshot carries them, and
     // where its picture lands on the canvas (picturePlacement). An empty
-    // clip shows none and stops a mask tool.
+    // clip shows none and stops a mask tool; a placement that is not invertible
+    // shows none and takes no clicks, and the masks are there again when it is.
     void setMasks(const QString &clip, const QJsonArray &masks, const QTransform &placement);
     void setMaskTool(MaskTool tool);
     MaskTool maskTool() const { return m_maskTool; }
@@ -137,8 +140,9 @@ public:
 
     // The motion path of picture clip `clip`, as its `path=` reads: `placement`
     // takes its points to shares of the canvas (pathPlacement), and `along` is how
-    // far along the clip is now. An empty clip, a path that does not read, or a
-    // placement that flattens it shows none.
+    // far along the clip is now. An empty clip, a path that does not read, a
+    // placement that flattens it, or one that puts all of it behind the camera
+    // shows none.
     //
     // Dragging a point moves it, a double-click on the curve adds one there, and
     // Delete removes the one clicked, down to the two a path needs; each writes
@@ -146,7 +150,8 @@ public:
     void setMotionPath(const QString &clip, const QString &text, const QTransform &placement, double along);
     bool showsMotionPath() const { return !m_pathClip.isEmpty(); }
     // Its points, the curve through them, and where the clip is on it, all in
-    // widget points as drawn.
+    // widget points as drawn. In depth, what is not in sight (inSight) is not drawn
+    // or hit, though these still say where it would map to.
     QList<QPointF> motionPathPoints() const;
     QList<QPointF> motionPathCurve() const;
     QPointF motionPathMarker() const;
@@ -195,11 +200,11 @@ private:
     bool editsMasks() const;
     // Fractions of the clip's picture to widget pixels.
     QTransform pictureToWidget() const;
-    QPointF picturePoint(const QPointF &widget) const;
+    std::optional<QPointF> picturePoint(const QPointF &widget) const;
     // A point of the motion path, in shares of the canvas from its origin, to
     // widget points and back.
     QPointF pathToWidget(const QPointF &point) const;
-    QPointF pathPoint(const QPointF &widget) const;
+    std::optional<QPointF> pathPoint(const QPointF &widget) const;
     // The path point under the pointer, or -1.
     int pathPointAt(const QPointF &widget) const;
     // How far along the path's curve (as MotionPath::curve takes it) the pointer
