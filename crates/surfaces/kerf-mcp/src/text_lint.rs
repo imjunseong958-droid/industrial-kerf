@@ -6,12 +6,13 @@
 //! out (`kerf-compose` `draw.rs`, through `kerf-draw` `text::draw`): a
 //! caption is Inter at 4.5% of the frame height (at least 12 px), centred,
 //! its bottom at 95% of the frame; a title is its font at `size` frame
-//! heights, centred on the frame, then cropped, scaled, rotated, and moved
+//! heights at its axes, centred on the frame, then cropped, scaled, rotated, and moved
 //! like any picture. A box is the layout's line boxes, not its ink.
 
 use crate::qc::{Finding, Rect};
 use kerf_lang::Clock;
 use kerf_model::{Catalog, Clip, Content, Domain, Param, Sequence, Time, TrackKind, Value};
+use kerf_text::fonts::Axis;
 use kerf_text::{layout, Align, ParagraphStyle, TextStyle};
 
 /// The most characters a viewer reads in a second (Netflix's limit for
@@ -71,9 +72,10 @@ impl Shown<'_> {
     /// Whether the box moves or changes size while the clip plays.
     fn animated(&self) -> bool {
         self.kind == Kind::Title
-            && GEOMETRY
+            && (GEOMETRY
                 .iter()
                 .any(|name| matches!(self.clip.props.get(*name), Some(Param::Animated(_))))
+                || axes_keyed(self.clip))
     }
 
     /// The box at sequence time `at`, in pixels of the frame:
@@ -124,6 +126,30 @@ fn shown(sequence: &Sequence) -> Vec<Shown<'_>> {
     shown
 }
 
+/// A title's font axes as they stand, by tag and name.
+fn title_axes(clip: &Clip) -> impl Iterator<Item = ([u8; 4], &Param)> {
+    let params = match &clip.content {
+        Content::Generator { params, .. } => Some(params),
+        _ => None,
+    };
+    kerf_model::TITLE_AXES.iter().filter_map(move |tag| {
+        let name = std::str::from_utf8(tag).ok()?;
+        Some((*tag, params?.get(name)?))
+    })
+}
+
+fn axes_keyed(clip: &Clip) -> bool {
+    title_axes(clip).any(|(_, param)| matches!(param, Param::Animated(_)))
+}
+
+/// The family `font` stands for, as the compositor resolves it.
+pub(crate) fn family_of(font: &str) -> &str {
+    GENERIC
+        .iter()
+        .find(|(generic, _)| generic.eq_ignore_ascii_case(font.trim()))
+        .map_or(font.trim(), |(_, family)| family)
+}
+
 /// The frame as the compositor draws it: even sizes.
 fn canvas(sequence: &Sequence) -> (f64, f64) {
     let even = |value: u32| f64::from((value.max(2) / 2) * 2);
@@ -134,7 +160,7 @@ fn canvas(sequence: &Sequence) -> (f64, f64) {
 /// `place` of their height above `at`'s y and its x where `align` puts it.
 fn laid_box(
     text: &str,
-    font: &str,
+    (font, axes): (&str, Vec<Axis>),
     size: f64,
     align: Align,
     at: [f64; 2],
@@ -143,13 +169,11 @@ fn laid_box(
     if text.trim().is_empty() || size <= 0.0 {
         return None;
     }
-    let family = GENERIC
-        .iter()
-        .find(|(generic, _)| generic.eq_ignore_ascii_case(font.trim()))
-        .map_or(font.trim(), |(_, family)| family);
+    let family = family_of(font);
     let style = TextStyle {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: size as f32,
+        axes,
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -177,7 +201,7 @@ fn caption_box(sequence: &Sequence, text: &str) -> Option<[f64; 4]> {
     let size = (f64::from(sequence.height) * 0.045).max(12.0);
     laid_box(
         text,
-        "sans-serif",
+        ("sans-serif", Vec::new()),
         size,
         Align::Center,
         [w / 2.0, h * 0.95],
@@ -225,10 +249,19 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
         Value::Enum(align) if align == "right" => Align::Right,
         _ => Align::Center,
     };
+    // As the compositor sets them: at 0, an axis is left as the font has it. Each moment is measured
+    // at what it is then, so a keyed axis is measured at the widest it reaches.
+    let axes = title_axes(clip)
+        .map(|(tag, param)| {
+            let value = param.value_at(at).as_number().unwrap_or(0.0);
+            (tag, value as f32)
+        })
+        .filter(|(_, value)| *value != 0.0)
+        .collect();
     let (cw, ch) = canvas(sequence);
     let laid = laid_box(
         &text,
-        &font,
+        (&font, axes),
         (size * ch).max(1.0),
         align,
         [cw / 2.0, ch / 2.0],

@@ -56,6 +56,15 @@ pub type FaceId = usize;
 /// An axis of a variable font and where to set it, by its OpenType tag (`wght`, `wdth`, ...).
 pub type Axis = ([u8; 4], f32);
 
+/// An axis a variable font has, on the scale it has it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AxisRange {
+    pub tag: [u8; 4],
+    pub min: f32,
+    pub default: f32,
+    pub max: f32,
+}
+
 /// Axes are held to this many steps of a unit, so that what a keyframe sweeps through comes to a
 /// number of instances a cache can hold.
 const AXIS_STEPS: f32 = 64.0;
@@ -291,6 +300,14 @@ impl Face {
     pub fn units_per_em(&self) -> f32 {
         self.font().map(|f| f.metrics(Size::unscaled(), LocationRef::default()).units_per_em as f32).filter(|u| *u > 0.0).unwrap_or(1000.0)
     }
+    /// The axes of a variable font, in the order it lists them; none for any other.
+    pub fn axes(&self) -> Vec<AxisRange> {
+        let Some(font) = self.font() else { return Vec::new() };
+        font.axes()
+            .iter()
+            .map(|axis| AxisRange { tag: axis.tag().to_be_bytes(), min: axis.min_value(), default: axis.default_value(), max: axis.max_value() })
+            .collect()
+    }
     /// Glyph for a character (None when the face does not cover it).
     pub fn glyph(&self, c: char) -> Option<u32> {
         self.font()?.charmap().map(c).map(|g| g.to_u32()).filter(|g| *g != 0)
@@ -444,6 +461,17 @@ pub fn families() -> Vec<(String, Vec<String>)> {
             (k, v.into_iter().map(|(_, _, s)| s).collect())
         })
         .collect()
+}
+
+/// The faces of a family, found as [`resolve`] finds it: none when no font has that name.
+pub fn faces_of(family: &str) -> Vec<Arc<Face>> {
+    let of = || all_faces().into_iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect::<Vec<_>>();
+    let found = of();
+    if !found.is_empty() || family.is_empty() || system_scanned() {
+        return found;
+    }
+    scan_system();
+    of()
 }
 
 /// The face chosen for a family/style request, plus synthetic emboldening / slant when the family

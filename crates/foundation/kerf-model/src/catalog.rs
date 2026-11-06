@@ -1086,7 +1086,7 @@ fn builtin_catalog() -> Catalog {
         .param(
             P::number("wght", 0.0)
                 .range(0.0, 1000.0)
-                .doc("A variable font's axes; 0 is the font's own."),
+                .doc("A variable font's axes (`look` `font`); 0 is the font's own."),
         )
         .param(P::number("wdth", 0.0).range(0.0, 1000.0))
         .param(P::number("slnt", 0.0).range(-90.0, 90.0))
