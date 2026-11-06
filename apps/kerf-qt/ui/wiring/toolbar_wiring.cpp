@@ -373,6 +373,7 @@ void ToolbarWiring::buildAppMenu() {
     addCommandItem(menu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
     addCommandItem(menu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
     addCommandItem(menu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
+    addCommandItem(menu, QStringLiteral("view.graph"), QStringLiteral("Graph Editor"), "appMenu.graph");
     menu->addSeparator();
     addCommandItem(menu, QStringLiteral("workspace.finish"), QStringLiteral("Scopes, loudness, QC"), "appMenu.finish");
     addCommandItem(menu, QStringLiteral("workspace.deliver"), QStringLiteral("Deliver"), "appMenu.deliver");
