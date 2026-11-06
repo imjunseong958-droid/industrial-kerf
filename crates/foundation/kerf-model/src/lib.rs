@@ -34,4 +34,8 @@ pub use ops::{
 pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};
 pub use validate::validate;
+
+/// The effect that gives a `gen=shape` clip another outline. It draws no pass of its own: the shape
+/// reads it where it draws.
+pub const SHAPE_OUTLINE: &str = "shape.outline";
 pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};

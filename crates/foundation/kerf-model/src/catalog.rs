@@ -357,6 +357,43 @@ pub struct FxDef {
     pub reads_from: u32,
 }
 
+/// The numbers of an outline, as `shape` and `shape.outline` both say them.
+fn figure_params(def: FxDef) -> FxDef {
+    use ParamDef as P;
+    def.param(P::choice(
+        "kind",
+        &["rect", "ellipse", "polygon", "star", "path"],
+    ))
+    .param(
+        P::number("width", 0.3)
+            .range(0.0, 100.0)
+            .unit("frame heights"),
+    )
+    .param(
+        P::number("height", 0.3)
+            .range(0.0, 100.0)
+            .unit("frame heights"),
+    )
+    .param(
+        P::number("round", 0.0)
+            .range(0.0, 10.0)
+            .unit("frame heights")
+            .doc("A rect's corners."),
+    )
+    .param(
+        P::number("sides", 5.0)
+            .range(2.0, 200.0)
+            .doc("A polygon's sides, or a star's points."),
+    )
+    .param(
+        P::number("inner", 0.5)
+            .range(0.0, 1.0)
+            .doc("How far out a star's inner corners are."),
+    )
+    .param(P::points("points").doc("A path's points, in frame heights from the clip's center."))
+    .param(P::toggle("smooth", false).doc("A path through its points in a curve."))
+}
+
 impl FxDef {
     /// The area this definition belongs to, from its kind and the group its
     /// id starts with.
@@ -381,7 +418,7 @@ impl FxDef {
             "image" => Area::Image,
             "blur" | "distort" | "key" | "light" | "matte" | "noise" | "stylize" | "time"
             | "vr" => Area::Vfx,
-            "generate" | "look" | "perspective" | "text" | "transform" => Area::Motion,
+            "generate" | "look" | "perspective" | "shape" | "text" | "transform" => Area::Motion,
             _ => Area::Edit,
         }
     }
@@ -1060,43 +1097,20 @@ fn builtin_catalog() -> Catalog {
             "Applies its effects to every layer beneath it.",
         )
         .category("Utility"),
-        FxDef::new(
+        figure_params(FxDef::new(
             "shape",
             FxKind::Generator,
             Domain::Video,
-            "A shape, filled and stroked. Its stroke can be trimmed along its length, for a line that draws itself on.",
-        )
+            "A shape, filled and stroked. Its stroke can be trimmed along its length, for a line that draws itself on, and tapered.",
+        ))
         .category("Generate")
-        .param(P::choice("kind", &["rect", "ellipse", "polygon", "star", "path"]))
-        .param(
-            P::number("width", 0.3)
-                .range(0.0, 100.0)
-                .unit("frame heights"),
-        )
-        .param(
-            P::number("height", 0.3)
-                .range(0.0, 100.0)
-                .unit("frame heights"),
-        )
-        .param(
-            P::number("round", 0.0)
-                .range(0.0, 10.0)
-                .unit("frame heights")
-                .doc("A rect's corners."),
-        )
-        .param(
-            P::number("sides", 5.0)
-                .range(2.0, 200.0)
-                .doc("A polygon's sides, or a star's points."),
-        )
-        .param(
-            P::number("inner", 0.5)
-                .range(0.0, 1.0)
-                .doc("How far out a star's inner corners are."),
-        )
-        .param(P::points("points").doc("A path's points, in frame heights from the clip's center."))
         .param(P::toggle("closed", true).doc("Whether a path joins up and fills."))
-        .param(P::toggle("smooth", false).doc("A path through its points in a curve."))
+        .param(
+            P::number("offset", 0.0)
+                .range(-10.0, 10.0)
+                .unit("frame heights")
+                .doc("Grows it; a negative shrinks it."),
+        )
         .param(P::color("fill", Rgba::WHITE))
         .param(P::color("stroke", Rgba::WHITE))
         .param(
@@ -1118,6 +1132,44 @@ fn builtin_catalog() -> Catalog {
             P::number("trim_offset", 0.0)
                 .range(-100.0, 100.0)
                 .doc("The trimmed part moved along the length."),
+        )
+        .param(
+            P::number("taper_start", 0.0)
+                .range(0.0, 1.0)
+                .doc("How much of the stroke it takes to widen from nothing."),
+        )
+        .param(
+            P::number("taper_end", 0.0)
+                .range(0.0, 1.0)
+                .doc("How much of the stroke it takes to narrow to nothing."),
+        ),
+        figure_params(FxDef::new(
+            crate::SHAPE_OUTLINE,
+            FxKind::Effect,
+            Domain::Video,
+            "Shape Outline: another outline on a `gen=shape` clip, combined with what comes before it, for a hole, a part added, or what overlaps. It is part of the shape rather than a filter on its picture.",
+        ))
+        .category("Generate")
+        .param(P::choice(
+            "mode",
+            &["add", "subtract", "intersect", "difference"],
+        ))
+        .param(
+            P::number("x", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights")
+                .doc("From the clip's center."),
+        )
+        .param(
+            P::number("y", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights")
+                .doc("From the clip's center."),
+        )
+        .param(
+            P::number("rotation", 0.0)
+                .range(-36000.0, 36000.0)
+                .unit("degrees"),
         ),
         FxDef::new(
             "particles",

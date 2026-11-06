@@ -96,6 +96,10 @@ sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-p
 moves the edge into the nearest pause of the media's sound, or onto a cut of
 its picture, by its index; within half a second unless given.
 
+The effect `shape.outline@1` combines another outline with a `gen=shape` clip, in order, by `mode`
+(add, subtract, intersect, difference), with the shape's `kind`, `width`, `height`, `round`, `sides`,
+`inner`, `points`, `smooth`, and `x`, `y`, `rotation` from its center. Its numbers animate.
+
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that
 effects such as `generate.audiowaveform path=<name>` read. Linked clips (a picture
@@ -120,10 +124,9 @@ pub fn reference(catalog: &Catalog) -> String {
         (FxKind::Generator, "Generators"),
     ] {
         writeln!(out, "\n## {title}").unwrap();
-        for fx in catalog
-            .all()
-            .filter(|fx| fx.kind == kind && fx.engine == Engine::Graph)
-        {
+        for fx in catalog.all().filter(|fx| {
+            fx.kind == kind && fx.engine == Engine::Graph && fx.id != kerf_model::SHAPE_OUTLINE
+        }) {
             out.push_str(&fx_reference(fx));
         }
     }

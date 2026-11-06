@@ -143,6 +143,8 @@ fn plan(def: &FxDef) -> Option<Plan> {
         // An adjustment layer alone draws nothing.
         (FxKind::Generator, _) if def.id == "adjustment" => None,
         (FxKind::Generator, _) => Some(Plan::Generator),
+        // It goes only on a shape, so it has no picture of its own to show.
+        (FxKind::Effect, _) if def.id == kerf_model::SHAPE_OUTLINE => None,
         (FxKind::Effect, Engine::Raster | Engine::Kerf) => Some(Plan::Raster),
         (FxKind::Effect, Engine::Graph) => Some(Plan::Composited),
         _ => None,

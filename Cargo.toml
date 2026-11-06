@@ -57,6 +57,8 @@ license = "MIT"
 serde = { version = "1", features = ["derive", "rc"] }
 rayon = "1"
 proptest = "1"
+kurbo = "0.13"
+linesweeper = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

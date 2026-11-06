@@ -695,6 +695,25 @@ impl Validator<'_> {
                         domain,
                         &effect.params,
                     );
+                    if effect.fx == crate::SHAPE_OUTLINE {
+                        if !matches!(&clip.content, Content::Generator { fx, .. } if fx == "shape") {
+                            self.error(
+                                "shape.outline",
+                                id,
+                                format!("`{id}`: `{}` goes on a `gen=shape` clip", effect.fx),
+                            );
+                        }
+                        let path = matches!(effect.params.get("kind"), Some(Param::Static(Value::Enum(kind))) if kind == "path");
+                        if let (true, Some(Param::Static(Value::Text(points)))) = (path, effect.params.get("points")) {
+                            if crate::path::parse_points(points).is_ok_and(|points| points.len() < 3) {
+                                self.error(
+                                    "param.invalid",
+                                    id,
+                                    format!("`{id}`: an outline's `points` need at least three to hold an area"),
+                                );
+                            }
+                        }
+                    }
                     let title =
                         matches!(&clip.content, Content::Generator { fx, .. } if fx == "title");
                     if let Some(look) = self.catalog.look(effect.fx.as_str(), effect.version) {

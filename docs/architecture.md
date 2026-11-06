@@ -180,7 +180,8 @@ To add: layered grades as stacked effects.
 ### Motion
 
 Has: keyframes (hold, linear, easings, Bezier curves) with a graph editor in the editor (`apps/kerf-qt/ui/graph_editor.h`), transforms, titles with reveals by character or
-word, shapes with trimmed strokes and particles worked out from their birth (`kerf-motion`, so any frame
+word, shapes whose outlines combine and offset (`fx shape.outline@1`, `offset`, on a sweep carried from
+EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render/three_d/adv` at
 `5c54866` has what to carry next: intersecting planes, shadows, and depth of field.
@@ -193,7 +194,7 @@ second document type, and an agent learns one model. To add, in order:
    `MotionPath` by a table of values). The overlay does not follow a parent or a clip in depth. The graph
    editor zooms and pans its time axis, frames keys, and moves several as one edit; its value axis still
    fits each number to the plot.
-2. More of shapes, from EffectCraft's `path` (booleans, offsets, variable strokes), and variable fonts.
+2. Variable fonts in titles.
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.
