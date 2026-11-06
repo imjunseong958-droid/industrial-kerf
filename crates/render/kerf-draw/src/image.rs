@@ -32,6 +32,35 @@ impl Image {
         Self { w, h, px }
     }
 
+    /// Straight 16-bit little-endian RGBA, `stride` bytes a row, with each pixel's code values
+    /// (0..1) taken into linear light by `convert`. Opaque unless `alpha` says the picture's
+    /// transparency counts.
+    pub fn from_rgba16(
+        rgba: &[u8],
+        (w, h): (usize, usize),
+        stride: usize,
+        alpha: bool,
+        convert: impl Fn([f32; 3]) -> [f32; 3] + Sync,
+    ) -> Self {
+        let mut image = Self::new(w, h);
+        image
+            .px
+            .par_chunks_mut(w * 4)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let line = &rgba[y * stride..y * stride + w * 8];
+                for (pixel, bytes) in row.chunks_exact_mut(4).zip(line.chunks_exact(8)) {
+                    let code = |at: usize| {
+                        f32::from(u16::from_le_bytes([bytes[at], bytes[at + 1]])) / 65535.0
+                    };
+                    let a = if alpha { code(6) } else { 1.0 };
+                    let [r, g, b] = convert([code(0), code(2), code(4)]);
+                    pixel.copy_from_slice(&[r * a, g * a, b * a, a]);
+                }
+            });
+        image
+    }
+
     /// Straight sRGB-encoded RGBA bytes, `stride` bytes a row, in linear
     /// light. Opaque unless `alpha` says the picture's transparency counts.
     pub fn from_rgba8(rgba: &[u8], w: usize, h: usize, stride: usize, alpha: bool) -> Self {

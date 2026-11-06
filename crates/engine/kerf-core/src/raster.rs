@@ -263,6 +263,7 @@ impl Planner<'_> {
                     width: job.width,
                     height: job.height,
                     alpha: true,
+                    ..Default::default()
                 }),
                 audio: None,
                 reel: None,

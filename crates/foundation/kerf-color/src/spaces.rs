@@ -136,8 +136,9 @@ pub enum Curve {
 }
 
 /// Source colour spaces offered by Interpret Footage ▸ Color Management.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColorSpace {
+    #[default]
     Rec709,
     Srgb,
     /// Rec. 2020 SDR (BT.2020 primaries, BT.709-style transfer).
@@ -192,6 +193,11 @@ impl ColorSpace {
     ];
 
     /// Stable id used in commands and project files.
+    /// The color space with this id, as a document writes it.
+    pub fn from_id(id: &str) -> Option<ColorSpace> {
+        ColorSpace::ALL.into_iter().find(|space| space.id() == id)
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             ColorSpace::Rec709 => "rec709",

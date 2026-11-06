@@ -14,7 +14,7 @@ use kerf_model::{
     apply, track_role, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Domain, Edge, Effect,
     FxDef, FxKind, Id, Interp, Keyframe, MarkerChange, MarkerColor, Mask, MaskMode, MaskShape,
     Media, NewClip, Op, Param, ParamDef, ParamType, Project, Rate, Ratio, Rejected, Sequence,
-    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange, Value, VideoInfo,
+    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange, Value,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -606,11 +606,7 @@ pub(crate) fn media_from_probe(
         .width
         .zip(probe.height)
         .filter(|(width, height)| *width > 0 && *height > 0)
-        .map(|(width, height)| VideoInfo {
-            width,
-            height,
-            alpha: probe.alpha == Some(true),
-        });
+        .map(|(width, height)| probe.video_info(width, height));
     let audio = (probe.has_audio == Some(true)).then_some(AudioInfo {
         channels: 2,
         sample_rate: 48_000,

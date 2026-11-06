@@ -588,7 +588,7 @@ fn unknown_param(
     )
 }
 
-/// `path= rate= [tc=] dur= [video= [alpha=]] [audio=] [reel=]`.
+/// `path= rate= [tc=] dur= [video= [alpha=] [bits=] [color=]] [audio=] [reel=]`.
 pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Diagnostic> {
     let line = fields.line();
     let path = fields
@@ -616,10 +616,28 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
     if alpha && size.is_none() {
         return Err(line.error(1, "`alpha=` needs `video=`"));
     }
+    let bits = fields.take_with("bits", |text| match text {
+        "8" | "10" | "12" | "16" => text.parse::<u8>().map_err(|error| error.to_string()),
+        _ => Err(format!("`{text}` is not 8, 10, 12, or 16 bits")),
+    })?;
+    let color = fields.take_with("color", |text| {
+        kerf_model::ColorSpace::from_id(text).ok_or_else(|| {
+            let known: Vec<&str> = kerf_model::ColorSpace::ALL
+                .iter()
+                .map(|space| space.id())
+                .collect();
+            format!("unknown color space `{text}`; use one of {}", known.join(", "))
+        })
+    })?;
+    if (bits.is_some() || color.is_some()) && size.is_none() {
+        return Err(line.error(1, "`bits=` and `color=` need `video=`"));
+    }
     let video = size.map(|(width, height)| VideoInfo {
         width,
         height,
         alpha,
+        bits: bits.unwrap_or(8),
+        color: color.unwrap_or_default(),
     });
     let audio = fields.take_with("audio", parse_audio)?;
     let reel = fields.take_text("reel")?.map(str::to_owned);
@@ -879,6 +897,12 @@ pub(crate) fn media_line(media: &Media) -> String {
         write!(line, " video={}x{}", video.width, video.height).unwrap();
         if video.alpha {
             line.push_str(" alpha=true");
+        }
+        if video.bits != 8 {
+            write!(line, " bits={}", video.bits).unwrap();
+        }
+        if video.color != kerf_model::ColorSpace::default() {
+            write!(line, " color={}", video.color.id()).unwrap();
         }
     }
     if let Some(audio) = media.audio {

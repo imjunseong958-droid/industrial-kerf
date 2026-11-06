@@ -92,6 +92,13 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 
 - `alpha=true` after `video=` marks media whose picture carries
   transparency; compositing keeps it.
+- `bits=` (8, the default, 10, 12, or 16) says how deep a picture is, and drawing keeps
+  all of it, so a grade that stretches it does not band. `color=` says how its code values
+  become light: `rec709` (the default), `srgb`, `rec2020`, `p3d65`, `rec2100-pq`,
+  `rec2100-hlg`, `linear709`, or a camera's log such as `slog3-sgamut3cine`, `logc3-awg3`,
+  `logc4-awg4`, `vlog-vgamut`, `clog3-cinemagamut`, or `applelog`. HDR and log come in tone
+  mapped for an SDR picture. Importing finds both from the file's tags; log footage rarely
+  tags itself, so write its `color=` by hand, with `media replace`.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,

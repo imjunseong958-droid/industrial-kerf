@@ -101,14 +101,13 @@ Three limits remain, in this order:
    reading another track, a sound, or a file is never kept. Renders do not keep frames, so
    rendering again after a small edit still draws everything; a cache on disk would change
    that, and EffectCraft's `render/src/disk_cache.rs` is a start.
-3. **Eight-bit input.** Footage decodes to 8-bit sRGB RGBA (`footage.rs`). The working
-   picture is float, but 10-bit, log, and HDR footage has lost its range before
-   anything sees it. No grade can bring that back, so the color area depends on fixing
-   it: decode at the source's depth, with its primaries and transfer, into a
-   scene-linear working space. FilmCraft's `composite.wgsl` samples Y'CbCr planes and
-   PQ and HLG in the shader. On Apple, handing decoded surfaces to the GPU without a
-   copy needs `unsafe`, which the workspace forbids, so that gets one small crate with
-   the exception written down. Scaling footage is the other cost here: 4K footage in a
+3. **Eight-bit output.** Footage now decodes at its depth, with its transfer and gamut, into
+   the float working picture (`bits=` and `color=` on a media line, found on import):
+   `InputTransform` on the CPU, `input.wgsl` on the GPU. HDR and log are tone mapped for SDR,
+   and frames still leave as 8-bit sRGB, so a render cannot be 10-bit or HDR, scopes read 8
+   bits, and a smooth gradient can band on the way out. On Apple, handing decoded surfaces to
+   the GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
+   crate with the exception written down. Scaling footage is another cost: 4K footage in a
    1080p sequence spends more converting (12 ms) than 4K shown whole (5 ms).
 
 ## The areas
@@ -145,7 +144,7 @@ tonal zones, a histogram, the cast, saturation, the skin tone line, and the dens
 Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
 also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
 
-To add: color management (needs deep input), the Lumetri presets (cut in `6eafef8`), and
+To add: output color (10-bit and HDR delivery), the Lumetri presets (cut in `6eafef8`), and
 layered grades as stacked effects.
 
 ### Motion
@@ -215,6 +214,6 @@ measurements, tracks as data, and check findings for what a viewer would notice.
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. These ideas are worth doing our own way: one kernel source
   run on the CPU and compiled to WGSL, which would end writing every effect twice;
-  decoded IOSurfaces as wgpu textures for deep input; a fact sheet for footage (faces, the
+  decoded IOSurfaces as wgpu textures, to skip the copy; a fact sheet for footage (faces, the
   subject, on-screen text, camera motion) beside what `kerfd` indexes now; and
   checks for clipped text, contrast, and safe areas.

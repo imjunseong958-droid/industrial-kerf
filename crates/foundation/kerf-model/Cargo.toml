@@ -6,3 +6,4 @@ license.workspace = true
 description = "Exact-time editing kernel for Kerf: model, catalog, validation, and NLE operations"
 
 [dependencies]
+kerf-color = { path = "../kerf-color" }

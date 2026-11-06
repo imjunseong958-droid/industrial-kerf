@@ -3132,6 +3132,8 @@ mod tests {
             fps: Some(24.0),
             has_audio: Some(true),
             alpha: None,
+            bits: None,
+            color: None,
             video_codec: None,
             audio_codec: None,
         };
@@ -3160,6 +3162,8 @@ mod tests {
             fps: Some(24.0),
             has_audio: Some(true),
             alpha: None,
+            bits: None,
+            color: None,
             video_codec: None,
             audio_codec: None,
         };
@@ -3472,6 +3476,8 @@ mod tests {
             fps: Some(25.0),
             has_audio: Some(true),
             alpha: Some(true),
+            bits: None,
+            color: None,
             ..Default::default()
         };
         let id = kerf_model::Id::new("m1").unwrap();
@@ -3485,7 +3491,8 @@ mod tests {
             Some(kerf_model::VideoInfo {
                 width: 1280,
                 height: 720,
-                alpha: true
+                alpha: true,
+                ..Default::default()
             })
         );
         assert!(media.audio.is_some());

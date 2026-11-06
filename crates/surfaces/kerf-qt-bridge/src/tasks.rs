@@ -9,7 +9,7 @@ use kerf_collab::scaffold::{self, NewProject, PRESETS_DIR};
 use kerf_engine::ProbeInfo;
 use kerf_lang::preset::{self, Binding, Preset};
 use kerf_lang::Clock;
-use kerf_model::{AudioInfo, Catalog, Id, Media, Rate, Time, VideoInfo};
+use kerf_model::{AudioInfo, Catalog, Id, Media, Rate, Time};
 use kerf_runtime::RuntimeClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -192,11 +192,7 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
         .width
         .zip(info.height)
         .filter(|(width, height)| *width > 0 && *height > 0)
-        .map(|(width, height)| VideoInfo {
-            width,
-            height,
-            alpha: info.alpha == Some(true),
-        });
+        .map(|(width, height)| info.video_info(width, height));
     let audio = (info.has_audio == Some(true)).then_some(AudioInfo {
         channels: 2,
         sample_rate: 48_000,

@@ -706,6 +706,7 @@ fn media_replace_prints_every_field_and_replays() {
             width: 1280,
             height: 720,
             alpha: false,
+            ..Default::default()
         }),
         audio: None,
         reel: None,

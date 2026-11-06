@@ -6,6 +6,7 @@ license.workspace = true
 description = "Kerf's compositor: a sequence drawn frame by frame in linear light, with footage decoded by libav"
 
 [dependencies]
+kerf-color = { path = "../../foundation/kerf-color" }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-draw = { path = "../../render/kerf-draw" }
 kerf-fx = { path = "../../effects/kerf-fx" }

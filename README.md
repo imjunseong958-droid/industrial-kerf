@@ -80,7 +80,9 @@ The graph can still render a program without FilmCraft's effects and
 transitions: it first bakes a clip's kept EffectCraft effects into a lossless
 file with transparency in `.kerf/cache/derived`, and plays that in the
 clip's place. Media can carry transparency too (`alpha=true`, found from the
-pixel format on import), which compositing keeps. `kerf-fx` generates the
+pixel format on import), which compositing keeps, and depth and color (`bits=10
+color=rec2100-hlg`, found from its tags on import, or written by hand for log footage), which
+drawing honors, with HDR and log tone mapped for an SDR picture. `kerf-fx` generates the
 catalog tables; after changing the effects, run
 `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 

@@ -17,6 +17,7 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::{decoder, filter, frame, media};
+use kerf_color::{ColorPipeline, ColorSpace, InputTransform, Range};
 use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Rate, Ratio, Time};
@@ -32,6 +33,21 @@ const READ_AHEAD_SECONDS: i64 = 2;
 /// Decoded frames kept by default.
 const CACHE_BUDGET: usize = 512 << 20;
 
+/// How footage in `space` becomes working light. Made once each: each holds tables.
+pub(crate) fn input_transform(space: ColorSpace) -> &'static InputTransform {
+    static MADE: Mutex<BTreeMap<&'static str, &'static InputTransform>> =
+        Mutex::new(BTreeMap::new());
+    lock(&MADE).entry(space.id()).or_insert_with(|| {
+        // Cameras record in video range, and the file's own range is taken out in decoding.
+        Box::leak(Box::new(InputTransform::new(
+            space,
+            Range::Limited,
+            &ColorPipeline::REC709,
+            None,
+        )))
+    })
+}
+
 /// What a media clip shows: its media's frames, from `source_in` at
 /// `speed`.
 #[derive(Clone, Debug)]
@@ -44,6 +60,8 @@ pub(crate) struct ClipSource {
     pub height: u32,
     /// The picture's transparency counts; otherwise it is opaque.
     pub alpha: bool,
+    /// How its 16-bit code values become light, for footage worth more than 8 bits.
+    pub deep: Option<&'static InputTransform>,
     pub source_in: Time,
     pub speed: Ratio,
     pub duration: Time,
@@ -126,8 +144,8 @@ impl DecoderPool {
             .collect()
     }
 
-    /// Frame `index` of `clip`'s file as straight RGBA at `size`; none for
-    /// a file that could not be read, whose problem is kept.
+    /// Frame `index` of `clip`'s file as straight RGBA at `size`, 16 bits a component for deep
+    /// footage; none for a file that could not be read, whose problem is kept.
     fn picture(&self, clip: &ClipSource, index: i64, size: (u32, u32)) -> Option<frame::Video> {
         let (loan, mut decoder) = match self.checkout(clip, index) {
             Ok(checked_out) => checked_out,
@@ -136,7 +154,7 @@ impl DecoderPool {
                 return None;
             }
         };
-        let read = decoder.picture(index, size);
+        let read = decoder.picture(index, size, clip.deep.is_some());
         self.give_back(loan, decoder);
         read.inspect_err(|problem| {
             lock(&self.problems).insert(clip.path.clone(), problem.clone());
@@ -246,41 +264,41 @@ impl Pictures {
             return Some(picture);
         }
         let rgba = self.pool.picture(clip, frame, size)?;
-        let picture = Arc::new(Picture::from_rgba8(
-            rgba.data(0),
-            rgba.width() as usize,
-            rgba.height() as usize,
-            rgba.stride(0),
-            clip.alpha,
-        ));
+        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+        let picture = Arc::new(match clip.deep {
+            Some(input) => {
+                Picture::from_rgba16(rgba.data(0), (w, h), rgba.stride(0), clip.alpha, |code| {
+                    input.convert(code)
+                })
+            }
+            None => Picture::from_rgba8(rgba.data(0), w, h, rgba.stride(0), clip.alpha),
+        });
         lock(&self.cache).insert(key, picture.clone());
         Some(picture)
     }
 
-    /// The frame clip `index` shows at clip time `at`, decoded at `size`, as
-    /// the 8-bit straight RGBA it decodes to: `(rgba, stride, alpha)`.
-    pub fn bytes(
-        &self,
-        index: usize,
-        at: Time,
-        size: (u32, u32),
-    ) -> Option<(Arc<frame::Video>, u32, bool)> {
+    /// The frame clip `index` shows at clip time `at`, decoded at `size`, as the straight RGBA it
+    /// decodes to, for the GPU to take into linear light.
+    pub fn decoded(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Decoded> {
         let clip = self.clips.get(index)?;
         let frame = clip.frame_at_time(at);
         let size = (size.0.max(1), size.1.max(1));
         let key = (clip.path.clone(), frame, size);
         // Not held while decoding: other frames go on.
         let kept = lock(&self.decoded).get(&key);
-        let decoded = match kept {
-            Some(decoded) => decoded,
+        let picture = match kept {
+            Some(picture) => picture,
             None => {
-                let decoded = Arc::new(self.pool.picture(clip, frame, size)?);
-                lock(&self.decoded).insert(key, decoded.clone());
-                decoded
+                let picture = Arc::new(self.pool.picture(clip, frame, size)?);
+                lock(&self.decoded).insert(key, picture.clone());
+                picture
             }
         };
-        let stride = decoded.stride(0) as u32;
-        Some((decoded, stride, clip.alpha))
+        Some(Decoded {
+            picture,
+            alpha: clip.alpha,
+            deep: clip.deep,
+        })
     }
 
     /// The frame clip `index` shows at clip time `at`, opaque RGBA at its
@@ -299,6 +317,13 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A frame as it decoded, and how to read it.
+pub(crate) struct Decoded {
+    pub picture: Arc<frame::Video>,
+    pub alpha: bool,
+    pub deep: Option<&'static InputTransform>,
 }
 
 type FrameKey = (String, i64, (u32, u32));
@@ -465,9 +490,14 @@ impl Decoder {
         (ticks + per / 2).div_euclid(per) as i64
     }
 
-    /// Frame `index` as straight RGBA at `size`: the last frame starting
-    /// by its start, give or take half a frame for timestamps that round.
-    fn picture(&mut self, index: i64, size: (u32, u32)) -> Result<frame::Video, String> {
+    /// Frame `index` as straight RGBA at `size`, 16 bits a component when `deep`: the last frame
+    /// starting by its start, give or take half a frame for timestamps that round.
+    fn picture(
+        &mut self,
+        index: i64,
+        size: (u32, u32),
+        deep: bool,
+    ) -> Result<frame::Video, String> {
         let target = self.pts_of(index);
         let limit = (target + self.pts_of(index + 1)) / 2;
         let ahead = i64::from(self.rate.num()) * READ_AHEAD_SECONDS / i64::from(self.rate.den());
@@ -496,8 +526,9 @@ impl Decoder {
             .map(|(_, frame)| frame)
             .ok_or_else(|| format!("{}: frame {index} could not be read", self.path))?;
         let mut convert = match self.convert.take() {
-            Some(convert) if convert.fits(shown, size) => convert,
-            _ => Convert::new(shown, size).map_err(|error| format!("{}: {error}", self.path))?,
+            Some(convert) if convert.fits(shown, size, deep) => convert,
+            _ => Convert::new(shown, size, deep)
+                .map_err(|error| format!("{}: {error}", self.path))?,
         };
         // The filter takes the frame it is given and leaves it empty, so it
         // gets a copy: the frame read stays to be drawn again, at another
@@ -577,10 +608,11 @@ struct Convert {
     graph: filter::Graph,
     input: (ffmpeg::format::Pixel, u32, u32),
     size: (u32, u32),
+    deep: bool,
 }
 
 impl Convert {
-    fn new(frame: &frame::Video, size: (u32, u32)) -> Result<Self, ffmpeg::Error> {
+    fn new(frame: &frame::Video, size: (u32, u32), deep: bool) -> Result<Self, ffmpeg::Error> {
         let (width, height) = (frame.width(), frame.height());
         let format = frame.format();
         let name = format
@@ -598,10 +630,11 @@ impl Convert {
             "video_size={width}x{height}:pix_fmt={name}:time_base=1/1:pixel_aspect={}/{}",
             aspect.0, aspect.1
         );
+        let out = if deep { "rgba64le" } else { "rgba" };
         let spec = if (width, height) == size {
-            "format=rgba".to_owned()
+            format!("format={out}")
         } else {
-            format!("scale=w={}:h={}:flags=bicubic,format=rgba", size.0, size.1)
+            format!("scale=w={}:h={}:flags=bicubic,format={out}", size.0, size.1)
         };
         let mut graph = filter::Graph::new();
         let buffer = filter::find("buffer").ok_or(ffmpeg::Error::FilterNotFound)?;
@@ -614,11 +647,14 @@ impl Convert {
             graph,
             input: (format, width, height),
             size,
+            deep,
         })
     }
 
-    fn fits(&self, frame: &frame::Video, size: (u32, u32)) -> bool {
-        self.input == (frame.format(), frame.width(), frame.height()) && self.size == size
+    fn fits(&self, frame: &frame::Video, size: (u32, u32), deep: bool) -> bool {
+        self.input == (frame.format(), frame.width(), frame.height())
+            && self.size == size
+            && self.deep == deep
     }
 
     fn run(&mut self, frame: &frame::Video) -> Result<frame::Video, String> {
@@ -668,6 +704,7 @@ mod tests {
             width: 16,
             height: 9,
             alpha: false,
+            deep: None,
             source_in: Rate::FPS_24.time_of(source_in),
             speed: Ratio::parse(speed).unwrap(),
             duration: Rate::FPS_24.time_of(duration),

@@ -292,6 +292,7 @@ pub fn from_timeline(
             width,
             height,
             alpha: false,
+            ..Default::default()
         });
         media.push(Media {
             id: claim(item.id.as_deref(), "m"),

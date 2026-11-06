@@ -1236,6 +1236,7 @@ fn rendered_preview(
                 width: sequence.width,
                 height: sequence.height,
                 alpha: false,
+                ..Default::default()
             }),
             audio: Some(AudioInfo {
                 channels: 2,
