@@ -82,6 +82,22 @@ const SCENES: &[(&str, &str)] = &[
         "3d point shadow",
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set x=0.2 y=-0.1 z=-0.6 shadow=1",
     ),
+    (
+        "3d focus flat",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=0.5 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.03",
+    ),
+    (
+        "3d focus wide",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=2 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.1",
+    ),
+    (
+        "3d focus turned",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true rotate_y=60 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.05",
+    ),
+    (
+        "3d focus two",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=0.6\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.2\n  track V3 video\n    clip c3 gen=camera@1 at=0f dur=96f\n      set aperture=0.05",
+    ),
 ];
 
 fn main() {

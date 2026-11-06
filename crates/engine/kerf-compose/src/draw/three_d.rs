@@ -8,7 +8,8 @@
 //! it is for the lights. Clips on adjacent 3D tracks draw far to near, and where two of them cross
 //! the run is drawn pixel by pixel, nearest last, so each is cut where they meet. A light with a
 //! `shadow` sends a ray from each pixel to itself, which every other clip in depth may block by as
-//! much as it is opaque there. Depth of field is still to come.
+//! much as it is opaque there. A camera with an `aperture` blurs each clip by how far its plane is from
+//! what it focuses on at each pixel ([`super::focus`]).
 
 use super::*;
 
@@ -16,6 +17,8 @@ use super::*;
 const DEFAULT_FOV: f64 = 40.0;
 /// How near a camera sees, in frame heights.
 const NEAR: f64 = 0.001;
+/// The widest a clip is blurred, in frame heights: as near the camera as can be, a blur has no end.
+const MOST_BLUR: f64 = 0.1;
 /// How much nearer one plane must be than another, in pixels, to go in front of it: less than this
 /// is the same place, as clips laid on one plane are, and they stack as their tracks do.
 const SAME_DEPTH: f32 = 0.01;
@@ -102,6 +105,10 @@ pub(super) struct Scene {
     lights: Vec<Light>,
     /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
     pub casters: Vec<Caster>,
+    /// How far along the camera's way is in focus, in pixels, and how far what is far from that may
+    /// spread: 0 for all of it sharp.
+    focus: f64,
+    aperture: f64,
 }
 
 impl Scene {
@@ -180,6 +187,14 @@ impl Scene {
         let (s, c) = roll.sin_cos();
         let right = add(times(level_right, c), times(level_down, s));
         let down = add(times(level_down, c), times(level_right, -s));
+        // Where the camera's own line meets the plane at that `z`, or straight across from it on a
+        // camera looking along the plane.
+        let sharp = read("focus", 0.0) * height;
+        let focus = if forward[2].abs() > 1e-6 {
+            (sharp - eye[2]) / forward[2]
+        } else {
+            dot(minus([0.0, 0.0, sharp], eye), forward)
+        };
         Self {
             eye,
             right,
@@ -190,7 +205,19 @@ impl Scene {
             height,
             lights,
             casters: Vec::new(),
+            focus,
+            aperture: read("aperture", 0.0) * height,
         }
+    }
+
+    /// How far each pixel of a plane spreads, from its depths along the camera's way.
+    fn blur_radii(&self, depth: &[f32]) -> Vec<f32> {
+        let (focus, aperture) = (self.focus as f32, self.aperture as f32);
+        let most = (self.height * MOST_BLUR) as f32;
+        depth
+            .iter()
+            .map(|depth| super::focus::radius_at(*depth, focus, aperture, most))
+            .collect()
     }
 
     /// Whether any light here is blocked by what is in its way, which takes the pictures of every
@@ -522,13 +549,16 @@ fn projected(
         }
     };
     let row_size = w.max(1) * 4;
-    if with_depth {
+    if with_depth || scene.aperture > 0.0 {
         let mut depth = vec![f32::INFINITY; w * h];
         out.px
             .par_chunks_mut(row_size)
             .zip(depth.par_chunks_mut(w.max(1)))
             .enumerate()
             .for_each(|(y, (row, depth))| draw_row(y, row, Some(depth)));
+        if scene.aperture > 0.0 {
+            out = super::focus::blurred(&out, &scene.blur_radii(&depth));
+        }
         (out, depth)
     } else {
         out.px

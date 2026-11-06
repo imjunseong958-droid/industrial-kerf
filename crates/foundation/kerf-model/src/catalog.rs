@@ -770,12 +770,12 @@ fn builtin_catalog() -> Catalog {
             .range(-10.0, 10.0)
             .unit("frame widths")
             .doc(
-                "Horizontal offset of the clip center from the frame center; positive moves right.",
+                "Clip center from the frame center; positive moves right.",
             ),
         P::number("y", 0.0)
             .range(-10.0, 10.0)
             .unit("frame heights")
-            .doc("Vertical offset of the clip center from the frame center; positive moves down."),
+            .doc("Clip center from the frame center; positive moves down."),
         P::text("path", "").doc(
             "A motion path: a smooth curve through `x,y x,y …`, in the units of x and y, added to them.",
         ),
@@ -852,7 +852,7 @@ fn builtin_catalog() -> Catalog {
                 "difference",
             ],
         )
-        .doc("How the layer combines with the layers beneath it."),
+        .doc("How it combines with what is beneath it."),
     ];
     let audio_props = vec![
         P::number("gain", 0.0)
@@ -1054,7 +1054,7 @@ fn builtin_catalog() -> Catalog {
             "title",
             FxKind::Generator,
             Domain::Video,
-            "A line of text. Position it with x and y. `reveal` animates it by character or word, from the look the `from_` numbers give.",
+            "A line of text. `reveal` animates it by character or word, from the look the `from_` numbers give.",
         )
         .category("Generate")
         .param(P::text("text", "").doc("The text to show."))
@@ -1241,7 +1241,7 @@ fn builtin_catalog() -> Catalog {
             "camera",
             FxKind::Generator,
             Domain::Video,
-            "What `three_d` clips are seen through: the topmost showing, from its `x`, `y`, `z`. At its defaults a clip at z=0 looks as in 2D.",
+            "What `three_d` clips are seen through: the topmost showing, from its `x`, `y`, `z`. By default a clip at z=0 looks as in 2D.",
         )
         .category("Utility")
         .param(P::number("pan", 0.0).range(-3600.0, 3600.0).unit("degrees"))
@@ -1252,6 +1252,18 @@ fn builtin_catalog() -> Catalog {
                 .range(1.0, 170.0)
                 .unit("degrees")
                 .doc("Field of view down the frame; smaller zooms in."),
+        )
+        .param(
+            P::number("focus", 0.0)
+                .range(-1000.0, 1000.0)
+                .unit("frame heights")
+                .doc("The `z` that is sharp."),
+        )
+        .param(
+            P::number("aperture", 0.0)
+                .range(0.0, 1.0)
+                .unit("frame heights")
+                .doc("The blur far from `focus`; 0 is none."),
         ),
         FxDef::new(
             "light",
@@ -1266,7 +1278,7 @@ fn builtin_catalog() -> Catalog {
         .param(
             P::number("shadow", 0.0)
                 .range(0.0, 1.0)
-                .doc("How much of it other `three_d` clips block; 0 is none."),
+                .doc("How much other `three_d` clips block; 0 is none."),
         ),
         FxDef::new(
             "null",

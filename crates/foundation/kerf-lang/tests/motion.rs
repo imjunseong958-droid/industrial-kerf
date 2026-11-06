@@ -153,6 +153,11 @@ sequence s1 rate=24 size=1280x720 audio=48000
       set kind=directional shadow={0f:0 24f:0.8} x=0.2 z=1
     clip l2 gen=light@1 at=48f dur=48f
       set shadow=1
+  track V3 video
+    clip k1 gen=camera@1 at=0f dur=48f
+      set aperture=0.05 focus={0f:0 24f:0.5}
+    clip k2 gen=camera@1 at=48f dur=48f
+      set aperture={0f:0 24f:0.1} focus=2
 "##;
 
 #[test]
@@ -169,4 +174,26 @@ fn a_lights_shadow_round_trips_and_a_bad_one_is_refused() {
     for bad in ["shadow=2", "shadow=-0.1", "shadow={0f:0 24f:2}"] {
         refused(&DEPTH.replace("shadow=1", bad), "shadow");
     }
+}
+
+#[test]
+fn a_cameras_focus_round_trips_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in [
+        "aperture=0.05",
+        "focus={0f:0 24f:0.5}",
+        "aperture={0f:0 24f:0.1}",
+        "focus=2",
+    ] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+    refused(&DEPTH.replace("aperture=0.05", "aperture=2"), "aperture");
+    refused(&DEPTH.replace("aperture=0.05", "aperture=-0.1"), "aperture");
+    refused(&DEPTH.replace("focus=2", "focus=2000"), "focus");
+    refused(&DEPTH.replace("focus=2", "focus=near"), "focus");
 }

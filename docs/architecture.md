@@ -185,16 +185,22 @@ EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
-reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy, with hard edges. EffectCraft's `render/three_d/adv` at
-`5c54866` has what to carry next: depth of field.
+reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy, with hard edges. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
+carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
-second document type, and an agent learns one model. To add:
+second document type, and an agent learns one model.
 
-- A motion path on a clip in depth: the picture shows and edits the curve of a selected clip's `path=`, through its
-  parents (`ViewerWidget::setMotionPath`, `parentMotion`; both held to the compositor by a table of values), adding a
-  point with a double-click and removing one with Delete, and shows nothing for a `three_d` clip rather than a wrong curve.
-  Masks on a clip in depth are still drawn flat. The graph editor zooms and pans both axes.
+The picture shows and edits the curve of a selected clip's `path=`, through its parents
+(`ViewerWidget::setMotionPath`, `parentMotion`; both held to the compositor by a table of values), adding a
+point with a double-click and removing one with Delete. The graph editor zooms and pans both axes.
+
+To add:
+
+- Overlays on a clip in depth: a `three_d` clip shows no motion path rather than a wrong curve, and its masks
+  are still drawn flat.
+- Soft shadows, which take several rays a pixel.
+- The rest of EffectCraft's `render/three_d/adv` at `5c54866`: models, extruded text, and environment light.
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.
