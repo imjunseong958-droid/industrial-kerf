@@ -19,8 +19,8 @@
 use crate::overlay::{atempo_filters, captions_filter, escape_drawtext_text, fmt, CaptionCue};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Engine, Id, Interp, Param, Project, Rate, Rgba, Sequence, Time,
-    Track, TrackKind, Transition, Value,
+    Bezier, Catalog, Clip, Content, Domain, Engine, Id, Interp, Param, Project, Rate, Rgba,
+    Sequence, Time, Track, TrackKind, Transition, Value,
 };
 use std::collections::HashMap;
 
@@ -1515,6 +1515,33 @@ fn is_number(param: &Param, value: f64) -> bool {
     matches!(param, Param::Static(Value::Number(n)) if *n == value)
 }
 
+/// How many straight pieces a curve becomes in an FFmpeg expression, which cannot solve a cubic.
+const CURVE_PIECES: usize = 16;
+
+/// Where a curve is at each end of its [`CURVE_PIECES`] pieces.
+fn curve_points(curve: Bezier) -> Vec<f64> {
+    (0..=CURVE_PIECES)
+        .map(|piece| curve.at(piece as f64 / CURVE_PIECES as f64))
+        .collect()
+}
+
+/// A curve as an FFmpeg expression of `u`, in straight pieces.
+fn curve_expression(curve: Bezier, u: &str) -> String {
+    let points = curve_points(curve);
+    let mut expr = fmt(points[CURVE_PIECES]);
+    for piece in (0..CURVE_PIECES).rev() {
+        let (low, high) = (points[piece], points[piece + 1]);
+        let across = format!("({u}*{CURVE_PIECES}-{piece})");
+        expr = format!(
+            "if(lt({u},{}),({}+({})*{across}),{expr})",
+            fmt((piece + 1) as f64 / CURVE_PIECES as f64),
+            fmt(low),
+            fmt(high - low)
+        );
+    }
+    format!("({expr})")
+}
+
 /// A numeric parameter as an FFmpeg expression of clip time `tau`, with
 /// the same interpolation curves as `Param::value_at`.
 fn expression(param: &Param, tau: &str) -> String {
@@ -1534,6 +1561,7 @@ fn expression(param: &Param, tau: &str) -> String {
             Interp::EaseIn => format!("({u}*{u})"),
             Interp::EaseOut => format!("(1-(1-{u})*(1-{u}))"),
             Interp::Ease => format!("({u}*{u}*(3-2*{u}))"),
+            Interp::Bezier(curve) => curve_expression(curve, &u),
         };
         let segment = format!(
             "({}+({})*{curve})",
@@ -1744,6 +1772,47 @@ mod sound_effect_tests {
             output.status.success(),
             "ffmpeg refused `{chain}`: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[cfg(test)]
+mod curve_tests {
+    use super::*;
+
+    #[test]
+    fn straight_pieces_stay_close_to_the_curve() {
+        for text in [
+            "0.2,0.8,0.4,1",
+            "0.7,0,0.3,1",
+            "0.42,0,0.58,1",
+            "0.3,1.6,0.7,1",
+        ] {
+            let Some(Interp::Bezier(curve)) = Interp::parse(text) else {
+                panic!("{text}");
+            };
+            let points = curve_points(curve);
+            for step in 0..=1000 {
+                let t = f64::from(step) / 1000.0;
+                let place = t * CURVE_PIECES as f64;
+                let piece = (place as usize).min(CURVE_PIECES - 1);
+                let line =
+                    points[piece] + (points[piece + 1] - points[piece]) * (place - piece as f64);
+                assert!((line - curve.at(t)).abs() < 0.02, "{text} at {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_expression_has_every_piece() {
+        let Some(Interp::Bezier(curve)) = Interp::parse("0.2,0.8,0.4,1") else {
+            panic!("a curve");
+        };
+        let expression = curve_expression(curve, "u");
+        assert_eq!(expression.matches("if(lt(u,").count(), CURVE_PIECES);
+        assert_eq!(
+            expression.matches('(').count(),
+            expression.matches(')').count()
         );
     }
 }

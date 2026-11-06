@@ -194,7 +194,7 @@ pub fn print_param(param: &Param, rate: Rate) -> String {
                         format!("{}:{}", print_offset(key.at, rate), print_value(&key.value));
                     if key.interp != Interp::Linear {
                         text.push(':');
-                        text.push_str(key.interp.name());
+                        text.push_str(&key.interp.name());
                     }
                     text
                 })
@@ -270,7 +270,7 @@ pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, Str
                             at,
                             value,
                             Interp::parse(interp).ok_or_else(|| {
-                                format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, or ease")
+                                format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, ease, or a curve's x1,y1,x2,y2")
                             })?,
                         ),
                         _ => return Err(format!("keyframe `{word}` should read time:value or time:value:interp")),

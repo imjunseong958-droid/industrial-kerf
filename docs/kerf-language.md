@@ -143,7 +143,12 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   so they follow earlier lines' edits; they are written into history as the
   timecode they found. `end` always means the end of the sequence, and a
   marker id that holds `-` is read as the id, not as an amount.
-- Keyframe times are relative to the clip: `{0f:0 12f:1:ease}`.
+- Keyframe times are relative to the clip: `{0f:0 12f:1:ease}`. What follows a value is
+  how it moves toward the next keyframe: `linear` (the default), `hold`, `ease-in`,
+  `ease-out`, `ease`, or a curve's two control points, `x1,y1,x2,y2`, as a graph editor
+  gives them (`{0f:0:0.2,0.8,0.4,1 12f:1}`). `x` stays within 0 to 1, and `y` may overshoot
+  to 5 either way, for a bounce. A clip split through a curve keeps its motion on both
+  sides, as two curves.
 
 Internally every time is an exact integer of flicks (1/705,600,000 s), so
 23.976, 29.97 DF, and 48 kHz audio never drift.

@@ -457,3 +457,30 @@ fn a_filled_area_takes_the_picture_around_it() {
     let unfilled = body.replace("path=k1 ", "");
     assert!(center(&unfilled).iter().all(|channel| *channel > 200));
 }
+
+#[test]
+fn a_keyframe_curve_moves_the_picture_along_it() {
+    // A white solid fading in over 24 frames: out fast along the curve, against steadily.
+    let body = |interp: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=48f\n\
+             \x20     set color=#ffffff opacity={{0f:0{interp} 24f:1}}\n"
+        )
+    };
+    let middle = |interp: &str| pixel(&frame(&body(interp), 12, false), 160, 90)[0];
+    let (steady, swift) = (middle(""), middle(":0.1,0.9,0.2,1"));
+    assert!(swift > steady + 20, "{swift} against {steady}");
+    let script = kerf_lang::print_document(
+        &parse_document(
+            &format!("kerf 1\nproject name=\"t\"\n{}", body(":0.1,0.9,0.2,1")),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project,
+        Catalog::builtin(),
+        kerf_lang::PrintOptions::default(),
+    );
+    assert!(script.contains("0f:0:0.1,0.9,0.2,1 "), "{script}");
+}

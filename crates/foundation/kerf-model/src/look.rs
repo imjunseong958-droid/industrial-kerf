@@ -807,7 +807,7 @@ fn val(arg: &Arg) -> Result<Val, String> {
                     [at, value, interp] => (
                         at,
                         value,
-                        Interp::parse(interp).ok_or_else(|| format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, or ease"))?,
+                        Interp::parse(interp).ok_or_else(|| format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, ease, or a curve's x1,y1,x2,y2"))?,
                     ),
                     _ => return Err(format!("keyframe `{key}` should read time:value or time:value:interp")),
                 };

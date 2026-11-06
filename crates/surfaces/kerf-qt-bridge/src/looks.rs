@@ -120,7 +120,7 @@ fn param(param: &Param, ty: &ParamType) -> Option<String> {
                     let mut text = format!("{}s:{}", key.at.seconds(), number(value, time));
                     if key.interp != Interp::Linear {
                         text.push(':');
-                        text.push_str(key.interp.name());
+                        text.push_str(&key.interp.name());
                     }
                     Some(text)
                 })

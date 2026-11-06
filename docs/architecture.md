@@ -150,13 +150,14 @@ layered grades as stacked effects.
 
 ### Motion
 
-Has: keyframes (hold, linear, ease), transforms, titles, generators, 15 looks.
+Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles, generators,
+15 looks.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add, in order:
 
-1. Bezier keyframes and motion paths, from EffectCraft's `keyframe`. The curve
-   comes first since everything else animates on it.
+1. Motion paths: positions that curve in space, on the Bezier keyframes that are in
+   (`kerf_model::Bezier`), and a graph editor in the panel. EffectCraft's `keyframe` has them.
 2. Parenting, then 3D layers, cameras, and lights (EffectCraft's `render/three_d`).
 3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable
    strokes).
