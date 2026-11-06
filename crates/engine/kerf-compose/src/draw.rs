@@ -87,6 +87,7 @@ pub(crate) struct Drawing {
     captions: bool,
     accel: Accel,
     keep_frames: bool,
+    disk: Option<std::sync::Arc<crate::disk::DiskFrames>>,
     /// The LUT files FilmCraft's effects name.
     library: filmcraft::project::Project,
 }
@@ -257,6 +258,7 @@ impl Drawing {
         captions: bool,
         accel: Accel,
         keep_frames: bool,
+        disk: Option<std::sync::Arc<crate::disk::DiskFrames>>,
     ) -> Result<Self> {
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
@@ -291,6 +293,7 @@ impl Drawing {
             captions,
             accel,
             keep_frames,
+            disk,
             library,
         })
     }
@@ -318,22 +321,72 @@ impl Drawing {
     /// The picture at sequence time `at` over black, at `scale` of the
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
-        let key = self
-            .keep_frames
+        let key = (self.keep_frames || self.disk.is_some())
             .then(|| self.frame_key(at, scale))
             .flatten();
-        if let Some(frame) = key.and_then(frames::get) {
+        let kept = key.filter(|_| self.keep_frames);
+        if let Some(frame) = kept.and_then(frames::get) {
             return frame;
         }
+        let on_disk = self.disk_key(key, at, scale);
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
+            if let Some(frame) = disk.get(key, false) {
+                if let Some(kept) = kept {
+                    frames::put(kept, frame.clone());
+                }
+                return frame;
+            }
+        }
         let frame = self.draw_frame(at, scale);
-        if let Some(key) = key {
-            frames::put(key, frame.clone());
+        if let Some(kept) = kept {
+            frames::put(kept, frame.clone());
+        }
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
+            disk.put(key, false, frame.clone());
         }
         frame
     }
 
+    /// See [`Compositor::flush_frames`](crate::Compositor::flush_frames).
+    pub fn flush_frames(&self) {
+        if let Some(disk) = &self.disk {
+            disk.flush();
+        }
+    }
+
+    /// A frame's key on disk: longer than in memory, since it stays longer and there are more.
+    fn disk_key(&self, key: Option<u64>, at: Time, scale: f64) -> Option<u128> {
+        self.disk.as_ref()?;
+        let first = key?;
+        let mut hash = DefaultHasher::new();
+        first.hash(&mut hash);
+        scale.clamp(1.0 / 16.0, 1.0).to_bits().hash(&mut hash);
+        self.hdr.as_ref().map(|output| output.pq).hash(&mut hash);
+        self.hash_sequence(&mut hash, 0, at)?;
+        Some(u128::from(first) << 64 | u128::from(hash.finish()))
+    }
+
     /// See [`Compositor::frame16`](crate::Compositor::frame16).
     pub fn frame16(&self, at: Time, scale: f64) -> Frame {
+        let key = self
+            .disk
+            .is_some()
+            .then(|| self.frame_key(at, scale))
+            .flatten();
+        let on_disk = self.disk_key(key, at, scale);
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
+            if let Some(frame) = disk.get(key, true) {
+                return frame;
+            }
+        }
+        let frame = self.draw_frame16(at, scale);
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
+            disk.put(key, true, frame.clone());
+        }
+        frame
+    }
+
+    fn draw_frame16(&self, at: Time, scale: f64) -> Frame {
         let scale = scale.clamp(1.0 / 16.0, 1.0);
         if let Some(frame) = self.gpu_frame16(at, scale) {
             return frame;

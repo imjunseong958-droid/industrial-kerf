@@ -99,13 +99,17 @@ Three limits remain, in this order:
    frame the GPU. The 72 carried transitions are procedural maths with no kernels (FilmCraft
    has one, Push, in `crates/gpu/src/transition.wgsl`), and they last only as long as a
    cut. EffectCraft's WGSL (`effectcraft/crates/gpu` at `5c54866`) has kernels for many of them.
-2. **Kept frames only live in memory.** Playback, previews, and `look` keep frames by a
-   hash of what they depend on (`Drawing::frame_key`), in `kerf-compose/src/frames.rs`, so
-   a frame comes back from any compositor, and an edit, which makes a new one, only
-   redraws the frames it touches. A clip moved along the timeline keeps its frames. A frame
-   reading another track, a sound, or a file is never kept. Renders do not keep frames, so
-   rendering again after a small edit still draws everything; a cache on disk would change
-   that, and EffectCraft's `render/src/disk_cache.rs` is a start.
+2. **Kept frames.** Playback, previews, and `look` keep frames by a hash of what they depend on
+   (`Drawing::frame_key`), in memory (`frames.rs`) and on disk (`disk.rs`, after EffectCraft's
+   `render/src/disk_cache.rs`), so a frame comes back from any compositor, an edit, which makes a new
+   one, only redraws the frames it touches, and a clip moved along the timeline keeps its frames.
+   Renders use the disk too, so rendering again after a small edit draws only what it changed, and
+   frames last between sessions. A frame reading another track, a sound, or a file is never kept.
+   Files are LZ4, whole or not at all, and go by the code that draws them (`build.rs`), so a new Kerf
+   never reads an older one's pixels. Up to 10 GB (`KERF_FRAME_CACHE_GB`) in the user's cache folder
+   (`KERF_FRAME_CACHE`, or `off`). A title's fonts are not in the key, as in memory.
+   A 96-frame 720p render with Lumetri and a glow took 4.53 s, 0.63 s the second time, and 1.70 s
+   after an edit to half of it.
 3. **Depth and color.** Footage decodes at its depth, with its transfer and gamut, into the float
    working picture (`bits=` and `color=` on a media line, found on import): `InputTransform`
    on the CPU, `input.wgsl` on the GPU. A ProRes master takes 16-bit frames, so it keeps that

@@ -68,6 +68,7 @@ impl Drawn {
     ) -> Result<Self, PlaybackError> {
         let options = ComposeOptions {
             keep_frames: true,
+            frame_folder: kerf_compose::default_frame_folder(),
             ..ComposeOptions::default()
         };
         let compositor = Compositor::new(project, Catalog::builtin(), &options)

@@ -54,6 +54,7 @@ pub fn draw_frame(
             sequence: sequence.map(str::to_owned),
             captions: true,
             keep_frames: true,
+            frame_folder: kerf_compose::default_frame_folder(),
             ..Default::default()
         },
     )?;
