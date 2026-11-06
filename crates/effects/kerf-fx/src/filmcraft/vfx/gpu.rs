@@ -6,6 +6,7 @@ use super::*;
 use crate::filmcraft::effects::gaussian_boxes;
 use crate::filmcraft::gpu::run as run_ops;
 use crate::filmcraft::gpufx::FxOp;
+use kerf_color::{rgb_to_ycbcr, Matrix};
 use kerf_gpu::{wgpu, Frame, Gpu, Picture};
 use std::sync::OnceLock;
 
@@ -51,6 +52,53 @@ pub enum Kernel {
         /// The frame's three hashes, each by `hash3`'s constant.
         hashes: [u64; 3],
     },
+    ColorKey {
+        /// The key's y, cb, cr.
+        key: [f32; 3],
+        tolerance: f32,
+        softness: f32,
+    },
+    LumaKey {
+        threshold: f32,
+        cutoff: f32,
+    },
+    LogoCutout {
+        background: [f32; 3],
+        threshold: f32,
+        softness: f32,
+        unmultiply: bool,
+        invert: bool,
+    },
+    UltraKey(Box<UltraKey>),
+    RadialZoom {
+        kind: u32,
+        center: [f32; 2],
+        zoom: f32,
+        arc: f32,
+        quality: f32,
+    },
+}
+
+/// Ultra Key's numbers as `color::ultra_key` works them out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UltraKey {
+    key: [f32; 3],
+    key_size: f32,
+    gain: f32,
+    highlight: f32,
+    shadow: f32,
+    tolerance: f32,
+    pedestal: f32,
+    contrast: f32,
+    mid: f32,
+    spill: f32,
+    desaturate: f32,
+    range: f32,
+    spill_luma: f32,
+    correction: [f32; 3],
+    output: u32,
+    dominant: u32,
+    corrects: bool,
 }
 
 /// `hash3`'s constant on its third coordinate.
@@ -133,8 +181,108 @@ impl Kernel {
                     hashes: [frame, frame + 7777, frame + 99_991].map(|z| z.wrapping_mul(HASH_Z)),
                 }
             }
+            "color_key" => {
+                let color = crate::filmcraft::effects::color(e, "color", cx);
+                let y = rgb_to_ycbcr(color[0], color[1], color[2], Matrix::Bt709);
+                Kernel::ColorKey {
+                    key: y,
+                    tolerance: crate::filmcraft::effects::f(e, "tolerance", cx) / 255.0 * 0.6
+                        + 0.01,
+                    softness: crate::filmcraft::effects::f(e, "feather", cx) / 50.0 * 0.2 + 0.01,
+                }
+            }
+            "luma_key" => Kernel::LumaKey {
+                threshold: crate::filmcraft::effects::f(e, "threshold", cx) / 100.0,
+                cutoff: crate::filmcraft::effects::f(e, "cutoff", cx) / 100.0,
+            },
+            "logo_cutout" => Kernel::LogoCutout {
+                background: match chv(e, "background") {
+                    0 => [1.0; 3],
+                    1 => [0.0; 3],
+                    _ => {
+                        let c = cv(e, "color", cx);
+                        [c[0], c[1], c[2]]
+                    }
+                },
+                threshold: fv(e, "threshold", cx) / 100.0,
+                softness: (fv(e, "softness", cx) / 100.0).max(1e-3),
+                unmultiply: bv(e, "unmultiply"),
+                invert: bv(e, "invert"),
+            },
+            "ultra_key" => {
+                let color = cv(e, "key_color", cx);
+                let key = rgb_to_ycbcr(color[0], color[1], color[2], Matrix::Bt709);
+                let preset =
+                    crate::filmcraft::project::effect::ultra_key_setting(chv(e, "setting"));
+                let pf = |id: &str| {
+                    preset
+                        .and_then(|rows| {
+                            rows.iter().find(|(k, _)| *k == id).map(|(_, v)| *v as f32)
+                        })
+                        .unwrap_or_else(|| fv(e, id, cx))
+                };
+                // Cleaning up the matte blurs it, which the CPU does.
+                if pf("choke") > 0.0 || pf("soften") > 0.0 {
+                    return None;
+                }
+                let correction = [
+                    fv(e, "cc_saturation", cx) / 100.0,
+                    fv(e, "cc_hue", cx) / 360.0,
+                    fv(e, "cc_luminance", cx) / 100.0,
+                ];
+                Kernel::UltraKey(Box::new(UltraKey {
+                    key,
+                    key_size: (key[1] * key[1] + key[2] * key[2]).max(1e-6),
+                    gain: 1.0 + 2.0 * pf("transparency") / 100.0,
+                    highlight: pf("highlight") / 100.0,
+                    shadow: pf("shadow") / 100.0,
+                    tolerance: 0.08 + pf("tolerance") / 100.0 * 0.5,
+                    pedestal: (pf("pedestal") / 100.0 * 0.3).min(0.9),
+                    contrast: pf("contrast") / 100.0,
+                    mid: pf("mid_point") / 100.0,
+                    spill: pf("spill") / 100.0,
+                    desaturate: pf("desaturate") / 100.0,
+                    range: pf("range") / 100.0,
+                    spill_luma: pf("spill_luma") / 100.0,
+                    correction,
+                    output: chv(e, "output"),
+                    dominant: if color[1] >= color[0] && color[1] >= color[2] {
+                        1
+                    } else if color[2] >= color[0] {
+                        2
+                    } else {
+                        0
+                    },
+                    corrects: (correction[0] - 1.0).abs() > 1e-4
+                        || correction[1].abs() > 1e-6
+                        || (correction[2] - 1.0).abs() > 1e-4,
+                }))
+            }
             _ => return None,
         })
+    }
+
+    /// `effect` on a picture brought under 1 and put back, as a picture holding values over 1
+    /// needs for an effect written for 0 to 1: `src` is the picture, and `effect` runs on it with
+    /// its pixels each under 1.
+    pub fn held(
+        frame: &mut Frame<'static>,
+        picture: Picture,
+        effect: impl FnOnce(&mut Frame<'static>, Picture) -> Option<Picture>,
+    ) -> Option<Picture> {
+        let stage = stage(frame.gpu())?;
+        let unit = stage.pass(frame, &stage.to_unit, &picture, None, &U::default());
+        let done = effect(frame, unit)?;
+        let out = stage.pass(
+            frame,
+            &stage.from_unit,
+            &done,
+            Some(&picture),
+            &U::default(),
+        );
+        frame.release(done);
+        frame.release(picture);
+        Some(out)
     }
 
     /// The kernel on `picture`, or `None` when the kernels did not build.
@@ -317,6 +465,103 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::ColorKey {
+                key,
+                tolerance,
+                softness,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.color_key,
+                    &picture,
+                    None,
+                    &U {
+                        p0: [key[0], key[1], key[2], *tolerance],
+                        p1: [*softness, 0.0, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::LumaKey { threshold, cutoff } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.luma_key,
+                    &picture,
+                    None,
+                    &U::floats([*threshold, *cutoff, 0.0, 0.0]),
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::LogoCutout {
+                background,
+                threshold,
+                softness,
+                unmultiply,
+                invert,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.logo_cutout,
+                    &picture,
+                    None,
+                    &U {
+                        a: [u32::from(*unmultiply), u32::from(*invert), 0, 0],
+                        p0: [background[0], background[1], background[2], 0.0],
+                        p1: [*threshold, *softness, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::UltraKey(key) => {
+                let out = stage.pass(
+                    frame,
+                    &stage.ultra_key,
+                    &picture,
+                    None,
+                    &U {
+                        a: [key.output, key.dominant, u32::from(key.corrects), 0],
+                        p0: [key.key[0], key.key[1], key.key[2], key.key_size],
+                        p1: [key.gain, key.highlight, key.shadow, key.tolerance],
+                        p2: [key.pedestal, key.contrast, key.mid, key.spill],
+                        p3: [key.desaturate, key.range, key.spill_luma, 0.0],
+                        p4: [key.correction[0], key.correction[1], key.correction[2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::RadialZoom {
+                kind,
+                center,
+                zoom,
+                arc,
+                quality,
+            } => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                frame.release(picture);
+                let blurred = stage.pass(
+                    frame,
+                    &stage.radial_zoom,
+                    &encoded,
+                    None,
+                    &U {
+                        a: [*kind, 0, 0, 0],
+                        p0: [center[0], center[1], *zoom, *arc],
+                        p1: [*quality, 0.0, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &blurred, None, &U::default());
+                frame.release(blurred);
+                out
+            }
         })
     }
 }
@@ -328,6 +573,9 @@ struct U {
     b: [u32; 4],
     p0: [f32; 4],
     p1: [f32; 4],
+    p2: [f32; 4],
+    p3: [f32; 4],
+    p4: [f32; 4],
 }
 
 impl U {
@@ -339,11 +587,12 @@ impl U {
     }
 
     fn bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64);
+        let mut out = Vec::with_capacity(112);
         for value in self.a.iter().chain(&self.b) {
             out.extend_from_slice(&value.to_le_bytes());
         }
-        for value in self.p0.iter().chain(&self.p1) {
+        let floats = [&self.p0, &self.p1, &self.p2, &self.p3, &self.p4];
+        for value in floats.into_iter().flatten() {
             out.extend_from_slice(&value.to_le_bytes());
         }
         out
@@ -361,6 +610,15 @@ struct Stage {
     rgb_split: wgpu::ComputePipeline,
     wave_warp: wgpu::ComputePipeline,
     noise: wgpu::ComputePipeline,
+    color_key: wgpu::ComputePipeline,
+    luma_key: wgpu::ComputePipeline,
+    logo_cutout: wgpu::ComputePipeline,
+    ultra_key: wgpu::ComputePipeline,
+    encode_kept: wgpu::ComputePipeline,
+    decode_kept: wgpu::ComputePipeline,
+    radial_zoom: wgpu::ComputePipeline,
+    to_unit: wgpu::ComputePipeline,
+    from_unit: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -396,6 +654,15 @@ impl Stage {
                 rgb_split: kernel("rgb_split"),
                 wave_warp: kernel("wave_warp"),
                 noise: kernel("noise"),
+                color_key: kernel("color_key"),
+                luma_key: kernel("luma_key"),
+                logo_cutout: kernel("logo_cutout"),
+                ultra_key: kernel("ultra_key"),
+                encode_kept: kernel("encode_kept"),
+                decode_kept: kernel("decode_kept"),
+                radial_zoom: kernel("radial_zoom"),
+                to_unit: kernel("to_unit"),
+                from_unit: kernel("from_unit"),
                 layout: layout.clone(),
             }
         });
@@ -610,8 +877,70 @@ mod tests {
                     ("grain_size", fl(3.0)),
                 ],
             ),
-            ("noise", vec![("amount", fl(20.0)), ("clip", on)]),
+            ("noise", vec![("amount", fl(20.0)), ("clip", on.clone())]),
             ("noise", vec![("amount", fl(0.0))]),
+            ("color_key", vec![]),
+            (
+                "color_key",
+                vec![
+                    ("color", ParamValue::Color([0.1, 0.8, 0.2, 1.0])),
+                    ("tolerance", fl(90.0)),
+                    ("feather", fl(20.0)),
+                ],
+            ),
+            ("luma_key", vec![]),
+            (
+                "luma_key",
+                vec![("threshold", fl(50.0)), ("cutoff", fl(47.0))],
+            ),
+            (
+                "luma_key",
+                vec![("threshold", fl(60.0)), ("cutoff", fl(20.0))],
+            ),
+            ("logo_cutout", vec![]),
+            (
+                "logo_cutout",
+                vec![("background", choice(1)), ("threshold", fl(15.0))],
+            ),
+            (
+                "logo_cutout",
+                vec![
+                    ("background", choice(2)),
+                    ("color", ParamValue::Color([0.2, 0.3, 0.9, 1.0])),
+                    ("invert", on.clone()),
+                ],
+            ),
+            ("ultra_key", vec![]),
+            (
+                "ultra_key",
+                vec![
+                    ("key_color", ParamValue::Color([0.1, 0.2, 0.9, 1.0])),
+                    ("setting", choice(3)),
+                    ("transparency", fl(70.0)),
+                    ("contrast", fl(30.0)),
+                    ("spill", fl(80.0)),
+                ],
+            ),
+            (
+                "ultra_key",
+                vec![
+                    ("key_color", ParamValue::Color([0.3, 0.45, 1.0, 1.0])),
+                    ("setting", choice(3)),
+                    ("shadow", fl(100.0)),
+                    ("highlight", fl(60.0)),
+                    ("tolerance", fl(90.0)),
+                ],
+            ),
+            ("ultra_key", vec![("output", choice(1))]),
+            ("ultra_key", vec![("output", choice(2))]),
+            (
+                "ultra_key",
+                vec![
+                    ("cc_saturation", fl(150.0)),
+                    ("cc_hue", fl(40.0)),
+                    ("cc_luminance", fl(80.0)),
+                ],
+            ),
         ];
         let image = picture(96, 54);
         let mut failures = Vec::new();
@@ -633,6 +962,53 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn a_matte_cleaned_up_stays_on_the_cpu() {
+        let e = effect(
+            "ultra_key",
+            &[
+                ("setting", ParamValue::Choice(3)),
+                ("soften", ParamValue::Float(20.0)),
+            ],
+        );
+        assert_eq!(Kernel::eval(&e, &context(0.0), (8, 8)), None);
+    }
+
+    #[test]
+    fn holding_values_over_1_puts_them_back() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let mut image = picture(96, 54);
+        for pixel in image.px.chunks_exact_mut(4).step_by(3) {
+            for value in &mut pixel[..3] {
+                *value *= 8.0;
+            }
+        }
+        // What the compositor's CPU path does, with Gamma as what runs in between.
+        let gamma = FxOp::Gamma { g: 1.4 };
+        let mut cpu = image.clone();
+        let gains = cpu.to_unit();
+        gamma.apply(&mut cpu);
+        cpu.from_unit(&gains);
+        assert!(cpu.peak() > 1.5, "the test needs values over 1");
+        let mut frame = gpu.frame();
+        let start = frame.image(&image);
+        let out = Kernel::held(&mut frame, start, |frame, unit| {
+            run_ops(frame, unit, std::slice::from_ref(&gamma))
+        })
+        .expect("the stage builds");
+        let gpu_px = frame.read_floats(&out).expect("read back");
+        let worst = cpu
+            .px
+            .iter()
+            .zip(&gpu_px)
+            .map(|(a, b)| (a - b).abs() / (1.0 + a.abs()))
+            .fold(0.0f32, f32::max);
+        assert!(worst < 2e-3, "differs by {worst:.2e}");
     }
 
     #[test]

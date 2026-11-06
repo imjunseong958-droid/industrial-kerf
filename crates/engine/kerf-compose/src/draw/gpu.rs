@@ -23,6 +23,8 @@ fn ready_gpu() -> Option<&'static Gpu> {
 /// One effect of a clip as a kernel.
 enum Op {
     Effect(GpuEffect),
+    /// An effect written for 0 to 1 on a picture holding values over 1.
+    Held(GpuEffect),
     Correct(Correction),
 }
 
@@ -239,12 +241,17 @@ impl Drawing {
         let mut ops = Vec::with_capacity(plan.effects.len());
         let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
         for effect in &plan.effects {
-            // Holding values over 1 for an effect is done on the CPU.
-            if self.hdr.is_some()
-                && filmcraft::catalog::headroom(effect.fx.as_str()) != Headroom::Keeps
-            {
+            // Bringing a whole picture under 1 goes by its peak, which only the CPU knows before it
+            // draws; each pixel under 1 needs no such thing.
+            let way = if self.hdr.is_some() {
+                filmcraft::catalog::headroom(effect.fx.as_str())
+            } else {
+                Headroom::Keeps
+            };
+            if way == Headroom::Whole {
                 return None;
             }
+            let before = ops.len();
             match effect.fx.as_str() {
                 "color.basic" => {
                     let correction = Correction::new(&|name| effect_number(effect, name, time));
@@ -262,6 +269,15 @@ impl Drawing {
                         ry: radii(down),
                         repeat: true,
                     })));
+                }
+                "blur.radialzoom" => {
+                    let kernel = kerf_fx::kept::radial_zoom_kernel(
+                        effect,
+                        time,
+                        shape.size,
+                        shape.per_source,
+                    )?;
+                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
                 }
                 id if kerf_fx::kept::kept(id) || domains::effect(id).is_some() => return None,
                 _ => {
@@ -297,6 +313,12 @@ impl Drawing {
                     };
                     let op = filmcraft::instance::gpu_effect(&instance, &run, shape.size)?;
                     ops.push(Op::Effect(op));
+                }
+            }
+            if way == Headroom::PerPixel && ops.len() > before {
+                match ops.pop() {
+                    Some(Op::Effect(op)) => ops.push(Op::Held(op)),
+                    other => ops.extend(other),
                 }
             }
         }
@@ -420,6 +442,7 @@ impl Drawing {
         for op in &ops {
             picture = match op {
                 Op::Effect(op) => op.run(frame, picture)?,
+                Op::Held(op) => op.run_held(frame, picture)?,
                 Op::Correct(correction) => frame.correct(picture, correction),
             };
         }
@@ -469,6 +492,7 @@ impl Drawing {
         for op in ops {
             adjusted = match op {
                 Op::Effect(op) => op.run(frame, adjusted)?,
+                Op::Held(op) => op.run_held(frame, adjusted)?,
                 Op::Correct(correction) => frame.correct(adjusted, correction),
             };
         }

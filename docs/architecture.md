@@ -73,6 +73,8 @@ Measured on an Apple Silicon Mac with `examples/frame_bench.rs` in
 | Gaussian blur, radius 40 | 33 fps | 42 fps | 8 fps | 15 fps |
 | Four layers | 31 fps | 53 fps | 9 fps | 15 fps |
 | One glow | 13 fps | 15 fps | 3 fps | 5 fps |
+| Ultra Key | 25 fps | 80 fps | 8 fps | 32 fps |
+| Radial Zoom Blur, amount 30 | 5 fps | 33 fps | 0.7 fps | 6 fps |
 
 A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title took
 3.3 s against 7.4 s, 46 dB from the CPU's after encoding.
@@ -81,11 +83,14 @@ A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title to
 crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes,
 adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
 `FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
-Noise. So 13 of the 15 bundled looks stay on the GPU, including the transitions that
-are looks (Whip, Flash Cut), since a look transition is layers rather than a mix.
+Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 bundled
+looks stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
+transition is layers rather than a mix.
 **What sends a frame to the CPU:** the transitions carried from FilmCraft, every other
-effect (other lights, keys, stylize, and the kept EffectCraft ones, which is what
-Film and Zoom Through need), and a Lumetri using a LUT or curves. Glow gains least
+effect (other lights, stylize, Ultra Key's Choke and Soften, and the kept EffectCraft ones, which is
+what Film and Zoom Through need), and a Lumetri using a LUT or curves. In HDR, so does an effect that
+needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
+each pixel under 1 (`catalog::headroom`) stay on the GPU. Glow gains least
 (13 to 15 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
 
 Three limits remain, in this order:
@@ -93,8 +98,7 @@ Three limits remain, in this order:
 1. **More of the frame on the GPU.** Each effect without a kernel costs its whole
    frame the GPU. The 72 carried transitions are procedural maths with no kernels (FilmCraft
    has one, Push, in `crates/gpu/src/transition.wgsl`), and they last only as long as a
-   cut; keys and `blur.radialzoom` are next. EffectCraft's WGSL
-   (`effectcraft/crates/gpu` at `5c54866`) has kernels for many of them.
+   cut. EffectCraft's WGSL (`effectcraft/crates/gpu` at `5c54866`) has kernels for many of them.
 2. **Kept frames only live in memory.** Playback, previews, and `look` keep frames by a
    hash of what they depend on (`Drawing::frame_key`), in `kerf-compose/src/frames.rs`, so
    a frame comes back from any compositor, and an edit, which makes a new one, only
@@ -109,8 +113,7 @@ Three limits remain, in this order:
    with what lies past them as values below 0 and above 1, and `HdrOutput` (`output.wgsl`) turns
    them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
    own signal. Other effects written for 0 to 1 get the picture brought under 1 and put back,
-   each pixel or the whole picture as `catalog::headroom` says, and that sends the frame to the
-   CPU. They still lose wide colors, and three looks still clip. Only ProRes carries HDR so far; H.264 is
+   each pixel or the whole picture as `catalog::headroom` says. They still lose wide colors, and three looks still clip. Only ProRes carries HDR so far; H.264 is
    8-bit, and scopes read the 8-bit SDR frame. On Apple, handing decoded surfaces to the
    GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
    crate with the exception written down. Scaling footage is another cost: 4K footage in a
@@ -155,7 +158,7 @@ tonal zones, a histogram, the cast, saturation, the skin tone line, and the dens
 Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
 also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
 
-To add: HEVC 10-bit delivery for HDR, HDR mastering metadata, the GPU holding values over 1, the Lumetri presets (cut in `6eafef8`), and
+To add: HEVC 10-bit delivery for HDR, HDR mastering metadata, the Lumetri presets (cut in `6eafef8`), and
 layered grades as stacked effects.
 
 ### Motion

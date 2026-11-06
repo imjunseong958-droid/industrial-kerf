@@ -107,6 +107,16 @@ pub enum GpuEffect {
 }
 
 impl GpuEffect {
+    /// The effect on `picture` with each pixel brought under 1 and put back, for a picture holding
+    /// values over 1 and an effect written for 0 to 1.
+    pub fn run_held(
+        &self,
+        frame: &mut kerf_gpu::Frame<'static>,
+        picture: kerf_gpu::Picture,
+    ) -> Option<kerf_gpu::Picture> {
+        super::vfx::gpu::Kernel::held(frame, picture, |frame, unit| self.run(frame, unit))
+    }
+
     /// The effect on `picture`, or `None` when its kernels did not build.
     pub fn run(
         &self,

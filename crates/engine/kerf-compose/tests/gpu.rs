@@ -120,6 +120,12 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("split", clip("      fx light.rgbsplit amount=8\n")),
         ("wave", clip("      fx distort.wavewarp height=8 width=60\n")),
         ("noise", clip("      fx noise.noise amount=30 grain_size=2\n")),
+        ("color key", clip("      fx key.color color=#30c040 tolerance=120 feather=20\n")),
+        ("luma key", clip("      fx key.luma threshold=70 cutoff=30\n")),
+        ("logo cutout", clip("      fx key.logocutout background=black threshold=10\n")),
+        ("ultra key", clip("      fx key.ultra key_color=#30c040\n")),
+        ("radial zoom", clip("      fx blur.radialzoom amount=30 quality=30\n")),
+        ("radial spin", clip("      fx blur.radialzoom type=rotate-fading amount=-20 center_x=0.3 center_y=0.6\n")),
     ]);
     for look in [
         "look.dreamy",
