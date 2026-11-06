@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+mod focus;
 mod gpu;
 mod three_d;
 

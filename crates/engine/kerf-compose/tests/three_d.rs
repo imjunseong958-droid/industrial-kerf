@@ -588,3 +588,177 @@ fn a_shadow_falls_on_a_clip_that_is_cut() {
     );
     assert!(pixel(&drawn, 200, 150)[0] > 120);
 }
+
+/// A white square a quarter of the frame across at `z`, and a camera that focuses as `camera` says.
+fn focused(z: f64, camera: &str) -> String {
+    format!(
+        "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25 three_d=true z={z}\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set {camera}\n"
+    )
+}
+
+/// How many pixels the left edge of what is in the middle of a row takes to come up: from where it
+/// has 2% of what the middle has to where it has 98%, in linear light.
+fn edge_width(frame: &Frame, y: u32) -> u32 {
+    let row: Vec<f64> = (0..frame.width)
+        .map(|x| linear(pixel(frame, x, y)[0]))
+        .collect();
+    let middle = row[frame.width as usize / 2];
+    let first = row.iter().position(|value| *value > middle * 0.02).unwrap();
+    let full = row.iter().position(|value| *value > middle * 0.98).unwrap();
+    (full - first) as u32
+}
+
+#[test]
+fn an_aperture_of_nothing_blurs_nothing() {
+    // Down to the byte, with a focus said or not, and at no aperture with the camera moved.
+    let none = frame(&focused(0.5, "fov=40"), 3);
+    assert_eq!(none.rgba, frame(&focused(0.5, "aperture=0"), 3).rgba);
+    assert_eq!(none.rgba, frame(&focused(0.5, "focus=3"), 3).rgba);
+    assert_eq!(
+        none.rgba,
+        frame(&focused(0.5, "focus={0f:0 23f:3} aperture=0"), 3).rgba
+    );
+    assert!(edge_width(&none, 90) <= 1, "{}", edge_width(&none, 90));
+}
+
+#[test]
+fn the_blur_grows_with_the_distance_from_the_focal_plane() {
+    // At the camera's rest, 247.3 pixels back from z = 0, in focus. A radius is 18 pixels of aperture
+    // by how far from focus over how far from the eye, and an edge takes twice that to come up.
+    let camera = "aperture=0.1 focus=0";
+    let eye = 90.0 / 20f64.to_radians().tan();
+    let wanted = |z: f64| {
+        let depth = eye + z * 180.0;
+        18.0 * (z * 180.0).abs() / depth * 2.0
+    };
+    let width = |z: f64| f64::from(edge_width(&frame(&focused(z, camera), 3), 90));
+    assert!(width(0.0) <= 1.0, "{}", width(0.0));
+    let mut before = 1.0;
+    for z in [0.25, 0.5, 1.0, 2.0] {
+        let (found, want) = (width(z), wanted(z));
+        assert!(found > before, "{z}: {found} after {before}");
+        assert!(
+            (found - want).abs() <= want * 0.3 + 1.5,
+            "{z}: {found} against {want}"
+        );
+        before = found;
+    }
+    // Nearer than focus as well, and nearer the camera it grows faster.
+    let (found, want) = (width(-0.5), wanted(-0.5));
+    assert!(
+        (found - want).abs() <= want * 0.3 + 1.5,
+        "{found} against {want}"
+    );
+}
+
+#[test]
+fn what_is_in_focus_goes_by_what_the_camera_says() {
+    // Sharp at the z it names, soft at the z it does not, either way round.
+    let at_half = "aperture=0.1 focus=0.5";
+    assert!(edge_width(&frame(&focused(0.5, at_half), 3), 90) <= 1);
+    assert!(edge_width(&frame(&focused(0.0, at_half), 3), 90) > 5);
+    // It animates: a rack from one to the other.
+    let rack = "aperture=0.1 focus={0f:0 23f:0.5}";
+    assert!(edge_width(&frame(&focused(0.0, rack), 0), 90) <= 1);
+    assert!(edge_width(&frame(&focused(0.0, rack), 23), 90) > 5);
+    // So does how wide it goes.
+    let opening = "aperture={0f:0 23f:0.2} focus=0.5";
+    let (shut, open) = (
+        edge_width(&frame(&focused(0.0, opening), 0), 90),
+        edge_width(&frame(&focused(0.0, opening), 23), 90),
+    );
+    assert!(shut <= 1 && open > 8, "{shut} {open}");
+    // Its focus goes with the camera's own place, as a clip's z does not: moving the camera along
+    // leaves the same z in focus.
+    let moved = "aperture=0.1 focus=0.5 z=-0.3";
+    assert!(edge_width(&frame(&focused(0.5, moved), 3), 90) <= 1);
+}
+
+#[test]
+fn a_turned_clip_goes_softer_along_its_length() {
+    // Its right side goes back, its left comes forward, about a middle in focus.
+    let frame = frame(
+        "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.5 three_d=true rotate_y=-60\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.1\n",
+        3,
+    );
+    // Top and bottom edges: how many rows each column takes to come up.
+    let rise = |x: u32| {
+        let column: Vec<f64> = (0..frame.height)
+            .map(|y| linear(pixel(&frame, x, y)[0]))
+            .collect();
+        let most = column[frame.height as usize / 2];
+        let first = column
+            .iter()
+            .position(|value| *value > most * 0.02)
+            .unwrap();
+        let full = column
+            .iter()
+            .position(|value| *value > most * 0.98)
+            .unwrap();
+        full - first
+    };
+    assert!(rise(160) <= 2, "{}", rise(160));
+    assert!(rise(190) > rise(160), "{} {}", rise(190), rise(160));
+    assert!(rise(130) > rise(160), "{} {}", rise(130), rise(160));
+}
+
+#[test]
+fn a_blurred_clip_filling_the_frame_keeps_its_corners() {
+    let frame = frame(
+        "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=2 three_d=true z=0.5\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.2\n",
+        3,
+    );
+    for (x, y) in [(0, 0), (319, 0), (0, 179), (319, 179), (160, 90)] {
+        assert_eq!(pixel(&frame, x, y), [255, 255, 255], "{x},{y}");
+    }
+}
+
+#[test]
+fn a_blurred_clip_keeps_what_it_had() {
+    // What spreads out is what was there, as much of it.
+    let total = |frame: &Frame| -> f64 {
+        (0..frame.width * frame.height)
+            .map(|at| linear(pixel(frame, at % frame.width, at / frame.width)[0]))
+            .sum()
+    };
+    let sharp = total(&frame(&focused(0.5, "aperture=0"), 3));
+    let soft = total(&frame(&focused(0.5, "aperture=0.1"), 3));
+    assert!(
+        (soft - sharp).abs() < sharp * 0.03,
+        "{soft} against {sharp}"
+    );
+}
+
+#[test]
+fn a_blur_is_each_clips_own_over_what_is_behind_it() {
+    // A soft clip in front lets what is behind it show through its edge; a sharp clip in front keeps
+    // its edge against a soft one behind.
+    let body = |near: f64, far: f64, focus: f64| {
+        format!(
+            "  track V1 video\n    clip far gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true z={far}\n  track V2 video\n    clip near gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.25 z={near}\n  track V3 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.1 focus={focus}\n"
+        )
+    };
+    let sharp_near = frame(&body(0.0, 1.0, 0.0), 3);
+    let row: Vec<[u8; 3]> = (0..320).map(|x| pixel(&sharp_near, x, 90)).collect();
+    let mixed = row.iter().filter(|[r, _, b]| *r > 30 && *b > 30).count();
+    assert!(mixed <= 2, "{mixed}");
+    let soft_near = frame(&body(0.0, 1.0, 1.0), 3);
+    let row: Vec<[u8; 3]> = (0..320).map(|x| pixel(&soft_near, x, 90)).collect();
+    let mixed = row.iter().filter(|[r, _, b]| *r > 30 && *b > 30).count();
+    assert!(mixed > 6, "{mixed}");
+}
+
+#[test]
+fn clips_that_cross_are_cut_and_blurred() {
+    let drawn = frame(
+        &format!(
+            "{}  track V3 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.05\n",
+            crossing("scale=0.5 z=0.1 rotate_y=45", "scale=0.5")
+        ),
+        0,
+    );
+    // Well away from the line each side still shows; flat blue at z = 0 stays sharp.
+    assert_eq!(pixel(&drawn, 150, 90), [0, 0, 255]);
+    let right = pixel(&drawn, 195, 90);
+    assert!(right[0] > 200, "{right:?}");
+}
