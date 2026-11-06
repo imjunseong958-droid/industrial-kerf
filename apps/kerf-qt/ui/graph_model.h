@@ -89,6 +89,9 @@ QList<Key> shifted(QList<Key> keys, const QList<int> &indices, qint64 frames, do
 std::optional<QList<QPointF>> parsePath(const QString &text);
 // `points` as `path=` writes them, each held to what the document allows.
 QString pathText(const QList<QPointF> &points);
+// `points` with one more, on their curve `u` points along, which is as close to
+// the curve they drew as a curve through points can stay: `path=` has no handles.
+QList<QPointF> withPointOn(QList<QPointF> points, double aspect, double u);
 
 // The curve through a clip's path points, on a canvas `aspect` times as wide as
 // it is high.
@@ -100,6 +103,9 @@ public:
         // The way it is heading, in degrees clockwise from the right.
         double heading = 0.0;
     };
+
+    // How many samples() each span between two points has.
+    static constexpr int kSamplesPerSpan = 32; // kerf_model's path::SAMPLES
 
     // From two points up.
     MotionPath(const QList<QPointF> &points, double aspect);

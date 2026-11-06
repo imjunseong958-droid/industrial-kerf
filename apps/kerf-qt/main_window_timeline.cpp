@@ -533,6 +533,7 @@ void MainWindow::wireTimeline() {
             if (id.isEmpty()) menu.addSeparator();
             else menu.addAction(m_commands->action(id));
         }
+        if (canStartMotionPath(selectedClipObject())) menu.addAction(m_commands->action(QStringLiteral("clip.startPath")));
         menu.exec(at);
     });
     connect(m_timeline, &TimelineWidget::razorRequested, this, [this](const QString &id, double frame) {

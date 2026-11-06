@@ -34,6 +34,8 @@ constexpr double kHandleSize = 7.0;
 // How near the pointer must be to a handle, or a path, to take it.
 constexpr double kHandleReach = 6.0;
 constexpr double kPathDragStart = 3.0;
+// `path=` holds four places, so a point that comes back may be this far from where it was.
+constexpr double kPathSamePoint = 0.0002;
 
 QColor maskColor(bool selected) { return selected ? editorTheme().maskOutline : editorTheme().maskOutlineIdle; }
 
@@ -666,20 +668,28 @@ void ViewerWidget::setMasks(const QString &clip, const QJsonArray &masks, const 
     update();
 }
 
-void ViewerWidget::setMotionPath(const QString &clip, const QString &text, QPointF origin, double along) {
+void ViewerWidget::setMotionPath(const QString &clip, const QString &text, const QTransform &placement, double along) {
     // A drag in progress keeps its curve until it is let go.
     if (m_pathDrag >= 0 && clip == m_pathClip) {
-        m_pathOrigin = origin;
+        if (placement.isInvertible()) m_pathPlacement = placement;
         m_pathAlong = along;
         return;
     }
-    const auto points = clip.isEmpty() ? std::nullopt : graph::parsePath(text);
+    const auto points = clip.isEmpty() || !placement.isInvertible() ? std::nullopt : graph::parsePath(text);
     const QString shown = points ? clip : QString();
     const QList<QPointF> list = points.value_or(QList<QPointF>{});
-    if (shown == m_pathClip && list == m_pathPoints && origin == m_pathOrigin && along == m_pathAlong) return;
+    if (shown == m_pathClip && list == m_pathPoints && placement == m_pathPlacement && along == m_pathAlong) return;
+    // The selection goes with the point, as long as a new state still has it: an
+    // undo can leave another point in its place.
+    if (m_pathSelected >= 0) {
+        const QPointF selected = m_pathPoints.at(m_pathSelected);
+        m_pathSelected = -1;
+        for (qsizetype index = 0; shown == m_pathClip && index < list.size(); ++index)
+            if (QLineF(list.at(index), selected).length() < kPathSamePoint) m_pathSelected = int(index);
+    }
     m_pathClip = shown;
     m_pathPoints = list;
-    m_pathOrigin = origin;
+    m_pathPlacement = placement;
     m_pathAlong = along;
     m_pathDrag = -1;
     updateCursor(mapFromGlobal(QCursor::pos()));
@@ -688,13 +698,14 @@ void ViewerWidget::setMotionPath(const QString &clip, const QString &text, QPoin
 
 QPointF ViewerWidget::pathToWidget(const QPointF &point) const {
     const QRectF canvas = pictureRect();
-    return {canvas.left() + (m_pathOrigin.x() + point.x()) * canvas.width(), canvas.top() + (m_pathOrigin.y() + point.y()) * canvas.height()};
+    const QPointF on = m_pathPlacement.map(point);
+    return {canvas.left() + on.x() * canvas.width(), canvas.top() + on.y() * canvas.height()};
 }
 
 QPointF ViewerWidget::pathPoint(const QPointF &widget) const {
     const QRectF canvas = pictureRect();
-    return {(widget.x() - canvas.left()) / std::max(1.0, canvas.width()) - m_pathOrigin.x(),
-            (widget.y() - canvas.top()) / std::max(1.0, canvas.height()) - m_pathOrigin.y()};
+    return m_pathPlacement.inverted().map(QPointF((widget.x() - canvas.left()) / std::max(1.0, canvas.width()),
+                                                  (widget.y() - canvas.top()) / std::max(1.0, canvas.height())));
 }
 
 int ViewerWidget::pathPointAt(const QPointF &widget) const {
@@ -704,6 +715,44 @@ int ViewerWidget::pathPointAt(const QPointF &widget) const {
         if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return int(index);
     }
     return -1;
+}
+
+double ViewerWidget::pathCurveAt(const QPointF &widget) const {
+    const QList<QPointF> line = motionPathCurve();
+    double nearest = kHandleReach;
+    double found = -1.0;
+    for (qsizetype index = 0; index + 1 < line.size(); ++index) {
+        const QPointF from = line.at(index);
+        const QPointF along = line.at(index + 1) - from;
+        const double length = QPointF::dotProduct(along, along);
+        const double t = length > 0.0 ? std::clamp(QPointF::dotProduct(widget - from, along) / length, 0.0, 1.0) : 0.0;
+        const double distance = QLineF(from + along * t, widget).length();
+        if (distance > nearest) continue;
+        nearest = distance;
+        found = (double(index) + t) / graph::MotionPath::kSamplesPerSpan;
+    }
+    return found;
+}
+
+void ViewerWidget::selectPathPoint(int point) {
+    if (point == m_pathSelected) return;
+    m_pathSelected = point;
+    update();
+}
+
+void ViewerWidget::writePath() {
+    emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
+                                              {QStringLiteral("clip"), m_pathClip},
+                                              {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_pathPoints)}}}}});
+}
+
+void ViewerWidget::removeSelectedPathPoint() {
+    // A path needs its two, and the key has still been answered.
+    if (m_pathSelected < 0 || m_pathPoints.size() <= 2) return;
+    m_pathPoints.removeAt(m_pathSelected);
+    m_pathSelected = -1;
+    update();
+    writePath();
 }
 
 QList<QPointF> ViewerWidget::motionPathPoints() const {
@@ -803,6 +852,7 @@ QString ViewerWidget::maskAt(const QPointF &widget) const {
 void ViewerWidget::updateCursor(const QPointF &widget) {
     if (m_maskTool != MaskTool::None) setCursor(Qt::CrossCursor);
     else if (m_pathDrag >= 0 || pathPointAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
+    else if (handleAt(widget) < 0 && pathCurveAt(widget) >= 0.0) setCursor(Qt::CrossCursor);
     else if (!editsMasks()) unsetCursor();
     else if (m_dragHandle == kMoveMask) setCursor(Qt::ClosedHandCursor);
     else if (m_dragHandle >= 0 || handleAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
@@ -865,7 +915,7 @@ bool ViewerWidget::event(QEvent *event) {
         const bool takes = capture || (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
                            ((key == Qt::Key_Return || key == Qt::Key_Enter) && m_penPoints.size() >= 2) ||
                            ((key == Qt::Key_Delete || key == Qt::Key_Backspace) &&
-                            (drawing || maskIndex(m_selectedMask) >= 0));
+                            (drawing || maskIndex(m_selectedMask) >= 0 || m_pathSelected >= 0));
         if (takes) {
             event->accept();
             return true;
@@ -900,6 +950,8 @@ void ViewerWidget::keyPressEvent(QKeyEvent *event) {
         if (!m_penPoints.isEmpty()) {
             m_penPoints.removeLast();
             update();
+        } else if (m_pathSelected >= 0) {
+            removeSelectedPathPoint();
         } else if (!m_drawing) {
             removeSelectedMask();
         }
@@ -922,6 +974,12 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
     if (m_maskTool == MaskTool::None) {
         if (const int point = pathPointAt(position); point >= 0) {
             setFocus(Qt::MouseFocusReason);
+            // One thing for Delete to take at a time.
+            if (!m_selectedMask.isEmpty()) {
+                m_selectedMask.clear();
+                emit maskSelected(QString());
+            }
+            selectPathPoint(point);
             m_pathDrag = point;
             m_pathBefore = m_pathPoints;
             m_pathHeld = pathToWidget(m_pathPoints.at(point)) - position;
@@ -930,6 +988,15 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
             updateCursor(position);
             return;
         }
+        // A click on the curve is the start of a double-click, not of playing;
+        // a click off it lets go of a point rather than playing.
+        const bool hadPoint = m_pathSelected >= 0;
+        selectPathPoint(-1);
+        if (handleAt(position) < 0 && pathCurveAt(position) >= 0.0) {
+            setFocus(Qt::MouseFocusReason);
+            return;
+        }
+        if (hadPoint && !editsMasks()) return;
     }
     if (!editsMasks()) {
         // A click on the picture plays or pauses, as on a video site.
@@ -1071,10 +1138,7 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
         m_pathDrag = -1;
         m_pathMoved = false;
         updateCursor(event->position());
-        if (moved)
-            emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
-                                                      {QStringLiteral("clip"), m_pathClip},
-                                                      {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_pathPoints)}}}}});
+        if (moved) writePath();
         return;
     }
     if (m_dragHandle == -1) return;
@@ -1092,6 +1156,21 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
     op.insert(QStringLiteral("clip"), m_maskClip);
     op.insert(QStringLiteral("name"), name);
     emit editRequested(QJsonArray{op});
+}
+
+void ViewerWidget::mouseDoubleClickEvent(QMouseEvent *event) {
+    const QPointF position = event->position();
+    if (event->button() == Qt::LeftButton && !m_capturing && m_maskTool == MaskTool::None && pathPointAt(position) < 0 && handleAt(position) < 0) {
+        if (const double u = pathCurveAt(position); u >= 0.0) {
+            m_pathPoints = graph::withPointOn(m_pathPoints, aspect(), u);
+            selectPathPoint(int(std::clamp<qsizetype>(qsizetype(std::floor(u)), 0, m_pathPoints.size() - 3)) + 1);
+            update();
+            writePath();
+            return;
+        }
+    }
+    // As a press, which is what it has always been to all else.
+    mousePressEvent(event);
 }
 
 void ViewerWidget::leaveEvent(QEvent *) {
@@ -1166,10 +1245,14 @@ void ViewerWidget::paintMotionPath(QPainter &p) {
     strokeOverPicture(p, path, true, false);
     const EditorTheme &theme = editorTheme();
     // The points are square, as a mask's handles are; a round one says where the clip is now.
-    p.setPen(QPen(theme.maskHandleBorder, 1.0));
-    p.setBrush(theme.maskHandleFill);
-    for (const QPointF &point : motionPathPoints())
-        p.drawRect(QRectF(point - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
+    const QList<QPointF> points = motionPathPoints();
+    for (qsizetype index = 0; index < points.size(); ++index) {
+        // The selected point turns white, as the pen's first point does when it would close.
+        const bool selected = index == m_pathSelected;
+        p.setPen(QPen(selected ? theme.maskHandleFill : theme.maskHandleBorder, 1.0));
+        p.setBrush(selected ? theme.maskHandleBorder : theme.maskHandleFill);
+        p.drawRect(QRectF(points.at(index) - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
+    }
     p.setPen(QPen(theme.maskHandleFill, 1.0));
     p.setBrush(theme.maskHandleBorder);
     p.drawEllipse(motionPathMarker(), kHandleSize / 2.0, kHandleSize / 2.0);

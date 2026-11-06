@@ -44,6 +44,10 @@ constexpr double kZoomPerNotch = 1.25;
 constexpr double kPanPerNotch = 48.0;
 // A framed key stands this share of what is framed in from the edge.
 constexpr double kFrameMargin = 0.1;
+// The value axis's zoom: no closer than a thousandth across, the document holding
+// four places, and no further out than this many times what the number fits.
+constexpr double kFewestValues = 0.001;
+constexpr double kWidestValues = 100.0;
 
 // Tick spacing, in frames, that leaves `room` points between labels.
 qint64 tickStep(double pointsPerFrame, double room) {
@@ -101,7 +105,7 @@ GraphEditor::GraphEditor(QWidget *parent, EditorBus *bus) : QWidget(parent), m_b
     connect(frame, &QAbstractButton::clicked, this, &GraphEditor::frameSelection);
     auto *fit = new ui::Button(QStringLiteral("Fit"));
     fit->setObjectName(QStringLiteral("graphFit"));
-    fit->setToolTip(QStringLiteral("Show the whole clip (Shift+F)"));
+    fit->setToolTip(QStringLiteral("Show the whole clip and fit the values to the plot (Shift+F)"));
     fit->setFocusPolicy(Qt::NoFocus);
     bar->addWidget(fit);
     connect(fit, &QAbstractButton::clicked, this, &GraphEditor::showWholeClip);
@@ -208,6 +212,15 @@ void GraphEditor::rebuild() {
                 if (keys.at(key).frame == keyFrame && isSelected(index, key)) m_key = key;
         }
     if (m_channel < 0 && !m_channels.isEmpty()) m_channel = 0;
+    // A view of the values lasts as long as the number does.
+    if (m_clipId != previous) {
+        m_valueViews.clear();
+    } else {
+        QHash<QString, std::pair<double, double>> kept;
+        for (const Channel &channel : std::as_const(m_channels))
+            if (const auto view = m_valueViews.constFind(channel.id()); view != m_valueViews.cend()) kept.insert(view.key(), view.value());
+        m_valueViews = kept;
+    }
     fitRanges();
     if (m_clipId != previous || showedWhole) setView(0.0, wholeSpan());
     else setView(m_viewStart, m_viewSpan);
@@ -290,7 +303,7 @@ void GraphEditor::selectInBox() {
         const QList<Key> &keys = m_channels.at(channel).keys;
         for (int key = 0; key < keys.size(); ++key) {
             const QPointF at = keyPoint(channel, key);
-            if (!box.contains(at) || at.x() < area.left() || at.x() > area.right() || isSelected(channel, key)) continue;
+            if (!box.contains(at) || !area.contains(at) || isSelected(channel, key)) continue;
             m_selected[channel].append(key);
             std::sort(m_selected[channel].begin(), m_selected[channel].end());
         }
@@ -355,10 +368,40 @@ void GraphEditor::setView(double start, double span) {
     update();
 }
 
-void GraphEditor::showWholeClip() { setView(0.0, wholeSpan()); }
+void GraphEditor::showWholeClip() {
+    m_valueViews.clear();
+    setView(0.0, wholeSpan());
+}
+
+bool GraphEditor::valuesZoomed(int channel) const { return m_valueViews.contains(m_channels.at(channel).id()); }
+
+void GraphEditor::setValueView(double low, double high) {
+    if (m_channel < 0) return;
+    const QString id = m_channels.at(m_channel).id();
+    const auto [fitLow, fitHigh] = m_ranges.value(id, {0.0, 1.0});
+    const double widest = std::max((fitHigh - fitLow) * kWidestValues, kFewestValues);
+    const double span = std::clamp(high - low, std::min(kFewestValues, fitHigh - fitLow), widest);
+    const double middle = (low + high) / 2.0;
+    m_valueViews.insert(id, {middle - span / 2.0, middle + span / 2.0});
+    update();
+}
+
+std::pair<double, double> GraphEditor::rangeOf(int channel) const {
+    const QString id = m_channels.at(channel).id();
+    const auto view = m_valueViews.constFind(id);
+    return view != m_valueViews.cend() ? view.value() : m_ranges.value(id, {0.0, 1.0});
+}
 
 void GraphEditor::frameSelection() {
     if (m_selected.isEmpty()) return showWholeClip();
+    // What is framed is on the plot: a number zoomed away from a selected key goes back to fitting.
+    for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
+        const auto [low, high] = rangeOf(it.key());
+        for (const int key : it.value()) {
+            const double value = m_channels.at(it.key()).keys.at(key).value;
+            if (value < low || value > high) m_valueViews.remove(m_channels.at(it.key()).id());
+        }
+    }
     qint64 first = std::numeric_limits<qint64>::max();
     qint64 last = std::numeric_limits<qint64>::min();
     for (auto it = m_selected.cbegin(); it != m_selected.cend(); ++it) {
@@ -419,13 +462,13 @@ double GraphEditor::frameOf(double x) const {
 
 double GraphEditor::yOf(int channel, double value) const {
     const QRectF area = plot();
-    const auto [low, high] = m_ranges.value(m_channels.at(channel).id(), {0.0, 1.0});
+    const auto [low, high] = rangeOf(channel);
     return area.bottom() - (value - low) / (high - low) * area.height();
 }
 
 double GraphEditor::valueOf(int channel, double y) const {
     const QRectF area = plot();
-    const auto [low, high] = m_ranges.value(m_channels.at(channel).id(), {0.0, 1.0});
+    const auto [low, high] = rangeOf(channel);
     return low + (area.bottom() - y) / area.height() * (high - low);
 }
 
@@ -445,7 +488,7 @@ std::pair<int, int> GraphEditor::keyAt(QPointF point) const {
         for (int key = 0; key < keys.size(); ++key) {
             const QPointF at(xOf(double(keys.at(key).frame)), yOf(channel, keys.at(key).value));
             // A key zoomed out of the plot is not there to take.
-            if (at.x() < area.left() || at.x() > area.right()) continue;
+            if (!area.contains(at)) continue;
             const double distance = QLineF(at, point).length();
             if (distance < best) {
                 best = distance;
@@ -536,13 +579,16 @@ void GraphEditor::paintEvent(QPaintEvent *) {
         painter.drawText(QPointF(x + 3, kBar + 14), QString::number(frame));
     }
     if (m_channel >= 0) {
-        // The selected number's scale.
+        // The selected number's scale, in as many places as tell its lines apart.
+        const auto [low, high] = rangeOf(m_channel);
+        const double largest = std::max({std::abs(low), std::abs(high), 1e-9});
+        const int places = std::max(4, int(std::ceil(std::log10(largest * 4.0 / (high - low)))) + 1);
         for (int line = 0; line <= 4; ++line) {
             const double y = area.top() + area.height() * line / 4.0;
             painter.setPen(QColor::fromRgba(tokens::line));
             painter.drawLine(QLineF(area.left(), y, area.right(), y));
             painter.setPen(QColor::fromRgba(tokens::ink3));
-            painter.drawText(QPointF(area.left() + 3, y - 3), QString::number(valueOf(m_channel, y), 'g', 4));
+            painter.drawText(QPointF(area.left() + 3, y - 3), QString::number(valueOf(m_channel, y), 'g', places));
         }
     }
 
@@ -641,6 +687,7 @@ void GraphEditor::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::MiddleButton) {
         m_drag = Drag::Pan;
         m_panFrom = m_viewStart;
+        if (m_channel >= 0) m_panValuesFrom = rangeOf(m_channel);
         return;
     }
     if (event->button() != Qt::LeftButton) return;
@@ -734,6 +781,13 @@ void GraphEditor::mouseMoveEvent(QMouseEvent *event) {
     }
     if (m_drag == Drag::Pan) {
         setView(m_panFrom - (pointer.x() - m_pressed.x()) * m_viewSpan / plot().width(), m_viewSpan);
+        // Up and down only once the number has been zoomed: a hand that wobbles
+        // going along should not take it off fitting the plot.
+        if (m_channel >= 0 && valuesZoomed(m_channel)) {
+            const auto [low, high] = m_panValuesFrom;
+            const double by = (pointer.y() - m_pressed.y()) * (high - low) / plot().height();
+            setValueView(low + by, high + by);
+        }
         return;
     }
     if (!m_changed && QLineF(pointer, m_pressed).length() < kDragStart) return;
@@ -804,6 +858,7 @@ void GraphEditor::wheelEvent(QWheelEvent *event) {
         return;
     }
     event->accept();
+    if ((event->modifiers() & Qt::AltModifier) && m_channel >= 0) return wheelValues(event);
     const QPoint angle = event->angleDelta();
     const QPoint pixels = event->pixelDelta();
     const bool shift = event->modifiers() & Qt::ShiftModifier;
@@ -822,6 +877,32 @@ void GraphEditor::wheelEvent(QWheelEvent *event) {
     const double frame = frameOf(x);
     const double span = std::clamp(m_viewSpan * std::pow(kZoomPerNotch, -double(angle.y()) / 120.0), std::min(kFewestFrames, wholeSpan()), wholeSpan());
     setView(frame - (x - area.left()) * span / area.width(), span);
+}
+
+void GraphEditor::wheelValues(QWheelEvent *event) {
+    // Some platforms hand a wheel turned with Alt over as going sideways, and with
+    // Shift as well on this one, so either way is the one way here.
+    const QPoint angle = event->angleDelta();
+    const QPoint pixels = event->pixelDelta();
+    const int notches = angle.y() != 0 ? angle.y() : angle.x();
+    const QRectF area = plot();
+    const auto [low, high] = rangeOf(m_channel);
+    if (event->modifiers() & Qt::ShiftModifier) {
+        const int moved = pixels.y() != 0 ? pixels.y() : pixels.x();
+        const double points = moved != 0 ? double(moved) : double(notches) * kPanPerNotch / 120.0;
+        const double by = points * (high - low) / area.height();
+        setValueView(low + by, high + by);
+        return;
+    }
+    // The fingers lifted: zoom stops where they left it.
+    if (event->phase() == Qt::ScrollMomentum || notches == 0) return;
+    const double y = std::clamp(event->position().y(), area.top(), area.bottom());
+    const double value = valueOf(m_channel, y);
+    const auto [fitLow, fitHigh] = m_ranges.value(m_channels.at(m_channel).id(), {0.0, 1.0});
+    const double span = std::clamp((high - low) * std::pow(kZoomPerNotch, -double(notches) / 120.0), std::min(kFewestValues, fitHigh - fitLow),
+                                   std::max((fitHigh - fitLow) * kWidestValues, kFewestValues));
+    const double below = (area.bottom() - y) / area.height() * span;
+    setValueView(value - below, value - below + span);
 }
 
 void GraphEditor::mouseDoubleClickEvent(QMouseEvent *event) {

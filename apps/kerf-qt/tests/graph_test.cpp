@@ -16,7 +16,9 @@
 #include "viewer_widget.h"
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSettings>
@@ -102,7 +104,7 @@ struct PathStage {
     PathStage() {
         viewer.resize(960, 600);
         viewer.setProjectInfo(1920, 1080);
-        viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.25,-0.25 0.5,0"), QPointF(0.5, 0.5), 0.5);
+        viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.25,-0.25 0.5,0"), QTransform::fromTranslate(0.5, 0.5), 0.5);
     }
     void drag(QPointF from, QPointF to) {
         QTest::mousePress(&viewer, Qt::LeftButton, Qt::NoModifier, from.toPoint());
@@ -198,9 +200,60 @@ private slots:
         const QJsonObject eased{{"along", QJsonArray{key(0, 0.0, "ease-in"), key(24, 1.0)}}};
         QCOMPARE(propertyAt(eased, "along", 0.5, 0.0), 0.25);
         // The path starts from where the clip otherwise is.
-        const QPointF origin = pathOrigin(QJsonObject{{"props", QJsonObject{{"x", 0.1}, {"y", -0.2}, {"anchor_x", 0.25}}}}, canvas, true, canvas, 0.0);
+        const QPointF origin = pathPlacement(QJsonObject{{"props", QJsonObject{{"x", 0.1}, {"y", -0.2}, {"anchor_x", 0.25}}}}, canvas, true, canvas, 0.0, QTransform{}).map(QPointF());
         QVERIFY(std::abs(origin.x() - 0.85) < 1e-9);
         QVERIFY(std::abs(origin.y() - 0.3) < 1e-9);
+    }
+
+    // The same table holds the compositor to these, in kerf-compose's draw.rs.
+    void parentsMoveAsTheCompositorMovesThem() {
+        const QSizeF hd(1920, 1080);
+        const struct {
+            QJsonObject props;
+            QSizeF size;
+            bool fit;
+            QSizeF canvas;
+            QPointF from;
+            QPointF to;
+        } table[] = {
+            {{{"x", -0.25}, {"y", 0.1}}, hd, false, hd, {1200.0, 540.0}, {720.0, 648.0}},
+            {{{"rotation", 90.0}}, hd, false, hd, {1200.0, 540.0}, {960.0, 780.0}},
+            {{{"scale", 0.5}}, hd, false, hd, {1200.0, 300.0}, {1080.0, 420.0}},
+            {{{"scale_x", 2.0}, {"rotation", 30.0}, {"anchor_x", 0.25}, {"anchor_y", -0.5}, {"x", 0.1}}, hd, false, hd, {100.0, 900.0}, {-1138.948082142, -560.577136594}},
+            {{{"crop_l", 0.2}, {"crop_t", 0.1}, {"scale", 1.5}, {"y", -0.2}}, {1280, 720}, true, hd, {640.0, 200.0}, {480.0, -186.0}},
+            {{{"rotation", 45.0}, {"anchor_x", 0.5}, {"scale", 0.75}}, {1000, 500}, true, {1080, 1920}, {540.0, 960.0}, {793.621753619, 673.621753619}},
+            {{{"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.5}, {"orient", true}, {"scale", 0.8}}, hd, false, hd, {1000.0, 500.0}, {1462.428694397, 793.07977502}},
+        };
+        for (const auto &row : table) {
+            const QTransform moved = parentMotion(QJsonObject{{"props", row.props}}, row.size, row.fit, row.canvas, 0.0);
+            const QPointF at = moved.map(row.from);
+            const QString where = QStringLiteral("%1: %2,%3").arg(QString::fromUtf8(QJsonDocument(row.props).toJson(QJsonDocument::Compact))).arg(at.x(), 0, 'f', 6).arg(at.y(), 0, 'f', 6);
+            QVERIFY2(std::abs(at.x() - row.to.x()) < 1e-6 && std::abs(at.y() - row.to.y()) < 1e-6, qPrintable(where));
+        }
+    }
+
+    void aPointAddedLiesOnTheCurveAndLeavesItsShape() {
+        const QList<QPointF> points{{0.0, 0.0}, {0.2, 0.3}, {0.5, -0.1}, {0.8, 0.2}};
+        const double aspect = 16.0 / 9.0;
+        const graph::MotionPath before(points, aspect);
+        for (const double u : {0.1, 0.5, 1.25, 1.5, 2.9}) {
+            const QList<QPointF> added = graph::withPointOn(points, aspect, u);
+            QCOMPARE(added.size(), points.size() + 1);
+            const qsizetype place = qsizetype(u) + 1;
+            QVERIFY(QLineF(added.at(place), before.curve(u)).length() < 1e-9);
+            // Every other point stays where it was, in its order.
+            QList<QPointF> rest = added;
+            rest.removeAt(place);
+            QCOMPARE(rest, points);
+            // A curve through points has no handles to hold: how far it strays is the
+            // price of that, and it is at most a sliver of the canvas.
+            const QList<QPointF> line = graph::MotionPath(added, aspect).samples();
+            for (const QPointF &sample : before.samples()) {
+                double nearest = 1e9;
+                for (const QPointF &along : line) nearest = std::min(nearest, std::hypot((along.x() - sample.x()) * aspect, along.y() - sample.y()));
+                QVERIFY2(nearest < 0.03, qPrintable(QStringLiteral("%1 strays %2").arg(u).arg(nearest)));
+            }
+        }
     }
 
     void aNamedCurvesHandlesDrawThatCurve() {
@@ -606,6 +659,163 @@ private slots:
         QCOMPARE(h.lastKeys("x").at(2).toObject().value("at").toInt(), 500);
     }
 
+    void altScrollingZoomsTheSelectedNumbersValues() {
+        Harness h;
+        h.click(h.editor.channelPoint(1));
+        QCOMPARE(h.editor.selectedChannel(), 1);
+        QVERIFY(!h.editor.valuesZoomed(1));
+        const auto [low, high] = h.editor.viewValues(1);
+        const auto time = h.editor.viewFrames();
+        const auto otherBefore = h.editor.viewValues(0);
+        const QPointF over = h.editor.plotPoint(1, 24.0, (low + high) * 0.5 + (high - low) * 0.2);
+        const double held = (low + high) * 0.5 + (high - low) * 0.2;
+        h.scroll(over, QPoint(0, 120), Qt::AltModifier);
+        QVERIFY(h.editor.valuesZoomed(1));
+        const auto [zoomedLow, zoomedHigh] = h.editor.viewValues(1);
+        QVERIFY(zoomedHigh - zoomedLow < high - low);
+        // The value under the pointer stays under it.
+        QVERIFY(QLineF(h.editor.plotPoint(1, 24.0, held), over).length() < 1.0);
+        // The time axis and the other numbers have not moved.
+        QCOMPARE(h.editor.viewFrames(), time);
+        QCOMPARE(h.editor.viewValues(0), otherBefore);
+        QVERIFY(!h.editor.valuesZoomed(0));
+        // Out again, past what fits, which gives a key room to go further.
+        for (int notch = 0; notch < 6; ++notch) h.scroll(over, QPoint(0, -120), Qt::AltModifier);
+        const auto [wideLow, wideHigh] = h.editor.viewValues(1);
+        QVERIFY(wideHigh - wideLow > high - low);
+        // A wheel turned sideways by Alt, as some platforms do, is the same wheel.
+        const double before = wideHigh - wideLow;
+        h.scroll(over, QPoint(120, 0), Qt::AltModifier);
+        const auto [turnedLow, turnedHigh] = h.editor.viewValues(1);
+        QVERIFY(turnedHigh - turnedLow < before);
+    }
+
+    void plainScrollingStillLeavesTheValuesAlone() {
+        Harness h;
+        const auto values = h.editor.viewValues(0);
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120));
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(40, 0));
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 40), Qt::ShiftModifier);
+        QCOMPARE(h.editor.viewValues(0), values);
+        QVERIFY(!h.editor.valuesZoomed(0));
+    }
+
+    void altShiftScrollingPansTheValues() {
+        Harness h;
+        const auto [low, high] = h.editor.viewValues(0);
+        const auto time = h.editor.viewFrames();
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120), Qt::AltModifier | Qt::ShiftModifier);
+        const auto [movedLow, movedHigh] = h.editor.viewValues(0);
+        QVERIFY(std::abs((movedHigh - movedLow) - (high - low)) < 1e-9);
+        // Up the wheel, what is on the plot goes up with it, so its values go by below.
+        QVERIFY(movedLow > low);
+        QCOMPARE(h.editor.viewFrames(), time);
+    }
+
+    void theMiddleButtonPansZoomedValuesAndOnlyThem() {
+        Harness h;
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120));
+        const auto values = h.editor.viewValues(0);
+        const auto drag = [&h](QPointF from, QPointF to) {
+            QTest::mousePress(&h.editor, Qt::MiddleButton, Qt::NoModifier, from.toPoint());
+            QMouseEvent move(QEvent::MouseMove, to, h.editor.mapToGlobal(to), Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+            QApplication::sendEvent(&h.editor, &move);
+            QTest::mouseRelease(&h.editor, Qt::MiddleButton, Qt::NoModifier, to.toPoint());
+        };
+        const QPointF from = h.editor.plotPoint(0, 24.0, 0.25);
+        // Fitting still: a hand that wobbles takes it off nothing.
+        drag(from, from + QPointF(-20, 30));
+        QCOMPARE(h.editor.viewValues(0), values);
+        QVERIFY(!h.editor.valuesZoomed(0));
+        h.scroll(from, QPoint(0, 120), Qt::AltModifier);
+        const auto [low, high] = h.editor.viewValues(0);
+        const auto time = h.editor.viewFrames();
+        drag(from, from + QPointF(-20, 30));
+        const auto [movedLow, movedHigh] = h.editor.viewValues(0);
+        QVERIFY(movedLow > low);
+        QVERIFY(std::abs((movedHigh - movedLow) - (high - low)) < 1e-9);
+        QVERIFY(h.editor.viewFrames().first > time.first);
+    }
+
+    void fitReturnsTheValuesToFitting() {
+        Harness h;
+        const auto values = h.editor.viewValues(0);
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 240), Qt::AltModifier);
+        h.click(h.editor.channelPoint(1));
+        h.scroll(h.editor.plotPoint(1, 24.0, 20.0), QPoint(0, 240), Qt::AltModifier);
+        QVERIFY(h.editor.valuesZoomed(0));
+        QVERIFY(h.editor.valuesZoomed(1));
+        QTest::keyClick(&h.editor, Qt::Key_F, Qt::ShiftModifier);
+        QVERIFY(!h.editor.valuesZoomed(0));
+        QVERIFY(!h.editor.valuesZoomed(1));
+        QCOMPARE(h.editor.viewValues(0), values);
+        // The button is the same thing.
+        h.scroll(h.editor.plotPoint(1, 24.0, 20.0), QPoint(0, 240), Qt::AltModifier);
+        QVERIFY(h.editor.valuesZoomed(1));
+        h.editor.findChild<QAbstractButton *>(QStringLiteral("graphFit"))->click();
+        QVERIFY(!h.editor.valuesZoomed(1));
+    }
+
+    void theValueViewOutlastsANewStateButNotAClip() {
+        Harness h;
+        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 240), Qt::AltModifier);
+        const auto view = h.editor.viewValues(0);
+        h.set(clip());
+        QVERIFY(h.editor.valuesZoomed(0));
+        QCOMPARE(h.editor.viewValues(0), view);
+        QJsonObject other = clip();
+        other.insert("id", "c2");
+        h.bus.setSelection({QStringLiteral("c2")});
+        h.set(other);
+        QVERIFY(!h.editor.valuesZoomed(0));
+    }
+
+    void aKeyDraggedWhileZoomedLandsAtTheValueUnderThePointer() {
+        Harness h;
+        // Close in on the key at 0.5.
+        const QPointF key = h.editor.keyPoint(0, 1);
+        for (int notch = 0; notch < 4; ++notch) h.scroll(key, QPoint(0, 120), Qt::AltModifier);
+        const QPointF kept = h.editor.keyPoint(0, 1);
+        QVERIFY(QLineF(kept, key).length() < 1.0);
+        const QPointF to = h.editor.plotPoint(0, 24.0, 0.48);
+        h.drag(kept, to);
+        QCOMPARE(h.edits.size(), 1);
+        const QJsonArray keys = h.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("x").toObject().value("keys").toArray();
+        QVERIFY(std::abs(keys.at(1).toObject().value("value").toDouble() - 0.48) < 0.002);
+        // The view holds: a fit afterwards would take the plot from under the hand.
+        QVERIFY(h.editor.valuesZoomed(0));
+    }
+
+    void aKeyZoomedOffTheValueAxisIsNotThereToTake() {
+        Harness h;
+        // Close in on the keys at 0, so that the one at 0.5 is off the top of the plot.
+        const QPointF bottom = h.editor.keyPoint(0, 0);
+        for (int notch = 0; notch < 8; ++notch) h.scroll(bottom, QPoint(0, 120), Qt::AltModifier);
+        const auto [low, high] = h.editor.viewValues(0);
+        QVERIFY(high < 0.5);
+        const QPointF key = h.editor.keyPoint(0, 1);
+        QVERIFY(key.y() < 0.0 || key.y() < h.editor.plotPoint(0, 24.0, high).y());
+        h.click(QPointF(key.x(), h.editor.plotPoint(0, 24.0, high).y()));
+        QCOMPARE(h.editor.selectedKey(), -1);
+        // Framing what is on the plot leaves the number as it is.
+        h.click(h.editor.keyPoint(0, 0));
+        QCOMPARE(h.editor.selectedKey(), 0);
+        h.editor.frameSelection();
+        QVERIFY(h.editor.valuesZoomed(0));
+    }
+
+    void framingAKeyZoomedOffTheValueAxisBringsItBack() {
+        Harness h;
+        h.click(h.editor.keyPoint(0, 1));
+        QCOMPARE(h.editor.selectedKey(), 1);
+        const QPointF bottom = h.editor.keyPoint(0, 0);
+        for (int notch = 0; notch < 8; ++notch) h.scroll(bottom, QPoint(0, 120), Qt::AltModifier);
+        QVERIFY(h.editor.viewValues(0).second < 0.5);
+        h.editor.frameSelection();
+        QVERIFY(!h.editor.valuesZoomed(0));
+        QVERIFY(h.editor.viewValues(0).second > 0.5);
+    }
+
     void aKeyOutOfViewIsNotThereToTake() {
         Harness h;
         h.click(h.editor.keyPoint(0, 2));
@@ -933,7 +1143,7 @@ private slots:
         QCOMPARE(s.edits.size(), 0);
         QVERIFY(QLineF(s.viewer.motionPathPoints().at(1), to).length() < 2.0);
         // A state arriving during a drag does not take the point from under it.
-        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.25,-0.25 0.5,0"), QPointF(0.5, 0.5), 0.5);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.25,-0.25 0.5,0"), QTransform::fromTranslate(0.5, 0.5), 0.5);
         QVERIFY(QLineF(s.viewer.motionPathPoints().at(1), to).length() < 2.0);
         QTest::mouseRelease(&s.viewer, Qt::LeftButton, Qt::NoModifier, to.toPoint());
         QCOMPARE(s.edits.size(), 1);
@@ -967,14 +1177,150 @@ private slots:
         QCOMPARE(s.edits.size(), 0);
     }
 
+    void doubleClickingTheCurveAddsAPointThereAsOneEdit() {
+        PathStage s;
+        QSignalSpy plays(&s.viewer, &ViewerWidget::playRequested);
+        const QList<QPointF> curve = s.viewer.motionPathCurve();
+        // A quarter of the way along the first span, a little to one side of it.
+        const QPointF on = curve.at(graph::MotionPath::kSamplesPerSpan / 4);
+        const QPointF at = on + QPointF(2, 2);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, at.toPoint());
+        QCOMPARE(s.edits.size(), 0);
+        QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, at.toPoint());
+        QCOMPARE(s.edits.size(), 1);
+        // The clicks were not asks to play.
+        QCOMPARE(plays.size(), 0);
+        const QJsonObject op = s.edits.last().at(0).toJsonArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
+        const auto written = graph::parsePath(op.value("props").toObject().value("path").toString());
+        QVERIFY(written);
+        QCOMPARE(written->size(), 4);
+        QCOMPARE(written->at(0), QPointF(0.0, 0.0));
+        QCOMPARE(written->at(2), QPointF(0.25, -0.25));
+        QCOMPARE(written->at(3), QPointF(0.5, 0.0));
+        // On the curve where the pointer was, not off it where the pointer was.
+        const QList<QPointF> points = s.viewer.motionPathPoints();
+        QCOMPARE(points.size(), 4);
+        QVERIFY(QLineF(points.at(1), on).length() < 4.0);
+        double nearest = 1e9;
+        for (const QPointF &along : curve) nearest = std::min(nearest, QLineF(points.at(1), along).length());
+        QVERIFY(nearest < 1.5);
+        // It is in hand, for Delete to take back.
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+    }
+
+    void doubleClickingOffTheCurveOrOnAPointAddsNothing() {
+        PathStage s;
+        const QList<QPointF> points = s.viewer.motionPathPoints();
+        QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, points.at(1).toPoint());
+        QCOMPARE(s.edits.size(), 0);
+        QCOMPARE(s.viewer.motionPathPoints().size(), 3);
+        QTest::mouseRelease(&s.viewer, Qt::LeftButton, Qt::NoModifier, points.at(1).toPoint());
+        QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, (points.at(0) + QPointF(-120, 60)).toPoint());
+        QCOMPARE(s.edits.size(), 0);
+        QCOMPARE(s.viewer.motionPathPoints().size(), 3);
+    }
+
+    void deleteTakesTheSelectedPointDownToTwo() {
+        PathStage s;
+        s.viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&s.viewer));
+        // Nothing selected: nothing for Delete to take.
+        QTest::keyClick(&s.viewer, Qt::Key_Delete);
+        QCOMPARE(s.edits.size(), 0);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, s.viewer.motionPathPoints().at(1).toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+        QCOMPARE(s.edits.size(), 0);
+        // The window's Delete would take the clip: the point is asked for first.
+        QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_Delete, Qt::NoModifier);
+        QVERIFY(QApplication::sendEvent(&s.viewer, &override));
+        QVERIFY(override.isAccepted());
+        QTest::keyClick(&s.viewer, Qt::Key_Delete);
+        QCOMPARE(s.edits.size(), 1);
+        const QJsonObject op = s.edits.last().at(0).toJsonArray().first().toObject();
+        QCOMPARE(op.value("props").toObject().value("path").toString(), QStringLiteral("0,0 0.5,0"));
+        QCOMPARE(s.viewer.selectedPathPoint(), -1);
+        // Two is what a path needs: selected, but Delete takes neither, nor the clip.
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, s.viewer.motionPathPoints().at(0).toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), 0);
+        QKeyEvent still(QEvent::ShortcutOverride, Qt::Key_Delete, Qt::NoModifier);
+        QVERIFY(QApplication::sendEvent(&s.viewer, &still));
+        QVERIFY(still.isAccepted());
+        QTest::keyClick(&s.viewer, Qt::Key_Delete);
+        QCOMPARE(s.edits.size(), 1);
+        QCOMPARE(s.viewer.motionPathPoints().size(), 2);
+    }
+
+    void aClickOffAPointLetsGoOfItBeforePlayingAgain() {
+        PathStage s;
+        QSignalSpy plays(&s.viewer, &ViewerWidget::playRequested);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, s.viewer.motionPathPoints().at(1).toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+        const QPointF away = s.viewer.motionPathPoints().at(0) + QPointF(-120, 60);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, away.toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), -1);
+        QCOMPARE(plays.size(), 0);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, away.toPoint());
+        QCOMPARE(plays.size(), 1);
+    }
+
+    void theSelectionGoesWithThePointThroughANewState() {
+        PathStage s;
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, s.viewer.motionPathPoints().at(2).toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), 2);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.25,-0.25 0.5,0"), QTransform::fromTranslate(0.5, 0.25), 0.5);
+        QCOMPARE(s.viewer.selectedPathPoint(), 2);
+        // Another point gone: the selected one has moved up one, and is still the one.
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.5,0"), QTransform::fromTranslate(0.5, 0.25), 0.5);
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+        // An undo that took it away leaves nothing selected, not whatever has its place.
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.4,0"), QTransform::fromTranslate(0.5, 0.25), 0.5);
+        QCOMPARE(s.viewer.selectedPathPoint(), -1);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, s.viewer.motionPathPoints().at(1).toPoint());
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+        s.viewer.setMotionPath(QStringLiteral("c2"), QStringLiteral("0,0 0.4,0"), QTransform::fromTranslate(0.5, 0.25), 0.5);
+        QCOMPARE(s.viewer.selectedPathPoint(), -1);
+    }
+
+    void aPointDrawnSelectedStandsOut() {
+        PathStage s;
+        s.viewer.show();
+        const QPointF point = s.viewer.motionPathPoints().at(1);
+        QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+        const QImage drawn = s.viewer.grab().toImage();
+        QCOMPARE(drawn.pixelColor((point * drawn.devicePixelRatio()).toPoint()), editorTheme().maskHandleBorder);
+    }
+
+    void aPathFollowsAPlacementThatTurnsIt() {
+        PathStage s;
+        const QRectF canvas = s.viewer.pictureRect();
+        // Half the size about the middle of the canvas, and over to the right.
+        const QTransform placement = QTransform::fromTranslate(0.5, 0.5) * QTransform::fromScale(0.5, 0.5) * QTransform::fromTranslate(0.25, 0.25);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.5,0"), placement, 0.0);
+        const QList<QPointF> points = s.viewer.motionPathPoints();
+        QVERIFY(QLineF(points.at(0), canvas.center()).length() < 0.01);
+        QVERIFY(QLineF(points.at(1), canvas.center() + QPointF(canvas.width() * 0.25, 0.0)).length() < 0.01);
+        // A drag comes back through it: the same pointer goes half as far on the path.
+        const QPointF to = points.at(1) + QPointF(0, canvas.height() * 0.1);
+        s.drag(points.at(1), to);
+        QCOMPARE(s.edits.size(), 1);
+        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        QVERIFY(written);
+        QVERIFY(std::abs(written->at(1).x() - 0.5) < 0.005);
+        QVERIFY(std::abs(written->at(1).y() - 0.2) < 0.005);
+        // Flattened, as under a parent scaled to nothing, there is no curve to show.
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 0.5,0"), QTransform::fromScale(0.0, 0.0), 0.0);
+        QVERIFY(!s.viewer.showsMotionPath());
+    }
+
     void aPathThatDoesNotReadOrAClipGoneShowsNone() {
         PathStage s;
-        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0"), QPointF(0.5, 0.5), 0.0);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0"), QTransform::fromTranslate(0.5, 0.5), 0.0);
         QVERIFY(!s.viewer.showsMotionPath());
         QVERIFY(s.viewer.motionPathPoints().isEmpty());
-        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 1,1"), QPointF(0.5, 0.5), 0.0);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("0,0 1,1"), QTransform::fromTranslate(0.5, 0.5), 0.0);
         QVERIFY(s.viewer.showsMotionPath());
-        s.viewer.setMotionPath(QString(), QStringLiteral("0,0 1,1"), QPointF(0.5, 0.5), 0.0);
+        s.viewer.setMotionPath(QString(), QStringLiteral("0,0 1,1"), QTransform::fromTranslate(0.5, 0.5), 0.0);
         QVERIFY(!s.viewer.showsMotionPath());
         // With no path, a click on the picture is the play button again.
         QSignalSpy plays(&s.viewer, &ViewerWidget::playRequested);
@@ -1029,6 +1375,107 @@ private slots:
         window.m_selectedClips = {QStringLiteral("c2")};
         window.updateViewerMasks();
         QVERIFY(!window.m_viewer->showsMotionPath());
+    }
+
+    void aPathFollowsItsParentsInTheWindow() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject child{{"id", "c1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48}, {"parent", "n1"},
+                                {"props", QJsonObject{{"path", "0,0 0.25,0"}, {"along", 0.0}}}};
+        const QJsonObject near{{"id", "n1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48}, {"parent", "n2"},
+                               {"props", QJsonObject{{"x", 0.1}}}};
+        const QJsonObject far{{"id", "n2"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48},
+                              {"props", QJsonObject{{"rotation", QJsonArray{key(0, 0.0), key(48, 180.0)}}, {"scale", 0.5}}}};
+        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{far, near, child}}}}}};
+        window.m_selectedClip = QStringLiteral("c1");
+        window.m_selectedClips = {QStringLiteral("c1")};
+        window.m_connected = true;
+        window.m_playhead = 1.0;
+        window.updateViewerMasks();
+        QVERIFY(window.m_viewer->showsMotionPath());
+        const QSizeF canvasSize(resolvedCanvasSize(window.m_project, QJsonArray{}));
+        const QRectF canvas = window.m_viewer->pictureRect();
+        // Nearest first: the x of the near parent, then, halfway through its keys, a
+        // quarter turn and half the size about the middle of the canvas.
+        const auto wanted = [&](QPointF share) {
+            const QPointF px((share.x() + 0.1) * canvasSize.width(), share.y() * canvasSize.height());
+            const QPointF middle(canvasSize.width() / 2.0, canvasSize.height() / 2.0);
+            const QPointF from = (px - middle) * 0.5;
+            const QPointF turned = middle + QPointF(-from.y(), from.x());
+            return QPointF(canvas.left() + turned.x() * canvas.width() / canvasSize.width(), canvas.top() + turned.y() * canvas.height() / canvasSize.height());
+        };
+        const QList<QPointF> points = window.m_viewer->motionPathPoints();
+        QVERIFY(QLineF(points.at(0), wanted({0.5, 0.5})).length() < 0.01);
+        QVERIFY(QLineF(points.at(1), wanted({0.75, 0.5})).length() < 0.01);
+        // A chain that goes round stops, as the document refuses it anyway.
+        QJsonObject round = far;
+        round.insert("parent", "c1");
+        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{round, near, child}}}}}};
+        window.updateViewerMasks();
+        QVERIFY(window.m_viewer->showsMotionPath());
+    }
+
+    void aClipInDepthShowsNoPath() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject clip{{"id", "c1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48},
+                         {"props", QJsonObject{{"path", "0,0 0.25,0"}, {"three_d", true}}}};
+        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}}}}};
+        window.m_selectedClip = QStringLiteral("c1");
+        window.m_selectedClips = {QStringLiteral("c1")};
+        window.m_connected = true;
+        window.updateViewerMasks();
+        QVERIFY(!window.m_viewer->showsMotionPath());
+        clip.insert("props", QJsonObject{{"path", "0,0 0.25,0"}, {"three_d", false}});
+        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}}}}};
+        window.updateViewerMasks();
+        QVERIFY(window.m_viewer->showsMotionPath());
+    }
+
+    void aClipWithNoPathCanStartOneAsOneEdit() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const auto clipWith = [](const QJsonObject &props) {
+            return QJsonObject{{"id", "c1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48}, {"props", props}};
+        };
+        const auto hold = [&window](const QJsonObject &clip) {
+            window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}}}}};
+        };
+        window.m_selectedClip = QStringLiteral("c1");
+        window.m_selectedClips = {QStringLiteral("c1")};
+        window.m_connected = true;
+        // One with a path, or in depth, has nothing to start.
+        hold(clipWith({{"path", "0,0 1,0"}}));
+        QVERIFY(!window.canStartMotionPath(window.selectedClipObject()));
+        hold(clipWith({{"three_d", true}}));
+        QVERIFY(!window.canStartMotionPath(window.selectedClipObject()));
+        hold(clipWith({}));
+        QVERIFY(window.canStartMotionPath(window.selectedClipObject()));
+        QVERIFY(window.m_commands->action(QStringLiteral("clip.startPath")));
+        window.m_lastCommand = {};
+        window.startMotionPath();
+        QVERIFY(!window.m_lastCommand.isEmpty());
+        const QJsonArray ops = window.m_lastCommand.value("ops").toArray();
+        QCOMPARE(ops.size(), 1);
+        const QJsonObject props = ops.first().toObject().value("props").toObject();
+        QCOMPARE(props.value("path").toString(), QStringLiteral("0,0 0.25,0"));
+        const QJsonArray keys = props.value("along").toObject().value("keys").toArray();
+        QCOMPARE(keys.size(), 2);
+        QCOMPARE(keys.at(0).toObject().value("at").toInt(), 0);
+        QCOMPARE(keys.at(1).toObject().value("at").toInt(), 47);
+        QCOMPARE(keys.at(1).toObject().value("value").toDouble(), 1.0);
+        // What already says how far along it is stays as it is, and a clip right of the middle goes left.
+        hold(clipWith({{"along", 0.5}, {"x", 0.4}}));
+        window.startMotionPath();
+        const QJsonObject kept = window.m_lastCommand.value("ops").toArray().first().toObject().value("props").toObject();
+        QCOMPARE(kept.value("path").toString(), QStringLiteral("0,0 -0.25,0"));
+        QVERIFY(!kept.contains("along"));
     }
 
     void aPointDraggedReachesTheWindow() {

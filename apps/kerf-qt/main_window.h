@@ -299,6 +299,15 @@ private:
     // The size of the selected clip's picture, in its own pixels, and
     // whether it is fitted to the canvas; empty when it has none to mask.
     QSizeF selectedPictureSize(bool *fit) const;
+    // What a picture clip on a track of `trackType` draws, in its own pixels; empty
+    // for one that draws none. `fit` says whether it is fitted to the canvas.
+    QSizeF pictureSizeOf(const QJsonObject &clip, const QString &trackType, bool *fit) const;
+    // What the parents of `clip` have done to it at sequence time `at`, in canvas pixels.
+    QTransform parentsMotion(const QJsonObject &clip, const QSizeF &canvas, double at) const;
+    // A selected picture clip with no `path=` and not in depth can start one: two
+    // points from where it is, and `along` keyed across the clip, as one edit.
+    bool canStartMotionPath(const QJsonObject &clip) const;
+    void startMotionPath();
     // The selected picture clip's masks on the viewer, where its picture
     // lands at the playhead.
     void updateViewerMasks();

@@ -17,6 +17,11 @@
 // with the middle button pans it. F or Frame shows what is selected, and Shift+F
 // or Fit shows the whole clip.
 //
+// With Alt, scrolling does the same to the value axis of the selected number:
+// up and down zooms it around the pointer, and with Shift pans it. Once it has
+// been zoomed the middle button pans it too. The other numbers keep their scales,
+// and Fit returns them all to fitting the plot.
+//
 // Nothing here animates: the tray comes and goes as the others do, and what
 // changes is drawn where it changed. See MOTION_UI.md.
 
@@ -33,6 +38,7 @@
 
 class QLabel;
 class QMenu;
+class QWheelEvent;
 
 namespace kerf {
 
@@ -63,6 +69,10 @@ public:
     // keys next to it, or with nothing selected the whole clip.
     void frameSelection();
     void showWholeClip();
+    // The values at the plot's bottom and top for a number, and whether it has
+    // been taken off fitting the plot.
+    std::pair<double, double> viewValues(int channel) const { return rangeOf(channel); }
+    bool valuesZoomed(int channel) const;
     QPointF keyPoint(int channel, int key) const;
     QPointF channelPoint(int channel) const;
     // The selected key's handles, when it has them.
@@ -109,6 +119,11 @@ private:
     // Show `span` frames from `start`, held to the clip.
     void setView(double start, double span);
     double wholeSpan() const { return double(std::max<qint64>(1, m_duration - 1)); }
+    // Alt with the wheel, on the selected number's value axis.
+    void wheelValues(QWheelEvent *event);
+    // Show the selected number from `low` to `high`, within what the zoom allows.
+    void setValueView(double low, double high);
+    std::pair<double, double> rangeOf(int channel) const;
 
     QRectF plot() const;
     QRectF listRect() const;
@@ -127,7 +142,9 @@ private:
     double m_clipStart = 0.0;
     qint64 m_duration = 1;
     QList<graph::Channel> m_channels;
+    // Each number's fit to the plot, and the numbers taken off it.
     QHash<QString, std::pair<double, double>> m_ranges;
+    QHash<QString, std::pair<double, double>> m_valueViews;
     QHash<QString, QJsonArray> m_effectParams;
     // The time axis: which frame is at the plot's left, and how many it shows.
     double m_viewStart = 0.0;
@@ -145,6 +162,7 @@ private:
     // Where the keys were when the drag began, and the view when a pan began.
     QList<graph::Channel> m_before;
     double m_panFrom = 0.0;
+    std::pair<double, double> m_panValuesFrom;
     // What a press on a selected key does if it turns out not to be a drag:
     // Shift takes the key away, otherwise the selection becomes just that key.
     bool m_shiftPress = false;
