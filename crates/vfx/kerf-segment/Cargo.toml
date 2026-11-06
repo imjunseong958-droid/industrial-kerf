@@ -1,0 +1,14 @@
+[package]
+name = "kerf-segment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Swappable trained models for roto: the MaskModel interface, a registry of open-licensed models, a PyTorch checkpoint reader, and MobileSAM in plain Rust"
+
+[dependencies]
+miniz_oxide = "0.8"
+ndarray = { version = "0.17", default-features = false, features = ["std"] }
+rayon = { workspace = true }
+
+[lints]
+workspace = true

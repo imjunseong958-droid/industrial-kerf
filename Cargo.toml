@@ -19,6 +19,7 @@ members = [
     # color
     "crates/color/kerf-scopes",
     # vfx
+    "crates/vfx/kerf-segment",
     "crates/vfx/kerf-track",
     # image
     "crates/image/kerf-image",
