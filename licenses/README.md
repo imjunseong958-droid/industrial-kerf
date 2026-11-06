@@ -21,6 +21,7 @@ on, and Kerf does not follow upstream.
 | `crates/image/kerf-image/src/fill.rs` | EffectCraft's hole filling |
 | `crates/vfx/kerf-track/src/planar.rs` | EffectCraft's homography fit and RANSAC |
 | `crates/vfx/kerf-track/src/roto` | EffectCraft's graph cut, colour models, and matte propagation |
+| `crates/vfx/kerf-track/src/camera` | EffectCraft's camera tracker (`track/src/camtrack`): its linear algebra, two-view geometry, bundle adjustment, and solve, with no lens distortion, zoom, or stored tracks |
 | `crates/vfx/kerf-segment` | EffectCraft's model interface and registry, PyTorch reader, and MobileSAM in Rust. MobileSAM's weights are Apache-2.0 and never bundled |
 | `crates/color/kerf-scopes` | FilmCraft's scope summaries, reduced to what an agent reads |
 | `crates/foundation/kerf-model/looks/grade-*.kerflook` | FilmCraft's Lumetri presets, as looks |

@@ -108,3 +108,7 @@ opt-level = 3
 [profile.dev.package.kerf-raster-fx]
 opt-level = 3
 
+# A camera solve is many small bundle adjustments, which take minutes unoptimized.
+[profile.dev.package.kerf-track]
+opt-level = 3
+
