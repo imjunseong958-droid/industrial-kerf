@@ -70,24 +70,29 @@ Measured on an Apple Silicon Mac with `examples/frame_bench.rs` in
 | One Lumetri | 29 fps | 78 fps | 9 fps | 24 fps |
 | Gaussian blur, radius 40 | 33 fps | 42 fps | 8 fps | 15 fps |
 | Four layers | 31 fps | 53 fps | 9 fps | 15 fps |
-| One glow (no kernel yet) | 13 fps | 13 fps | 3 fps | 3 fps |
+| One glow | 13 fps | 15 fps | 3 fps | 5 fps |
 
 A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title took
 3.3 s against 7.4 s, 46 dB from the CPU's after encoding.
 
 **What the GPU draws:** media, nested sequences, solids, titles, captions; masks,
-crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes;
-`color.basic`, `blur.gaussian`, and the 29 kinds of operation in `FxOp`, Lumetri
-among them. **What sends a frame to the CPU:** the transitions carried from FilmCraft,
-adjustment layers, effects outside `FxOp` (glows, lights, keys, stylize, and the kept
-EffectCraft ones), and a Lumetri using a LUT or curves.
+crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes,
+adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
+`FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
+Noise. So 13 of the 15 bundled looks stay on the GPU, including the transitions that
+are looks (Whip, Flash Cut), since a look transition is layers rather than a mix.
+**What sends a frame to the CPU:** the transitions carried from FilmCraft, every other
+effect (other lights, keys, stylize, and the kept EffectCraft ones, which is what
+Film and Zoom Through need), and a Lumetri using a LUT or curves. Glow gains least
+(13 to 15 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
 
 Three limits remain, in this order:
 
-1. **More of the frame on the GPU.** Each effect outside `FxOp` costs its whole
-   frame the GPU. Transitions and adjustment layers come first since they are the
-   most common, then glows and keys. EffectCraft's WGSL (`effectcraft/crates/gpu` at
-   `5c54866`) has kernels for many of them.
+1. **More of the frame on the GPU.** Each effect without a kernel costs its whole
+   frame the GPU. The 72 carried transitions are procedural maths with no kernels (FilmCraft
+   has one, Push, in `crates/gpu/src/transition.wgsl`), and they last only as long as a
+   cut; keys and `blur.radialzoom` are next. EffectCraft's WGSL
+   (`effectcraft/crates/gpu` at `5c54866`) has kernels for many of them.
 2. **Nothing is kept between frames.** A clip with no animation is drawn again every
    frame. EffectCraft's layer cache (`render/src/cache.rs`, `disk_cache.rs`) keyed a
    layer's pixels by a hash of exactly what they depend on.

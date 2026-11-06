@@ -98,12 +98,29 @@ pub fn apply(picture: &mut kerf_draw::Image, instance: &EffectInstance, run: &Ru
     super::effects::apply(picture, instance, &cx);
 }
 
-/// `instance` on a picture of `size` as one GPU op, when the GPU can run it as `apply` would.
-pub fn gpu_op(
-    instance: &EffectInstance,
-    run: &Run,
-    (w, h): (usize, usize),
-) -> Option<super::gpufx::FxOp> {
+/// An effect as the GPU runs it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GpuEffect {
+    Op(super::gpufx::FxOp),
+    Kernel(super::vfx::gpu::Kernel),
+}
+
+impl GpuEffect {
+    /// The effect on `picture`, or `None` when its kernels did not build.
+    pub fn run(
+        &self,
+        frame: &mut kerf_gpu::Frame<'static>,
+        picture: kerf_gpu::Picture,
+    ) -> Option<kerf_gpu::Picture> {
+        match self {
+            Self::Op(op) => super::gpu::run(frame, picture, std::slice::from_ref(op)),
+            Self::Kernel(kernel) => kernel.run(frame, picture),
+        }
+    }
+}
+
+/// `instance` on a picture of `size` as the GPU runs it, when it can run it as `apply` would.
+pub fn gpu_effect(instance: &EffectInstance, run: &Run, size: (usize, usize)) -> Option<GpuEffect> {
     let cx = super::effects::FxCtx {
         t: tick(run.at),
         px_scale: run.per_source,
@@ -115,7 +132,12 @@ pub fn gpu_op(
         frame_rate: run.frame_rate,
         working: kerf_color::WorkingSpace::Rec709,
     };
-    super::gpufx::FxOp::eval(instance, &cx, w, h).filter(super::gpufx::FxOp::gpu_ok)
+    if let Some(kernel) = super::vfx::gpu::Kernel::eval(instance, &cx, size) {
+        return Some(GpuEffect::Kernel(kernel));
+    }
+    super::gpufx::FxOp::eval(instance, &cx, size.0, size.1)
+        .filter(super::gpufx::FxOp::gpu_ok)
+        .map(GpuEffect::Op)
 }
 
 /// Run a clip's carried FilmCraft `effects` on an 8-bit RGBA `picture` of `size` alone, as a

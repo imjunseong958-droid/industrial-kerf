@@ -1322,7 +1322,6 @@ dependencies = [
  "kerf-model",
  "kerf-raster-fx",
  "kerf-text",
- "pollster",
  "rayon",
 ]
 

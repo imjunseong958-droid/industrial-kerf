@@ -373,3 +373,21 @@ fn correct(@builtin(global_invocation_id) id: vec3<u32>) {
     if (u.a.y & 8u) != 0u { c = vibrance(c, u.rect.z); }
     textureStore(dst, p, vec4(srgb_to_linear(c) * alpha, alpha));
 }
+
+// `src` by the alpha of `aux` and by p.x, or (when a.y) by what is left of that.
+@compute @workgroup_size(16, 16)
+fn by_weight(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let weight = textureLoad(aux, p, 0).a * u.p.x;
+    let k = select(weight, 1.0 - weight, u.a.y != 0u);
+    textureStore(dst, p, textureLoad(src, p, 0) * k);
+}
+
+// `src` plus `aux`.
+@compute @workgroup_size(16, 16)
+fn plus(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, textureLoad(src, p, 0) + textureLoad(aux, p, 0));
+}

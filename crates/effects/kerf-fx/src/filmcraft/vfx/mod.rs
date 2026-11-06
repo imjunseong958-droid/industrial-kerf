@@ -15,6 +15,7 @@ mod blur;
 mod color;
 pub(crate) use color::cdl;
 mod distort;
+pub mod gpu;
 mod immersive;
 mod lights;
 mod stylize;
