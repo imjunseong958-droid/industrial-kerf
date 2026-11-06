@@ -30,20 +30,15 @@ fn frame(mask: &str, at: i64) -> Frame {
     compositor(mask, Accel::Never).frame(Rate::FPS_24.time_of(at), 1.0)
 }
 
-/// How much of a pixel is the white clip, over nothing: in light.
+/// How much of a pixel is the white clip, over black: in light.
 fn covered(frame: &Frame, x: u32, y: u32) -> f64 {
     let at = ((y * frame.width + x) * 4) as usize;
     let encoded = f64::from(frame.rgba[at]) / 255.0;
-    let alpha = f64::from(frame.rgba[at + 3]) / 255.0;
-    if alpha <= 0.0 {
-        return 0.0;
-    }
-    let linear = if encoded <= 0.04045 {
+    if encoded <= 0.04045 {
         encoded / 12.92
     } else {
         ((encoded + 0.055) / 1.055).powf(2.4)
-    };
-    linear.max(1.0 - alpha) * alpha.max(linear)
+    }
 }
 
 /// How wide the fall-off across row `y` is around column `x`, from where it starts to where it ends.
