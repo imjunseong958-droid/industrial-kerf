@@ -78,16 +78,16 @@ void setOption(const QString &directory, const QString &key, bool on);
 
 // One configured output.
 struct Output {
-    QString id;      // master, draft, preview, vertical
-    QString title;   // Master, Draft, Render preview, Vertical cut
+    QString id;      // master, draft, preview, vertical, hdr
+    QString title;   // Master, Draft, Render preview, Vertical cut, HDR delivery
     QString quality; // master, review, full; empty for the preview
-    QString codec;   // prores_hq, h264, hevc; empty for the preview
+    QString codec;   // prores_hq, h264, hevc, hevc_hdr; empty for the preview
     QString folder;  // where the file goes (relative to the project or absolute); empty for the project folder
     QString name;    // the file's name without its extension; empty lets kerfd name it
 };
 
 // The outputs of the project with their saved folders and names (the
-// defaults: deliveries/, and <project>_master, _draft, _vertical).
+// defaults: deliveries/, and <project>_master, _draft, _vertical, _hdr).
 QList<Output> outputs(const QString &directory);
 Output output(const QString &directory, const QString &id);
 // Keep `folder` as the output's (all outputs of a project share the master's

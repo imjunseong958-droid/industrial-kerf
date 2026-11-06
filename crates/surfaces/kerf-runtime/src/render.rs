@@ -13,7 +13,7 @@ const RENDER_CANCEL_FILE_PREFIX: &str = ".kerf-render-";
 pub const RENDER_QUALITIES: [&str; 4] = ["preview", "full", "review", "master"];
 
 /// The codecs a render job takes.
-pub const RENDER_CODECS: [&str; 3] = ["h264", "hevc", "prores_hq"];
+pub const RENDER_CODECS: [&str; 4] = ["h264", "hevc", "hevc_hdr", "prores_hq"];
 
 /// The longest render name, in characters.
 const MAX_RENDER_NAME: usize = 120;
@@ -53,13 +53,13 @@ impl Encoding {
                 .ok_or_else(|| {
                     RuntimeError::new(
                         "INVALID_RENDER_CODEC",
-                        "codec must be h264, hevc, or prores_hq",
+                        "codec must be h264, hevc, hevc_hdr, or prores_hq",
                     )
                 })?,
         };
         let refused = match (quality, codec) {
-            ("preview", "prores_hq") => Some("a preview is an H.264 or HEVC draft"),
-            ("review", "hevc" | "prores_hq") => Some("a review copy is H.264"),
+            ("preview", "prores_hq" | "hevc_hdr") => Some("a preview is an H.264 or HEVC draft"),
+            ("review", "hevc" | "hevc_hdr" | "prores_hq") => Some("a review copy is H.264"),
             _ => None,
         };
         if let Some(reason) = refused {
@@ -70,6 +70,7 @@ impl Encoding {
             codec,
             preset: match (quality, codec) {
                 (_, "prores_hq") => RenderPreset::ProRes422Hq,
+                (_, "hevc_hdr") => RenderPreset::HevcHdr,
                 ("review", _) => RenderPreset::Review,
                 _ => RenderPreset::Standard,
             },

@@ -234,6 +234,27 @@ private slots:
         QCOMPARE(h.sent.last(), (QJsonObject{{"type", "export"}, {"quality", "review"}, {"output", "deliveries/"}, {"name", "atlas_draft"}}));
     }
 
+    void hdrDeliveryAppearsOnlyWithAnHdrSequence() {
+        Harness h;
+        DeliverTray tray(nullptr, &h.bus);
+        tray.setProjectDirectory(m_project);
+        RenderQueueView *view = tray.renderQueueView();
+        QVERIFY(!view->rowIds().contains("hdr"));
+        QJsonObject hdr = timeline();
+        QJsonArray sequences = hdr.value("sequences").toArray();
+        QJsonObject first = sequences.first().toObject();
+        first.insert("color", "rec2100-pq");
+        sequences[0] = first;
+        hdr.insert("sequences", sequences);
+        h.setTimeline(hdr);
+        QVERIFY(view->rowIds().contains("hdr"));
+        QVERIFY(view->specText("hdr").startsWith(QStringLiteral("HEVC 10-bit")));
+        QVERIFY(view->specText("hdr").endsWith(QStringLiteral("HDR10")));
+        QVERIFY(view->start("hdr"));
+        QCOMPARE(h.sent.last(), (QJsonObject{{"type", "export"}, {"quality", "full"}, {"codec", "hevc_hdr"},
+                                             {"output", "deliveries/"}, {"name", "atlas_hdr"}}));
+    }
+
     void verticalCutAppearsOnlyWithAPortraitSequence() {
         Harness h;
         DeliverTray tray(nullptr, &h.bus);

@@ -367,3 +367,255 @@ fn an_hdr_sequence_masters_as_hdr_and_comes_back_as_it() {
         assert_eq!(found.color, kerf_model::ColorSpace::Rec709);
     }
 }
+
+/// What ffprobe finds of a video's first frame and stream, as `key=value` lines.
+fn probed(path: &Path) -> String {
+    let output = Command::new(kerf_engine::ffmpeg::resolve_ffprobe_bin())
+        .args(["-v", "error", "-select_streams", "v:0"])
+        .args(["-read_intervals", "%+#1", "-show_frames"])
+        .args([
+            "-show_entries",
+            "stream=codec_name,profile,pix_fmt,color_space,color_primaries,color_transfer,color_range,codec_tag_string:frame=side_data_list",
+        ])
+        .args(["-of", "default=nw=1"])
+        .arg(path)
+        .output()
+        .expect("ffprobe runs");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// `name=number/denominator` or `name=number` as a number.
+fn number_after(text: &str, name: &str) -> f64 {
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(&format!("{name}=")))
+        .unwrap_or_else(|| panic!("no {name} in {text}"));
+    let value = line.split_once('=').expect("a value").1;
+    match value.split_once('/') {
+        Some((top, bottom)) => {
+            top.parse::<f64>().expect("a number") / bottom.parse::<f64>().expect("a number")
+        }
+        None => value.parse().expect("a number"),
+    }
+}
+
+/// A sequence finished in `color` holding one flat clip of 10-bit `transfer` footage and a white
+/// solid under a mask over part of it.
+fn hdr_project(dir: &Path, color: &str, transfer: &str, gray: u8) -> kerf_model::Project {
+    let source = dir.join(format!("{transfer}.mov"));
+    let made = Command::new(resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!("color=c=0x{gray:02x}{gray:02x}{gray:02x}:s=320x180:r=24:d=1"))
+        .args([
+            "-vf",
+            &format!("scale=in_range=pc:out_range=tv,format=yuv422p10le,setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc={transfer}"),
+            "-c:v",
+            "prores_ks",
+        ])
+        .arg(&source)
+        .output()
+        .expect("ffmpeg runs");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    kerf_lang::parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180 bits=10 color={color}\nsequence s1 rate=24 size=320x180 audio=48000 color={color}\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n",
+            source.display()
+        ),
+        kerf_model::Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+#[test]
+fn hdr10_delivery_says_what_it_was_mastered_on_and_how_bright_it_is() {
+    if !encoder_available("libx265") {
+        eprintln!("skipping: this FFmpeg has no libx265");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("a folder");
+    // A signal of 0xD0 / 255 in PQ is about 2100 nits.
+    let project = hdr_project(dir.path(), "rec2100-pq", "smpte2084", 0xD0);
+    let out = dir.path().join("hdr10.mp4");
+    render_program::<fn(f64)>(
+        &project,
+        None,
+        None,
+        &RenderOptions {
+            output: out.to_string_lossy().into_owned(),
+            preset: RenderPreset::HevcHdr,
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect("renders");
+    let text = probed(&out);
+    for wanted in [
+        "codec_name=hevc",
+        "profile=Main 10",
+        "pix_fmt=yuv420p10le",
+        "color_space=bt2020nc",
+        "color_transfer=smpte2084",
+        "color_primaries=bt2020",
+        "codec_tag_string=hvc1",
+        "side_data_type=Mastering display metadata",
+        "side_data_type=Content light level metadata",
+    ] {
+        assert!(text.contains(wanted), "no {wanted} in {text}");
+    }
+    // The display: P3 D65 at 1000 nits.
+    assert!((number_after(&text, "red_x") - 0.68).abs() < 1e-3, "{text}");
+    assert!(
+        (number_after(&text, "green_y") - 0.69).abs() < 1e-3,
+        "{text}"
+    );
+    assert!(
+        (number_after(&text, "white_point_x") - 0.3127).abs() < 1e-3,
+        "{text}"
+    );
+    assert!(
+        (number_after(&text, "max_luminance") - 1000.0).abs() < 1e-3,
+        "{text}"
+    );
+    // The picture holds the same signal, within what 4:2:0 and a compression allow.
+    let signal = |path: &Path| -> f64 {
+        let raw = Command::new(resolve_ffmpeg_bin())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(path)
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "yuv420p10le",
+                "-",
+            ])
+            .output()
+            .expect("ffmpeg runs")
+            .stdout;
+        let code = u16::from_le_bytes([raw[2 * (90 * 320 + 160)], raw[2 * (90 * 320 + 160) + 1]]);
+        f64::from(code)
+    };
+    // A flat gray picture's brightest pixel is its average, and its code says how bright it is,
+    // whatever the meter thought.
+    let code = signal(&out);
+    let expected = kerf_color::pq_eotf(((code - 64.0) / 876.0) as f32) * 10_000.0;
+    let (cll, fall) = (
+        number_after(&text, "max_content"),
+        number_after(&text, "max_average"),
+    );
+    eprintln!("flat PQ footage of {expected:.0} nits measured: MaxCLL {cll}, MaxFALL {fall}");
+    assert!(
+        (cll - f64::from(expected)).abs() < f64::from(expected) * 0.03,
+        "{cll} of {expected}"
+    );
+    assert!((cll - fall).abs() < 5.0, "{cll} {fall}");
+    let master = dir.path().join("master.mov");
+    render_program::<fn(f64)>(
+        &project,
+        None,
+        None,
+        &RenderOptions {
+            output: master.to_string_lossy().into_owned(),
+            preset: RenderPreset::ProRes422Hq,
+            force_software: true,
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect("renders the master");
+    assert!(
+        (signal(&out) - signal(&master)).abs() < 8.0,
+        "{} {}",
+        signal(&out),
+        signal(&master)
+    );
+    // Told the levels, it writes those without measuring.
+    let told = dir.path().join("told.mp4");
+    render_program::<fn(f64)>(
+        &project,
+        None,
+        None,
+        &RenderOptions {
+            output: told.to_string_lossy().into_owned(),
+            preset: RenderPreset::HevcHdr,
+            mastering: kerf_engine::render::MasteringDisplay {
+                peak: 4000.0,
+                ..Default::default()
+            },
+            content_light: Some(kerf_engine::render::ContentLight {
+                max_cll: 3210,
+                max_fall: 321,
+            }),
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect("renders");
+    let text = probed(&told);
+    assert_eq!(number_after(&text, "max_content"), 3210.0, "{text}");
+    assert_eq!(number_after(&text, "max_average"), 321.0, "{text}");
+    assert!(
+        (number_after(&text, "max_luminance") - 4000.0).abs() < 1e-3,
+        "{text}"
+    );
+}
+
+#[test]
+fn hlg_delivery_is_tagged_and_carries_no_hdr10_metadata() {
+    if !encoder_available("libx265") {
+        eprintln!("skipping: this FFmpeg has no libx265");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("a folder");
+    let project = hdr_project(dir.path(), "rec2100-hlg", "arib-std-b67", 0xC0);
+    let out = dir.path().join("hlg.mp4");
+    render_program::<fn(f64)>(
+        &project,
+        None,
+        None,
+        &RenderOptions {
+            output: out.to_string_lossy().into_owned(),
+            preset: RenderPreset::HevcHdr,
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect("renders");
+    let text = probed(&out);
+    assert!(text.contains("color_transfer=arib-std-b67"), "{text}");
+    assert!(text.contains("profile=Main 10"), "{text}");
+    assert!(!text.contains("Mastering display"), "{text}");
+}
+
+#[test]
+fn hdr_delivery_refuses_an_sdr_sequence() {
+    if !encoder_available("libx265") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("a folder");
+    let project = kerf_lang::parse_document(
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n  track V1 video\n    clip g gen=solid@1 at=0f dur=4f\n",
+        kerf_model::Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let refused = render_program::<fn(f64)>(
+        &project,
+        None,
+        None,
+        &RenderOptions {
+            output: dir.path().join("out.mp4").to_string_lossy().into_owned(),
+            preset: RenderPreset::HevcHdr,
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect_err("nothing to deliver in HDR");
+    assert!(refused.to_string().contains("rec2100"), "{refused}");
+}

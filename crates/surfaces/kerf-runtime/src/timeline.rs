@@ -64,6 +64,7 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
                 "fps": sequence.rate.fps(),
                 "dropFrame": sequence.drop_frame,
                 "duration": sequence.duration().seconds(),
+                "color": sequence.color.id(),
             })
         }).collect::<Vec<_>>(),
         "properties": properties_json(),

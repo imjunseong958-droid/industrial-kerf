@@ -489,7 +489,7 @@ fn main() -> Result<()> {
             out,
         } => {
             let Some(preset) = kerf_engine::render::RenderPreset::parse(&preset) else {
-                bail!("unknown preset `{preset}`: use standard, review or prores_hq");
+                bail!("unknown preset `{preset}`: use standard, review, prores_hq or hevc_hdr");
             };
             let document = read_project(&project)?;
             let started = std::time::Instant::now();

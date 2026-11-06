@@ -157,18 +157,28 @@ pub enum RenderPreset {
     /// limited range, in QuickTime with 24-bit PCM sound.
     #[serde(rename = "prores_hq")]
     ProRes422Hq,
+    /// HDR delivery: HEVC Main 10 in MP4, from a `rec2100-pq` or `rec2100-hlg` sequence, tagged, and
+    /// for PQ with HDR10's mastering display and content light levels. Encoded by `libx265`.
+    #[serde(rename = "hevc_hdr")]
+    HevcHdr,
 }
 
 impl RenderPreset {
-    pub const ALL: [Self; 3] = [Self::Standard, Self::Review, Self::ProRes422Hq];
+    pub const ALL: [Self; 4] = [
+        Self::Standard,
+        Self::Review,
+        Self::ProRes422Hq,
+        Self::HevcHdr,
+    ];
 
-    /// `standard`, `review` or `prores_hq`, as the bridge and the runtime
+    /// `standard`, `review`, `prores_hq` or `hevc_hdr`, as the bridge and the runtime
     /// name them.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Standard => "standard",
             Self::Review => "review",
             Self::ProRes422Hq => "prores_hq",
+            Self::HevcHdr => "hevc_hdr",
         }
     }
 
@@ -177,6 +187,7 @@ impl RenderPreset {
             "standard" => Some(Self::Standard),
             "review" => Some(Self::Review),
             "prores_hq" | "prores" | "prores_422_hq" | "prores422hq" => Some(Self::ProRes422Hq),
+            "hevc_hdr" | "hdr10" => Some(Self::HevcHdr),
             _ => None,
         }
     }
@@ -184,7 +195,7 @@ impl RenderPreset {
     /// The file extension the preset's container takes.
     pub fn extension(self) -> &'static str {
         match self {
-            Self::Standard | Self::Review => "mp4",
+            Self::Standard | Self::Review | Self::HevcHdr => "mp4",
             Self::ProRes422Hq => "mov",
         }
     }
@@ -195,6 +206,7 @@ impl RenderPreset {
             Self::Standard => "H.264",
             Self::Review => "H.264 review",
             Self::ProRes422Hq => "ProRes 422 HQ",
+            Self::HevcHdr => "HEVC 10-bit HDR",
         }
     }
 }
@@ -218,6 +230,107 @@ pub struct RenderOptions {
     /// What the file is for. A draft has its own encoding and takes only
     /// [`RenderPreset::Standard`].
     pub preset: RenderPreset,
+    /// The display an HDR10 file says it was mastered on. Its light levels are measured.
+    pub mastering: MasteringDisplay,
+    /// HDR10's content light levels when already known; otherwise they are measured from the frames
+    /// before encoding.
+    pub content_light: Option<ContentLight>,
+}
+
+/// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MasteringDisplay {
+    /// Primaries and white point in CIE xy: green, blue, red, white.
+    pub primaries: [[f64; 2]; 4],
+    /// Peak and black, in nits.
+    pub peak: f64,
+    pub black: f64,
+}
+
+impl MasteringDisplay {
+    /// Display P3 with a D65 white, as most HDR is graded on, at 1000 nits.
+    pub const P3_1000: Self = Self {
+        primaries: [[0.265, 0.690], [0.150, 0.060], [0.680, 0.320], [0.3127, 0.3290]],
+        peak: 1000.0,
+        black: 0.0001,
+    };
+
+    /// As `x265` takes it: chromaticities in 50,000ths, luminance in 10,000ths of a nit.
+    fn x265(&self) -> String {
+        let point = |p: [f64; 2]| {
+            format!(
+                "({},{})",
+                (p[0] * 50_000.0).round() as u32,
+                (p[1] * 50_000.0).round() as u32
+            )
+        };
+        let [g, b, r, w] = self.primaries;
+        format!(
+            "G{}B{}R{}WP{}L({},{})",
+            point(g),
+            point(b),
+            point(r),
+            point(w),
+            (self.peak * 10_000.0).round() as u64,
+            (self.black * 10_000.0).round() as u64
+        )
+    }
+}
+
+impl Default for MasteringDisplay {
+    fn default() -> Self {
+        Self::P3_1000
+    }
+}
+
+/// How bright a picture is, as CTA-861.3 measures it, in nits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentLight {
+    /// The brightest any pixel's brightest channel gets.
+    pub max_cll: u32,
+    /// The brightest any frame's average of those gets.
+    pub max_fall: u32,
+}
+
+/// Measures 16-bit PQ frames as they pass.
+struct LightMeter {
+    nits: Vec<f32>,
+    max_cll: f32,
+    max_fall: f32,
+}
+
+impl LightMeter {
+    fn new() -> Self {
+        Self {
+            nits: (0..=u16::MAX)
+                .map(|code| kerf_color::pq_eotf(f32::from(code) / 65_535.0) * 10_000.0)
+                .collect(),
+            max_cll: 0.0,
+            max_fall: 0.0,
+        }
+    }
+
+    /// `rgba` is 16-bit little-endian RGBA, holding the PQ signal.
+    fn add(&mut self, rgba: &[u8]) {
+        let (mut brightest, mut sum, mut count) = (0.0f32, 0.0f64, 0u64);
+        for pixel in rgba.chunks_exact(8) {
+            let channel = |at: usize| u16::from_le_bytes([pixel[at], pixel[at + 1]]) as usize;
+            let code = channel(0).max(channel(2)).max(channel(4));
+            let nits = self.nits[code];
+            brightest = brightest.max(nits);
+            sum += f64::from(nits);
+            count += 1;
+        }
+        self.max_cll = self.max_cll.max(brightest);
+        self.max_fall = self.max_fall.max((sum / count.max(1) as f64) as f32);
+    }
+
+    fn levels(&self) -> ContentLight {
+        ContentLight {
+            max_cll: self.max_cll.round() as u32,
+            max_fall: self.max_fall.round() as u32,
+        }
+    }
 }
 
 impl Default for RenderOptions {
@@ -231,6 +344,8 @@ impl Default for RenderOptions {
             project_dir: None,
             graph: false,
             preset: RenderPreset::Standard,
+            mastering: MasteringDisplay::P3_1000,
+            content_light: None,
         }
     }
 }
@@ -279,6 +394,7 @@ fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
                 .into();
             Ok(encoding)
         }
+        RenderPreset::HevcHdr => hevc_hdr_encoding(opts, color),
         RenderPreset::ProRes422Hq => {
             let (video, pix_fmt) = prores_hq_args(opts.prefer_hardware, opts.force_software);
             let (matrix, primaries, transfer, convert) = match color {
@@ -322,6 +438,77 @@ fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
             })
         }
     }
+}
+
+/// HEVC Main 10 from `libx265`, whose stream carries the transfer and, for PQ, HDR10's metadata.
+fn hevc_hdr_encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
+    if !encoder_available("libx265") {
+        return Err(EngineError::msg(
+            "HEVC HDR needs an FFmpeg with libx265, which this one does not have",
+        ));
+    }
+    let (transfer, convert, hdr) = match color {
+        ColorSpace::Rec2100Pq => ("smpte2084", MASTER_CONVERT_PQ, true),
+        ColorSpace::Rec2100Hlg => ("arib-std-b67", MASTER_CONVERT_HLG, false),
+        _ => {
+            return Err(EngineError::msg(
+                "HEVC HDR needs a sequence finished in HDR: color=rec2100-pq or rec2100-hlg",
+            ))
+        }
+    };
+    let mut params = format!(
+        "profile=main10:repeat-headers=1:colorprim=bt2020:transfer={transfer}:colormatrix=bt2020nc:range=limited"
+    );
+    if hdr {
+        params.push_str(":hdr10=1:hdr10-opt=1");
+        params.push_str(&format!(":master-display={}", opts.mastering.x265()));
+        let light = opts.content_light.unwrap_or_default();
+        params.push_str(&format!(":max-cll={},{}", light.max_cll, light.max_fall));
+    } else {
+        // HLG for players that read only the alternative transfer.
+        params.push_str(":atc-sei=18:pic-struct=0");
+    }
+    let budget = budget();
+    let video: Vec<String> = [
+        "-c:v".to_owned(),
+        "libx265".to_owned(),
+        "-crf".to_owned(),
+        budget.software_crf.to_string(),
+        "-preset".to_owned(),
+        budget.software_preset.to_string(),
+        "-profile:v".to_owned(),
+        "main10".to_owned(),
+        "-x265-params".to_owned(),
+        params,
+        // QuickTime and Apple's players want it tagged so.
+        "-tag:v".to_owned(),
+        "hvc1".to_owned(),
+    ]
+    .into();
+    let output = [
+        "-c:a",
+        "aac",
+        "-b:a",
+        "320k",
+        "-colorspace",
+        "bt2020nc",
+        "-color_primaries",
+        "bt2020",
+        "-color_trc",
+        transfer,
+        "-color_range",
+        "tv",
+        "-movflags",
+        "+faststart",
+    ]
+    .map(String::from)
+    .into();
+    Ok(Encoding {
+        video,
+        pix_fmt: "yuv420p10le",
+        convert: Some(convert),
+        output,
+    })
 }
 
 /// H.264 at [`REVIEW_BITRATE`], on a hardware encoder when the budget
@@ -700,6 +887,19 @@ where
             ..Default::default()
         },
     )?;
+    // HDR10 says how bright the picture is before its first frame, so the frames are measured first;
+    // kept on disk, they are not drawn twice.
+    let measured;
+    let opts = if needs_measuring(project, sequence, opts) {
+        let light = measure_light(&compositor, project, sequence, range, opts, cancellation)?;
+        measured = RenderOptions {
+            content_light: Some(light),
+            ..opts.clone()
+        };
+        &measured
+    } else {
+        opts
+    };
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
     let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(&render.args)
@@ -760,6 +960,43 @@ where
         Err(error) => Err(error),
         Ok(()) => Ok(()),
     }
+}
+
+/// Whether a render still has to work out HDR10's content light levels.
+fn needs_measuring(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    opts: &RenderOptions,
+) -> bool {
+    opts.preset == RenderPreset::HevcHdr
+        && opts.content_light.is_none()
+        && kerf_core::program::program_sequence(project, sequence)
+            .is_ok_and(|top| top.color == ColorSpace::Rec2100Pq)
+}
+
+/// How bright the frames a render would encode are.
+fn measure_light(
+    compositor: &Compositor,
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+    opts: &RenderOptions,
+    cancellation: &CancellationToken,
+) -> Result<ContentLight> {
+    let render = composited_render(project, sequence, range, opts, compositor.size())?;
+    let mut meter = LightMeter::new();
+    draw_in_order(
+        render.times.len(),
+        RENDER_DRAWERS,
+        |index| compositor.frame16(render.times[index], render.scale),
+        |frame| {
+            meter.add(&frame.rgba);
+            Ok(())
+        },
+        cancellation,
+    )?;
+    compositor.flush_frames();
+    Ok(meter.levels())
 }
 
 /// Draw `count` frames on `threads` threads, handing them to `write` in
@@ -1135,6 +1372,56 @@ mod tests {
         assert_eq!(flag(args, "-maxrate"), Some("12M"));
         assert_eq!(flag(args, "-pix_fmt"), Some("yuv420p"));
         assert!(!args.iter().any(|arg| arg == "-crf"));
+    }
+
+    #[test]
+    fn a_meter_reads_nits_from_the_pq_signal() {
+        let mut meter = LightMeter::new();
+        let code = |nits: f32| {
+            (kerf_color::pq_inverse_eotf(nits / 10_000.0) * 65_535.0).round() as u16
+        };
+        let pixel = |r: u16, g: u16, b: u16| {
+            [r, g, b, u16::MAX]
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
+        // A frame half at 1000 nits in one channel and half black: its average is 500.
+        let mut frame = pixel(code(1000.0), code(100.0), 0);
+        frame.extend(pixel(0, 0, 0));
+        meter.add(&frame);
+        // Another, dimmer overall but with a brighter peak among many.
+        let mut frame = pixel(0, code(4000.0), 0);
+        for _ in 0..39 {
+            frame.extend(pixel(0, 0, 0));
+        }
+        meter.add(&frame);
+        let levels = meter.levels();
+        assert!(levels.max_cll.abs_diff(4000) <= 3, "{levels:?}");
+        assert!(levels.max_fall.abs_diff(500) <= 2, "{levels:?}");
+    }
+
+    #[test]
+    fn mastering_display_is_written_as_x265_reads_it() {
+        assert_eq!(
+            MasteringDisplay::P3_1000.x265(),
+            "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+        );
+    }
+
+    #[test]
+    fn hevc_hdr_refuses_what_is_not_an_hdr_sequence() {
+        if !encoder_available("libx265") {
+            return;
+        }
+        let opts = RenderOptions {
+            output: "out.mp4".into(),
+            preset: RenderPreset::HevcHdr,
+            ..RenderOptions::default()
+        };
+        let refused = composited_render(&project(), None, None, &opts, (160, 120))
+            .expect_err("an SDR sequence");
+        assert!(refused.to_string().contains("rec2100"), "{refused}");
     }
 
     #[test]
