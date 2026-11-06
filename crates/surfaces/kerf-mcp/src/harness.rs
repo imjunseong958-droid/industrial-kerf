@@ -258,7 +258,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
-                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "clip": {"type": "string"}}, "required": ["x", "y"]},
+                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "clip": {"type": "string"}}},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
                     "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
@@ -395,8 +395,9 @@ struct LookInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrackInput {
-    x: f64,
-    y: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+    corners: Option<[[f64; 2]; 4]>,
     clip: Option<String>,
 }
 
@@ -1385,7 +1386,23 @@ impl KerfMcpRouter {
                 format!("`from`–`to` is not a range of sequence `{}`", sequence.id),
             ));
         }
-        if !(0.0..=1.0).contains(&track.x) || !(0.0..=1.0).contains(&track.y) {
+        let point = match (track.x, track.y, track.corners) {
+            (Some(x), Some(y), None) => Some([x, y]),
+            (None, None, Some(_)) => None,
+            _ => {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "give `x` and `y` to follow a point, or `corners` to follow a surface",
+                ))
+            }
+        };
+        let within = |value: &f64| (0.0..=1.0).contains(value);
+        if !point
+            .iter()
+            .chain(track.corners.iter().flatten())
+            .flatten()
+            .all(within)
+        {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
                 "`x` and `y` run 0 to 1 across the frame",
@@ -1409,7 +1426,10 @@ impl KerfMcpRouter {
                     .flat_map(|track| &track.clips)
                     .find(|clip| clip.id.as_str() == id)
                     .ok_or_else(|| {
-                        McpError::new("INVALID_ARGUMENTS", format!("no clip `{id}` in the sequence"))
+                        McpError::new(
+                            "INVALID_ARGUMENTS",
+                            format!("no clip `{id}` in the sequence"),
+                        )
                     })?,
             ),
             None => None,
@@ -1418,35 +1438,101 @@ impl KerfMcpRouter {
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
         let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
         let id = sequence.id.as_str();
-        let mut failure = None;
-        let followed = kerf_track::follow(
-            count as usize + 1,
-            [track.x, track.y],
-            |index| {
-                let at = rate.time_of(first + index as i64);
-                let at = if at >= duration { to } else { at };
-                match kerf_engine::still::draw_frame(&resolved, Some(id), at, scale) {
-                    Ok(frame) => Some((frame.width as usize, frame.height as usize, frame.rgba)),
-                    Err(error) => {
-                        failure = Some(error.to_string());
-                        None
-                    }
+        let failure = std::cell::RefCell::new(None);
+        let read = |index: usize| {
+            let at = rate.time_of(first + index as i64);
+            let at = if at >= duration { to } else { at };
+            match kerf_engine::still::draw_frame(&resolved, Some(id), at, scale) {
+                Ok(frame) => Some((frame.width as usize, frame.height as usize, frame.rgba)),
+                Err(error) => {
+                    *failure.borrow_mut() = Some(error.to_string());
+                    None
                 }
-            },
-        );
-        if let Some(failure) = failure {
-            return Err(McpError::new("RENDER_FAILED", failure));
-        }
+            }
+        };
         let drawn_width = f64::from(sequence.width.max(1)) * scale;
-        let kept = kerf_track::simplified(&followed.points, TRACK_TOLERANCE_PIXELS / drawn_width);
         // Times on the clip that will follow, or from `from` without one.
         let origin = target.map_or(first, |clip| clip.start.flicks().div_euclid(frame));
-        let keys = |value: &dyn Fn(usize) -> f64| {
+        if let Some(corners) = track.corners {
+            let followed = kerf_track::follow_plane(count as usize + 1, corners, read);
+            if let Some(failure) = failure.into_inner() {
+                return Err(McpError::new("RENDER_FAILED", failure));
+            }
+            let kept =
+                kerf_track::simplified_quads(&followed.quads, TRACK_TOLERANCE_PIXELS / drawn_width);
+            let rounded = |value: f64| (value * 100_000.0).round() / 100_000.0;
+            // One number of one corner over the kept frames, as keyframes.
+            let channel = |corner: usize, axis: usize| {
+                let words: Vec<String> = kept
+                    .iter()
+                    .map(|index| {
+                        format!(
+                            "{}f:{}",
+                            first + *index as i64 - origin,
+                            rounded(followed.quads[*index][corner][axis])
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", words.join(" "))
+            };
             let words: Vec<String> = kept
                 .iter()
                 .map(|index| {
-                    format!("{}f:{:.5}", first + *index as i64 - origin, value(*index))
+                    let corners: Vec<String> = followed.quads[*index]
+                        .iter()
+                        .map(|corner| format!("{},{}", rounded(corner[0]), rounded(corner[1])))
+                        .collect();
+                    format!("{}f:{}", first + *index as i64 - origin, corners.join(";"))
                 })
+                .collect();
+            let mut result = json!({
+                "sequence": sequence.id.to_string(),
+                "revision": revision,
+                "frames": followed.quads.len(),
+                "lostAt": followed.lost_at.map(|index| format!("{}f", first + index as i64)),
+                "quads": kept.iter().map(|index| json!({
+                    "frame": first + *index as i64,
+                    "corners": followed.quads[*index].map(|corner| corner.map(rounded)),
+                    "agreeing": followed.agreeing[*index],
+                })).collect::<Vec<_>>(),
+                "outline": format!("{{{}}}", words.join(" ")),
+            });
+            if let Some(clip) = target {
+                // Corner order, as the corner pin names them.
+                let names = [
+                    ("upper_left", 0),
+                    ("upper_right", 1),
+                    ("lower_right", 2),
+                    ("lower_left", 3),
+                ];
+                let params: Vec<String> = names
+                    .iter()
+                    .map(|(name, corner)| {
+                        format!(
+                            "{name}_x={} {name}_y={}",
+                            channel(*corner, 0),
+                            channel(*corner, 1)
+                        )
+                    })
+                    .collect();
+                result["script"] = json!(format!(
+                    "fx {} add distort.cornerpin@2 {}",
+                    clip.id,
+                    params.join(" ")
+                ));
+            }
+            return Ok(result);
+        }
+        let point = point.ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "nothing to follow"))?;
+        let followed = kerf_track::follow(count as usize + 1, point, read);
+        if let Some(failure) = failure.into_inner() {
+            return Err(McpError::new("RENDER_FAILED", failure));
+        }
+        let kept = kerf_track::simplified(&followed.points, TRACK_TOLERANCE_PIXELS / drawn_width);
+        let keys = |value: &dyn Fn(usize) -> f64| {
+            let words: Vec<String> = kept
+                .iter()
+                .map(|index| format!("{}f:{:.5}", first + *index as i64 - origin, value(*index)))
                 .collect();
             format!("{{{}}}", words.join(" "))
         };
@@ -1502,12 +1588,9 @@ impl KerfMcpRouter {
             let frame =
                 kerf_engine::still::draw_frame(&resolved, Some(sequence.id.as_str()), time, scale)
                     .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
-            let reading = kerf_scopes::read(
-                &frame.rgba,
-                frame.width as usize,
-                frame.height as usize,
-            )
-            .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))?;
+            let reading =
+                kerf_scopes::read(&frame.rgba, frame.width as usize, frame.height as usize)
+                    .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))?;
             readings.push(json!({"at": text, "scopes": reading}));
         }
         Ok(json!({

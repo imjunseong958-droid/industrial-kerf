@@ -3,6 +3,10 @@
 //! its way, for writing it as keyframes. Kerf keeps no tracking data of its own: what a track finds
 //! becomes plain keyframes in the document, which merge, read, and edit like any others.
 
+pub mod planar;
+
+pub use planar::{follow_plane, simplified_quads, FollowedPlane, Quad};
+
 use kerf_raster::klt::{track, GrayPyramid, LkOpts};
 use kerf_raster::plane::Plane;
 

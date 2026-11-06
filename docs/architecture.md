@@ -185,13 +185,16 @@ Has: keys, track mattes, blurs, glows, distortions, warp stabilizer, restoration
 
 `crates/vfx/kerf-track` follows a point of the picture (pyramidal Lucas-Kanade with a
 forward-backward check), and `look` gives the result as keyframes (`track`), so that what
-follows is plain text in the document, and a null and `parent=` do the rest.
+follows is plain text in the document, and a null and `parent=` do the rest. Given four corners it
+follows a flat surface: a homography from the first frame, fitted by RANSAC to the corners of detail
+inside it, so what passes in front is left out and an error in one frame does not add up. `look`
+gives it as a `distort.cornerpin@2` line and as keyframes for a moving mask. On a surface sliding and
+tilting for 48 frames at 320x180, a corner is at worst 0.57 pixels off, 1.75 with a bar crossing it.
 
 Mask outlines animate (`MaskShape::Moving`), and `image.fill method=video` with one removes what
 moves: each frame's hole comes from the outline at that moment.
 
-To add, in order: planar tracking, for corner pins and screen replacements
-(EffectCraft's `track`); roto with the swappable
+To add, in order: roto with the swappable
 model interface of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; the camera
 solver. Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.

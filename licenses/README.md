@@ -19,6 +19,7 @@ on, and Kerf does not follow upstream.
 | `crates/effects/kerf-raster-fx` | The 24 EffectCraft effects Kerf keeps, with the tracking and plane code they run on |
 | `crates/render/kerf-raster` | EffectCraft's raster images, warps, and blurs, the feature tracker, and optical flow |
 | `crates/image/kerf-image/src/fill.rs` | EffectCraft's hole filling |
+| `crates/vfx/kerf-track/src/planar.rs` | EffectCraft's homography fit and RANSAC |
 | `crates/color/kerf-scopes` | FilmCraft's scope summaries, reduced to what an agent reads |
 | `crates/foundation/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
 | `crates/foundation/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
