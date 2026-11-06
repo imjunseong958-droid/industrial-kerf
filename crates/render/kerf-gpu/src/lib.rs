@@ -11,7 +11,7 @@
 //! a real GPU, with `KERF_GPU=0` in the environment, or after the device fails, and the CPU then
 //! draws everything.
 
-use kerf_color::InputTransform;
+use kerf_color::{HdrOutput, InputTransform};
 use kerf_draw::correct::Correction;
 use kerf_draw::{Affine, Blend, Image, Landing, Rect};
 use std::collections::HashMap;
@@ -69,6 +69,9 @@ pub struct Gpu {
     finish: wgpu::ComputePipeline,
     finish16_layout: wgpu::BindGroupLayout,
     finish16: wgpu::ComputePipeline,
+    finish_signal: wgpu::ComputePipeline,
+    output_layout: wgpu::BindGroupLayout,
+    output: wgpu::ComputePipeline,
     dummy: wgpu::TextureView,
     pool: Mutex<Pool>,
     /// Held while kernels build: a device's error scopes nest, so two at once would cross.
@@ -315,6 +318,54 @@ impl Gpu {
             compilation_options: Default::default(),
             cache: None,
         });
+        let finish_signal_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("kerf-finish-signal"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("finish_signal.wgsl").into()),
+        });
+        let finish_signal = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("finish-signal"),
+            layout: Some(&finish16_pipeline_layout),
+            module: &finish_signal_module,
+            entry_point: Some("finish"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let output_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("kerf-output"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("output.wgsl").into()),
+        });
+        let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("kerf-output"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                texture_entry(1),
+                storage_entry(2, WORKING_FORMAT),
+                texture_entry(3),
+            ],
+        });
+        let output_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("kerf-output"),
+                bind_group_layouts: &[Some(&output_layout)],
+                immediate_size: 0,
+            });
+        let output = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("output"),
+            layout: Some(&output_pipeline_layout),
+            module: &output_module,
+            entry_point: Some("output"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         if let Some(error) = now(scope.pop()) {
             eprintln!("kerf-gpu: kernels did not build: {error}");
             return None;
@@ -358,6 +409,9 @@ impl Gpu {
             finish,
             finish16_layout,
             finish16,
+            finish_signal,
+            output_layout,
+            output,
             dummy,
             pool: Mutex::default(),
             building: Mutex::new(()),
@@ -859,6 +913,91 @@ impl<'a> Frame<'a> {
         out
     }
 
+    /// The working picture of an HDR sequence as linear SDR, which [`Frame::finish`] takes on, or
+    /// as its signal, which [`Frame::finish_signal`] does: `HdrOutput::sdr` and `HdrOutput::signal`.
+    pub fn hdr_output(&mut self, picture: &Picture, output: &HdrOutput, signal: bool) -> Picture {
+        let gpu = self.gpu;
+        let values = &output.tone.table().values;
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let tone = self
+            .upload(
+                wgpu::TextureFormat::R32Float,
+                (values.len() as u32, 1),
+                &bytes,
+                values.len() as u32 * 4,
+            )
+            .create_view(&Default::default());
+        let mode = match (signal, output.pq) {
+            (false, _) => 0u32,
+            (true, true) => 1,
+            (true, false) => 2,
+        };
+        let m = &output.to_bt2020;
+        let (l2020, l709) = (output.bt2020_luma, output.bt709_luma);
+        let mut uniform = Vec::with_capacity(112);
+        for value in [mode, 0, 0, 0] {
+            uniform.extend_from_slice(&value.to_le_bytes());
+        }
+        let floats = [
+            [
+                output.tone.src_peak_nits as f32,
+                output.tone.dst_peak_nits as f32,
+                output.hlg_scale,
+                output.hlg_gamma,
+            ],
+            [m[0][0], m[0][1], m[0][2], 0.0],
+            [m[1][0], m[1][1], m[1][2], 0.0],
+            [m[2][0], m[2][1], m[2][2], 0.0],
+            [l2020[0], l2020[1], l2020[2], 0.0],
+            [l709[0], l709[1], l709[2], 0.0],
+        ];
+        for value in floats.iter().flatten() {
+            uniform.extend_from_slice(&value.to_le_bytes());
+        }
+        let out = self.take(picture.w, picture.h);
+        let buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("kerf-output"),
+                contents: &uniform,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kerf-output"),
+            layout: &gpu.output_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&picture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&out.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&tone),
+                },
+            ],
+        });
+        {
+            let mut pass = self
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("kerf-output"),
+                    timestamp_writes: None,
+                });
+            pass.set_pipeline(&gpu.output);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(picture.w.div_ceil(16), picture.h.div_ceil(16), 1);
+        }
+        out
+    }
+
     /// A picture the CPU drew, such as a title.
     pub fn image(&mut self, image: &Image) -> Picture {
         let (w, h) = (image.w as u32, image.h as u32);
@@ -1010,7 +1149,7 @@ impl<'a> Frame<'a> {
     /// Submit the frame and read `picture` back as sRGB-encoded RGBA bytes over black. `None` when
     /// the device failed, and the CPU should draw the frame.
     pub fn finish(mut self, picture: &Picture) -> Option<Vec<u8>> {
-        let bytes = self.finish_encoded(picture, false);
+        let bytes = self.finish_encoded(picture, Finish::Eight);
         if self.gpu.failed.load(Ordering::Relaxed) {
             return None;
         }
@@ -1019,7 +1158,16 @@ impl<'a> Frame<'a> {
 
     /// [`Frame::finish`] at 16 bits a component, little-endian.
     pub fn finish16(mut self, picture: &Picture) -> Option<Vec<u8>> {
-        let bytes = self.finish_encoded(picture, true);
+        let bytes = self.finish_encoded(picture, Finish::Sixteen);
+        if self.gpu.failed.load(Ordering::Relaxed) {
+            return None;
+        }
+        bytes
+    }
+
+    /// A picture that is already a signal, from [`Frame::hdr_output`], at 16 bits a component.
+    pub fn finish_signal(mut self, picture: &Picture) -> Option<Vec<u8>> {
+        let bytes = self.finish_encoded(picture, Finish::Signal);
         if self.gpu.failed.load(Ordering::Relaxed) {
             return None;
         }
@@ -1046,23 +1194,28 @@ impl<'a> Frame<'a> {
         Some(rows)
     }
 
-    fn finish_encoded(&mut self, picture: &Picture, deep: bool) -> Option<Vec<u8>> {
+    fn finish_encoded(&mut self, picture: &Picture, finish: Finish) -> Option<Vec<u8>> {
         let gpu = self.gpu;
         let (w, h) = (picture.w, picture.h);
-        let (format, per_pixel, layout, pipeline) = if deep {
-            (
-                wgpu::TextureFormat::Rgba16Uint,
-                8,
-                &gpu.finish16_layout,
-                &gpu.finish16,
-            )
-        } else {
-            (
+        let (format, per_pixel, layout, pipeline) = match finish {
+            Finish::Eight => (
                 wgpu::TextureFormat::Rgba8Unorm,
                 4,
                 &gpu.finish_layout,
                 &gpu.finish,
-            )
+            ),
+            Finish::Sixteen => (
+                wgpu::TextureFormat::Rgba16Uint,
+                8,
+                &gpu.finish16_layout,
+                &gpu.finish16,
+            ),
+            Finish::Signal => (
+                wgpu::TextureFormat::Rgba16Uint,
+                8,
+                &gpu.finish16_layout,
+                &gpu.finish_signal,
+            ),
         };
         let key = (
             w,
@@ -1202,6 +1355,17 @@ impl<'a> Frame<'a> {
 /// The bytes a row of a texture takes in a buffer.
 fn align_row(bytes: u32) -> u32 {
     bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+
+/// How a finished picture comes back.
+#[derive(Clone, Copy)]
+enum Finish {
+    /// 8-bit sRGB.
+    Eight,
+    /// 16-bit sRGB.
+    Sixteen,
+    /// 16 bits of what it already holds.
+    Signal,
 }
 
 #[cfg(test)]
@@ -1475,6 +1639,50 @@ mod tests {
         let floats = frame.read_floats(&picture).expect("read back");
         for pixel in floats.chunks_exact(4) {
             assert_eq!(pixel, [0.1, 0.2, 0.3, 0.4]);
+        }
+    }
+
+    #[test]
+    fn hdr_output_matches_the_cpu() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        let (w, h) = (64usize, 32usize);
+        let mut image = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / 63.0, y as f32 / 31.0);
+                // Inside BT.709, past white, and below its primaries.
+                let color = [u * 6.0 - 0.3, v * 6.0, (u + v) * 3.0 - 0.1, 1.0];
+                image.px[(y * w + x) * 4..][..4].copy_from_slice(&color);
+            }
+        }
+        for space in [
+            kerf_color::ColorSpace::Rec2100Pq,
+            kerf_color::ColorSpace::Rec2100Hlg,
+        ] {
+            let output = HdrOutput::new(space).expect("HDR");
+            for signal in [false, true] {
+                let mut frame = gpu.frame();
+                let picture = frame.image(&image);
+                let out = frame.hdr_output(&picture, &output, signal);
+                let floats = frame.read_floats(&out).expect("read back");
+                for (g, c) in floats.chunks_exact(4).zip(image.px.chunks_exact(4)) {
+                    let rgb = [c[0], c[1], c[2]];
+                    let want = if signal {
+                        output.signal(rgb)
+                    } else {
+                        output.sdr(rgb)
+                    };
+                    for k in 0..3 {
+                        assert!(
+                            (g[k] - want[k]).abs() < 2e-3 * (1.0 + want[k].abs()),
+                            "{space:?} signal={signal}: {rgb:?} made {:?}, the CPU {want:?}",
+                            &g[..3]
+                        );
+                    }
+                }
+            }
         }
     }
 }

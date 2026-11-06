@@ -88,6 +88,7 @@ fn scene() -> Project {
         width: 1920,
         height: 1080,
         sample_rate: 48_000,
+        color: Default::default(),
         start: f(24 * 3600),
         tracks: vec![
             track(

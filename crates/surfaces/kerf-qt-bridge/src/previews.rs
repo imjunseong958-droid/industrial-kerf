@@ -339,6 +339,7 @@ fn compose_generator(
         width: width_px,
         height: height_px,
         sample_rate: 48_000,
+        color: Default::default(),
         start: Time::ZERO,
         tracks: vec![track],
         markers: Vec::new(),

@@ -64,6 +64,7 @@ pub struct SequenceChange {
     pub rate: Option<Rate>,
     pub size: Option<(u32, u32)>,
     pub sample_rate: Option<u32>,
+    pub color: Option<crate::ColorSpace>,
     /// Start timecode and whether it is drop-frame.
     pub start: Option<(Time, bool)>,
 }
@@ -2106,6 +2107,7 @@ impl Editor<'_> {
             target.height = height;
         }
         target.sample_rate = change.sample_rate.unwrap_or(target.sample_rate);
+        target.color = change.color.unwrap_or(target.color);
         if let Some((start, drop_frame)) = change.start {
             target.start = start;
             target.drop_frame = drop_frame;

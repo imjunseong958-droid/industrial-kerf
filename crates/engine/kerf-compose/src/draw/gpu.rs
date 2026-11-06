@@ -41,12 +41,26 @@ struct Shape {
 impl Drawing {
     /// The frame at `at`, when the GPU draws it.
     pub(super) fn gpu_frame(&self, at: Time, scale: f64) -> Option<Frame> {
-        self.gpu_frame_as(at, scale, |frame, canvas| frame.finish(canvas))
+        let hdr = self.hdr.clone();
+        self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
+            Some(output) => {
+                let sdr = frame.hdr_output(canvas, output, false);
+                frame.finish(&sdr)
+            }
+            None => frame.finish(canvas),
+        })
     }
 
     /// The frame at `at` at 16 bits a component, when the GPU draws it.
     pub(super) fn gpu_frame16(&self, at: Time, scale: f64) -> Option<Frame> {
-        self.gpu_frame_as(at, scale, |frame, canvas| frame.finish16(canvas))
+        let hdr = self.hdr.clone();
+        self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
+            Some(output) => {
+                let signal = frame.hdr_output(canvas, output, true);
+                frame.finish_signal(&signal)
+            }
+            None => frame.finish16(canvas),
+        })
     }
 
     fn gpu_frame_as(

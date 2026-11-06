@@ -34,17 +34,16 @@ const READ_AHEAD_SECONDS: i64 = 2;
 const CACHE_BUDGET: usize = 512 << 20;
 
 /// How footage in `space` becomes working light. Made once each: each holds tables.
-pub(crate) fn input_transform(space: ColorSpace) -> &'static InputTransform {
-    static MADE: Mutex<BTreeMap<&'static str, &'static InputTransform>> =
+pub(crate) fn input_transform(space: ColorSpace, hdr: bool) -> &'static InputTransform {
+    static MADE: Mutex<BTreeMap<(&'static str, bool), &'static InputTransform>> =
         Mutex::new(BTreeMap::new());
-    lock(&MADE).entry(space.id()).or_insert_with(|| {
+    lock(&MADE).entry((space.id(), hdr)).or_insert_with(|| {
         // Cameras record in video range, and the file's own range is taken out in decoding.
-        Box::leak(Box::new(InputTransform::new(
-            space,
-            Range::Limited,
-            &ColorPipeline::REC709,
-            None,
-        )))
+        Box::leak(Box::new(if hdr {
+            InputTransform::extended(space, Range::Limited)
+        } else {
+            InputTransform::new(space, Range::Limited, &ColorPipeline::REC709, None)
+        }))
     })
 }
 

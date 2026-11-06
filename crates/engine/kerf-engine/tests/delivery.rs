@@ -300,3 +300,70 @@ fn a_prores_master_probes_back_as_prores_hq_with_24_bit_pcm() {
         (Some("bt709"), Some("bt709"), Some("bt709"))
     );
 }
+
+#[test]
+fn an_hdr_sequence_masters_as_hdr_and_comes_back_as_it() {
+    if !ffmpeg_present() {
+        return;
+    }
+    if !encoder_available("prores_ks") && !encoder_available("prores_videotoolbox") {
+        eprintln!("skipping: this ffmpeg has no ProRes encoder");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("temp directory");
+    for (id, transfer, space) in [
+        ("rec2100-pq", "smpte2084", kerf_model::ColorSpace::Rec2100Pq),
+        (
+            "rec2100-hlg",
+            "arib-std-b67",
+            kerf_model::ColorSpace::Rec2100Hlg,
+        ),
+    ] {
+        let project = project(&format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000 color={id}\n  track V1 video\n    clip g1 gen=solid@1 at=0f dur=12f\n      set color=#ffffff\n"
+        ));
+        let master = dir.path().join(format!("{id}.mov"));
+        render_program::<fn(f64)>(
+            &project,
+            None,
+            None,
+            &RenderOptions {
+                output: master.to_string_lossy().into_owned(),
+                preset: RenderPreset::ProRes422Hq,
+                ..RenderOptions::default()
+            },
+            None,
+        )
+        .expect("renders the master");
+        let path = master.to_string_lossy();
+        let info = media_info(&path).expect("probes");
+        assert_eq!(info.color_space.as_deref(), Some("bt2020nc"), "{info:?}");
+        assert_eq!(info.primaries.as_deref(), Some("bt2020"), "{info:?}");
+        assert_eq!(info.transfer.as_deref(), Some(transfer), "{info:?}");
+        assert_eq!(info.bit_depth, Some(10), "{info:?}");
+        let found = kerf_engine::info(&path)
+            .expect("probes")
+            .video_info(320, 180);
+        assert_eq!((found.color, found.bits), (space, 10), "{id}");
+
+        // SDR copies of it are ordinary Rec.709.
+        let copy = dir.path().join(format!("{id}.mp4"));
+        render_program::<fn(f64)>(
+            &project,
+            None,
+            None,
+            &RenderOptions {
+                output: copy.to_string_lossy().into_owned(),
+                preset: RenderPreset::Review,
+                force_software: true,
+                ..RenderOptions::default()
+            },
+            None,
+        )
+        .expect("renders a review copy");
+        let found = kerf_engine::info(&copy.to_string_lossy())
+            .expect("probes")
+            .video_info(320, 180);
+        assert_eq!(found.color, kerf_model::ColorSpace::Rec709);
+    }
+}

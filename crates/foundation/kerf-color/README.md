@@ -9,7 +9,7 @@ input transforms with tone and gamut mapping, LUT files, and EffectCraft's blend
 | `lib.rs` | `Matrix`/`Transfer`/`Primaries`/`Range`/`ColorInfo` (stream metadata), Y'CbCr↔R'G'B', sRGB, PQ (ST 2084), HLG (ARIB STD-B67), HSL, hex colours |
 | `log` | camera log curves (encode/decode), their signal domains |
 | `spaces` | gamuts and 3×3 matrices (SMPTE RP 177), `ColorSpace` (Interpret Footage choices), `WorkingSpace`, `ColorPipeline` |
-| `transform` | `InputTransform` (source → working), BT.2390 tone mapping, gamut compression |
+| `transform` | `InputTransform` (source → working), `HdrOutput` (working → PQ/HLG or SDR), BT.2390 tone mapping, gamut compression |
 | `lut` | `.cube` (1D, 3D, shaper + 3D) and `.3dl` parse/write, tetrahedral interpolation |
 | `blend` | EffectCraft's 38 After Effects blend modes, on premultiplied pixels |
 
@@ -18,8 +18,9 @@ input transforms with tone and gamut mapping, LUT files, and EffectCraft's blend
 The compositor works in linear light with **1.0 = reference white**: SDR white for SDR media, and
 **203 cd/m²** for HDR (ITU-R BT.2408, "HDR Reference White"). SDR media keeps its values in an HDR
 sequence (the BT.2408 SDR-in-HDR mapping), HDR highlights are values above 1.0, and log media
-decodes to scene-linear reflectance (18 % grey = 0.18). Working primaries are BT.709 for a Rec. 709
-sequence and BT.2020 for Rec. 2100 PQ/HLG sequences or when "wide gamut" is on.
+decodes to scene-linear reflectance (18 % grey = 0.18). Working primaries are BT.709 in every
+sequence, since Kerf's effects and colors are written in them: an HDR sequence keeps what lies past
+them as values below 0 and above 1 (`InputTransform::extended`), and `HdrOutput` delivers them.
 
 ## Camera log curves
 
