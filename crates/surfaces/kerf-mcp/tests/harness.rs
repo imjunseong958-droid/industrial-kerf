@@ -1074,6 +1074,90 @@ fn look_follows_a_point_and_gives_a_line_that_makes_a_clip_follow_it() {
 }
 
 #[test]
+fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    // A textured picture panning right to left, 4 pixels a frame.
+    let pan = directory.path().join("pan.mp4");
+    let made = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("mandelbrot=s=480x180:r=30:start_scale=0.6:end_scale=0.6:end_pts=1,crop=320:180:x='n*4':y=0,trim=duration=1")
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv444p"])
+        .arg(&pan)
+        .status()
+        .expect("ffmpeg");
+    assert!(made.success());
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "media add p path=\"pan.mp4\" rate=30 dur=30f video=320x180\ntrack add V2 video\ntrack add V3 video\noverwrite media=p src=0f dur=30f at=0f on=V2 as=plate\noverwrite gen=solid dur=30f at=0f on=V3 as=sq\nset sq color=#ffffff"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    // Hide the white square for the tracking: it is what will be pinned.
+    let hidden = ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": "set sq opacity=0"}),
+    );
+    let proposal = hidden["proposal"]["id"]
+        .as_str()
+        .or_else(|| hidden["proposal"].as_str())
+        .unwrap_or(proposal);
+    let corners = [[0.4, 0.3], [0.7, 0.3], [0.7, 0.7], [0.4, 0.7]];
+    let followed = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"corners": corners, "clip": "sq"},
+            "from": "0f",
+            "to": "20f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(followed["lostAt"].is_null(), "{followed}");
+    assert_eq!(followed["frames"], 21);
+    // 80 pixels of 320 to the left by frame 20.
+    let quads = followed["quads"].as_array().unwrap();
+    let last = quads.last().unwrap();
+    assert_eq!(last["frame"], 20);
+    let found = last["corners"].as_array().unwrap();
+    for (found, start) in found.iter().zip(corners) {
+        let (x, y) = (found[0].as_f64().unwrap(), found[1].as_f64().unwrap());
+        assert!((x - (start[0] - 0.25)).abs() < 0.01, "{followed}");
+        assert!((y - start[1]).abs() < 0.01, "{followed}");
+    }
+    // A straight move is few keyframes.
+    assert!(quads.len() < 8, "{followed}");
+    // The lines are ones the language takes.
+    let script = followed["script"].as_str().unwrap();
+    assert!(
+        script.starts_with("fx sq add distort.cornerpin@2 upper_left_x={0f:"),
+        "{script}"
+    );
+    let outline = followed["outline"].as_str().unwrap();
+    ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": format!("{script}\nmask plate add k1 points={outline} mode=none\nfx plate add image.fill@1 path=k1 method=smooth")}),
+    );
+    for refused in [
+        json!({"track": {"corners": corners, "x": 0.5, "y": 0.5}, "from": "0f", "to": "2f"}),
+        json!({"track": {"x": 0.5}, "from": "0f", "to": "2f"}),
+        json!({"track": {"corners": [[0.1, 0.1], [2.0, 0.1], [0.9, 0.9], [0.1, 0.9]]}, "from": "0f", "to": "2f"}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
 fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;
