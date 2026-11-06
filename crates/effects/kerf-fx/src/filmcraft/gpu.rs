@@ -43,6 +43,7 @@ const OP_MIRROR: u32 = 28;
 const OP_OFFSET: u32 = 29;
 const OP_VIDEO_LIMITER: u32 = 30;
 const OP_LUMETRI: u32 = 31;
+const OP_LUMETRI_LOOK: u32 = 32;
 
 /// One pass before texture routing: entry point, op code, integer and float parameters.
 struct Step {
@@ -312,6 +313,9 @@ fn steps(op: &FxOp) -> Vec<Step> {
             vround,
             vfeather,
             aspect,
+            look,
+            look_k,
+            wheels,
             ..
         } => {
             let ge = [
@@ -366,6 +370,17 @@ fn steps(op: &FxOp) -> Vec<Step> {
                 [*creative_on as u32, *vignette_on as u32, 0, 0],
                 &p,
             ));
+            if *look > 0 || wheels.is_some() {
+                let [lift, mid, gain] = wheels.map_or([[0.0; 3]; 3], |w| [w.lift, w.mid, w.gain]);
+                out.push(step(
+                    OP_LUMETRI_LOOK,
+                    [*look, wheels.is_some() as u32, 0, 0],
+                    &[
+                        *look_k, 0.0, 0.0, 0.0, lift[0], lift[1], lift[2], 0.0, mid[0], mid[1],
+                        mid[2], 0.0, gain[0], gain[1], gain[2],
+                    ],
+                ));
+            }
         }
     }
     out

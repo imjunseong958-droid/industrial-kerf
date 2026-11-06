@@ -1381,6 +1381,53 @@ pub(crate) fn wheel_rgb(v: Vec2) -> [f32; 3] {
     ]
 }
 
+/// Lumetri's color wheels, ready for a pixel of display-encoded colour: what the shadows lift and
+/// the midtones add per channel, and how far the highlights gain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wheels {
+    pub lift: [f32; 3],
+    pub mid: [f32; 3],
+    pub gain: [f32; 3],
+}
+
+impl Wheels {
+    /// The wheels of `e` at `cx.t`: `None` when they are off or all at rest.
+    pub(crate) fn read(e: &EffectInstance, cx: &FxCtx) -> Option<Wheels> {
+        if !on(e, "wheels_on") {
+            return None;
+        }
+        let v2 = |id: &str| e.param(id).map(|p| p.vec2_at(cx.t)).unwrap_or_default();
+        let (ws, wm, wh) = (
+            wheel_rgb(v2("wheel_shadows")),
+            wheel_rgb(v2("wheel_midtones")),
+            wheel_rgb(v2("wheel_highlights")),
+        );
+        let (ls, lm, lh) = (
+            f(e, "wheel_shadows_l", cx) / 100.0,
+            f(e, "wheel_midtones_l", cx) / 100.0,
+            f(e, "wheel_highlights_l", cx) / 100.0,
+        );
+        (ws.iter().chain(&wm).chain(&wh).any(|v| v.abs() > 1e-5)
+            || ls.abs() + lm.abs() + lh.abs() > 1e-5)
+            .then(|| Wheels {
+                lift: ws.map(|v| v * 0.3 + ls * 0.3),
+                mid: wm.map(|v| v * 0.3 + lm * 0.3),
+                gain: wh.map(|v| v * 0.5 + lh * 0.5),
+            })
+    }
+
+    /// Lift (shadows), gamma-ish (midtones), gain (highlights), weighted by the pixel's luma.
+    #[inline]
+    pub(crate) fn apply(&self, v: &mut [f32; 3]) {
+        let l = (0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]).clamp(0.0, 1.0);
+        let wsh = (1.0 - l).powi(2);
+        let whi = l * l;
+        let wmid = (1.0 - wsh - whi).max(0.0);
+        *v = [0, 1, 2]
+            .map(|k| (v[k] + self.lift[k] * wsh + self.mid[k] * wmid) * (1.0 + self.gain[k] * whi));
+    }
+}
+
 /// Looks: our own procedural grades (no third-party LUTs), applied on display-encoded colour.
 pub fn apply_look(look: u32, c: [f32; 3]) -> [f32; 3] {
     let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -1423,8 +1470,7 @@ pub fn apply_look(look: u32, c: [f32; 3]) -> [f32; 3] {
 
 fn lumetri_advanced(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     const N: usize = 1024;
-    let (creative_on, curves_on, wheels_on) =
-        (on(e, "creative_on"), on(e, "curves_on"), on(e, "wheels_on"));
+    let (creative_on, curves_on) = (on(e, "creative_on"), on(e, "curves_on"));
     let lut = |id: &str| {
         curve_param(e, id)
             .filter(|c| curves_on && !is_identity_curve(c))
@@ -1460,20 +1506,7 @@ fn lumetri_advanced(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         0
     };
     let look_k = f(e, "look_intensity", cx) / 100.0;
-    let v2 = |id: &str| e.param(id).map(|p| p.vec2_at(cx.t)).unwrap_or_default();
-    let (ws, wm, wh) = (
-        wheel_rgb(v2("wheel_shadows")),
-        wheel_rgb(v2("wheel_midtones")),
-        wheel_rgb(v2("wheel_highlights")),
-    );
-    let (ls, lm, lh) = (
-        f(e, "wheel_shadows_l", cx) / 100.0,
-        f(e, "wheel_midtones_l", cx) / 100.0,
-        f(e, "wheel_highlights_l", cx) / 100.0,
-    );
-    let wheels = wheels_on
-        && (ws.iter().chain(&wm).chain(&wh).any(|v| v.abs() > 1e-5)
-            || ls.abs() + lm.abs() + lh.abs() > 1e-5);
+    let wheels = Wheels::read(e, cx);
     let any = luma_c.is_some()
         || red_c.is_some()
         || green_c.is_some()
@@ -1485,7 +1518,7 @@ fn lumetri_advanced(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         || svs.is_some()
         || look > 0
         || look_lut.is_some()
-        || wheels;
+        || wheels.is_some();
     if !any {
         return;
     }
@@ -1523,17 +1556,8 @@ fn lumetri_advanced(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 v[2] + (lk[2] - v[2]) * look_k,
             ];
         }
-        if wheels {
-            let l = (0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]).clamp(0.0, 1.0);
-            let wsh = (1.0 - l).powi(2);
-            let whi = l * l;
-            let wmid = (1.0 - wsh - whi).max(0.0);
-            for k in 0..3 {
-                // lift (shadows), gamma-ish (midtones), gain (highlights)
-                v[k] += (ws[k] * 0.3 + ls * 0.3) * wsh;
-                v[k] += (wm[k] * 0.3 + lm * 0.3) * wmid;
-                v[k] *= 1.0 + (wh[k] * 0.5 + lh * 0.5) * whi;
-            }
+        if let Some(wheels) = &wheels {
+            wheels.apply(&mut v);
         }
         if let Some(l) = &luma_c {
             v = v.map(|q| sample(l, q));
@@ -1839,6 +1863,110 @@ mod lumetri_cpu_parity_tests {
         ParamValue::Color([r, g, b, 1.0])
     }
 
+    fn vec2(x: f64, y: f64) -> ParamValue {
+        ParamValue::Vec2(Vec2::new(x, y))
+    }
+
+    /// The numbers a wheel at a known position hands the pixel, and what they do to one: the
+    /// CPU and the kernel share these, so their parity cannot catch a wrong one.
+    #[test]
+    fn wheels_push_by_their_angle_and_lightness() {
+        let cx = FxCtx {
+            t: Tick::ZERO,
+            px_scale: 1.0,
+            seconds: 0.0,
+            timecode: "",
+            clip_name: "",
+            project: None,
+            env: None,
+            frame_rate: 24.0,
+            working: kerf_color::WorkingSpace::Rec709,
+        };
+        assert_eq!(Wheels::read(&effect(&[]), &cx), None);
+        let off = effect(&[
+            ("wheels_on", ParamValue::Bool(false)),
+            ("wheel_shadows", vec2(1.0, 0.0)),
+        ]);
+        assert_eq!(Wheels::read(&off, &cx), None);
+        let close = |a: [f32; 3], b: [f32; 3]| {
+            assert!(
+                a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5),
+                "{a:?} {b:?}"
+            );
+        };
+        // At angle 0 red takes the full length and the others minus half of it; past the rim the
+        // length stays 1.
+        let wheels = Wheels::read(
+            &effect(&[
+                ("wheel_shadows", vec2(1.0, 0.0)),
+                ("wheel_shadows_l", fl(50.0)),
+                ("wheel_midtones", vec2(5.0, 0.0)),
+                ("wheel_midtones_l", fl(-100.0)),
+                ("wheel_highlights", vec2(0.5, 0.0)),
+                ("wheel_highlights_l", fl(20.0)),
+            ]),
+            &cx,
+        )
+        .unwrap();
+        close(wheels.lift, [0.45, 0.0, 0.0]);
+        close(wheels.mid, [0.0, -0.45, -0.45]);
+        close(wheels.gain, [0.35, -0.025, -0.025]);
+
+        // Black takes only the lift and white only the gain; middle grey takes all three.
+        let at = |grey: f32| {
+            let mut v = [grey; 3];
+            wheels.apply(&mut v);
+            v
+        };
+        close(at(0.0), [0.45, 0.0, 0.0]);
+        close(at(1.0), [1.35, 0.975, 0.975]);
+        close(
+            at(0.5),
+            [
+                (0.5 + 0.45 * 0.25) * (1.0 + 0.35 * 0.25),
+                (0.5 - 0.45 * 0.5) * (1.0 - 0.025 * 0.25),
+                (0.5 - 0.45 * 0.5) * (1.0 - 0.025 * 0.25),
+            ],
+        );
+    }
+
+    /// What still goes to the CPU, and that a hostile number there does not reach the shader.
+    #[test]
+    fn lumetri_leaves_the_gpu_only_for_what_the_kernel_does_not_draw() {
+        let cx = FxCtx {
+            t: Tick::ZERO,
+            px_scale: 1.0,
+            seconds: 0.0,
+            timecode: "",
+            clip_name: "",
+            project: None,
+            env: None,
+            frame_rate: 24.0,
+            working: kerf_color::WorkingSpace::Rec709,
+        };
+        let on_gpu = |params: &[(&str, ParamValue)]| {
+            FxOp::eval(&effect(params), &cx, 8, 8).unwrap().gpu_ok()
+        };
+        assert!(on_gpu(&[]));
+        assert!(on_gpu(&[("look", ParamValue::Choice(6))]));
+        assert!(on_gpu(&[("wheel_midtones", vec2(0.3, 0.17))]));
+        assert!(on_gpu(&[("wheel_shadows_l", fl(30.0))]));
+        assert!(!on_gpu(&[("sharpen", fl(50.0))]));
+        assert!(!on_gpu(&[("hsl_on", ParamValue::Bool(true))]));
+        assert!(!on_gpu(&[("look_lut", ParamValue::Text("x.cube".into()))]));
+        assert!(!on_gpu(&[("input_lut", ParamValue::Text("x.cube".into()))]));
+        assert!(!on_gpu(&[
+            ("look", ParamValue::Choice(6)),
+            ("look_intensity", fl(f64::NAN)),
+        ]));
+        // (a strength with no look to mix is not read)
+        assert!(on_gpu(&[("look_intensity", fl(f64::NAN))]));
+        assert!(!on_gpu(&[
+            ("wheel_midtones", vec2(0.3, 0.17)),
+            ("wheel_shadows_l", fl(f64::NAN)),
+        ]));
+    }
+
     #[test]
     fn lumetri_gpu_op_matches_original_fn_lumetri_cpu() {
         let cases: &[(&str, Vec<(&str, ParamValue)>)] = &[
@@ -1924,6 +2052,47 @@ mod lumetri_cpu_parity_tests {
                     ("tint", fl(-100.0)),
                     ("whites", fl(-100.0)),
                     ("blacks", fl(-100.0)),
+                ],
+            ),
+            (
+                "bleach_look",
+                vec![
+                    ("look", ParamValue::Choice(4)),
+                    ("look_intensity", fl(80.0)),
+                ],
+            ),
+            (
+                "every_look_term",
+                vec![
+                    ("exposure", fl(-0.5)),
+                    ("look", ParamValue::Choice(6)),
+                    ("look_intensity", fl(140.0)),
+                    ("wheel_shadows", vec2(-0.25, -0.04)),
+                    ("wheel_shadows_l", fl(-20.0)),
+                    ("wheel_midtones", vec2(0.3, 0.17)),
+                    ("wheel_midtones_l", fl(15.0)),
+                    ("wheel_highlights", vec2(0.12, 0.09)),
+                    ("wheel_highlights_l", fl(-35.0)),
+                ],
+            ),
+            (
+                "wheels_past_the_rim",
+                vec![("wheel_highlights", vec2(3.0, -4.0))],
+            ),
+            (
+                "look_off_with_its_section",
+                vec![
+                    ("creative_on", ParamValue::Bool(false)),
+                    ("look", ParamValue::Choice(6)),
+                    ("wheel_midtones", vec2(0.3, 0.17)),
+                ],
+            ),
+            (
+                "wheels_off_with_their_section",
+                vec![
+                    ("wheels_on", ParamValue::Bool(false)),
+                    ("look", ParamValue::Choice(1)),
+                    ("wheel_midtones", vec2(0.3, 0.17)),
                 ],
             ),
         ];

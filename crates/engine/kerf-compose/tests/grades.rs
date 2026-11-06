@@ -207,18 +207,9 @@ fn each_draws_the_same_on_the_gpu_as_on_the_cpu() {
     }
 }
 
-/// The grades with color wheels or a named look, which Lumetri's GPU kernel does not draw, so a frame
-/// holding one is drawn on the CPU.
-const ON_THE_CPU: [&str; 8] = [
-    "cold-mono",
-    "cross-processed",
-    "golden-dusk",
-    "night-exterior",
-    "sepia",
-    "silver-retention",
-    "teal-warm",
-    "warm-negative",
-];
+/// The grades whose frames go to the CPU: none, since Lumetri's kernels draw color wheels and named
+/// looks. A new grade with a LUT, curves, sharpening, or an HSL secondary would be named here.
+const ON_THE_CPU: [&str; 0] = [];
 
 #[test]
 fn the_rest_stay_on_the_gpu_where_there_is_one() {

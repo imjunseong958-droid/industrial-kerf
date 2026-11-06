@@ -111,7 +111,7 @@ fn compare(cpu: &[f32], gpu: &[f32]) -> (f32, f64) {
 type Case = (&'static str, Vec<(&'static str, ParamValue)>, bool);
 
 fn cases() -> Vec<Case> {
-    vec![
+    let mut cases = vec![
         (
             "brightness_contrast",
             vec![("brightness", fl(30.0)), ("contrast", fl(40.0))],
@@ -692,7 +692,110 @@ fn cases() -> Vec<Case> {
             ],
             false,
         ),
-    ]
+    ];
+    cases.extend(lumetri_look_and_wheel_cases());
+    cases
+}
+
+/// Each named look at full, part, and over-full strength, and each wheel's three terms (hue on
+/// its own, lightness on its own) alone and together, on their own and after the basic grade.
+fn lumetri_look_and_wheel_cases() -> Vec<Case> {
+    let mut cases = Vec::new();
+    for look in 1..=8 {
+        for strength in [100.0, 37.0, 200.0] {
+            cases.push((
+                "lumetri",
+                vec![("look", ch(look)), ("look_intensity", fl(strength))],
+                false,
+            ));
+        }
+    }
+    for wheel in ["wheel_shadows", "wheel_midtones", "wheel_highlights"] {
+        // The three channels of a wheel each take their own cosine, so two angles tell them apart.
+        cases.push(("lumetri", vec![(wheel, pt(0.4, 0.0))], false));
+        cases.push(("lumetri", vec![(wheel, pt(-0.21, 0.33))], false));
+        // Past the rim the direction is what counts.
+        cases.push(("lumetri", vec![(wheel, pt(3.0, -4.0))], false));
+    }
+    for (lightness, amount) in [
+        ("wheel_shadows_l", 30.0),
+        ("wheel_midtones_l", -45.0),
+        ("wheel_highlights_l", 60.0),
+    ] {
+        cases.push(("lumetri", vec![(lightness, fl(amount))], false));
+    }
+    cases.extend([
+        (
+            "lumetri",
+            vec![
+                ("wheel_shadows", pt(-0.25, -0.04)),
+                ("wheel_shadows_l", fl(-20.0)),
+                ("wheel_midtones", pt(0.3, 0.17)),
+                ("wheel_midtones_l", fl(15.0)),
+                ("wheel_highlights", pt(0.12, 0.09)),
+                ("wheel_highlights_l", fl(-35.0)),
+            ],
+            false,
+        ),
+        (
+            "lumetri",
+            vec![
+                ("temperature", fl(-45.0)),
+                ("exposure", fl(-0.9)),
+                ("contrast", fl(15.0)),
+                ("creative_sat", fl(70.0)),
+                ("look", ch(4)),
+                ("look_intensity", fl(80.0)),
+                ("wheel_shadows", pt(-0.1, -0.12)),
+                ("wheel_highlights", pt(0.14, 0.14)),
+                ("vignette_amount", fl(-2.0)),
+            ],
+            false,
+        ),
+        // A look over-full on grey near white goes past 1, and near black below 0, where the
+        // wheels weigh the pixel by a luma held to 0 to 1.
+        (
+            "lumetri",
+            vec![
+                ("look", ch(1)),
+                ("look_intensity", fl(200.0)),
+                ("wheel_highlights", pt(-0.5, -0.3)),
+                ("wheel_shadows", pt(0.4, 0.2)),
+            ],
+            false,
+        ),
+        (
+            "lumetri",
+            vec![
+                ("look", ch(4)),
+                ("look_intensity", fl(200.0)),
+                ("wheel_shadows", pt(0.5, -0.2)),
+                ("wheel_midtones", pt(-0.3, 0.4)),
+            ],
+            false,
+        ),
+        // The look off with its section, the wheels still on.
+        (
+            "lumetri",
+            vec![
+                ("creative_on", ParamValue::Bool(false)),
+                ("look", ch(6)),
+                ("wheel_midtones", pt(0.3, 0.17)),
+            ],
+            false,
+        ),
+        // The wheels off with their section, the look still on.
+        (
+            "lumetri",
+            vec![
+                ("wheels_on", ParamValue::Bool(false)),
+                ("look", ch(6)),
+                ("wheel_midtones", pt(0.3, 0.17)),
+            ],
+            false,
+        ),
+    ]);
+    cases
 }
 
 /// `ops` on the GPU, read back.
@@ -737,6 +840,37 @@ fn gpu_effects_match_cpu_exactly() {
         "GPU effects differ from the CPU:\n{}",
         failures.join("\n")
     );
+}
+
+/// A pixel with next to no alpha has no straight color to grade, so both leave it as it is.
+#[test]
+fn lumetri_look_leaves_what_is_all_but_transparent_alone() {
+    let Some(gpu) = kerf_gpu::shared() else {
+        eprintln!("no GPU; skipping");
+        return;
+    };
+    let image = Image {
+        w: 3,
+        h: 1,
+        px: vec![
+            0.5, 0.25, 0.75, 0.0, 0.5, 0.25, 0.75, 1e-7, 0.25, 0.25, 0.25, 0.5,
+        ],
+    };
+    let e = effect(
+        "lumetri",
+        &[
+            ("basic_on", ParamValue::Bool(false)),
+            ("look", ch(6)),
+            ("wheel_midtones", pt(0.3, 0.17)),
+        ],
+    );
+    let op = FxOp::eval(&e, &cx(Tick::ZERO, 1.0), 3, 1).expect("an op");
+    let mut cpu = image.clone();
+    op.apply(&mut cpu);
+    assert_eq!(&cpu.px[..8], &image.px[..8]);
+    assert_ne!(&cpu.px[8..], &image.px[8..]);
+    let on = on_gpu(gpu, &image, std::slice::from_ref(&op));
+    assert_eq!(&on[..8], &image.px[..8]);
 }
 
 /// Chains run in order, and Unsharp keeps its original while blurring, between other blurs.
