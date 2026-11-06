@@ -24,6 +24,12 @@ const MIX_FRAMES: usize = 1024;
 /// Level readings kept for the clock to reach: the buffered time's worth,
 /// with room to spare.
 const LEVEL_QUEUE_CAPACITY: usize = 64;
+/// The longest the clock waits for the output device to open. On macOS the
+/// first device a process opens takes longer the more files sit beside the
+/// executable: seconds beside the hundreds of thousands in Cargo's `deps`, and
+/// more on a busy machine. One that never opens must not hold playback up for
+/// good, so the clock then runs without it.
+const DEVICE_OPEN_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub(crate) struct AudioRuntime {
@@ -36,6 +42,9 @@ impl AudioRuntime {
     pub fn spawn(timeline: PlaybackTimeline, enabled: bool) -> Result<Self, PlaybackError> {
         let (commands, receiver) = mpsc::sync_channel(AUDIO_COMMAND_QUEUE_CAPACITY);
         let clock = AudioClock::new();
+        if enabled {
+            clock.set_opening();
+        }
         let levels = LevelTap::new(clock.clone());
         let worker_clock = clock.clone();
         let worker_levels = levels.clone();
@@ -43,6 +52,7 @@ impl AudioRuntime {
             .name("kerf-audio".into())
             .spawn(move || {
                 let output = make_audio_output(worker_clock.clone(), enabled);
+                worker_clock.opened();
                 AudioWorker::new(
                     timeline,
                     receiver,
@@ -137,6 +147,9 @@ struct AudioClockState {
     sample_rate: AtomicU32,
     playing: AtomicBool,
     source: AtomicU8,
+    /// The output is still opening, so nothing can be heard or metered yet:
+    /// time waits, and playing starts where it was asked to, with its sound.
+    opening: AtomicBool,
     anchor: Mutex<ClockAnchor>,
 }
 
@@ -155,11 +168,30 @@ impl AudioClock {
                 sample_rate: AtomicU32::new(48_000),
                 playing: AtomicBool::new(false),
                 source: AtomicU8::new(ClockSource::MonotonicFallback as u8),
+                opening: AtomicBool::new(false),
                 anchor: Mutex::new(ClockAnchor {
                     position: 0.0,
                     started: None,
                 }),
             }),
+        }
+    }
+
+    fn set_opening(&self) {
+        self.inner.opening.store(true, Ordering::Release);
+    }
+
+    /// The output has opened, or there is none to open: time runs from now,
+    /// not from when playing was asked for.
+    fn opened(&self) {
+        let mut anchor = self
+            .inner
+            .anchor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.inner.opening.store(false, Ordering::Release);
+        if anchor.started.is_some() {
+            anchor.started = Some(Instant::now());
         }
     }
 
@@ -279,7 +311,13 @@ impl AudioClock {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match anchor.started {
-            Some(started) if self.is_playing() => anchor.position + started.elapsed().as_secs_f64(),
+            Some(started) if self.is_playing() => {
+                let mut elapsed = started.elapsed();
+                if self.inner.opening.load(Ordering::Acquire) {
+                    elapsed = elapsed.saturating_sub(DEVICE_OPEN_WAIT);
+                }
+                anchor.position + elapsed.as_secs_f64()
+            }
             _ => anchor.position,
         }
     }
@@ -968,10 +1006,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::AudioClock;
+    use super::{AudioClock, DEVICE_OPEN_WAIT};
     use crate::ClockSource;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn monotonic_clock_advances_and_stops_at_pause() {
@@ -986,6 +1024,38 @@ mod tests {
         let paused_position = clock.now();
         thread::sleep(Duration::from_millis(5));
         assert!((clock.now() - paused_position).abs() < 0.01);
+    }
+
+    /// A clock playing from 0.5 since `waited` ago, its device still opening.
+    fn opening_since(waited: Duration) -> AudioClock {
+        let clock = AudioClock::new();
+        clock.set_opening();
+        clock.play_at(0.5);
+        clock.inner.anchor.lock().expect("anchor").started = Instant::now().checked_sub(waited);
+        clock
+    }
+
+    #[test]
+    fn the_clock_waits_while_the_device_opens() {
+        let clock = opening_since(Duration::from_secs(5));
+        assert_eq!(clock.now(), 0.5, "nothing has been heard yet");
+
+        // The wait is not played: time runs from when the device opened.
+        let opened = Instant::now();
+        clock.opened();
+        let position = clock.now();
+        assert!(position >= 0.5);
+        assert!(
+            position - 0.5 <= opened.elapsed().as_secs_f64(),
+            "{position}"
+        );
+    }
+
+    #[test]
+    fn a_device_that_never_opens_holds_the_clock_up_only_so_long() {
+        let clock = opening_since(DEVICE_OPEN_WAIT + Duration::from_secs(2));
+        let position = clock.now();
+        assert!((2.5..10.0).contains(&position), "{position}");
     }
 
     /// An output whose device went away.
@@ -1025,7 +1095,6 @@ mod tests {
         use super::{AudioCommand, AudioWorker};
         use crate::PlaybackTimeline;
         use std::sync::mpsc;
-        use std::time::Instant;
 
         let clock = AudioClock::new();
         clock.set_device_clock(48_000);
