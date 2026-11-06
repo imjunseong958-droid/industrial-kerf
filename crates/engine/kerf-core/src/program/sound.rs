@@ -206,7 +206,7 @@ impl<'a> Graph<'a> {
                     }
                     Content::Sequence {
                         sequence: nested, ..
-                    } if clip.speed().value() == 1.0 => {
+                    } if clip.speed().is_one() => {
                         let nested = self.nested(clip, nested)?;
                         let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
                             .expect("nested clips have a source");

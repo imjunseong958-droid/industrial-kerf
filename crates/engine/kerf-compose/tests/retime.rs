@@ -117,3 +117,80 @@ fn a_reversed_clip_makes_frames_too() {
         difference(&plain, &flow)
     );
 }
+
+/// A shot at `speed`, against the one frame of the file it should be showing.
+fn shows_the_frame(path: &Path, (speed, dur): (&str, i64), at: i64, file_frame: i64) {
+    let ramped = shown(
+        path,
+        24,
+        &format!("src=0f at=0f dur={dur}f speed={speed}"),
+        at,
+    );
+    let plain = shown(path, 24, &format!("src={file_frame}f at=0f dur=1f"), 0);
+    let off = difference(&ramped, &plain);
+    assert!(
+        off < 0.01,
+        "{speed} at {at}: {off} from file frame {file_frame}"
+    );
+}
+
+#[test]
+fn a_ramp_shows_the_frame_its_speed_has_reached() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = dir.path().join("pan.mp4");
+    encode(&pan(24, 6), &path);
+    // One speed to frame 8, then half: 8 more frames play 4.
+    let speed = ("{0f:1:hold 8f:1/2}", 24);
+    shows_the_frame(&path, speed, 5, 5);
+    shows_the_frame(&path, speed, 8, 8);
+    shows_the_frame(&path, speed, 16, 12);
+    // Speeding up in a line from 1 to 2 over 8 frames plays 12; then 2 holds.
+    let speed = ("{0f:1 8f:2}", 12);
+    shows_the_frame(&path, speed, 8, 12);
+    shows_the_frame(&path, speed, 10, 16);
+    // Backward, from the frame before the source out: 12 frames at 1 and 12 at 1/2 play 18.
+    let speed = ("{0f:-1:hold 12f:-1/2}", 24);
+    shows_the_frame(&path, speed, 0, 17);
+    shows_the_frame(&path, speed, 11, 6);
+    shows_the_frame(&path, speed, 22, 0);
+}
+
+#[test]
+fn a_ramp_is_the_same_frame_on_either_side_of_a_split() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = dir.path().join("pan.mp4");
+    encode(&pan(24, 6), &path);
+    let document = format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f speed={{0f:1 12f:1/2}}\n",
+        path.display()
+    );
+    let project = parse_document(&document, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let split = kerf_lang::apply_script(&project, Catalog::builtin(), "split c1 at=7f as=c2")
+        .expect("splits")
+        .project;
+    let frame = |project: &kerf_model::Project, at: i64| {
+        Compositor::new(project, Catalog::builtin(), &ComposeOptions::default())
+            .expect("composes")
+            .frame(Rate::FPS_24.time_of(at), 1.0)
+    };
+    for at in [0, 6, 7, 11, 18, 23] {
+        let off = difference(&frame(&project, at), &frame(&split, at));
+        assert!(off < 0.01, "frame {at}: {off}");
+    }
+}
+
+#[test]
+fn a_ramp_makes_frames_between_frames() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let (slow, fast) = (dir.path().join("slow.mp4"), dir.path().join("fast.mp4"));
+    encode(&pan(24, 6), &slow);
+    encode(&pan(48, 3), &fast);
+    // Half speed to frame 12, on to third speed: frame 5 is half way from file frame 2 to 3.
+    let line = |retime: &str| format!("src=0f at=0f dur=24f speed={{0f:1/2:hold 12f:1/3}}{retime}");
+    let truth = shown(&fast, 48, "src=5f at=0f dur=1f", 0);
+    let frames = difference(&shown(&slow, 24, &line(""), 5), &truth);
+    let flow = difference(&shown(&slow, 24, &line(" retime=flow"), 5), &truth);
+    assert!(flow < frames * 0.6, "frames {frames}, flow {flow}");
+}

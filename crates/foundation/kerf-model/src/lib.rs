@@ -11,6 +11,7 @@ pub mod look;
 pub mod model;
 pub mod ops;
 mod path;
+pub mod speed;
 pub mod time;
 pub mod validate;
 pub mod value;
@@ -30,6 +31,7 @@ pub use ops::{
     apply, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
     TrackChange, TrackRoleChange,
 };
+pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};
 pub use validate::validate;
 pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};

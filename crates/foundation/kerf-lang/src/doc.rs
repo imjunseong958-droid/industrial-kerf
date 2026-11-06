@@ -18,13 +18,15 @@
 //! is deterministic and omits defaults, so a document diff is an edit diff.
 
 use crate::lex::{lex, Arg, Atom, Line};
-use crate::text::{number, print_fx_ref, print_param, quote, Clock, Fields};
+use crate::text::{
+    number, parse_speed, print_fx_ref, print_param, print_speed, quote, Clock, Fields,
+};
 use kerf_model::time::parse_timecode;
 use kerf_model::Align;
 use kerf_model::{
     validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Marker,
     MarkerColor, Mask, MaskMode, MaskShape, Media, Param, ParamDef, ParamType, Params, Project,
-    Rate, Ratio, Sequence, Time, Track, TrackKind, Transition, Value, VideoInfo,
+    Rate, Sequence, Speed, Time, Track, TrackKind, Transition, Value, VideoInfo,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -296,7 +298,7 @@ impl Parser<'_> {
         let clock = Clock::of_sequence(&self.project.sequences[s]);
         let mut fields = Fields::new(line)?;
         let id = fields.id(1, "a clip id")?;
-        let (content, _) = content(&mut fields, &self.project, self.catalog)?;
+        let (content, _) = content(&mut fields, &self.project, self.catalog, clock.rate)?;
         let start = fields
             .take_with("at", |text| clock.position(text))?
             .ok_or_else(|| line.error(1, "missing `at=`"))?;
@@ -473,6 +475,7 @@ pub(crate) fn content(
     fields: &mut Fields<'_>,
     project: &Project,
     catalog: &Catalog,
+    rate: Rate,
 ) -> Result<(Content, Option<Clock>), Diagnostic> {
     let line = fields.line();
     let media = fields.take_id("media")?;
@@ -509,14 +512,11 @@ pub(crate) fn content(
             .unwrap_or(Time::ZERO),
         None => Time::ZERO,
     };
-    let speed = if source_clock.is_some() {
-        fields
-            .take_with("speed", |text| {
-                Ratio::parse(text).map_err(|e| e.to_string())
-            })?
-            .unwrap_or(Ratio::ONE)
-    } else {
-        Ratio::ONE
+    let speed = match fields.take("speed") {
+        Some(arg) if source_clock.is_some() => {
+            parse_speed(&arg.value, rate).map_err(|message| fields.error(arg, message))?
+        }
+        _ => Speed::ONE,
     };
     let content = match (media, sequence, generator, caption) {
         (Some(media), ..) => Content::Media {
@@ -633,7 +633,10 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
                 .iter()
                 .map(|space| space.id())
                 .collect();
-            format!("unknown color space `{text}`; use one of {}", known.join(", "))
+            format!(
+                "unknown color space `{text}`; use one of {}",
+                known.join(", ")
+            )
         })
     })?;
     if (bits.is_some() || color.is_some()) && size.is_none() {
@@ -1112,8 +1115,8 @@ fn print_clip(
         clock.print_duration(clip.duration)
     )
     .unwrap();
-    if clip.speed() != Ratio::ONE {
-        write!(out, " speed={}", clip.speed()).unwrap();
+    if !clip.speed().is_one() {
+        write!(out, " speed={}", print_speed(clip.speed(), clock.rate)).unwrap();
     }
     if clip.retime != kerf_model::Retime::default() {
         write!(out, " retime={}", clip.retime.id()).unwrap();
@@ -1617,14 +1620,59 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
             format!("kerf 1\nproject name=\"t\"\nsequence s1 name=\"\" rate=24 size=64x36 audio=48000{color} start=00:00:00:00\n")
         };
         let hdr = parse_document(&text(" color=rec2100-pq"), Catalog::builtin()).expect("parses");
-        assert_eq!(hdr.project.sequences[0].color, kerf_model::ColorSpace::Rec2100Pq);
+        assert_eq!(
+            hdr.project.sequences[0].color,
+            kerf_model::ColorSpace::Rec2100Pq
+        );
         let printed = print_document(&hdr.project, Catalog::builtin(), PrintOptions::default());
-        assert!(printed.contains("audio=48000 color=rec2100-pq start="), "{printed}");
+        assert!(
+            printed.contains("audio=48000 color=rec2100-pq start="),
+            "{printed}"
+        );
         let plain = parse_document(&text(""), Catalog::builtin()).expect("parses");
-        assert!(!print_document(&plain.project, Catalog::builtin(), PrintOptions::default())
-            .contains("color="));
+        assert!(
+            !print_document(&plain.project, Catalog::builtin(), PrintOptions::default())
+                .contains("color=")
+        );
         // Log is something footage is in, not something a file is finished in.
         assert!(parse_document(&text(" color=slog3"), Catalog::builtin()).is_err());
+    }
+
+    #[test]
+    fn a_speed_ramp_reads_and_prints_as_keyframes() {
+        let text = |speed: &str| {
+            format!("kerf 1\nproject name=\"t\"\nmedia m path=\"a.mov\" rate=24 dur=960f video=64x36\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=96f speed={speed}\n")
+        };
+        let written = "{0f:1:hold 24f:2 48f:0.25:ease 72f:1/3:0.2,0,0.8,1 96f:1}";
+        let document = parse_document(&text(written), Catalog::builtin()).expect("parses");
+        let printed = print_document(
+            &document.project,
+            Catalog::builtin(),
+            PrintOptions::default(),
+        );
+        assert!(printed.contains(&format!("speed={written}")), "{printed}");
+        let again = parse_document(&printed, Catalog::builtin()).expect("reads back");
+        assert_eq!(document.project, again.project);
+        let clip = &document.project.sequences[0].tracks[0].clips[0];
+        assert_eq!(clip.speed().constant(), None);
+        // One speed throughout is plain speed.
+        let flat = parse_document(&text("{0f:2 24f:2}"), Catalog::builtin()).expect("parses");
+        let printed = print_document(&flat.project, Catalog::builtin(), PrintOptions::default());
+        assert!(printed.contains(" speed=2\n"), "{printed}");
+        // What cannot play is refused where it is written.
+        for bad in [
+            "{0f:1 24f:-1}",
+            "{24f:1 0f:2}",
+            "{}",
+            "{0f:1:wobble 24f:2}",
+            "{0f:1:0.2,1.5,0.8,1 24f:2}",
+            "{0f:0 24f:1}",
+        ] {
+            assert!(
+                parse_document(&text(bad), Catalog::builtin()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -825,24 +825,22 @@ impl Validator<'_> {
     /// time. `None` means unlimited.
     fn head_handle(&self, clip: &Clip) -> Option<Time> {
         let (source_in, source_out) = clip.source_range()?;
-        let speed = clip.speed();
-        let handle = if speed.is_reverse() {
+        let handle = if clip.speed().is_reverse() {
             self.source_length(clip)? - source_out
         } else {
             source_in
         };
-        Some(speed.timeline_span(handle))
+        Some(clip.time_before(handle))
     }
 
     fn tail_handle(&self, clip: &Clip) -> Option<Time> {
         let (source_in, source_out) = clip.source_range()?;
-        let speed = clip.speed();
-        let handle = if speed.is_reverse() {
+        let handle = if clip.speed().is_reverse() {
             source_in
         } else {
             self.source_length(clip)? - source_out
         };
-        Some(speed.timeline_span(handle))
+        Some(clip.time_after(handle))
     }
 
     fn nesting(&mut self) {

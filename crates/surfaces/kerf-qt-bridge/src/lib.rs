@@ -1213,7 +1213,7 @@ fn rendered_preview(
             Content::Media {
                 media: media.clone(),
                 source_in: Time::ZERO,
-                speed: Ratio::ONE,
+                speed: Ratio::ONE.into(),
             },
             start,
             duration,

@@ -116,6 +116,12 @@ impl Bezier {
         )
     }
 
+    /// Whether its control points go past 0 or 1 up, which is what lets it overshoot.
+    pub fn overshoots(self) -> bool {
+        let up = 0..=10_000;
+        !up.contains(&self.y1) || !up.contains(&self.y2)
+    }
+
     fn points(self) -> [f64; 4] {
         [self.x1, self.y1, self.x2, self.y2].map(|units| f64::from(units) / 10_000.0)
     }
@@ -230,7 +236,20 @@ impl Interp {
         }
     }
 
-    fn curve(self, t: f64) -> f64 {
+    /// It as a curve, for those that are one. The named easings are cubics in `t`, which a curve
+    /// with its control points a third of the way across each draws exactly.
+    fn as_curve(self) -> Option<Bezier> {
+        let (y1, y2) = match self {
+            Self::Linear | Self::Hold => return None,
+            Self::Bezier(curve) => return Some(curve),
+            Self::EaseIn => (0.0, 1.0 / 3.0),
+            Self::EaseOut => (2.0 / 3.0, 1.0),
+            Self::Ease => (0.0, 1.0),
+        };
+        Bezier::new(1.0 / 3.0, y1, 2.0 / 3.0, y2)
+    }
+
+    pub(crate) fn curve(self, t: f64) -> f64 {
         match self {
             Self::Linear => t,
             Self::Hold => 0.0,
@@ -304,10 +323,10 @@ impl Param {
         let before = keys.iter().rev().find(|key| key.at <= at);
         let after = keys.iter().find(|key| key.at > at);
         let interp = before.map_or(Interp::Linear, |key| key.interp);
-        // A curve cut in two is two curves, which together draw it exactly. A named easing eases
-        // each half on its own.
-        let cut = match (before, after, interp) {
-            (Some(left), Some(right), Interp::Bezier(curve)) if left.at < at => {
+        // A curve cut in two is two curves, which together draw it. So is a named easing, which is
+        // a curve with a name.
+        let cut = match (before, after, interp.as_curve()) {
+            (Some(left), Some(right), Some(curve)) if left.at < at => {
                 let span = (right.at - left.at).flicks() as f64;
                 curve.split((at - left.at).flicks() as f64 / span)
             }
@@ -369,6 +388,41 @@ mod tests {
         assert_eq!(param.value_at(frames(36)), Value::Number(1.0));
         assert_eq!(param.value_at(frames(-5)), Value::Number(0.0));
         assert_eq!(param.value_at(frames(100)), Value::Number(0.5));
+    }
+
+    #[test]
+    fn a_named_easing_keeps_its_motion_across_a_split() {
+        for interp in [Interp::EaseIn, Interp::EaseOut, Interp::Ease] {
+            let param = Param::Animated(vec![
+                Keyframe {
+                    at: frames(0),
+                    value: Value::Number(0.0),
+                    interp,
+                },
+                Keyframe {
+                    at: frames(48),
+                    value: Value::Number(1.0),
+                    interp: Interp::Linear,
+                },
+            ]);
+            let number = |param: &Param, at: Time| match param.value_at(at) {
+                Value::Number(number) => number,
+                other => panic!("{other:?}"),
+            };
+            let (head, tail) = param.split(frames(16));
+            for at in 0..48 {
+                let whole = number(&param, frames(at));
+                let parted = if at < 16 {
+                    number(&head, frames(at))
+                } else {
+                    number(&tail, frames(at - 16))
+                };
+                assert!(
+                    (whole - parted).abs() < 2e-3,
+                    "{interp:?} at {at}: {whole} against {parted}"
+                );
+            }
+        }
     }
 
     #[test]

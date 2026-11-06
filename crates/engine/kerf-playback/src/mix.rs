@@ -663,6 +663,134 @@ mod tests {
         assert_eq!(project, before, "a solo never changes the project");
     }
 
+    /// Where each burst of tone starts in `samples`, in seconds.
+    fn onsets(samples: &[f32]) -> Vec<f64> {
+        let block = 96;
+        let loud: Vec<bool> = samples
+            .chunks(block * CHANNELS)
+            .map(|chunk| chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32 > 0.01)
+            .collect();
+        let quiet = 9_600 / block;
+        loud.iter()
+            .enumerate()
+            .filter(|(at, on)| **on && !loud[at.saturating_sub(quiet)..*at].contains(&true))
+            .map(|(at, _)| (at * block) as f64 / 48_000.0)
+            .collect()
+    }
+
+    #[test]
+    fn a_ramp_is_heard_live_and_in_a_render_where_the_ramp_says() {
+        let Some(ffmpeg) = ffmpeg() else {
+            eprintln!("skipping the ramp check: ffmpeg is unavailable");
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        // A tenth of a second of tone every half second. Not 1 kHz, whose samples repeat every 192
+        // bytes: libav then takes the file for an MPEG transport stream.
+        let path = directory.path().join("bursts.wav");
+        let path = path.to_str().expect("UTF-8 path");
+        run(
+            &ffmpeg,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(lt(mod(t\\,0.5)\\,0.1)\\,0.8*sin(2*PI*997*t)\\,0):s=48000:d=8",
+                "-ac",
+                "2",
+                "-c:a",
+                "pcm_s16le",
+                path,
+            ],
+        );
+        // One speed for a second, then down to half in a line over two, then half.
+        let text = format!(
+            "kerf 1\nproject name=\"Ramp\"\n\
+             media d path=\"{path}\" rate=30 dur=8s audio=2ch@48000\n\
+             sequence s1 rate=30 size=64x36 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=d src=0s at=0s dur=6s speed={{0f:1 30f:1 90f:1/2}}\n"
+        );
+        let project = kerf_lang::parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let clip = project.clip("a1").expect("the clip");
+        let expected = |source: f64| {
+            clip.played_at(Time::from_seconds(source).expect("a time"))
+                .expect("a source")
+                .seconds()
+        };
+        let played = live(&project, 0.0, 6 * 48_000 * CHANNELS);
+        let heard = onsets(&played);
+        assert!(heard.len() >= 8, "{heard:?}");
+        for (index, onset) in heard.iter().enumerate() {
+            let wanted = expected(index as f64 * 0.5);
+            assert!(
+                (onset - wanted).abs() < 0.06,
+                "burst {index} heard at {onset}, the ramp says {wanted}"
+            );
+        }
+        // A render reads what playback reads.
+        let baked = kerf_compose::ramps::with_sound(&project, |_, _, _| None);
+        let out = directory.path().join("render.f32");
+        let whole = rendered(&ffmpeg, &baked, None, &out);
+        assert!(difference(&whole, &played) < 1e-2);
+        // Seeking lands in the same sound.
+        let resumed = live(&project, 2.0, 2 * 48_000 * CHANNELS);
+        let start = 2 * 48_000 * CHANNELS;
+        assert!(difference(&played[start..start + resumed.len()], &resumed) < 1e-2);
+    }
+
+    #[test]
+    fn a_reversed_ramp_plays_its_sound_backward() {
+        let Some(ffmpeg) = ffmpeg() else {
+            eprintln!("skipping the ramp check: ffmpeg is unavailable");
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("burst.wav");
+        let path = path.to_str().expect("UTF-8 path");
+        // One burst, at a second and a half of three.
+        run(
+            &ffmpeg,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(between(t\\,1.5\\,1.6)\\,0.8*sin(2*PI*1000*t)\\,0):s=48000:d=3",
+                "-ac",
+                "2",
+                "-c:a",
+                "pcm_s16le",
+                path,
+            ],
+        );
+        let text = format!(
+            "kerf 1\nproject name=\"Ramp\"\n\
+             media d path=\"{path}\" rate=30 dur=3s audio=2ch@48000\n\
+             sequence s1 rate=30 size=64x36 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=d src=0s at=0s dur=2s speed={{0f:-2 30f:-1}}\n"
+        );
+        let project = kerf_lang::parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let clip = project.clip("a1").expect("the clip");
+        // The end of the burst comes first when played backward.
+        let wanted = clip
+            .played_at(Time::from_seconds(1.6).expect("a time"))
+            .expect("a source")
+            .seconds();
+        let played = live(&project, 0.0, 2 * 48_000 * CHANNELS);
+        let heard = onsets(&played);
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert!(
+            (heard[0] - wanted).abs() < 0.06,
+            "{} against {wanted}",
+            heard[0]
+        );
+    }
+
     #[test]
     fn the_live_mix_sounds_like_a_render() {
         let Some(ffmpeg) = ffmpeg() else {

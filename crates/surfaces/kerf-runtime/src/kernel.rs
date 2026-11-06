@@ -532,7 +532,7 @@ pub(crate) fn import_media(
     let content = Content::Media {
         media: media.id.clone(),
         source_in: Time::ZERO,
-        speed: Ratio::ONE,
+        speed: Ratio::ONE.into(),
     };
     let clip = ids.next("c");
     let mut ops = vec![Op::AddMedia(media.clone())];
@@ -1253,7 +1253,9 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         }
         EditOp::Speed { clip, speed } => Op::Speed {
             clip: edit_id(clip)?,
-            speed: Ratio::parse(speed).map_err(|error| invalid(error.to_string()))?,
+            speed: Ratio::parse(speed)
+                .map_err(|error| invalid(error.to_string()))?
+                .into(),
         },
         EditOp::FxAdd {
             clip,
@@ -1388,7 +1390,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                     Content::Media {
                         media: found.id.clone(),
                         source_in: found.rate.time_of(*source_in),
-                        speed: Ratio::ONE,
+                        speed: Ratio::ONE.into(),
                     }
                 }
                 (None, Some(generator)) => {

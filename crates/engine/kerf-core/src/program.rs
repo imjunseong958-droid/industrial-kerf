@@ -291,20 +291,15 @@ impl Shown<'_> {
         let mut lo = item.from.max(from);
         let mut hi = item.to.min(to);
         // Keep the source inside the media or nested sequence.
-        if let (Some(length), Some((source_in, _))) = (length, item.clip.source_range()) {
-            let speed = item.clip.speed();
-            let clip = item.clip;
-            let (earliest, latest) = if speed.is_reverse() {
-                let out = source_in + speed.source_span(clip.duration);
-                (
-                    clip.start - speed.timeline_span(length - out),
-                    clip.start + speed.timeline_span(out),
-                )
+        if let Some(ends) = length.and_then(|length| {
+            item.clip
+                .played_at(Time::ZERO)
+                .zip(item.clip.played_at(length))
+        }) {
+            let (earliest, latest) = if item.clip.speed().is_reverse() {
+                (ends.1, ends.0)
             } else {
-                (
-                    clip.start - speed.timeline_span(source_in),
-                    clip.start + speed.timeline_span(length - source_in),
-                )
+                ends
             };
             lo = lo.max(earliest);
             hi = hi.min(latest);
@@ -455,13 +450,10 @@ impl<'a> Graph<'a> {
         let speed = clip.speed();
         let (a, b) = (start - clip.start, end - clip.start);
         Some(if speed.is_reverse() {
-            let out = source_in + speed.source_span(clip.duration);
-            (out - speed.source_span(b), out - speed.source_span(a))
+            let out = source_in + speed.played(clip.duration);
+            (out - speed.played(b), out - speed.played(a))
         } else {
-            (
-                source_in + speed.source_span(a),
-                source_in + speed.source_span(b),
-            )
+            (source_in + speed.played(a), source_in + speed.played(b))
         })
     }
 
@@ -633,14 +625,17 @@ impl<'a> Graph<'a> {
             Content::Caption { .. } => return Ok(None),
         };
         let speed = clip.speed();
+        let Some(ratio) = speed.constant() else {
+            return Err(ProgramError::unsupported(&clip.id, "a speed ramp"));
+        };
         if speed.is_reverse() {
             filters.push("reverse".into());
         }
-        if speed.num().unsigned_abs() != speed.den() {
+        if ratio.num().unsigned_abs() != ratio.den() {
             filters.push(format!(
                 "setpts=PTS*{}/{}",
-                speed.den(),
-                speed.num().unsigned_abs()
+                ratio.den(),
+                ratio.num().unsigned_abs()
             ));
         }
         let fit = matches!(source, Source::Stream(_));
@@ -1315,7 +1310,9 @@ pub fn sound_filters(
     if speed.is_reverse() {
         filters.push("areverse".into());
     }
-    filters.extend(atempo_filters(speed.value().abs()));
+    // The sound of a ramp is made beforehand (`kerf_compose::ramps`), which leaves it at speed 1. One
+    // that could not be keeps the length it should have, at its speed as one number.
+    filters.extend(atempo_filters(speed.average(clip.duration)));
     let local = clip_time("t", portion.offset(clip));
     match param(catalog, clip, Domain::Audio, "gain") {
         Param::Static(Value::Number(gain)) if gain != 0.0 => {

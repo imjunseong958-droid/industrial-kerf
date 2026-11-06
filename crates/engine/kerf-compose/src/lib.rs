@@ -8,6 +8,7 @@ mod domains;
 mod draw;
 mod footage;
 mod frames;
+pub mod ramps;
 mod sound;
 
 use kerf_model::{Catalog, Project, Rate, Time};

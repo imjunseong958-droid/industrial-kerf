@@ -164,7 +164,7 @@ impl Drawing {
             } = &plan.source
             {
                 let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
                 if !self.gpu_can_draw(gpu, *nested, shown, scale) {
                     return false;
                 }
@@ -538,7 +538,7 @@ impl Drawing {
                 duration,
             } => {
                 let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
                 self.gpu_draw(frame, *nested, shown, scale)?
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),

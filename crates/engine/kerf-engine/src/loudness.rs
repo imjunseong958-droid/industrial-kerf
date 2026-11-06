@@ -153,8 +153,9 @@ pub fn measure_program_with_progress(
     cancellation: &CancellationToken,
     mut on_progress: impl FnMut(f64),
 ) -> Result<Loudness> {
+    let heard = crate::ramps::with_sound(project);
     let compiled = compile_program(
-        project,
+        &heard,
         kerf_model::Catalog::builtin(),
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),

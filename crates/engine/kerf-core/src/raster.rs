@@ -12,7 +12,7 @@
 
 use crate::program::canvas;
 use kerf_model::{
-    Catalog, Clip, Content, Effect, Engine, Id, IdGen, Media, Project, Rate, Ratio, Sequence, Time,
+    Catalog, Clip, Content, Effect, Engine, Id, IdGen, Media, Project, Rate, Sequence, Speed, Time,
     Track, TrackKind, VideoInfo,
 };
 use std::collections::BTreeSet;
@@ -81,7 +81,7 @@ pub struct BakeJob {
     pub to: Time,
     /// The clip's source in, speed, and length, for its keyframes.
     pub source_in: Time,
-    pub speed: Ratio,
+    pub speed: Speed,
     pub clip_duration: Time,
     /// The raster effects, in stack order.
     pub effects: Vec<Effect>,
@@ -96,10 +96,10 @@ impl BakeJob {
     /// where its keyframes are read. Handles fall before 0 or after the end.
     pub fn clip_time(&self, at: Time) -> Time {
         if self.speed.is_reverse() {
-            let out = self.source_in + self.speed.source_span(self.clip_duration);
-            self.speed.timeline_span(out - at)
+            let out = self.source_in + self.speed.played(self.clip_duration);
+            self.speed.time_for(out - at)
         } else {
-            self.speed.timeline_span(at - self.source_in)
+            self.speed.time_for(at - self.source_in)
         }
     }
 
@@ -209,7 +209,7 @@ struct Baked {
     clip: Id,
     media: Id,
     source_in: Time,
-    speed: Ratio,
+    speed: Speed,
 }
 
 impl Planner<'_> {
@@ -272,7 +272,7 @@ impl Planner<'_> {
                 clip: clip.id.clone(),
                 media,
                 source_in: job.source_in - job.from,
-                speed: job.speed,
+                speed: job.speed.clone(),
             });
             jobs.push(job);
         }
@@ -320,7 +320,7 @@ impl Planner<'_> {
                     from: window.0,
                     to: window.1,
                     source_in: Time::ZERO,
-                    speed: Ratio::ONE,
+                    speed: Speed::ONE,
                     clip_duration: clip.duration,
                     effects: Vec::new(),
                     seed: 0,
@@ -341,12 +341,12 @@ impl Planner<'_> {
                 };
                 let window = frames(
                     media.rate,
-                    source_window(clip, *source_in, *speed, pre, post),
+                    source_window(clip, *source_in, speed, pre, post),
                     media.duration,
                 );
                 BakeJob {
                     source_in: *source_in,
-                    speed: *speed,
+                    speed: speed.clone(),
                     ..job(
                         media.path.clone(),
                         None,
@@ -366,7 +366,7 @@ impl Planner<'_> {
                 };
                 let (from, to) = frames(
                     nested.rate,
-                    source_window(clip, *source_in, *speed, pre, post),
+                    source_window(clip, *source_in, speed, pre, post),
                     nested.duration(),
                 );
                 let index = self.prerender(
@@ -378,7 +378,7 @@ impl Planner<'_> {
                 )?;
                 BakeJob {
                     source_in: *source_in - from,
-                    speed: *speed,
+                    speed: speed.clone(),
                     ..job(
                         prerenders[index].output.clone(),
                         Some(index),
@@ -459,7 +459,7 @@ impl Planner<'_> {
 }
 
 /// How far the clip's transitions reach before and after it.
-fn handles(track: &Track, clip: &Clip) -> (Time, Time) {
+pub fn handles(track: &Track, clip: &Clip) -> (Time, Time) {
     track
         .transitions
         .iter()
@@ -484,19 +484,16 @@ fn handles(track: &Track, clip: &Clip) -> (Time, Time) {
 fn source_window(
     clip: &Clip,
     source_in: Time,
-    speed: Ratio,
+    speed: &Speed,
     pre: Time,
     post: Time,
 ) -> (Time, Time) {
     let (a, b) = (-pre, clip.duration + post);
     if speed.is_reverse() {
-        let out = source_in + speed.source_span(clip.duration);
-        (out - speed.source_span(b), out - speed.source_span(a))
+        let out = source_in + speed.played(clip.duration);
+        (out - speed.played(b), out - speed.played(a))
     } else {
-        (
-            source_in + speed.source_span(a),
-            source_in + speed.source_span(b),
-        )
+        (source_in + speed.played(a), source_in + speed.played(b))
     }
 }
 

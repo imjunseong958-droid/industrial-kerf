@@ -142,6 +142,15 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   motion: `frames` (the default) repeats the frame showing, `blend` cross-fades the two around
   that moment, and `flow` moves them along the motion between them first. `flow` costs the most
   and suits steady motion; fast or crossing motion can smear.
+- `speed=` is one ratio (`2`, `0.5`, `-1`), or keyframes to change over the clip: `speed={0f:1
+  24f:1 36f:1/4 84f:1/4 96f:1}` ramps down to quarter speed and back. They read as any keyframes
+  do, except that a curve may not overshoot. The speeds are all forward or all reversed, and from
+  1% to 10,000%; between keyframes the speed moves as they say, and before the first and after the
+  last it holds. The picture follows it exactly, `retime=` included. The sound keeps its pitch and
+  stays within 10 ms of the picture; it is made once for each ramp and reused. Trims and splits
+  keep what plays where it was, by moving the keyframes with the clip and keeping those that fall
+  outside it, so trimming back brings back what was there. An EDL gets the speed overall; the
+  FFmpeg graph (`KERF_GRAPH_RENDER=1`) cannot draw a ramp's picture.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one
@@ -177,8 +186,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   how it moves toward the next keyframe: `linear` (the default), `hold`, `ease-in`,
   `ease-out`, `ease`, or a curve's two control points, `x1,y1,x2,y2`, as a graph editor
   gives them (`{0f:0:0.2,0.8,0.4,1 12f:1}`). `x` stays within 0 to 1, and `y` may overshoot
-  to 5 either way, for a bounce. A clip split through a curve keeps its motion on both
-  sides, as two curves.
+  to 5 either way, for a bounce. A clip split through a curve or an easing keeps its
+  motion on both sides, as two curves.
 
 Internally every time is an exact integer of flicks (1/705,600,000 s), so
 23.976, 29.97 DF, and 48 kHz audio never drift.
@@ -205,6 +214,8 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `ripple-delete`, `extract`, and ripple trims keep every unlocked track in
   sync, and refuse when they would cut through another track's clip. Lock a
   track to leave it out.
+- `speed c9 2` changes a clip and what is linked to it, keeping the source range, so its length
+  changes; `speed c9 {0f:1 24f:1/4}` does the same with a ramp, whose times stay on the clip.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
 - `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and

@@ -364,12 +364,7 @@ struct Picture {
 }
 
 fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<Picture>, String> {
-    let Content::Media {
-        media,
-        source_in,
-        speed,
-    } = &clip.content
-    else {
+    let Content::Media { media, .. } = &clip.content else {
         return Ok(None);
     };
     let Some(media) = project.media(media.as_str()) else {
@@ -381,12 +376,7 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
     let at = Time::from_seconds(at)
         .unwrap_or(Time::ZERO)
         .clamp(clip.start, clip.end() - media.rate.frame_duration());
-    let clip_time = at - clip.start;
-    let source = if speed.is_reverse() {
-        *source_in + speed.source_span(clip.duration - clip_time)
-    } else {
-        *source_in + speed.source_span(clip_time)
-    };
+    let source = clip.source_at(at).unwrap_or(Time::ZERO);
     let width = width.clamp(16, MAX_WIDTH) & !1;
     let height = ((u64::from(width) * u64::from(video.height) / u64::from(video.width.max(1)))
         as u32)
@@ -412,7 +402,7 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         width,
         height,
         rgba,
-        clip_time,
+        clip_time: at - clip.start,
         source: (video.width, video.height),
         fps: media.rate.fps(),
     }))

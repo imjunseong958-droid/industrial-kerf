@@ -134,10 +134,15 @@ code nothing calls was cut once already and should not come back as such.
 Has: ripple, roll, slip, slide, transitions, nested sequences, captions from
 transcripts, snapping to pauses and cuts, roles, proxies, interchange, QC.
 
-Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. To add, in order:
-speed that changes over a clip (a clip's speed is one constant ratio today); multicam; sound beyond gain and
-fades, with effects and buses. A timeline's own tools stay in `kerf-model` and
-`kerf-lang`.
+Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. Speed changes over a clip
+(`kerf_model::Speed`, `speed={0f:1 24f:1/4}`): the model knows one curve, source played by clip time,
+and everything from trims to handles reads it. FFmpeg's `atempo` cannot follow a ramp (timed tempo
+commands drifted by up to 0.39 s when measured), so `kerf_compose::ramps` makes the sound with
+waveform-similarity overlap-add into a WAV in the temp folder, in sync within 10 ms by construction
+(80 s of stereo in 142 ms in a release build),
+and the graph and the live mixer play that as plain media. Native playback hands a ramp's picture to
+the compositor. To add, in order: multicam; sound beyond gain and fades, with effects and buses. A
+timeline's own tools stay in `kerf-model` and `kerf-lang`.
 
 ### Color
 

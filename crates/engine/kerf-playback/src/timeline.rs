@@ -236,7 +236,10 @@ impl PlaybackTimeline {
         let (width, height) = sequence.map_or((1920, 1080), kerf_core::program::canvas);
         // A program a render cannot mix plays no sound; the preview plan
         // says why.
-        let sounds = program_sound(project, Catalog::builtin(), None).unwrap_or_default();
+        // A clip that ramps plays sound made for it.
+        let heard = kerf_compose::ramps::with_sound(project, |_, _, _| None);
+        let sounds = program_sound(&heard, Catalog::builtin(), None).unwrap_or_default();
+        let program = heard.into_owned();
         Ok(Self {
             fps: sequence.map_or(30.0, |sequence| sequence.rate.fps()),
             width,
@@ -251,7 +254,7 @@ impl PlaybackTimeline {
             clip_index,
             clip_prefix_max_end,
             sounds: sounds.into(),
-            program: Arc::new(expanded),
+            program: Arc::new(program),
         })
     }
 
@@ -420,7 +423,7 @@ impl Flattener<'_> {
                 if speed.is_reverse() {
                     continue;
                 }
-                let source_at = |time: Time| source_in + speed.source_span(time - clip.start);
+                let source_at = |time: Time| source_in + speed.played(time - clip.start);
                 match &clip.content {
                     Content::Media { media, .. } => {
                         let kind = match track.kind {
@@ -457,7 +460,7 @@ impl Flattener<'_> {
                             duration: (hi - lo).seconds(),
                             source_in: source_at(lo).seconds(),
                             source_out: source_at(hi).seconds(),
-                            speed: speed.value(),
+                            speed: speed.average(clip.duration),
                             volume: 10f64.powf(gain / 20.0) as f32,
                             track_muted: muted || track.muted,
                             effects,
@@ -467,7 +470,7 @@ impl Flattener<'_> {
                             seed: kerf_core::raster::seed(clip.id.as_str()),
                         });
                     }
-                    Content::Sequence { sequence: id, .. } if speed.value() == 1.0 => {
+                    Content::Sequence { sequence: id, .. } if speed.is_one() => {
                         if let Some(nested) = self.project.sequence(id.as_str()) {
                             self.depth += 1;
                             self.sequence(
@@ -698,7 +701,7 @@ impl NativeCheck<'_> {
         // another speed: a render changes the speed of its mix as a whole.
         if kind == TrackKind::Audio {
             let nested = matches!(clip.content, Content::Sequence { .. });
-            return (nested && clip.speed().value() != 1.0)
+            return (nested && !clip.speed().is_one())
                 .then_some("a speed change on a nested sequence");
         }
         // Raster effects on a media picture run live, unless they make it
@@ -754,13 +757,16 @@ impl NativeCheck<'_> {
             }
             Content::Generator { .. } => return Some("a generator"),
             Content::Caption { .. } => return Some("captions"),
-            Content::Sequence { .. } if clip.speed().value() != 1.0 => {
+            Content::Sequence { .. } if !clip.speed().is_one() => {
                 return Some("a speed change on a nested sequence")
             }
             Content::Media { .. } | Content::Sequence { .. } => {}
         }
         if clip.speed().is_reverse() {
             return Some("reverse playback");
+        }
+        if clip.speed().constant().is_none() {
+            return Some("a speed ramp");
         }
         if kind != TrackKind::Video {
             return None;
