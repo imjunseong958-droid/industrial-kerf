@@ -1202,7 +1202,7 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
     let last = outline
         .trim_matches(['{', '}'])
         .split(' ')
-        .last()
+        .next_back()
         .and_then(|key| key.split(':').nth(1))
         .unwrap();
     let corners: Vec<[f64; 2]> = last
