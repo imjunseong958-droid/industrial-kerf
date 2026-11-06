@@ -20,6 +20,8 @@ const SCENES: &[(&str, &str)] = &[
     ("lumetri", "      fx color.lumetri@2 exposure=0.5\n"),
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
     ("glow", "      fx light.wonderglow@1\n"),
+    ("ultra key", "      fx key.ultra@1 key_color=#30c040\n"),
+    ("radial zoom", "      fx blur.radialzoom@1 amount=30 quality=30\n"),
     (
         "fill small",
         "      mask k1 rect=0.45,0.45,0.55,0.55 mode=none\n      fx image.fill@1 path=k1\n",

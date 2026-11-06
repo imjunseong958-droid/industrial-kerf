@@ -79,6 +79,38 @@ pub struct Run<'a> {
     pub host: Option<&'a dyn Host>,
 }
 
+/// Radial Zoom Blur as a kernel, with its parameters read as [`apply`] reads them.
+pub fn radial_zoom_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    let spec = spec("blur.radialzoom")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let amount = values.f("amount");
+    if amount == 0.0 {
+        return Some(Kernel::Nothing);
+    }
+    let center = values.v2("center");
+    Some(Kernel::RadialZoom {
+        kind: values.e("type"),
+        center: [(center[0] * per_source) as f32, (center[1] * per_source) as f32],
+        zoom: ((amount / 100.0).clamp(-1.0, 1.0) * 0.5) as f32,
+        arc: (amount.to_radians() * 0.25) as f32,
+        quality: values.f("quality").clamp(1.0, 100.0) as f32,
+    })
+}
+
 /// Run the kept effect `effect` on `picture`, premultiplied linear light.
 pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
     let Some(spec) = spec(effect.fx.as_str()).filter(|_| kept(effect.fx.as_str())) else {
@@ -241,6 +273,77 @@ impl EffectHost for Adapter<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_radial_zoom_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let bright = (x / 9 + y / 7) % 3 == 0;
+                let a = if y % 11 == 0 { 0.5 } else { 1.0 };
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let c = if bright { [1.0, 0.9, 0.7] } else { [u, v, 1.0 - u] };
+                px.extend_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        for (kind, amount, center) in [
+            ("straight-zoom", 40.0, (0.5, 0.5)),
+            ("fading-zoom", -30.0, (0.2, 0.7)),
+            ("centered", 60.0, (0.5, 0.2)),
+            ("rotate", 25.0, (0.5, 0.5)),
+            ("rotate-fading", -40.0, (0.8, 0.4)),
+        ] {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("blur.radialzoom").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            effect.params.insert(
+                "type".into(),
+                kerf_model::Param::Static(Value::Enum(kind.into())),
+            );
+            effect.params.insert("amount".into(), number(amount));
+            effect.params.insert("center_x".into(), number(center.0));
+            effect.params.insert("center_y".into(), number(center.1));
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = radial_zoom_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 4e-3, "{kind}: differs by {worst:.2e}");
+            assert_ne!(cpu.px, image.px, "{kind} changes nothing");
+        }
+    }
+
     use super::*;
     use kerf_model::{Catalog, Engine, Id};
 

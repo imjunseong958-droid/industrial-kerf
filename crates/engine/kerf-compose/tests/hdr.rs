@@ -184,6 +184,53 @@ fn effects_written_for_0_to_1_keep_what_an_hdr_picture_holds() {
 }
 
 #[test]
+fn the_gpu_holds_what_is_over_1_for_effects_as_the_cpu_does() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = pq_footage(dir.path(), 200);
+    let line = |effect: &str| {
+        format!(
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{path}\" rate=24 dur=24f video=320x180 bits=10 color=rec2100-pq\nsequence s1 rate=24 size=320x180 audio=48000 color=rec2100-pq\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n      fx {effect}\n"
+        )
+    };
+    let at = Rate::FPS_24.time_of(1);
+    let plain = signal(&line("color.tint amount=0"), Accel::Never);
+    let mut drew_any = false;
+    for effect in [
+        "color.brightnesscontrast contrast=10",
+        "color.gamma gamma=12",
+        "color.levels",
+        "color.tint amount=60",
+        "key.luma threshold=0 cutoff=0",
+    ] {
+        let document = line(effect);
+        let gpu = compositor(&document, Accel::Always);
+        let cpu = compositor(&document, Accel::Never);
+        if !gpu.draws_on_gpu(at, 1.0) {
+            panic!("{effect} goes to the CPU");
+        }
+        drew_any = true;
+        let (on_gpu, on_cpu) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
+        let (x, y) = (on_gpu.width / 2, on_gpu.height / 2);
+        let (a, b) = (code16(&on_gpu, x, y), code16(&on_cpu, x, y));
+        assert!(
+            a.abs_diff(b) < 300,
+            "{effect}: {a} on the GPU, {b} on the CPU"
+        );
+        // It kept something over SDR white, which sits near 0.58 in PQ.
+        if effect != "color.tint amount=60" {
+            assert!(
+                f64::from(a) / 65535.0 > 0.6,
+                "{effect} lost its highlights: {a}"
+            );
+        }
+    }
+    assert!(drew_any);
+    assert!(plain > 0.6, "the footage should be over SDR white: {plain}");
+    // Bringing a whole picture under 1 goes by its peak, which the CPU has to read.
+    assert!(!compositor(&line("blur.radialzoom amount=20"), Accel::Always).draws_on_gpu(at, 1.0));
+}
+
+#[test]
 fn lumetri_grades_highlights_in_an_hdr_sequence_alike_on_gpu_and_cpu() {
     let dir = tempfile::tempdir().expect("a folder");
     let path = pq_footage(dir.path(), 0xD0);
