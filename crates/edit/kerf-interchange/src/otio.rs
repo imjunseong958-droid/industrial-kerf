@@ -318,6 +318,7 @@ pub fn from_timeline(
         ));
     }
     let mut sequence = Sequence {
+        buses: Vec::new(),
         id: claim(None, "s"),
         name: if timeline.name.is_empty() {
             "Main".into()

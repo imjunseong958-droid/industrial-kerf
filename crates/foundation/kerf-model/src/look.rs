@@ -1964,6 +1964,7 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
         for look in looks {
             let mut project = Project::new("p");
             let mut sequence = crate::Sequence {
+                buses: Vec::new(),
                 id: Id::new("s1").unwrap(),
                 name: "s1".into(),
                 rate,

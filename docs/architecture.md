@@ -152,8 +152,10 @@ waveform-similarity overlap-add into a WAV in the temp folder, in sync within 10
 and the graph and the live mixer play that as plain media. Native playback hands a ramp's picture to
 the compositor. A multicam is a sequence with a camera on each track, and a clip of it shows one
 (`angle=V2`), since a composition is a sequence and this needs no second document type; `look` with
-`sync` lines recordings up by the rise of their loudness (`kerf_engine::sync`). To add: sound beyond
-gain and fades, with effects and buses. A timeline's own tools stay in `kerf-model` and `kerf-lang`.
+`sync` lines recordings up by the rise of their loudness (`kerf_engine::sync`). Sound goes through
+clip effects and then buses (`kerf_model::Bus`), mixed by the render's graph and, at the top of a
+program, by the live mixer's own stream for each bus, so a compressor hears the same sum in both. A
+timeline's own tools stay in `kerf-model` and `kerf-lang`.
 
 ### Color
 

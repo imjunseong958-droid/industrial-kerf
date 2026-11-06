@@ -224,6 +224,7 @@ impl Flat {
             let head = Sequence {
                 id: id.clone(),
                 name: sequence.name.clone(),
+                buses: sequence.buses.clone(),
                 tracks: Vec::new(),
                 markers: Vec::new(),
                 ..*sequence
@@ -553,6 +554,8 @@ fn merge_sequence(
             clashes,
         ),
         start: pick("start", &base.start, &ours.start, &theirs.start, clashes),
+        // Buses merge as one, since what one feeds depends on the others.
+        buses: pick("buses", &base.buses, &ours.buses, &theirs.buses, clashes),
         tracks: Vec::new(),
         markers: Vec::new(),
     }
@@ -578,6 +581,7 @@ fn merge_track(base: &Track, ours: &Track, theirs: &Track, clashes: &mut Vec<Str
             clashes,
         ),
         muted: pick("muted", &base.muted, &ours.muted, &theirs.muted, clashes),
+        bus: pick("bus", &base.bus, &ours.bus, &theirs.bus, clashes),
         role: pick("role", &base.role, &ours.role, &theirs.role, clashes),
         sync_locked: pick(
             "sync lock",

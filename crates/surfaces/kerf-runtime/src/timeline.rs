@@ -149,6 +149,7 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
         "role": track.role_or_default(),
         "roleAssigned": track.role.is_some(),
         "syncLocked": track.sync_locked,
+        "bus": track.bus.as_ref().map(|bus| bus.as_str()),
         "clips": track.clips.iter().map(|clip| clip_json(project, rate, clip)).collect::<Vec<_>>(),
         "transitions": track.transitions.iter().map(|transition| {
             let cut = track.clip(transition.from.as_str()).map_or(Time::ZERO, Clip::end);

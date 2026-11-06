@@ -409,6 +409,7 @@ fn rejected_error(rejected: Rejected) -> RuntimeError {
 pub(crate) fn empty_project() -> Project {
     let mut project = Project::new("Untitled project");
     project.sequences.push(Sequence {
+            buses: Vec::new(),
         id: Id::new("s1").expect("valid id"),
         name: project.name.clone(),
         rate: Rate::FPS_30,
@@ -1520,6 +1521,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         } => {
             let (sequence, track) = (sequence(id)?.id.clone(), edit_id(track)?);
             let switches = TrackChange {
+                bus: None,
                 name: None,
                 enabled: *enabled,
                 locked: *locked,

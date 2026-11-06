@@ -717,12 +717,19 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
             group: Some(group),
         });
     }
+    for bus in &sequence.buses {
+        ops.push(Op::AddBus {
+            sequence: sequence.id.clone(),
+            bus: bus.clone(),
+        });
+    }
     // Lock only after all content and link groups have been installed.
     for track in &sequence.tracks {
         ops.push(Op::SetTrack {
             sequence: sequence.id.clone(),
             track: track.id.clone(),
             change: TrackChange {
+                bus: Some(track.bus.clone()),
                 name: Some(track.name.clone()),
                 enabled: Some(track.enabled),
                 locked: Some(track.locked),

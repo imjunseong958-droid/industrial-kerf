@@ -22,13 +22,13 @@ pub use id::{Id, IdGen, InvalidId};
 pub use model::{
     Retime,
     track_role, Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask,
-    MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
+    Bus, MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;
 pub use path::{parse_path_points, MotionPath, PathPoint};
 pub use ops::{
-    apply, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
+    apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
     TrackChange, TrackRoleChange,
 };
 pub use speed::{Ramp, RampKey, Speed};

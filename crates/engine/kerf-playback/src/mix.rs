@@ -11,7 +11,7 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::util::format::Sample;
 use ffmpeg_next::{decoder, filter, media, ChannelLayout, Rescale};
-use kerf_core::program::{program_sound, ProgramSound, SoundCut, SAMPLE_RATE};
+use kerf_core::program::{program_sound, LiveBus, ProgramSound, SoundCut, SAMPLE_RATE};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Catalog, Id, Project, Time, TrackKind};
 use std::sync::Arc;
@@ -43,8 +43,76 @@ pub(crate) struct Mixer {
     waiting: Vec<usize>,
     next: usize,
     voices: Vec<Voice>,
+    /// The program's buses, each before the one it feeds.
+    buses: Vec<BusStream>,
     /// The program sample the next frame mixed plays at.
     cursor: i64,
+}
+
+/// A bus of the program: what feeds it, summed, through its filters.
+struct BusStream {
+    /// `None` when its filters change nothing.
+    graph: Option<filter::Graph>,
+    to: Option<usize>,
+    /// What has come out and not yet been mixed.
+    pending: Vec<f32>,
+}
+
+impl BusStream {
+    fn open(bus: &LiveBus) -> Self {
+        let args = format!(
+            "time_base=1/{SAMPLE_RATE}:sample_rate={SAMPLE_RATE}:sample_fmt=flt:channel_layout=0x{:x}",
+            ChannelLayout::STEREO.bits()
+        );
+        // A bus that cannot play passes its sound on, rather than losing it.
+        let graph = (!bus.filters.is_empty())
+            .then(|| graph(&args, &bus.filters, SAMPLE_RATE, ChannelLayout::STEREO).ok())
+            .flatten();
+        Self {
+            graph,
+            to: bus.to,
+            pending: Vec::new(),
+        }
+    }
+
+    /// `input` through the filters, the same length: a filter that holds sound back has silence
+    /// before it, as it has in a render.
+    fn run(&mut self, input: &[f32], at: i64) -> Vec<f32> {
+        let Some(graph) = &mut self.graph else {
+            return input.to_vec();
+        };
+        let frames = input.len() / CHANNELS;
+        let mut frame = ffmpeg::frame::Audio::new(
+            Sample::F32(ffmpeg::format::sample::Type::Packed),
+            frames,
+            ChannelLayout::STEREO,
+        );
+        frame.set_rate(SAMPLE_RATE);
+        frame.set_pts(Some(at));
+        for (out, sample) in frame.data_mut(0).chunks_exact_mut(4).zip(input) {
+            out.copy_from_slice(&sample.to_ne_bytes());
+        }
+        let added = graph
+            .get("in")
+            .map(|mut source| source.source().add(&frame));
+        if !matches!(added, Some(Ok(()))) {
+            return input.to_vec();
+        }
+        if let Some(mut sink) = graph.get("out") {
+            let mut out = ffmpeg::frame::Audio::empty();
+            while sink.sink().frame(&mut out).is_ok() {
+                if let Ok(samples) = libav::packed_f32(&out) {
+                    self.pending.extend(samples);
+                }
+            }
+        }
+        let mut output = vec![0.0; input.len()];
+        let have = self.pending.len().min(input.len());
+        let at = input.len() - have;
+        output[at..].copy_from_slice(&self.pending[..have]);
+        self.pending.drain(..have);
+        output
+    }
 }
 
 impl Mixer {
@@ -56,7 +124,12 @@ impl Mixer {
             .filter(|index| sounds[*index].end > from)
             .collect();
         waiting.sort_by_key(|index| sounds[*index].start);
+        let buses = sounds
+            .first()
+            .map(|sound| sound.buses.iter().map(BusStream::open).collect())
+            .unwrap_or_default();
         Self {
+            buses,
             sounds,
             waiting,
             next: 0,
@@ -79,10 +152,14 @@ impl Mixer {
                 self.voices.push(voice);
             }
         }
-        let mut mixed = vec![0.0; frames * CHANNELS];
+        // One for each bus, then the mix.
+        let mut mixes = vec![vec![0.0; frames * CHANNELS]; self.buses.len() + 1];
+        let master = self.buses.len();
         let mut index = 0;
         while index < self.voices.len() {
-            if !self.voices[index].add(&mut mixed, self.cursor) {
+            let target = self.sounds[self.voices[index].sound].bus.unwrap_or(master);
+            let into = mixes.get_mut(target).expect("a bus of the program");
+            if !self.voices[index].add(into, self.cursor) {
                 index += 1;
                 continue;
             }
@@ -95,8 +172,15 @@ impl Mixer {
                 }
             }
         }
+        for (place, bus) in self.buses.iter_mut().enumerate() {
+            let out = bus.run(&mixes[place], self.cursor);
+            let target = bus.to.unwrap_or(master);
+            for (into, sample) in mixes[target].iter_mut().zip(&out) {
+                *into += *sample;
+            }
+        }
         self.cursor = end;
-        mixed
+        mixes.pop().unwrap_or_default()
     }
 
     /// The program time, in seconds, the next frame mixed plays at.
@@ -676,6 +760,53 @@ mod tests {
             .filter(|(at, on)| **on && !loud[at.saturating_sub(quiet)..*at].contains(&true))
             .map(|(at, _)| (at * block) as f64 / 48_000.0)
             .collect()
+    }
+
+    #[test]
+    fn the_live_mix_hears_buses_as_a_render_does() {
+        let Some(ffmpeg) = ffmpeg() else {
+            eprintln!("skipping the bus check: ffmpeg is unavailable");
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let (dialog, music) = fixtures(&ffmpeg, directory.path());
+        // Dialog and music through a compressor that must hear them together, a gain that moves, and
+        // a second bus before the mix.
+        let text = format!(
+            "kerf 1\nproject name=\"Mix\"\n\
+             media d path=\"{dialog}\" rate=30 dur=4s video=64x36 audio=2ch@48000\n\
+             media m path=\"{music}\" rate=30 dur=4s audio=2ch@44100\n\
+             sequence s1 rate=30 size=64x36 audio=48000\n\
+             \x20 bus all to=out gain={{0f:0 60f:-9}}\n\
+             \x20   fx audio.compressor@1 threshold_db=-24 ratio=6 attack_ms=5 release_ms=80\n\
+             \x20 bus out gain=-2 pan=0.2\n\
+             \x20 track A1 audio bus=all\n\
+             \x20   clip a1 media=d src=0.5s at=0s dur=3s\n\
+             \x20 track A2 audio bus=all\n\
+             \x20   clip m1 media=m src=0s at=0.5s dur=2s\n\
+             \x20 track A3 audio\n\
+             \x20   clip o1 media=d src=0s at=1s dur=1s\n\
+             \x20     set gain=-12\n"
+        );
+        let project = kerf_lang::parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let out = directory.path().join("render.f32");
+        let whole = rendered(&ffmpeg, &project, None, &out);
+        assert!(!whole.is_empty());
+        let played = live(&project, 0.0, whole.len());
+        let off = difference(&whole, &played);
+        eprintln!("live against render through buses: {off:e}");
+        assert!(off < 0.03, "{off}");
+        // Without its compressor it is another mix, so the check can tell.
+        let bare = kerf_lang::parse_document(
+            &text.replace("\x20   fx audio.compressor@1 threshold_db=-24 ratio=6 attack_ms=5 release_ms=80\n", "").replace("    fx audio.compressor@1 threshold_db=-24 ratio=6 attack_ms=5 release_ms=80\n", ""),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let without = live(&bare, 0.0, whole.len());
+        assert!(difference(&whole, &without) > 0.1);
     }
 
     #[test]

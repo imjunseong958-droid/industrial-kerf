@@ -161,6 +161,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   track. `set c1 angle=V3` switches it, `angle=""` shows them all, and `split` cuts between them.
   `look` with `sync: ["m1", "m2"]` lines recordings up by their sound and gives a script that builds
   that sequence.
+- `bus music gain=-6 to=mix` under a `sequence`, with `fx` lines under it, mixes the sound tracks that
+  say `bus=music`, then through its gain, pan, and effects, on to another bus or the sequence's mix.
+  Gain is keyframed from the sequence's start. Sound effects (`audio.compressor`, `audio.gate`,
+  `audio.deesser`, `audio.denoise`, `audio.delay`, `audio.reverb`, `audio.eq`, `audio.eq3`,
+  `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

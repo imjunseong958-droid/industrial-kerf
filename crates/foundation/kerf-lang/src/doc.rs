@@ -183,37 +183,53 @@ impl Parser<'_> {
         let mut sequence: Option<usize> = None;
         let mut track: Option<usize> = None;
         let mut clip: Option<usize> = None;
+        let mut bus: Option<usize> = None;
         let mut sequence_count = 0;
         for line in &lines[1..] {
-            let result =
-                match (line.depth, keyword(line)) {
-                    (0, "sequence") => {
-                        sequence = Some(sequence_count);
-                        sequence_count += 1;
-                        track = None;
+            let result = match (line.depth, keyword(line)) {
+                (0, "sequence") => {
+                    sequence = Some(sequence_count);
+                    sequence_count += 1;
+                    track = None;
+                    clip = None;
+                    bus = None;
+                    Ok(())
+                }
+                (0, _) => {
+                    sequence = None;
+                    Ok(())
+                }
+                (1, word) => match sequence {
+                    None => Err(line.error(1, "indented lines belong under a sequence")),
+                    Some(s) => {
                         clip = None;
-                        Ok(())
-                    }
-                    (0, _) => {
-                        sequence = None;
-                        Ok(())
-                    }
-                    (1, word) => match sequence {
-                        None => Err(line.error(1, "indented lines belong under a sequence")),
-                        Some(s) => {
-                            clip = None;
-                            match word {
-                                "track" => self.track_line(s, line).map(|t| track = Some(t)),
-                                "marker" => {
-                                    track = None;
-                                    self.marker_line(s, line)
-                                }
-                                other => Err(line
-                                    .error(1, format!("expected track or marker, not `{other}`"))),
+                        match word {
+                            "track" => self.track_line(s, line).map(|t| {
+                                track = Some(t);
+                                bus = None;
+                            }),
+                            "bus" => self.bus_line(s, line).map(|b| {
+                                track = None;
+                                bus = Some(b);
+                            }),
+                            "marker" => {
+                                track = None;
+                                bus = None;
+                                self.marker_line(s, line)
                             }
+                            other => Err(line.error(
+                                1,
+                                format!("expected track, bus, or marker, not `{other}`"),
+                            )),
                         }
-                    },
-                    (2, word) => match (sequence, track) {
+                    }
+                },
+                (2, "fx") if bus.is_some() => match (sequence, bus) {
+                    (Some(s), Some(b)) => self.bus_fx_line(s, b, line),
+                    _ => Err(line.error(1, "fx lines belong under a clip or a bus")),
+                },
+                (2, word) => {
+                    match (sequence, track) {
                         (Some(s), Some(t)) => match word {
                             "clip" => self.clip_line(s, t, line).map(|c| clip = Some(c)),
                             "transition" => {
@@ -224,21 +240,21 @@ impl Parser<'_> {
                                 .error(1, format!("expected clip or transition, not `{other}`"))),
                         },
                         _ => Err(line.error(1, "clips and transitions belong under a track")),
-                    },
-                    (3, word) => {
-                        match (sequence, track, clip) {
-                            (Some(s), Some(t), Some(c)) => match word {
-                                "set" => self.set_line(s, t, c, line),
-                                "mask" => self.mask_line(s, c, t, line),
-                                "fx" => self.fx_line(s, t, c, line),
-                                other => Err(line
-                                    .error(1, format!("expected set, mask, or fx, not `{other}`"))),
-                            },
-                            _ => Err(line.error(1, "set, mask, and fx lines belong under a clip")),
-                        }
                     }
-                    _ => Err(line.error(1, "too deeply indented")),
-                };
+                }
+                (3, word) => match (sequence, track, clip) {
+                    (Some(s), Some(t), Some(c)) => match word {
+                        "set" => self.set_line(s, t, c, line),
+                        "mask" => self.mask_line(s, c, t, line),
+                        "fx" => self.fx_line(s, t, c, line),
+                        other => {
+                            Err(line.error(1, format!("expected set, mask, or fx, not `{other}`")))
+                        }
+                    },
+                    _ => Err(line.error(1, "set, mask, and fx lines belong under a clip")),
+                },
+                _ => Err(line.error(1, "too deeply indented")),
+            };
             if let Err(error) = result {
                 self.errors.push(error);
             }
@@ -262,10 +278,49 @@ impl Parser<'_> {
         track.muted = fields.take_bool("muted")?.unwrap_or(false);
         track.role = take_role(&mut fields)?.flatten();
         track.sync_locked = take_sync(&mut fields)?.unwrap_or(true);
+        track.bus = fields.take_id("bus")?;
         fields.finish(3)?;
         let tracks = &mut self.project.sequences[s].tracks;
         tracks.push(track);
         Ok(tracks.len() - 1)
+    }
+
+    fn bus_line(&mut self, s: usize, line: &Line) -> Step<usize> {
+        let rate = self.project.sequences[s].rate;
+        let mut fields = Fields::new(line)?;
+        let id = fields.id(1, "a bus id")?;
+        let mut bus = kerf_model::Bus::new(id.clone());
+        bus.name = fields.take_text("name")?.map(str::to_owned);
+        bus.to = fields.take_id("to")?;
+        bus.params = parse_params(&mut fields, self.catalog.props(Domain::Audio), &id, rate)?;
+        fields.finish(2)?;
+        let buses = &mut self.project.sequences[s].buses;
+        buses.push(bus);
+        Ok(buses.len() - 1)
+    }
+
+    fn bus_fx_line(&mut self, s: usize, b: usize, line: &Line) -> Step {
+        let rate = self.project.sequences[s].rate;
+        let mut fields = Fields::new(line)?;
+        let (fx, version) = fields.fx_ref(1, "an effect id")?;
+        let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+            fields.error(
+                fields.positional()[1],
+                kerf_model::catalog::unknown("effect", fx.as_str()),
+            )
+        })?;
+        let version = pinned(def, version)
+            .map_err(|message| fields.error(fields.positional()[1], message))?;
+        let enabled = fields.take_bool("enabled")?.unwrap_or(true);
+        let params = parse_params(&mut fields, def.params.as_slice(), &fx, rate)?;
+        fields.finish(2)?;
+        self.project.sequences[s].buses[b].effects.push(Effect {
+            fx,
+            version,
+            enabled,
+            params,
+        });
+        Ok(())
     }
 
     fn marker_line(&mut self, s: usize, line: &Line) -> Step {
@@ -706,6 +761,7 @@ pub(crate) fn sequence_fields(fields: &mut Fields<'_>, id: Id) -> Result<Sequenc
         })?
         .unwrap_or((Time::ZERO, false));
     Ok(Sequence {
+        buses: Vec::new(),
         id,
         name,
         rate,
@@ -1061,6 +1117,35 @@ fn print_sequence(
         .unwrap();
     }
     out.push('\n');
+    for bus in &sequence.buses {
+        write!(out, "  bus {}", bus.id).unwrap();
+        if let Some(name) = &bus.name {
+            write!(out, " name={}", quote(name)).unwrap();
+        }
+        if let Some(to) = &bus.to {
+            write!(out, " to={to}").unwrap();
+        }
+        out.push_str(&params_text(
+            &bus.params,
+            catalog.props(Domain::Audio),
+            clock.rate,
+        ));
+        out.push('\n');
+        for effect in &bus.effects {
+            write!(out, "    fx {}", print_fx_ref(&effect.fx, effect.version)).unwrap();
+            if !effect.enabled {
+                out.push_str(" enabled=false");
+            }
+            if let Some(def) = catalog.fx(effect.fx.as_str()) {
+                out.push_str(&params_text(
+                    &effect.params,
+                    def.params.as_slice(),
+                    clock.rate,
+                ));
+            }
+            out.push('\n');
+        }
+    }
     for track in &sequence.tracks {
         write!(out, "  track {} {}", track.id, track.kind.name()).unwrap();
         if let Some(name) = &track.name {
@@ -1080,6 +1165,9 @@ fn print_sequence(
         }
         if !track.sync_locked {
             out.push_str(" sync=off");
+        }
+        if let Some(bus) = &track.bus {
+            write!(out, " bus={bus}").unwrap();
         }
         out.push('\n');
         let domain = track.kind.domain();
@@ -1716,6 +1804,49 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         );
         // Log is something footage is in, not something a file is finished in.
         assert!(parse_document(&text(" color=slog3"), Catalog::builtin()).is_err());
+    }
+
+    #[test]
+    fn buses_read_and_print() {
+        let text = "kerf 1\nproject name=\"t\"\nmedia m path=\"a.mov\" rate=24 dur=96f audio=2ch@48000\nsequence s1 rate=24 size=64x36 audio=48000\n  bus dialogue to=mix gain=-3\n    fx audio.compressor@1 threshold_db=-20\n    fx audio.deesser@1 enabled=false\n  bus mix name=\"All\" gain={0f:0 24f:-6}\n  track A1 audio bus=dialogue\n    clip a1 media=m src=0f at=0f dur=24f\n";
+        let read = parse_document(text, Catalog::builtin()).expect("reads");
+        let printed = print_document(&read.project, Catalog::builtin(), PrintOptions::default());
+        for line in [
+            "  bus dialogue to=mix gain=-3\n    fx audio.compressor@1 threshold_db=-20\n    fx audio.deesser@1 enabled=false\n",
+            "  bus mix name=\"All\" gain={0f:0 24f:-6}\n",
+            "  track A1 audio bus=dialogue\n",
+        ] {
+            assert!(printed.contains(line), "{printed}");
+        }
+        assert_eq!(
+            parse_document(&printed, Catalog::builtin())
+                .expect("reads back")
+                .project,
+            read.project
+        );
+        assert_eq!(
+            read.project.sequences[0].buses[0].effects[0].fx.as_str(),
+            "audio.compressor"
+        );
+        for bad in [
+            // Feeds nothing that is there.
+            text.replace("to=mix", "to=nowhere"),
+            text.replace("bus=dialogue", "bus=nowhere"),
+            // Round and round.
+            text.replace("name=\"All\"", "to=dialogue"),
+            // Not a sound effect, not a property.
+            text.replace("audio.deesser@1 enabled=false", "color.basic@1"),
+            text.replace("gain=-3", "opacity=1"),
+            // Twice.
+            text.replace("bus mix", "bus dialogue"),
+            // A picture track feeds no bus.
+            text.replace(
+                "track A1 audio bus=dialogue\n    clip a1 media=m src=0f at=0f dur=24f",
+                "track V1 video bus=dialogue",
+            ),
+        ] {
+            assert!(parse_document(&bad, Catalog::builtin()).is_err(), "{bad}");
+        }
     }
 
     #[test]

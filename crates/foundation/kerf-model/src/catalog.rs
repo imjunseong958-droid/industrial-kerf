@@ -788,6 +788,78 @@ fn builtin_catalog() -> Catalog {
         .param(P::number("limit_db", -1.0).range(-12.0, 0.0).unit("dBFS"))
         .param(P::number("release_ms", 50.0).range(10.0, 1000.0).unit("ms")),
         FxDef::new(
+            "audio.compressor",
+            FxKind::Effect,
+            Domain::Audio,
+            "Evens out loudness: what rises over the threshold is brought down by the ratio.",
+        )
+        .category("Audio")
+        .param(P::number("threshold_db", -18.0).range(-60.0, 0.0).unit("dBFS"))
+        .param(P::number("ratio", 3.0).range(1.0, 20.0))
+        .param(P::number("attack_ms", 20.0).range(0.5, 500.0).unit("ms"))
+        .param(P::number("release_ms", 200.0).range(10.0, 2000.0).unit("ms"))
+        .param(P::number("makeup_db", 0.0).range(0.0, 24.0).unit("dB")),
+        FxDef::new(
+            "audio.gate",
+            FxKind::Effect,
+            Domain::Audio,
+            "Closes on what falls under the threshold: room noise between words.",
+        )
+        .category("Audio")
+        .param(P::number("threshold_db", -40.0).range(-80.0, 0.0).unit("dBFS"))
+        .param(P::number("ratio", 4.0).range(1.0, 20.0))
+        .param(P::number("attack_ms", 10.0).range(0.5, 500.0).unit("ms"))
+        .param(P::number("release_ms", 200.0).range(10.0, 2000.0).unit("ms")),
+        FxDef::new(
+            "audio.deesser",
+            FxKind::Effect,
+            Domain::Audio,
+            "Softens sharp s sounds in speech.",
+        )
+        .category("Audio")
+        .param(P::number("amount", 0.5).range(0.0, 1.0)),
+        FxDef::new(
+            "audio.denoise",
+            FxKind::Effect,
+            Domain::Audio,
+            "Takes a steady noise down: hiss, hum, air conditioning.",
+        )
+        .category("Audio")
+        .param(P::number("reduction_db", 12.0).range(0.0, 60.0).unit("dB"))
+        .param(
+            P::number("noise_db", -40.0)
+                .range(-80.0, -20.0)
+                .unit("dBFS")
+                .doc("How loud the noise is; what it says decides what counts as noise."),
+        ),
+        FxDef::new(
+            "audio.delay",
+            FxKind::Effect,
+            Domain::Audio,
+            "Echoes of the sound.",
+        )
+        .category("Audio")
+        .param(P::number("time_ms", 300.0).range(1.0, 5000.0).unit("ms"))
+        .param(
+            P::number("feedback", 0.4)
+                .range(0.0, 0.9)
+                .doc("How loud each echo is against the last."),
+        )
+        .param(P::number("mix", 0.5).range(0.0, 1.0)),
+        FxDef::new(
+            "audio.reverb",
+            FxKind::Effect,
+            Domain::Audio,
+            "A room around the sound, from close reflections.",
+        )
+        .category("Audio")
+        .param(
+            P::number("size", 0.5)
+                .range(0.0, 1.0)
+                .doc("How large the room sounds."),
+        )
+        .param(P::number("mix", 0.3).range(0.0, 1.0)),
+        FxDef::new(
             "dissolve",
             FxKind::Transition,
             Domain::Video,

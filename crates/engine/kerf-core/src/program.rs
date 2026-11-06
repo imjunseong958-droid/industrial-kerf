@@ -26,7 +26,7 @@ use std::collections::HashMap;
 
 mod sound;
 
-pub use sound::{program_sound, ProgramSound, SoundCut};
+pub use sound::{program_sound, ProgramSound, SoundCut, LiveBus};
 
 /// Output audio sample rate.
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -1114,6 +1114,8 @@ impl<'a> Graph<'a> {
             secs(duration)
         ));
         let mut inputs = vec![bed];
+        // What feeds each bus, by its id.
+        let mut feeding: HashMap<Id, Vec<String>> = HashMap::new();
         for track in &sequence.tracks {
             if !heard(track, angle) {
                 continue;
@@ -1127,8 +1129,34 @@ impl<'a> Graph<'a> {
                     continue;
                 };
                 if let Some(label) = self.sound(item, &portion, from, duration)? {
-                    inputs.push(label);
+                    match &track.bus {
+                        Some(bus) => feeding.entry(bus.clone()).or_default().push(label),
+                        None => inputs.push(label),
+                    }
                 }
+            }
+        }
+        for bus in sequence.buses_in_order() {
+            let Some(fed) = feeding.remove(&bus.id) else {
+                continue;
+            };
+            let bed = self.label("bed");
+            self.parts.push(format!(
+                "aevalsrc=0:c=stereo:s={SAMPLE_RATE}:d={}[{bed}]",
+                secs(duration)
+            ));
+            let label = self.label("bus");
+            let filters = bus_filters(self.catalog, bus, from)?;
+            self.parts.push(format!(
+                "[{bed}]{}amix=inputs={}:duration=first:dropout_transition=0:normalize=0,asetpts=N/SR/TB{}{}[{label}]",
+                fed.iter().map(|input| format!("[{input}]")).collect::<String>(),
+                fed.len() + 1,
+                if filters.is_empty() { "" } else { "," },
+                filters,
+            ));
+            match &bus.to {
+                Some(to) => feeding.entry(to.clone()).or_default().push(label),
+                None => inputs.push(label),
             }
         }
         let mixed = self.label("mix");
@@ -1406,9 +1434,55 @@ fn place(delay: i64, total: Time) -> String {
 
 /// The filters a clip's sound effects lower to, in order. A render and
 /// playback both run these.
+/// A bus's filters, for a stream timed from `from` on its sequence.
+pub fn bus_filters(catalog: &Catalog, bus: &kerf_model::Bus, from: Time) -> Result<String> {
+    let mut filters = audio_effects_of(catalog, &bus.id, &bus.effects)?;
+    let local = clip_time("t", from);
+    let number = |name: &str| -> Param {
+        bus.params.get(name).cloned().unwrap_or_else(|| {
+            Param::Static(
+                catalog
+                    .prop(Domain::Audio, name)
+                    .map(|def| def.default.clone())
+                    .unwrap_or(Value::Number(0.0)),
+            )
+        })
+    };
+    match number("gain") {
+        Param::Static(Value::Number(gain)) if gain != 0.0 => {
+            filters.push(format!("volume={}dB", fmt(gain)));
+        }
+        gain @ Param::Animated(_) => filters.push(format!(
+            "volume='pow(10,({})/20)':eval=frame",
+            expression(&gain, &local)
+        )),
+        _ => {}
+    }
+    match number("pan") {
+        Param::Static(Value::Number(pan)) if pan != 0.0 => filters.push(format!(
+            "pan=stereo|c0={}*c0|c1={}*c1",
+            fmt((1.0 - pan).min(1.0)),
+            fmt((1.0 + pan).min(1.0))
+        )),
+        Param::Animated(_) => {
+            return Err(ProgramError::unsupported(&bus.id, "animated pan"));
+        }
+        _ => {}
+    }
+    Ok(filters.join(","))
+}
+
 fn audio_effects(catalog: &Catalog, clip: &Clip) -> Result<Vec<String>> {
+    audio_effects_of(catalog, &clip.id, &clip.effects)
+}
+
+fn audio_effects_of(
+    catalog: &Catalog,
+    owner: &Id,
+    effects: &[kerf_model::Effect],
+) -> Result<Vec<String>> {
     let mut filters = Vec::new();
-    for effect in clip.effects.iter().filter(|effect| effect.enabled) {
+    for effect in effects.iter().filter(|effect| effect.enabled) {
         let value = |name: &str| -> Result<f64> {
             match effect.params.get(name) {
                 None => Ok(catalog
@@ -1421,7 +1495,7 @@ fn audio_effects(catalog: &Catalog, clip: &Clip) -> Result<Vec<String>> {
                     .unwrap_or(0.0)),
                 Some(Param::Static(Value::Number(n))) => Ok(*n),
                 Some(_) => Err(ProgramError::unsupported(
-                    &clip.id,
+                    owner,
                     format!("animated `{}` {name}", effect.fx),
                 )),
             }
@@ -1461,9 +1535,83 @@ fn audio_effects(catalog: &Catalog, clip: &Clip) -> Result<Vec<String>> {
                     fmt(release.clamp(1.0, 8000.0))
                 ));
             }
+            "audio.compressor" => {
+                let level = |db: f64| fmt(10f64.powf(db / 20.0));
+                filters.push(format!(
+                    "acompressor=threshold={}:ratio={}:attack={}:release={}:makeup={}",
+                    level(value("threshold_db")?.clamp(-60.0, 0.0)),
+                    fmt(value("ratio")?.clamp(1.0, 20.0)),
+                    fmt(value("attack_ms")?.clamp(0.5, 500.0)),
+                    fmt(value("release_ms")?.clamp(10.0, 2000.0)),
+                    level(value("makeup_db")?.clamp(0.0, 24.0)),
+                ));
+            }
+            "audio.gate" => {
+                filters.push(format!(
+                    "agate=threshold={}:ratio={}:attack={}:release={}",
+                    fmt(10f64.powf(value("threshold_db")?.clamp(-80.0, 0.0) / 20.0)),
+                    fmt(value("ratio")?.clamp(1.0, 20.0)),
+                    fmt(value("attack_ms")?.clamp(0.5, 500.0)),
+                    fmt(value("release_ms")?.clamp(10.0, 2000.0)),
+                ));
+            }
+            "audio.deesser" => {
+                filters.push(format!("deesser=i={}", fmt(value("amount")?.clamp(0.0, 1.0))));
+            }
+            "audio.denoise" => {
+                filters.push(format!(
+                    "afftdn=nr={}:nf={}",
+                    fmt(value("reduction_db")?.clamp(0.01, 60.0)),
+                    fmt(value("noise_db")?.clamp(-80.0, -20.0))
+                ));
+            }
+            "audio.delay" => {
+                let time = value("time_ms")?.clamp(1.0, 5000.0);
+                let feedback = value("feedback")?.clamp(0.0, 0.9);
+                let mix = value("mix")?.clamp(0.0, 1.0);
+                // Each echo as far again and as much softer, as many as are still worth hearing.
+                let echoes: Vec<(f64, f64)> = (1..=6)
+                    .map(|index| (time * f64::from(index), feedback.powi(index) * mix))
+                    .filter(|(at, level)| *at <= 90_000.0 && *level >= 0.01)
+                    .collect();
+                if !echoes.is_empty() {
+                    let list = |pick: fn(&(f64, f64)) -> f64| {
+                        echoes
+                            .iter()
+                            .map(|echo| fmt(pick(echo)))
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    };
+                    filters.push(format!(
+                        "aecho=in_gain=1:out_gain=1:delays={}:decays={}",
+                        list(|echo| echo.0),
+                        list(|echo| echo.1)
+                    ));
+                }
+            }
+            "audio.reverb" => {
+                let size = value("size")?.clamp(0.0, 1.0);
+                let mix = value("mix")?.clamp(0.0, 1.0);
+                if mix > 0.0 {
+                    // Close reflections at times that share no factor, so that they do not ring.
+                    let base = 12.0 + size * 60.0;
+                    let steps = [1.0, 1.7, 2.3, 3.1, 4.3, 5.9];
+                    let delays: Vec<String> =
+                        steps.iter().map(|step| fmt(base * step)).collect();
+                    let decays: Vec<String> = steps
+                        .iter()
+                        .map(|step| fmt(mix * (0.8 + size * 0.15).powf(step * 2.0)))
+                        .collect();
+                    filters.push(format!(
+                        "aecho=in_gain=1:out_gain=1:delays={}:decays={}",
+                        delays.join("|"),
+                        decays.join("|")
+                    ));
+                }
+            }
             other => {
                 return Err(ProgramError::unsupported(
-                    &clip.id,
+                    owner,
                     format!("effect `{other}` on sound"),
                 ))
             }

@@ -198,7 +198,94 @@ impl Validator<'_> {
         }
     }
 
+    /// Buses have their own ids, feed buses of the sequence without a loop, and hold sound effects;
+    /// tracks feeding a bus are sound tracks.
+    fn buses(&mut self, sequence: &Sequence) {
+        let id = &sequence.id;
+        let mut names = std::collections::HashSet::new();
+        for bus in &sequence.buses {
+            if !names.insert(bus.id.as_str()) {
+                self.error(
+                    "bus.duplicate",
+                    &bus.id,
+                    format!("`{id}` has two buses `{}`", bus.id),
+                );
+            }
+            if let Some(to) = &bus.to {
+                if sequence.bus(to.as_str()).is_none() {
+                    self.error(
+                        "bus.unknown",
+                        &bus.id,
+                        format!("bus `{}` feeds `{to}`, which `{id}` does not have", bus.id),
+                    );
+                }
+            }
+            // Following where it goes comes to an end, or round again.
+            let mut seen = std::collections::HashSet::new();
+            let mut at = Some(bus);
+            while let Some(current) = at {
+                if !seen.insert(current.id.as_str()) {
+                    self.error(
+                        "bus.loop",
+                        &bus.id,
+                        format!("bus `{}` feeds itself", bus.id),
+                    );
+                    break;
+                }
+                at = current.to.as_ref().and_then(|to| sequence.bus(to.as_str()));
+            }
+            for (key, param) in &bus.params {
+                match self.catalog.prop(Domain::Audio, key) {
+                    None => self.error(
+                        "param.unknown",
+                        &bus.id,
+                        format!("bus `{}` has no property `{key}`", bus.id),
+                    ),
+                    Some(def) => {
+                        if let Err(message) = def.check(param) {
+                            self.error("param.value", &bus.id, message);
+                        }
+                    }
+                }
+            }
+            for effect in &bus.effects {
+                self.fx_params(
+                    &bus.id,
+                    (&effect.fx, effect.version),
+                    FxKind::Effect,
+                    Domain::Audio,
+                    &effect.params,
+                );
+            }
+        }
+        for track in &sequence.tracks {
+            let Some(bus) = &track.bus else {
+                continue;
+            };
+            if track.kind != TrackKind::Audio {
+                self.error(
+                    "bus.track",
+                    &track.id,
+                    format!(
+                        "only sound tracks feed a bus, and `{}` is not one",
+                        track.id
+                    ),
+                );
+            } else if sequence.bus(bus.as_str()).is_none() {
+                self.error(
+                    "bus.unknown",
+                    &track.id,
+                    format!(
+                        "track `{}` feeds `{bus}`, which `{id}` does not have",
+                        track.id
+                    ),
+                );
+            }
+        }
+    }
+
     fn sequence(&mut self, sequence: &Sequence) {
+        self.buses(sequence);
         let id = &sequence.id;
         if sequence.width == 0 || sequence.height == 0 || sequence.sample_rate == 0 {
             self.error(
