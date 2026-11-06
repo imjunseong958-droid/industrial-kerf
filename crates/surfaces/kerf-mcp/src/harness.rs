@@ -260,7 +260,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
                     "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
-                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, the same `outline`, and with `clip` a mask line for that clip. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
+                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, the same `outline`, and with `clip` a mask line for that clip, with a third number on each corner where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
                     "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
@@ -1714,17 +1714,28 @@ impl KerfMcpRouter {
             if let Some(failure) = failure.into_inner() {
                 return Err(McpError::new("RENDER_FAILED", failure));
             }
-            let kept = kerf_track::simplified_outlines(
-                &followed.outlines,
-                TRACK_TOLERANCE_PIXELS / drawn_width,
-            );
+            let kept =
+                kerf_track::simplified_object(&followed, TRACK_TOLERANCE_PIXELS / drawn_width);
             let rounded = |value: f64| (value * 10_000.0).round() / 10_000.0;
+            // How soft its edge is, in the pixels of what the mask goes on, and said only of an
+            // object that has one.
+            let pixels = picture_width(project, target).unwrap_or(f64::from(sequence.width));
+            let softly = |frame: usize, corner: usize| (followed.soft[frame][corner] * pixels * 10.0).round() / 10.0;
+            let any_soft = followed.soft.iter().flatten().any(|soft| soft * pixels >= 0.05);
             let words: Vec<String> = kept
                 .iter()
                 .map(|index| {
                     let corners: Vec<String> = followed.outlines[*index]
                         .iter()
-                        .map(|corner| format!("{},{}", rounded(corner[0]), rounded(corner[1])))
+                        .enumerate()
+                        .map(|(at, corner)| {
+                            let (x, y) = (rounded(corner[0]), rounded(corner[1]));
+                            if any_soft {
+                                format!("{x},{y},{}", softly(*index, at))
+                            } else {
+                                format!("{x},{y}")
+                            }
+                        })
                         .collect();
                     format!("{}f:{}", first + *index as i64 - origin, corners.join(";"))
                 })
@@ -2440,6 +2451,15 @@ const MOST_PINS: usize = 24;
 
 /// How far a followed point may stray from the keyframes it is written with, in pixels of the frame
 /// it was followed on: finer than that is the tracker's own jitter.
+/// How many pixels wide the picture of `clip` is, if it has one of its own.
+fn picture_width(project: &kerf_model::Project, clip: Option<&kerf_model::Clip>) -> Option<f64> {
+    let kerf_model::Content::Media { media, .. } = &clip?.content else {
+        return None;
+    };
+    let media = project.media.iter().find(|found| found.id == *media)?;
+    Some(f64::from(media.video.as_ref()?.width))
+}
+
 const TRACK_TOLERANCE_PIXELS: f64 = 0.5;
 
 /// The width frames are drawn at for scopes to read.

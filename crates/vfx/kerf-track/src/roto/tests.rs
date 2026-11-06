@@ -303,3 +303,234 @@ fn the_edge_of_a_square_goes_all_the_way_around() {
     assert!(edge.contains(&[9.0, 7.0]));
     assert!(!edge.contains(&[11.0, 9.0]));
 }
+
+/// One frame of a subject with a known soft edge, over the same background as ever, mixed in light as
+/// a lens or a shutter mixes it, with `alpha` saying how much of a pixel is the subject.
+fn soft_scene((w, h): (usize, usize), alpha: impl Fn(f64, f64) -> f64) -> (usize, usize, Vec<u8>) {
+    let linear = |code: f64| {
+        if code <= 0.04045 {
+            code / 12.92
+        } else {
+            ((code + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let code = |light: f64| {
+        if light <= 0.0031308 {
+            12.92 * light
+        } else {
+            1.055 * light.powf(1.0 / 2.4) - 0.055
+        }
+    };
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let (n, m) = (noise(px, py, 5), noise(px * 1.7, py * 1.7, 9));
+            let back = [0.05 + 0.25 * m, 0.3 + 0.4 * n, 0.45 + 0.4 * m];
+            let f = noise(px + 500.0, py + 500.0, 11);
+            let fore = [0.75 + 0.25 * f, 0.35 + 0.3 * f, 0.1 + 0.15 * f];
+            let a = alpha(px, py);
+            for (fore, back) in fore.iter().zip(&back) {
+                let mixed = linear(*fore) * a + linear(*back) * (1.0 - a);
+                rgba.push((code(mixed) * 255.0).round() as u8);
+            }
+            rgba.push(255);
+        }
+    }
+    (w, h, rgba)
+}
+
+/// How far a frame's mask is from a true alpha, as the mean difference over the pixels of the edge.
+fn off_by((w, h): (usize, usize), covered: &[f32], alpha: &impl Fn(f64, f64) -> f64) -> f64 {
+    let (mut sum, mut count) = (0.0, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            let truth = alpha(x as f64 + 0.5, y as f64 + 0.5);
+            let found = f64::from(covered[y * w + x]);
+            if (0.02..=0.98).contains(&truth) || (0.02..=0.98).contains(&found) {
+                sum += (truth - found).abs();
+                count += 1;
+            }
+        }
+    }
+    sum / count.max(1) as f64
+}
+
+fn mask_of((w, h): (usize, usize), outline: &[[f64; 2]], soft: Vec<f32>, feather: f32) -> Vec<f32> {
+    let mask = kerf_draw::mask::FlatMask {
+        points: outline
+            .iter()
+            .map(|c| [(c[0] * w as f64) as f32, (c[1] * h as f64) as f32])
+            .collect(),
+        soft,
+        feather,
+        expansion: 0.0,
+        opacity: 1.0,
+        inverted: false,
+        mode: kerf_model::MaskMode::Add,
+    };
+    kerf_draw::mask::coverage(&[mask], w, h).unwrap()
+}
+
+/// How close what was followed comes to `alpha` at `frame`, and how close the best one `feather=` for
+/// the whole mask does.
+fn against_the_truth(
+    size: (usize, usize),
+    followed: &FollowedObject,
+    frame: usize,
+    alpha: &impl Fn(f64, f64) -> f64,
+) -> (f64, f64) {
+    let outline = &followed.outlines[frame];
+    let soft: Vec<f32> = followed.soft[frame]
+        .iter()
+        .map(|soft| (soft * size.0 as f64) as f32)
+        .collect();
+    let ours = off_by(size, &mask_of(size, outline, soft, 0.0), alpha);
+    let plain = (0..=30)
+        .map(|feather| {
+            off_by(
+                size,
+                &mask_of(size, outline, Vec::new(), feather as f32),
+                alpha,
+            )
+        })
+        .fold(f64::INFINITY, f64::min);
+    (ours, plain)
+}
+
+#[test]
+fn an_edge_softer_on_one_side_is_measured_and_beats_one_feather() {
+    // Sharp on the left of the disk and 16 pixels wide on its right, as focus falls off across it.
+    let (frames, size) = (8, (W, H));
+    let alpha_at = |frame: usize| {
+        move |x: f64, y: f64| {
+            let c = center(frame);
+            let (dx, dy) = (x - c[0], y - c[1]);
+            let angle = dy.atan2(dx);
+            let wide = 1.0 + 15.0 * (0.5 + 0.5 * angle.cos());
+            1.0 / (1.0 + ((dx.hypot(dy) - R) * 4.4 / wide).exp())
+        }
+    };
+    let followed = follow_object(frames, &hints_on_the_disk(), None, |n| {
+        Some(soft_scene(size, alpha_at(n)))
+    });
+    assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
+    let (mut worst, mut best_plain) = (0.0f64, f64::INFINITY);
+    for frame in 0..frames {
+        let (ours, plain) = against_the_truth(size, &followed, frame, &alpha_at(frame));
+        eprintln!("focus {frame}: {ours:.4} against one feather's {plain:.4}");
+        worst = worst.max(ours);
+        best_plain = best_plain.min(plain);
+    }
+    // Right and left of the middle, it found the difference.
+    let c = center(frames / 2);
+    let outline = &followed.outlines[frames / 2];
+    let soft = &followed.soft[frames / 2];
+    let at = |side: f64| {
+        (0..outline.len())
+            .max_by(|a, b| {
+                let along = |corner: usize| (outline[corner][0] * W as f64 - c[0]) * side;
+                along(*a).total_cmp(&along(*b))
+            })
+            .map(|corner| soft[corner] * W as f64)
+            .unwrap()
+    };
+    let (right, left) = (at(1.0), at(-1.0));
+    eprintln!("focus: {right:.1} wide on the right, {left:.1} on the left");
+    assert!(right > 10.0 && left < 5.0, "{right} {left}");
+    assert!(worst < 0.06, "{worst}");
+    assert!(worst < best_plain * 0.75, "{worst} {best_plain}");
+}
+
+#[test]
+fn motion_blur_is_measured_the_way_the_subject_moves_and_beats_one_feather() {
+    // On a bigger frame, a disk going 12 pixels to the right a frame with the shutter open all the way:
+    // its left and right are 12 wide, and its top and bottom are sharp.
+    let (frames, size, radius) = (10, (400, 300), 64.0);
+    let at = |frame: usize, off: f64| [90.0 + 12.0 * (frame as f64 + off), 140.0];
+    let alpha_at = |frame: usize| {
+        move |x: f64, y: f64| {
+            let inside = (0..32)
+                .filter(|step| {
+                    let c = at(frame, (f64::from(*step) + 0.5) / 32.0);
+                    (x - c[0]).hypot(y - c[1]) < radius
+                })
+                .count();
+            inside as f64 / 32.0
+        }
+    };
+    let start = at(0, 0.5);
+    let hints = Hints {
+        inside: vec![[start[0] / size.0 as f64, start[1] / size.1 as f64]],
+        ..Hints::default()
+    };
+    let followed = follow_object(frames, &hints, None, |n| {
+        Some(soft_scene(size, alpha_at(n)))
+    });
+    assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
+    let (mut worst, mut best_plain) = (0.0f64, f64::INFINITY);
+    for frame in 0..frames {
+        let (ours, plain) = against_the_truth(size, &followed, frame, &alpha_at(frame));
+        eprintln!("blur {frame}: {ours:.4} against one feather's {plain:.4}");
+        worst = worst.max(ours);
+        best_plain = best_plain.min(plain);
+    }
+    assert!(worst < 0.06, "{worst}");
+    assert!(worst < best_plain * 0.8, "{worst} {best_plain}");
+    // It says so the way it moved.
+    let middle = frames / 2;
+    let c = at(middle, 0.5);
+    let outline = &followed.outlines[middle];
+    let soft = &followed.soft[middle];
+    let (mut across, mut along) = (Vec::new(), Vec::new());
+    for (corner, wide) in outline.iter().zip(soft) {
+        let (dx, dy) = (
+            corner[0] * size.0 as f64 - c[0],
+            corner[1] * size.1 as f64 - c[1],
+        );
+        let wide = wide * size.0 as f64;
+        if dx.abs() > dy.abs() * 2.0 {
+            along.push(wide);
+        } else if dy.abs() > dx.abs() * 2.0 {
+            across.push(wide);
+        }
+    }
+    let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len().max(1) as f64;
+    eprintln!(
+        "blur: {:.1} wide along, {:.1} across",
+        mean(&along),
+        mean(&across)
+    );
+    assert!(mean(&along) > mean(&across) + 3.0, "{along:?} {across:?}");
+}
+
+#[test]
+fn a_hard_edge_stays_hard() {
+    let frames = 6;
+    let followed = follow_object(frames, &hints_on_the_disk(), None, |n| {
+        Some(scene(n, false))
+    });
+    let widest = followed
+        .soft
+        .iter()
+        .flatten()
+        .fold(0.0f64, |most, soft| most.max(soft * W as f64));
+    eprintln!("hard: at most {widest:.2} wide");
+    assert!(widest < 2.0, "{widest}");
+}
+
+#[test]
+fn softness_changing_alone_is_kept_as_keyframes() {
+    let outline = vec![[0.5, 0.5], [0.6, 0.5], [0.5, 0.6]];
+    let followed = FollowedObject {
+        outlines: vec![outline; 5],
+        soft: [0.0, 0.0, 0.2, 0.0, 0.0]
+            .iter()
+            .map(|wide| vec![*wide; 3])
+            .collect(),
+        areas: vec![0.1; 5],
+        lost_at: None,
+    };
+    assert_eq!(simplified_outlines(&followed.outlines, 0.01), [0, 4]);
+    assert!(simplified_object(&followed, 0.01).contains(&2));
+}

@@ -116,11 +116,39 @@ const SCENES: &[(&str, &str)] = &[
     ),
 ];
 
+/// A mask with as many corners as following an object gives, around the middle of the frame, with
+/// what `corner` says at each of them.
+fn masked(corner: impl Fn(f64) -> String, rest: &str) -> String {
+    let corners: Vec<String> = (0..40)
+        .map(|at| {
+            let turn = f64::from(at) / 40.0 * std::f64::consts::TAU;
+            let (x, y) = (0.5 + 0.3 * turn.cos(), 0.5 + 0.4 * turn.sin());
+            format!("{x:.4},{y:.4}{}", corner(turn))
+        })
+        .collect();
+    format!(
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff\n      mask m points=\"{}\"{rest}",
+        corners.join(" ")
+    )
+}
+
 fn main() {
     // A word on the command line picks the scenes with it in their names.
     let wanted = std::env::args().nth(1).unwrap_or_default();
     println!("{:<18}{:>12}{:>12}", "scene", "1080p ms", "4K ms");
-    for (name, clip) in SCENES.iter().filter(|(name, _)| name.contains(&wanted)) {
+    let masks = [
+        ("mask 40 hard", masked(|_| String::new(), "")),
+        ("mask 40 feather", masked(|_| String::new(), " feather=24")),
+        (
+            "mask 40 soft",
+            masked(|turn| format!(",{:.1}", 24.0 + 24.0 * turn.cos()), ""),
+        ),
+    ];
+    let scenes = SCENES
+        .iter()
+        .map(|(name, clip)| (*name, *clip))
+        .chain(masks.iter().map(|(name, clip)| (*name, clip.as_str())));
+    for (name, clip) in scenes.filter(|(name, _)| name.contains(&wanted)) {
         let mut line = format!("{name:<18}");
         for (w, h) in [(1920, 1080), (3840, 2160)] {
             let text = format!(

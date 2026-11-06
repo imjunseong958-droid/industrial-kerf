@@ -34,7 +34,7 @@ line, applied in order and atomically.
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
-  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one.
+  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels, over `feather`, evenly to the next corner.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. `look` with `sync` lines cameras up by sound.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross.
@@ -68,7 +68,7 @@ speed <clip> <speed>                    2, 0.5, -1 for reverse, or {0f:1 24f:1/4
 fx <clip> add <effect> [at=<n>] [<param>=<value> …]
 fx <clip> set <n|effect> [enabled=…] [reset=…] [<param>=<value> …]
 fx <clip> remove <n|effect>  ·  fx <clip> move <n|effect> to=<n>
-mask <clip> add <name> rect=L,T,R,B|ellipse=X,Y,RX,RY|points="x,y x,y …" [closed=false] [mode=…] [inverted=true] [feather=<px>] [opacity=<0-1>] [expansion=<px>] [at=<n>]
+mask <clip> add <name> rect=L,T,R,B|ellipse=X,Y,RX,RY|points="x,y[,soft] …" [closed=false] [mode=…] [inverted=true] [feather=<px>] [opacity=<0-1>] [expansion=<px>] [at=<n>]
     a picture clip's mask, in fractions of its picture (0,0 top left)
 mask <clip> set <name> [outline] [mode=…] [inverted=…] [reset=…] [<prop>=<value> …]  ·  mask <clip> remove <name>
 transition add from=<clip> to=<clip> fx=<transition> dur=<dur> [align=center|start|end] [as=<id>] [<param>=<value> …]

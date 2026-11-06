@@ -10,11 +10,13 @@
 //! colour, and one that disagrees with the flow is ignored for that frame.
 //!
 //! Carried from EffectCraft's `track/src/roto`. Kerf keeps no matte of its own: what this finds is
-//! written as a mask whose outline has keyframes, which merges, reads, and edits like any other.
+//! written as a mask whose outline has keyframes, which merges, reads, and edits like any other, with
+//! how soft its edge is at each corner, measured from the picture ([`soft`]).
 
 pub mod gmm;
 pub mod matting;
 pub mod maxflow;
+mod soft;
 
 use gmm::Gmm;
 use kerf_raster::flow::block_flow;
@@ -270,6 +272,9 @@ pub struct FollowedObject {
     /// Its outline in fractions of the frame, one a frame, up to where it was lost, each of
     /// [`OUTLINE_CORNERS`] corners that move one for one from the frame before.
     pub outlines: Vec<Vec<[f64; 2]>>,
+    /// How wide its edge's fall-off is at each of those corners, one a frame, as fractions of the
+    /// frame's width: 0 where it is hard.
+    pub soft: Vec<Vec<f64>>,
     /// How much of the frame it covers, one a frame.
     pub areas: Vec<f64>,
     /// The frame it could no longer be found in.
@@ -742,16 +747,18 @@ pub fn follow_object(
     }
     let area_of = |matte: &[u8]| matte.iter().filter(|v| **v != 0).count() as f64 / (w * h);
     let mut area = area_of(&matte);
-    followed.outlines.push(fraction(&corners));
+    let mut raw = vec![corners.clone()];
+    let mut across = vec![soft::measured(&picture, &matte, &corners)];
     followed.areas.push(area);
+    let mut lost_at = None;
     for index in 1..count {
         let Some((frame_w, frame_h, rgba)) = frame(index) else {
-            followed.lost_at = Some(index);
-            return followed;
+            lost_at = Some(index);
+            break;
         };
         if (frame_w, frame_h) != (width, height) {
-            followed.lost_at = Some(index);
-            return followed;
+            lost_at = Some(index);
+            break;
         }
         let next = Picture::of(width, height, &rgba);
         let labels = next_matte(&picture, &matte, &next, (&fg, &bg), model);
@@ -759,15 +766,30 @@ pub fn follow_object(
         let moved = aligned(&edge_of(&labels, width, height), &corners);
         // A cut that loses the object or spills over it is no longer following it.
         if moved.is_empty() || now < area * 0.5 || now > area * 2.0 {
-            followed.lost_at = Some(index);
-            return followed;
+            lost_at = Some(index);
+            break;
         }
         corners = moved;
         area = now;
         matte = labels;
         picture = next;
-        followed.outlines.push(fraction(&corners));
+        raw.push(corners.clone());
+        across.push(soft::measured(&picture, &matte, &corners));
         followed.areas.push(area);
+    }
+    followed.lost_at = lost_at;
+    // An edge's middle is where the fall-off says, which a cut through a soft edge only comes near.
+    for (corners, across) in raw.iter().zip(soft::settled(&across)) {
+        let moved: Vec<[f64; 2]> = corners
+            .iter()
+            .zip(soft::normals(corners))
+            .zip(&across)
+            .map(|((at, out), edge)| [at[0] + out[0] * edge.out, at[1] + out[1] * edge.out])
+            .collect();
+        followed.outlines.push(fraction(&moved));
+        followed
+            .soft
+            .push(across.iter().map(|edge| edge.wide / w).collect());
     }
     followed
 }
@@ -789,6 +811,28 @@ pub fn simplified_outlines(outlines: &[Vec<[f64; 2]>], tolerance: f64) -> Vec<us
             })
             .collect();
         kept.extend(crate::simplified(&points, tolerance));
+    }
+    kept.into_iter().collect()
+}
+
+/// [`simplified_outlines`] of a followed object, its edge's softness included: that matters less than
+/// where its corners are, as a blur is forgiving of its width, so it has four times the room.
+pub fn simplified_object(followed: &FollowedObject, tolerance: f64) -> Vec<usize> {
+    let mut kept: std::collections::BTreeSet<usize> =
+        simplified_outlines(&followed.outlines, tolerance)
+            .into_iter()
+            .collect();
+    for corner in 0..followed.soft.first().map_or(0, Vec::len) {
+        let widths: Vec<crate::Point> = followed
+            .soft
+            .iter()
+            .map(|soft| crate::Point {
+                x: soft[corner],
+                y: 0.0,
+                confidence: 1.0,
+            })
+            .collect();
+        kept.extend(crate::simplified(&widths, tolerance * 4.0));
     }
     kept.into_iter().collect()
 }

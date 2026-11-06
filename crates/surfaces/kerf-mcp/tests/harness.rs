@@ -1229,6 +1229,68 @@ fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
 }
 
 #[test]
+fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A white clip over the red shot, cut by a mask that is sharp on its left and falls off over a tenth
+    // of the frame on its right.
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "track add V2 video\noverwrite gen=solid dur=12f at=0f on=V2 as=sq\nset sq color=#ffffff\nmask sq add soft points=\"0.3,0.25,0 0.7,0.25,64 0.7,0.75,64 0.3,0.75,0\""}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let followed = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"inside": [[0.45, 0.5]], "outside": [[0.05, 0.05]], "clip": "sq"},
+            "from": "0f",
+            "to": "4f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(followed["lostAt"].is_null(), "{followed}");
+    let outline = followed["outline"].as_str().unwrap();
+    let last = outline
+        .trim_matches(['{', '}'])
+        .split(' ')
+        .next_back()
+        .and_then(|key| key.split(':').nth(1))
+        .unwrap();
+    let corners: Vec<[f64; 3]> = last
+        .split(';')
+        .map(|corner| {
+            let values: Vec<f64> = corner.split(',').map(|v| v.parse().unwrap()).collect();
+            [values[0], values[1], values[2]]
+        })
+        .collect();
+    let mean = |wanted: &dyn Fn(f64) -> bool| {
+        let widths: Vec<f64> = corners
+            .iter()
+            .filter(|corner| wanted(corner[0]) && (0.35..=0.65).contains(&corner[1]))
+            .map(|corner| corner[2])
+            .collect();
+        assert!(!widths.is_empty(), "{corners:?}");
+        widths.iter().sum::<f64>() / widths.len() as f64
+    };
+    let (left, right) = (mean(&|x| x < 0.4), mean(&|x| x > 0.6));
+    assert!(left < 12.0, "{left}: {corners:?}");
+    assert!(right > 40.0, "{right}: {corners:?}");
+    // What it gives is a line a document takes.
+    let script = followed["script"].as_str().unwrap();
+    ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": script}),
+    );
+}
+
+#[test]
 fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
     let Some((_directory, router)) = router() else {
         return;
@@ -1263,6 +1325,9 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
         script.starts_with("mask sq add object points={0f:"),
         "{script}"
     );
+    // A square with hard edges says nothing of how soft they are, and its document stays as it was.
+    let first_corner = script.split(['{', ';']).nth(1).unwrap();
+    assert_eq!(first_corner.matches(',').count(), 1, "{first_corner}");
     ok(
         &router,
         "edit",

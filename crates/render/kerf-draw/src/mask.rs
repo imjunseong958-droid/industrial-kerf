@@ -15,7 +15,10 @@
 //!
 //! so a hard mask is the box-filtered coverage of its edge, antialiased,
 //! and a feathered one falls off smoothly over `feather` pixels centered on
-//! its expanded edge. Masks combine in order by their mode, as Kerf's
+//! its expanded edge. An outline that says how soft it is at each corner adds
+//! that to `feather`, going evenly along each edge, and a pixel takes the edge
+//! that covers it least inside the outline, or most outside it, which comes to
+//! the nearest edge when they are alike. Masks combine in order by their mode, as Kerf's
 //! language describes them: a first mask that subtracts takes from the
 //! whole picture, and a first that intersects or darkens covers as one that
 //! adds.
@@ -31,6 +34,8 @@ const TOLERANCE: f64 = 0.05;
 pub struct FlatMask {
     /// A closed polygon: the last corner joins the first.
     pub points: Vec<[f32; 2]>,
+    /// How much wider than `feather` the edge's fall-off is at each corner, or empty for not at all.
+    pub soft: Vec<f32>,
     pub feather: f32,
     pub expansion: f32,
     /// 0 to 1.
@@ -95,8 +100,16 @@ pub fn prepare(masks: &[Mask], size: (f64, f64), scale: f64, at: Time) -> Vec<Fl
                     })
                     .unwrap_or(0.0)
             };
+            let shape = mask.shape.at(at);
+            let soft = match shape.as_ref() {
+                MaskShape::Polygon { soft, .. } => {
+                    soft.iter().map(|soft| (soft * scale) as f32).collect()
+                }
+                _ => Vec::new(),
+            };
             FlatMask {
-                points: outline(&mask.shape.at(at), size.0, size.1, scale),
+                points: outline(&shape, size.0, size.1, scale),
+                soft,
                 feather: (number("feather").max(0.0) * scale) as f32,
                 expansion: (number("expansion") * scale) as f32,
                 opacity: number("opacity").clamp(0.0, 1.0) as f32,
@@ -132,11 +145,14 @@ fn falloff(s: f32, feather: f32) -> f32 {
 
 /// How far from the edge coverage stops changing.
 fn band(mask: &FlatMask) -> f32 {
-    mask.expansion.abs() + mask.feather.max(1.0) * 0.5 + 1.0
+    let softest = mask.soft.iter().copied().fold(0.0, f32::max);
+    mask.expansion.abs() + (mask.feather + softest).max(1.0) * 0.5 + 1.0
 }
 
+/// How far from the place `(px, py)` the segment from `a` to `b` is, squared, and how far along it
+/// that is, from 0 to 1.
 #[inline]
-fn segment_distance2(px: f32, py: f32, a: [f32; 2], b: [f32; 2]) -> f32 {
+fn segment_distance2(px: f32, py: f32, a: [f32; 2], b: [f32; 2]) -> (f32, f32) {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let (qx, qy) = (px - a[0], py - a[1]);
     let length2 = dx * dx + dy * dy;
@@ -146,7 +162,17 @@ fn segment_distance2(px: f32, py: f32, a: [f32; 2], b: [f32; 2]) -> f32 {
         0.0
     };
     let (ex, ey) = (qx - dx * t, qy - dy * t);
-    ex * ex + ey * ey
+    (ex * ex + ey * ey, t)
+}
+
+/// An edge of an outline near a row: from `a` to `b`, near what lies from `left` to `right`, starting
+/// at the corner it is by number.
+struct NearEdge {
+    a: [f32; 2],
+    b: [f32; 2],
+    left: f32,
+    right: f32,
+    corner: usize,
 }
 
 /// One mask's coverage of row `y` into `out`: the winding from the row's
@@ -155,8 +181,7 @@ fn mask_row(mask: &FlatMask, y: usize, out: &mut [f32]) {
     let n = mask.points.len();
     let py = y as f32 + 0.5;
     let band = band(mask);
-    let value = |distance: f32| {
-        let covered = falloff(distance + mask.expansion, mask.feather);
+    let kept = |covered: f32| {
         mask.opacity
             * if mask.inverted {
                 1.0 - covered
@@ -164,12 +189,13 @@ fn mask_row(mask: &FlatMask, y: usize, out: &mut [f32]) {
                 covered
             }
     };
+    let value = |distance: f32| kept(falloff(distance + mask.expansion, mask.feather));
     if n < 3 {
         out.fill(value(-band));
         return;
     }
     let mut crossings: Vec<(f32, i32)> = Vec::new();
-    let mut near: Vec<([f32; 2], [f32; 2], f32, f32)> = Vec::new();
+    let mut near: Vec<NearEdge> = Vec::new();
     for i in 0..n {
         let a = mask.points[i];
         let b = mask.points[(i + 1) % n];
@@ -178,7 +204,13 @@ fn mask_row(mask: &FlatMask, y: usize, out: &mut [f32]) {
             crossings.push((a[0] + (b[0] - a[0]) * t, if b[1] > a[1] { 1 } else { -1 }));
         }
         if py >= a[1].min(b[1]) - band && py <= a[1].max(b[1]) + band {
-            near.push((a, b, a[0].min(b[0]) - band, a[0].max(b[0]) + band));
+            near.push(NearEdge {
+                a,
+                b,
+                left: a[0].min(b[0]) - band,
+                right: a[0].max(b[0]) + band,
+                corner: i,
+            });
         }
     }
     crossings.sort_by(|p, q| p.0.total_cmp(&q.0));
@@ -190,14 +222,35 @@ fn mask_row(mask: &FlatMask, y: usize, out: &mut [f32]) {
             winding += crossings[next].1;
             next += 1;
         }
-        let mut distance2 = band2;
-        for (a, b, x0, x1) in &near {
-            if px >= *x0 && px <= *x1 {
-                distance2 = distance2.min(segment_distance2(px, py, *a, *b));
+        if mask.soft.is_empty() {
+            let mut distance2 = band2;
+            for edge in &near {
+                if px >= edge.left && px <= edge.right {
+                    distance2 = distance2.min(segment_distance2(px, py, edge.a, edge.b).0);
+                }
+            }
+            let distance = distance2.sqrt();
+            *out = value(if winding != 0 { distance } else { -distance });
+            continue;
+        }
+        let inside = winding != 0;
+        let mut covered = if inside { 1.0f32 } else { 0.0 };
+        for edge in &near {
+            if px >= edge.left && px <= edge.right {
+                let (distance2, along) = segment_distance2(px, py, edge.a, edge.b);
+                let distance = distance2.min(band2).sqrt();
+                let (from, to) = (mask.soft[edge.corner], mask.soft[(edge.corner + 1) % n]);
+                let wide = mask.feather + from + (to - from) * along;
+                let signed = if inside { distance } else { -distance };
+                let here = falloff(signed + mask.expansion, wide);
+                covered = if inside {
+                    covered.min(here)
+                } else {
+                    covered.max(here)
+                };
             }
         }
-        let distance = distance2.sqrt();
-        *out = value(if winding != 0 { distance } else { -distance });
+        *out = kept(covered);
     }
 }
 
@@ -241,6 +294,7 @@ mod tests {
     fn flat(shape: MaskShape, size: f64, mode: MaskMode) -> FlatMask {
         FlatMask {
             points: outline(&shape, size, size, 1.0),
+            soft: Vec::new(),
             feather: 0.0,
             expansion: 0.0,
             opacity: 1.0,
@@ -284,6 +338,101 @@ mod tests {
         assert_eq!((intersect[0], intersect[4 * 8 + 4]), (0.0, 1.0));
     }
 
+    /// A square from 25 to 75 of 100, with these at its corners from the top left, going clockwise.
+    fn soft_square(soft: Vec<f32>) -> FlatMask {
+        let mut mask = flat(
+            MaskShape::Polygon {
+                points: vec![[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
+                closed: true,
+                soft: Vec::new(),
+            },
+            100.0,
+            MaskMode::Add,
+        );
+        mask.soft = soft;
+        mask
+    }
+
+    #[test]
+    fn softness_of_nothing_draws_as_none_does() {
+        let plain = coverage(&[soft_square(Vec::new())], 100, 100).unwrap();
+        let zero = coverage(&[soft_square(vec![0.0; 4])], 100, 100).unwrap();
+        assert_eq!(plain, zero);
+        for (feather, expansion) in [(6.0, 0.0), (10.0, -3.0), (0.5, 4.0)] {
+            let with = |soft: Vec<f32>| {
+                let mut mask = soft_square(soft);
+                (mask.feather, mask.expansion) = (feather, expansion);
+                coverage(&[mask], 100, 100).unwrap()
+            };
+            assert_eq!(
+                with(Vec::new()),
+                with(vec![0.0; 4]),
+                "{feather} {expansion}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_edge_is_as_soft_as_its_corners_say_going_evenly_along_it() {
+        // Hard on its left, 20 across on its right, and going from one to the other along the top and
+        // the bottom.
+        let covered = coverage(&[soft_square(vec![0.0, 20.0, 20.0, 0.0])], 100, 100).unwrap();
+        let at = |x: usize, y: usize| covered[y * 100 + x];
+        // The right edge, at x = 75 and up the middle row: smoothstep over 20 pixels.
+        for x in 60..90 {
+            let u = ((75.0 - (x as f32 + 0.5)) / 20.0 + 0.5).clamp(0.0, 1.0);
+            let wanted = u * u * (3.0 - 2.0 * u);
+            let found = at(x, 50);
+            assert!((found - wanted).abs() < 0.01, "{x}: {found} not {wanted}");
+        }
+        // The left, sharp as ever.
+        assert_eq!(at(23, 50), 0.0);
+        assert_eq!(at(26, 50), 1.0);
+        // Halfway along the top it is 10 across, and 2.5 pixels out from its middle is a quarter of it.
+        let (u, found) = (0.25f32, at(50, 22));
+        let wanted = u * u * (3.0 - 2.0 * u);
+        assert!((found - wanted).abs() < 0.02, "{found} not {wanted}");
+        // It stays the same for a mask turned inside out, and it scales.
+        let mut inverted = soft_square(vec![0.0, 20.0, 20.0, 0.0]);
+        inverted.inverted = true;
+        let inverted = coverage(&[inverted], 100, 100).unwrap();
+        assert!((inverted[50 * 100 + 70] - (1.0 - at(70, 50))).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_soft_edge_has_no_seam_where_two_edges_meet() {
+        // Whichever edge a pixel goes by, none is far from its neighbours: a fall-off at least 12 wide
+        // changes by 1.5 / 12 a pixel at most.
+        let covered = coverage(&[soft_square(vec![12.0, 30.0, 12.0, 30.0])], 100, 100).unwrap();
+        for y in 1..99 {
+            for x in 1..99 {
+                let here = covered[y * 100 + x];
+                let (across, down) = (covered[y * 100 + x + 1], covered[(y + 1) * 100 + x]);
+                assert!(
+                    (here - across).abs() < 0.2 && (here - down).abs() < 0.2,
+                    "{x},{y}: {here} {across} {down}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_shape_with_soft_corners_prepares_them_at_the_scale_it_draws() {
+        let mask = Mask {
+            name: kerf_model::Id::new("p").unwrap(),
+            shape: MaskShape::Polygon {
+                points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+                closed: true,
+                soft: vec![4.0, 8.0, 12.0],
+            },
+            mode: MaskMode::Add,
+            inverted: false,
+            params: Default::default(),
+        };
+        let flat = prepare(&[mask], (100.0, 100.0), 0.5, Time::ZERO);
+        assert_eq!(flat[0].soft, [2.0, 4.0, 6.0]);
+    }
+
     #[test]
     fn open_outlines_and_none_cut_nothing() {
         let open = Mask {
@@ -291,6 +440,7 @@ mod tests {
             shape: MaskShape::Polygon {
                 points: vec![[0.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
                 closed: false,
+                soft: Vec::new(),
             },
             mode: MaskMode::Add,
             inverted: false,

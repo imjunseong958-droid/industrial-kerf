@@ -321,9 +321,16 @@ fn shape_json(value: &mut Json, shape: &MaskShape) {
     match shape {
         MaskShape::Rect(rect) => value["rect"] = json!(rect),
         MaskShape::Ellipse(ellipse) => value["ellipse"] = json!(ellipse),
-        MaskShape::Polygon { points, closed } => {
+        MaskShape::Polygon {
+            points,
+            closed,
+            soft,
+        } => {
             value["points"] = json!(points);
             value["closed"] = json!(closed);
+            if !soft.is_empty() {
+                value["soft"] = json!(soft);
+            }
         }
         MaskShape::Moving(_) => {}
     }

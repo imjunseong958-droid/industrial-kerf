@@ -142,6 +142,49 @@ fn a_kind_that_is_not_one_is_refused_with_a_reason() {
     assert!(format!("{errors:?}").contains("kind"), "{errors:?}");
 }
 
+const SOFT: &str = r##"kerf 1
+project name="t"
+sequence s1 rate=24 size=1280x720 audio=48000
+  track V1 video
+    clip c1 gen=solid@1 at=0f dur=48f
+      mask k1 points="0.1,0.1,4 0.9,0.1,12.5 0.9,0.9,0 0.1,0.9,3" feather=2
+      mask k2 points={0f:0,0,1;0.5,0,2;0.5,0.5,3 24f:0.1,0,4;0.6,0,5;0.6,0.5,6:ease}
+      mask k3 points="0.1,0.1 0.9,0.1,12 0.9,0.9"
+      mask k4 points="0.1,0.1 0.9,0.1 0.9,0.9"
+"##;
+
+#[test]
+fn a_masks_soft_corners_round_trip_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(SOFT, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in [
+        "points=\"0.1,0.1,4 0.9,0.1,12.5 0.9,0.9,0 0.1,0.9,3\"",
+        "0f:0,0,1;0.5,0,2;0.5,0.5,3",
+        // What one corner says, all of them say.
+        "points=\"0.1,0.1,0 0.9,0.1,12 0.9,0.9,0\"",
+        // And nothing changes for an outline that says none.
+        "points=\"0.1,0.1 0.9,0.1 0.9,0.9\"",
+    ] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+    let k1 = "0.1,0.1,4 0.9,0.1,12.5 0.9,0.9,0 0.1,0.9,3";
+    refused(&SOFT.replace(k1, "0.1,0.1,-4 0.9,0.1 0.9,0.9"), "soft");
+    refused(&SOFT.replace(k1, "0.1,0.1,20000 0.9,0.1 0.9,0.9"), "soft");
+    refused(&SOFT.replace(k1, "0.1,0.1,1,2 0.9,0.1 0.9,0.9"), "x,y,soft");
+    refused(
+        &SOFT.replace(k1, "0.1,0.1,x 0.9,0.1 0.9,0.9"),
+        "not a number",
+    );
+    // An open outline has no edge.
+    refused(&SOFT.replace("feather=2", "closed=false"), "open outline");
+    // A key's softness is held to the same.
+    refused(&SOFT.replace("0.5,0.5,3", "0.5,0.5,-3"), "soft");
+}
+
 const DEPTH: &str = r##"kerf 1
 project name="t"
 sequence s1 rate=24 size=1280x720 audio=48000
