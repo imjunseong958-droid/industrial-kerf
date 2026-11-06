@@ -187,8 +187,11 @@ Has: keys, track mattes, blurs, glows, distortions, warp stabilizer, restoration
 forward-backward check), and `look` gives the result as keyframes (`track`), so that what
 follows is plain text in the document, and a null and `parent=` do the rest.
 
+Mask outlines animate (`MaskShape::Moving`), and `image.fill method=video` with one removes what
+moves: each frame's hole comes from the outline at that moment.
+
 To add, in order: planar tracking, for corner pins and screen replacements
-(EffectCraft's `track`); mask outlines that animate, and with them `image.fill` of what moves; roto with the swappable
+(EffectCraft's `track`); roto with the swappable
 model interface of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; the camera
 solver. Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.

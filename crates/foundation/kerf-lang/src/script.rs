@@ -1107,7 +1107,7 @@ impl Script<'_> {
         let defs = self.catalog.mask_props();
         let op = match action {
             "add" => {
-                let shape = take_mask_shape(&mut fields)?
+                let shape = take_mask_shape(&mut fields, clock.rate)?
                     .ok_or_else(|| line.error(1, "mask add needs rect=, ellipse=, or points="))?;
                 let index = fields.take_with("at", position_index)?;
                 let mode = fields
@@ -1128,7 +1128,7 @@ impl Script<'_> {
                 }
             }
             "set" => {
-                let shape = take_mask_shape(&mut fields)?;
+                let shape = take_mask_shape(&mut fields, clock.rate)?;
                 let mode = fields.take_with("mode", parse_mask_mode)?;
                 let inverted = fields.take_bool("inverted")?;
                 let mut changes = Vec::new();
@@ -1995,7 +1995,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             let clock = clip_clock(clip).unwrap_or(fallback);
             let mut text = format!("mask {clip} set {name}");
             if let Some(shape) = shape {
-                text.push_str(&mask_shape_text(shape));
+                text.push_str(&mask_shape_text(shape, clock.rate));
             }
             if let Some(mode) = mode {
                 write!(text, " mode={}", mode.name()).unwrap();

@@ -293,15 +293,38 @@ fn mask_json(mask: &Mask, rate: Rate) -> Json {
             .map(|(name, param)| (name.clone(), param_json(param, rate)))
             .collect::<Map<String, Json>>(),
     });
-    match &mask.shape {
+    shape_json(&mut value, &mask.shape);
+    if let MaskShape::Moving(keys) = &mask.shape {
+        // Where it starts, as a still outline reads, and its keyframes.
+        if let Some(first) = keys.first() {
+            shape_json(&mut value, &first.shape);
+        }
+        value["keys"] = keys
+            .iter()
+            .map(|key| {
+                let mut entry = json!({
+                    "at": key.at.seconds(),
+                    "frame": frames(rate, key.at),
+                    "interp": key.interp.name(),
+                });
+                shape_json(&mut entry, &key.shape);
+                entry
+            })
+            .collect();
+    }
+    value
+}
+
+fn shape_json(value: &mut Json, shape: &MaskShape) {
+    match shape {
         MaskShape::Rect(rect) => value["rect"] = json!(rect),
         MaskShape::Ellipse(ellipse) => value["ellipse"] = json!(ellipse),
         MaskShape::Polygon { points, closed } => {
             value["points"] = json!(points);
             value["closed"] = json!(closed);
         }
+        MaskShape::Moving(_) => {}
     }
-    value
 }
 
 /// The picture effects and transitions an editor offers, by category, each

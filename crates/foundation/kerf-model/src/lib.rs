@@ -22,7 +22,7 @@ pub use id::{Id, IdGen, InvalidId};
 pub use model::{
     Retime,
     track_role, Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask,
-    MaskMode, MaskShape, Media, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
+    MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;

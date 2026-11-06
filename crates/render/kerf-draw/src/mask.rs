@@ -42,11 +42,7 @@ pub struct FlatMask {
 /// Whether a mask cuts the picture. One that combines by `none`, or an
 /// open outline, only gives effects a path.
 pub fn cuts(mask: &Mask) -> bool {
-    let closed = match &mask.shape {
-        MaskShape::Polygon { closed, .. } => *closed,
-        MaskShape::Rect(_) | MaskShape::Ellipse(_) => true,
-    };
-    mask.mode != MaskMode::None && closed
+    mask.mode != MaskMode::None && mask.shape.is_closed()
 }
 
 /// A mask's outline on a `width` × `height` picture drawn at `scale` of
@@ -74,6 +70,10 @@ pub fn outline(shape: &MaskShape, width: f64, height: f64, scale: f64) -> Vec<[f
                 .collect()
         }
         MaskShape::Polygon { points, .. } => points.iter().map(|[x, y]| at(*x, *y)).collect(),
+        // Whoever knows the time asks for the outline at it; without one, it is where it starts.
+        MaskShape::Moving(keys) => keys
+            .first()
+            .map_or_else(Vec::new, |key| outline(&key.shape, width, height, scale)),
     }
 }
 
@@ -96,7 +96,7 @@ pub fn prepare(masks: &[Mask], size: (f64, f64), scale: f64, at: Time) -> Vec<Fl
                     .unwrap_or(0.0)
             };
             FlatMask {
-                points: outline(&mask.shape, size.0, size.1, scale),
+                points: outline(&mask.shape.at(at), size.0, size.1, scale),
                 feather: (number("feather").max(0.0) * scale) as f32,
                 expansion: (number("expansion") * scale) as f32,
                 opacity: number("opacity").clamp(0.0, 1.0) as f32,

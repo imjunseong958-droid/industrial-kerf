@@ -9,8 +9,9 @@ use crate::catalog::{Catalog, Domain, ParamType};
 use crate::id::{Id, IdGen};
 use crate::speed::Speed;
 use crate::time::{Rate, Time};
-use crate::value::{Param, Value};
+use crate::value::{Interp, Param, Value};
 use kerf_color::ColorSpace;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -444,6 +445,7 @@ impl Clip {
         self.props
             .values_mut()
             .chain(self.effects.iter_mut().flat_map(|e| e.params.values_mut()))
+            .chain(self.masks.iter_mut().flat_map(|m| m.params.values_mut()))
             .chain(content.into_iter().flatten())
     }
 
@@ -464,6 +466,9 @@ impl Clip {
         }
         for param in self.params_mut() {
             *param = param.shifted(-delta);
+        }
+        for mask in &mut self.masks {
+            mask.shape.shift(-delta);
         }
     }
 
@@ -575,6 +580,128 @@ pub enum MaskShape {
     /// Corners in order. An open outline cuts nothing; effects still read
     /// it as a path.
     Polygon { points: Vec<[f64; 2]>, closed: bool },
+    /// An outline that changes over the clip: outlines of one kind, with the same corners, at times
+    /// relative to the clip's start. Before the first and after the last the nearest one holds.
+    Moving(Vec<OutlineKey>),
+}
+
+/// An outline at a time relative to the start of its clip, and how it moves toward the next.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineKey {
+    pub at: Time,
+    pub shape: MaskShape,
+    pub interp: Interp,
+}
+
+impl MaskShape {
+    /// The outline at clip time `at`.
+    pub fn at(&self, at: Time) -> Cow<'_, Self> {
+        let Self::Moving(keys) = self else {
+            return Cow::Borrowed(self);
+        };
+        let next = keys.partition_point(|key| key.at <= at);
+        match (next.checked_sub(1).map(|i| &keys[i]), keys.get(next)) {
+            (None, Some(first)) => Cow::Borrowed(&first.shape),
+            (Some(last), None) => Cow::Borrowed(&last.shape),
+            (Some(left), Some(right)) => {
+                let across = (at - left.at).flicks() as f64 / (right.at - left.at).flicks() as f64;
+                let along = left.interp.curve(across);
+                let mix = |a: f64, b: f64| a + (b - a) * along;
+                Cow::Owned(match (&left.shape, &right.shape) {
+                    (Self::Rect(a), Self::Rect(b)) => {
+                        Self::Rect(std::array::from_fn(|i| mix(a[i], b[i])))
+                    }
+                    (Self::Ellipse(a), Self::Ellipse(b)) => {
+                        Self::Ellipse(std::array::from_fn(|i| mix(a[i], b[i])))
+                    }
+                    (Self::Polygon { points: a, closed }, Self::Polygon { points: b, .. })
+                        if a.len() == b.len() =>
+                    {
+                        Self::Polygon {
+                            points: a
+                                .iter()
+                                .zip(b)
+                                .map(|(a, b)| [mix(a[0], b[0]), mix(a[1], b[1])])
+                                .collect(),
+                            closed: *closed,
+                        }
+                    }
+                    _ => left.shape.clone(),
+                })
+            }
+            (None, None) => Cow::Owned(Self::Rect([0.0; 4])),
+        }
+    }
+
+    /// Whether it encloses something: an open outline only gives effects a path.
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Self::Polygon { closed, .. } => *closed,
+            Self::Rect(_) | Self::Ellipse(_) => true,
+            Self::Moving(keys) => keys.first().is_none_or(|key| key.shape.is_closed()),
+        }
+    }
+
+    /// What is wrong with it, for a document to be told.
+    pub fn problem(&self) -> Option<&'static str> {
+        let fine = |values: &[f64]| values.iter().all(|value| value.is_finite());
+        match self {
+            Self::Rect(r) if !fine(r) || r[2] <= r[0] || r[3] <= r[1] => {
+                Some("a rectangle needs its right past its left and its bottom below its top")
+            }
+            Self::Ellipse(e) if !fine(e) || e[2] <= 0.0 || e[3] <= 0.0 => {
+                Some("an ellipse needs radii above 0")
+            }
+            Self::Polygon { points, closed }
+                if !fine(points.as_flattened()) || points.len() < if *closed { 3 } else { 2 } =>
+            {
+                Some("an outline needs 3 corners, or 2 points when open")
+            }
+            Self::Moving(keys) => {
+                if keys.windows(2).any(|pair| pair[0].at >= pair[1].at) {
+                    return Some("an outline's keyframes need increasing times");
+                }
+                let same =
+                    keys.windows(2)
+                        .all(|pair| match (&pair[0].shape, &pair[1].shape) {
+                            (Self::Rect(_), Self::Rect(_))
+                            | (Self::Ellipse(_), Self::Ellipse(_)) => true,
+                            (
+                                Self::Polygon {
+                                    points: a,
+                                    closed: x,
+                                },
+                                Self::Polygon {
+                                    points: b,
+                                    closed: y,
+                                },
+                            ) => a.len() == b.len() && x == y,
+                            _ => false,
+                        });
+                if !same {
+                    return Some(
+                        "an outline's keyframes need one kind of outline, with the same corners",
+                    );
+                }
+                if keys.iter().any(|key| matches!(key.shape, Self::Moving(_))) {
+                    return Some("an outline's keyframes hold outlines, not more keyframes");
+                }
+                keys.iter().find_map(|key| key.shape.problem()).or(keys
+                    .is_empty()
+                    .then_some("an outline's keyframes need at least one"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Move its keyframes by `delta`, as when a clip's head is trimmed.
+    fn shift(&mut self, delta: Time) {
+        if let Self::Moving(keys) = self {
+            for key in keys {
+                key.at += delta;
+            }
+        }
+    }
 }
 
 /// How a mask combines with the masks before it, as After Effects'.
@@ -857,7 +984,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::time::Ratio;
-    use crate::value::{Interp, Keyframe, Value};
+    use crate::value::{Keyframe, Value};
 
     fn frames(n: i64) -> Time {
         Rate::FPS_24.time_of(n)
@@ -972,6 +1099,134 @@ mod tests {
         assert_eq!(clip.source_range(), Some((frames(100), frames(180))));
         clip.move_tail(frames(-4));
         assert_eq!(clip.source_range(), Some((frames(108), frames(180))));
+    }
+
+    fn moving_rect() -> MaskShape {
+        MaskShape::Moving(vec![
+            OutlineKey {
+                at: frames(0),
+                shape: MaskShape::Rect([0.0, 0.0, 0.2, 0.2]),
+                interp: Interp::Linear,
+            },
+            OutlineKey {
+                at: frames(24),
+                shape: MaskShape::Rect([0.5, 0.0, 0.7, 0.4]),
+                interp: Interp::Hold,
+            },
+            OutlineKey {
+                at: frames(48),
+                shape: MaskShape::Rect([0.8, 0.8, 1.0, 1.0]),
+                interp: Interp::Linear,
+            },
+        ])
+    }
+
+    #[test]
+    fn an_outline_moves_between_its_keyframes() {
+        let shape = moving_rect();
+        let MaskShape::Rect(between) = shape.at(frames(12)).into_owned() else {
+            panic!("a rectangle");
+        };
+        for (found, wanted) in between.iter().zip([0.25, 0.0, 0.45, 0.3]) {
+            assert!((found - wanted).abs() < 1e-9, "{between:?}");
+        }
+        assert_eq!(*shape.at(frames(36)), MaskShape::Rect([0.5, 0.0, 0.7, 0.4]));
+        assert_eq!(*shape.at(frames(-3)), MaskShape::Rect([0.0, 0.0, 0.2, 0.2]));
+        assert_eq!(*shape.at(frames(60)), MaskShape::Rect([0.8, 0.8, 1.0, 1.0]));
+        assert_eq!(shape.problem(), None);
+    }
+
+    #[test]
+    fn corners_move_one_for_one() {
+        let polygon = |x: f64| MaskShape::Polygon {
+            points: vec![[x, 0.0], [x + 0.1, 0.0], [x, 0.1]],
+            closed: true,
+        };
+        let shape = MaskShape::Moving(vec![
+            OutlineKey {
+                at: frames(0),
+                shape: polygon(0.0),
+                interp: Interp::Linear,
+            },
+            OutlineKey {
+                at: frames(10),
+                shape: polygon(0.4),
+                interp: Interp::Linear,
+            },
+        ]);
+        let MaskShape::Polygon { points, .. } = shape.at(frames(5)).into_owned() else {
+            panic!("a polygon");
+        };
+        assert!((points[1][0] - 0.3).abs() < 1e-9, "{points:?}");
+    }
+
+    #[test]
+    fn outlines_that_cannot_move_into_each_other_are_refused() {
+        let key = |at: i64, shape: MaskShape| OutlineKey {
+            at: frames(at),
+            shape,
+            interp: Interp::Linear,
+        };
+        let rect = MaskShape::Rect([0.0, 0.0, 0.5, 0.5]);
+        let triangle = |extra: bool| MaskShape::Polygon {
+            points: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
+                .into_iter()
+                .chain(extra.then_some([0.0, 1.0]))
+                .collect(),
+            closed: true,
+        };
+        for bad in [
+            vec![key(0, rect.clone()), key(0, rect.clone())],
+            vec![key(0, rect.clone()), key(5, MaskShape::Ellipse([0.5; 4]))],
+            vec![key(0, triangle(false)), key(5, triangle(true))],
+            vec![key(0, MaskShape::Rect([0.5, 0.0, 0.1, 0.5]))],
+            vec![],
+        ] {
+            assert!(
+                MaskShape::Moving(bad.clone()).problem().is_some(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mask_stays_on_the_picture_through_a_trim_and_a_split() {
+        let mut whole = media_clip("1");
+        let mut mask = Mask::new(Id::new("k1").unwrap(), moving_rect());
+        mask.params.insert(
+            "feather".into(),
+            Param::Animated(vec![
+                Keyframe {
+                    at: frames(0),
+                    value: Value::Number(0.0),
+                    interp: Interp::Linear,
+                },
+                Keyframe {
+                    at: frames(24),
+                    value: Value::Number(24.0),
+                    interp: Interp::Linear,
+                },
+            ]),
+        );
+        whole.masks.push(mask);
+        let check = |clip: &Clip, sequence_frame: i64| {
+            let mask = clip.mask("k1").unwrap();
+            let at = frames(sequence_frame) - clip.start;
+            let there = frames(sequence_frame) - whole.start;
+            let whole = whole.mask("k1").unwrap();
+            assert_eq!(mask.shape.at(at), whole.shape.at(there));
+            assert_eq!(
+                mask.params["feather"].value_at(at),
+                whole.params["feather"].value_at(there)
+            );
+        };
+        let mut trimmed = whole.clone();
+        trimmed.move_head(frames(6));
+        check(&trimmed, 20);
+        let mut head = whole.clone();
+        let tail = head.split_off(frames(12), Id::new("c2").unwrap());
+        check(&head, 15);
+        check(&tail, 30);
     }
 
     /// A clip from source frame 100 that slows from 2 to 1/2 over 48 frames, or the reverse of that.
