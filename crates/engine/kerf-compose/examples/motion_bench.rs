@@ -48,6 +48,16 @@ const SCENES: &[(&str, &str)] = &[
         "gen=particles@1 at=0f dur=96f\n      set rate=20000 life=2 velocity=0.5 spread=360 size=0.004",
     ),
     (
+        "title",
+        r#"gen=title@1 at=0f dur=96f
+      set text="A line of words" font="Skia" size=0.08"#,
+    ),
+    (
+        "weight moving",
+        r#"gen=title@1 at=0f dur=96f
+      set text="A line of words" font="Skia" size=0.08 wght={0f:0.5 96f:2.5}"#,
+    ),
+    (
         "title reveal",
         r#"gen=title@1 at=0f dur=96f
       set text="A line of words that comes in" size=0.08 reveal={0f:0 48f:1} from_y=0.05 from_rotation=20"#,

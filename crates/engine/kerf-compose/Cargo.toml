@@ -21,5 +21,6 @@ rayon = "1"
 thiserror = "2"
 
 [dev-dependencies]
+kerf-text = { path = "../../foundation/kerf-text" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 tempfile = "3"

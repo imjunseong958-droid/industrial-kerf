@@ -1084,6 +1084,15 @@ fn builtin_catalog() -> Catalog {
         .param(P::number("from_opacity", 0.0).range(0.0, 1.0))
         .param(P::text("font", "sans-serif"))
         .param(
+            P::number("wght", 0.0)
+                .range(0.0, 1000.0)
+                .doc("A variable font's axes; 0 is the font's own."),
+        )
+        .param(P::number("wdth", 0.0).range(0.0, 1000.0))
+        .param(P::number("slnt", 0.0).range(-90.0, 90.0))
+        .param(P::number("opsz", 0.0).range(0.0, 1000.0))
+        .param(P::number("ital", 0.0).range(0.0, 1.0))
+        .param(
             P::number("size", 0.08)
                 .range(0.005, 1.0)
                 .unit("frame heights"),
@@ -1136,12 +1145,12 @@ fn builtin_catalog() -> Catalog {
         .param(
             P::number("taper_start", 0.0)
                 .range(0.0, 1.0)
-                .doc("How much of the stroke it takes to widen from nothing."),
+                .doc("How much of the stroke widens from nothing."),
         )
         .param(
             P::number("taper_end", 0.0)
                 .range(0.0, 1.0)
-                .doc("How much of the stroke it takes to narrow to nothing."),
+                .doc("How much of the stroke narrows to nothing."),
         ),
         figure_params(FxDef::new(
             crate::SHAPE_OUTLINE,

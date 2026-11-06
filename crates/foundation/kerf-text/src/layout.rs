@@ -60,6 +60,8 @@ pub struct TextStyle {
     pub faux_italic: bool,
     pub caps: Caps,
     pub underline: bool,
+    /// Where to set a variable font's axes. A face without them ignores them.
+    pub axes: Vec<fonts::Axis>,
 }
 
 impl Default for TextStyle {
@@ -76,6 +78,7 @@ impl Default for TextStyle {
             faux_italic: false,
             caps: Caps::Normal,
             underline: false,
+            axes: Vec::new(),
         }
     }
 }
@@ -110,6 +113,10 @@ impl Hash for TextStyle {
         hf(h, self.tracking);
         hf(h, self.baseline_shift);
         (self.kerning, self.ligatures, self.faux_bold, self.faux_italic, self.caps, self.underline).hash(h);
+        for (tag, value) in &self.axes {
+            tag.hash(h);
+            hf(h, *value);
+        }
     }
 }
 
@@ -136,6 +143,8 @@ pub struct Glyph {
     pub cluster: usize,
     pub synth_bold: bool,
     pub synth_italic: bool,
+    /// Where its face's axes are set ([`fonts::instance`]); 0 is the font as it comes.
+    pub instance: u32,
     /// Style the glyph was set in: 0 = the base style, `i + 1` = `runs[i]` of [`layout_rich`].
     pub run: u16,
 }
@@ -299,6 +308,7 @@ fn line_dist(l: &Line, y: f32) -> f32 {
 
 struct ShapedGlyph {
     face: FaceId,
+    instance: u32,
     id: u32,
     cluster: usize,
     adv: f32,
@@ -332,7 +342,11 @@ fn uses_vertical_form(c: char) -> bool {
 fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId, size: f32, style: &TextStyle, vertical: bool) -> Vec<ShapedGlyph> {
     let f = fonts::face(face);
     let (Some(font), Some(data)) = (f.font(), f.shaper_data()) else { return Vec::new() };
-    let shaper = data.shaper(&font).build();
+    let variations = (!style.axes.is_empty()).then(|| {
+        harfrust::ShaperInstance::from_variations(&font, fonts::settled(&style.axes).map(|(tag, value)| harfrust::Variation { tag: Tag::new(&tag), value }))
+    });
+    let instance = fonts::instance(face, &style.axes);
+    let shaper = data.shaper(&font).instance(variations.as_ref()).build();
     let mut buf = UnicodeBuffer::new();
     for &(b, _, sc) in chars {
         buf.add(if sc == '\t' { ' ' } else { sc }, b as u32);
@@ -359,6 +373,7 @@ fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId
         .zip(out.glyph_positions())
         .map(|(i, p)| ShapedGlyph {
             face,
+            instance,
             id: i.glyph_id,
             cluster: i.cluster as usize,
             adv: p.x_advance as f32 * k,
@@ -532,6 +547,7 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                         cluster: base + g.cluster,
                         synth_bold: pr.synth_bold || st.faux_bold,
                         synth_italic: pr.synth_italic || st.faux_italic,
+                        instance: g.instance,
                         run: si as u16,
                     });
                     pen += g.adv;

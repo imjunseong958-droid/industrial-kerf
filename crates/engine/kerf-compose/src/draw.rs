@@ -254,6 +254,8 @@ struct TitlePlan {
     size: f64,
     color: Rgba,
     justify: Justify,
+    /// Where a variable font's axes are set, by tag, as they are given.
+    axes: Vec<([u8; 4], Param)>,
     /// How it comes in, when it does.
     reveal: Option<Box<Reveals>>,
 }
@@ -1209,6 +1211,13 @@ fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
 /// A title drawn on a transparent `w` × `h` picture.
 fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
     let mut image = Image::new(w, h);
+    // At 0, an axis is left as the font has it.
+    let axes: Vec<([u8; 4], f32)> = title
+        .axes
+        .iter()
+        .map(|(tag, param)| (*tag, number(&param.value_at(time)) as f32))
+        .filter(|(_, value)| *value != 0.0)
+        .collect();
     let text = Text {
         text: &title.text,
         font: &title.font,
@@ -1216,6 +1225,7 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
         color: title.color,
         justify: title.justify,
         outline: None,
+        axes: &axes,
     };
     let at = [w as f32 / 2.0, h as f32 / 2.0];
     let Some(reveal) = &title.reveal else {
@@ -1444,6 +1454,7 @@ fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
             },
             (size * 0.06) as f32,
         )),
+        axes: &[],
     }
 }
 
@@ -2222,6 +2233,10 @@ impl<'a> Builder<'a> {
                 Value::Enum(align) if align == "right" => Justify::Right,
                 _ => Justify::Center,
             },
+            axes: kerf_model::TITLE_AXES
+                .iter()
+                .filter_map(|tag| Some((*tag, params.get(std::str::from_utf8(tag).ok()?)?.clone())))
+                .collect(),
             reveal: {
                 let raw = |name: &str| {
                     params

@@ -622,6 +622,13 @@ impl<'a> Graph<'a> {
                     "title" if params.contains_key("reveal") => {
                         return Err(ProgramError::unsupported(&clip.id, "a title's reveal"))
                     }
+                    "title"
+                        if kerf_model::TITLE_AXES.iter().any(|tag| {
+                            std::str::from_utf8(tag).is_ok_and(|name| params.contains_key(name))
+                        }) =>
+                    {
+                        return Err(ProgramError::unsupported(&clip.id, "a title's font axes"))
+                    }
                     "title" => Source::Generated(format!(
                         "color=c=black@0:s={width}x{height}:r={color}:d={span},format=rgba,{}",
                         self.title(clip, params, height)?

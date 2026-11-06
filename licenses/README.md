@@ -28,6 +28,7 @@ on, and Kerf does not follow upstream.
 | `crates/foundation/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
 | `crates/foundation/kerf-text` | FilmCraft's text engine |
 | `crates/render/kerf-draw` | FilmCraft's renderer, in Kerf's terms |
+| `crates/foundation/kerf-text/testdata` | Nothing carried: the small variable font the tests set axes on is Kerf's own, written by the script beside it |
 | `crates/motion/kerf-motion/src/outline.rs` | EffectCraft's path offsetting and how it uses the sweep (`crates/path`), on polygons rather than curves |
 | `crates/render/kerf-gpu/src/picture.wgsl` | FilmCraft's blend modes and dissolve pattern in WGSL |
 | `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions, with its GPU effect kernels (`filmcraft/gpu.rs`, `fx.wgsl`) |
