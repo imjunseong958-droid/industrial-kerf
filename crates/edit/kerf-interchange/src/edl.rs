@@ -396,11 +396,13 @@ impl Writer<'_> {
             }
         }
         let speed = clip.speed();
-        if speed.value() != 1.0 {
+        if !speed.is_one() {
+            // An EDL holds one speed a cut; what ramps is written as its speed overall.
+            let signed = speed.average(clip.duration) * if speed.is_reverse() { -1.0 } else { 1.0 };
             motion.push(format!(
                 "M2   {:<8}       {:>05.1}                {}",
                 source.reel,
-                self.rate.fps() * speed.value(),
+                self.rate.fps() * signed,
                 self.tc(src_in)
             ));
         }

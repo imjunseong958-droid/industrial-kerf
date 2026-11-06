@@ -29,7 +29,7 @@ fn media_clip(
         Content::Media {
             media: id(media),
             source_in: f(source),
-            speed: Ratio::ONE,
+            speed: Ratio::ONE.into(),
         },
         f(start),
         f(frames),
@@ -172,7 +172,7 @@ fn new_media(source: i64) -> NewClip {
     NewClip::new(Content::Media {
         media: id("m1"),
         source_in: f(source),
-        speed: Ratio::ONE,
+        speed: Ratio::ONE.into(),
     })
 }
 
@@ -757,7 +757,7 @@ fn speed_keeps_the_source_range() {
             lock("A2"),
             Op::Speed {
                 clip: id("c2"),
-                speed: Ratio::parse("2").unwrap(),
+                speed: Ratio::parse("2").unwrap().into(),
             },
         ],
     );

@@ -18,17 +18,20 @@
 use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
-    parse_align, parse_marker_color, parse_mask_mode, parse_retime, parse_sample_rate, parse_sequence_color, parse_size, pinned,
-    sequence_fields, sequence_line, take_mask_shape, take_role, take_sync, word_or_quote,
+    parse_align, parse_marker_color, parse_mask_mode, parse_retime, parse_sample_rate,
+    parse_sequence_color, parse_size, pinned, sequence_fields, sequence_line, take_mask_shape,
+    take_role, take_sync, word_or_quote,
 };
 use crate::facts::{Facts, NoFacts, Snap};
 use crate::lex::{lex, Arg, Atom, Line};
-use crate::text::{parse_fx_ref, parse_param, print_fx_ref, quote, Clock, Fields};
+use crate::text::{
+    parse_fx_ref, parse_param, parse_speed, print_fx_ref, print_speed, quote, Clock, Fields,
+};
 use kerf_model::time::{parse_timecode, FLICKS_PER_SECOND};
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
-    Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence,
-    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange,
+    Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Report, Sequence, SequenceChange,
+    Time, TrackChange, TrackKind, TrackRoleChange,
 };
 use std::fmt::Write as _;
 
@@ -395,9 +398,14 @@ impl Script<'_> {
             "set" => self.set(fields),
             "speed" => {
                 let clip = fields.id(1, "a clip id")?;
-                let speed = fields.word(2, "a speed such as 2, 0.5, or -1")?;
-                let speed = Ratio::parse(speed)
-                    .map_err(|e| line.error(fields.positional()[2].column, e.to_string()))?;
+                let arg = fields.positional().get(2).copied().ok_or_else(|| {
+                    line.error(1, "expected a speed such as 2, 0.5, -1, or {0f:1 12f:1/2}")
+                })?;
+                let rate = self
+                    .project
+                    .locate(clip.as_str())
+                    .map_or(Rate::FPS_24, |at| self.project.sequences[at.sequence].rate);
+                let speed = parse_speed(&arg.value, rate).map_err(|m| fields.error(arg, m))?;
                 fields.finish(3)?;
                 Ok(vec![Op::Speed { clip, speed }])
             }
@@ -603,7 +611,7 @@ impl Script<'_> {
         let s = self.current(line)?;
         let sequence = &self.project.sequences[s];
         let clock = Clock::of_sequence(sequence);
-        let (mut content, source) = content(&mut fields, &self.project, self.catalog)?;
+        let (mut content, source) = content(&mut fields, &self.project, self.catalog, clock.rate)?;
         let snap = take_snap(&mut fields, &clock)?;
         let wrote = |key: &str| line.args.iter().any(|arg| arg.key.as_deref() == Some(key));
         let media = match (&content, snap) {
@@ -624,7 +632,7 @@ impl Script<'_> {
         ) = (media, snap, &mut content, wrote("src"))
         {
             *source_in = self
-                .snap_source(media, *source_in, to, speed.source_span(within), false)
+                .snap_source(media, *source_in, to, speed.played(within), false)
                 .map_err(|m| line.error(1, m))?;
         }
         let positions = Positions::of(&self.project, s);
@@ -645,7 +653,7 @@ impl Script<'_> {
                     (media, snap, &content)
                 {
                     out_time = self
-                        .snap_source(media, out_time, to, speed.source_span(within), true)
+                        .snap_source(media, out_time, to, speed.played(within), true)
                         .map_err(|m| fields.error(out, m))?;
                 }
                 let (Content::Media {
@@ -661,7 +669,7 @@ impl Script<'_> {
                 if !span.is_positive() {
                     return Err(fields.error(out, "out= must come after src="));
                 }
-                let frames = clock.rate.frames_round(speed.timeline_span(span)).max(1);
+                let frames = clock.rate.frames_round(speed.time_for(span)).max(1);
                 clock.rate.time_of(frames)
             }
             (None, None) => {
@@ -936,7 +944,9 @@ impl Script<'_> {
             .media_of(clip)
             .ok_or_else(|| format!("clip `{}` plays no media to snap to", clip.id))?;
         let source = clip.source_at(edge).expect("a media clip plays a source");
-        let reach = clip.speed().source_span(within);
+        let speed = clip.speed();
+        let offset = edge - clip.start;
+        let reach = speed.played(offset + within) - speed.played(offset);
         self.snaps(media, source, snap, reach, false)?
             .into_iter()
             .map(|at| rate.round(clip.played_at(at).expect("a media clip plays a source")))
@@ -1780,8 +1790,8 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                 clock.print_duration(*duration)
             );
             if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &first.content {
-                if *speed != Ratio::ONE {
-                    write!(text, " speed={speed}").unwrap();
+                if !speed.is_one() {
+                    write!(text, " speed={}", print_speed(speed, clock.rate)).unwrap();
                 }
             }
             let tracks: Vec<Id> = targets.iter().map(|(t, _)| t.clone()).collect();
@@ -1915,9 +1925,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                             .map_or_else(|| quote(""), |parent| parent.to_string())
                     )
                     .unwrap(),
-                    ClipChange::Retime(retime) => {
-                        write!(text, " retime={}", retime.id()).unwrap()
-                    }
+                    ClipChange::Retime(retime) => write!(text, " retime={}", retime.id()).unwrap(),
                     ClipChange::Caption(caption) => {
                         write!(text, " caption={}", quote(caption)).unwrap()
                     }
@@ -1927,7 +1935,12 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             text.push_str(&changes(&params, clock.rate));
             text
         }
-        Op::Speed { clip, speed } => format!("speed {clip} {speed}"),
+        Op::Speed { clip, speed } => {
+            let rate = project
+                .locate(clip.as_str())
+                .map_or(Rate::FPS_24, |at| project.sequences[at.sequence].rate);
+            format!("speed {clip} {}", print_speed(speed, rate))
+        }
         Op::FxAdd {
             clip,
             effect,

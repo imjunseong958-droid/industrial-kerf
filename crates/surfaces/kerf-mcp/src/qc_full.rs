@@ -596,8 +596,9 @@ fn locate_peak(
     limit: f64,
     cancel: &CancellationToken,
 ) -> Result<Option<PeakStretch>, EngineError> {
+    let heard = kerf_engine::ramps::with_sound(project);
     let compiled = compile_program(
-        project,
+        &heard,
         Catalog::builtin(),
         &ProgramOptions {
             sequence: Some(sequence.id.to_string()),

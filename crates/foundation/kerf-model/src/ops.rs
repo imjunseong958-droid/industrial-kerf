@@ -14,7 +14,8 @@ use crate::model::{
     Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode, MaskShape, Media,
     Params, Project, Sequence, Track, TrackKind, Transition,
 };
-use crate::time::{format_timecode, Rate, Ratio, Time};
+use crate::speed::Speed;
+use crate::time::{format_timecode, Rate, Time};
 use crate::validate::{accepts, errors};
 use crate::value::Param;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -224,7 +225,7 @@ pub enum Op {
     /// Change speed, keeping the source range and changing the duration.
     Speed {
         clip: Id,
-        speed: Ratio,
+        speed: Speed,
     },
     FxAdd {
         clip: Id,
@@ -630,7 +631,7 @@ impl Editor<'_> {
             }
             Op::Move { clip, track, delta } => self.move_clip(clip, track.as_ref(), *delta),
             Op::Set { clip, changes } => self.set(clip, changes),
-            Op::Speed { clip, speed } => self.speed(clip, *speed),
+            Op::Speed { clip, speed } => self.speed(clip, speed),
             Op::FxAdd {
                 clip,
                 effect,
@@ -1104,20 +1105,18 @@ impl Editor<'_> {
         let Some(available) = available else {
             return Ok(());
         };
-        let speed = clip.speed();
-        let (short_head, short_tail) = if speed.is_reverse() {
+        let (short_head, short_tail) = if clip.speed().is_reverse() {
             (source_out - available, -source_in)
         } else {
             (-source_in, source_out - available)
         };
-        let short = |amount: Time| speed.timeline_span(amount);
         if short_head.is_positive() {
             return Err(fail(
                 "clip.source_range",
                 format!(
                     "clip `{}` runs out of media: it needs {} more before its first frame",
                     clip.id,
-                    short(short_head)
+                    clip.time_before(short_head)
                 ),
             ));
         }
@@ -1127,7 +1126,7 @@ impl Editor<'_> {
                 format!(
                     "clip `{}` runs out of media: it needs {} more after its last frame",
                     clip.id,
-                    short(short_tail)
+                    clip.time_after(short_tail)
                 ),
             ));
         }
@@ -1917,10 +1916,11 @@ impl Editor<'_> {
         Ok(())
     }
 
-    fn speed(&mut self, clip: &Id, speed: Ratio) -> Outcome {
+    fn speed(&mut self, clip: &Id, speed: &Speed) -> Outcome {
         let at = self.locate(clip)?;
         let s = at.sequence;
         let rate = self.project.sequences[s].rate;
+        let start = self.clip(at).start;
         let members: Vec<Id> = self
             .linked(at)
             .into_iter()
@@ -1937,8 +1937,16 @@ impl Editor<'_> {
             let member = self.find(id);
             self.unlocked(s, member.track)?;
             let found = self.clip(member);
-            let span = found.speed().source_span(found.duration);
-            let frames = rate.frames_round(speed.timeline_span(span)).max(1);
+            let span = found.speed().played(found.duration);
+            // Keys are the clip's: a linked clip starting elsewhere changes speed at the same place.
+            let mut speed = speed.clone();
+            speed.shift(start - found.start);
+            let mut frames = rate.frames_round(speed.time_for(span)).max(1);
+            // A ramp plays its source unevenly, so its last frame is what must not run out.
+            if speed.constant().is_none() && frames > 1 && speed.played(rate.time_of(frames)) > span
+            {
+                frames -= 1;
+            }
             let duration = rate.time_of(frames);
             let track = &self.project.sequences[s].tracks[member.track];
             if !track.is_free(found.start, found.start + duration, &[id]) {

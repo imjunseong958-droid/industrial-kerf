@@ -36,7 +36,7 @@ use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, MotionPath, Param, ParamType,
-    Params, Project, Rate, Ratio, Rgba, Sequence, Time, Track, TrackKind, Value,
+    Params, Project, Rate, Rgba, Sequence, Speed, Time, Track, TrackKind, Value,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ struct SoundClip {
     start: Time,
     duration: Time,
     source_in: Time,
-    speed: Ratio,
+    speed: Speed,
 }
 
 struct CaptionPlan {
@@ -230,7 +230,7 @@ enum Source {
     Nested {
         sequence: usize,
         source_in: Time,
-        speed: Ratio,
+        speed: Speed,
         duration: Time,
     },
     Solid(Rgba),
@@ -435,7 +435,7 @@ impl Drawing {
                 } = &clip.source
                 {
                     let inner = &self.sequences[*nested];
-                    let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                    let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
                     self.hash_sequence(hash, *nested, shown)?;
                 }
                 for pair in track.pairs.iter().filter(|pair| {
@@ -738,7 +738,7 @@ impl Drawing {
                 duration,
             } => {
                 let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
                 let image = self.draw(*nested, shown, scale);
                 let per_source = image.w as f64 / f64::from(inner.width);
                 (Arc::new(image), per_source)
@@ -1172,18 +1172,18 @@ impl kerf_fx::kept::Host for ClipEnv<'_> {
             };
             let length = sound.len() / 2;
             let (from, duration) = (clip.start.seconds(), clip.duration.seconds());
-            let speed = clip.speed.value().abs();
             for (index, out) in mixed.chunks_exact_mut(2).enumerate() {
                 let offset = start + index as f64 / f64::from(rate.max(1)) - from;
                 if !(0.0..duration).contains(&offset) {
                     continue;
                 }
+                let played = clip.speed.played_seconds(offset);
                 let played = if clip.speed.is_reverse() {
-                    duration - offset
+                    clip.speed.played_seconds(duration) - played
                 } else {
-                    offset
+                    played
                 };
-                let at = (clip.source_in.seconds() + played * speed) * kept;
+                let at = (clip.source_in.seconds() + played) * kept;
                 match at as usize {
                     _ if at < 0.0 => {}
                     sample if sample < length => {
@@ -1250,7 +1250,7 @@ impl FxEnv for ClipEnv<'_> {
             }
             | Content::Sequence {
                 source_in, speed, ..
-            } => *source_in + speed.source_span(time),
+            } => *source_in + speed.played(time),
             _ => time,
         };
         let sequence = self.placed.sequence;
@@ -1350,7 +1350,7 @@ impl<'a> Builder<'a> {
                                 start: clip.start,
                                 duration: clip.duration,
                                 source_in: *source_in,
-                                speed: *speed,
+                                speed: speed.clone(),
                             })
                         })
                         .collect(),
@@ -1573,19 +1573,12 @@ impl<'a> Builder<'a> {
                 .map(Sequence::duration),
             Content::Generator { .. } | Content::Caption { .. } => None,
         };
-        if let (Some(length), Some((source_in, _))) = (length, clip.source_range()) {
-            let speed = clip.speed();
-            let (earliest, latest) = if speed.is_reverse() {
-                let out = source_in + speed.source_span(clip.duration);
-                (
-                    clip.start - speed.timeline_span(length - out),
-                    clip.start + speed.timeline_span(out),
-                )
+        if let Some(length) = length {
+            let ends = (clip.played_at(Time::ZERO)?, clip.played_at(length)?);
+            let (earliest, latest) = if clip.speed().is_reverse() {
+                (ends.1, ends.0)
             } else {
-                (
-                    clip.start - speed.timeline_span(source_in),
-                    clip.start + speed.timeline_span(length - source_in),
-                )
+                ends
             };
             lo = lo.max(earliest);
             hi = hi.min(latest);
@@ -1634,7 +1627,7 @@ impl<'a> Builder<'a> {
                         .then(|| crate::footage::input_transform(video.color, self.hdr)),
                     retime: clip.retime,
                     source_in: *source_in,
-                    speed: *speed,
+                    speed: speed.clone(),
                     duration: clip.duration,
                 });
                 (
@@ -1680,7 +1673,7 @@ impl<'a> Builder<'a> {
                     Source::Nested {
                         sequence: index,
                         source_in: *source_in,
-                        speed: *speed,
+                        speed: speed.clone(),
                         duration: clip.duration,
                     },
                     kerf_core::program::canvas(inner),
@@ -2003,12 +1996,12 @@ fn untouched(plan: &ClipPlan) -> bool {
 /// The time a nested sequence shows at its clip's time `time`: on its own
 /// frames, the frame showing at the source position, which a reversed clip
 /// runs back from its source out.
-fn nested_time(time: Time, source_in: Time, speed: Ratio, duration: Time, rate: Rate) -> Time {
-    let span = speed.source_span(time.max(Time::ZERO)).flicks();
+fn nested_time(time: Time, source_in: Time, speed: &Speed, duration: Time, rate: Rate) -> Time {
+    let span = speed.played(time.max(Time::ZERO)).flicks();
     let frame = rate.frame_duration().flicks().max(1);
     let index = if speed.is_reverse() {
         // The frame showing just before the source position.
-        let position = (source_in + speed.source_span(duration)).flicks() - span;
+        let position = (source_in + speed.played(duration)).flicks() - span;
         -(-position).div_euclid(frame) - 1
     } else {
         (source_in.flicks() + span).div_euclid(frame)
@@ -2168,13 +2161,16 @@ mod tests {
         let rate = Rate::FPS_24;
         let at = |frames: i64| rate.time_of(frames);
         // Forward from frame 10: clip frame 5 shows nested frame 15.
-        assert_eq!(nested_time(at(5), at(10), Ratio::ONE, at(48), rate), at(15));
+        assert_eq!(
+            nested_time(at(5), at(10), &Speed::ONE, at(48), rate),
+            at(15)
+        );
         // Half speed: clip frame 5 is nested frame 12.5, so 12 shows.
-        let half = Ratio::parse("1/2").unwrap();
-        assert_eq!(nested_time(at(5), at(10), half, at(48), rate), at(12));
+        let half = Speed::from(kerf_model::Ratio::parse("1/2").unwrap());
+        assert_eq!(nested_time(at(5), at(10), &half, at(48), rate), at(12));
         // Reversed over [10, 58): the first frame is 57.
-        let back = Ratio::parse("-1").unwrap();
-        assert_eq!(nested_time(Time::ZERO, at(10), back, at(48), rate), at(57));
-        assert_eq!(nested_time(at(47), at(10), back, at(48), rate), at(10));
+        let back = Speed::from(kerf_model::Ratio::parse("-1").unwrap());
+        assert_eq!(nested_time(Time::ZERO, at(10), &back, at(48), rate), at(57));
+        assert_eq!(nested_time(at(47), at(10), &back, at(48), rate), at(10));
     }
 }

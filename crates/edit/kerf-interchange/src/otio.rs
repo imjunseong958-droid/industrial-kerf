@@ -182,7 +182,7 @@ pub fn to_timeline(
                 );
                 continue;
             };
-            if *speed != Ratio::ONE {
+            if !speed.is_one() {
                 loss(
                     "speed_not_exported",
                     format!("speed {speed} was not exported"),
@@ -365,7 +365,7 @@ pub fn from_timeline(
                         Content::Media {
                             media: source.id.clone(),
                             source_in: source.rate.time_of(*source_in) - source.start,
-                            speed: Ratio::ONE,
+                            speed: Ratio::ONE.into(),
                         },
                         rate.time_of(*start),
                         rate.time_of(*duration),

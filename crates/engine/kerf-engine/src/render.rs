@@ -587,8 +587,9 @@ fn composited_render(
     canvas: (u32, u32),
 ) -> Result<CompositedRender> {
     // The graph mixes the sound; the picture comes from stdin.
+    let heard = crate::ramps::with_sound(project);
     let sound = compile_program(
-        project,
+        &heard,
         kerf_model::Catalog::builtin(),
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),

@@ -33,6 +33,7 @@ line, applied in order and atomically. Later lines see what earlier lines did.
   `x1,y1,x2,y2` that may overshoot: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
+- `speed={0f:1 24f:1 36f:1/4}` changes speed over a clip, keyframes as above but with no overshoot.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
@@ -45,7 +46,7 @@ use <sequence>                          choose the sequence when there are sever
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
                                         open time on every unlocked track; several tracks get linked clips
 overwrite <same arguments as insert>    replace what occupies the range on the target tracks
-    <content> is media=<id> [src=<src>] [speed=<ratio>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
+    <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
 delete <clip> …                         remove clips (and linked partners), leaving gaps
 ripple-delete <clip> …                  remove and close the gap on every unlocked track
 lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
@@ -59,7 +60,7 @@ split <clip> at=<pos> [as=<id>]
 blade at=<pos> [tracks=…]               split every clip crossing a point
 move <clip> [on=<track>] [at=<pos>|by=<amount>]
 set <clip> <prop>=<value> … [name="…"] [enabled=false] [caption="…"] [reset=<prop>,…]
-speed <clip> <ratio>                    2, 0.5, or -1 for reverse; keeps the source range
+speed <clip> <speed>                    2, 0.5, -1 for reverse, or {0f:1 24f:1/4} to change over the clip; keeps the source range
 fx <clip> add <effect> [at=<n>] [<param>=<value> …]
 fx <clip> set <n|effect> [enabled=…] [reset=…] [<param>=<value> …]
 fx <clip> remove <n|effect>  ·  fx <clip> move <n|effect> to=<n>

@@ -7,7 +7,8 @@
 
 use crate::catalog::{Catalog, Domain, ParamType};
 use crate::id::{Id, IdGen};
-use crate::time::{Rate, Ratio, Time};
+use crate::speed::Speed;
+use crate::time::{Rate, Time};
 use crate::value::{Param, Value};
 use kerf_color::ColorSpace;
 use std::collections::{BTreeMap, BTreeSet};
@@ -288,13 +289,13 @@ pub enum Content {
     Media {
         media: Id,
         source_in: Time,
-        speed: Ratio,
+        speed: Speed,
     },
     /// A nested sequence, as used for reels and compound clips.
     Sequence {
         sequence: Id,
         source_in: Time,
-        speed: Ratio,
+        speed: Speed,
     },
     Generator {
         fx: Id,
@@ -361,10 +362,10 @@ impl Clip {
         self.start + self.duration
     }
 
-    pub fn speed(&self) -> Ratio {
+    pub fn speed(&self) -> &Speed {
         match &self.content {
-            Content::Media { speed, .. } | Content::Sequence { speed, .. } => *speed,
-            Content::Generator { .. } | Content::Caption { .. } => Ratio::ONE,
+            Content::Media { speed, .. } | Content::Sequence { speed, .. } => speed,
+            Content::Generator { .. } | Content::Caption { .. } => Speed::normal(),
         }
     }
 
@@ -376,7 +377,7 @@ impl Clip {
             }
             | Content::Sequence {
                 source_in, speed, ..
-            } => Some((*source_in, *source_in + speed.source_span(self.duration))),
+            } => Some((*source_in, *source_in + speed.played(self.duration))),
             Content::Generator { .. } | Content::Caption { .. } => None,
         }
     }
@@ -392,12 +393,7 @@ impl Clip {
         } else {
             source - low
         };
-        let span = if offset.is_negative() {
-            -speed.timeline_span(-offset)
-        } else {
-            speed.timeline_span(offset)
-        };
-        Some(self.start + span)
+        Some(self.start + speed.time_for(offset))
     }
 
     /// What this clip plays at `time` on its sequence, a time on its media
@@ -406,17 +402,28 @@ impl Clip {
     pub fn source_at(&self, time: Time) -> Option<Time> {
         let (low, high) = self.source_range()?;
         let speed = self.speed();
-        let offset = time - self.start;
-        let span = if offset.is_negative() {
-            -speed.source_span(-offset)
-        } else {
-            speed.source_span(offset)
-        };
+        let span = speed.played(time - self.start);
         Some(if speed.is_reverse() {
             high - span
         } else {
             low + span
         })
+    }
+
+    /// How long `handle` of unused source lasts before the clip's first frame, at the speed it
+    /// would play there.
+    pub fn time_before(&self, handle: Time) -> Time {
+        -self.speed().time_for(-handle)
+    }
+
+    /// How long `handle` of unused source lasts after the clip's last frame, at the speed it would
+    /// play there.
+    pub fn time_after(&self, handle: Time) -> Time {
+        let speed = self.speed();
+        match speed.constant() {
+            Some(ratio) => ratio.timeline_span(handle),
+            None => speed.time_for(speed.played(self.duration) + handle) - self.duration,
+        }
     }
 
     fn source_in_mut(&mut self) -> Option<&mut Time> {
@@ -443,13 +450,17 @@ impl Clip {
     /// Move the first frame by `delta`: positive removes material from the
     /// head, negative reveals it. Source and keyframes follow the content.
     pub fn move_head(&mut self, delta: Time) {
-        let speed = self.speed();
+        let played = self.speed().played(delta);
+        let reverse = self.speed().is_reverse();
         self.start += delta;
         self.duration -= delta;
-        if !speed.is_reverse() {
+        if !reverse {
             if let Some(source_in) = self.source_in_mut() {
-                *source_in += speed.source_span(delta);
+                *source_in += played;
             }
+        }
+        if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &mut self.content {
+            speed.shift(-delta);
         }
         for param in self.params_mut() {
             *param = param.shifted(-delta);
@@ -460,20 +471,22 @@ impl Clip {
     /// negative removes it.
     pub fn move_tail(&mut self, delta: Time) {
         let speed = self.speed();
+        let reverse = speed.is_reverse();
+        let played = speed.played(self.duration + delta) - speed.played(self.duration);
         self.duration += delta;
-        if speed.is_reverse() {
+        if reverse {
             if let Some(source_in) = self.source_in_mut() {
-                *source_in -= speed.source_span(delta);
+                *source_in -= played;
             }
         }
     }
 
     /// Show source material `delta` of timeline later (slip).
     pub fn slip(&mut self, delta: Time) {
-        let speed = self.speed();
+        let span = self.speed().played(delta);
+        let reverse = self.speed().is_reverse();
         if let Some(source_in) = self.source_in_mut() {
-            let span = speed.source_span(delta);
-            *source_in += if speed.is_reverse() { -span } else { span };
+            *source_in += if reverse { -span } else { span };
         }
     }
 
@@ -843,6 +856,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Ratio;
     use crate::value::{Interp, Keyframe, Value};
 
     fn frames(n: i64) -> Time {
@@ -855,7 +869,7 @@ mod tests {
             Content::Media {
                 media: Id::new("m1").unwrap(),
                 source_in: frames(100),
-                speed: Ratio::parse(speed).unwrap(),
+                speed: Ratio::parse(speed).unwrap().into(),
             },
             frames(10),
             frames(48),
@@ -958,6 +972,111 @@ mod tests {
         assert_eq!(clip.source_range(), Some((frames(100), frames(180))));
         clip.move_tail(frames(-4));
         assert_eq!(clip.source_range(), Some((frames(108), frames(180))));
+    }
+
+    /// A clip from source frame 100 that slows from 2 to 1/2 over 48 frames, or the reverse of that.
+    fn ramped(reverse: bool) -> Clip {
+        let sign = if reverse { "-" } else { "" };
+        let key = |at: i64, speed: &str| crate::speed::RampKey {
+            at: frames(at),
+            speed: Ratio::parse(&format!("{sign}{speed}")).unwrap(),
+            interp: Interp::Linear,
+        };
+        let mut clip = media_clip("1");
+        let Content::Media { speed, .. } = &mut clip.content else {
+            unreachable!();
+        };
+        *speed = Speed::ramp(vec![key(0, "2"), key(48, "0.5")]).unwrap();
+        clip
+    }
+
+    /// What each frame of `clips` plays, one after another on the sequence.
+    fn plays(clips: &[&Clip], from: i64, to: i64) -> Vec<i64> {
+        (from..to)
+            .map(|frame| {
+                let time = frames(frame);
+                let clip = clips
+                    .iter()
+                    .find(|clip| clip.start <= time && time < clip.end())
+                    .expect("a clip shows");
+                clip.source_at(time).unwrap().flicks()
+            })
+            .collect()
+    }
+
+    fn close(a: &[i64], b: &[i64]) {
+        assert_eq!(a.len(), b.len());
+        for (frame, (a, b)) in a.iter().zip(b).enumerate() {
+            assert!((a - b).abs() <= 2, "frame {frame}: {a} against {b}");
+        }
+    }
+
+    #[test]
+    fn a_split_ramp_plays_what_it_played_on_both_sides() {
+        for reverse in [false, true] {
+            let whole = ramped(reverse);
+            let before = plays(&[&whole], 10, 58);
+            for at in [1, 7, 12, 30, 47] {
+                let mut head = whole.clone();
+                let tail = head.split_off(frames(at), Id::new("c2").unwrap());
+                assert_eq!(head.end(), tail.start);
+                close(&plays(&[&head, &tail], 10, 58), &before);
+                // Their sources meet.
+                let (head_range, tail_range) =
+                    (head.source_range().unwrap(), tail.source_range().unwrap());
+                if reverse {
+                    assert!((tail_range.1 - head_range.0).abs().flicks() <= 2);
+                } else {
+                    assert!((head_range.1 - tail_range.0).abs().flicks() <= 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn trimming_a_ramp_leaves_what_stays_where_it_was() {
+        for reverse in [false, true] {
+            let whole = ramped(reverse);
+            let mut trimmed = whole.clone();
+            trimmed.move_head(frames(8));
+            trimmed.move_tail(frames(-5));
+            close(&plays(&[&trimmed], 18, 53), &plays(&[&whole], 18, 53));
+            assert_eq!(trimmed.duration, frames(35));
+            // And what was trimmed comes back as it was.
+            trimmed.move_head(frames(-8));
+            trimmed.move_tail(frames(5));
+            close(&plays(&[&trimmed], 10, 58), &plays(&[&whole], 10, 58));
+        }
+    }
+
+    #[test]
+    fn a_ramp_finds_its_way_back_from_a_source_time() {
+        for reverse in [false, true] {
+            let clip = ramped(reverse);
+            for frame in [10, 22, 40, 57, 70, 2] {
+                let time = frames(frame);
+                let played = clip.played_at(clip.source_at(time).unwrap()).unwrap();
+                assert!((played - time).abs().flicks() < 1_000, "frame {frame}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_ramp_measures_its_handles_at_the_speed_it_would_play_them() {
+        let clip = ramped(false);
+        // Twice as fast before its first key, half as fast after its last.
+        assert_eq!(clip.time_before(frames(10)), frames(5));
+        assert_eq!(clip.time_after(frames(10)), frames(20));
+    }
+
+    #[test]
+    fn slipping_a_ramp_moves_the_source_and_not_the_ramp() {
+        let mut clip = ramped(false);
+        let before = clip.source_range().unwrap();
+        clip.slip(frames(4));
+        let moved = clip.speed().played(frames(4));
+        assert_eq!(clip.source_range().unwrap().0, before.0 + moved);
+        assert_eq!(clip.speed(), ramped(false).speed());
     }
 
     #[test]

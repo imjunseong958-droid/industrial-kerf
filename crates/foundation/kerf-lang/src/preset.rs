@@ -268,12 +268,12 @@ fn required_source(clip: &Clip, transitions: &[Transition], rate: Rate) -> Optio
     for transition in transitions {
         let (before, after) = transition.split_at_cut(rate);
         let head = if transition.to == clip.id {
-            speed.source_span_covering(before)
+            speed.played_covering(-before, Time::ZERO)
         } else {
             Time::ZERO
         };
         let tail = if transition.from == clip.id {
-            speed.source_span_covering(after)
+            speed.played_covering(clip.duration, clip.duration + after)
         } else {
             Time::ZERO
         };

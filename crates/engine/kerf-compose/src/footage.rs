@@ -20,7 +20,7 @@ use ffmpeg_next::{decoder, filter, frame, media};
 use kerf_color::{ColorPipeline, ColorSpace, InputTransform, Range};
 use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Rate, Ratio, Retime, Time};
+use kerf_model::{Rate, Retime, Speed, Time};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
@@ -76,7 +76,7 @@ pub(crate) struct ClipSource {
     pub deep: Option<&'static InputTransform>,
     pub retime: Retime,
     pub source_in: Time,
-    pub speed: Ratio,
+    pub speed: Speed,
     pub duration: Time,
 }
 
@@ -84,22 +84,31 @@ impl ClipSource {
     /// The media frame shown at clip time `at`: the one showing at its
     /// source time, which a reversed clip runs back from its source out.
     pub fn frame_at_time(&self, at: Time) -> i64 {
-        let at = i128::from(at.flicks());
-        let per_second = i128::from(FLICKS_PER_SECOND);
         let units = |time: Time| i128::from(time.flicks());
-        let (num, den) = (
-            i128::from(self.speed.num().unsigned_abs()),
-            i128::from(self.speed.den()),
-        );
-        // Frames per unit, as a fraction over the clip speed's denominator.
-        let per = per_second * i128::from(self.rate.den()) * den;
+        // Source flicks, as a fraction over the clip speed's denominator: one ratio stays exact,
+        // and a ramp is exact to the flick.
+        let (forward, reverse, den) = match self.speed.constant() {
+            Some(ratio) => {
+                let (num, den) = (
+                    i128::from(ratio.num().unsigned_abs()),
+                    i128::from(ratio.den()),
+                );
+                (units(at) * num, units(at) * num, den)
+            }
+            None => {
+                let played = units(self.speed.played(at));
+                (played, played, 1)
+            }
+        };
+        // Frames per unit.
+        let per = i128::from(FLICKS_PER_SECOND) * i128::from(self.rate.den()) * den;
         let frame = if self.speed.is_reverse() {
             // The frame showing just before the source position.
-            let out = units(self.source_in + self.speed.source_span(self.duration));
-            let position = (out * den - at * num) * i128::from(self.rate.num());
+            let out = units(self.source_in + self.speed.played(self.duration));
+            let position = (out * den - reverse) * i128::from(self.rate.num());
             -(-position).div_euclid(per) - 1
         } else {
-            let position = (units(self.source_in) * den + at * num) * i128::from(self.rate.num());
+            let position = (units(self.source_in) * den + forward) * i128::from(self.rate.num());
             position.div_euclid(per)
         };
         frame.clamp(0, i128::from(self.frames.max(1) - 1)) as i64
@@ -110,12 +119,12 @@ impl ClipSource {
     fn between_at(&self, at: Time) -> Option<(i64, u16)> {
         let seconds = |time: Time| time.flicks() as f64 / FLICKS_PER_SECOND as f64;
         let per_second = f64::from(self.rate.num()) / f64::from(self.rate.den());
-        let speed = f64::from(self.speed.num().unsigned_abs()) / f64::from(self.speed.den());
+        let played = self.speed.played_seconds(seconds(at));
         let position = if self.speed.is_reverse() {
-            let out = self.source_in + self.speed.source_span(self.duration);
-            (seconds(out) - seconds(at) * speed) * per_second - 1.0
+            let out = self.source_in + self.speed.played(self.duration);
+            (seconds(out) - played) * per_second - 1.0
         } else {
-            (seconds(self.source_in) + seconds(at) * speed) * per_second
+            (seconds(self.source_in) + played) * per_second
         };
         let first = position.floor();
         let between = ((position - first) * 64.0).round() as u16;
@@ -778,7 +787,7 @@ mod tests {
             deep: None,
             retime: Retime::Frames,
             source_in: Rate::FPS_24.time_of(source_in),
-            speed: Ratio::parse(speed).unwrap(),
+            speed: kerf_model::Ratio::parse(speed).unwrap().into(),
             duration: Rate::FPS_24.time_of(duration),
         }
     }
@@ -809,6 +818,52 @@ mod tests {
         let fast = clip(10, "-2", 24);
         assert_eq!(fast.frame_at_time(at(0, Rate::FPS_24)), 57);
         assert_eq!(fast.frame_at_time(at(1, Rate::FPS_24)), 55);
+    }
+
+    fn ramped(speed: kerf_model::Speed) -> ClipSource {
+        ClipSource {
+            speed,
+            ..clip(10, "1", 48)
+        }
+    }
+
+    fn keys(speeds: &[(i64, &str)]) -> kerf_model::Speed {
+        kerf_model::Speed::ramp(
+            speeds
+                .iter()
+                .map(|(frame, speed)| kerf_model::RampKey {
+                    at: Rate::FPS_24.time_of(*frame),
+                    speed: kerf_model::Ratio::parse(speed).unwrap(),
+                    interp: kerf_model::Interp::Linear,
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_ramp_shows_the_frame_its_area_has_reached() {
+        // From 2 to 1/2 in a line over 24 frames plays 30 frames.
+        let clip = ramped(keys(&[(0, "2"), (24, "1/2")]));
+        assert_eq!(clip.frame_at_time(at(0, Rate::FPS_24)), 10);
+        assert_eq!(clip.frame_at_time(at(24, Rate::FPS_24)), 40);
+        // Half speed from then on.
+        assert_eq!(clip.frame_at_time(at(28, Rate::FPS_24)), 42);
+        // Half way along, the speed is 5/4 and the area (2 + 5/4) / 2 × 12 = 19.5.
+        assert_eq!(clip.frame_at_time(at(12, Rate::FPS_24)), 29);
+        assert_eq!(clip.between_at(at(12, Rate::FPS_24)), Some((29, 32)));
+    }
+
+    #[test]
+    fn a_reversed_ramp_runs_back_from_its_source_out() {
+        // Over 24 frames from -1 to -1/2 plays 18 frames, then 12 more over 24 at -1/2: 30 in all.
+        let clip = ClipSource {
+            duration: Rate::FPS_24.time_of(48),
+            ..ramped(keys(&[(0, "-1"), (24, "-1/2")]))
+        };
+        assert_eq!(clip.frame_at_time(at(0, Rate::FPS_24)), 39);
+        assert_eq!(clip.frame_at_time(at(24, Rate::FPS_24)), 21);
+        assert_eq!(clip.frame_at_time(at(47, Rate::FPS_24)), 10);
     }
 
     #[test]

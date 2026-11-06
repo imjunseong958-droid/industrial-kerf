@@ -3,8 +3,8 @@
 use crate::lex::{Arg, Atom, Line};
 use kerf_model::time::{format_timecode, parse_timecode, parse_timecode_frames};
 use kerf_model::{
-    Diagnostic, Id, Interp, Keyframe, Media, Param, ParamDef, ParamType, Rate, Rgba, Sequence,
-    Time, Value,
+    Diagnostic, Id, Interp, Keyframe, Media, Param, ParamDef, ParamType, RampKey, Rate, Ratio,
+    Rgba, Sequence, Speed, Time, Value,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -200,6 +200,65 @@ pub fn print_param(param: &Param, rate: Rate) -> String {
                 })
                 .collect();
             format!("{{{}}}", keys.join(" "))
+        }
+    }
+}
+
+/// A clip's speed as a document writes it: one ratio, or keyframes of them.
+pub fn print_speed(speed: &Speed, rate: Rate) -> String {
+    match speed {
+        Speed::Constant(ratio) => ratio.to_string(),
+        Speed::Ramp(ramp) => {
+            let keys: Vec<String> = ramp
+                .keys()
+                .iter()
+                .map(|key| {
+                    let mut text = format!("{}:{}", print_offset(key.at, rate), key.speed);
+                    if key.interp != Interp::Linear {
+                        text.push(':');
+                        text.push_str(&key.interp.name());
+                    }
+                    text
+                })
+                .collect();
+            format!("{{{}}}", keys.join(" "))
+        }
+    }
+}
+
+/// Read a clip's speed: `2`, `0.5`, `-1`, or `{time:speed[:interp] …}` to change it over the clip.
+pub fn parse_speed(atom: &Atom, rate: Rate) -> Result<Speed, String> {
+    match atom {
+        Atom::Word(word) => Ratio::parse(word)
+            .map(Speed::Constant)
+            .map_err(|error| error.to_string()),
+        Atom::Str(_) => {
+            Err("a speed is a number or {time:speed …}, not a quoted string".to_owned())
+        }
+        Atom::Group(words) => {
+            let keys = words
+                .iter()
+                .map(|word| {
+                    let parts: Vec<&str> = word.split(':').collect();
+                    let (at, speed, interp) = match parts[..] {
+                        [at, speed] => (at, speed, Interp::Linear),
+                        [at, speed, interp] => (
+                            at,
+                            speed,
+                            Interp::parse(interp).ok_or_else(|| {
+                                format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, ease, or a curve's x1,y1,x2,y2")
+                            })?,
+                        ),
+                        _ => return Err(format!("keyframe `{word}` should read time:speed or time:speed:interp")),
+                    };
+                    Ok(RampKey {
+                        at: amount(at, rate)?,
+                        speed: Ratio::parse(speed).map_err(|error| error.to_string())?,
+                        interp,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Speed::ramp(keys)
         }
     }
 }

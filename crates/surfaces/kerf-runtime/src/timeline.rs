@@ -194,7 +194,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         object.insert("in".into(), json!(source_in.seconds()));
         object.insert("out".into(), json!(source_out.seconds()));
         let speed = clip.speed();
-        object.insert("speed".into(), json!(speed.value().abs()));
+        object.insert("speed".into(), json!(speed.average(clip.duration)));
         object.insert("speedRatio".into(), json!(speed.to_string()));
         if speed.is_reverse() {
             object.insert("reverse".into(), json!(true));
@@ -447,6 +447,24 @@ mod tests {
             .unwrap()
             .iter()
             .all(|fx| fx["kind"] != "generator" && fx.get("domain").is_none()));
+    }
+
+    #[test]
+    fn a_ramp_reads_as_its_speed_overall() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\n\
+             media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=2s at=0f dur=24f speed={0f:1 24f:1/2}\n",
+            Catalog::builtin(),
+        )
+        .expect("parses")
+        .project;
+        let view = timeline_json(&project);
+        let clip = &view["tracks"][0]["clips"][0];
+        assert_eq!(clip["speed"], 0.75);
+        assert_eq!(clip["speedRatio"], "ramp");
     }
 
     #[test]
