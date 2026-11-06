@@ -14,6 +14,7 @@ class CommentsTest;
 class DeliverTest;
 class FeatureTest;
 class FinishTest;
+class GraphTest;
 class InspectorTest;
 class KitTest;
 class LauncherTest;
@@ -44,6 +45,7 @@ struct Access;
     friend class ::kerf::DeliverTest;                                                                                  \
     friend class ::kerf::FeatureTest;                                                                                  \
     friend class ::kerf::FinishTest;                                                                                   \
+    friend class ::kerf::GraphTest;                                                                                    \
     friend class ::kerf::InspectorTest;                                                                                \
     friend class ::kerf::KitTest;                                                                                      \
     friend class ::kerf::LauncherTest;                                                                                 \

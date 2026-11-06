@@ -25,6 +25,7 @@
 #include "deliver_tray.h"
 #include "editor_bus.h"
 #include "finish_tray.h"
+#include "graph_editor.h"
 #include "deliver_pane.h"
 #include "inspector_column.h"
 #include "wiring/main_window_shared.h"
@@ -948,11 +949,14 @@ void MainWindow::buildPreferences() {
 void MainWindow::buildShell() {
     m_finishTray = new FinishTray(nullptr, m_bus);
     m_deliverTray = new DeliverTray(nullptr, m_bus);
+    m_graphEditor = new GraphEditor(nullptr, m_bus);
+    connect(m_graphEditor, &GraphEditor::editRequested, this, &MainWindow::sendEdit);
+    connect(m_graphEditor, &GraphEditor::seekRequested, this, &MainWindow::queueSeek);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
     buildSidebar();
     buildAgentViews();
     m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
-    m_shell->setTrays(m_finishTray, m_deliverTray);
+    m_shell->setTrays(m_finishTray, m_deliverTray, m_graphEditor);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
     // Each sheet closes from the end of its strip.
     const auto closeButton = [this](StageShell::Sheet sheet) {
@@ -1044,6 +1048,9 @@ void MainWindow::setupActions() {
             if (id == QStringLiteral("workspace.finish")) m_shell->setTray(checked ? StageShell::Tray::Finish : StageShell::Tray::None);
             else if (id == QStringLiteral("workspace.deliver")) m_shell->setTray(checked ? StageShell::Tray::Deliver : StageShell::Tray::None);
             else m_shell->setTray(StageShell::Tray::None);
+            syncPanelCommands();
+        } else if (id == QStringLiteral("view.graph")) {
+            m_shell->setTray(checked ? StageShell::Tray::Graph : StageShell::Tray::None);
             syncPanelCommands();
         } else if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
         else if (id == QStringLiteral("inspector.video")) {
@@ -2063,12 +2070,13 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("inspector.video"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Video},
         {QStringLiteral("inspector.audio"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Audio},
         {QStringLiteral("inspector.info"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Info},
-        {QStringLiteral("workspace.review"), tray == StageShell::Tray::None},
+        {QStringLiteral("workspace.review"), tray == StageShell::Tray::None || tray == StageShell::Tray::Graph},
         {QStringLiteral("workspace.finish"), tray == StageShell::Tray::Finish},
         {QStringLiteral("workspace.deliver"), tray == StageShell::Tray::Deliver},
         {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
         {QStringLiteral("view.picture"), m_shell->panes().picture},
         {QStringLiteral("view.timeline"), m_shell->panes().timeline},
+        {QStringLiteral("view.graph"), tray == StageShell::Tray::Graph},
         {QStringLiteral("view.followKerf"), m_followKerf},
     };
     for (const auto &[id, checked] : states)

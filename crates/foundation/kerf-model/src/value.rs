@@ -355,6 +355,26 @@ impl Param {
 
 #[cfg(test)]
 mod tests {
+    /// The same table holds the graph editor to these curves, in `apps/kerf-qt/tests/graph_test.cpp`.
+    #[test]
+    fn curves_read_the_table_the_graph_editor_is_held_to() {
+        for (interp, t, wanted) in [
+            ("linear", 0.25, 0.25),
+            ("hold", 0.9, 0.0),
+            ("ease-in", 0.5, 0.25),
+            ("ease-out", 0.5, 0.75),
+            ("ease", 0.25, 0.15625),
+            ("0.25,0.1,0.25,1", 0.5, 0.802403),
+            ("0.42,0,0.58,1", 0.25, 0.129162),
+            ("0.5,-1,0.5,2", 0.5, 0.5),
+            ("0.5,-1,0.5,2", 0.25, -0.182322),
+            ("0,0,1,1", 0.3, 0.3),
+        ] {
+            let curve = super::Interp::parse(interp).expect("an interp");
+            assert!((curve.curve(t) - wanted).abs() < 1e-5, "{interp} at {t}");
+        }
+    }
+
     use super::*;
     use crate::time::Rate;
 

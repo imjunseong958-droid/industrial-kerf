@@ -165,8 +165,8 @@ corrections.
 `crates/color/kerf-scopes` reads a frame as a colorist reads scopes, and `look` gives the
 agent the numbers (`scopes: true`), so that it can grade by measuring: levels, clipping,
 tonal zones, a histogram, the cast, saturation, the skin tone line, and the densest colors.
-Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
-also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
+Comparing `proposal` with the project shows what a grade did. A person reads the same frame in the
+Finish tray: a waveform, a vectorscope, and an RGB parade (`apps/kerf-qt/ui/scopes.h`).
 
 The 18 grades (`look.grade.*`, `crates/foundation/kerf-model/looks`) are FilmCraft's Lumetri presets
 as looks, each behind an `amount`, so 0 leaves the picture alone and `fx c1 flatten 1` opens one up for
@@ -179,7 +179,7 @@ To add: layered grades as stacked effects.
 
 ### Motion
 
-Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with reveals by character or
+Has: keyframes (hold, linear, easings, Bezier curves) with a graph editor in the editor (`apps/kerf-qt/ui/graph_editor.h`), transforms, titles with reveals by character or
 word, shapes with trimmed strokes and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render/three_d/adv` at
@@ -188,8 +188,7 @@ perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add, in order:
 
-1. A graph editor in the panel, for the Bezier keyframes (`kerf_model::Bezier`) and motion paths
-   (`path=`, `along=`, `orient=`) that are in the language.
+1. Motion paths (`path=`, `orient=`) drawn on the picture; the graph editor already has `along`.
 2. More of shapes, from EffectCraft's `path` (booleans, offsets, variable strokes), and variable fonts.
 
 Expressions stay out. They exist so that a person need not write hundreds of

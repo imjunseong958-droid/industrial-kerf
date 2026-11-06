@@ -283,9 +283,10 @@ void StageShell::setSheets(QWidget *media, QWidget *browser, QWidget *inspector)
     place();
 }
 
-void StageShell::setTrays(QWidget *finish, QWidget *deliver) {
+void StageShell::setTrays(QWidget *finish, QWidget *deliver, QWidget *graph) {
     m_trays[0] = finish;
     m_trays[1] = deliver;
+    m_trays[2] = graph;
     for (QWidget *tray : m_trays)
         if (tray) {
             tray->setParent(this);
@@ -542,7 +543,7 @@ void StageShell::place() {
     placeSeam(m_seamColumn, QRect());
 
     // The tray, over the regions; a sheet over the tray.
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < 3; ++index) {
         QWidget *tray = m_trays[index];
         if (!tray) continue;
         const bool shown = int(m_tray) == index + 1;

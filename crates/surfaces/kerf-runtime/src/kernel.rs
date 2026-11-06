@@ -1728,8 +1728,8 @@ const MAX_KEY_FRAMES: i64 = 1 << 30;
 /// `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}`. `at` counts
 /// whole frames of `rate` (the clip's sequence) from the clip's first frame,
 /// as the model keeps keyframes clip-relative; `interp` is `linear` (the
-/// default), `hold`, `ease`, `ease-in` or `ease-out`, and says how the value
-/// moves toward the next key. Keys are put in time order; two at one frame
+/// default), `hold`, `ease`, `ease-in`, `ease-out` or a curve's four numbers
+/// (`0.25,0.1,0.75,0.9`), and says how the value moves toward the next key. Keys are put in time order; two at one frame
 /// are refused when the edit is checked. `None` for anything else.
 pub(crate) fn json_param(ty: &ParamType, value: &Json, rate: Rate) -> Option<Param> {
     let Some(keys) = value.as_object().and_then(|object| object.get("keys")) else {
@@ -1801,6 +1801,23 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keys_take_the_curves_the_graph_editor_writes() {
+        use kerf_model::{Interp, Param, ParamType, Rate};
+        let keys = serde_json::json!({"keys": [
+            {"at": 0, "value": 0.0, "interp": "0.25,0.1,0.75,0.9"},
+            {"at": 24, "value": 1.0, "interp": "hold"},
+        ]});
+        let Some(Param::Animated(found)) = super::json_param(&ParamType::Number, &keys, Rate::FPS_24)
+        else {
+            panic!("took no keys");
+        };
+        assert_eq!(found[0].interp, Interp::parse("0.25,0.1,0.75,0.9").expect("a curve"));
+        assert_eq!(found[1].interp, Interp::Hold);
+        let wrong = serde_json::json!({"keys": [{"at": 0, "value": 0.0, "interp": "9,0,0,1"}]});
+        assert!(super::json_param(&ParamType::Number, &wrong, Rate::FPS_24).is_none());
+    }
+
     use super::*;
     use serde_json::json;
     use std::time::Duration;
