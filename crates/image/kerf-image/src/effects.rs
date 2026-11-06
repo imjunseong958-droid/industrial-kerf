@@ -1,11 +1,13 @@
 //! This area's effects.
 
 use crate::fill::{dilate, fill_frames, membrane_fill, opaque_fill, patch_fill};
+use crate::stroke::{clone_stroke, find_source, heal_stroke, Stroke};
+use crate::warp::warp;
 use kerf_draw::color::{to_encoded, to_linear};
 use kerf_draw::effect::{EffectRun, PictureEffect};
 use kerf_draw::mask;
 use kerf_draw::Image;
-use kerf_model::{Effect, MaskMode, Time};
+use kerf_model::{parse_moves, parse_points, Effect, MaskMode, Time};
 use kerf_raster::Image as Raster;
 use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -13,7 +15,124 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Every effect of this area.
-pub const EFFECTS: &[&dyn PictureEffect] = &[&Fill];
+pub const EFFECTS: &[&dyn PictureEffect] = &[&Fill, &Clone, &Heal, &Warp];
+
+/// `image.clone`: a stroke painted with the picture from elsewhere.
+struct Clone;
+
+impl PictureEffect for Clone {
+    fn id(&self) -> &'static str {
+        "image.clone"
+    }
+
+    fn apply(&self, picture: &mut Image, effect: &Effect, run: &EffectRun) {
+        paint(picture, effect, run, clone_stroke);
+    }
+}
+
+/// `image.heal`: a stroke with the detail of elsewhere, and the light and color of where it goes.
+struct Heal;
+
+impl PictureEffect for Heal {
+    fn id(&self) -> &'static str {
+        "image.heal"
+    }
+
+    fn apply(&self, picture: &mut Image, effect: &Effect, run: &EffectRun) {
+        paint(picture, effect, run, heal_stroke);
+    }
+}
+
+/// `image.warp`: a mesh over the picture, dragged by moves.
+struct Warp;
+
+impl PictureEffect for Warp {
+    fn id(&self) -> &'static str {
+        "image.warp"
+    }
+
+    fn apply(&self, picture: &mut Image, effect: &Effect, run: &EffectRun) {
+        let Some(moves) = run.text(effect, "moves") else {
+            return;
+        };
+        let Ok(chains) = parse_moves(&moves) else {
+            return;
+        };
+        let place = placing(picture, effect, run);
+        let chains: Vec<Vec<[f32; 2]>> = chains
+            .iter()
+            .map(|chain| chain.iter().map(|point| place(*point)).collect())
+            .collect();
+        let radius = (run.number(effect, "radius") * picture.h as f64) as f32;
+        warp(
+            picture,
+            &chains,
+            radius,
+            run.number(effect, "amount") as f32,
+        );
+    }
+}
+
+/// What turns a point of the document, in fractions of the picture, into its pixels, moved with the
+/// picture by the effect's `move_x` and `move_y`.
+fn placing(picture: &Image, effect: &Effect, run: &EffectRun) -> impl Fn([f64; 2]) -> [f32; 2] {
+    let (w, h) = (picture.w as f64, picture.h as f64);
+    let moved = [run.number(effect, "move_x"), run.number(effect, "move_y")];
+    move |point| {
+        [
+            ((point[0] + moved[0]) * w) as f32,
+            ((point[1] + moved[1]) * h) as f32,
+        ]
+    }
+}
+
+/// Paint the stroke an effect says, from where it says, with `paint`.
+fn paint(
+    picture: &mut Image,
+    effect: &Effect,
+    run: &EffectRun,
+    paint: fn(&mut Image, Option<&Image>, &Stroke, [f32; 2]),
+) {
+    let Some(points) = run.text(effect, "points") else {
+        return;
+    };
+    let Ok(points) = parse_points(&points) else {
+        return;
+    };
+    let place = placing(picture, effect, run);
+    let stroke = Stroke {
+        points: points.into_iter().map(place).collect(),
+        radius: (run.number(effect, "radius") * picture.h as f64) as f32,
+        hardness: run.number(effect, "hardness") as f32,
+        opacity: run.number(effect, "opacity") as f32,
+    };
+    let (w, h) = (picture.w as f64, picture.h as f64);
+    let mut from = [
+        (run.number(effect, "from_x") * w) as f32,
+        (run.number(effect, "from_y") * h) as f32,
+    ];
+    let frames = run.number(effect, "from_frame").round();
+    if from == [0.0, 0.0] && frames == 0.0 {
+        // Told nowhere to paint from, it finds a place.
+        match find_source(picture, &stroke) {
+            Some(found) => from = found,
+            None => return,
+        }
+    }
+    let other = (frames != 0.0)
+        .then(|| other_frame(picture, run, frames))
+        .flatten();
+    paint(picture, other.as_ref(), &stroke, from);
+}
+
+/// The clip's picture `frames` away, held to its ends; `None` when it has no other frames to read.
+fn other_frame(picture: &Image, run: &EffectRun, frames: f64) -> Option<Image> {
+    let read = run.picture_at?;
+    let frame = 1.0 / run.frame_rate.max(1.0);
+    let last = (run.duration.seconds() - frame).max(0.0);
+    let time = Time::from_seconds((run.at.seconds() + frames * frame).clamp(0.0, last))?;
+    read(time).filter(|other| (other.w, other.h) == (picture.w, picture.h))
+}
 
 /// `image.fill`: the area a mask draws, filled from the rest of the picture.
 struct Fill;
@@ -345,6 +464,118 @@ mod tests {
         let mut changed = picture.clone();
         changed.px[100] += 0.01;
         assert_ne!(key, fill_key(&changed, &hole, "", 7, 1));
+    }
+
+    fn stroke_effect(id: &str, params: &[(&str, Param)]) -> Effect {
+        Effect {
+            fx: Id::new(id).expect("an id"),
+            version: 1,
+            enabled: true,
+            params: params
+                .iter()
+                .map(|(name, param)| ((*name).to_owned(), param.clone()))
+                .collect(),
+        }
+    }
+
+    fn text(value: &str) -> Param {
+        Param::Static(Value::Text(value.to_owned()))
+    }
+
+    fn number(value: f64) -> Param {
+        Param::Static(Value::Number(value))
+    }
+
+    #[test]
+    fn a_clone_reads_fractions_of_the_picture_and_moves_with_it() {
+        let masks = [];
+        let mut picture = Image::filled(100, 50, [0.2, 0.2, 0.2, 1.0]);
+        for y in 20..30 {
+            for x in 20..30 {
+                picture.px[(y * 100 + x) * 4..][..3].copy_from_slice(&[1.0, 1.0, 1.0]);
+            }
+        }
+        let original = picture.clone();
+        let params = [
+            ("points", text("0.75,0.5")),
+            ("radius", number(0.1)),
+            ("hardness", number(1.0)),
+            ("from_x", number(-0.5)),
+        ];
+        Clone.apply(
+            &mut picture,
+            &stroke_effect("image.clone", &params),
+            &run(&masks),
+        );
+        assert_eq!(picture.get(75, 25)[0], 1.0);
+        // Moved a tenth across, the stroke and what it reads go together.
+        let mut moved = original.clone();
+        let params = [
+            ("points", text("0.65,0.5")),
+            ("radius", number(0.1)),
+            ("hardness", number(1.0)),
+            ("from_x", number(-0.5)),
+            ("move_x", number(0.1)),
+        ];
+        Clone.apply(
+            &mut moved,
+            &stroke_effect("image.clone", &params),
+            &run(&masks),
+        );
+        assert_eq!(moved.get(75, 25)[0], 1.0);
+        assert_eq!(moved.get(65, 25)[0], 0.2);
+    }
+
+    #[test]
+    fn strokes_can_paint_from_another_frame_held_to_the_clips_ends() {
+        let masks = [];
+        let white = Image::filled(20, 20, [1.0; 4]);
+        let seen = Mutex::new(Vec::new());
+        let read = |at: Time| {
+            seen.lock().unwrap_or_else(PoisonError::into_inner).push(at);
+            Some(white.clone())
+        };
+        let mut picture = Image::filled(20, 20, [0.2, 0.2, 0.2, 1.0]);
+        let params = [
+            ("points", text("0.5,0.5")),
+            ("radius", number(0.25)),
+            ("hardness", number(1.0)),
+            ("from_frame", number(-100.0)),
+        ];
+        let reading = EffectRun {
+            picture_at: Some(&read),
+            ..run(&masks)
+        };
+        Clone.apply(
+            &mut picture,
+            &stroke_effect("image.clone", &params),
+            &reading,
+        );
+        assert_eq!(picture.get(10, 10)[0], 1.0);
+        assert_eq!(picture.get(1, 1)[0], 0.2);
+        assert_eq!(
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
+            [Time::ZERO]
+        );
+    }
+
+    #[test]
+    fn a_warp_moves_by_fractions_and_radius_in_frame_heights() {
+        let masks = [];
+        let mut picture = Image::filled(100, 50, [0.2, 0.2, 0.2, 1.0]);
+        for y in 23..27 {
+            for x in 28..32 {
+                picture.px[(y * 100 + x) * 4..][..3].copy_from_slice(&[1.0, 1.0, 1.0]);
+            }
+        }
+        let params = [("moves", text("0.3,0.5>0.6,0.5")), ("radius", number(0.8))];
+        Warp.apply(
+            &mut picture,
+            &stroke_effect("image.warp", &params),
+            &run(&masks),
+        );
+        assert!(picture.get(60, 25)[0] > 0.9, "{:?}", picture.get(60, 25));
+        assert!(picture.get(30, 25)[0] < 0.3, "{:?}", picture.get(30, 25));
     }
 
     #[test]

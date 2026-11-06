@@ -26,7 +26,7 @@ pub use model::{
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;
-pub use path::{parse_path_points, MotionPath, PathPoint};
+pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use ops::{
     apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
     TrackChange, TrackRoleChange,
