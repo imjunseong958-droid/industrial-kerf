@@ -41,6 +41,7 @@ fn compositor(document: &str, accel: Accel, captions: bool) -> Compositor {
             sequence: None,
             captions,
             accel,
+            ..ComposeOptions::default()
         },
     )
     .expect("composes")

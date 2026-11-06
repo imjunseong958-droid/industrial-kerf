@@ -20,8 +20,8 @@
 //!   picture in order, after its masks, and read its other frames, the
 //!   sequence's other tracks, and its sound tracks as they need.
 
-use crate::domains;
 use crate::footage::{frame_count, ClipSource, Pictures};
+use crate::{domains, frames};
 use crate::{Accel, ComposeError, Frame};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
@@ -33,10 +33,12 @@ use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Param, Params, Project, Rate, Ratio,
-    Rgba, Sequence, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, Param, ParamType, Params,
+    Project, Rate, Ratio, Rgba, Sequence, Time, Track, TrackKind, Value,
 };
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod gpu;
@@ -62,6 +64,7 @@ pub(crate) struct Drawing {
     sounds: crate::sound::Sounds,
     captions: bool,
     accel: Accel,
+    keep_frames: bool,
     /// The LUT files FilmCraft's effects name.
     library: filmcraft::project::Project,
 }
@@ -139,7 +142,7 @@ struct Shown {
 /// How a clip enters over the one before it, and from when to when.
 type Entrance = (Reveal, Time, Time);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Reveal {
     Dissolve,
     Wipe {
@@ -178,6 +181,11 @@ struct ClipPlan {
     shown: f64,
     blend: Blend,
     effects: Vec<Effect>,
+    /// A number for everything about the clip that does not change over time, wherever it starts.
+    /// `None` when it draws on something the document does not hold: another track, a sound, a file.
+    digest: Option<u64>,
+    /// Its effects read the sequence's time or name, as a burn-in does.
+    reads_sequence_time: bool,
 }
 
 enum Source {
@@ -211,6 +219,7 @@ impl Drawing {
         sequence: Option<&str>,
         captions: bool,
         accel: Accel,
+        keep_frames: bool,
     ) -> Result<Self> {
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
@@ -242,6 +251,7 @@ impl Drawing {
             sounds: crate::sound::Sounds::default(),
             captions,
             accel,
+            keep_frames,
             library,
         })
     }
@@ -269,6 +279,21 @@ impl Drawing {
     /// The picture at sequence time `at` over black, at `scale` of the
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
+        let key = self
+            .keep_frames
+            .then(|| self.frame_key(at, scale))
+            .flatten();
+        if let Some(frame) = key.and_then(frames::get) {
+            return frame;
+        }
+        let frame = self.draw_frame(at, scale);
+        if let Some(key) = key {
+            frames::put(key, frame.clone());
+        }
+        frame
+    }
+
+    fn draw_frame(&self, at: Time, scale: f64) -> Frame {
         if scale >= 1.0 {
             if let Some(frame) = self.plain_frame(at) {
                 return frame;
@@ -284,6 +309,75 @@ impl Drawing {
             height: image.h as u32,
             rgba: image.to_rgba8_over_black(),
         }
+    }
+
+    /// See [`Compositor::frame_key`](crate::Compositor::frame_key).
+    pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
+        let mut hash = DefaultHasher::new();
+        scale.clamp(1.0 / 16.0, 1.0).to_bits().hash(&mut hash);
+        self.captions.hash(&mut hash);
+        self.hash_sequence(&mut hash, 0, at)?;
+        Some(hash.finish())
+    }
+
+    /// Hash everything sequence `index` at its time `at` draws from.
+    fn hash_sequence(&self, hash: &mut DefaultHasher, index: usize, at: Time) -> Option<()> {
+        let plan = &self.sequences[index];
+        (
+            plan.width,
+            plan.height,
+            plan.rate.fps().to_bits(),
+            plan.drop_frame,
+        )
+            .hash(hash);
+        for track in plan.tracks.iter().filter(|track| track.shows) {
+            for (place, shown) in track.shown.iter().enumerate() {
+                if !shown.shows(at) {
+                    continue;
+                }
+                let clip = &shown.plan;
+                let time = at - clip.clip.start;
+                clip.digest?.hash(hash);
+                time.flicks().hash(hash);
+                clip.shown.to_bits().hash(hash);
+                clip.letterboxed.hash(hash);
+                if clip.reads_sequence_time {
+                    at.flicks().hash(hash);
+                }
+                if let Some((reveal, start, end)) = shown.reveal {
+                    format!("{reveal:?}").hash(hash);
+                    progress(at, start, end).to_bits().hash(hash);
+                }
+                if let Source::Nested {
+                    sequence: nested,
+                    source_in,
+                    speed,
+                    duration,
+                } = &clip.source
+                {
+                    let inner = &self.sequences[*nested];
+                    let shown = nested_time(time, *source_in, *speed, *duration, inner.rate);
+                    self.hash_sequence(hash, *nested, shown)?;
+                }
+                for pair in track.pairs.iter().filter(|pair| {
+                    pair.start <= at && at < pair.end && (pair.from == place || pair.to == place)
+                }) {
+                    format!("{}{:?}", pair.def.id, pair.params).hash(hash);
+                    (pair.from == place, pair.from_nothing).hash(hash);
+                    progress(at, pair.start, pair.end).to_bits().hash(hash);
+                }
+            }
+            for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
+                (dip.color.r, dip.color.g, dip.color.b, dip.color.a).hash(hash);
+                progress(at, dip.from, dip.to).to_bits().hash(hash);
+            }
+        }
+        if self.captions {
+            for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
+                caption.text.hash(hash);
+            }
+        }
+        Some(())
     }
 
     /// A frame that is one media clip alone, untouched, at full size: its
@@ -777,6 +871,44 @@ impl Drawing {
             adjusted.mul_coverage(&weight);
             composite(canvas, &adjusted, 1.0, plan.blend);
         }
+    }
+}
+
+/// A number for everything about `clip` that does not change over time, wherever it starts, and
+/// the file it shows. `None` when it draws on something the document does not hold.
+fn clip_digest(clip: &Clip, catalog: &Catalog, media: Option<&Media>) -> Option<u64> {
+    for effect in &clip.effects {
+        let def = catalog.fx(effect.fx.as_str())?;
+        let outside = def.params.iter().any(|param| {
+            matches!(
+                param.ty,
+                ParamType::Track | ParamType::Sound | ParamType::File(_)
+            ) && !effect_text_is_empty(effect, &param.name)
+        });
+        if outside {
+            return None;
+        }
+    }
+    let mut hash = DefaultHasher::new();
+    let mut unplaced = clip.clone();
+    unplaced.start = Time::ZERO;
+    format!("{unplaced:?}").hash(&mut hash);
+    if let Some(media) = media {
+        format!("{media:?}").hash(&mut hash);
+        // A file replaced under the same name is another picture.
+        let file = std::fs::metadata(&media.path).ok()?;
+        file.len().hash(&mut hash);
+        file.modified().ok()?.hash(&mut hash);
+    }
+    Some(hash.finish())
+}
+
+/// Whether effect parameter `name` holds no text, as a track or file not chosen does.
+fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
+    match effect.params.get(name) {
+        Some(Param::Static(Value::Text(text))) => text.is_empty(),
+        Some(_) => false,
+        None => true,
     }
 }
 
@@ -1453,6 +1585,14 @@ impl<'a> Builder<'a> {
             Param::Animated(_) => return Err(unsupported(&clip.id, "animated `blend`")),
         };
         self.effects.extend(effects.iter().cloned());
+        let media = match &clip.content {
+            Content::Media { media, .. } => self.project.media(media.as_str()),
+            _ => None,
+        };
+        let digest = clip_digest(clip, self.catalog, media);
+        let reads_sequence_time = effects
+            .iter()
+            .any(|effect| effect.fx.as_str().starts_with("text."));
         let mut plan = ClipPlan {
             clip: clip.clone(),
             name,
@@ -1465,6 +1605,8 @@ impl<'a> Builder<'a> {
             shown: 1.0,
             blend,
             effects,
+            digest,
+            reads_sequence_time,
         };
         let frames = Frames::new(sequence.rate, clip, lo, hi);
         let cw = f64::from(canvas.0);

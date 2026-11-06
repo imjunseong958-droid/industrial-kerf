@@ -38,9 +38,16 @@ fn time(document: &str, frames: i64) -> (f64, f64) {
     // CPU, and so does a frame the kernels cannot draw.
     let options = ComposeOptions {
         accel: Accel::Always,
+        keep_frames: std::env::var_os("KERF_BENCH_KEEP").is_some(),
         ..ComposeOptions::default()
     };
     let compositor = Compositor::new(&project, Catalog::builtin(), &options).expect("draws");
+    // With frames kept, what is timed is drawing them again.
+    if std::env::var_os("KERF_BENCH_KEEP").is_some() {
+        for index in 0..frames {
+            compositor.frame(Rate::FPS_24.time_of(index), 1.0);
+        }
+    }
     let mut times: Vec<f64> = (0..frames)
         .map(|index| {
             let began = Instant::now();
