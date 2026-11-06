@@ -121,9 +121,7 @@ Three limits remain, in this order:
    the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. `time.echo`, `light.echoglow`, and `light.glint` with `colorize` still mix back in what they clipped, so a color past BT.709 fades in those, and what changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
    8-bit. `look` with `scopes` reads an HDR sequence by its PQ or HLG signal, with what that comes to in cd/m² and how much of it BT.709 cannot hold; the Finish tray's scopes still read the 8-bit frame a monitor gets, since playback hands over only that. An HDR10 file (`hevc_hdr`) says what it was mastered on
    (P3 D65 at 1000 nits unless told otherwise) and its MaxCLL and MaxFALL, measured from the frames
-   before encoding, which disk-kept frames make cheap; HLG carries its tags without them. On Apple, handing decoded surfaces to the
-   GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
-   crate with the exception written down. Scaling footage is another cost: 4K footage in a
+   before encoding, which disk-kept frames make cheap; HLG carries its tags without them. Handing VideoToolbox surfaces to the GPU without a copy was measured and left (`examples/upload_bench.rs`, an M1 with 8 GB). A 4K H.264 frame takes 4.5 ms to decode in software, 1.4 to convert, and 4.7 to upload, 10.6 in all, against 14.5 ms just to decode it on a surface; 1080p takes 3.0 against 5.3, and 4K HEVC 14.2 against 14.6. Only 10-bit ProRes gains, 24 to 27 against 14.8, and more than that gain is its 16-bit RGBA, 7 to 10 ms to make and twice the bytes to upload, which uploading the decoded planes and converting them on the GPU should save with no `unsafe` at all (not built). So there is no crate with an exception to the workspace's `forbid`. Scaling footage is another cost: 4K footage in a
    1080p sequence spends more converting (12 ms) than 4K shown whole (5 ms).
 
 ## The areas
@@ -315,4 +313,4 @@ leaves out, since silence would read as a finding: faces and the subject, which 
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. These ideas are worth doing our own way: one kernel source
   run on the CPU and compiled to WGSL, which would end writing every effect twice;
-  decoded IOSurfaces as wgpu textures, to skip the copy; and a check for clipped text. The fact sheet and the contrast check are in `look`.
+  and a check for clipped text. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here (see Depth and color). The fact sheet and the contrast check are in `look`.
