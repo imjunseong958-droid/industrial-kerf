@@ -47,9 +47,12 @@ an error that names what to use instead (`stylize.glow` is
 `image.fill` removes what a mask outlines by filling it from the rest of the
 picture. Give the mask `mode=none`, so the picture stays whole for it:
 `mask c1 add k1 rect=0.4,0.4,0.6,0.6 mode=none`, then `fx c1 add image.fill
-path=k1`. `method=object` matches texture, and `method=smooth` blends the edges
-across, for skies and walls. It works frame by frame, so a moving shot's fill
-changes between frames; identical frames, as a still has, reuse one fill.
+path=k1`. `method=object` matches texture within the frame, for stills and locked-off shots;
+`method=smooth` blends the edges across, for skies and walls; and `method=video` takes what the
+area hides from the frames around it along the motion, for anything that moves, in runs of
+`reach` frames either side. An outline holds still for now, so this removes what stays in place
+in the picture, as a logo or a spot does, while the shot moves behind it. Identical frames, as a
+still has, reuse one fill.
 
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,

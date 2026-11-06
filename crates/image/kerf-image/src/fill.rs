@@ -9,7 +9,11 @@
 //!   Shechtman and Irani (2007): every patch overlapping the hole is matched
 //!   to a fully known patch, hole pixels become the weighted vote of the
 //!   overlapping matches, and that repeats over a pyramid, coarse to fine.
+//! - **Flow-guided propagation** (the propagation stage of flow-guided video inpainting, e.g. Xu et
+//!   al. 2019 and Huang et al. 2016): each missing pixel follows the optical flow, completed inside
+//!   the hole from the motion around it, to a frame where that point of the scene shows.
 
+use kerf_raster::flow::{block_flow, Flow};
 use kerf_raster::Image;
 use rayon::prelude::*;
 
@@ -570,6 +574,184 @@ pub fn patch_fill(
     }
 }
 
+/// Block flow from `a` to `b` with the tiles that touch either hole replaced by the membrane
+/// interpolation of the surrounding motion (flow completion).
+fn completed_flow(a: &Image, b: &Image, hole_a: &[bool], hole_b: &[bool]) -> Flow {
+    let mut f = block_flow(a, b, 8, 6);
+    if f.v.is_empty() {
+        return f;
+    }
+    let (w, bs) = (a.width as usize, f.block as usize);
+    let mut known = vec![true; f.v.len()];
+    for (i, k) in known.iter_mut().enumerate() {
+        let (c, r) = (i % f.cols, i / f.cols);
+        // A tile is unreliable when any pixel within it (and a block's margin) is a hole.
+        let (x0, y0) = (
+            (c * bs).saturating_sub(bs / 2),
+            (r * bs).saturating_sub(bs / 2),
+        );
+        let (x1, y1) = (
+            ((c + 1) * bs + bs / 2).min(w),
+            ((r + 1) * bs + bs / 2).min(a.height as usize),
+        );
+        'tile: for y in y0..y1 {
+            for x in x0..x1 {
+                if hole_a[y * w + x] || hole_b[y * w + x] {
+                    *k = false;
+                    break 'tile;
+                }
+            }
+        }
+    }
+    if known.iter().all(|k| !*k) {
+        f.v.iter_mut().for_each(|v| *v = [0.0; 2]);
+        return f;
+    }
+    let mut d: Vec<[f32; 4]> = f.v.iter().map(|v| [v[0], v[1], 0.0, 0.0]).collect();
+    membrane_core(&mut d, &known, f.cols, f.rows);
+    for (v, x) in f.v.iter_mut().zip(d) {
+        *v = [x[0], x[1]];
+    }
+    f
+}
+
+/// Trace pixel (x, y) of frame `t` through `flows` (`step` = +1 forward with `fwd`, −1 backward
+/// with `bwd`) to the nearest frame where it is visible: (sampled colour, frames travelled).
+fn trace(
+    t: usize,
+    x: f64,
+    y: f64,
+    step: i64,
+    fwd: &[Flow],
+    bwd: &[Flow],
+    known: &dyn Fn(usize, i64, i64) -> bool,
+    frames: &[&Image],
+    max: usize,
+) -> Option<([f32; 4], usize)> {
+    let n = frames.len();
+    let (w, h) = (frames[0].width as f64, frames[0].height as f64);
+    let (mut px, mut py) = (x, y);
+    let mut k = t as i64;
+    for d in 1..=max {
+        let v = if step > 0 {
+            if k as usize + 1 >= n {
+                return None;
+            }
+            fwd[k as usize].at(px, py)
+        } else {
+            if k == 0 {
+                return None;
+            }
+            bwd[k as usize - 1].at(px, py)
+        };
+        px += v[0] as f64;
+        py += v[1] as f64;
+        k += step;
+        if px < 0.0 || py < 0.0 || px >= w || py >= h {
+            return None;
+        }
+        // Visible when the bilinear support is known.
+        let (x0, y0) = ((px - 0.5).floor() as i64, (py - 0.5).floor() as i64);
+        let ok = [(x0, y0), (x0 + 1, y0), (x0, y0 + 1), (x0 + 1, y0 + 1)]
+            .iter()
+            .all(|&(xx, yy)| {
+                known(
+                    k as usize,
+                    xx.clamp(0, w as i64 - 1),
+                    yy.clamp(0, h as i64 - 1),
+                )
+            });
+        if ok {
+            return Some((frames[k as usize].sample_bilinear_clamped(px, py), d));
+        }
+    }
+    None
+}
+
+/// Fill a run of frames from each other: what a frame's hole hides that another frame shows comes
+/// from that frame along the optical flow, and what no frame shows is synthesized once and carried
+/// along the flow, so that it holds still from frame to frame. Frames and holes go together, one to
+/// a frame, all the same size.
+pub fn fill_frames(frames: &[Image], holes: &[Vec<bool>], patch: usize, seed: u32) -> Vec<Image> {
+    let n = frames.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let (w, h) = (frames[0].width as usize, frames[0].height as usize);
+    // Flows between membrane-filled neighbours, completed inside the holes.
+    let pre: Vec<Image> = frames
+        .par_iter()
+        .zip(holes)
+        .map(|(frame, hole)| membrane_fill(frame, hole))
+        .collect();
+    let pairs: Vec<(Flow, Flow)> = (0..n.saturating_sub(1))
+        .into_par_iter()
+        .map(|i| {
+            (
+                completed_flow(&pre[i], &pre[i + 1], &holes[i], &holes[i + 1]),
+                completed_flow(&pre[i + 1], &pre[i], &holes[i + 1], &holes[i]),
+            )
+        })
+        .collect();
+    let (fwd, bwd): (Vec<Flow>, Vec<Flow>) = pairs.into_iter().unzip();
+    // Propagation.
+    let refs: Vec<&Image> = frames.iter().collect();
+    let known = |k: usize, x: i64, y: i64| !holes[k][y as usize * w + x as usize];
+    let propagated: Vec<(Image, Vec<bool>)> = (0..n)
+        .into_par_iter()
+        .map(|t| {
+            let mut image = frames[t].clone();
+            let mut left = holes[t].clone();
+            let filled: Vec<(usize, [f32; 4])> = (0..w * h)
+                .filter(|&i| holes[t][i])
+                .filter_map(|i| {
+                    let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+                    let ahead = trace(t, x, y, 1, &fwd, &bwd, &known, &refs, n);
+                    let behind = trace(t, x, y, -1, &fwd, &bwd, &known, &refs, n);
+                    let color = match (ahead, behind) {
+                        (Some((a, da)), Some((c, dc))) => {
+                            let (wa, wc) = (1.0 / da as f32, 1.0 / dc as f32);
+                            std::array::from_fn(|k| (a[k] * wa + c[k] * wc) / (wa + wc))
+                        }
+                        (Some((a, _)), None) | (None, Some((a, _))) => a,
+                        _ => return None,
+                    };
+                    Some((i, color))
+                })
+                .collect();
+            for (i, color) in filled {
+                image.data[i] = color;
+                left[i] = false;
+            }
+            (image, left)
+        })
+        .collect();
+    // Synthesis of what no frame shows, each frame starting from the one before it.
+    let mut out: Vec<Image> = Vec::with_capacity(n);
+    for t in 0..n {
+        let (image, left) = &propagated[t];
+        if !left.contains(&true) {
+            out.push(image.clone());
+            continue;
+        }
+        let Some(previous) = t.checked_sub(1).and_then(|before| out.get(before)) else {
+            out.push(patch_fill(image, left, None, patch, seed));
+            continue;
+        };
+        let mut warped = image.clone();
+        for i in (0..w * h).filter(|&i| left[i]) {
+            let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+            let v = bwd[t - 1].at(x, y);
+            warped.data[i] = previous.sample_bilinear_clamped(x + v[0] as f64, y + v[1] as f64);
+        }
+        out.push(patch_fill(image, left, Some(&warped), patch, seed));
+    }
+    out.into_iter()
+        .zip(holes)
+        .map(|(image, hole)| opaque_fill(image, hole))
+        .collect()
+}
+
 /// Filled pixels are opaque.
 pub fn opaque_fill(mut img: Image, hole: &[bool]) -> Image {
     for (p, hl) in img.data.iter_mut().zip(hole) {
@@ -687,5 +869,47 @@ mod tests {
         let filled = opaque_fill(image, &[true, false]);
         assert_eq!(filled.data[0], [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(filled.data[1], [0.25, 0.25, 0.25, 0.5]);
+    }
+
+    /// A moving object removed from a (static or panning) textured background.
+    fn sequence(n: usize, pan: f32) -> (Vec<Image>, Vec<Vec<bool>>, Vec<Image>) {
+        let (w, h) = (96u32, 64u32);
+        let mut frames = vec![];
+        let mut holes = vec![];
+        let mut gts = vec![];
+        for t in 0..n {
+            let gt = background(w, h, t as f32 * pan);
+            let hole = rect_hole(w, h, 10 + 8 * t as u32, 22, 18);
+            frames.push(cut(&gt, &hole));
+            holes.push(hole);
+            gts.push(gt);
+        }
+        (frames, holes, gts)
+    }
+
+    #[test]
+    fn object_fill_recovers_background_and_is_stable() {
+        for pan in [0.0, 1.0] {
+            let (frames, holes, gts) = sequence(8, pan);
+            let out = fill_frames(&frames, &holes, 7, 1);
+            for t in 0..out.len() {
+                let db = psnr(&out[t], &gts[t], Some(&holes[t]));
+                assert!(db > 26.0, "frame {t} pan {pan}: {db:.1} dB");
+                assert_eq!(out[t].data[0][3], 1.0);
+            }
+            if pan == 0.0 {
+                // Temporal consistency: on a static background the filled pixels agree between
+                // frames.
+                for t in 1..out.len() {
+                    let both: Vec<bool> = holes[t]
+                        .iter()
+                        .zip(&holes[t - 1])
+                        .map(|(a, b)| *a || *b)
+                        .collect();
+                    let db = psnr(&out[t], &out[t - 1], Some(&both));
+                    assert!(db > 30.0, "frames {}–{t} differ: {db:.1} dB", t - 1);
+                }
+            }
+        }
     }
 }

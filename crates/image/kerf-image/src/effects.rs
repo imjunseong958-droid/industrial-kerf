@@ -1,11 +1,11 @@
 //! This area's effects.
 
-use crate::fill::{dilate, membrane_fill, opaque_fill, patch_fill};
+use crate::fill::{dilate, fill_frames, membrane_fill, opaque_fill, patch_fill};
 use kerf_draw::color::{to_encoded, to_linear};
 use kerf_draw::effect::{EffectRun, PictureEffect};
 use kerf_draw::mask;
 use kerf_draw::Image;
-use kerf_model::{Effect, MaskMode};
+use kerf_model::{Effect, MaskMode, Time};
 use kerf_raster::Image as Raster;
 use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -24,13 +24,18 @@ impl PictureEffect for Fill {
     }
 
     fn apply(&self, picture: &mut Image, effect: &Effect, run: &EffectRun) {
-        let Some(hole) = hole(picture, effect, run) else {
+        let Some(hole) = hole(picture, effect, run, run.at) else {
             return;
         };
         let method = run.text(effect, "method");
         let patch = run.number(effect, "patch").round() as usize;
-        let key = fill_key(picture, &hole, method.as_deref(), patch, run.seed);
+        let key = fill_key(picture, &hole, &run_method(effect, run), patch, run.seed);
         let pixels = kept_or(key, || {
+            if method.as_deref() == Some("video") {
+                if let Some(pixels) = fill_run(picture, effect, run, patch, &hole) {
+                    return pixels;
+                }
+            }
             let source = encoded(picture);
             let filled = match method.as_deref() {
                 Some("smooth") => membrane_fill(&source, &hole),
@@ -47,6 +52,88 @@ impl PictureEffect for Fill {
             pixel.copy_from_slice(value);
         }
     }
+}
+
+/// What a fill is told to do, as its key knows it.
+fn run_method(effect: &Effect, run: &EffectRun) -> String {
+    let method = run.text(effect, "method").unwrap_or_default();
+    match method.as_str() {
+        "video" => format!("video {}", run.number(effect, "reach").round()),
+        _ => method,
+    }
+}
+
+/// Fill the run of frames around this one together and keep them all, so that the frames of a run
+/// come at the cost of one and agree with each other. Runs fall on fixed frames of the clip, so that
+/// any frame asked for first gives the same fills. This frame's fill, or `None` without other frames
+/// to read.
+fn fill_run(
+    picture: &Image,
+    effect: &Effect,
+    run: &EffectRun,
+    patch: usize,
+    hole_here: &[bool],
+) -> Option<Vec<[f32; 4]>> {
+    let picture_at = run.picture_at?;
+    let frame_seconds = 1.0 / run.frame_rate.max(1.0);
+    let length = run.number(effect, "reach").round().max(1.0) as i64 * 2 + 1;
+    let here = (run.at.seconds() / frame_seconds + 1e-6).floor() as i64;
+    let first = here.div_euclid(length) * length;
+    let time_of = |frame: i64| Time::from_seconds(frame as f64 * frame_seconds);
+    let mut pictures = Vec::with_capacity(length as usize);
+    let mut sources = Vec::with_capacity(length as usize);
+    let mut holes = Vec::with_capacity(length as usize);
+    let mut place = None;
+    for frame in first..first + length {
+        let Some(time) = time_of(frame) else {
+            continue;
+        };
+        if time >= run.duration {
+            continue;
+        }
+        if frame == here {
+            place = Some(pictures.len());
+            sources.push(encoded(picture));
+            holes.push(hole_here.to_vec());
+            pictures.push(picture.clone());
+            continue;
+        }
+        let Some(other) = picture_at(time) else {
+            continue;
+        };
+        if (other.w, other.h) != (picture.w, picture.h) {
+            continue;
+        }
+        let Some(hole) = hole(&other, effect, run, time) else {
+            // Nothing to fill there: it shows all the scene, for others to read from.
+            sources.push(encoded(&other));
+            holes.push(vec![false; other.w * other.h]);
+            pictures.push(other);
+            continue;
+        };
+        sources.push(encoded(&other));
+        holes.push(hole);
+        pictures.push(other);
+    }
+    let place = place?;
+    let filled = fill_frames(&sources, &holes, patch, run.seed);
+    let mut here_pixels = None;
+    for (index, (fill, hole)) in filled.iter().zip(&holes).enumerate() {
+        let pixels = linear_in_hole(fill, hole);
+        if index == place {
+            here_pixels = Some(pixels);
+        } else if hole.contains(&true) {
+            let key = fill_key(
+                &pictures[index],
+                hole,
+                &run_method(effect, run),
+                patch,
+                run.seed,
+            );
+            keep(key, pixels);
+        }
+    }
+    here_pixels
 }
 
 /// What the fills made and may be asked for again, newest last. A still, or
@@ -66,17 +153,29 @@ fn kept_or(key: u64, make: impl FnOnce() -> Vec<[f32; 4]>) -> Arc<Vec<[f32; 4]>>
     }
     // Other fills go on while this one is made.
     let made = Arc::new(make());
-    let mut fills = lock();
-    fills.push((key, made.clone()));
+    keep_shared(key, made.clone());
+    made
+}
+
+/// Keep a fill made along with another.
+fn keep(key: u64, pixels: Vec<[f32; 4]>) {
+    keep_shared(key, Arc::new(pixels));
+}
+
+fn keep_shared(key: u64, pixels: Arc<Vec<[f32; 4]>>) {
+    let mut fills = FILLS.lock().unwrap_or_else(PoisonError::into_inner);
+    if fills.iter().any(|(kept, _)| *kept == key) {
+        return;
+    }
+    fills.push((key, pixels));
     let mut kept: usize = fills.iter().map(|(_, pixels)| pixels.len()).sum();
     while kept > MOST_KEPT_PIXELS && fills.len() > 1 {
         kept -= fills.remove(0).1.len();
     }
-    made
 }
 
 /// Everything a fill's result depends on, in one number.
-fn fill_key(picture: &Image, hole: &[bool], method: Option<&str>, patch: usize, seed: u32) -> u64 {
+fn fill_key(picture: &Image, hole: &[bool], method: &str, patch: usize, seed: u32) -> u64 {
     let rows: Vec<u64> = picture
         .px
         .par_chunks(picture.w.max(1) * 4)
@@ -94,7 +193,7 @@ fn fill_key(picture: &Image, hole: &[bool], method: Option<&str>, patch: usize, 
 /// The pixels the effect's mask covers, grown by its `expand`: a mask whose
 /// `mode=none` leaves the picture whole for the effect to read. `None` when
 /// the effect names no mask of the clip, or the mask covers nothing.
-fn hole(picture: &Image, effect: &Effect, run: &EffectRun) -> Option<Vec<bool>> {
+fn hole(picture: &Image, effect: &Effect, run: &EffectRun, at: Time) -> Option<Vec<bool>> {
     let name = run.text(effect, "path")?;
     let mut outline = run
         .masks
@@ -104,7 +203,7 @@ fn hole(picture: &Image, effect: &Effect, run: &EffectRun) -> Option<Vec<bool>> 
     outline.mode = MaskMode::Add;
     let per_source = run.per_source.max(1e-6);
     let size = (picture.w as f64 / per_source, picture.h as f64 / per_source);
-    let flat = mask::prepare(std::slice::from_ref(&outline), size, per_source, run.at);
+    let flat = mask::prepare(std::slice::from_ref(&outline), size, per_source, at);
     let covered = mask::coverage(&flat, picture.w, picture.h)?;
     let hole: Vec<bool> = covered.iter().map(|coverage| *coverage > 0.5).collect();
     if !hole.contains(&true) {
@@ -156,7 +255,7 @@ fn linear_in_hole(filled: &Raster, hole: &[bool]) -> Vec<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_model::{Id, Mask, MaskShape, Param, Time, Value};
+    use kerf_model::{Id, Mask, MaskShape, Param, Value};
     use std::collections::BTreeMap;
 
     /// A flat gray picture with a bright square in the middle.
@@ -203,6 +302,9 @@ mod tests {
             per_source: 1.0,
             seed: 1,
             masks,
+            frame_rate: 24.0,
+            duration: Time::from_seconds(2.0).expect("a time"),
+            picture_at: None,
         }
     }
 
@@ -236,13 +338,13 @@ mod tests {
     fn a_different_picture_or_setting_is_a_different_fill() {
         let picture = with_square(16, 12);
         let hole = vec![false; 16 * 12];
-        let key = fill_key(&picture, &hole, None, 7, 1);
-        assert_eq!(key, fill_key(&picture.clone(), &hole, None, 7, 1));
-        assert_ne!(key, fill_key(&picture, &hole, Some("smooth"), 7, 1));
-        assert_ne!(key, fill_key(&picture, &hole, None, 9, 1));
+        let key = fill_key(&picture, &hole, "", 7, 1);
+        assert_eq!(key, fill_key(&picture.clone(), &hole, "", 7, 1));
+        assert_ne!(key, fill_key(&picture, &hole, "smooth", 7, 1));
+        assert_ne!(key, fill_key(&picture, &hole, "", 9, 1));
         let mut changed = picture.clone();
         changed.px[100] += 0.01;
-        assert_ne!(key, fill_key(&changed, &hole, None, 7, 1));
+        assert_ne!(key, fill_key(&changed, &hole, "", 7, 1));
     }
 
     #[test]

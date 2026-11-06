@@ -17,6 +17,12 @@ pub struct EffectRun<'a> {
     pub seed: u32,
     /// The clip's masks, which effects read as paths.
     pub masks: &'a [Mask],
+    pub frame_rate: f64,
+    /// How long the clip is.
+    pub duration: Time,
+    /// The clip's picture at another clip time, as this effect gets it; none where the effect runs
+    /// without a clip of its own, as on an adjustment layer.
+    pub picture_at: Option<&'a (dyn Fn(Time) -> Option<Image> + Sync)>,
 }
 
 impl EffectRun<'_> {

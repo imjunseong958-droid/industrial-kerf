@@ -754,12 +754,24 @@ impl Drawing {
                 id if kerf_fx::kept::kept(id) => self.kept(picture, plan, time, placed, index),
                 id => match domains::effect(id) {
                     Some(area) => {
+                        let env = ClipEnv {
+                            drawing: self,
+                            plan,
+                            placed,
+                            upto: index,
+                            working: (picture.w, picture.h),
+                        };
+                        let read = |at: Time| env.picture_at(plan.clip.start + at);
                         let run = EffectRun {
                             at: time,
                             per_source: placed.per_source,
                             seed: kerf_core::raster::seed(plan.clip.id.as_str())
                                 .wrapping_add(index as u32),
                             masks: &plan.clip.masks,
+                            frame_rate: placed.sequence.rate.fps(),
+                            duration: plan.clip.duration,
+                            picture_at: (placed.env && !nested)
+                                .then_some(&read as &(dyn Fn(Time) -> Option<Image> + Sync)),
                         };
                         area.apply(picture, effect, &run);
                     }
