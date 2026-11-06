@@ -6,8 +6,9 @@
 //! nothing moves until something is asked to. Each output pixel's ray meets the clip's plane where
 //! the plane says, which needs no homography, gives the true perspective, and tells each pixel where
 //! it is for the lights. Clips on adjacent 3D tracks draw far to near, and where two of them cross
-//! the run is drawn pixel by pixel, nearest last, so each is cut where they meet. Shadows and depth of
-//! field are still to come.
+//! the run is drawn pixel by pixel, nearest last, so each is cut where they meet. A light with a
+//! `shadow` sends a ray from each pixel to itself, which every other clip in depth may block by as
+//! much as it is opaque there. Depth of field is still to come.
 
 use super::*;
 
@@ -80,13 +81,13 @@ fn is_generator(clip: &Clip, id: &str) -> bool {
     matches!(&clip.content, Content::Generator { fx, .. } if fx == id)
 }
 
-/// A light on the scene.
+/// A light on the scene, with how much what is in its way takes of it, from 0 to 1.
 enum Light {
     Ambient([f32; 3]),
     /// A position, in output pixels.
-    Point(Vector, [f32; 3]),
+    Point(Vector, [f32; 3], f32),
     /// The way it shines.
-    Directional(Vector, [f32; 3]),
+    Directional(Vector, [f32; 3], f32),
 }
 
 /// How a scene is seen and lit at a moment, in output pixels.
@@ -99,6 +100,8 @@ pub(super) struct Scene {
     center: (f64, f64),
     height: f64,
     lights: Vec<Light>,
+    /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
+    pub casters: Vec<Caster>,
 }
 
 impl Scene {
@@ -131,6 +134,7 @@ impl Scene {
                     ];
                     let own = |name: &str| number(&param(clip, name).value_at(at - clip.start));
                     let place = [own("x") * width, own("y") * height, own("z") * height];
+                    let shadow = read("shadow").unwrap_or(0.0) as f32;
                     lights.push(match generated(def, clip, "kind", at) {
                         Some(Value::Enum(kind)) if kind == "ambient" => Light::Ambient(color),
                         Some(Value::Enum(kind)) if kind == "directional" => {
@@ -140,9 +144,9 @@ impl Scene {
                             } else {
                                 [0.0, 0.0, 1.0]
                             };
-                            Light::Directional(way, color)
+                            Light::Directional(way, color, shadow)
                         }
-                        _ => Light::Point(place, color),
+                        _ => Light::Point(place, color, shadow),
                     });
                 }
             }
@@ -185,7 +189,40 @@ impl Scene {
             center: (width / 2.0, height / 2.0),
             height,
             lights,
+            casters: Vec::new(),
         }
+    }
+
+    /// Whether any light here is blocked by what is in its way, which takes the pictures of every
+    /// clip in depth to find out.
+    pub fn casts_shadows(&self) -> bool {
+        self.lights.iter().any(|light| {
+            matches!(
+                light,
+                Light::Point(_, _, shadow) | Light::Directional(_, _, shadow) if *shadow > 0.0
+            )
+        })
+    }
+
+    /// How much of a light gets to `at` on clip `receiver`, going along `way`, a unit long, for
+    /// `reach`, with `shadow` of it blocked by what is in its way: all of it where there is nothing.
+    fn gets_through(
+        &self,
+        receiver: &Id,
+        at: Vector,
+        (way, reach): (Vector, f64),
+        shadow: f32,
+    ) -> f32 {
+        if shadow <= 0.0 {
+            return 1.0;
+        }
+        let through = self
+            .casters
+            .iter()
+            .filter(|caster| caster.clip != *receiver)
+            .map(|caster| caster.lets_through(at, way, reach))
+            .product::<f32>();
+        1.0 - shadow * (1.0 - through)
     }
 
     /// A point of the output picture on the plane z = 0, in the world.
@@ -204,19 +241,29 @@ impl Scene {
         )
     }
 
-    fn lit(&self, at: Vector, normal: Vector) -> Option<[f32; 3]> {
+    fn lit(&self, receiver: &Id, at: Vector, normal: Vector) -> Option<[f32; 3]> {
         if self.lights.is_empty() {
             return None;
         }
         let mut sum = [0.0f32; 3];
         for light in &self.lights {
-            let (color, facing) = match light {
-                Light::Ambient(color) => (color, 1.0),
-                Light::Point(place, color) => (color, dot(unit(minus(*place, at)), normal).abs()),
-                Light::Directional(way, color) => (color, dot(*way, normal).abs()),
+            let (color, facing, through) = match light {
+                Light::Ambient(color) => (color, 1.0, 1.0),
+                Light::Point(place, color, shadow) => {
+                    let to = minus(*place, at);
+                    let way = unit(to);
+                    let reach = dot(to, to).sqrt();
+                    let through = self.gets_through(receiver, at, (way, reach), *shadow);
+                    (color, dot(way, normal).abs(), through)
+                }
+                Light::Directional(way, color, shadow) => {
+                    let back = times(*way, -1.0);
+                    let through = self.gets_through(receiver, at, (back, f64::INFINITY), *shadow);
+                    (color, dot(*way, normal).abs(), through)
+                }
             };
             for (sum, channel) in sum.iter_mut().zip(color) {
-                *sum += channel * facing as f32;
+                *sum += channel * facing as f32 * through;
             }
         }
         Some(sum)
@@ -319,6 +366,57 @@ impl Plane {
     }
 }
 
+/// A clip in depth, as what may stand in a light's way.
+pub(super) struct Caster {
+    clip: Id,
+    plane: Plane,
+    picture: Arc<Image>,
+    crop: Rect,
+    opacity: f32,
+}
+
+impl Caster {
+    /// `picture`, as much of it as `crop` leaves, is where `to_output` puts it, on a clip at clip time
+    /// `time`.
+    pub fn new(
+        scene: &Scene,
+        plan: &ClipPlan,
+        picture: Arc<Image>,
+        (to_output, crop): (&Affine, Option<Rect>),
+        opacity: f32,
+        time: Time,
+    ) -> Self {
+        let (pw, ph) = (picture.w as f64, picture.h as f64);
+        Self {
+            clip: plan.clip.id.clone(),
+            plane: Plane::of(scene, plan, (pw, ph), to_output, time),
+            crop: crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph)),
+            picture,
+            opacity,
+        }
+    }
+
+    /// How much of what leaves `from` along `way`, a unit long, for `reach`, gets past this clip.
+    fn lets_through(&self, from: Vector, way: Vector, reach: f64) -> f32 {
+        let toward = dot(way, self.plane.normal);
+        if toward.abs() < 1e-9 {
+            return 1.0;
+        }
+        let along = dot(minus(self.plane.origin, from), self.plane.normal) / toward;
+        // Not behind where it starts, or past the light, with a pixel's room so that a clip laid on
+        // another does not catch it.
+        if along < 1.0 || along > reach - 1.0 {
+            return 1.0;
+        }
+        let (u, v) = self.plane.at(add(from, times(way, along)));
+        let crop = self.crop;
+        if u < crop.x || v < crop.y || u > crop.right() || v > crop.bottom() {
+            return 1.0;
+        }
+        1.0 - self.picture.sample_bilinear(u as f32, v as f32)[3] * self.opacity
+    }
+}
+
 /// `picture` as a clip in depth on an output picture of `(w, h)`, transparent around it. `to_output`
 /// takes its pixels to where its 2D geometry puts them.
 pub(super) fn project(
@@ -415,7 +513,7 @@ fn projected(
             if pixel[3] <= 0.0 {
                 continue;
             }
-            if let Some(light) = scene.lit(hit, plane.normal) {
+            if let Some(light) = scene.lit(&plan.clip.id, hit, plane.normal) {
                 for (value, light) in pixel.iter_mut().zip(light) {
                     *value *= light;
                 }

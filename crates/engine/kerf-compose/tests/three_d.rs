@@ -407,3 +407,184 @@ fn three_clips_cross_in_the_order_of_each_pixel() {
     assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
     assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
 }
+
+/// A wall filling the frame at z = 0, a small square in front of it, and a light. As `CASTER` has it,
+/// the square is 32 by 18 pixels, from x = -80 to -48 about the middle of the frame and y = -9 to 9,
+/// and 45 pixels nearer.
+fn shadowed(square: &str, light: &str) -> String {
+    format!(
+        "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.1 {square}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set {light}\n"
+    )
+}
+
+const CASTER: &str = "x=-0.2 z=-0.25";
+
+/// What a channel of a frame is in linear light, which is what lights add up in.
+fn linear(value: u8) -> f64 {
+    let encoded = f64::from(value) / 255.0;
+    if encoded <= 0.04045 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn near(found: f64, wanted: f64) {
+    assert!((found - wanted).abs() < 0.02, "{found} against {wanted}");
+}
+
+/// The light goes 160 across for every 180 back, so what is 45 pixels in front of the wall falls 40
+/// to the right of where it is: from x = -40 to -8, or columns 120 to 152, and rows 81 to 99.
+const SLANTED: &str = "kind=directional x=0.5 z=1 shadow=1";
+
+#[test]
+fn a_shadow_lands_where_the_geometry_says() {
+    let frame = frame(&shadowed(CASTER, SLANTED), 0);
+    let dark = |x, y| pixel(&frame, x, y)[0] < 8;
+    let lit = |x, y| pixel(&frame, x, y)[0] > 120;
+    assert!(dark(136, 90), "{:?}", pixel(&frame, 136, 90));
+    // Its edges, a pixel or so either way.
+    assert!(lit(118, 90) && dark(122, 90));
+    assert!(dark(150, 90) && lit(154, 90));
+    assert!(lit(136, 79) && dark(136, 83));
+    assert!(dark(136, 97) && lit(136, 101));
+    // And nowhere else on the wall, not even behind the square from here.
+    assert!(lit(200, 90) && lit(136, 40) && lit(50, 150));
+}
+
+#[test]
+fn a_shadow_is_as_dark_as_the_light_says() {
+    let lit = linear(pixel(&frame(&shadowed(CASTER, SLANTED), 0), 200, 90)[0]);
+    // The light comes 41.6 degrees off straight on, so the wall takes 180 / 240.8 of it.
+    near(lit, 180.0 / 240.83);
+    let half = frame(
+        &shadowed(CASTER, "kind=directional x=0.5 z=1 shadow=0.5"),
+        0,
+    );
+    near(linear(pixel(&half, 136, 90)[0]), lit / 2.0);
+    // None at 0, which is the default, down to the byte.
+    let none = frame(&shadowed(CASTER, "kind=directional x=0.5 z=1 shadow=0"), 0);
+    let unsaid = frame(&shadowed(CASTER, "kind=directional x=0.5 z=1"), 0);
+    assert_eq!(none.rgba, unsaid.rgba);
+    assert_eq!(pixel(&none, 136, 90)[0], pixel(&none, 200, 90)[0]);
+    // Ambient light comes from nowhere in particular, and lifts what is in shadow.
+    let ambient = frame(
+        &format!(
+            "{}  track V4 video\n    clip air gen=light@1 at=0f dur=24f\n      set kind=ambient intensity=0.25\n",
+            shadowed(CASTER, SLANTED)
+        ),
+        0,
+    );
+    near(linear(pixel(&ambient, 136, 90)[0]), 0.25);
+}
+
+#[test]
+fn a_shadow_goes_when_the_light_moves_away() {
+    // Its way goes round: by frame 23 it falls 400 to the right of the square, off the frame.
+    let moving = shadowed(CASTER, "kind=directional x={0f:0.5 23f:5} z=1 shadow=1");
+    let frame_of = |at| frame(&moving, at);
+    assert!(pixel(&frame_of(0), 136, 90)[0] < 8);
+    let last = frame_of(23);
+    let across_the_wall: Vec<u8> = (0..320).map(|x| pixel(&last, x, 150)[0]).collect();
+    assert!(across_the_wall.iter().all(|value| *value > 16));
+    assert!(pixel(&last, 136, 90)[0] > 16, "{:?}", pixel(&last, 136, 90));
+    assert!((60..320).all(|x| pixel(&last, x, 90)[0] > 16 || (62..=102).contains(&x)));
+    // Behind the wall, it lights the wall through to the side the camera sees, and the square has the
+    // wall in its way, so the shadow is the square's.
+    let behind = frame(&shadowed(CASTER, "kind=directional x=0.5 z=-1 shadow=1"), 0);
+    assert!(pixel(&behind, 136, 90)[0] > 120);
+    assert!(
+        pixel(&behind, 80, 90)[1] < 8,
+        "{:?}",
+        pixel(&behind, 80, 90)
+    );
+}
+
+#[test]
+fn a_shadow_goes_when_what_casts_it_moves_away() {
+    // Moved 0.1 of the frame's width to the right, so is its shadow, by 32 pixels, to columns 152
+    // to 184. Where it was is lit now, past the square itself, which is at 101 to 140 from here.
+    let moved = frame(&shadowed("x=-0.1 z=-0.25", SLANTED), 0);
+    assert!(pixel(&moved, 146, 90)[0] > 120);
+    assert!(pixel(&moved, 168, 90)[0] < 8);
+    // Keyed right off the frame, and its shadow with it.
+    let gone = shadowed("x={0f:-0.2 23f:3} z=-0.25", SLANTED);
+    assert!(pixel(&frame(&gone, 0), 136, 90)[0] < 8);
+    let last = frame(&gone, 23);
+    assert!((0..320).all(|x| pixel(&last, x, 90)[0] > 120));
+    // Past the light, it is in nobody's way. The light is 18 pixels from the wall, above x = -64: with
+    // the square 45 from the wall it is lit, and with the square 9 from the wall, halfway to the
+    // light, it is twice the size on the wall, from -96 to -32, and covers column 120 (x = -40).
+    let light = "kind=point x=-0.2 y=0 z=-0.1 shadow=1";
+    let past = frame(&shadowed(CASTER, light), 0);
+    let lit = linear(pixel(&past, 120, 90)[0]);
+    // 18 away over a distance of 30, so 0.6 of it.
+    near(lit, 0.6);
+    let between = frame(&shadowed("x=-0.2 z=-0.05", light), 0);
+    assert!(
+        pixel(&between, 120, 90)[0] < 8,
+        "{:?}",
+        pixel(&between, 120, 90)
+    );
+}
+
+#[test]
+fn a_point_lights_shadow_spreads_from_it() {
+    // In line with the square and twice as far from the wall as it is, the light casts a shadow twice
+    // the size: from -160 to -96 in x and -18 to 18 in y, about the frame's middle.
+    let frame = frame(
+        &shadowed(CASTER, "kind=point x=-0.2 y=0 z=-0.5 shadow=1 intensity=2"),
+        0,
+    );
+    let at = |x: i32, y: i32| pixel(&frame, (160 + x) as u32, (90 + y) as u32)[0];
+    // Twice the square's size about the point below the light, x = -64: from -96 to -32 across and
+    // -18 to 18 down.
+    assert!(
+        at(-34, 0) < 8 && at(-30, 0) > 40,
+        "{} {}",
+        at(-34, 0),
+        at(-30, 0)
+    );
+    assert!(
+        at(-34, 16) < 8 && at(-34, 20) > 40,
+        "{} {}",
+        at(-34, 16),
+        at(-34, 20)
+    );
+}
+
+#[test]
+fn only_what_is_opaque_casts() {
+    // Half opaque, half a shadow.
+    let lit = linear(pixel(&frame(&shadowed(CASTER, SLANTED), 0), 200, 90)[0]);
+    let half = frame(&shadowed("x=-0.2 z=-0.25 opacity=0.5", SLANTED), 0);
+    near(linear(pixel(&half, 136, 90)[0]), lit / 2.0);
+    // A picture of an ellipse casts an ellipse. It is 160 by 90 pixels about the frame's middle, and
+    // the light goes 640 across for every 180 back, so its shadow's middle is at 160 to the right.
+    let masked = frame(
+        "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.5 z=-0.25\n      mask k1 ellipse=0.5,0.5,0.5,0.5\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional z=1 x=2 shadow=1\n",
+        0,
+    );
+    let at = |x: i32, y: i32| pixel(&masked, (160 + x) as u32, (90 + y) as u32);
+    // Inside the ellipse, 60 to the left of its middle.
+    assert!(at(100, 0)[0] < 8, "{:?}", at(100, 0));
+    // In the corner of its box, outside the ellipse.
+    assert!(at(85, 40)[0] > 40, "{:?}", at(85, 40));
+}
+
+#[test]
+fn a_shadow_falls_on_a_clip_that_is_cut() {
+    // Crossing and in shadow at once: the wall is cut by a turned clip, and both still take shadows.
+    let drawn = frame(
+        &format!(
+            "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip turned gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.3 x=0.3 z=0.05 rotate_y=45\n  track V3 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.1 x=-0.2 z=-0.25\n  track V4 video\n    clip sun gen=light@1 at=0f dur=24f\n      set {SLANTED}\n"
+        ),
+        0,
+    );
+    assert!(
+        pixel(&drawn, 136, 90)[0] < 8,
+        "{:?}",
+        pixel(&drawn, 136, 90)
+    );
+    assert!(pixel(&drawn, 200, 150)[0] > 120);
+}

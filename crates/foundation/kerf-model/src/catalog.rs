@@ -1054,7 +1054,7 @@ fn builtin_catalog() -> Catalog {
             "title",
             FxKind::Generator,
             Domain::Video,
-            "A line of text. Position it with x and y. `reveal` animates it character by character or word by word, from the look the `from_` numbers give.",
+            "A line of text. Position it with x and y. `reveal` animates it by character or word, from the look the `from_` numbers give.",
         )
         .category("Generate")
         .param(P::text("text", "").doc("The text to show."))
@@ -1110,7 +1110,7 @@ fn builtin_catalog() -> Catalog {
             "shape",
             FxKind::Generator,
             Domain::Video,
-            "A shape, filled and stroked. Its stroke can be trimmed along its length, for a line that draws itself on, and tapered.",
+            "A shape, filled and stroked. Its stroke can be trimmed, to draw itself on, and tapered.",
         ))
         .category("Generate")
         .param(P::toggle("closed", true).doc("Whether a path joins up and fills."))
@@ -1184,7 +1184,7 @@ fn builtin_catalog() -> Catalog {
             "particles",
             FxKind::Generator,
             Domain::Video,
-            "Particles from a point or an area. Each follows a formula from its birth, so any frame can be drawn first and looks the same every time.",
+            "Particles from a point or an area, the same every time.",
         )
         .category("Generate")
         .param(P::number("rate", 50.0).range(0.0, 100_000.0).unit("a second"))
@@ -1241,7 +1241,7 @@ fn builtin_catalog() -> Catalog {
             "camera",
             FxKind::Generator,
             Domain::Video,
-            "What `three_d` clips are seen through: the topmost one showing, from its `x`, `y`, and `z`. At its defaults a clip at z=0 looks as it would in 2D.",
+            "What `three_d` clips are seen through: the topmost showing, from its `x`, `y`, `z`. At its defaults a clip at z=0 looks as in 2D.",
         )
         .category("Utility")
         .param(P::number("pan", 0.0).range(-3600.0, 3600.0).unit("degrees"))
@@ -1257,12 +1257,17 @@ fn builtin_catalog() -> Catalog {
             "light",
             FxKind::Generator,
             Domain::Video,
-            "Lights `three_d` clips: `x`, `y`, and `z` are where a point light is, or which way a directional one shines. With no light showing, they show as they are.",
+            "Lights `three_d` clips: `x`, `y`, and `z` are where a point light is, or which way a directional one shines. With none showing, they show as they are.",
         )
         .category("Utility")
         .param(P::choice("kind", &["point", "ambient", "directional"]))
         .param(P::color("color", Rgba::WHITE))
-        .param(P::number("intensity", 1.0).range(0.0, 100.0)),
+        .param(P::number("intensity", 1.0).range(0.0, 100.0))
+        .param(
+            P::number("shadow", 0.0)
+                .range(0.0, 1.0)
+                .doc("How much of it other `three_d` clips block; 0 is none."),
+        ),
         FxDef::new(
             "null",
             FxKind::Generator,

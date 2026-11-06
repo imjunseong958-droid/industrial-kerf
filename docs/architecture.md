@@ -184,8 +184,9 @@ word, set in variable fonts at any axis (`wght`, `wdth`, `slnt`, `opsz`, `ital`,
 EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
-takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. EffectCraft's `render/three_d/adv` at
-`5c54866` has what to carry next: shadows and depth of field.
+takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
+reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy, with hard edges. EffectCraft's `render/three_d/adv` at
+`5c54866` has what to carry next: depth of field.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add:
