@@ -24,23 +24,43 @@ pub struct PathPoint {
     pub heading: f64,
 }
 
+fn parse_point(point: &str) -> Result<[f64; 2], String> {
+    let (x, y) = point
+        .split_once(',')
+        .ok_or_else(|| format!("`{point}` should read x,y"))?;
+    let number = |text: &str| {
+        text.parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite() && number.abs() <= 10.0)
+            .ok_or_else(|| format!("`{text}` is not a number from -10 to 10"))
+    };
+    Ok([number(x)?, number(y)?])
+}
+
+/// The points `text` lists, `x,y x,y`, however many.
+pub fn parse_points(text: &str) -> Result<Vec<[f64; 2]>, String> {
+    text.split_whitespace().map(parse_point).collect()
+}
+
+/// The moves `text` lists, `x,y>x,y x,y>x,y>x,y`: each drags from its first point through the rest.
+pub fn parse_moves(text: &str) -> Result<Vec<Vec<[f64; 2]>>, String> {
+    text.split_whitespace()
+        .map(|chain| {
+            let points = chain
+                .split('>')
+                .map(parse_point)
+                .collect::<Result<Vec<_>, String>>()?;
+            if points.len() < 2 {
+                return Err(format!("`{chain}` should read x,y>x,y"));
+            }
+            Ok(points)
+        })
+        .collect()
+}
+
 /// The points `text` lists, `x,y x,y`.
 pub fn parse_path_points(text: &str) -> Result<Vec<[f64; 2]>, String> {
-    let points = text
-        .split_whitespace()
-        .map(|point| {
-            let (x, y) = point
-                .split_once(',')
-                .ok_or_else(|| format!("`{point}` should read x,y"))?;
-            let number = |text: &str| {
-                text.parse::<f64>()
-                    .ok()
-                    .filter(|number| number.is_finite() && number.abs() <= 10.0)
-                    .ok_or_else(|| format!("`{text}` is not a number from -10 to 10"))
-            };
-            Ok([number(x)?, number(y)?])
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let points = parse_points(text)?;
     if points.len() < 2 {
         return Err("a path needs at least two points".to_owned());
     }

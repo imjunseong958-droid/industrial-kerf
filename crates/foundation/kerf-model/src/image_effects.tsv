@@ -6,3 +6,29 @@ effect	image.fill	Image	Fill Area	Removes what a mask outlines (a logo, a stray 
 	number	expand	2	0..100	px	Grows the area past the mask, in source pixels, to leave no edge behind.
 	number	patch	7	3..31	px	The size of the patches object compares.
 	number	reach	6	1..24	frames	How many frames either side video reads.
+effect	image.clone	Image	Clone Stroke	A stroke painted with the picture from elsewhere in it, or from another frame. One effect is one stroke, and strokes paint in order, each over what came before. To take out something on a moving shot, keyframe move_x and move_y from a track.
+	points	points				The stroke as fractions of the picture, x across and y down. One point dabs.
+	number	radius	0.03	0.001..2	frame heights	
+	number	hardness	0.5	0..1		How much of the radius is solid before it fades.
+	number	opacity	1	0..1		
+	number	from_x	0	-2..2		Where it paints from, as a fraction of the picture from the stroke. Left at 0 with from_y and from_frame, it finds a place that matches around the stroke; name it on a moving shot so that it holds still.
+	number	from_y	0	-2..2		
+	number	from_frame	0	-100000..100000	frames	Paints from this many frames away in the clip, held to its ends: a clean plate of what moved away.
+	number	move_x	0	-2..2		Moves the stroke with the picture.
+	number	move_y	0	-2..2		
+effect	image.heal	Image	Heal Stroke	Takes a blemish out: a stroke with the detail of elsewhere in the picture, and the light and color of where it goes, so that its edge does not show. One effect is one stroke. Parameters as image.clone's.
+	points	points				The stroke as fractions of the picture, x across and y down. One point dabs.
+	number	radius	0.03	0.001..2	frame heights	
+	number	hardness	0.5	0..1		How much of the radius is solid before it fades.
+	number	opacity	1	0..1		
+	number	from_x	0	-2..2		Where it paints from, as a fraction of the picture from the stroke. Left at 0 with from_y and from_frame, it finds a place that matches around the stroke; name it on a moving shot so that it holds still.
+	number	from_y	0	-2..2		
+	number	from_frame	0	-100000..100000	frames	Paints from this many frames away in the clip, held to its ends.
+	number	move_x	0	-2..2		Moves the stroke with the picture.
+	number	move_y	0	-2..2		
+effect	image.warp	Image	Mesh Warp	Liquify: drags the picture around with a mesh. What is at a move's first point ends at its last, and what is around follows less the further it is. It does not fold, and the frame's edges stay on the frame.
+	moves	moves				The moves as fractions of the picture, x across and y down: x,y>x,y, more points to drag through them, and a space between moves.
+	number	radius	0.15	0.001..10	frame heights	How far around a move the picture follows.
+	number	amount	1	0..1		How far along its moves it has come; animate it to push over time.
+	number	move_x	0	-2..2		Moves the moves with the picture.
+	number	move_y	0	-2..2		

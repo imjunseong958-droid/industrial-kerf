@@ -8,5 +8,7 @@
 
 mod effects;
 pub mod fill;
+pub mod stroke;
+pub mod warp;
 
 pub use effects::EFFECTS;

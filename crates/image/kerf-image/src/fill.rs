@@ -55,7 +55,7 @@ pub fn dilate(hole: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
 // ------------------------------------------------------------------ membrane
 
 /// Harmonic fill of `data` (`w × h`, 4 channels) where `known` is false.
-fn membrane_core(data: &mut [[f32; 4]], known: &[bool], w: usize, h: usize) {
+pub(crate) fn membrane_core(data: &mut [[f32; 4]], known: &[bool], w: usize, h: usize) {
     if !known.iter().any(|k| !*k) {
         return;
     }

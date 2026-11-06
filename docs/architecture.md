@@ -222,8 +222,9 @@ Kept small on purpose. Video editors have always carried a little of Photoshop,
 and that little is what belongs here. A still is a one-frame clip and a selection
 is a mask, so this area adds no document type.
 
-Has: `image.fill`. To add: clone and heal as strokes in the document, then a mesh
-warp for liquify work.
+Has: `image.fill`; `image.clone` and `image.heal`, a stroke in the document each, painted from
+elsewhere in the frame or from another frame, and from a place heal finds itself when not told one; and
+`image.warp`, a mesh dragged by moves in small steps so that it does not fold, for liquify work.
 
 Stays out: a brush engine, pixel layers as their own documents, RAW development,
 and print color. When a job needs those, it is a job for a photo editor.

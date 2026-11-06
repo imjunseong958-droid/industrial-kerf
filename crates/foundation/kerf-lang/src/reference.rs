@@ -239,6 +239,8 @@ fn describe(param: &ParamDef) -> String {
         ParamType::Track => facts.push("a picture track of the sequence, such as V2".into()),
         ParamType::Sound => facts.push("a sound track of the sequence, such as A1".into()),
         ParamType::Mask => facts.push("one of the clip's masks, by name".into()),
+        ParamType::Points => facts.push("points, \"x,y x,y\"".into()),
+        ParamType::Moves => facts.push("moves, \"x,y>x,y x,y>x,y>x,y\"".into()),
         ParamType::File(extensions) => facts.push(format!(
             "a file ({}), relative to the project",
             extensions

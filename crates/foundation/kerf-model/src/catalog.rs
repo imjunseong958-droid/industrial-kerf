@@ -31,6 +31,10 @@ pub enum ParamType {
     /// for none. Effects read its picture, as After Effects' layer
     /// parameters read another layer.
     Track,
+    /// Points, `x,y x,y`, held as text.
+    Points,
+    /// Moves, `x,y>x,y x,y>x,y`, held as text.
+    Moves,
     Color,
     Enum(Vec<String>),
 }
@@ -46,6 +50,8 @@ impl ParamType {
             Self::Track => "track",
             Self::Sound => "sound",
             Self::Mask => "mask",
+            Self::Points => "points",
+            Self::Moves => "moves",
             Self::Color => "color",
             Self::Enum(_) => "enum",
         }
@@ -80,6 +86,14 @@ impl ParamDef {
 
     pub fn text(name: &str, default: &str) -> Self {
         Self::new(name, ParamType::Text, Value::Text(default.into()), false)
+    }
+
+    pub fn points(name: &str) -> Self {
+        Self::new(name, ParamType::Points, Value::Text(String::new()), false)
+    }
+
+    pub fn moves(name: &str) -> Self {
+        Self::new(name, ParamType::Moves, Value::Text(String::new()), false)
     }
 
     pub fn track(name: &str) -> Self {
@@ -183,6 +197,12 @@ impl ParamDef {
                     ))
                 }
             }
+            (ParamType::Points, Value::Text(text)) => crate::path::parse_points(text)
+                .map(|_| ())
+                .map_err(|problem| format!("`{}`: {problem}", self.name)),
+            (ParamType::Moves, Value::Text(text)) => crate::path::parse_moves(text)
+                .map(|_| ())
+                .map_err(|problem| format!("`{}`: {problem}", self.name)),
             (ParamType::Bool, Value::Bool(_))
             | (
                 ParamType::Text
@@ -999,9 +1019,7 @@ fn builtin_catalog() -> Catalog {
                 .range(0.0, 1.0)
                 .doc("How far out a star's inner corners are."),
         )
-        .param(P::text("points", "").doc(
-            "A path's points, \"x,y x,y …\", in frame heights from the clip's center.",
-        ))
+        .param(P::points("points").doc("A path's points, in frame heights from the clip's center."))
         .param(P::toggle("closed", true).doc("Whether a path joins up and fills."))
         .param(P::toggle("smooth", false).doc("A path through its points in a curve."))
         .param(P::color("fill", Rgba::WHITE))
@@ -1230,6 +1248,8 @@ fn table_definitions(text: &str, engine: Engine) -> Vec<FxDef> {
             "track" => ParamDef::track(name),
             "sound" => ParamDef::sound(name),
             "mask" => ParamDef::mask(name),
+            "points" => ParamDef::points(name),
+            "moves" => ParamDef::moves(name),
             "file" => {
                 let mut param = ParamDef::file(name, &constraint.split('|').collect::<Vec<_>>());
                 param.default = Value::Text(default.to_owned());

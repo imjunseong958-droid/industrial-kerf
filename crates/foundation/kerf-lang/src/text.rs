@@ -281,7 +281,9 @@ fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
         | ParamType::File(_)
         | ParamType::Track
         | ParamType::Sound
-        | ParamType::Mask => Ok(Value::Text(text.to_owned())),
+        | ParamType::Mask
+        | ParamType::Points
+        | ParamType::Moves => Ok(Value::Text(text.to_owned())),
         ParamType::Color => Rgba::parse(text)
             .map(Value::Color)
             .ok_or_else(|| format!("`{}` expects a color like #ff8800, not `{text}`", def.name)),
@@ -309,6 +311,8 @@ pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, Str
                     | ParamType::Track
                     | ParamType::Sound
                     | ParamType::Mask
+                    | ParamType::Points
+                    | ParamType::Moves
             ) =>
         {
             Ok(Param::Static(Value::Text(text.clone())))

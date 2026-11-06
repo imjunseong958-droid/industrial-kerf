@@ -21,7 +21,26 @@ const SCENES: &[(&str, &str)] = &[
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
     ("glow", "      fx light.wonderglow@1\n"),
     ("ultra key", "      fx key.ultra@1 key_color=#30c040\n"),
-    ("radial zoom", "      fx blur.radialzoom@1 amount=30 quality=30\n"),
+    (
+        "radial zoom",
+        "      fx blur.radialzoom@1 amount=30 quality=30\n",
+    ),
+    (
+        "heal found",
+        "      fx image.heal@1 points=\"0.4,0.5 0.5,0.52\" radius=0.03\n",
+    ),
+    (
+        "clone",
+        "      fx image.clone@1 points=\"0.4,0.5 0.5,0.52\" radius=0.03 from_x=0.2\n",
+    ),
+    (
+        "warp",
+        "      fx image.warp@1 moves=\"0.5,0.5>0.55,0.45\" radius=0.2\n",
+    ),
+    (
+        "warp small",
+        "      fx image.warp@1 moves=\"0.5,0.5>0.51,0.49\" radius=0.02\n",
+    ),
     (
         "fill small",
         "      mask k1 rect=0.45,0.45,0.55,0.55 mode=none\n      fx image.fill@1 path=k1\n",

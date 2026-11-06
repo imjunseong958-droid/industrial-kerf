@@ -1322,7 +1322,7 @@ fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) ->
                     inner: read.number("inner") as f32,
                 },
                 "path" => kerf_motion::Figure::Path {
-                    points: kerf_model::parse_path_points(&read.word("points"))
+                    points: kerf_model::parse_points(&read.word("points"))
                         .unwrap_or_default()
                         .into_iter()
                         .map(|point| [(point[0] * height) as f32, (point[1] * height) as f32])

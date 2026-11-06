@@ -44,6 +44,12 @@ in stack order beside FilmCraft's effects. Any other id EffectCraft had is
 an error that names what to use instead (`stylize.glow` is
 `light.wonderglow@1` now).
 
+`image.heal` and `image.clone` are strokes: `fx c1 add image.heal@1
+points="0.42,0.31 0.44,0.33" radius=0.02` takes out what is under it, from a place it finds, or one
+named with `from_x`, `from_y`, and `from_frame`. On a moving shot, keyframe `move_x` and `move_y` from a
+track. `image.warp` is liquify: `moves="0.5,0.6>0.5,0.55"` drags what is at the first point to the last
+with what is within `radius`, and `amount` animates it.
+
 `image.fill` removes what a mask outlines by filling it from the rest of the
 picture. Give the mask `mode=none`, so the picture stays whole for it:
 `mask c1 add k1 rect=0.4,0.4,0.6,0.6 mode=none`, then `fx c1 add image.fill
