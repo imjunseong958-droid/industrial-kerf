@@ -150,9 +150,9 @@ sequence s1 rate=24 size=1280x720 audio=48000
       set three_d=true z=0.5
   track V2 video
     clip l1 gen=light@1 at=0f dur=48f
-      set kind=directional shadow={0f:0 24f:0.8} x=0.2 z=1
+      set kind=directional shadow={0f:0 24f:0.8} size={0f:0 24f:5} x=0.2 z=1
     clip l2 gen=light@1 at=48f dur=48f
-      set shadow=1
+      set shadow=1 size=0.1
   track V3 video
     clip k1 gen=camera@1 at=0f dur=48f
       set aperture=0.05 focus={0f:0 24f:0.5}
@@ -174,6 +174,27 @@ fn a_lights_shadow_round_trips_and_a_bad_one_is_refused() {
     for bad in ["shadow=2", "shadow=-0.1", "shadow={0f:0 24f:2}"] {
         refused(&DEPTH.replace("shadow=1", bad), "shadow");
     }
+}
+
+#[test]
+fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in ["size={0f:0 24f:5}", "size=0.1"] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+    for bad in ["size=-1", "size=91", "size={0f:0 24f:91}", "size=wide"] {
+        refused(&DEPTH.replace("size=0.1", bad), "size");
+    }
+    // Only a light is that wide.
+    refused(
+        &DEPTH.replace("set aperture=0.05", "set size=1 aperture=0.05"),
+        "size",
+    );
 }
 
 #[test]
