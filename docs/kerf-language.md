@@ -138,6 +138,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   through those points, in the units of `x` and `y`, which it adds to. `along` is by distance
   on the canvas, so an even `along` is an even speed. `orient=true` turns the clip to face the
   way it is heading.
+- `retime=` says what footage shows when its frames do not fall on the sequence's, as in slow
+  motion: `frames` (the default) repeats the frame showing, `blend` cross-fades the two around
+  that moment, and `flow` moves them along the motion between them first. `flow` costs the most
+  and suits steady motion; fast or crossing motion can smear.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

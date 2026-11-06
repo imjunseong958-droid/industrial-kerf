@@ -274,6 +274,8 @@ pub struct Clip {
     /// The clip of the same sequence this one moves with: its position, scale, and rotation
     /// apply on top of this clip's own.
     pub parent: Option<Id>,
+    /// What a clip of footage shows between the frames of its file.
+    pub retime: Retime,
     /// Intrinsic properties from the catalog; absent means default.
     pub props: Params,
     /// Masks on a picture clip, combined in order.
@@ -305,6 +307,34 @@ pub enum Content {
     },
 }
 
+/// What footage shows when its frames do not fall on the sequence's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Retime {
+    /// The frame showing at that moment.
+    #[default]
+    Frames,
+    /// The two frames around it, cross-faded.
+    Blend,
+    /// The two frames around it, moved along the motion between them and cross-faded.
+    Flow,
+}
+
+impl Retime {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Frames => "frames",
+            Self::Blend => "blend",
+            Self::Flow => "flow",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        [Self::Frames, Self::Blend, Self::Flow]
+            .into_iter()
+            .find(|retime| retime.id() == id)
+    }
+}
+
 impl Clip {
     pub fn new(id: Id, content: Content, start: Time, duration: Time) -> Self {
         Self {
@@ -316,6 +346,7 @@ impl Clip {
             name: None,
             link: None,
             parent: None,
+            retime: Retime::default(),
             props: Params::new(),
             masks: Vec::new(),
             effects: Vec::new(),

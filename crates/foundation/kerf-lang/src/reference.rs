@@ -32,6 +32,7 @@ line, applied in order and atomically. Later lines see what earlier lines did.
   Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve
   `x1,y1,x2,y2` that may overshoot: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
+- `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as

@@ -56,6 +56,7 @@ pub enum ClipChange {
     Caption(String),
     /// The clip it moves with, or none.
     Parent(Option<Id>),
+    Retime(crate::Retime),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1846,6 +1847,16 @@ impl Editor<'_> {
                         self.check_parent(at, clip, parent)?;
                     }
                     self.project.clip_at_mut(at).parent.clone_from(parent);
+                }
+                ClipChange::Retime(retime) => {
+                    let target = self.project.clip_at_mut(at);
+                    if !matches!(target.content, Content::Media { .. }) {
+                        return Err(fail(
+                            "clip.domain",
+                            format!("`{clip}` is not footage, so it has no frames to retime"),
+                        ));
+                    }
+                    target.retime = *retime;
                 }
                 ClipChange::Caption(text) => match &mut self.project.clip_at_mut(at).content {
                     Content::Caption { text: current } => current.clone_from(text),

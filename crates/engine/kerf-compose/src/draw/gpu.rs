@@ -151,6 +151,10 @@ impl Drawing {
                 return false;
             }
             let plan = &shown.plan;
+            // Frames between frames are made on the CPU.
+            if plan.clip.retime != kerf_model::Retime::Frames {
+                return false;
+            }
             let time = at - plan.clip.start;
             if let Source::Nested {
                 sequence: nested,

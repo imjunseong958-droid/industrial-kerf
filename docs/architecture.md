@@ -134,8 +134,8 @@ code nothing calls was cut once already and should not come back as such.
 Has: ripple, roll, slip, slide, transitions, nested sequences, captions from
 transcripts, snapping to pauses and cuts, roles, proxies, interchange, QC.
 
-To add, in order: speed that changes over a clip (a clip's speed is one constant
-ratio today), with optical-flow frames between; multicam; sound beyond gain and
+Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. To add, in order:
+speed that changes over a clip (a clip's speed is one constant ratio today); multicam; sound beyond gain and
 fades, with effects and buses. A timeline's own tools stay in `kerf-model` and
 `kerf-lang`.
 
@@ -186,7 +186,7 @@ To add, in order: planar tracking, for corner pins and screen replacements
 (EffectCraft's `track`); mask outlines that animate, and with them `image.fill` of what moves; roto with the swappable
 model interface of its `segment`, for a Magnetic Mask or Object Matte of Kerf's own; the camera
 solver. Optical flow is in
-`kerf-raster` now, which `image.fill` uses on a moving shot, and speed changes can use too.
+`kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.
 
 ### Image
 
