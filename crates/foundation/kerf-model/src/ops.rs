@@ -17,7 +17,7 @@ use crate::model::{
 use crate::time::{format_timecode, Rate, Ratio, Time};
 use crate::validate::{accepts, errors};
 use crate::value::Param;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Edge {
@@ -54,6 +54,8 @@ pub enum ClipChange {
     Name(Option<String>),
     Enabled(bool),
     Caption(String),
+    /// The clip it moves with, or none.
+    Parent(Option<Id>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1838,6 +1840,12 @@ impl Editor<'_> {
             match change {
                 ClipChange::Name(name) => self.project.clip_at_mut(at).name.clone_from(name),
                 ClipChange::Enabled(enabled) => self.project.clip_at_mut(at).enabled = *enabled,
+                ClipChange::Parent(parent) => {
+                    if let Some(parent) = parent {
+                        self.check_parent(at, clip, parent)?;
+                    }
+                    self.project.clip_at_mut(at).parent.clone_from(parent);
+                }
                 ClipChange::Caption(text) => match &mut self.project.clip_at_mut(at).content {
                     Content::Caption { text: current } => current.clone_from(text),
                     _ => return Err(fail("clip.domain", format!("`{clip}` is not a caption"))),
@@ -2131,8 +2139,38 @@ impl Editor<'_> {
         Ok(())
     }
 
-    /// Drop transitions whose clips no longer meet, and link groups left
-    /// with a single clip.
+    /// Whether `clip`, at `at`, can move with `parent`: a clip of its sequence that does not
+    /// already move with it.
+    fn check_parent(&self, at: ClipAt, clip: &Id, parent: &Id) -> Result<(), Diagnostic> {
+        let sequence = &self.project.sequences[at.sequence];
+        let find = |id: &Id| {
+            sequence
+                .tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .find(|clip| clip.id == *id)
+        };
+        let mut ancestor = Some(parent);
+        while let Some(id) = ancestor {
+            if id == clip {
+                return Err(fail(
+                    "clip.parent",
+                    format!("`{clip}` cannot move with `{parent}`, which moves with it"),
+                ));
+            }
+            let found = find(id).ok_or_else(|| {
+                fail(
+                    "clip.parent",
+                    format!("`{id}` is not a clip of the sequence `{clip}` is in"),
+                )
+            })?;
+            ancestor = found.parent.as_ref();
+        }
+        Ok(())
+    }
+
+    /// Drop transitions whose clips no longer meet, link groups left with a single clip, and
+    /// parents that no longer exist.
     fn housekeep(&mut self) {
         for sequence in &mut self.project.sequences {
             for track in &mut sequence.tracks {
@@ -2160,6 +2198,22 @@ impl Editor<'_> {
             for clip in sequence.tracks.iter_mut().flat_map(|t| &mut t.clips) {
                 if clip.link.as_ref().is_some_and(|link| counts[link] < 2) {
                     clip.link = None;
+                }
+            }
+            let clips: BTreeSet<Id> = sequence
+                .tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .map(|clip| clip.id.clone())
+                .collect();
+            for clip in sequence.tracks.iter_mut().flat_map(|t| &mut t.clips) {
+                if clip.parent.as_ref().is_some_and(|id| !clips.contains(id)) {
+                    self.notes.push(format!(
+                        "`{}` no longer moves with `{}`, which is gone",
+                        clip.id,
+                        clip.parent.as_ref().map_or("", Id::as_str)
+                    ));
+                    clip.parent = None;
                 }
             }
         }

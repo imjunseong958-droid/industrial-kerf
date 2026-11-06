@@ -84,6 +84,8 @@ struct SequencePlan {
     sounds: Vec<SoundPlan>,
     sound_ids: Vec<String>,
     captions: Vec<CaptionPlan>,
+    /// The clips other clips move with.
+    rigs: HashMap<Id, Rig>,
 }
 
 struct SoundPlan {
@@ -160,6 +162,15 @@ struct Dip {
     to: Time,
 }
 
+/// A clip other clips move with: what it takes to work out how it has moved them.
+struct Rig {
+    clip: Clip,
+    /// The source's size in its own pixels.
+    size: (u32, u32),
+    fit: bool,
+    digest: Option<u64>,
+}
+
 struct ClipPlan {
     clip: Clip,
     /// Its name, or its media's file or nested sequence's name.
@@ -201,6 +212,8 @@ enum Source {
     Solid(Rgba),
     Title(TitlePlan),
     Adjustment,
+    /// A null: it draws nothing, and other clips move with it.
+    Nothing,
 }
 
 struct TitlePlan {
@@ -355,6 +368,12 @@ impl Drawing {
                 time.flicks().hash(hash);
                 clip.shown.to_bits().hash(hash);
                 clip.letterboxed.hash(hash);
+                let mut parent = clip.clip.parent.as_ref();
+                while let Some(rig) = parent.and_then(|id| plan.rigs.get(id)) {
+                    rig.digest?.hash(hash);
+                    (at - rig.clip.start).flicks().hash(hash);
+                    parent = rig.clip.parent.as_ref();
+                }
                 if clip.reads_sequence_time {
                     at.flicks().hash(hash);
                 }
@@ -539,6 +558,9 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
+        if matches!(plan.source, Source::Nothing) {
+            return;
+        }
         if matches!(plan.source, Source::Adjustment) {
             self.adjust(canvas, sequence, plan, time, scale);
             return;
@@ -680,20 +702,23 @@ impl Drawing {
                 scale,
             ),
             Source::Title(title) => (Arc::new(title_on(title, (cw, ch))), scale),
-            Source::Adjustment => return None,
+            Source::Adjustment | Source::Nothing => return None,
         })
     }
 
     /// Where a clip's source pixels land on the canvas at clip time `time`,
     /// in canvas pixels: cropped, fitted, scaled, flipped, rotated about
-    /// its anchor, and moved, as the graph places it.
+    /// its anchor, and moved, as the graph places it, and then moved with each of its parents.
     fn geometry(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time) -> Affine {
-        place(
-            plan,
-            (f64::from(sequence.width), f64::from(sequence.height)),
-            time,
-        )
-        .0
+        let canvas = (f64::from(sequence.width), f64::from(sequence.height));
+        let mut geometry = place(plan, canvas, time).0;
+        let at = plan.clip.start + time;
+        let mut parent = plan.clip.parent.as_ref();
+        while let Some(rig) = parent.and_then(|id| sequence.rigs.get(id)) {
+            geometry = parent_motion(rig, canvas, at - rig.clip.start).then_apply(&geometry);
+            parent = rig.clip.parent.as_ref();
+        }
+        geometry
     }
 
     /// Run a clip's effects before the one at `upto` on its picture at clip
@@ -1264,7 +1289,31 @@ impl<'a> Builder<'a> {
                 _ => {}
             }
         }
+        let rigs = tracks
+            .iter()
+            .flat_map(|track: &TrackPlan| &track.shown)
+            .map(|shown| &shown.plan)
+            .filter(|plan| {
+                sequence
+                    .tracks
+                    .iter()
+                    .flat_map(|track| &track.clips)
+                    .any(|clip| clip.parent.as_ref() == Some(&plan.clip.id))
+            })
+            .map(|plan| {
+                (
+                    plan.clip.id.clone(),
+                    Rig {
+                        clip: plan.clip.clone(),
+                        size: plan.size,
+                        fit: plan.fit,
+                        digest: plan.digest,
+                    },
+                )
+            })
+            .collect();
         Ok(SequencePlan {
+            rigs,
             name: sequence.name.clone(),
             width,
             height,
@@ -1559,13 +1608,15 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
+                "null" => (Source::Nothing, canvas, false, true),
                 other => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
             },
             Content::Caption { .. } => return Ok(None),
         };
-        let animated = GEOMETRY
-            .iter()
-            .any(|name| matches!(param(clip, name), Param::Animated(_)));
+        let animated = clip.parent.is_some()
+            || GEOMETRY
+                .iter()
+                .any(|name| matches!(param(clip, name), Param::Animated(_)));
         let mut effects = Vec::new();
         for effect in clip.effects.iter().filter(|effect| effect.enabled) {
             let def = self.catalog.fx(effect.fx.as_str()).ok_or_else(|| {
@@ -1645,13 +1696,16 @@ impl<'a> Builder<'a> {
             }
         }
         if matches!(plan.source, Source::Media { .. }) {
-            plan.shown = largest.clamp(1e-6, 1.0);
-            plan.letterboxed = !alpha && letterboxed(&plan, canvas);
+            // A parent can scale it past anything its own properties say.
+            let moved = clip.parent.is_some();
+            plan.shown = if moved { 1.0 } else { largest.clamp(1e-6, 1.0) };
+            plan.letterboxed = !alpha && !moved && letterboxed(&plan, canvas);
             let deep = media
                 .and_then(|media| media.video)
                 .is_some_and(|video| video.is_deep());
             plan.plain = !alpha
                 && !deep
+                && !moved
                 && self.nesting.len() == 1
                 && entering
                 && size == canvas
@@ -1697,13 +1751,23 @@ impl<'a> Builder<'a> {
 
 /// Where a clip's source pixels land on a `canvas` at clip time `time`,
 /// and how many canvas pixels a source pixel is across and down.
-fn place(plan: &ClipPlan, (cw, ch): (f64, f64), time: Time) -> (Affine, Vec2) {
-    let clip = &plan.clip;
-    let [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y] =
-        GEOMETRY.map(|name| number(&param(clip, name).value_at(time)));
-    let (sw, sh) = (f64::from(plan.size.0), f64::from(plan.size.1));
+fn place(plan: &ClipPlan, canvas: (f64, f64), time: Time) -> (Affine, Vec2) {
+    let numbers = GEOMETRY.map(|name| number(&param(&plan.clip, name).value_at(time)));
+    placed(plan.size, plan.fit, !plan.animated, canvas, numbers)
+}
+
+/// [`place`] from the geometry's values: pixels of a source of `size`, fitted to the canvas when
+/// `fit`, and on whole pixels when `snap` and nothing rules that out.
+fn placed(
+    size: (u32, u32),
+    fit: bool,
+    snap: bool,
+    (cw, ch): (f64, f64),
+    [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y]: [f64; 12],
+) -> (Affine, Vec2) {
+    let (sw, sh) = (f64::from(size.0), f64::from(size.1));
     let (width, height) = (sw * (1.0 - l - r), sh * (1.0 - t - b));
-    let (fw, fh) = if plan.fit {
+    let (fw, fh) = if fit {
         fitted(width, height, cw, ch)
     } else {
         (width, height)
@@ -1711,7 +1775,7 @@ fn place(plan: &ClipPlan, (cw, ch): (f64, f64), time: Time) -> (Affine, Vec2) {
     let (kx, ky) = (s * sx, s * sy);
     let mut position = Vec2::new(cw / 2.0 + x * cw + ax * fw, ch / 2.0 + y * ch + ay * fh);
     let mut scale = Vec2::new(fw / width * kx, fh / height * ky);
-    if !plan.animated && rotation == 0.0 && ax == 0.0 && ay == 0.0 {
+    if snap && rotation == 0.0 && ax == 0.0 && ay == 0.0 {
         // A still picture lands on whole pixels.
         let (ow, oh) = ((fw * kx.abs()).round(), (fh * ky.abs()).round());
         position = Vec2::new(
@@ -1722,6 +1786,19 @@ fn place(plan: &ClipPlan, (cw, ch): (f64, f64), time: Time) -> (Affine, Vec2) {
     }
     let anchor = Vec2::new(sw * l + width * (0.5 + ax), sh * t + height * (0.5 + ay));
     (Affine::motion(position, scale, rotation, anchor), scale)
+}
+
+/// How a parent has moved its children at its clip time `time`: from where it would sit with no
+/// position, scale, or rotation of its own, to where it is.
+fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> Affine {
+    let numbers = GEOMETRY.map(|name| number(&param(&rig.clip, name).value_at(time)));
+    let [l, r, t, b, _, _, _, _, ax, ay, _, _] = numbers;
+    let rest = [l, r, t, b, 1.0, 1.0, 1.0, 0.0, ax, ay, 0.0, 0.0];
+    let (now, _) = placed(rig.size, rig.fit, false, canvas, numbers);
+    let (before, _) = placed(rig.size, rig.fit, false, canvas, rest);
+    before
+        .inverse()
+        .map_or(Affine::IDENTITY, |inverse| now.then_apply(&inverse))
 }
 
 /// What a clip's crop at clip time `time` leaves of its `picture`, in the

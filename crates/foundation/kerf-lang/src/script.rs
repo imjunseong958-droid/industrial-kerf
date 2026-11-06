@@ -1033,7 +1033,7 @@ impl Script<'_> {
                     .into_iter()
                     .flat_map(|g| g.params.iter().map(|p| p.name.as_str())),
             );
-            names.extend(["name", "enabled", "caption", "reset"]);
+            names.extend(["name", "enabled", "caption", "parent", "reset"]);
             names.join(", ")
         };
         let mut changes = Vec::new();
@@ -1047,6 +1047,14 @@ impl Script<'_> {
         }
         if let Some(text) = fields.take_text("caption")? {
             changes.push(ClipChange::Caption(text.to_owned()));
+        }
+        if let Some(parent) = fields.take("parent") {
+            let text = fields.text(parent)?;
+            changes.push(ClipChange::Parent(if text.is_empty() {
+                None
+            } else {
+                Some(Id::new(text).map_err(|error| fields.error(parent, error.to_string()))?)
+            }));
         }
         if let Some(reset) = fields.take("reset") {
             for name in fields.text(reset)?.split(',') {
@@ -1892,6 +1900,14 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
                             .unwrap()
                     }
                     ClipChange::Enabled(enabled) => write!(text, " enabled={enabled}").unwrap(),
+                    ClipChange::Parent(parent) => write!(
+                        text,
+                        " parent={}",
+                        parent
+                            .as_ref()
+                            .map_or_else(|| quote(""), |parent| parent.to_string())
+                    )
+                    .unwrap(),
                     ClipChange::Caption(caption) => {
                         write!(text, " caption={}", quote(caption)).unwrap()
                     }

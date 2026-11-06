@@ -24,6 +24,7 @@ pub fn validate(project: &Project, catalog: &Catalog) -> Vec<Diagnostic> {
     }
     validator.nesting();
     validator.links();
+    validator.parents();
     validator.out
 }
 
@@ -42,6 +43,46 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
+    /// Every parent is a clip of the same sequence, and none moves with itself.
+    fn parents(&mut self) {
+        let project = self.project;
+        for sequence in &project.sequences {
+            let parents: HashMap<&Id, Option<&Id>> = sequence
+                .tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .map(|clip| (&clip.id, clip.parent.as_ref()))
+                .collect();
+            for (clip, parent) in &parents {
+                let Some(parent) = parent else {
+                    continue;
+                };
+                if !parents.contains_key(parent) {
+                    self.error(
+                        "clip.parent",
+                        clip,
+                        format!("`{clip}` moves with `{parent}`, not a clip of its sequence"),
+                    );
+                    continue;
+                }
+                let mut seen = 0;
+                let mut at = Some(*parent);
+                while let Some(id) = at {
+                    if id == *clip || seen > parents.len() {
+                        self.error(
+                            "clip.parent",
+                            clip,
+                            format!("`{clip}` moves with itself through `{parent}`"),
+                        );
+                        break;
+                    }
+                    seen += 1;
+                    at = parents.get(id).copied().flatten();
+                }
+            }
+        }
+    }
+
     fn error(&mut self, code: &'static str, entity: &Id, message: String) {
         self.out
             .push(Diagnostic::error(code, message).entity(entity));

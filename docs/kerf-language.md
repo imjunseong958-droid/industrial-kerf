@@ -124,6 +124,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   unique within the clip.
 - Clips sharing a `link=` group, such as a picture and its sound, edit
   together.
+- `parent=` names a clip of the same sequence this one moves with: the parent's position,
+  scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
+  and parents chain. `gen=null@1` draws nothing, to rig several clips under one
+  (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
+  child of a clip that is split stays with its first part.
 - Printing is deterministic and omits defaults. Printing with annotations
   appends comments with each clip's end and source out; parsing ignores them.
 

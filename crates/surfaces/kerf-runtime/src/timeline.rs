@@ -187,6 +187,9 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
     if let Some(link) = &clip.link {
         object.insert("link".into(), json!(link.as_str()));
     }
+    if let Some(parent) = &clip.parent {
+        object.insert("parent".into(), json!(parent.as_str()));
+    }
     if let Some((source_in, source_out)) = clip.source_range() {
         object.insert("in".into(), json!(source_in.seconds()));
         object.insert("out".into(), json!(source_out.seconds()));

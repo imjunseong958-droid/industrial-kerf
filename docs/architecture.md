@@ -157,7 +157,8 @@ second document type, and an agent learns one model. To add, in order:
 
 1. Motion paths: positions that curve in space, on the Bezier keyframes that are in
    (`kerf_model::Bezier`), and a graph editor in the panel. EffectCraft's `keyframe` has them.
-2. Parenting, then 3D layers, cameras, and lights (EffectCraft's `render/three_d`).
+2. 3D layers, cameras, and lights (EffectCraft's `render/three_d`), on the parenting that is
+   in (`parent=`, `gen=null@1`).
 3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable
    strokes).
 4. Text animators and variable fonts.

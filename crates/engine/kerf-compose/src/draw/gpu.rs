@@ -177,7 +177,7 @@ impl Drawing {
             }
             Source::Solid(_) | Source::Title(_) => (canvas, scale),
             // It works on the canvas beneath it, unplaced.
-            Source::Adjustment => {
+            Source::Adjustment | Source::Nothing => {
                 return Shape {
                     source: canvas,
                     source_per: scale,
@@ -347,6 +347,9 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
+        if matches!(plan.source, Source::Nothing) {
+            return Some(canvas);
+        }
         let shape = self.gpu_shape(sequence, plan, time, scale);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         if matches!(plan.source, Source::Adjustment) {
@@ -514,7 +517,7 @@ impl Drawing {
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
             Source::Title(title) => frame.image(&title_on(title, (cw, ch))),
-            Source::Adjustment => return None,
+            Source::Adjustment | Source::Nothing => return None,
         }))
     }
 }
