@@ -52,6 +52,33 @@ fn refused(document: &str, word: &str) {
     assert!(format!("{errors:?}").contains(word), "{word}: {errors:?}");
 }
 
+const AXES: &str = r##"kerf 1
+project name="t"
+sequence s1 rate=24 size=1280x720 audio=48000
+  track V1 video
+    clip c1 gen=title@1 at=0f dur=48f
+      set font="Some Variable" ital=1 opsz=14 slnt=-10 text="Words" wdth=75 wght={0f:100 24f:900}
+"##;
+
+#[test]
+fn a_titles_axes_round_trip_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(AXES, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in ["wght={", "wdth=75", "slnt=-10", "opsz=14", "ital=1"] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+    refused(&AXES.replace("wdth=75", "wdth=5000"), "wdth");
+    refused(&AXES.replace("slnt=-10", "slnt=-100"), "slnt");
+    refused(&AXES.replace("ital=1", "ital=2"), "ital");
+    refused(&AXES.replace("wght={0f:100 24f:900}", "wght=-1"), "wght");
+    // A shape has no font to set.
+    refused(&OUTLINES.replace("kind=rect", "kind=rect wght=700"), "wght");
+}
+
 #[test]
 fn outlines_round_trip_with_what_animates() {
     let once =

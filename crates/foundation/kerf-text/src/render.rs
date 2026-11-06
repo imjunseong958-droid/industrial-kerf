@@ -55,25 +55,27 @@ impl OutlinePen for Rec {
     }
 }
 
-/// Outline commands in font units (y up), cached per (face, glyph).
-fn outline(face: FaceId, gid: u32) -> Option<Arc<Vec<Cmd>>> {
-    static C: OnceLock<Mutex<HashMap<(FaceId, u32), Option<Arc<Vec<Cmd>>>>>> = OnceLock::new();
+/// Outline commands in font units (y up), cached per (face, glyph, where its axes are set).
+fn outline(face: FaceId, gid: u32, instance: u32) -> Option<Arc<Vec<Cmd>>> {
+    static C: OnceLock<Mutex<HashMap<(FaceId, u32, u32), Option<Arc<Vec<Cmd>>>>>> = OnceLock::new();
     let c = C.get_or_init(Default::default);
-    if let Some(v) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&(face, gid)) {
+    if let Some(v) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&(face, gid, instance)) {
         return v.clone();
     }
     let f = fonts::face(face);
+    let location = fonts::location_of(instance);
     let v = f.font().and_then(|font| {
         let g = font.outline_glyphs().get(GlyphId::new(gid))?;
         let mut rec = Rec(Vec::new());
-        g.draw(DrawSettings::unhinted(Size::unscaled(), LocationRef::default()), &mut rec).ok()?;
+        let at = location.as_deref().map_or(LocationRef::default(), LocationRef::from);
+        g.draw(DrawSettings::unhinted(Size::unscaled(), at), &mut rec).ok()?;
         Some(Arc::new(rec.0))
     });
     let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
     if m.len() > 20_000 {
         m.clear();
     }
-    m.insert((face, gid), v.clone());
+    m.insert((face, gid, instance), v.clone());
     v
 }
 
@@ -81,7 +83,7 @@ fn outline(face: FaceId, gid: u32) -> Option<Arc<Vec<Cmd>>> {
 /// at the glyph's size) to the output.
 pub fn glyph_path(g: &Glyph, m: &Xform) -> Path {
     let mut p = Path::new();
-    let Some(cmds) = outline(g.face, g.id) else { return p };
+    let Some(cmds) = outline(g.face, g.id, g.instance) else { return p };
     let k = g.size / fonts::face(g.face).units_per_em();
     let slant = if g.synth_italic { SYNTH_ITALIC_SLANT } else { 0.0 };
     // font units (y up) → glyph px (y down), slanted
@@ -129,7 +131,7 @@ pub struct GlyphMask {
     pub top: i32,
 }
 
-type GKey = (FaceId, u32, u32, u8, bool, bool);
+type GKey = (FaceId, u32, u32, u32, u8, bool, bool);
 
 /// No single glyph mask may consume more than this much memory. Larger glyphs are filled directly
 /// into the caller's clipped destination instead of first allocating their complete bounds.
@@ -163,7 +165,7 @@ fn glyph_mask_bounds(path: &Path) -> Option<(i32, i32, usize, usize)> {
 pub fn glyph_mask(g: &Glyph, px: f32, frac: f32) -> Option<Arc<GlyphMask>> {
     let size_q = (px * 8.0).round().max(1.0) as u32;
     let frac_q = ((frac.rem_euclid(1.0) * 4.0).round() as u8) % 4;
-    let key = (g.face, g.id, size_q, frac_q, g.synth_bold, g.synth_italic);
+    let key = (g.face, g.id, g.instance, size_q, frac_q, g.synth_bold, g.synth_italic);
     if let Some(v) = glyph_cache().lock().unwrap_or_else(|e| e.into_inner()).entries.get(&key) {
         return v.clone();
     }

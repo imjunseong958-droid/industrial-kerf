@@ -96,9 +96,8 @@ sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-p
 moves the edge into the nearest pause of the media's sound, or onto a cut of
 its picture, by its index; within half a second unless given.
 
-The effect `shape.outline@1` combines another outline with a `gen=shape` clip, in order, by `mode`
-(add, subtract, intersect, difference), with the shape's `kind`, `width`, `height`, `round`, `sides`,
-`inner`, `points`, `smooth`, and `x`, `y`, `rotation` from its center. Its numbers animate.
+The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
+intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that

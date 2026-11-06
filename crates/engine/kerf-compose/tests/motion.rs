@@ -419,6 +419,91 @@ fn a_title_at_rest_draws_as_it_did() {
     assert!(near < 40, "{near}");
 }
 
+/// The small variable font `kerf-text` tests with: its I is a stem 100 units wide and 700 high at
+/// `wght` 400, 300 wide at 900, and 40 wide at 100, in 1000 to the em.
+const TEST_FONT: &str = "Kerf Test Variable";
+
+struct TestFont;
+
+impl kerf_text::fonts::FontSource for TestFont {
+    fn faces(&self) -> Vec<kerf_text::fonts::FaceInfo> {
+        vec![kerf_text::fonts::FaceInfo {
+            family: TEST_FONT.into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            index: 0,
+            data: kerf_text::fonts::FaceData::Static(include_bytes!(
+                "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
+            )),
+            origin: "test",
+        }]
+    }
+}
+
+/// A title of a capital I at half a frame high: 90 pixels to the em.
+fn stem(set: &str, at: i64) -> f64 {
+    kerf_text::fonts::add_source(&TestFont);
+    let drawn = frame(
+        &clip(
+            "title",
+            &format!(r#"text="I" font="{TEST_FONT}" size=0.5 {set}"#),
+        ),
+        at,
+    );
+    covered(&drawn)
+}
+
+#[test]
+fn a_titles_weight_changes_its_ink_by_what_the_font_says() {
+    // 63 pixels high, and 9 wide at rest.
+    let wide = |pixels: f64| pixels * 63.0;
+    let close = |found: f64, wanted: f64| {
+        assert!(
+            (found - wanted).abs() < wanted * 0.03,
+            "{found} against {wanted}"
+        );
+    };
+    close(stem("", 3), wide(9.0));
+    close(stem("wght=900", 3), wide(27.0));
+    close(stem("wght=100", 3), wide(3.6));
+    // Another of its axes, and both.
+    close(stem("wdth=200", 3), wide(18.0));
+    close(stem("wght=900 wdth=200", 3), wide(36.0));
+    // Keys move it, from where the clip starts.
+    let keyed = "wght={0f:400 48f:900}";
+    close(stem(keyed, 0), wide(9.0));
+    close(stem(keyed, 24), wide(18.0));
+    close(stem(keyed, 48), wide(27.0));
+    // And as it comes in, where each piece is drawn on its own.
+    close(stem("wght=900 reveal=1", 3), wide(27.0));
+}
+
+#[test]
+fn a_title_that_sets_no_axis_draws_as_it_does() {
+    kerf_text::fonts::add_source(&TestFont);
+    let of = |text: &str, font: &str, set: &str| {
+        frame(
+            &clip(
+                "title",
+                &format!(r#"text="{text}" font="{font}" size=0.12 {set}"#),
+            ),
+            3,
+        )
+        .rgba
+    };
+    // At 0 an axis is left alone, and at its default it is where the font has it.
+    let test = |set: &str| of("II I", TEST_FONT, set);
+    assert_eq!(test(""), test("wght=0"));
+    assert_eq!(test(""), test("wght=400 wdth=100"));
+    assert_ne!(test(""), test("wght=900"));
+    // A font without the axis takes no notice.
+    assert_eq!(
+        of(WORDS, "Inter", ""),
+        of(WORDS, "Inter", "wght=900 wdth=75 slnt=-10")
+    );
+}
+
 #[test]
 fn a_title_comes_in_from_the_start_of_the_text() {
     let body = clip(
@@ -472,6 +557,7 @@ fn a_title_comes_in_from_where_it_is_told() {
 
 #[test]
 fn the_gpu_draws_them_as_the_cpu_does() {
+    kerf_text::fonts::add_source(&TestFont);
     let scenes = [
         clip(
             "shape",
@@ -479,6 +565,10 @@ fn the_gpu_draws_them_as_the_cpu_does() {
         ),
         clip("particles", "rate=100 life=1 spread=360 size=0.03"),
         clip("title", &format!(r#"text="{WORDS}" size=0.2 reveal=0.5"#)),
+        clip(
+            "title",
+            &format!(r#"text="III I" font="{TEST_FONT}" size=0.3 wght={{0f:100 24f:900}} wdth=150"#),
+        ),
         format!(
             "{}      fx blur.gaussian@1 radius=4\n",
             clip("shape", "width=0.4 height=0.4 x=0.1 rotation=20")

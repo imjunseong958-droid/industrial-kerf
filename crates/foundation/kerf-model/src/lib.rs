@@ -38,4 +38,7 @@ pub use validate::validate;
 /// The effect that gives a `gen=shape` clip another outline. It draws no pass of its own: the shape
 /// reads it where it draws.
 pub const SHAPE_OUTLINE: &str = "shape.outline";
+
+/// The axes of a variable font a title can set, by the tags fonts name them with.
+pub const TITLE_AXES: [[u8; 4]; 5] = [*b"wght", *b"wdth", *b"slnt", *b"opsz", *b"ital"];
 pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};

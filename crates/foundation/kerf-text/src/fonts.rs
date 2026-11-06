@@ -7,9 +7,11 @@
 //! bold/italic needed when the family lacks that style. Unknown families fall back to Inter.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use skrifa::instance::{LocationRef, Size};
+use skrifa::Tag;
+use skrifa::instance::{Location, LocationRef, NormalizedCoord, Size};
 use skrifa::{FontRef, MetadataProvider};
 
 use crate::sfnt::{FaceNames, read_faces, read_faces_bytes};
@@ -50,6 +52,60 @@ pub const DEFAULT_FAMILY: &str = "Inter";
 
 /// Index of a face in the database.
 pub type FaceId = usize;
+
+/// An axis of a variable font and where to set it, by its OpenType tag (`wght`, `wdth`, ...).
+pub type Axis = ([u8; 4], f32);
+
+/// Axes are held to this many steps of a unit, so that what a keyframe sweeps through comes to a
+/// number of instances a cache can hold.
+const AXIS_STEPS: f32 = 64.0;
+
+/// Where axes are set, as each face reads them.
+#[derive(Default)]
+struct Instances {
+    ids: HashMap<(FaceId, Vec<([u8; 4], i32)>), u32>,
+    locations: Vec<Arc<Location>>,
+}
+
+fn instances() -> &'static Mutex<Instances> {
+    static I: OnceLock<Mutex<Instances>> = OnceLock::new();
+    I.get_or_init(Default::default)
+}
+
+/// `axes` at the steps they are held to, which shaping and drawing both go by.
+pub(crate) fn settled(axes: &[Axis]) -> impl Iterator<Item = ([u8; 4], f32)> + '_ {
+    axes.iter().map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() / AXIS_STEPS))
+}
+
+/// Which instance of `face` `axes` set: 0 is the font as it comes, which is also what they come to
+/// on a face without those axes, or at their defaults.
+pub fn instance(face: FaceId, axes: &[Axis]) -> u32 {
+    if axes.is_empty() {
+        return 0;
+    }
+    let key = (face, axes.iter().map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() as i32)).collect::<Vec<_>>());
+    if let Some(id) = instances().lock().unwrap_or_else(|e| e.into_inner()).ids.get(&key) {
+        return *id;
+    }
+    let f = self::face(face);
+    let location = f.font().map(|font| font.axes().location(settled(axes).map(|(tag, value)| (Tag::new(&tag), value))));
+    let mut held = instances().lock().unwrap_or_else(|e| e.into_inner());
+    let id = match location.filter(|at| at.coords().iter().any(|coord| *coord != NormalizedCoord::default())) {
+        Some(at) => {
+            held.locations.push(Arc::new(at));
+            held.locations.len() as u32
+        }
+        None => 0,
+    };
+    held.ids.insert(key, id);
+    id
+}
+
+/// Where instance `id` sets its axes; none for the font as it comes.
+pub(crate) fn location_of(id: u32) -> Option<Arc<Location>> {
+    let index = id.checked_sub(1)? as usize;
+    instances().lock().unwrap_or_else(|e| e.into_inner()).locations.get(index).cloned()
+}
 
 /// Where a face's bytes come from.
 #[derive(Clone, Debug)]

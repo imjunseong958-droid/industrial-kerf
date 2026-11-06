@@ -1269,6 +1269,7 @@ dependencies = [
  "kerf-model",
  "kerf-motion",
  "kerf-raster",
+ "kerf-text",
  "lz4_flex",
  "rayon",
  "tempfile",

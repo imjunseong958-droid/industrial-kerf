@@ -43,6 +43,8 @@ pub struct Text<'a> {
     /// An edge around the glyphs, under them: its color and how far it
     /// reaches past them, in pixels.
     pub outline: Option<(Rgba, f32)>,
+    /// Where to set a variable font's axes.
+    pub axes: &'a [kerf_text::fonts::Axis],
 }
 
 /// Draw `text` over `image`, its lines placed against `at`'s x by its
@@ -59,6 +61,7 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
     let style = TextStyle {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: text.size,
+        axes: text.axes.to_vec(),
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -118,6 +121,7 @@ pub fn draw_pieces(
     let style = TextStyle {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: text.size,
+        axes: text.axes.to_vec(),
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -264,6 +268,7 @@ mod tests {
             color: Rgba::WHITE,
             justify: Justify::Center,
             outline: None,
+            axes: &[],
         }
     }
 
@@ -354,6 +359,7 @@ mod tests {
             color: Rgba::WHITE,
             justify: Justify::Center,
             outline: None,
+            axes: &[],
         };
         draw(&mut image, &text, [200.0, 100.0], 0.5);
         let (x0, y0, x1, y1) = covered(&image);
@@ -372,6 +378,7 @@ mod tests {
                 color: Rgba::WHITE,
                 justify,
                 outline: None,
+                axes: &[],
             };
             draw(&mut image, &text, [200.0, 50.0], 0.5);
             covered(&image)
@@ -391,6 +398,7 @@ mod tests {
             color: Rgba::WHITE,
             justify: Justify::Center,
             outline: None,
+            axes: &[],
         };
         draw(&mut plain, &text, [150.0, 50.0], 0.5);
         let outlined = Text {
