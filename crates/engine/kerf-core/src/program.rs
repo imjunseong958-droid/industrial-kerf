@@ -571,6 +571,12 @@ impl<'a> Graph<'a> {
         if clip.angle.is_some() {
             return Err(ProgramError::unsupported(&clip.id, "a multicam angle"));
         }
+        if matches!(
+            clip.props.get("three_d"),
+            Some(Param::Static(Value::Bool(true)))
+        ) {
+            return Err(ProgramError::unsupported(&clip.id, "a clip in depth"));
+        }
         let (width, height) = canvas(sequence);
         let length = portion.hi - portion.decode;
         let mut filters = Vec::new();

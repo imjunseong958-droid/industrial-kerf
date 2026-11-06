@@ -173,16 +173,16 @@ layered grades as stacked effects.
 
 ### Motion
 
-Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles, generators,
-15 looks.
+Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles, generators, 15 looks, and
+clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
+perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render/three_d/adv` at
+`5c54866` has what to carry next: intersecting planes, shadows, and depth of field.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add, in order:
 
 1. A graph editor in the panel, for the Bezier keyframes (`kerf_model::Bezier`) and motion paths
    (`path=`, `along=`, `orient=`) that are in the language.
-2. 3D layers, cameras, and lights (EffectCraft's `render/three_d`), on the parenting that is
-   in (`parent=`, `gen=null@1`).
 3. Shape clips, from EffectCraft's `path` (booleans, offsets, trim, variable
    strokes).
 4. Text animators and variable fonts.
