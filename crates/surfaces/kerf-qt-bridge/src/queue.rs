@@ -195,6 +195,7 @@ pub(crate) fn job_name(job: &RenderJob) -> String {
         Some(RenderPreset::ProRes422Hq) if quality != "Master" => {
             format!("{quality} · ProRes 422 HQ")
         }
+        Some(RenderPreset::HevcHdr) => format!("{quality} · HEVC 10-bit HDR"),
         _ => quality.to_owned(),
     }
 }

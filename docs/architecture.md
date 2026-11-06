@@ -117,8 +117,10 @@ Three limits remain, in this order:
    with what lies past them as values below 0 and above 1, and `HdrOutput` (`output.wgsl`) turns
    them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
    own signal. Other effects written for 0 to 1 get the picture brought under 1 and put back,
-   each pixel or the whole picture as `catalog::headroom` says. They still lose wide colors, and three looks still clip. Only ProRes carries HDR so far; H.264 is
-   8-bit, and scopes read the 8-bit SDR frame. On Apple, handing decoded surfaces to the
+   each pixel or the whole picture as `catalog::headroom` says. They still lose wide colors, and three looks still clip. ProRes and HEVC Main 10 carry HDR; H.264 is
+   8-bit, and scopes read the 8-bit SDR frame. An HDR10 file (`hevc_hdr`) says what it was mastered on
+   (P3 D65 at 1000 nits unless told otherwise) and its MaxCLL and MaxFALL, measured from the frames
+   before encoding, which disk-kept frames make cheap; HLG carries its tags without them. On Apple, handing decoded surfaces to the
    GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
    crate with the exception written down. Scaling footage is another cost: 4K footage in a
    1080p sequence spends more converting (12 ms) than 4K shown whole (5 ms).
@@ -162,7 +164,7 @@ tonal zones, a histogram, the cast, saturation, the skin tone line, and the dens
 Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
 also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
 
-To add: HEVC 10-bit delivery for HDR, HDR mastering metadata, the Lumetri presets (cut in `6eafef8`), and
+To add: the Lumetri presets (cut in `6eafef8`), and
 layered grades as stacked effects.
 
 ### Motion

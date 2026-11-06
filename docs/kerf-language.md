@@ -117,8 +117,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   with a warning ([looks.md](looks.md#versions)).
 - `sequence` takes `color=rec2100-pq` or `color=rec2100-hlg` to finish in HDR (the default is
   Rec.709, which is not written). 1.0 stays SDR white at 203 cd/m², so SDR clips keep their
-  look and HDR footage keeps its highlights. The ProRes master carries the HDR signal; the
-  monitor, stills, scopes, and H.264 files get it tone mapped to Rec.709. The program's own
+  look and HDR footage keeps its highlights. The ProRes master and an HEVC 10-bit render (`codec
+  hevc_hdr`) carry the HDR signal, the latter with HDR10's metadata for PQ; the monitor, stills,
+  scopes, and H.264 files get it tone mapped to Rec.709. The program's own
   sequence decides this for what is nested in it. Effects keep highlights there, except
   `color.videolimiter`, which limits on purpose, and the looks `look.flash`, `look.noir`, and
   `look.vhs`. Colors wider than Rec.709 survive only effects that do not limit to 0 to 1.

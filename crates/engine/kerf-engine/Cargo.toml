@@ -16,6 +16,7 @@ path = "src/bin/kerf-engine.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-fx = { path = "../../effects/kerf-fx" }

@@ -1292,6 +1292,7 @@ dependencies = [
  "clap",
  "criterion",
  "hex",
+ "kerf-color",
  "kerf-compose",
  "kerf-core",
  "kerf-fx",

@@ -47,6 +47,7 @@ QList<Output> defaults(const QString &directory) {
         {QStringLiteral("draft"), QStringLiteral("Draft"), QStringLiteral("review"), QStringLiteral("h264"), folder, named("draft")},
         {QStringLiteral("preview"), QStringLiteral("Render preview"), QString(), QString(), QString(), QString()},
         {QStringLiteral("vertical"), QStringLiteral("Vertical cut"), QStringLiteral("full"), QStringLiteral("h264"), folder, named("vertical")},
+        {QStringLiteral("hdr"), QStringLiteral("HDR delivery"), QStringLiteral("full"), QStringLiteral("hevc_hdr"), folder, named("hdr")},
     };
 }
 
@@ -261,6 +262,7 @@ QString codecName(const QString &quality, const QString &codec) {
     const QString used = !codec.isEmpty() ? codec : quality == QStringLiteral("master") ? QStringLiteral("prores_hq") : QStringLiteral("h264");
     if (used == QStringLiteral("prores_hq")) return QStringLiteral("ProRes 422 HQ");
     if (used == QStringLiteral("hevc")) return QStringLiteral("HEVC");
+    if (used == QStringLiteral("hevc_hdr")) return QStringLiteral("HEVC 10-bit");
     return QStringLiteral("H.264");
 }
 
@@ -633,6 +635,9 @@ RenderQueueView::RowState RenderQueueView::stateOf(const deliver::Output &output
         spec << QStringLiteral("12 Mb/s") << QStringLiteral("review copy");
     } else if (output.id == QStringLiteral("vertical")) {
         if (const QString name = sequence.value(QStringLiteral("name")).toString(); !name.isEmpty()) spec << name;
+    } else if (output.id == QStringLiteral("hdr")) {
+        // kerf-engine measures MaxCLL and MaxFALL as it renders a PQ sequence.
+        spec << (sequence.value(QStringLiteral("color")).toString() == QStringLiteral("rec2100-hlg") ? QStringLiteral("HLG") : QStringLiteral("HDR10"));
     }
     state.spec = spec.join(QStringLiteral(" · "));
     const bool running = !state.job.isEmpty() && deliver::active(state.job.value(QStringLiteral("status")).toString());
@@ -657,6 +662,8 @@ void RenderQueueView::rebuild() {
     QSet<QString> shownJobs;
     for (const deliver::Output &out : known.outputs) {
         if (out.id == QStringLiteral("vertical") && !vertical) continue;
+        // Only a sequence finished in HDR has HDR to deliver.
+        if (out.id == QStringLiteral("hdr") && !deliver::masterSequence(m_bus ? m_bus->timeline() : QJsonObject()).value(QStringLiteral("color")).toString().startsWith(QStringLiteral("rec2100"))) continue;
         RowState state = stateOf(out, known);
         if (!state.job.isEmpty()) shownJobs.insert(state.job.value(QStringLiteral("jobId")).toString());
         states << state;
@@ -702,7 +709,7 @@ void RenderQueueView::rebuild() {
         m_rows << row;
     }
     for (qsizetype i = 0; i < states.size(); ++i) {
-        const bool startable = canRender && (states[i].id == QStringLiteral("draft") || states[i].id == QStringLiteral("vertical"));
+        const bool startable = canRender && (states[i].id == QStringLiteral("draft") || states[i].id == QStringLiteral("vertical") || states[i].id == QStringLiteral("hdr"));
         m_rows[i]->setState(states[i], startable);
     }
     // The path row: the master's file and its configured folder, where the
