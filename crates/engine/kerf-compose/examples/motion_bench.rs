@@ -99,6 +99,22 @@ const SCENES: &[(&str, &str)] = &[
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=title@1 at=0f dur=96f\n      set text=\"Soft\" size=0.4 three_d=true z=-0.2\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional x=0.2 z=1 shadow=1 size=10",
     ),
     (
+        "3d deep square",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true scale=0.3 x=-0.2 depth=0.3\n  track V2 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.3 z=1",
+    ),
+    (
+        "3d deep title",
+        "gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 rotate_y={0f:-20 96f:20}\n  track V2 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1",
+    ),
+    (
+        "3d title flat",
+        "gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true rotate_y={0f:-20 96f:20}\n  track V2 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1",
+    ),
+    (
+        "3d deep title shadow",
+        "gen=solid@1 at=0f dur=96f\n      set color=#808080 three_d=true z=0.3\n  track V2 video\n    clip t gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1\n  track V3 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4",
+    ),
+    (
         "3d focus flat",
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=0.5 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.03",
     ),

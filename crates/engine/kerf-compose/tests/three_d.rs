@@ -792,6 +792,268 @@ fn a_lights_size_is_in_the_frames_key() {
     );
 }
 
+/// A square a quarter of the frame across, in depth, with a light.
+fn deep(set: &str, light: &str) -> String {
+    let light = if light.is_empty() {
+        String::new()
+    } else {
+        format!("  track V2 video\n    clip sun gen=light@1 at=0f dur=24f\n      set {light}\n")
+    };
+    format!(
+        "  track V1 video\n    clip solid gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25 three_d=true {set}\n{light}"
+    )
+}
+
+#[test]
+fn a_clip_with_no_depth_draws_as_it_did() {
+    for set in ["", "x=0.2 rotate_y=30"] {
+        for light in ["", "kind=directional x=0.5 z=1"] {
+            assert_eq!(
+                frame(&deep(set, light), 3).rgba,
+                frame(&deep(&format!("{set} depth=0"), light), 3).rgba,
+                "{set} {light}"
+            );
+        }
+    }
+    // Not in depth, depth is nothing.
+    let flat = "  track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25 depth=0.5\n";
+    let plain = "  track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25\n";
+    assert_eq!(frame(flat, 3).rgba, frame(plain, 3).rgba);
+}
+
+#[test]
+fn a_solid_shows_its_side_as_far_as_perspective_says() {
+    // 80 by 45 pixels, with its right edge at x = -40 about the middle: 0.25 of the frame, with no light
+    // to tell the side from the front, so only the outline says. The camera is 247 pixels from z = 0, so
+    // the back, 90 pixels behind, has that edge at -40 x 247.3 / (247.3 + 90) = -29.3, or column 130.7.
+    let set = "x=-0.25";
+    let flat = frame(&deep(set, ""), 3);
+    let thick = frame(&deep(&format!("{set} depth=0.5"), ""), 3);
+    let edge = |frame: &Frame| {
+        (0..320)
+            .rev()
+            .find(|x| pixel(frame, *x, 90)[0] > 128)
+            .expect("something shows")
+    };
+    assert!(edge(&flat).abs_diff(119) <= 1, "{}", edge(&flat));
+    assert!(edge(&thick).abs_diff(130) <= 1, "{}", edge(&thick));
+    // The front is where it was, and nothing shows of the far side, which it hides.
+    let left = |frame: &Frame| (0..320).find(|x| pixel(frame, *x, 90)[0] > 128).unwrap();
+    assert!(left(&flat).abs_diff(left(&thick)) <= 1);
+    // Deeper shows more of it; and in the middle of the frame, none of its sides show.
+    let deeper = frame(&deep(&format!("{set} depth=1"), ""), 3);
+    assert!(edge(&deeper) > edge(&thick) + 4);
+    let middle = frame(&deep("depth=0.5", ""), 3);
+    assert!(width_of(&middle).abs_diff(80) <= 1, "{}", width_of(&middle));
+}
+
+#[test]
+fn a_solids_sides_take_the_light_by_the_way_they_face() {
+    // Off to the left, its right side shows, which faces right.
+    let set = "x=-0.25 depth=0.5";
+    let front = 100;
+    let side = 125;
+    // A light straight on: all on its front and none on a side square to it.
+    let on = frame(&deep(set, "kind=directional z=1"), 3);
+    assert_eq!(pixel(&on, front, 90)[0], 255);
+    assert!(pixel(&on, side, 90)[0] < 8, "{:?}", pixel(&on, side, 90));
+    // Shining to the right, from the left, it lights neither what faces right nor what faces the viewer.
+    let from_left = frame(&deep(set, "kind=directional x=1 z=0.001"), 3);
+    assert!(
+        pixel(&from_left, side, 90)[0] < 8,
+        "{:?}",
+        pixel(&from_left, side, 90)
+    );
+    assert!(
+        pixel(&from_left, front, 90)[0] < 16,
+        "{:?}",
+        pixel(&from_left, front, 90)
+    );
+    // Shining to the left, from the right, it lights that side and hardly the front.
+    let from_right = frame(&deep(set, "kind=directional x=-1 z=0.001"), 3);
+    assert!(
+        pixel(&from_right, side, 90)[0] > 200,
+        "{:?}",
+        pixel(&from_right, side, 90)
+    );
+    assert!(
+        pixel(&from_right, front, 90)[0] < 16,
+        "{:?}",
+        pixel(&from_right, front, 90)
+    );
+    // A light behind a solid does not come through it, as one behind a flat clip does.
+    let behind = frame(&deep(set, "kind=directional z=-1"), 3);
+    assert!(
+        pixel(&behind, front, 90)[0] < 8,
+        "{:?}",
+        pixel(&behind, front, 90)
+    );
+    let flat_behind = frame(&deep("x=-0.25", "kind=directional z=-1"), 3);
+    assert_eq!(pixel(&flat_behind, front, 90)[0], 255);
+    // Ambient light is the same on all of it.
+    let ambient = frame(&deep(set, "kind=ambient intensity=0.5"), 3);
+    assert_eq!(pixel(&ambient, front, 90), pixel(&ambient, side, 90));
+}
+
+#[test]
+fn a_title_with_depth_is_lit_on_its_sides_and_keeps_its_holes() {
+    let title = |depth: &str| {
+        format!(
+            "  track V1 video\n    clip words gen=title@1 at=0f dur=24f\n      set text=\"O\" size=0.8 color=#ffffff three_d=true {depth}\n  track V2 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 y=0.4 z=1\n"
+        )
+    };
+    let flat = frame(&title(""), 3);
+    let deep = frame(&title("depth=0.3"), 3);
+    let lit = |frame: &Frame| {
+        (0..frame.width * frame.height)
+            .filter(|at| pixel(frame, at % frame.width, at / frame.width)[0] > 8)
+            .count()
+    };
+    // More of it, where its sides show, and shades of them: the flat one has one level of light.
+    assert!(
+        lit(&deep) > lit(&flat) + 100,
+        "{} {}",
+        lit(&deep),
+        lit(&flat)
+    );
+    let levels = |frame: &Frame| {
+        let mut seen = std::collections::BTreeSet::new();
+        for at in 0..frame.width * frame.height {
+            seen.insert(pixel(frame, at % frame.width, at / frame.width)[0]);
+        }
+        seen.len()
+    };
+    assert!(levels(&deep) > levels(&flat) + 10);
+    // Its middle is a hole, and the frame shows through it.
+    assert_eq!(pixel(&deep, 160, 90)[0], 0, "{:?}", pixel(&deep, 160, 90));
+    // Its alpha is whole where it shows and nothing where it does not.
+    let at = |x: u32, y: u32| ((y * deep.width + x) * 4 + 3) as usize;
+    assert_eq!(deep.rgba[at(160, 90)], 255);
+}
+
+#[test]
+fn a_clips_depth_animates_and_is_in_the_frames_key() {
+    let keyed = deep("x=-0.25 depth={0f:0 23f:0.5}", "");
+    assert_eq!(frame(&keyed, 0).rgba, frame(&deep("x=-0.25", ""), 0).rgba);
+    let end = frame(&keyed, 23);
+    let edge = (0..320)
+        .rev()
+        .find(|x| pixel(&end, *x, 90)[0] > 128)
+        .unwrap();
+    assert!(edge.abs_diff(130) <= 1, "{edge}");
+    let compositor = |set: &str| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
+                deep(set, "")
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(3);
+    assert_ne!(
+        compositor("depth=0.1").frame_key(at, 1.0),
+        compositor("depth=0.2").frame_key(at, 1.0)
+    );
+}
+
+#[test]
+fn a_solid_casts_a_shadow_as_long_as_it_is_deep() {
+    // A clip in front of a wall with the light slanting by 160 for every 180 back: what is d nearer than
+    // the wall falls d x 160 / 180 to the right. From 45 to 90 pixels nearer, its shadow runs from 40
+    // to 80 to the right, where a clip that thin is one or the other.
+    let wall = "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n";
+    let scene = |set: &str| {
+        format!(
+            "{wall}  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.1 {set}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=0.5 z=1 shadow=1\n"
+        )
+    };
+    // Its front is at z = -0.5, 90 pixels near, and it reaches back to -0.25.
+    let thin = frame(&scene("x=-0.2 z=-0.5"), 0);
+    let solid = frame(&scene("x=-0.2 z=-0.5 depth=0.25"), 0);
+    let dark = |frame: &Frame, x: u32| pixel(frame, x, 90)[0] < 8;
+    // The thin one's shadow is 32 across, from column 160 - 80 + 80 = 160 to 192.
+    assert!(dark(&thin, 176) && !dark(&thin, 150));
+    // The solid's reaches back as far as what is 45 pixels near casts, from column 120.
+    assert!(
+        dark(&solid, 176) && dark(&solid, 150),
+        "{:?}",
+        pixel(&solid, 150, 90)
+    );
+    assert!(!dark(&solid, 112), "{:?}", pixel(&solid, 112, 90));
+}
+
+/// A clip turned with `set`, lit by an environment on a hidden track, whose clip is all white on its top
+/// half and black below.
+fn in_a_sky(set: &str, light: &str) -> String {
+    format!(
+        "  track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.5 {set}\n  track sky video enabled=false\n    clip s gen=solid@1 at=0f dur=24f\n      set color=#ffffff\n      mask top rect=0,0,1,0.5\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=environment image=sky {light}\n"
+    )
+}
+
+#[test]
+fn an_environment_light_comes_from_where_its_picture_says() {
+    // Lit in linear light, and the middle of the frame shows the clip.
+    let at_middle = |document: &str| linear(pixel(&frame(document, 3), 160, 90)[0]);
+    // Facing the camera, it sees as much sky as ground.
+    near(at_middle(&in_a_sky("", "")), 0.5);
+    // Tipped back, it faces up more, and tipped forward, down more, each by its turn.
+    let up = at_middle(&in_a_sky("rotate_x=60", ""));
+    let down = at_middle(&in_a_sky("rotate_x=-60", ""));
+    assert!(up > 0.75 || down > 0.75, "{up} {down}");
+    assert!(up < 0.25 || down < 0.25, "{up} {down}");
+    assert!((up + down - 1.0).abs() < 0.05, "{up} {down}");
+    // Its color and intensity go on top, and it adds to other lights.
+    near(at_middle(&in_a_sky("", "intensity=0.5")), 0.25);
+    let tinted = frame(&in_a_sky("", "color=#ff0000"), 3);
+    near(linear(pixel(&tinted, 160, 90)[0]), 0.5);
+    assert_eq!(pixel(&tinted, 160, 90)[1], 0);
+    // With nothing on the track at that moment, it gives nothing.
+    let gone = in_a_sky("", "").replace(
+        "clip s gen=solid@1 at=0f dur=24f",
+        "clip s gen=solid@1 at=20f dur=4f",
+    );
+    assert_eq!(pixel(&frame(&gone, 3), 160, 90)[0], 0);
+    assert!(pixel(&frame(&gone, 22), 160, 90)[0] > 100);
+    // And with no image it is ambient light.
+    let plain = in_a_sky("", "").replace("image=sky ", "");
+    assert_eq!(pixel(&frame(&plain, 3), 160, 90)[0], 255);
+}
+
+#[test]
+fn a_solid_in_an_environment_is_lit_on_each_face_by_what_it_faces() {
+    // Well below the middle of the frame, the camera looks down onto its top, which faces the sky. Its
+    // near top edge is 63 pixels below the middle, and its far one, 90 pixels behind, 46.
+    let body = |y: &str| in_a_sky(&format!("depth=0.5 y={y}"), "");
+    let at = |frame: &Frame, y: u32| linear(pixel(frame, 160, y)[0]);
+    let low = frame(&body("0.6"), 3);
+    assert!(at(&low, 145) > 0.9, "{}", at(&low, 145));
+    near(at(&low, 170), 0.5);
+    // Well above it, the camera looks up at its underside, which faces the dark.
+    let high = frame(&body("-0.6"), 3);
+    assert!(at(&high, 35) < 0.1, "{}", at(&high, 35));
+    near(at(&high, 10), 0.5);
+}
+
+#[test]
+fn a_frame_lit_by_another_track_is_not_kept_by_a_key_that_cannot_see_it() {
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
+            in_a_sky("", "")
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let compositor = Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default())
+        .expect("composes");
+    assert_eq!(compositor.frame_key(Rate::FPS_24.time_of(3), 1.0), None);
+}
+
 #[test]
 fn a_shadow_falls_on_a_clip_that_is_cut() {
     // Crossing and in shadow at once: the wall is cut by a turned clip, and both still take shadows.

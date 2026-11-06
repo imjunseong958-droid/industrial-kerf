@@ -195,6 +195,7 @@ perspective is true and lighting is per pixel, on the CPU. Where two adjacent cl
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
 reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
 carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.
+A clip with a `depth` is a solid with no mesh: each pixel's ray goes between the planes of its front and its back, half a picture's pixel at a time, reading the picture's alpha, and takes the color of whatever more of it it reaches, lit by the plane's normal at the front and by the slope of the alpha on a side. So a title's sides are its letters', its holes stay holes, and its edges are as soft as a pixel. What is empty of alpha is passed over by a summed table without being read. Lights fall only on the way a solid's surface faces, and its shadow is what five planes through it cast between them. A 1080p title takes 25 ms for 16 flat, and 4K 108 for 70; with a soft shadow on a wall, 200 and 763. An environment light (`kind=environment image=V3`) is a track's picture wrapped around the scene as a panorama and reduced to how much light reaches each way a surface can face, a table of 32 by 16 made for each frame, which is all that a surface with no gloss shows of it, and such a frame is not kept, since it reads another track.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model.
@@ -213,7 +214,7 @@ To add:
 
 - A path on a clip in depth with `orient` and an anchor off its middle, turned: its anchor leaves the plane by a different amount at each
   point, which no one map shows, so it shows no curve rather than a wrong one.
-- The rest of EffectCraft's `render/three_d/adv` at `5c54866`: models, extruded text, and environment light.
+- EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has. Bevels are its next piece for a solid.
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.
