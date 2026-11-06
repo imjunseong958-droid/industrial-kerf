@@ -1383,6 +1383,7 @@ dependencies = [
  "kerf-lang",
  "kerf-model",
  "kerf-runtime",
+ "kerf-scopes",
  "kerf-skills",
  "kerf-text",
  "libc",
@@ -1469,6 +1470,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "kerf-scopes"
+version = "0.1.0"
+dependencies = [
+ "kerf-color",
+ "serde",
 ]
 
 [[package]]

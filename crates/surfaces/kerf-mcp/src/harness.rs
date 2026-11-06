@@ -258,6 +258,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
+                    "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
                     "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
                     "to": {"type": "string", "description": "The end of that range."},
@@ -379,6 +380,8 @@ struct LookInput {
     transcript: bool,
     #[serde(default)]
     words: bool,
+    #[serde(default)]
+    scopes: bool,
     sheet: Option<usize>,
     from: Option<String>,
     to: Option<String>,
@@ -797,6 +800,17 @@ impl KerfMcpRouter {
                 "words times a transcript; pass transcript: true",
             ));
         }
+        if input.scopes
+            && (input.at.is_empty()
+                || input.media.is_some()
+                || input.transcript
+                || input.sheet.is_some())
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "scopes read the program at `at`; pass `at`, and not `media`, `transcript`, or `sheet`",
+            ));
+        }
         if input.at.len() > MAX_LOOK_FRAMES {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
@@ -834,6 +848,9 @@ impl KerfMcpRouter {
                 "revision": revision,
                 "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
             }),
+            None if input.scopes => {
+                self.program_scopes(&project, input.sequence.as_deref(), revision, &input.at)?
+            }
             None => self.program_frames(
                 &project,
                 input.sequence.as_deref(),
@@ -1321,6 +1338,48 @@ impl KerfMcpRouter {
         Ok(json!({"sequence": sequence.id.to_string(), "revision": revision, "frames": frames}))
     }
 
+    /// What scopes read of the program at each of `at`.
+    fn program_scopes(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        revision: u64,
+        at: &[String],
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, sequence)?;
+        let clock = Clock::of_sequence(sequence);
+        let duration = sequence.duration();
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        // Scopes read a few hundred samples across, so a smaller frame reads the same.
+        let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
+        let mut readings = Vec::new();
+        for text in at {
+            let time = position(&clock, text)?;
+            if time.is_negative() || time >= duration {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("`{text}` is outside sequence `{}`", sequence.id),
+                ));
+            }
+            let frame =
+                kerf_engine::still::draw_frame(&resolved, Some(sequence.id.as_str()), time, scale)
+                    .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            let reading = kerf_scopes::read(
+                &frame.rgba,
+                frame.width as usize,
+                frame.height as usize,
+            )
+            .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))?;
+            readings.push(json!({"at": text, "scopes": reading}));
+        }
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "readings": readings,
+        }))
+    }
+
     /// Render the program at each of `times` at full size and quality and
     /// take its frame there, at most `width` wide; with `columns`, also a
     /// contact sheet of them. `project` has its media paths resolved.
@@ -1768,6 +1827,9 @@ const KEPT_PROGRAM_FRAMES: usize = 32;
 
 /// A script refusal, with each line numbered as the agent wrote it.
 /// The most catalog entries `look` with `effects` returns.
+/// The width frames are drawn at for scopes to read.
+const SCOPE_WIDTH: f64 = 960.0;
+
 const MAX_FOUND_FX: usize = 20;
 
 /// Catalog entries matching `words`, by how many of the words their id,

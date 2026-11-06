@@ -20,6 +20,7 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
+kerf-scopes = { path = "../../color/kerf-scopes" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
 kerf-text = { path = "../../foundation/kerf-text" }
 libc = "0.2"
