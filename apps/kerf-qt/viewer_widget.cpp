@@ -675,7 +675,12 @@ void ViewerWidget::setMotionPath(const QString &clip, const QString &text, const
         m_pathAlong = along;
         return;
     }
-    const auto points = clip.isEmpty() || !placement.isInvertible() ? std::nullopt : graph::parsePath(text);
+    auto points = clip.isEmpty() || !placement.isInvertible() ? std::nullopt : graph::parsePath(text);
+    // All of it on or behind the camera is no curve to show.
+    if (points) {
+        const QList<QPointF> samples = graph::MotionPath(*points, aspect()).samples();
+        if (std::none_of(samples.cbegin(), samples.cend(), [&placement](const QPointF &sample) { return inSight(placement, sample); })) points.reset();
+    }
     const QString shown = points ? clip : QString();
     const QList<QPointF> list = points.value_or(QList<QPointF>{});
     if (shown == m_pathClip && list == m_pathPoints && placement == m_pathPlacement && along == m_pathAlong) return;
@@ -702,15 +707,16 @@ QPointF ViewerWidget::pathToWidget(const QPointF &point) const {
     return {canvas.left() + on.x() * canvas.width(), canvas.top() + on.y() * canvas.height()};
 }
 
-QPointF ViewerWidget::pathPoint(const QPointF &widget) const {
+std::optional<QPointF> ViewerWidget::pathPoint(const QPointF &widget) const {
     const QRectF canvas = pictureRect();
-    return m_pathPlacement.inverted().map(QPointF((widget.x() - canvas.left()) / std::max(1.0, canvas.width()),
-                                                  (widget.y() - canvas.top()) / std::max(1.0, canvas.height())));
+    return pointInSight(m_pathPlacement, QPointF((widget.x() - canvas.left()) / std::max(1.0, canvas.width()),
+                                                 (widget.y() - canvas.top()) / std::max(1.0, canvas.height())));
 }
 
 int ViewerWidget::pathPointAt(const QPointF &widget) const {
     if (m_pathClip.isEmpty()) return -1;
     for (qsizetype index = m_pathPoints.size() - 1; index >= 0; --index) {
+        if (!inSight(m_pathPlacement, m_pathPoints.at(index))) continue;
         const QPointF delta = pathToWidget(m_pathPoints.at(index)) - widget;
         if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return int(index);
     }
@@ -719,9 +725,11 @@ int ViewerWidget::pathPointAt(const QPointF &widget) const {
 
 double ViewerWidget::pathCurveAt(const QPointF &widget) const {
     const QList<QPointF> line = motionPathCurve();
+    const QList<QPointF> samples = m_pathClip.isEmpty() ? QList<QPointF>{} : graph::MotionPath(m_pathPoints, aspect()).samples();
     double nearest = kHandleReach;
     double found = -1.0;
     for (qsizetype index = 0; index + 1 < line.size(); ++index) {
+        if (!inSight(m_pathPlacement, samples.at(index)) || !inSight(m_pathPlacement, samples.at(index + 1))) continue;
         const QPointF from = line.at(index);
         const QPointF along = line.at(index + 1) - from;
         const double length = QPointF::dotProduct(along, along);
@@ -794,7 +802,7 @@ void ViewerWidget::selectMask(const QString &name) {
 }
 
 bool ViewerWidget::editsMasks() const {
-    return !m_maskClip.isEmpty() && (m_maskTool != MaskTool::None || !m_masks.isEmpty());
+    return !m_maskClip.isEmpty() && m_placement.isInvertible() && (m_maskTool != MaskTool::None || !m_masks.isEmpty());
 }
 
 QTransform ViewerWidget::pictureToWidget() const {
@@ -807,10 +815,8 @@ QTransform ViewerWidget::pictureToWidget() const {
     return m_placement * view;
 }
 
-QPointF ViewerWidget::picturePoint(const QPointF &widget) const {
-    bool invertible = false;
-    const QTransform toPicture = pictureToWidget().inverted(&invertible);
-    return invertible ? toPicture.map(widget) : QPointF();
+std::optional<QPointF> ViewerWidget::picturePoint(const QPointF &widget) const {
+    return pointInSight(pictureToWidget(), widget);
 }
 
 int ViewerWidget::maskIndex(const QString &name) const {
@@ -822,10 +828,11 @@ int ViewerWidget::maskIndex(const QString &name) const {
 
 int ViewerWidget::handleAt(const QPointF &widget) const {
     const int index = maskIndex(m_selectedMask);
-    if (index < 0) return -1;
+    if (index < 0 || !m_placement.isInvertible()) return -1;
     const QTransform toWidget = pictureToWidget();
     const QVector<QPointF> handles = handlesOf(m_masks.at(index).toObject());
     for (int handle = handles.size() - 1; handle >= 0; --handle) {
+        if (!inSight(toWidget, handles.at(handle))) continue;
         const QPointF delta = toWidget.map(handles.at(handle)) - widget;
         if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return handle;
     }
@@ -833,6 +840,7 @@ int ViewerWidget::handleAt(const QPointF &widget) const {
 }
 
 QString ViewerWidget::maskAt(const QPointF &widget) const {
+    if (!m_placement.isInvertible()) return {};
     const QTransform toWidget = pictureToWidget();
     QPainterPathStroker stroker;
     stroker.setWidth(kHandleReach * 2.0);
@@ -1005,7 +1013,9 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
         return;
     }
     setFocus(Qt::MouseFocusReason);
-    const QPointF at = picturePoint(position);
+    // Past the horizon of a picture in depth there is nowhere on it to draw.
+    const std::optional<QPointF> at = picturePoint(position);
+    if (m_maskTool != MaskTool::None && !at) return;
     if (m_maskTool == MaskTool::Pen) {
         // A click on the first point closes the outline.
         if (m_penPoints.size() >= 3) {
@@ -1015,14 +1025,14 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
                 return;
             }
         }
-        m_penPoints.append(at);
+        m_penPoints.append(*at);
         m_pointer = position;
         update();
         return;
     }
     if (m_maskTool != MaskTool::None) {
         m_drawing = true;
-        m_drawStart = m_drawEnd = at;
+        m_drawStart = m_drawEnd = *at;
         update();
         return;
     }
@@ -1033,9 +1043,9 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
         update();
         emit maskSelected(name);
     }
-    if (name.isEmpty()) return;
+    if (name.isEmpty() || !at) return;
     m_dragHandle = handle >= 0 ? handle : kMoveMask;
-    m_dragFrom = at;
+    m_dragFrom = *at;
     m_dragOriginal = m_masks.at(maskIndex(name)).toObject();
     updateCursor(position);
 }
@@ -1053,8 +1063,10 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         }
         return;
     }
+    // Past the horizon of a plane in depth, what is in hand stays where it last was;
+    // a path's point does a little before that, where the document can no longer say it.
     if (m_drawing) {
-        m_drawEnd = picturePoint(position);
+        if (const auto at = picturePoint(position)) m_drawEnd = *at;
         update();
         return;
     }
@@ -1062,16 +1074,16 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         // A hand that wobbles while clicking has not moved anything.
         if (!m_pathMoved && QLineF(position, m_pathPressed).length() < kPathDragStart) return;
         m_pathMoved = true;
-        m_pathPoints[m_pathDrag] = pathPoint(position + m_pathHeld);
+        if (const auto at = pathPoint(position + m_pathHeld); at && graph::pathHolds(*at)) m_pathPoints[m_pathDrag] = *at;
         update();
         return;
     }
     if (m_dragHandle != -1) {
-        const QPointF at = picturePoint(position);
         const int index = maskIndex(m_dragOriginal.value(QStringLiteral("name")).toString());
-        if (index >= 0)
-            m_masks[index] = m_dragHandle == kMoveMask ? movedBy(m_dragOriginal, at - m_dragFrom)
-                                                       : withHandle(m_dragOriginal, m_dragHandle, at);
+        const auto at = picturePoint(position);
+        if (index >= 0 && at)
+            m_masks[index] = m_dragHandle == kMoveMask ? movedBy(m_dragOriginal, *at - m_dragFrom)
+                                                       : withHandle(m_dragOriginal, m_dragHandle, *at);
         update();
         return;
     }
@@ -1119,7 +1131,7 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (m_drawing) {
         m_drawing = false;
-        m_drawEnd = picturePoint(event->position());
+        if (const auto at = picturePoint(event->position())) m_drawEnd = *at;
         const QTransform toWidget = pictureToWidget();
         const QRectF drawn = QRectF(toWidget.map(m_drawStart), toWidget.map(m_drawEnd)).normalized();
         update();
@@ -1181,7 +1193,7 @@ void ViewerWidget::leaveEvent(QEvent *) {
 
 
 void ViewerWidget::paintMasks(QPainter &p) {
-    if (m_maskClip.isEmpty()) return;
+    if (m_maskClip.isEmpty() || !m_placement.isInvertible()) return;
     const QTransform toWidget = pictureToWidget();
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
@@ -1207,9 +1219,10 @@ void ViewerWidget::paintMasks(QPainter &p) {
         strokeOverPicture(p, path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
         // The name on a tag over the outline's top left; the selected
         // mask's tag is the accent.
-        if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected, picture);
+        if (!name.isEmpty() && !path.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected, picture);
         if (!selected) continue;
-        for (const QPointF &point : handlesOf(mask)) handle(toWidget.map(point), false);
+        for (const QPointF &point : handlesOf(mask))
+            if (inSight(toWidget, point)) handle(toWidget.map(point), false);
     }
     if (m_drawing) {
         const QRectF box = QRectF(m_drawStart, m_drawEnd).normalized();
@@ -1239,23 +1252,35 @@ void ViewerWidget::paintMotionPath(QPainter &p) {
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setBrush(Qt::NoBrush);
+    // In depth, what is on or behind the camera breaks the curve.
     const QList<QPointF> line = motionPathCurve();
-    QPainterPath path(line.first());
-    for (qsizetype index = 1; index < line.size(); ++index) path.lineTo(line.at(index));
+    const QList<QPointF> samples = graph::MotionPath(m_pathPoints, aspect()).samples();
+    QPainterPath path;
+    bool going = false;
+    for (qsizetype index = 0; index < line.size(); ++index) {
+        const bool seen = inSight(m_pathPlacement, samples.at(index));
+        if (seen && going) path.lineTo(line.at(index));
+        else if (seen) path.moveTo(line.at(index));
+        going = seen;
+    }
     strokeOverPicture(p, path, true, false);
     const EditorTheme &theme = editorTheme();
     // The points are square, as a mask's handles are; a round one says where the clip is now.
     const QList<QPointF> points = motionPathPoints();
     for (qsizetype index = 0; index < points.size(); ++index) {
+        if (!inSight(m_pathPlacement, m_pathPoints.at(index))) continue;
         // The selected point turns white, as the pen's first point does when it would close.
         const bool selected = index == m_pathSelected;
         p.setPen(QPen(selected ? theme.maskHandleFill : theme.maskHandleBorder, 1.0));
         p.setBrush(selected ? theme.maskHandleBorder : theme.maskHandleFill);
         p.drawRect(QRectF(points.at(index) - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
     }
-    p.setPen(QPen(theme.maskHandleFill, 1.0));
-    p.setBrush(theme.maskHandleBorder);
-    p.drawEllipse(motionPathMarker(), kHandleSize / 2.0, kHandleSize / 2.0);
+    const auto on = graph::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
+    if (inSight(m_pathPlacement, QPointF(on.x, on.y))) {
+        p.setPen(QPen(theme.maskHandleFill, 1.0));
+        p.setBrush(theme.maskHandleBorder);
+        p.drawEllipse(motionPathMarker(), kHandleSize / 2.0, kHandleSize / 2.0);
+    }
     p.restore();
 }
 

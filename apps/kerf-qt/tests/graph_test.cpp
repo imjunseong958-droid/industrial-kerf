@@ -26,6 +26,10 @@
 #include <QKeyEvent>
 #include <QTest>
 #include <QWheelEvent>
+#include <QtMath>
+
+#include <cmath>
+#include <optional>
 
 namespace kerf {
 
@@ -230,6 +234,131 @@ private slots:
             const QString where = QStringLiteral("%1: %2,%3").arg(QString::fromUtf8(QJsonDocument(row.props).toJson(QJsonDocument::Compact))).arg(at.x(), 0, 'f', 6).arg(at.y(), 0, 'f', 6);
             QVERIFY2(std::abs(at.x() - row.to.x()) < 1e-6 && std::abs(at.y() - row.to.y()) < 1e-6, qPrintable(where));
         }
+    }
+
+    // The same table holds the compositor to these, in kerf-compose's draw.rs: a camera,
+    // a parent, a clip, its picture's size and whether it is fitted, and the canvas;
+    // then a point of the picture, in fractions of it, and where on the canvas it
+    // lands, or that nothing shows it. A row with a path names the clip's anchor.
+    void clipsInDepthLandAsTheCompositorDrawsThem() {
+        const struct {
+            QJsonObject camera;
+            QJsonObject rig;
+            QJsonObject props;
+            QSizeF size;
+            bool fit;
+            QSizeF canvas;
+            QPointF from;
+            std::optional<QPointF> to;
+        } table[] = {
+            {{}, {}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {0.25, 0.75}, QPointF(480.0, 810.0)},
+            {{}, {}, {{"three_d", true}, {"z", 1.0}}, {1920, 1080}, false, {1920, 1080}, {0.0, 0.0}, QPointF(404.425304296, 227.489233666)},
+            {{}, {}, {{"three_d", true}, {"z", -0.5}, {"x", 0.25}, {"y", -0.25}, {"scale", 0.5}}, {1920, 1080}, false, {1920, 1080}, {1.0, 1.0}, QPointF(2469.363321845, 540.0)},
+            {{}, {}, {{"three_d", true}, {"rotate_y", 60.0}}, {1920, 1080}, false, {1920, 1080}, {0.0, 0.0}, QPointF(652.380423425, 193.927976353)},
+            {{}, {}, {{"three_d", true}, {"rotate_y", 60.0}}, {1920, 1080}, false, {1920, 1080}, {1.0, 1.0}, QPointF(2051.824322445, 1768.30236275)},
+            {{}, {}, {{"three_d", true}, {"z", 0.4}, {"rotate_x", -35.0}, {"rotate_y", 20.0}, {"scale", 0.6}, {"rotation", 30.0}, {"x", 0.15}}, {1920, 1080}, false, {1920, 1080}, {0.1, 0.9}, QPointF(813.293244888, 536.56976567)},
+            {{{"x", 0.1}, {"y", -0.1}, {"z", -0.2}}, {}, {{"three_d", true}, {"z", 0.5}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.25}, QPointF(1150.784280848, 432.683842023)},
+            {{{"pan", 15.0}, {"tilt", -10.0}, {"roll", 20.0}, {"fov", 60.0}}, {}, {{"three_d", true}, {"rotate_y", -25.0}}, {1920, 1080}, false, {1920, 1080}, {0.9, 0.1}, QPointF(925.135566674, 137.609390156)},
+            {{}, {}, {{"three_d", true}, {"crop_l", 0.2}, {"crop_t", 0.1}, {"anchor_x", 0.25}, {"rotate_y", 30.0}}, {1920, 1080}, false, {1920, 1080}, {0.6, 0.6}, QPointF(932.497292288, 597.735845172)},
+            {{{"tilt", 5.0}}, {}, {{"three_d", true}, {"rotate_x", 25.0}, {"scale", 0.75}}, {1280, 720}, true, {1080, 1920}, {0.2, 0.8}, QPointF(300.339390717, 1313.504377609)},
+            {{}, {{"x", -0.1}, {"rotation", 20.0}}, {{"three_d", true}, {"z", 0.5}, {"rotate_y", 30.0}, {"x", 0.2}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(1083.787134162, 636.289297037)},
+            {{{"pan", 10.0}}, {}, {{"three_d", true}, {"z", 1.0}, {"rotate_y", 40.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.0}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(698.394625114, 540.0)},
+            {{{"pan", 10.0}}, {}, {{"three_d", true}, {"z", 1.0}, {"rotate_y", 40.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.5}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(980.39775465, 708.363349572)},
+            {{{"pan", 10.0}}, {}, {{"three_d", true}, {"z", 1.0}, {"rotate_y", 40.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 1.0}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(1235.761146107, 480.464694441)},
+            {{}, {}, {{"three_d", true}, {"z", 0.5}, {"rotate_y", 40.0}, {"anchor_x", 0.25}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.25}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.5}, QPointF(1461.484615779, 736.839478992)},
+            {{}, {}, {{"three_d", true}, {"z", 0.5}, {"rotate_y", 40.0}, {"anchor_x", 0.25}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 1.0}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.5}, QPointF(2108.520888367, 446.575181565)},
+            {{}, {{"x", -0.1}, {"scale", 0.8}}, {{"three_d", true}, {"z", 0.5}, {"path", "0,0 0.2,0.3"}, {"along", 1.0}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(1044.45932111, 730.033472497)},
+            {{}, {}, {{"three_d", true}, {"rotate_y", 30.0}, {"orient", true}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.5}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(1448.468778868, 836.127664149)},
+            {{}, {}, {{"three_d", true}, {"z", -5.0}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, std::nullopt},
+            {{}, {}, {{"three_d", true}, {"rotate_y", 90.0}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.5}, std::nullopt},
+            {{}, {}, {{"three_d", true}, {"x", 0.1}, {"rotate_y", 90.0}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.5}, QPointF(1243.825954944, 540.0)},
+            {{{"pan", 80.0}}, {}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {0.0, 0.5}, std::nullopt},
+            {{{"pan", 80.0}}, {}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {1.0, 0.5}, QPointF(-636.292895473, 540.0)},
+        };
+        for (const auto &row : table) {
+            const QJsonObject camera{{"id", "cam"}, {"kind", "generator"}, {"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", row.camera}};
+            const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{camera}}}}}};
+            const QTransform parents = row.rig.isEmpty() ? QTransform{} : parentMotion(QJsonObject{{"props", row.rig}}, row.canvas, false, row.canvas, 0.0);
+            const QJsonObject clip{{"id", "c1"}, {"props", row.props}};
+            const QTransform placement = picturePlacement(clip, row.size, row.fit, row.canvas, 0.0, parents, timeline);
+            const QString name = QString::fromUtf8(QJsonDocument(row.props).toJson(QJsonDocument::Compact));
+            if (!row.to) {
+                QVERIFY2(!placement.isInvertible() || !inSight(placement, row.from), qPrintable(name));
+                continue;
+            }
+            QVERIFY2(inSight(placement, row.from), qPrintable(name));
+            const QPointF at = placement.map(row.from);
+            const QString where = QStringLiteral("%1: %2,%3").arg(name).arg(at.x(), 0, 'f', 6).arg(at.y(), 0, 'f', 6);
+            QVERIFY2(QLineF(at, *row.to).length() < 1e-6, qPrintable(where));
+            // And back, as a drag reads it.
+            const auto back = pointInSight(placement, *row.to);
+            QVERIFY2(back && QLineF(*back, row.from).length() < 1e-6, qPrintable(where));
+            if (!row.props.contains("path")) continue;
+            // A clip's anchor is where its path says, wherever along it the clip is now.
+            const auto points = graph::parsePath(row.props.value("path").toString());
+            QVERIFY(points);
+            const auto on = graph::MotionPath(*points, row.canvas.width() / row.canvas.height()).at(row.props.value("along").toDouble());
+            for (const double along : {0.0, 0.3, 1.0}) {
+                if (row.props.value("orient").toBool() && along != row.props.value("along").toDouble()) continue;
+                QJsonObject elsewhere = row.props;
+                elsewhere.insert("along", along);
+                const QTransform path = pathPlacement(QJsonObject{{"id", "c1"}, {"props", elsewhere}}, row.size, row.fit, row.canvas, 0.0, parents, timeline);
+                QVERIFY2(inSight(path, QPointF(on.x, on.y)), qPrintable(where));
+                const QPointF shares = path.map(QPointF(on.x, on.y));
+                const QPointF landed(shares.x() * row.canvas.width(), shares.y() * row.canvas.height());
+                const QString there = QStringLiteral("%1 along %2: %3,%4").arg(name).arg(along).arg(landed.x(), 0, 'f', 6).arg(landed.y(), 0, 'f', 6);
+                QVERIFY2(QLineF(landed, *row.to).length() < 1e-6, qPrintable(there));
+            }
+        }
+    }
+
+    void aPlaneThatCannotBeSeenPlacesNothing() {
+        const QSizeF canvas(1920, 1080);
+        const auto placementOf = [&](const QJsonObject &props) { return picturePlacement(QJsonObject{{"props", props}}, canvas, false, canvas, 0.0); };
+        // Edge on through the camera, and wholly behind it.
+        QVERIFY(!placementOf({{"three_d", true}, {"rotate_y", 90.0}}).isInvertible());
+        QVERIFY(!placementOf({{"three_d", true}, {"rotate_x", 90.0}}).isInvertible());
+        QVERIFY(!placementOf({{"three_d", true}, {"z", -5.0}}).isInvertible());
+        // Facing the other way, a clip in depth is mirrored, not gone.
+        QVERIFY(placementOf({{"three_d", true}, {"rotate_y", 180.0}}).isInvertible());
+        // A path's plane behind the camera has no point in sight.
+        const QTransform behind = pathPlacement(QJsonObject{{"props", QJsonObject{{"three_d", true}, {"z", -5.0}}}}, canvas, false, canvas, 0.0, QTransform{});
+        QVERIFY(!inSight(behind, QPointF()));
+        QVERIFY(!pointInSight(behind, QPointF(0.5, 0.5)));
+        // A flat clip keeps its affine map, and everything is in sight of it.
+        const QTransform flat = placementOf({{"x", 0.1}, {"three_d", false}});
+        QVERIFY(flat.isAffine());
+        QVERIFY(inSight(flat, QPointF(-100.0, 100.0)));
+        // An anchor off the middle leaves the plane by a different amount at each point
+        // of a path it faces along: no one map says that.
+        const auto pathOf = [&](const QJsonObject &props) { return pathPlacement(QJsonObject{{"props", props}}, canvas, false, canvas, 0.0, QTransform{}); };
+        QVERIFY(!pathOf({{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"path", "0,0 0.5,0"}}).isInvertible());
+        QVERIFY(pathOf({{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"path", "0,0 0.5,0"}}).isInvertible());
+        QVERIFY(pathOf({{"three_d", true}, {"orient", true}, {"rotate_y", 30.0}, {"path", "0,0 0.5,0"}}).isInvertible());
+        QVERIFY(pathOf({{"three_d", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"path", "0,0 0.5,0"}}).isInvertible());
+    }
+
+    void aCameraIsTheTopmostShowing() {
+        const QSizeF canvas(1920, 1080);
+        const auto cameraClip = [](const char *id, double start, double fov, bool enabled = true) {
+            return QJsonObject{{"id", id}, {"fx", "camera"}, {"timelineStart", start}, {"duration", 1.0}, {"enabled", enabled}, {"props", QJsonObject{{"fov", fov}}}};
+        };
+        const QJsonObject clip{{"timelineStart", 0.0}, {"duration", 4.0}, {"props", QJsonObject{{"three_d", true}}}};
+        const auto width = [&](const QJsonObject &timeline, double at) {
+            const QTransform placement = picturePlacement(clip, canvas, false, canvas, at, QTransform{}, timeline);
+            return placement.map(QPointF(1.0, 0.5)).x() - placement.map(QPointF(0.0, 0.5)).x();
+        };
+        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"clips", QJsonArray{cameraClip("a", 0.0, 20.0), cameraClip("b", 2.0, 80.0, false)}}},
+                                                         QJsonObject{{"clips", QJsonArray{cameraClip("c", 0.0, 40.0)}}},
+                                                         QJsonObject{{"enabled", false}, {"clips", QJsonArray{cameraClip("d", 0.0, 80.0)}}}}}};
+        // The upper of the two, and not the one on a track turned off: at the resting 40 degrees, the picture is its own size.
+        QVERIFY(std::abs(width(timeline, 0.5) - 1920.0) < 1e-6);
+        // Past the end of both, the default; and one turned off does not show.
+        QVERIFY(std::abs(width(timeline, 2.5) - 1920.0) < 1e-6);
+        // Alone, narrower sees it wider, by the tangents of half of each.
+        const QJsonObject narrow{{"tracks", QJsonArray{QJsonObject{{"clips", QJsonArray{cameraClip("a", 0.0, 20.0)}}}}}};
+        QVERIFY(std::abs(width(narrow, 0.5) - 1920.0 * std::tan(qDegreesToRadians(20.0)) / std::tan(qDegreesToRadians(10.0))) < 1e-6);
+        QVERIFY(std::abs(width(narrow, 1.5) - 1920.0) < 1e-6);
     }
 
     void aPointAddedLiesOnTheCurveAndLeavesItsShape() {
@@ -1417,23 +1546,234 @@ private slots:
         QVERIFY(window.m_viewer->showsMotionPath());
     }
 
-    void aClipInDepthShowsNoPath() {
+    void aClipInDepthShowsItsOverlaysThroughTheCamera() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        QJsonObject clip{{"id", "c1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48},
-                         {"props", QJsonObject{{"path", "0,0 0.25,0"}, {"three_d", true}}}};
-        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}}}}};
         window.m_selectedClip = QStringLiteral("c1");
         window.m_selectedClips = {QStringLiteral("c1")};
         window.m_connected = true;
-        window.updateViewerMasks();
-        QVERIFY(!window.m_viewer->showsMotionPath());
-        clip.insert("props", QJsonObject{{"path", "0,0 0.25,0"}, {"three_d", false}});
-        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}}}}};
-        window.updateViewerMasks();
+        const QJsonObject camera{{"id", "cam"}, {"kind", "generator"}, {"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"pan", 10.0}}}};
+        const auto hold = [&](const QJsonObject &props) {
+            const QJsonObject clip{{"id", "c1"}, {"kind", "generator"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"durationFrames", 48}, {"props", props},
+                                   {"masks", QJsonArray{QJsonObject{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "add"}}}}};
+            window.m_project = QJsonObject{{"width", 1920}, {"height", 1080}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}},
+                                                                                                     QJsonObject{{"id", "V2"}, {"type", "video"}, {"clips", QJsonArray{camera}}}}}};
+            window.updateViewerMasks();
+        };
+        // Where the table in clipsInDepthLandAsTheCompositorDrawsThem says, on the picture.
+        hold({{"three_d", true}, {"z", 1.0}, {"rotate_y", 40.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}, {"along", 0.0}});
         QVERIFY(window.m_viewer->showsMotionPath());
+        const auto onPicture = [&](QPointF px) {
+            const QRectF canvas = window.m_viewer->pictureRect();
+            return QPointF(canvas.left() + px.x() * canvas.width() / 1920.0, canvas.top() + px.y() * canvas.height() / 1080.0);
+        };
+        QVERIFY(QLineF(window.m_viewer->motionPathPoints().at(0), onPicture({698.394625114, 540.0})).length() < 0.01);
+        QVERIFY(QLineF(window.m_viewer->motionPathPoints().at(2), onPicture({1235.761146107, 480.464694441})).length() < 0.01);
+        QVERIFY(!window.m_viewer->pictureToWidget().isAffine());
+        const QAction *rectangle = window.m_maskTools.first();
+        QVERIFY(rectangle->isEnabled());
+        // Behind the camera both go, and the masks are back when it is in sight again.
+        hold({{"three_d", true}, {"z", -5.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}});
+        QVERIFY(!window.m_viewer->showsMotionPath());
+        QVERIFY(!window.m_viewer->editsMasks());
+        QVERIFY(!rectangle->isEnabled());
+        hold({{"three_d", true}, {"path", "0,0 0.25,0"}});
+        QVERIFY(window.m_viewer->showsMotionPath());
+        QVERIFY(window.m_viewer->editsMasks());
+        QVERIFY(rectangle->isEnabled());
+        // A flat clip takes no notice of a camera.
+        hold({{"path", "0,0 0.25,0"}, {"three_d", false}});
+        QVERIFY(window.m_viewer->pictureToWidget().isAffine());
+        const QRectF canvas = window.m_viewer->pictureRect();
+        QVERIFY(QLineF(window.m_viewer->motionPathPoints().at(0), canvas.center()).length() < 0.01);
+    }
+
+    void aPathInDepthWritesWhatLandsUnderThePointer() {
+        PathStage s;
+        const QSizeF canvas(1920, 1080);
+        const QJsonObject camera{{"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"pan", 10.0}, {"tilt", -5.0}, {"z", -0.1}}}};
+        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"clips", QJsonArray{camera}}}}}};
+        const QJsonObject clip{{"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"three_d", true}, {"z", 0.75}, {"rotate_y", 35.0}, {"x", -0.1}}}};
+        const QTransform placement = pathPlacement(clip, canvas, false, canvas, 0.0, QTransform{}, timeline);
+        QVERIFY(!placement.isAffine());
+        const QString text = QStringLiteral("0,0 0.25,-0.25 0.5,0");
+        s.viewer.setMotionPath(QStringLiteral("c1"), text, placement, 0.0);
+        QVERIFY(s.viewer.showsMotionPath());
+        const auto widget = [&](QPointF point) {
+            const QRectF picture = s.viewer.pictureRect();
+            const QPointF on = placement.map(point);
+            return QPointF(picture.left() + on.x() * picture.width(), picture.top() + on.y() * picture.height());
+        };
+        QVERIFY(QLineF(s.viewer.motionPathPoints().at(1), widget({0.25, -0.25})).length() < 0.01);
+        // The curve's samples and the marker go through the same map.
+        const QList<QPointF> samples = graph::MotionPath({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0).samples();
+        QVERIFY(QLineF(s.viewer.motionPathCurve().at(7), widget(samples.at(7))).length() < 0.01);
+        QVERIFY(QLineF(s.viewer.motionPathMarker(), widget({0.0, 0.0})).length() < 0.01);
+        // A drag writes the share that lands under the pointer, to the four places a path is kept to.
+        const QPointF from = s.viewer.motionPathPoints().at(1);
+        const QPointF to = from + QPointF(70, 45);
+        s.drag(from, to);
+        QCOMPARE(s.edits.size(), 1);
+        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        QVERIFY(written);
+        QVERIFY2(QLineF(widget(written->at(1)), to).length() < 1.5, qPrintable(QStringLiteral("%1,%2").arg(widget(written->at(1)).x()).arg(widget(written->at(1)).y())));
+        // The other points stay.
+        QCOMPARE(written->at(0), QPointF(0.0, 0.0));
+        QCOMPARE(written->at(2), QPointF(0.5, 0.0));
+        // A double-click on the curve adds a point where it is drawn, as one edit.
+        s.viewer.setMotionPath(QStringLiteral("c1"), text, placement, 0.0);
+        s.edits.clear();
+        const QPointF onCurve = s.viewer.motionPathCurve().at(16);
+        QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, onCurve.toPoint());
+        QCOMPARE(s.edits.size(), 1);
+        const auto added = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        QVERIFY(added);
+        QCOMPARE(added->size(), 4);
+        QVERIFY(QLineF(widget(added->at(1)), onCurve).length() < 2.0);
+        // And Delete takes it away, as another.
+        QCOMPARE(s.viewer.selectedPathPoint(), 1);
+        s.edits.clear();
+        s.viewer.setFocus();
+        QTest::keyClick(&s.viewer, Qt::Key_Delete);
+        QCOMPARE(s.edits.size(), 1);
+        QCOMPARE(graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString())->size(), 3);
+    }
+
+    void aDragPastAPlanesHorizonStaysWhereItWas() {
+        PathStage s;
+        const QSizeF canvas(1920, 1080);
+        // Looking almost straight down the plane at z = 0, which ends at a horizon across the picture.
+        const QJsonObject camera{{"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"tilt", -85.0}}}};
+        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"clips", QJsonArray{camera}}}}}};
+        const QJsonObject clip{{"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"three_d", true}}}};
+        const QTransform placement = pathPlacement(clip, canvas, false, canvas, 0.0, QTransform{}, timeline);
+        QVERIFY(placement.isInvertible());
+        // How far down the picture it reaches, in shares of its height.
+        double horizon = 0.0;
+        while (horizon < 1.0 && pointInSight(placement, QPointF(0.5, horizon))) horizon += 0.001;
+        QVERIFY(horizon > 0.5 && horizon < 0.8);
+        const double past = (horizon + 1.0) / 2.0;
+        QVERIFY(!pointInSight(placement, QPointF(0.5, past)));
+        const QPointF good = *pointInSight(placement, QPointF(0.5, horizon - 0.4));
+        const QPointF other = *pointInSight(placement, QPointF(0.7, horizon - 0.4));
+        s.viewer.setMotionPath(QStringLiteral("c1"), graph::pathText({good, other}), placement, 0.0);
+        QVERIFY(s.viewer.showsMotionPath());
+        const QRectF picture = s.viewer.pictureRect();
+        const QPointF from = s.viewer.motionPathPoints().at(0);
+        QTest::mousePress(&s.viewer, Qt::LeftButton, Qt::NoModifier, from.toPoint());
+        const QPointF stillGood = from + QPointF(30, 20);
+        QMouseEvent there(QEvent::MouseMove, stillGood, s.viewer.mapToGlobal(stillGood), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&s.viewer, &there);
+        const QPointF lastGood = s.viewer.motionPathPoints().at(0);
+        QVERIFY(QLineF(lastGood, stillGood).length() < 1.5);
+        // Just short of the horizon it is further out than a path can say, and held there it
+        // would land elsewhere: it stays, as it does beyond.
+        const double nearly = horizon - 0.002;
+        const auto tooFar = pointInSight(placement, QPointF(0.5, nearly));
+        QVERIFY(tooFar && !graph::pathHolds(*tooFar));
+        const QPointF close(picture.center().x(), picture.top() + picture.height() * nearly);
+        QMouseEvent almost(QEvent::MouseMove, close, s.viewer.mapToGlobal(close), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&s.viewer, &almost);
+        QVERIFY(QLineF(s.viewer.motionPathPoints().at(0), lastGood).length() < 0.01);
+        const QPointF beyond(picture.center().x(), picture.top() + picture.height() * past);
+        QMouseEvent gone(QEvent::MouseMove, beyond, s.viewer.mapToGlobal(beyond), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&s.viewer, &gone);
+        QVERIFY(QLineF(s.viewer.motionPathPoints().at(0), lastGood).length() < 0.01);
+        QTest::mouseRelease(&s.viewer, Qt::LeftButton, Qt::NoModifier, beyond.toPoint());
+        // What is written is where it stayed.
+        QCOMPARE(s.edits.size(), 1);
+        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        QVERIFY(written);
+        const QPointF shares = placement.map(written->at(0));
+        QVERIFY(QLineF(QPointF(picture.left() + shares.x() * picture.width(), picture.top() + shares.y() * picture.height()), lastGood).length() < 1.5);
+    }
+
+    void aPathPartlyBehindTheCameraShowsThePartInSight() {
+        PathStage s;
+        const QSizeF canvas(1920, 1080);
+        // Looking far to the right, what is left of the middle of the plane is behind the camera.
+        const QJsonObject camera{{"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"pan", 80.0}}}};
+        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"clips", QJsonArray{camera}}}}}};
+        const QJsonObject clip{{"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{{"three_d", true}}}};
+        const QTransform placement = pathPlacement(clip, canvas, false, canvas, 0.0, QTransform{}, timeline);
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("-0.5,0 0.5,0"), placement, 0.0);
+        QVERIFY(!inSight(placement, QPointF(-0.5, 0.0)));
+        QVERIFY(inSight(placement, QPointF(0.5, 0.0)));
+        QVERIFY(s.viewer.showsMotionPath());
+        s.viewer.show();
+        QVERIFY(!s.viewer.grab().isNull());
+        // Where the point behind would map to, nothing takes a click.
+        const QPointF mirrored = s.viewer.motionPathPoints().at(0);
+        QCOMPARE(s.viewer.pathPointAt(mirrored), -1);
+        // A path wholly behind it shows none.
+        s.viewer.setMotionPath(QStringLiteral("c1"), QStringLiteral("-0.5,0 -0.4,0"), placement, 0.0);
+        QVERIFY(!s.viewer.showsMotionPath());
+    }
+
+    void aMaskInDepthFollowsThePointer() {
+        ViewerWidget viewer;
+        viewer.resize(960, 600);
+        viewer.setProjectInfo(1920, 1080);
+        QSignalSpy edits(&viewer, &ViewerWidget::editRequested);
+        const QSizeF canvas(1920, 1080);
+        const QJsonObject clip{{"props", QJsonObject{{"three_d", true}, {"z", 0.5}, {"rotate_y", 35.0}, {"rotate_x", -15.0}}}};
+        const QTransform placement = picturePlacement(clip, canvas, false, canvas, 0.0);
+        QVERIFY(!placement.isAffine());
+        const QJsonObject mask{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "add"}, {"inverted", false}};
+        viewer.setMasks(QStringLiteral("c1"), QJsonArray{mask}, placement);
+        viewer.selectMask(QStringLiteral("k1"));
+        const QTransform toWidget = viewer.pictureToWidget();
+        const auto mouse = [&viewer](QEvent::Type type, QPointF at) {
+            QMouseEvent event(type, at, viewer.mapToGlobal(at), type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&viewer, &event);
+        };
+        const auto drag = [&](QPointF from, QPointF to) {
+            mouse(QEvent::MouseButtonPress, from);
+            mouse(QEvent::MouseMove, to);
+            mouse(QEvent::MouseButtonRelease, to);
+        };
+        const auto number = [](const QJsonObject &op, int index) { return op.value("rect").toArray().at(index).toDouble(); };
+        // A corner lands under the pointer, on the plane, and leaves its opposite as it was.
+        const QPointF corner = toWidget.map(QPointF(0.75, 0.75));
+        QVERIFY(viewer.handleAt(corner) >= 0);
+        const QPointF to = corner + QPointF(25, 15);
+        drag(corner, to);
+        QCOMPARE(edits.size(), 1);
+        QJsonObject op = edits.last().at(0).toJsonArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("mask-set"));
+        QVERIFY(QLineF(toWidget.map(QPointF(number(op, 2), number(op, 3))), to).length() < 0.5);
+        QVERIFY(std::abs(number(op, 0) - 0.25) < 1e-4);
+        QVERIFY(std::abs(number(op, 1) - 0.25) < 1e-4);
+        // A drag inside moves the whole mask by what the pointer moved on the plane.
+        viewer.setMasks(QStringLiteral("c1"), QJsonArray{mask}, placement);
+        const QPointF inside = toWidget.map(QPointF(0.5, 0.5));
+        const QPointF moved = inside + QPointF(-30, 10);
+        drag(inside, moved);
+        QCOMPARE(edits.size(), 2);
+        op = edits.last().at(0).toJsonArray().first().toObject();
+        const QPointF shift = *pointInSight(toWidget, moved) - QPointF(0.5, 0.5);
+        QVERIFY(std::abs(number(op, 0) - (0.25 + shift.x())) < 1e-3);
+        QVERIFY(std::abs(number(op, 1) - (0.25 + shift.y())) < 1e-3);
+        // A new one drawn in depth is a rectangle on the plane.
+        viewer.setMasks(QStringLiteral("c1"), QJsonArray{mask}, placement);
+        viewer.setMaskTool(MaskTool::Rectangle);
+        const QPointF a = toWidget.map(QPointF(0.1, 0.1)), b = toWidget.map(QPointF(0.2, 0.3));
+        drag(a, b);
+        QCOMPARE(edits.size(), 3);
+        op = edits.last().at(0).toJsonArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("mask-add"));
+        QVERIFY(std::abs(number(op, 0) - 0.1) < 2e-3);
+        QVERIFY(std::abs(number(op, 3) - 0.3) < 2e-3);
+        // Edge on it takes nothing and shows nothing, and the selection waits for it.
+        viewer.selectMask(QStringLiteral("k1"));
+        viewer.setMasks(QStringLiteral("c1"), QJsonArray{mask}, picturePlacement(QJsonObject{{"props", QJsonObject{{"three_d", true}, {"rotate_y", 90.0}}}}, canvas, false, canvas, 0.0));
+        QVERIFY(!viewer.editsMasks());
+        QCOMPARE(viewer.handleAt(corner), -1);
+        QVERIFY(viewer.maskAt(inside).isEmpty());
+        QVERIFY(!viewer.grab().isNull());
+        QCOMPARE(viewer.selectedMask(), QStringLiteral("k1"));
     }
 
     void aClipWithNoPathCanStartOneAsOneEdit() {
@@ -1450,11 +1790,12 @@ private slots:
         window.m_selectedClip = QStringLiteral("c1");
         window.m_selectedClips = {QStringLiteral("c1")};
         window.m_connected = true;
-        // One with a path, or in depth, has nothing to start.
+        // One with a path has nothing to start.
         hold(clipWith({{"path", "0,0 1,0"}}));
         QVERIFY(!window.canStartMotionPath(window.selectedClipObject()));
+        // One in depth can, its plane being as drawable as any.
         hold(clipWith({{"three_d", true}}));
-        QVERIFY(!window.canStartMotionPath(window.selectedClipObject()));
+        QVERIFY(window.canStartMotionPath(window.selectedClipObject()));
         hold(clipWith({}));
         QVERIFY(window.canStartMotionPath(window.selectedClipObject()));
         QVERIFY(window.m_commands->action(QStringLiteral("clip.startPath")));

@@ -264,6 +264,8 @@ QString pathText(const QList<QPointF> &points) {
     return parts.join(QLatin1Char(' '));
 }
 
+bool pathHolds(const QPointF &point) { return std::abs(point.x()) <= kPathLimit && std::abs(point.y()) <= kPathLimit; }
+
 QList<QPointF> withPointOn(QList<QPointF> points, double aspect, double u) {
     const QPointF on = MotionPath(points, aspect).curve(u);
     const qsizetype span = std::clamp<qsizetype>(qsizetype(std::floor(u)), 0, points.size() - 2);

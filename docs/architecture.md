@@ -195,10 +195,16 @@ The picture shows and edits the curve of a selected clip's `path=`, through its 
 (`ViewerWidget::setMotionPath`, `parentMotion`; both held to the compositor by a table of values), adding a
 point with a double-click and removing one with Delete. The graph editor zooms and pans both axes.
 
+On a clip in depth the curve and the masks are drawn through what the camera does to a plane, which one projective
+map says exactly, so `picturePlacement` and `pathPlacement` return it and the viewer paints through it and inverts it to drag
+(`a_clip_in_depth_lands_where_the_table_says` holds it to `Scene::at` and `Plane::of`). A mask lies on the clip's plane; a path lies square to the world at the
+clip's `z`, as a clip turns about its middle. What is keyed goes by the moment on the picture, so the rest of the curve says where
+the clip would be if those stayed. A plane edge on or wholly behind the camera shows nothing, and in a drag what goes past a plane's horizon, or further than `path=` can say, stays where it last was.
+
 To add:
 
-- Overlays on a clip in depth: a `three_d` clip shows no motion path rather than a wrong curve, and its masks
-  are still drawn flat.
+- A path on a clip in depth with `orient` and an anchor off its middle, turned: its anchor leaves the plane by a different amount at each
+  point, which no one map shows, so it shows no curve rather than a wrong one.
 - Soft shadows, which take several rays a pixel.
 - The rest of EffectCraft's `render/three_d/adv` at `5c54866`: models, extruded text, and environment light.
 
