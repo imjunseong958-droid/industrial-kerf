@@ -291,7 +291,7 @@ fn is_convex(quad: &[[f64; 2]; 4]) -> bool {
 }
 
 /// Corners of detail inside `quad`, in pixels, the best in each cell of a grid, up to about `want`.
-fn corners_inside(plane: &Plane, quad: &[[f64; 2]; 4], want: usize) -> Vec<[f64; 2]> {
+pub(crate) fn corners_inside(plane: &Plane, quad: &[[f64; 2]; 4], want: usize) -> Vec<[f64; 2]> {
     let (w, h) = (plane.w, plane.h);
     if w < 8 || h < 8 {
         return Vec::new();

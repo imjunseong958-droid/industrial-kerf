@@ -1,8 +1,10 @@
 //! Following what moves in a picture. [`follow`] tracks a point through frames with pyramidal
 //! Lucas-Kanade and a forward-backward check, and [`simplified`] keeps only the points that shape
 //! its way, for writing it as keyframes. Kerf keeps no tracking data of its own: what a track finds
-//! becomes plain keyframes in the document, which merge, read, and edit like any others.
+//! becomes plain keyframes in the document, which merge, read, and edit like any others. [`camera`]
+//! does the same for where the camera went.
 
+pub mod camera;
 pub mod planar;
 pub mod roto;
 

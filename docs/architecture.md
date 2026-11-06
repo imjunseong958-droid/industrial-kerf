@@ -229,7 +229,21 @@ MobileSAM runs in plain Rust; its weights are never bundled, and `look` names th
 disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at
 least 0.994; camouflaged so colour says nothing, 0.005 alone and 0.966 with a model standing in.
 
-To add: soft edges, which a polygon cannot hold (`feather=` approximates them); the camera solver. Optical flow is in
+Given `camera`, `look` solves where the camera went over a shot (`kerf_track::camera`, EffectCraft's
+camera tracker in Kerf's terms): points followed through it, a start from the essential matrix or a
+flat scene's homography, the other frames found from what is placed, and bundle adjustment over it
+all, with the focal length searched for. What it finds is `gen=camera@1` keyframes and a list of
+places to set a clip's `x`, `y`, and `z` to, not a solve kept beside the document. Its first frame is
+the 2D picture at the shot's own lens, with z=0 at the middle depth of what shows. It says plainly what
+it cannot solve: a picture that does not move, a camera that only turns, a picture no one camera
+explains. A camera that never turns fits any lens, which it says too, and takes the lens it is told.
+On a camera wandering a room for 240 frames at 960x540, the way is 0.15% of how far it went off, the
+turn 0.15 degrees at worst, and the field of view 0.2 degrees, with 0.13 pixels of reprojection error,
+in 31 ms a frame after the frames are drawn (28 of it following points). A clip pinned under a 55
+degree lens for 36 frames at 480x270 stays within 0.72 pixels of its spot.
+
+To add: soft edges, which a polygon cannot hold (`feather=` approximates them); a lens that zooms
+during a camera solve, which now reads as moving along its line with more error. Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.
 
 ### Image

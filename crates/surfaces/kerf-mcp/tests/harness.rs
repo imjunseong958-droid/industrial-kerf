@@ -3,10 +3,15 @@
 
 use kerf_mcp::{KerfMcpRouter, McpServer};
 use serde_json::{json, Value};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+/// The scene `kerf-track`'s own solve tests film, known cameras and all.
+#[path = "../../../vfx/kerf-track/src/camera/scene.rs"]
+mod scene;
 
 fn ffmpeg_available() -> bool {
     Command::new("ffmpeg").arg("-version").output().is_ok()
@@ -1632,6 +1637,247 @@ fn the_note_tool_writes_a_comment_by_the_client() {
             error(&router, "note", arguments.clone())["code"],
             code,
             "{arguments}"
+        );
+    }
+}
+
+/// Lossless footage of `surfaces` through `shots`, and a project of one sequence that shows it.
+fn filmed(
+    surfaces: &[scene::Surface],
+    shots: &[scene::Shot],
+    (width, height): (usize, usize),
+) -> Option<(TempDir, KerfMcpRouter)> {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg is not installed");
+        return None;
+    }
+    let directory = TempDir::new().unwrap();
+    let mut encoder = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-r", "30"])
+        .args(["-s", &format!("{width}x{height}"), "-i", "-"])
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv444p"])
+        .arg(directory.path().join("shot.mp4"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("ffmpeg");
+    let mut stdin = encoder.stdin.take().unwrap();
+    for shot in shots {
+        stdin
+            .write_all(&scene::picture(surfaces, shot, width, height))
+            .unwrap();
+    }
+    drop(stdin);
+    assert!(encoder.wait().unwrap().success());
+    let frames = shots.len();
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        format!(
+            "kerf 1\nproject name=\"Filmed\"\nmedia m1 path=\"shot.mp4\" rate=30 dur={frames}f video={width}x{height}\nsequence s1 rate=30 size={width}x{height}\n  track V1 video\n    clip plate media=m1 at=0f dur={frames}f\n"
+        ),
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    Some((directory, router))
+}
+
+/// The middle of what is pure magenta in a frame of the sequence.
+fn marker_at(project: &kerf_model::Project, at: i64) -> Option<[f64; 2]> {
+    let frame = kerf_engine::still::draw_frame(
+        project,
+        Some("s1"),
+        kerf_model::Rate::FPS_30.time_of(at),
+        1.0,
+    )
+    .unwrap();
+    let (mut x, mut y, mut count) = (0.0, 0.0, 0.0);
+    for (index, pixel) in frame.rgba.chunks_exact(4).enumerate() {
+        if pixel[0] > 200 && pixel[1] < 90 && pixel[2] > 200 {
+            x += (index % frame.width as usize) as f64 + 0.5;
+            y += (index / frame.width as usize) as f64 + 0.5;
+            count += 1.0;
+        }
+    }
+    (count > 0.0).then(|| [x / count, y / count])
+}
+
+#[test]
+fn look_solves_a_shots_camera_and_a_clip_stays_where_it_is_pinned() {
+    let (width, height) = (480, 270);
+    let (w, h) = (width as f64, height as f64);
+    // Wide, far from the 40 degrees a document's camera starts at.
+    let focal = 260.0;
+    let shots = scene::across_the_room(36, focal);
+    let room = scene::room();
+    let Some((directory, router)) = filmed(&room, &shots, (width, height)) else {
+        return;
+    };
+    let started = Instant::now();
+    let solved = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true}, "from": "0f", "to": "36f"}),
+    );
+    eprintln!(
+        "look took {:.0} ms a frame: {}",
+        started.elapsed().as_secs_f64() * 1000.0 / 36.0,
+        solved["fit"]
+    );
+    assert_eq!(solved["solved"], true, "{solved}");
+    assert_eq!(solved["frames"], 36, "{solved}");
+    assert!(solved["lostAt"].is_null(), "{solved}");
+    assert_eq!(solved["solvedFrames"], 36, "{solved}");
+    assert_eq!(solved["lensKnown"], true, "{solved}");
+    let true_fov = (2.0 * (h / 2.0 / focal).atan()).to_degrees();
+    let fov = solved["fov"].as_f64().unwrap();
+    assert!((fov - true_fov).abs() < 1.0, "{fov} not {true_fov}");
+    assert!(solved["fit"]["error"].as_f64().unwrap() < 0.4, "{solved}");
+    assert!(
+        solved["fit"]["agreeing"].as_f64().unwrap() > 0.6,
+        "{solved}"
+    );
+    // Few keyframes for a smooth move, and every one of its channels is in the document.
+    assert!(solved["keyframes"].as_i64().unwrap() < 36, "{solved}");
+    let script = solved["script"].as_str().unwrap();
+    assert!(script.contains("gen=camera@1"), "{script}");
+    for name in ["x", "y", "z", "pan", "tilt", "roll"] {
+        assert!(script.contains(&format!(" {name}={{0f:")), "{script}");
+    }
+    assert!(script.contains(" fov="), "{script}");
+
+    // A place it found, which stays in view, on a spot of the scene that is known.
+    let spot_of = |place: &Value| {
+        let at = [
+            (place["at"][0].as_f64().unwrap() - 0.5) * w,
+            (place["at"][1].as_f64().unwrap() - 0.5) * h,
+        ];
+        scene::point_at(&room, &shots[0], at)
+    };
+    let in_view = |spot: [f64; 3]| {
+        shots.iter().all(|shot| {
+            shot.shows(spot)
+                .is_some_and(|at| at[0].abs() < w / 2.0 - 12.0 && at[1].abs() < h / 2.0 - 12.0)
+        })
+    };
+    let points = solved["points"].as_array().unwrap();
+    assert!(points.len() >= 10, "{solved}");
+    let place = points
+        .iter()
+        .filter(|place| place["frame"] == 0 && place["lastFrame"] == 35)
+        .find(|place| spot_of(place).is_some_and(in_view))
+        .unwrap_or_else(|| panic!("nothing stays in view: {solved}"));
+    let spot = spot_of(place).unwrap();
+
+    // On a clip, keyframes count from its start, and the range need not be all of it.
+    let part = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true, "clip": "plate"}, "from": "6f", "to": "30f"}),
+    );
+    assert_eq!(part["frames"], 25, "{part}");
+    let line = part["script"].as_str().unwrap();
+    assert!(line.starts_with("set plate x={6f:"), "{line}");
+
+    let camera = ok(&router, "edit", json!({ "script": script }));
+    let proposal = camera["proposal"]["id"]
+        .as_str()
+        .or_else(|| camera["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{camera}"));
+    let pinned = ok(
+        &router,
+        "edit",
+        json!({
+            "extend": proposal,
+            "script": format!(
+                "track add V3 video\noverwrite gen=solid dur=36f at=0f on=V3 as=pin\nset pin color=#ff00ff scale=0.025 three_d=true x={} y={} z={}",
+                place["x"], place["y"], place["z"]
+            ),
+        }),
+    );
+    let proposal = pinned["proposal"]["id"]
+        .as_str()
+        .or_else(|| pinned["proposal"].as_str())
+        .unwrap_or(proposal);
+    let document = ok(&router, "look", json!({ "proposal": proposal }));
+    let text = document["document"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{document}"));
+    let mut project = kerf_lang::parse_document(text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    kerf_runtime::resolve_media_paths(&mut project, directory.path());
+
+    // On each frame the clip is where the known spot shows through the known camera.
+    let mut worst = 0.0f64;
+    for frame in (0..36).step_by(5) {
+        let found = marker_at(&project, frame as i64)
+            .unwrap_or_else(|| panic!("no marker on frame {frame}"));
+        let known = shots[frame].shows(spot).unwrap();
+        let known = [known[0] + w / 2.0, known[1] + h / 2.0];
+        let off = (found[0] - known[0]).hypot(found[1] - known[1]);
+        worst = worst.max(off);
+    }
+    eprintln!("the pinned clip was at worst {worst:.2} pixels off");
+    assert!(worst < 1.5, "at worst {worst} pixels off");
+}
+
+#[test]
+fn look_says_plainly_when_a_shot_cannot_be_solved() {
+    let (width, height) = (320, 180);
+    // A camera on a tripod, panning across a flat wall and then a room.
+    let pan = |frame: usize| {
+        let a = -0.25 + 0.5 * frame as f64 / 23.0;
+        scene::Shot::looking(
+            [0.0, 0.0, 0.0],
+            [10.0 * f64::sin(a), 0.0, 10.0 * f64::cos(a)],
+            0.0,
+            260.0,
+        )
+    };
+    let shots: Vec<scene::Shot> = (0..24).map(pan).collect();
+    let Some((_directory, router)) = filmed(&scene::wall(), &shots, (width, height)) else {
+        return;
+    };
+    let turned = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true}, "from": "0f", "to": "24f"}),
+    );
+    assert_eq!(turned["solved"], false, "{turned}");
+    assert!(
+        turned["reason"].as_str().unwrap().contains("only turns"),
+        "{turned}"
+    );
+    assert!(turned["script"].is_null(), "{turned}");
+
+    let held = vec![pan(0); 12];
+    let Some((_directory, router)) = filmed(&scene::room(), &held, (width, height)) else {
+        return;
+    };
+    let still = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true}, "from": "0f", "to": "12f"}),
+    );
+    assert_eq!(still["solved"], false, "{still}");
+    assert!(
+        still["reason"].as_str().unwrap().contains("moves"),
+        "{still}"
+    );
+
+    for refused in [
+        json!({"track": {"camera": true, "x": 0.5, "y": 0.5}, "from": "0f", "to": "2f"}),
+        json!({"track": {"camera": true, "model": "classical"}, "from": "0f", "to": "2f"}),
+        json!({"track": {"camera": true}, "from": "0f"}),
+        json!({"track": {"camera": true, "clip": "nobody"}, "from": "0f", "to": "2f"}),
+        json!({"track": {"camera": true, "fov": 0.2}, "from": "0f", "to": "2f"}),
+        json!({"track": {"x": 0.5, "y": 0.5, "fov": 40.0}, "from": "0f", "to": "2f"}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
         );
     }
 }
