@@ -70,6 +70,18 @@ const SCENES: &[(&str, &str)] = &[
         "3d crossing",
         "gen=solid@1 at=0f dur=96f\n      set color=#ff0000 three_d=true scale=0.6 z=0.1 rotate_y=45\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.6 rotate_y=-30",
     ),
+    (
+        "3d lit",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional x=0.2 z=1",
+    ),
+    (
+        "3d shadow",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional x=0.2 z=1 shadow=1",
+    ),
+    (
+        "3d point shadow",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set x=0.2 y=-0.1 z=-0.6 shadow=1",
+    ),
 ];
 
 fn main() {

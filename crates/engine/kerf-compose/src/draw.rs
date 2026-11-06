@@ -597,15 +597,27 @@ impl Drawing {
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = Image::new(w, h);
         let tracks = self.in_order(plan, at, scale, angle);
+        let in_depth = tracks.iter().any(|track| {
+            track
+                .shown
+                .iter()
+                .any(|shown| shown.shows(at) && shown.plan.three_d)
+        });
+        let scene = in_depth.then(|| self.scene(plan, &tracks, at, scale, (w, h)));
+        let moment = Moment {
+            at,
+            scale,
+            scene: scene.as_ref(),
+        };
         let mut next = 0;
         while next < tracks.len() {
-            let crossing = self.crossing_run(plan, &tracks[next..], at, scale, (w, h));
+            let crossing = self.crossing_run(plan, &tracks[next..], &moment);
             if crossing.is_empty() {
-                self.track(&mut canvas, plan, tracks[next], at, scale);
+                self.track(&mut canvas, plan, tracks[next], &moment);
                 next += 1;
             } else {
                 next += crossing.len();
-                self.crossing(&mut canvas, plan, &crossing, at, scale);
+                self.crossing(&mut canvas, plan, &crossing, &moment);
             }
         }
         if self.captions {
@@ -673,16 +685,55 @@ impl Drawing {
         tracks
     }
 
+    /// How the clips in depth of `tracks` are seen and lit at `at`, with their pictures when a light
+    /// casts shadows, and only then, since it takes every one of them at once.
+    fn scene(
+        &self,
+        plan: &SequencePlan,
+        tracks: &[&TrackPlan],
+        at: Time,
+        scale: f64,
+        size: (usize, usize),
+    ) -> three_d::Scene {
+        let mut scene = three_d::Scene::at(plan, at, size);
+        if scene.casts_shadows() {
+            let casters = tracks
+                .iter()
+                .flat_map(|track| &track.shown)
+                .filter(|shown| {
+                    shown.shows(at)
+                        && shown.plan.three_d
+                        && !matches!(shown.plan.source, Source::Nothing | Source::Adjustment)
+                })
+                .filter_map(|shown| {
+                    let ready = self.ready(plan, shown, at, scale, size)?;
+                    Some(three_d::Caster::new(
+                        &scene,
+                        &shown.plan,
+                        ready.picture,
+                        (&ready.to_output, ready.crop),
+                        ready.opacity,
+                        at - shown.plan.clip.start,
+                    ))
+                })
+                .collect();
+            scene.casters = casters;
+        }
+        scene
+    }
+
     /// The clips of the run of tracks in depth at the start of `tracks`, far to near as they stand, if
     /// any two of them cross; else none, and they draw one by one as ever.
     fn crossing_run<'p>(
         &self,
         plan: &'p SequencePlan,
         tracks: &[&'p TrackPlan],
-        at: Time,
-        scale: f64,
-        size: (usize, usize),
+        moment: &Moment,
     ) -> Vec<&'p Shown> {
+        let Moment { at, scale, scene } = *moment;
+        let Some(scene) = scene else {
+            return Vec::new();
+        };
         let run: Vec<&Shown> = tracks
             .iter()
             .map_while(|track| track.lone_in_depth(at))
@@ -690,7 +741,6 @@ impl Drawing {
         if run.len() < 2 {
             return Vec::new();
         }
-        let scene = three_d::Scene::at(plan, at, size);
         let planes: Vec<(three_d::Plane, Rect)> = run
             .iter()
             .map(|shown| {
@@ -707,7 +757,7 @@ impl Drawing {
                     (clip.size.0 as usize, clip.size.1 as usize),
                 )
                 .unwrap_or_else(|| Rect::new(0.0, 0.0, w, h));
-                (three_d::Plane::of(&scene, clip, (w, h), &place, time), crop)
+                (three_d::Plane::of(scene, clip, (w, h), &place, time), crop)
             })
             .collect();
         let crosses = planes.iter().enumerate().any(|(index, (plane, crop))| {
@@ -728,17 +778,19 @@ impl Drawing {
         canvas: &mut Image,
         sequence: &SequencePlan,
         run: &[&Shown],
-        at: Time,
-        scale: f64,
+        moment: &Moment,
     ) {
+        let Moment { at, scale, scene } = *moment;
+        let Some(scene) = scene else {
+            return;
+        };
         let size = (canvas.w, canvas.h);
-        let scene = three_d::Scene::at(sequence, at, size);
         let layers: Vec<three_d::Layer> = run
             .iter()
             .filter_map(|shown| {
                 let ready = self.ready(sequence, shown, at, scale, size)?;
                 let (picture, depth) = three_d::project_with_depth(
-                    &scene,
+                    scene,
                     &shown.plan,
                     &ready.picture,
                     (&ready.to_output, ready.crop),
@@ -756,15 +808,15 @@ impl Drawing {
         three_d::composite_by_depth(canvas, &layers);
     }
 
-    /// A track of `sequence` at its time `at` over `canvas`.
+    /// A track of `sequence` at `moment` over `canvas`.
     fn track(
         &self,
         canvas: &mut Image,
         sequence: &SequencePlan,
         track: &TrackPlan,
-        at: Time,
-        scale: f64,
+        moment: &Moment,
     ) {
+        let at = moment.at;
         for (index, shown) in track.shown.iter().enumerate() {
             if !shown.shows(at) {
                 continue;
@@ -775,10 +827,10 @@ impl Drawing {
             match pair {
                 // Drawn once, at the first of its clips that shows.
                 Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
-                    self.pair(canvas, sequence, track, pair, at, scale);
+                    self.pair(canvas, sequence, track, pair, moment);
                 }
                 Some(_) => {}
-                None => self.layer(canvas, sequence, shown, at, scale, shown.plan.blend),
+                None => self.layer(canvas, sequence, shown, moment, shown.plan.blend),
             }
         }
         for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
@@ -804,15 +856,15 @@ impl Drawing {
         sequence: &SequencePlan,
         track: &TrackPlan,
         pair: &Pair,
-        at: Time,
-        scale: f64,
+        moment: &Moment,
     ) {
+        let Moment { at, scale, .. } = *moment;
         let (w, h) = (canvas.w, canvas.h);
         let (from, to) = (&track.shown[pair.from], &track.shown[pair.to]);
         let side = |shown: &Shown| {
             let mut picture = Image::new(w, h);
             if shown.shows(at) {
-                self.layer(&mut picture, sequence, shown, at, scale, Blend::Normal);
+                self.layer(&mut picture, sequence, shown, moment, Blend::Normal);
             }
             picture
         };
@@ -838,16 +890,16 @@ impl Drawing {
         composite(canvas, &mixed, 1.0, blend);
     }
 
-    /// Draw a shown clip over `canvas` at sequence time `at` with `blend`.
+    /// Draw a shown clip over `canvas` at `moment` with `blend`.
     fn layer(
         &self,
         canvas: &mut Image,
         sequence: &SequencePlan,
         shown: &Shown,
-        at: Time,
-        scale: f64,
+        moment: &Moment,
         blend: Blend,
     ) {
+        let Moment { at, scale, scene } = *moment;
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
@@ -868,10 +920,9 @@ impl Drawing {
         else {
             return;
         };
-        if plan.three_d {
-            let scene = three_d::Scene::at(sequence, at, (w, h));
+        if let (true, Some(scene)) = (plan.three_d, scene) {
             let projected =
-                three_d::project(&scene, plan, &picture, (&to_output, crop), time, (w, h));
+                three_d::project(scene, plan, &picture, (&to_output, crop), time, (w, h));
             composite(canvas, &projected, opacity, blend);
             return;
         }
@@ -1590,6 +1641,14 @@ fn caption_on(
     image
 }
 
+/// What a sequence is being drawn at: when, how large, and, with clips in depth, how they are seen.
+#[derive(Clone, Copy)]
+struct Moment<'a> {
+    at: Time,
+    scale: f64,
+    scene: Option<&'a three_d::Scene>,
+}
+
 /// A clip's picture with all done to it that is done to the picture itself, and how it goes down.
 struct Ready {
     picture: Arc<Image>,
@@ -1729,8 +1788,19 @@ impl FxEnv for ClipEnv<'_> {
         let track = placed.sequence.tracks.get(index)?;
         let (w, h) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
         let mut canvas = Image::new(w, h);
+        let (at, scale) = (placed.at, placed.scale);
+        let in_depth = track.shown.iter().any(|shown| shown.plan.three_d);
+        let scene = in_depth.then(|| {
+            self.drawing
+                .scene(placed.sequence, &[track], at, scale, (w, h))
+        });
+        let moment = Moment {
+            at,
+            scale,
+            scene: scene.as_ref(),
+        };
         self.drawing
-            .track(&mut canvas, placed.sequence, track, placed.at, placed.scale);
+            .track(&mut canvas, placed.sequence, track, &moment);
         Some(canvas)
     }
 

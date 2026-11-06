@@ -141,3 +141,32 @@ fn a_kind_that_is_not_one_is_refused_with_a_reason() {
     };
     assert!(format!("{errors:?}").contains("kind"), "{errors:?}");
 }
+
+const DEPTH: &str = r##"kerf 1
+project name="t"
+sequence s1 rate=24 size=1280x720 audio=48000
+  track V1 video
+    clip c1 gen=solid@1 at=0f dur=48f
+      set three_d=true z=0.5
+  track V2 video
+    clip l1 gen=light@1 at=0f dur=48f
+      set kind=directional shadow={0f:0 24f:0.8} x=0.2 z=1
+    clip l2 gen=light@1 at=48f dur=48f
+      set shadow=1
+"##;
+
+#[test]
+fn a_lights_shadow_round_trips_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    for word in ["shadow={0f:0 24f:0.8}", "shadow=1"] {
+        assert!(printed.contains(word), "{word} in {printed}");
+    }
+    for bad in ["shadow=2", "shadow=-0.1", "shadow={0f:0 24f:2}"] {
+        refused(&DEPTH.replace("shadow=1", bad), "shadow");
+    }
+}
