@@ -10,6 +10,7 @@ pub mod id;
 pub mod look;
 pub mod model;
 pub mod ops;
+mod path;
 pub mod time;
 pub mod validate;
 pub mod value;
@@ -23,6 +24,7 @@ pub use model::{
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;
+pub use path::{parse_path_points, MotionPath, PathPoint};
 pub use ops::{
     apply, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
     TrackChange, TrackRoleChange,

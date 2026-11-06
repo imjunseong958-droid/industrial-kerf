@@ -229,3 +229,88 @@ fn the_gpu_draws_a_rig_as_the_cpu_does() {
         assert!(worst <= 3, "{null}: differs by {worst}");
     }
 }
+
+/// A small square moving along `path`.
+fn on_path(path: &str, along: &str) -> Project {
+    project(&format!(
+        "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale=0.1 path=\"{path}\" along={along}\n"
+    ))
+}
+
+#[test]
+fn a_path_moves_a_clip_along_it_at_an_even_speed() {
+    let project = on_path("-0.25,0 0,0.25 0.25,0", "{0f:0 24f:1}");
+    let at = |frame_at| bright(&frame(&project, frame_at, Accel::Never));
+    let (start, middle, end) = (at(0), at(12), at(24));
+    close(start.0, 320.0 - 160.0);
+    close(start.1, 180.0);
+    close(middle.0, 320.0);
+    close(middle.1, 180.0 + 90.0);
+    close(end.0, 320.0 + 160.0);
+    close(end.1, 180.0);
+    // It held its last place after that.
+    close(at(40).0, 320.0 + 160.0);
+}
+
+#[test]
+fn x_and_y_add_to_a_path() {
+    let body = "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale=0.1 path=\"0,0 0.2,0\" along=1 x=0.1 y=0.1\n";
+    let (x, y, _, _) = bright(&frame(&project(body), 0, Accel::Never));
+    close(x, 320.0 + 192.0);
+    close(y, 180.0 + 36.0);
+}
+
+#[test]
+fn orient_turns_a_clip_to_face_its_way() {
+    let body = |orient: &str| {
+        format!(
+            "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale_x=0.2 scale_y=0.02 path=\"0,-0.3 0,0.3\" along=0.5{orient}\n"
+        )
+    };
+    // Heading straight down: the long thin bar stands up.
+    let (_, _, flat_w, flat_h) = bright(&frame(&project(&body("")), 0, Accel::Never));
+    let (_, _, up_w, up_h) = bright(&frame(&project(&body(" orient=true")), 0, Accel::Never));
+    assert!(flat_w > flat_h * 2.0, "{flat_w} by {flat_h}");
+    assert!(up_h > up_w * 2.0, "{up_w} by {up_h}");
+}
+
+#[test]
+fn a_bad_path_is_refused_and_a_parent_on_a_path_carries_its_children() {
+    let document = "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 gen=solid@1 at=0f dur=4f\n      set path=\"0,0\"\n";
+    assert!(parse_document(document, Catalog::builtin()).is_err());
+    let rigged = "  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n      set path=\"0,0 0.25,0\" along=1\n  track V2 video\n    clip c1 gen=solid@1 at=0f dur=48f parent=n1\n      set color=#ffffff scale=0.1\n";
+    close(
+        bright(&frame(&project(rigged), 0, Accel::Never)).0,
+        320.0 + 160.0,
+    );
+}
+
+#[test]
+fn the_gpu_draws_a_path_as_the_cpu_does() {
+    let project = on_path("-0.3,-0.1 0,0.2 0.3,-0.1", "{0f:0 24f:1:ease}");
+    let compositor = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            accel: Accel::Always,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    if !compositor.draws_on_gpu(Rate::FPS_24.time_of(9), 1.0) {
+        eprintln!("no GPU: nothing to compare");
+        return;
+    }
+    let (a, b) = (
+        frame(&project, 9, Accel::Always),
+        frame(&project, 9, Accel::Never),
+    );
+    let worst = a
+        .rgba
+        .iter()
+        .zip(&b.rgba)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(worst <= 3, "differs by {worst}");
+}

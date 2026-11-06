@@ -594,6 +594,13 @@ impl Validator<'_> {
         }
         match domain {
             Some(domain) => {
+                if let Some(Param::Static(Value::Text(text))) = clip.props.get("path") {
+                    if !text.is_empty() {
+                        if let Err(problem) = crate::path::parse_path_points(text) {
+                            self.error("param.invalid", &clip.id, format!("`path`: {problem}"));
+                        }
+                    }
+                }
                 for (name, param) in &clip.props {
                     match self.catalog.prop(domain, name) {
                         None => self.error(
