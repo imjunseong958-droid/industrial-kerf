@@ -24,9 +24,9 @@ use crate::text::{
 use kerf_model::time::parse_timecode;
 use kerf_model::Align;
 use kerf_model::{
-    validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Marker,
-    MarkerColor, Mask, MaskMode, MaskShape, Media, Param, ParamDef, ParamType, Params, Project,
-    Rate, Sequence, Speed, Time, Track, TrackKind, Transition, Value, VideoInfo,
+    validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Interp,
+    Marker, MarkerColor, Mask, MaskMode, MaskShape, Media, OutlineKey, Param, ParamDef, ParamType,
+    Params, Project, Rate, Sequence, Speed, Time, Track, TrackKind, Transition, Value, VideoInfo,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -374,7 +374,7 @@ impl Parser<'_> {
         let rate = self.project.sequences[s].rate;
         let mut fields = Fields::new(line)?;
         let name = fields.id(1, "a mask name")?;
-        let shape = take_mask_shape(&mut fields)?
+        let shape = take_mask_shape(&mut fields, rate)?
             .ok_or_else(|| line.error(1, "a mask needs rect=, ellipse=, or points="))?;
         let mode = fields
             .take_with("mode", parse_mask_mode)?
@@ -781,7 +781,10 @@ pub(crate) fn word_or_quote(text: &str) -> String {
     }
 }
 
-pub(crate) fn take_mask_shape(fields: &mut Fields<'_>) -> Result<Option<MaskShape>, Diagnostic> {
+pub(crate) fn take_mask_shape(
+    fields: &mut Fields<'_>,
+    rate: Rate,
+) -> Result<Option<MaskShape>, Diagnostic> {
     let rect = fields.take("rect");
     let ellipse = fields.take("ellipse");
     let points = fields.take("points");
@@ -807,33 +810,66 @@ pub(crate) fn take_mask_shape(fields: &mut Fields<'_>) -> Result<Option<MaskShap
             })
             .collect()
     };
-    let four = |arg: &Arg, what: &str| -> Result<[f64; 4], Diagnostic> {
-        let values = numbers(arg, fields.text(arg)?)?;
-        values
+    let four = |arg: &Arg, text: &str, what: &str| -> Result<[f64; 4], Diagnostic> {
+        numbers(arg, text)?
             .try_into()
             .map_err(|_| fields.error(arg, format!("expected {what}")))
     };
+    // One outline as a word, or keyframes of them: `{0f:0,0,1,1 24f:0.1,0,1,1:ease}`.
+    let moving = |arg: &Arg,
+                  one: &dyn Fn(&str) -> Result<MaskShape, Diagnostic>|
+     -> Result<MaskShape, Diagnostic> {
+        let Atom::Group(words) = &arg.value else {
+            return one(fields.text(arg)?);
+        };
+        let keys = words
+            .iter()
+            .map(|word| {
+                let parts: Vec<&str> = word.split(':').collect();
+                let (at, shape, interp) = match parts[..] {
+                    [at, shape] => (at, shape, Interp::Linear),
+                    [at, shape, interp] => (
+                        at,
+                        shape,
+                        Interp::parse(interp).ok_or_else(|| {
+                            fields.error(arg, format!("unknown interpolation `{interp}`; use linear, hold, ease-in, ease-out, ease, or a curve's x1,y1,x2,y2"))
+                        })?,
+                    ),
+                    _ => {
+                        return Err(fields.error(
+                            arg,
+                            format!("keyframe `{word}` should read time:outline or time:outline:interp"),
+                        ))
+                    }
+                };
+                Ok(OutlineKey {
+                    at: crate::text::amount(at, rate).map_err(|message| fields.error(arg, message))?,
+                    shape: one(shape)?,
+                    interp,
+                })
+            })
+            .collect::<Result<Vec<_>, Diagnostic>>()?;
+        Ok(MaskShape::Moving(keys))
+    };
     if let Some(arg) = rect {
-        return Ok(Some(MaskShape::Rect(four(arg, "left,top,right,bottom")?)));
+        return moving(arg, &|text| {
+            Ok(MaskShape::Rect(four(arg, text, "left,top,right,bottom")?))
+        })
+        .map(Some);
     }
     if let Some(arg) = ellipse {
-        return Ok(Some(MaskShape::Ellipse(four(
-            arg,
-            "x,y,radius across,radius down",
-        )?)));
+        return moving(arg, &|text| {
+            Ok(MaskShape::Ellipse(four(
+                arg,
+                text,
+                "x,y,radius across,radius down",
+            )?))
+        })
+        .map(Some);
     }
     let Some(arg) = points else {
         return Ok(None);
     };
-    let points = fields
-        .text(arg)?
-        .split_whitespace()
-        .map(|point| {
-            let values = numbers(arg, point)?;
-            <[f64; 2]>::try_from(values)
-                .map_err(|_| fields.error(arg, format!("`{point}` is not x,y")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let closed = match closed.map(|closed| fields.text(closed)).transpose()? {
         None | Some("true") => true,
         Some("false") => false,
@@ -841,11 +877,24 @@ pub(crate) fn take_mask_shape(fields: &mut Fields<'_>) -> Result<Option<MaskShap
             return Err(fields.error(arg, format!("`closed` is true or false, not `{other}`")))
         }
     };
-    Ok(Some(MaskShape::Polygon { points, closed }))
+    moving(arg, &|text| {
+        // A quoted outline is spaced, and within keyframes corners are split by `;`.
+        let points = text
+            .split(|c: char| c.is_whitespace() || c == ';')
+            .filter(|point| !point.is_empty())
+            .map(|point| {
+                let values = numbers(arg, point)?;
+                <[f64; 2]>::try_from(values)
+                    .map_err(|_| fields.error(arg, format!("`{point}` is not x,y")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(MaskShape::Polygon { points, closed })
+    })
+    .map(Some)
 }
 
 /// `rect=`, `ellipse=`, or `points=` (and `closed=false`) for an outline.
-pub(crate) fn mask_shape_text(shape: &MaskShape) -> String {
+pub(crate) fn mask_shape_text(shape: &MaskShape, rate: Rate) -> String {
     let list = |values: &[f64]| {
         values
             .iter()
@@ -861,13 +910,40 @@ pub(crate) fn mask_shape_text(shape: &MaskShape) -> String {
             let open = if *closed { "" } else { " closed=false" };
             format!(" points={}{open}", quote(&points.join(" ")))
         }
+        MaskShape::Moving(keys) => {
+            let key_text = |key: &OutlineKey| {
+                let shape = match &key.shape {
+                    MaskShape::Rect(values) | MaskShape::Ellipse(values) => list(values),
+                    MaskShape::Polygon { points, .. } => points
+                        .iter()
+                        .map(|point| list(point))
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                    MaskShape::Moving(_) => String::new(),
+                };
+                let mut text = format!("{}:{shape}", crate::text::print_offset(key.at, rate));
+                if key.interp != Interp::Linear {
+                    text.push(':');
+                    text.push_str(&key.interp.name());
+                }
+                text
+            };
+            let words: Vec<String> = keys.iter().map(key_text).collect();
+            let (key, open) = match keys.first().map(|key| &key.shape) {
+                Some(MaskShape::Ellipse(_)) => ("ellipse", ""),
+                Some(MaskShape::Polygon { closed: false, .. }) => ("points", " closed=false"),
+                Some(MaskShape::Polygon { .. }) => ("points", ""),
+                _ => ("rect", ""),
+            };
+            format!(" {key}={{{}}}{open}", words.join(" "))
+        }
     }
 }
 
 /// A mask after its name: its outline, mode and inversion when not the
 /// defaults, and its properties.
 pub(crate) fn mask_text(mask: &Mask, catalog: &Catalog, rate: Rate) -> String {
-    let mut out = mask_shape_text(&mask.shape);
+    let mut out = mask_shape_text(&mask.shape, rate);
     if mask.mode != MaskMode::Add {
         write!(out, " mode={}", mask.mode.name()).unwrap();
     }
@@ -1636,6 +1712,45 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         );
         // Log is something footage is in, not something a file is finished in.
         assert!(parse_document(&text(" color=slog3"), Catalog::builtin()).is_err());
+    }
+
+    #[test]
+    fn a_moving_outline_reads_and_prints_as_keyframes() {
+        let text = |mask: &str| {
+            format!("kerf 1\nproject name=\"t\"\nmedia m path=\"a.mov\" rate=24 dur=960f video=64x36\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=96f\n      mask k1 {mask}\n")
+        };
+        for written in [
+            "rect={0f:0.1,0.1,0.5,0.5 24f:0.2,0.1,0.6,0.5:ease 48f:0.3,0.2,0.7,0.6}",
+            "ellipse={0f:0.5,0.5,0.1,0.2:hold 24f:0.6,0.5,0.1,0.2}",
+            "points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5:0.2,0,0.8,1}",
+            "points={0f:0,0;0.5,0 24f:0.1,0;0.6,0} closed=false",
+        ] {
+            let document = parse_document(&text(written), Catalog::builtin())
+                .unwrap_or_else(|errors| panic!("{written}: {errors:?}"));
+            let printed = print_document(
+                &document.project,
+                Catalog::builtin(),
+                PrintOptions::default(),
+            );
+            assert!(
+                printed.contains(&format!("mask k1 {written}\n")),
+                "{printed}"
+            );
+            let again = parse_document(&printed, Catalog::builtin()).expect("reads back");
+            assert_eq!(document.project, again.project);
+        }
+        for bad in [
+            "rect={0f:0.1,0.1,0.5,0.5 0f:0.2,0.1,0.6,0.5}",
+            "rect={24f:0.1,0.1,0.5,0.5 0f:0.2,0.1,0.6,0.5}",
+            "rect={0f:0.1,0.1,0.5}",
+            "points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0}",
+            "points={0f:0,0;0.5,0;0.5,0.5:wobble}",
+        ] {
+            assert!(
+                parse_document(&text(bad), Catalog::builtin()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

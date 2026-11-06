@@ -105,6 +105,63 @@ fn video_fill_recovers_the_scene_behind_a_logo_on_a_moving_shot() {
 }
 
 #[test]
+fn video_fill_removes_what_moves_when_its_outline_moves_with_it() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let clean = dir.path().join("clean.mp4");
+    let boxed = dir.path().join("boxed.mp4");
+    ffmpeg(SCENE, &clean);
+    // Something crosses the frame, 8 pixels a frame, while the shot pans behind it.
+    ffmpeg(
+        &format!("{SCENE},format=yuv444p,geq=lum='if(between(X,20+8*N,50+8*N)*between(Y,70,100),0,lum(X,Y))':cb='if(between(X,20+8*N,50+8*N)*between(Y,70,100),128,cb(X,Y))':cr='if(between(X,20+8*N,50+8*N)*between(Y,70,100),128,cr(X,Y))'"),
+        &boxed,
+    );
+    let (clean, boxed) = (clean.display().to_string(), boxed.display().to_string());
+    let (w, h) = (320.0, 180.0);
+    let rect = |frame: f64| {
+        format!(
+            "{:.4},{:.4},{:.4},{:.4}",
+            (18.0 + 8.0 * frame) / w,
+            68.0 / h,
+            (52.0 + 8.0 * frame) / w,
+            102.0 / h
+        )
+    };
+    let keyed = |method: &str| {
+        format!(
+            "      mask k1 rect={{0f:{} 23f:{}}} mode=none\n      fx image.fill@1 path=k1 method={method} reach=6\n",
+            rect(0.0),
+            rect(23.0)
+        )
+    };
+    let still = format!(
+        "      mask k1 rect={} mode=none\n      fx image.fill@1 path=k1 method=video reach=6\n",
+        rect(12.0)
+    );
+    for at in [6, 12, 17] {
+        let reference = frame(&clean, "", at);
+        let x = 20 + 8 * at as u32;
+        let area = (x, 70, x + 30, 100);
+        let untouched = difference(&frame(&boxed, "", at), &reference, area);
+        let by_frame = difference(&frame(&boxed, &keyed("object"), at), &reference, area);
+        let by_video = difference(&frame(&boxed, &keyed("video"), at), &reference, area);
+        eprintln!(
+            "frame {at}: left {untouched:.2}, one frame alone {by_frame:.2}, video {by_video:.2}"
+        );
+        assert!(untouched > 30.0, "the thing was there: {untouched:.2}");
+        assert!(
+            by_video < by_frame * 0.6,
+            "video {by_video:.2}, one frame {by_frame:.2}"
+        );
+        assert!(by_video < 12.0, "video {by_video:.2} off the clean plate");
+        // And a still outline only catches it where it happens to be.
+        if at != 12 {
+            let missed = difference(&frame(&boxed, &still, at), &reference, area);
+            assert!(missed > by_video * 2.0, "{missed:.2} against {by_video:.2}");
+        }
+    }
+}
+
+#[test]
 fn a_clip_without_frames_to_read_still_fills() {
     // A generator's fill has no footage, and an adjustment layer no clip of its own: it falls back.
     let body = "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n      set color=#404040\n  track V2 video\n    clip g2 gen=solid@1 at=0f dur=24f\n      set color=#ffffff\n      mask k9 rect=0.45,0.45,0.55,0.55\n  track V3 video\n    clip a1 gen=adjustment@1 at=0f dur=24f\n      mask k1 rect=0.3,0.3,0.7,0.7 mode=none\n      fx image.fill@1 path=k1 method=video\n";

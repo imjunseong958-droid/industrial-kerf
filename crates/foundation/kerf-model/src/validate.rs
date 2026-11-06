@@ -6,7 +6,7 @@
 use crate::catalog::{Catalog, Domain, FxKind, ParamType};
 use crate::diag::Diagnostic;
 use crate::id::Id;
-use crate::model::{Clip, Content, MaskShape, Params, Project, Sequence, Track, TrackKind};
+use crate::model::{Clip, Content, Params, Project, Sequence, Track, TrackKind};
 use crate::time::Time;
 use crate::value::{Param, Value};
 use std::collections::{HashMap, HashSet};
@@ -461,23 +461,7 @@ impl Validator<'_> {
                     format!("clip `{id}` has two masks named `{name}`"),
                 );
             }
-            let fine = |values: &[f64]| values.iter().all(|value| value.is_finite());
-            let problem = match &mask.shape {
-                MaskShape::Rect(r) if !fine(r) || r[2] <= r[0] || r[3] <= r[1] => {
-                    Some("a rectangle needs its right past its left and its bottom below its top")
-                }
-                MaskShape::Ellipse(e) if !fine(e) || e[2] <= 0.0 || e[3] <= 0.0 => {
-                    Some("an ellipse needs radii above 0")
-                }
-                MaskShape::Polygon { points, closed }
-                    if !fine(points.as_flattened())
-                        || points.len() < if *closed { 3 } else { 2 } =>
-                {
-                    Some("an outline needs 3 corners, or 2 points when open")
-                }
-                _ => None,
-            };
-            if let Some(problem) = problem {
+            if let Some(problem) = mask.shape.problem() {
                 self.error(
                     "mask.shape",
                     id,

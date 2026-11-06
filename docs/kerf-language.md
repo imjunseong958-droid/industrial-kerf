@@ -50,9 +50,9 @@ picture. Give the mask `mode=none`, so the picture stays whole for it:
 path=k1`. `method=object` matches texture within the frame, for stills and locked-off shots;
 `method=smooth` blends the edges across, for skies and walls; and `method=video` takes what the
 area hides from the frames around it along the motion, for anything that moves, in runs of
-`reach` frames either side. An outline holds still for now, so this removes what stays in place
-in the picture, as a logo or a spot does, while the shot moves behind it. Identical frames, as a
-still has, reuse one fill.
+`reach` frames either side. Give the outline keyframes to remove what moves itself: `mask c1 add k1
+rect={0f:0.1,0.4,0.2,0.6 24f:0.6,0.4,0.7,0.6} mode=none`. Identical frames, as a still has, reuse one
+fill.
 
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
@@ -129,7 +129,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   default), `subtract`, `intersect`, `lighten`, `darken`, `difference`, or
   `none`, which cuts nothing and leaves a path for effects; `inverted=true`
   flips it. `feather=` and `expansion=` are in picture pixels and `opacity=`
-  runs 0 to 1; all three animate. A crop still applies over the masks.
+  runs 0 to 1; all three animate. So does the outline, with keyframes of it:
+  `rect={0f:0.1,0.1,0.5,0.5 24f:0.3,0.1,0.7,0.5:ease}`, `ellipse={…}`, or
+  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, with `;` between corners. Outlines of a
+  mask are one kind, with the same corners, which move one for one. A trim or a split keeps a
+  mask where it was on the picture. A crop still applies over the masks.
   Effects name a mask by its name (`fx generate.stroke path=k1`); names are
   unique within the clip.
 - Clips sharing a `link=` group, such as a picture and its sound, edit

@@ -10,7 +10,7 @@
 
 use crate::{spec, value_at};
 use kerf_draw::color::{to_encoded, to_linear};
-use kerf_model::{Effect, Mask, MaskShape, Param, Time, Value};
+use kerf_model::{Effect, Mask, Param, Time, Value};
 use kerf_raster_fx::{
     Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, ParamUi, Params, Value as FxValue,
 };
@@ -92,11 +92,11 @@ pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
         .iter()
         .map(|mask| kerf_raster_fx::MaskShape {
             name: mask.name.to_string(),
-            points: kerf_draw::mask::outline(&mask.shape, layer_size[0], layer_size[1], 1.0)
+            points: kerf_draw::mask::outline(&mask.shape.at(run.at), layer_size[0], layer_size[1], 1.0)
                 .into_iter()
                 .map(|[x, y]| [f64::from(x), f64::from(y)])
                 .collect(),
-            closed: !matches!(mask.shape, MaskShape::Polygon { closed: false, .. }),
+            closed: mask.shape.is_closed(),
             inverted: mask.inverted,
         })
         .collect();

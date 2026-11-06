@@ -249,7 +249,8 @@ impl Interp {
         Bezier::new(1.0 / 3.0, y1, 2.0 / 3.0, y2)
     }
 
-    pub(crate) fn curve(self, t: f64) -> f64 {
+    /// How far from this keyframe to the next it is, `t` of the way across.
+    pub fn curve(self, t: f64) -> f64 {
         match self {
             Self::Linear => t,
             Self::Hold => 0.0,
