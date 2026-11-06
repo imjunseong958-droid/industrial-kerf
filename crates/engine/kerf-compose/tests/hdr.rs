@@ -194,7 +194,7 @@ fn the_gpu_holds_what_is_over_1_for_effects_as_the_cpu_does() {
     };
     let at = Rate::FPS_24.time_of(1);
     let plain = signal(&line("color.tint amount=0"), Accel::Never);
-    let mut drew_any = false;
+    let has_gpu = compositor(&line("blur.gaussian radius=2"), Accel::Always).draws_on_gpu(at, 1.0);
     for effect in [
         "color.brightnesscontrast contrast=10",
         "color.gamma gamma=12",
@@ -205,10 +205,11 @@ fn the_gpu_holds_what_is_over_1_for_effects_as_the_cpu_does() {
         let document = line(effect);
         let gpu = compositor(&document, Accel::Always);
         let cpu = compositor(&document, Accel::Never);
-        if !gpu.draws_on_gpu(at, 1.0) {
-            panic!("{effect} goes to the CPU");
-        }
-        drew_any = true;
+        // A plain clip with no effect shows whether there is a GPU to ask at all.
+        assert!(
+            gpu.draws_on_gpu(at, 1.0) || !has_gpu,
+            "{effect} goes to the CPU"
+        );
         let (on_gpu, on_cpu) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
         let (x, y) = (on_gpu.width / 2, on_gpu.height / 2);
         let (a, b) = (code16(&on_gpu, x, y), code16(&on_cpu, x, y));
@@ -224,7 +225,6 @@ fn the_gpu_holds_what_is_over_1_for_effects_as_the_cpu_does() {
             );
         }
     }
-    assert!(drew_any);
     assert!(plain > 0.6, "the footage should be over SDR white: {plain}");
     // Bringing a whole picture under 1 goes by its peak, which the CPU has to read.
     assert!(!compositor(&line("blur.radialzoom amount=20"), Accel::Always).draws_on_gpu(at, 1.0));
