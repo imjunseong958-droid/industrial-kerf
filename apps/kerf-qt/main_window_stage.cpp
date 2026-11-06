@@ -110,6 +110,7 @@ void MainWindow::updateViewerMasks() {
     for (QAction *action : m_maskTools) action->setEnabled(!picture.isEmpty());
     if (picture.isEmpty()) {
         m_viewer->setMasks(QString(), QJsonArray{}, QTransform{});
+        m_viewer->setMotionPath(QString(), QString(), QPointF(), 0.0);
         return;
     }
     const QJsonObject clip = selectedClipObject();
@@ -118,6 +119,9 @@ void MainWindow::updateViewerMasks() {
     const QSizeF canvas(resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray()));
     m_viewer->setMasks(m_selectedClip, clip.value(QStringLiteral("masks")).toArray(),
                        picturePlacement(clip, picture, fit, canvas, clipTime));
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    m_viewer->setMotionPath(m_selectedClip, props.value(QStringLiteral("path")).toString(), pathOrigin(clip, picture, fit, canvas, clipTime),
+                            propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
 }
 
 void MainWindow::setSafeZones(bool shown) {

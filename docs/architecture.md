@@ -188,7 +188,11 @@ perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model. To add, in order:
 
-1. Motion paths (`path=`, `orient=`) drawn on the picture; the graph editor already has `along`.
+1. Adding and removing a motion path's points on the picture, which now shows the curve of a selected
+   clip's `path=` and drags its points (`ViewerWidget::setMotionPath`; `graph::MotionPath` is held to
+   `MotionPath` by a table of values). The overlay does not follow a parent or a clip in depth. The graph
+   editor zooms and pans its time axis, frames keys, and moves several as one edit; its value axis still
+   fits each number to the plot.
 2. More of shapes, from EffectCraft's `path` (booleans, offsets, variable strokes), and variable fonts.
 
 Expressions stay out. They exist so that a person need not write hundreds of

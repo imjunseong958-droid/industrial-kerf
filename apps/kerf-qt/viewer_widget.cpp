@@ -6,6 +6,7 @@
 #include <QVariantAnimation>
 #include "editor_common.h"
 #include "editor_theme.h"
+#include "graph_model.h"
 #include "stage_shell.h"
 #include "ui/components.h"
 
@@ -13,6 +14,7 @@
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
@@ -31,6 +33,7 @@ namespace {
 constexpr double kHandleSize = 7.0;
 // How near the pointer must be to a handle, or a path, to take it.
 constexpr double kHandleReach = 6.0;
+constexpr double kPathDragStart = 3.0;
 
 QColor maskColor(bool selected) { return selected ? editorTheme().maskOutline : editorTheme().maskOutlineIdle; }
 
@@ -663,6 +666,66 @@ void ViewerWidget::setMasks(const QString &clip, const QJsonArray &masks, const 
     update();
 }
 
+void ViewerWidget::setMotionPath(const QString &clip, const QString &text, QPointF origin, double along) {
+    // A drag in progress keeps its curve until it is let go.
+    if (m_pathDrag >= 0 && clip == m_pathClip) {
+        m_pathOrigin = origin;
+        m_pathAlong = along;
+        return;
+    }
+    const auto points = clip.isEmpty() ? std::nullopt : graph::parsePath(text);
+    const QString shown = points ? clip : QString();
+    const QList<QPointF> list = points.value_or(QList<QPointF>{});
+    if (shown == m_pathClip && list == m_pathPoints && origin == m_pathOrigin && along == m_pathAlong) return;
+    m_pathClip = shown;
+    m_pathPoints = list;
+    m_pathOrigin = origin;
+    m_pathAlong = along;
+    m_pathDrag = -1;
+    updateCursor(mapFromGlobal(QCursor::pos()));
+    update();
+}
+
+QPointF ViewerWidget::pathToWidget(const QPointF &point) const {
+    const QRectF canvas = pictureRect();
+    return {canvas.left() + (m_pathOrigin.x() + point.x()) * canvas.width(), canvas.top() + (m_pathOrigin.y() + point.y()) * canvas.height()};
+}
+
+QPointF ViewerWidget::pathPoint(const QPointF &widget) const {
+    const QRectF canvas = pictureRect();
+    return {(widget.x() - canvas.left()) / std::max(1.0, canvas.width()) - m_pathOrigin.x(),
+            (widget.y() - canvas.top()) / std::max(1.0, canvas.height()) - m_pathOrigin.y()};
+}
+
+int ViewerWidget::pathPointAt(const QPointF &widget) const {
+    if (m_pathClip.isEmpty()) return -1;
+    for (qsizetype index = m_pathPoints.size() - 1; index >= 0; --index) {
+        const QPointF delta = pathToWidget(m_pathPoints.at(index)) - widget;
+        if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return int(index);
+    }
+    return -1;
+}
+
+QList<QPointF> ViewerWidget::motionPathPoints() const {
+    QList<QPointF> points;
+    if (m_pathClip.isEmpty()) return points;
+    for (const QPointF &point : m_pathPoints) points.append(pathToWidget(point));
+    return points;
+}
+
+QList<QPointF> ViewerWidget::motionPathCurve() const {
+    QList<QPointF> line;
+    if (m_pathClip.isEmpty()) return line;
+    for (const QPointF &point : graph::MotionPath(m_pathPoints, aspect()).samples()) line.append(pathToWidget(point));
+    return line;
+}
+
+QPointF ViewerWidget::motionPathMarker() const {
+    if (m_pathClip.isEmpty()) return {};
+    const auto on = graph::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
+    return pathToWidget({on.x, on.y});
+}
+
 void ViewerWidget::setMaskTool(MaskTool tool) {
     if (m_maskClip.isEmpty()) tool = MaskTool::None;
     if (tool == m_maskTool) return;
@@ -739,6 +802,7 @@ QString ViewerWidget::maskAt(const QPointF &widget) const {
 
 void ViewerWidget::updateCursor(const QPointF &widget) {
     if (m_maskTool != MaskTool::None) setCursor(Qt::CrossCursor);
+    else if (m_pathDrag >= 0 || pathPointAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
     else if (!editsMasks()) unsetCursor();
     else if (m_dragHandle == kMoveMask) setCursor(Qt::ClosedHandCursor);
     else if (m_dragHandle >= 0 || handleAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
@@ -855,6 +919,18 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
         }
         return;
     }
+    if (m_maskTool == MaskTool::None) {
+        if (const int point = pathPointAt(position); point >= 0) {
+            setFocus(Qt::MouseFocusReason);
+            m_pathDrag = point;
+            m_pathBefore = m_pathPoints;
+            m_pathHeld = pathToWidget(m_pathPoints.at(point)) - position;
+            m_pathPressed = position;
+            m_pathMoved = false;
+            updateCursor(position);
+            return;
+        }
+    }
     if (!editsMasks()) {
         // A click on the picture plays or pauses, as on a video site.
         // On the black bars, a click does nothing.
@@ -915,6 +991,14 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         update();
         return;
     }
+    if (m_pathDrag >= 0) {
+        // A hand that wobbles while clicking has not moved anything.
+        if (!m_pathMoved && QLineF(position, m_pathPressed).length() < kPathDragStart) return;
+        m_pathMoved = true;
+        m_pathPoints[m_pathDrag] = pathPoint(position + m_pathHeld);
+        update();
+        return;
+    }
     if (m_dragHandle != -1) {
         const QPointF at = picturePoint(position);
         const int index = maskIndex(m_dragOriginal.value(QStringLiteral("name")).toString());
@@ -930,6 +1014,11 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
             m_pointer = position;
             update();
         }
+        updateCursor(position);
+        return;
+    }
+    // So does it while a path can be dragged.
+    if (!m_pathClip.isEmpty()) {
         updateCursor(position);
         return;
     }
@@ -975,6 +1064,17 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
                                                                        box.width() / 2.0, box.height() / 2.0})}});
         else
             addMask(QJsonObject{{QStringLiteral("rect"), fractions({box.left(), box.top(), box.right(), box.bottom()})}});
+        return;
+    }
+    if (m_pathDrag >= 0) {
+        const bool moved = m_pathMoved && m_pathPoints != m_pathBefore;
+        m_pathDrag = -1;
+        m_pathMoved = false;
+        updateCursor(event->position());
+        if (moved)
+            emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
+                                                      {QStringLiteral("clip"), m_pathClip},
+                                                      {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_pathPoints)}}}}});
         return;
     }
     if (m_dragHandle == -1) return;
@@ -1052,6 +1152,27 @@ void ViewerWidget::paintMasks(QPainter &p) {
         const bool closes = m_penPoints.size() >= 3 && std::abs(reach.x()) <= kHandleReach && std::abs(reach.y()) <= kHandleReach;
         for (int index = 0; index < m_penPoints.size(); ++index) handle(toWidget.map(m_penPoints.at(index)), index == 0 && closes);
     }
+    p.restore();
+}
+
+void ViewerWidget::paintMotionPath(QPainter &p) {
+    if (m_pathClip.isEmpty()) return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setBrush(Qt::NoBrush);
+    const QList<QPointF> line = motionPathCurve();
+    QPainterPath path(line.first());
+    for (qsizetype index = 1; index < line.size(); ++index) path.lineTo(line.at(index));
+    strokeOverPicture(p, path, true, false);
+    const EditorTheme &theme = editorTheme();
+    // The points are square, as a mask's handles are; a round one says where the clip is now.
+    p.setPen(QPen(theme.maskHandleBorder, 1.0));
+    p.setBrush(theme.maskHandleFill);
+    for (const QPointF &point : motionPathPoints())
+        p.drawRect(QRectF(point - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
+    p.setPen(QPen(theme.maskHandleFill, 1.0));
+    p.setBrush(theme.maskHandleBorder);
+    p.drawEllipse(motionPathMarker(), kHandleSize / 2.0, kHandleSize / 2.0);
     p.restore();
 }
 
@@ -1279,6 +1400,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     paintAnnotations(p);
     p.restore();
     paintMasks(p);
+    paintMotionPath(p);
     // The agent HUD's --pop shadow (0 8 24 rgba(0,0,0,.45)), under the card
     // it paints itself: the HUD is a child, so it lands over this.
     if (m_hud && m_hud->isVisible()) ui::paintShadow(p, QRectF(m_hud->geometry()), tokens::radius::card);
