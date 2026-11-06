@@ -4,6 +4,7 @@
 //! refuses (transitions, adjustment layers, effects without a kernel) the CPU draws.
 
 use super::*;
+use kerf_fx::filmcraft::catalog::Headroom;
 use kerf_fx::filmcraft::gpufx::FxOp;
 use kerf_fx::filmcraft::instance::GpuEffect;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
@@ -234,6 +235,12 @@ impl Drawing {
         let mut ops = Vec::with_capacity(plan.effects.len());
         let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
         for effect in &plan.effects {
+            // Holding values over 1 for an effect is done on the CPU.
+            if self.hdr.is_some()
+                && filmcraft::catalog::headroom(effect.fx.as_str()) != Headroom::Keeps
+            {
+                return None;
+            }
             match effect.fx.as_str() {
                 "color.basic" => {
                     let correction = Correction::new(&|name| effect_number(effect, name, time));
@@ -275,6 +282,7 @@ impl Drawing {
                     let timecode =
                         format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
                     let run = filmcraft::instance::Run {
+                        working: self.working(),
                         at: time,
                         per_source: shape.per_source as f32,
                         timecode: &timecode,

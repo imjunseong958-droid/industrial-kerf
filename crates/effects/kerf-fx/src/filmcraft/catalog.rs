@@ -157,6 +157,38 @@ const OFFSETS: &[(&str, &str)] = &[
 /// Field names an effect line takes itself, which a parameter cannot be.
 const FIELDS: &[&str] = &["at", "enabled", "reset"];
 
+/// What an effect written for 0 to 1 needs to keep what an HDR picture holds above 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Headroom {
+    /// Nothing: it keeps those values, or it means to limit them.
+    Keeps,
+    /// Each pixel brought under 1 and put back: its math is on the pixel alone.
+    PerPixel,
+    /// The whole picture brought under 1 and put back: it reads its neighbors or moves pixels.
+    Whole,
+}
+
+/// How effect `id` handles an HDR picture. Measured by running every effect at its defaults on
+/// footage above SDR white.
+pub fn headroom(id: &str) -> Headroom {
+    match id {
+        "blur.bilateral" | "blur.radialzoom" | "distort.bulge" | "distort.opticscompensation"
+        | "distort.rollingshutterrepair" | "distort.upscale" | "image.fill"
+        | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain"
+        | "perspective.bevelalpha" | "stylize.coloremboss" | "stylize.emboss"
+        | "stylize.findedges" | "stylize.motiontile" | "stylize.strobe" => Headroom::Whole,
+        "channel.invert" | "color.asccdl" | "color.autocolor" | "color.autocontrast"
+        | "color.autolevels" | "color.brightnesscontrast" | "color.changetocolor"
+        | "color.channelmixer" | "color.colorbalance" | "color.curves" | "color.gamma"
+        | "color.huesaturation" | "color.levels" | "color.photofilter" | "color.procamp"
+        | "color.selectivecolor" | "color.shadowhighlight" | "color.tint" | "key.advancedspill"
+        | "key.color" | "key.extract" | "key.keycleaner" | "key.logocutout" | "key.ultra"
+        | "key.unmult" | "light.leaks" | "look.film" | "look.flash" | "look.noir" | "look.vhs"
+        | "stylize.posterize" | "stylize.vignette" | "utility.cineon" => Headroom::PerPixel,
+        _ => Headroom::Keeps,
+    }
+}
+
 /// The FilmCraft definition Kerf carries as `id`.
 pub fn carried(id: &str) -> Option<&'static EffectDef> {
     let (filmcraft, ..) = CARRIED.iter().find(|(_, kerf, ..)| *kerf == id)?;

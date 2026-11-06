@@ -34,7 +34,7 @@ fn code16(frame: &Frame, x: u32, y: u32) -> u16 {
 
 fn signal(document: &str, accel: Accel) -> f64 {
     let frame = compositor(document, accel).frame16(Rate::FPS_24.time_of(1), 1.0);
-    f64::from(code16(&frame, 32, 18)) / 65535.0
+    f64::from(code16(&frame, frame.width / 2, frame.height / 2)) / 65535.0
 }
 
 #[test]
@@ -152,4 +152,49 @@ fn a_frame_kept_for_one_color_is_not_used_for_another() {
     };
     assert_ne!(key(""), key(" color=rec2100-pq"));
     assert_ne!(key(" color=rec2100-hlg"), key(" color=rec2100-pq"));
+}
+
+#[test]
+fn effects_written_for_0_to_1_keep_what_an_hdr_picture_holds() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = pq_footage(dir.path(), 0xD0);
+    let footage = over_footage(&path, " color=rec2100-pq");
+    let shown = signal(&footage, Accel::Never);
+    // Each way of holding values: a grade that knows HDR, each pixel on its own, the whole picture.
+    for fx in [
+        "color.lumetri",
+        "color.levels",
+        "color.tint",
+        "color.gamma",
+        "key.color",
+        "stylize.vignette",
+        "blur.radialzoom",
+        "distort.bulge",
+        "distort.upscale",
+    ] {
+        let document = format!("{footage}      fx {fx}\n");
+        for accel in [Accel::Never, Accel::Always] {
+            let held = signal(&document, accel);
+            assert!(
+                (held - shown).abs() < 0.01,
+                "{fx} on {accel:?} made {held} of {shown}"
+            );
+        }
+    }
+}
+
+#[test]
+fn lumetri_grades_highlights_in_an_hdr_sequence_alike_on_gpu_and_cpu() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = pq_footage(dir.path(), 0xD0);
+    let footage = over_footage(&path, " color=rec2100-pq");
+    let shown = signal(&footage, Accel::Never);
+    let document = format!("{footage}      fx color.lumetri exposure=-1\n");
+    let cpu = signal(&document, Accel::Never);
+    let gpu = signal(&document, Accel::Always);
+    assert!(cpu < shown - 0.02, "{cpu} of {shown}");
+    assert!(
+        (cpu - gpu).abs() < 0.005,
+        "{cpu} on the CPU, {gpu} on the GPU"
+    );
 }

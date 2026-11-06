@@ -67,6 +67,8 @@ pub fn instance(
 
 /// What a FilmCraft effect knows beyond its parameters as it runs.
 pub struct Run<'a> {
+    /// The sequence's working color space, which Lumetri grades in.
+    pub working: kerf_color::WorkingSpace,
     /// Clip time.
     pub at: Time,
     /// How many of the picture's pixels a source pixel is.
@@ -92,8 +94,7 @@ pub fn apply(picture: &mut kerf_draw::Image, instance: &EffectInstance, run: &Ru
         project: Some(run.library),
         env: run.env,
         frame_rate: run.frame_rate,
-        // Kerf draws in linear Rec. 709 (sRGB primaries).
-        working: kerf_color::WorkingSpace::Rec709,
+        working: run.working,
     };
     super::effects::apply(picture, instance, &cx);
 }
@@ -130,7 +131,7 @@ pub fn gpu_effect(instance: &EffectInstance, run: &Run, size: (usize, usize)) ->
         project: Some(run.library),
         env: None,
         frame_rate: run.frame_rate,
-        working: kerf_color::WorkingSpace::Rec709,
+        working: run.working,
     };
     if let Some(kernel) = super::vfx::gpu::Kernel::eval(instance, &cx, size) {
         return Some(GpuEffect::Kernel(kernel));
@@ -159,6 +160,7 @@ pub fn apply_rgba(
             continue;
         };
         let run = Run {
+            working: kerf_color::WorkingSpace::Rec709,
             at,
             per_source,
             timecode: "00:00:00:00",

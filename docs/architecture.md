@@ -107,8 +107,10 @@ Three limits remain, in this order:
    on the CPU, `input.wgsl` on the GPU. A ProRes master takes 16-bit frames, so it keeps that
    depth. A sequence with `color=rec2100-pq` or `rec2100-hlg` keeps BT.709 working primaries,
    with what lies past them as values below 0 and above 1, and `HdrOutput` (`output.wgsl`) turns
-   them into the master's signal or tone maps them for monitors. Lumetri, Levels, and Tint still
-   clip highlights to SDR white in an HDR sequence, even at their defaults. Only ProRes carries HDR so far; H.264 is
+   them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
+   own signal. Other effects written for 0 to 1 get the picture brought under 1 and put back,
+   each pixel or the whole picture as `catalog::headroom` says, and that sends the frame to the
+   CPU. They still lose wide colors, and three looks still clip. Only ProRes carries HDR so far; H.264 is
    8-bit, and scopes read the 8-bit SDR frame. On Apple, handing decoded surfaces to the
    GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
    crate with the exception written down. Scaling footage is another cost: 4K footage in a
@@ -148,7 +150,7 @@ tonal zones, a histogram, the cast, saturation, the skin tone line, and the dens
 Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
 also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
 
-To add: HEVC 10-bit delivery for HDR, effects that keep values past 1, HDR mastering metadata, the Lumetri presets (cut in `6eafef8`), and
+To add: HEVC 10-bit delivery for HDR, HDR mastering metadata, the GPU holding values over 1, the Lumetri presets (cut in `6eafef8`), and
 layered grades as stacked effects.
 
 ### Motion
