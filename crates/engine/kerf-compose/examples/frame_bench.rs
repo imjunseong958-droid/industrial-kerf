@@ -25,6 +25,8 @@ const SCENES: &[(&str, &str)] = &[
         "radial zoom",
         "      fx blur.radialzoom@1 amount=30 quality=30\n",
     ),
+    ("grade steel-blue", "      fx look.grade.steel-blue@1\n"),
+    ("grade sepia", "      fx look.grade.sepia@1\n"),
     (
         "heal found",
         "      fx image.heal@1 points=\"0.4,0.5 0.5,0.52\" radius=0.03\n",

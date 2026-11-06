@@ -207,8 +207,21 @@ fn each_draws_the_same_on_the_gpu_as_on_the_cpu() {
     }
 }
 
+/// The grades with color wheels or a named look, which Lumetri's GPU kernel does not draw, so a frame
+/// holding one is drawn on the CPU.
+const ON_THE_CPU: [&str; 8] = [
+    "cold-mono",
+    "cross-processed",
+    "golden-dusk",
+    "night-exterior",
+    "sepia",
+    "silver-retention",
+    "teal-warm",
+    "warm-negative",
+];
+
 #[test]
-fn each_stays_on_the_gpu_where_there_is_one() {
+fn the_rest_stay_on_the_gpu_where_there_is_one() {
     let draws_on_gpu = |fx: &str| {
         let project = parse_document(
             &format!(
@@ -233,6 +246,11 @@ fn each_stays_on_the_gpu_where_there_is_one() {
         return;
     }
     for grade in grades() {
-        assert!(draws_on_gpu(&format!("fx {grade}@1")), "{grade}");
+        let name = grade.trim_start_matches("look.grade.");
+        assert_eq!(
+            draws_on_gpu(&format!("fx {grade}@1")),
+            !ON_THE_CPU.contains(&name),
+            "{grade}"
+        );
     }
 }
