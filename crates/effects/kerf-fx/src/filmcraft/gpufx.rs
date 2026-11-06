@@ -15,7 +15,8 @@ use kerf_geom::Affine;
 use rayon::prelude::*;
 
 use crate::filmcraft::effects::{
-    b, choice, color, dec, enc, f, gaussian_boxes, grade_space, on, point, text, FxCtx,
+    apply_look, b, choice, color, dec, enc, f, gaussian_boxes, grade_space, on, point, text, FxCtx,
+    Wheels,
 };
 use kerf_draw::Image;
 
@@ -197,6 +198,10 @@ pub enum FxOp {
         vround: f32,
         vfeather: f32,
         aspect: f32,
+        /// The named look (0: none) and how strongly it mixes in.
+        look: u32,
+        look_k: f32,
+        wheels: Option<Wheels>,
         gpu_capable: bool,
     },
 }
@@ -625,7 +630,7 @@ impl FxOp {
                 }
             }
             "lumetri" => {
-                use crate::filmcraft::effects::{curve_param, is_identity_curve, wheel_rgb};
+                use crate::filmcraft::effects::{curve_param, is_identity_curve};
                 let (basic_on, creative_on, vignette_on) = (
                     on(e, "basic_on"),
                     on(e, "creative_on"),
@@ -662,33 +667,20 @@ impl FxOp {
                         .any(|id| curve_param(e, id).is_some_and(|c| !c.is_empty()))
                 };
 
-                let wheels_on = on(e, "wheels_on");
-                let has_wheels = wheels_on && {
-                    let v2 = |id: &str| e.param(id).map(|p| p.vec2_at(cx.t)).unwrap_or_default();
-                    let (ws, wm, wh) = (
-                        wheel_rgb(v2("wheel_shadows")),
-                        wheel_rgb(v2("wheel_midtones")),
-                        wheel_rgb(v2("wheel_highlights")),
-                    );
-                    let (ls, lm, lh) = (
-                        f(e, "wheel_shadows_l", cx) / 100.0,
-                        f(e, "wheel_midtones_l", cx) / 100.0,
-                        f(e, "wheel_highlights_l", cx) / 100.0,
-                    );
-                    ws.iter().chain(&wm).chain(&wh).any(|v| v.abs() > 1e-5)
-                        || (ls.abs() + lm.abs() + lh.abs() > 1e-5)
-                };
-
                 let hsl_on = b(e, "hsl_on");
 
                 let gpu_capable = !is_hdr
                     && !has_input_lut
                     && !has_look_lut
-                    && look == 0
                     && sharpen.abs() <= 1e-3
                     && !has_curves
-                    && !has_wheels
                     && !hsl_on;
+                let look_k = if look > 0 {
+                    f(e, "look_intensity", cx) / 100.0
+                } else {
+                    0.0
+                };
+                let wheels = Wheels::read(e, cx);
 
                 let bf = |id: &str| if basic_on { f(e, id, cx) } else { 0.0 };
                 let temp = bf("temperature") / 100.0;
@@ -755,6 +747,9 @@ impl FxOp {
                     vround,
                     vfeather,
                     aspect,
+                    look,
+                    look_k,
+                    wheels,
                     gpu_capable,
                 }
             }
@@ -876,6 +871,8 @@ impl FxOp {
                 vround,
                 vfeather,
                 aspect,
+                look_k,
+                wheels,
                 gpu_capable,
                 ..
             } => {
@@ -884,7 +881,10 @@ impl FxOp {
                     && fin(&[*exposure, *contrast, *hl, *sh, *wh, *bl, *sat, *faded, *vib])
                     && fin(st)
                     && fin(ht)
-                    && fin(&[*va, *vmid, *vround, *vfeather, *aspect])
+                    && fin(&[*va, *vmid, *vround, *vfeather, *aspect, *look_k])
+                    && wheels
+                        .as_ref()
+                        .is_none_or(|w| fin(&w.lift) && fin(&w.mid) && fin(&w.gain))
             }
         }
     }
@@ -1328,6 +1328,9 @@ impl FxOp {
                 vround,
                 vfeather,
                 aspect,
+                look,
+                look_k,
+                wheels,
                 ..
             } => {
                 let gains = *gains;
@@ -1406,6 +1409,20 @@ impl FxOp {
                     }
                     dec(v)
                 });
+                // Like `effects::lumetri_advanced`, a second pass on the clamped result.
+                let (look, look_k, wheels) = (*look, *look_k, *wheels);
+                if look > 0 || wheels.is_some() {
+                    img.map_rgb(|c, _, _| {
+                        let mut v = enc(c);
+                        if look > 0 {
+                            v = crate::filmcraft::vfx::lerp3(v, apply_look(look, v), look_k);
+                        }
+                        if let Some(wheels) = &wheels {
+                            wheels.apply(&mut v);
+                        }
+                        dec(v)
+                    });
+                }
             }
         }
     }

@@ -50,6 +50,7 @@ const OP_MIRROR: u32 = 28u;
 const OP_OFFSET: u32 = 29u;
 const OP_VIDEO_LIMITER: u32 = 30u;
 const OP_LUMETRI: u32 = 31u;
+const OP_LUMETRI_LOOK: u32 = 32u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -530,6 +531,68 @@ fn lumetri_op(c: vec3<f32>, p: vec2<i32>) -> vec3<f32> {
     return dec(v);
 }
 
+// `s_curve` of `effects::apply_look`.
+fn look_curve(c: vec3<f32>, k: f32) -> vec3<f32> {
+    let x = clamp(c, vec3(0.0), vec3(1.0));
+    return x + (x * x * (vec3(3.0) - 2.0 * x) - x) * k;
+}
+
+// `effects::apply_look`
+fn apply_look(look: u32, c: vec3<f32>) -> vec3<f32> {
+    let l = luma709(c);
+    let grey = vec3(l);
+    switch look {
+        case 1u: {
+            return look_curve(c + vec3(0.0, 0.08, 0.1) * (1.0 - l) + vec3(0.1, 0.04, -0.06) * l, 0.35);
+        }
+        case 2u: {
+            let warm = c * vec3(1.06, 1.0, 0.9) + vec3(0.02, 0.01, 0.0);
+            return (warm + (grey - warm) * 0.15) * 0.94 + vec3(0.04);
+        }
+        case 3u: {
+            return look_curve(c * vec3(0.9, 0.98, 1.1) + vec3(0.0, 0.0, 0.02), 0.2);
+        }
+        case 4u: {
+            return look_curve(c + (grey - c) * 0.55, 0.6);
+        }
+        case 5u: {
+            return (c + (grey - c) * 0.25) * 0.84 + vec3(0.08);
+        }
+        case 6u: {
+            return look_curve(grey, 0.3);
+        }
+        case 7u: {
+            return look_curve(c * vec3(1.1, 1.02, 0.82) + vec3(0.03, 0.01, 0.0), 0.15);
+        }
+        case 8u: {
+            return c * vec3(0.75, 0.85, 1.15) * 0.8;
+        }
+        default: {
+            return c;
+        }
+    }
+}
+
+// `FxOp::Lumetri`'s second pass: the named look at its strength, then the color wheels
+// (`effects::Wheels::apply`).
+fn lumetri_look(c: vec3<f32>) -> vec3<f32> {
+    var v = enc(c);
+    let look = u.i1.x;
+    if look > 0u {
+        v = v + (apply_look(look, v) - v) * u.p0.x;
+    }
+    if u.i1.y != 0u {
+        let l = clamp(luma709(v), 0.0, 1.0);
+        let wsh = (1.0 - l) * (1.0 - l);
+        let whi = l * l;
+        let wmid = max(1.0 - wsh - whi, 0.0);
+        v = v + u.p1.xyz * wsh;
+        v = v + u.p2.xyz * wmid;
+        v = v * (vec3(1.0) + u.p3.xyz * whi);
+    }
+    return dec(v);
+}
+
 // One output pixel of every op but the running-sum box blur.
 fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
     let s = size();
@@ -714,6 +777,14 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             let c = o.rgb / a;
             let res = lumetri_op(c, p);
             return vec4(res * a, a);
+        }
+        case OP_LUMETRI_LOOK: {
+            let o = ld(p);
+            let a = o.a;
+            if a <= 1e-6 {
+                return o;
+            }
+            return vec4(lumetri_look(o.rgb / a) * a, a);
         }
         default: {
             let o = ld(p);
