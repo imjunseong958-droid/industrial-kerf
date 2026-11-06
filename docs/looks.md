@@ -1,7 +1,7 @@
 # Effects, looks, and versions
 
 > Status: the plan at the end is in: versions, the built-in effects, looks
-> (the reader, the catalog layers, expansion, `flatten`, and 15 bundled
+> (the reader, the catalog layers, expansion, `flatten`, and 33 bundled
 > looks in `crates/foundation/kerf-model/looks`), presets that carry their looks, and
 > markers placed on new music's beats.
 

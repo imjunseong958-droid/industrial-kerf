@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.hard-mono version=1 name="Hard Mono" category="Mono grades" on=clip
+  doc "Black and white with crushed blacks and strong contrast; noir without the corners."
+  param amount number default=1 range=0..1 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 saturation=100-100*$amount contrast=60*$amount blacks=-25*$amount

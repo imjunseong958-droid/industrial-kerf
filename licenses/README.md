@@ -23,6 +23,7 @@ on, and Kerf does not follow upstream.
 | `crates/vfx/kerf-track/src/roto` | EffectCraft's graph cut, colour models, and matte propagation |
 | `crates/vfx/kerf-segment` | EffectCraft's model interface and registry, PyTorch reader, and MobileSAM in Rust. MobileSAM's weights are Apache-2.0 and never bundled |
 | `crates/color/kerf-scopes` | FilmCraft's scope summaries, reduced to what an agent reads |
+| `crates/foundation/kerf-model/looks/grade-*.kerflook` | FilmCraft's Lumetri presets, as looks |
 | `crates/foundation/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
 | `crates/foundation/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
 | `crates/foundation/kerf-text` | FilmCraft's text engine |

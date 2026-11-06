@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.cross-processed version=1 name="Cross Processed" category="Film grades" on=clip
+  doc "Yellow-green highlights and blue shadows, as from film developed in the wrong chemistry; music videos and fashion."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 contrast=10*$amount wheel_shadows_x=-0.125*$amount wheel_shadows_y=-0.217*$amount wheel_highlights_x=0.065*$amount wheel_highlights_y=0.241*$amount

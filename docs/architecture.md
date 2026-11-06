@@ -83,12 +83,12 @@ A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title to
 crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes,
 adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
 `FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
-Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 bundled
-looks stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
+Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 playful looks and 10 of
+the 18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
 transition is layers rather than a mix.
 **What sends a frame to the CPU:** the transitions carried from FilmCraft, every other
 effect (other lights, stylize, Ultra Key's Choke and Soften, and the kept EffectCraft ones, which is
-what Film and Zoom Through need), and a Lumetri using a LUT or curves. In HDR, so does an effect that
+what Film and Zoom Through need), and a Lumetri using a LUT, curves, color wheels, a named `look`, sharpening, or an HSL secondary, which is 8 of the 18 grades. In HDR, so does an effect that
 needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
 each pixel under 1 (`catalog::headroom`) stay on the GPU. Glow gains least
 (13 to 15 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
@@ -168,14 +168,20 @@ tonal zones, a histogram, the cast, saturation, the skin tone line, and the dens
 Comparing `proposal` with the project shows what a grade did. FilmCraft's `crates/scopes`
 also has the waveform, parade, and vectorscope grids a panel in the editor would draw.
 
-To add: the Lumetri presets (cut in `6eafef8`), and
-layered grades as stacked effects.
+The 18 grades (`look.grade.*`, `crates/foundation/kerf-model/looks`) are FilmCraft's Lumetri presets
+as looks, each behind an `amount`, so 0 leaves the picture alone and `fx c1 flatten 1` opens one up for
+hand tuning. Their tints became color wheels, since a number can scale and a color cannot; Cross
+Processed's crossed curves did too, and Legal Range is `color.levels`. Wheels and named looks draw on the
+CPU only, so those 8 grades send their frames there; drawing them in Lumetri's GPU kernel would bring
+them back.
+
+To add: layered grades as stacked effects.
 
 ### Motion
 
 Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with reveals by character or
 word, shapes with trimmed strokes and particles worked out from their birth (`kerf-motion`, so any frame
-can be drawn first), generators, 15 looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
+can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
 perspective is true and lighting is per pixel, on the CPU. EffectCraft's `render/three_d/adv` at
 `5c54866` has what to carry next: intersecting planes, shadows, and depth of field.
 

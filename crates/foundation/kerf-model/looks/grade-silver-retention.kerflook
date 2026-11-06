@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.silver-retention version=1 name="Silver Retention" category="Film grades" on=clip
+  doc "Bleached and hard: little color and strong contrast; war, grit, and period pieces."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 look=bleach-bypass look_intensity=80*$amount

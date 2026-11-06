@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.teal-warm version=1 name="Teal Shadows, Warm Skin" category="Cinematic grades" on=clip
+  doc "Teal shadows and warm highlights with a little more contrast; drama and commercials."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 contrast=20*$amount creative_sat=100+10*$amount wheel_shadows_x=-0.246*$amount wheel_shadows_y=-0.043*$amount wheel_highlights_x=0.123*$amount wheel_highlights_y=0.086*$amount

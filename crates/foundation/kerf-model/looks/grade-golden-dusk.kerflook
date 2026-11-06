@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.golden-dusk version=1 name="Golden Dusk" category="Cinematic grades" on=clip
+  doc "Warm, soft late-afternoon light; romance, travel, and endings."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 temperature=35*$amount tint=8*$amount highlights=-15*$amount vibrance=20*$amount wheel_highlights_x=0.123*$amount wheel_highlights_y=0.086*$amount

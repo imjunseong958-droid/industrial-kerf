@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.night-exterior version=1 name="Night Exterior" category="Cinematic grades" on=clip
+  doc "Day for night: darker, cooler, and less saturated; a daytime shot that has to read as night."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 temperature=-45*$amount exposure=-0.9*$amount contrast=15*$amount creative_sat=100-30*$amount wheel_shadows_x=-0.096*$amount wheel_shadows_y=-0.115*$amount

@@ -1,0 +1,5 @@
+kerf-look 1
+look look.grade.boost-vibrance version=1 name="Boost Vibrance" category="Technical grades" on=clip
+  doc "More color in what has little, leaving what has much alone; flat footage."
+  param amount number default=1 range=0..2 doc="How strong the grade is; 0 leaves the picture alone."
+  fx color.lumetri@2 vibrance=40*$amount
