@@ -270,6 +270,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
                     "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
+                    "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone, or with `area`."},
                     "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
                 },
@@ -374,6 +375,7 @@ struct LookInput {
     presets: bool,
     effect: Option<String>,
     effects: Option<String>,
+    font: Option<String>,
     area: Option<String>,
     media: Option<String>,
     #[serde(default)]
@@ -393,6 +395,50 @@ struct LookInput {
     width: Option<u32>,
     sequence: Option<String>,
     proposal: Option<String>,
+}
+
+/// What `look` says of a font: its faces and axes, or the families a name no font has could mean.
+fn font_description(wanted: &str) -> Value {
+    use kerf_text::fonts;
+    // Four places say all a font does, where a float says it with noise.
+    let place = |value: f32| (f64::from(value) * 10000.0).round() / 10000.0;
+    let family = crate::text_lint::family_of(wanted);
+    let faces = fonts::faces_of(family);
+    if faces.is_empty() {
+        fonts::scan_system();
+        let words = wanted.trim().to_lowercase();
+        // A name with a dot in front is the system's own, and it does not offer them.
+        let families: Vec<String> = fonts::families()
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| !name.starts_with('.') && name.to_lowercase().contains(&words))
+            .collect();
+        return json!({"font": wanted, "found": false, "families": families});
+    }
+    let faces: Vec<Value> = faces
+        .iter()
+        .map(|face| {
+            let axes: Vec<Value> = face
+                .axes()
+                .iter()
+                .map(|axis| {
+                    json!({
+                        "tag": String::from_utf8_lossy(&axis.tag),
+                        "min": place(axis.min),
+                        "default": place(axis.default),
+                        "max": place(axis.max),
+                    })
+                })
+                .collect();
+            json!({
+                "style": face.info.style,
+                "weight": face.info.weight,
+                "italic": face.info.italic,
+                "axes": axes,
+            })
+        })
+        .collect();
+    json!({"font": family, "found": true, "faces": faces})
 }
 
 /// A trained model by its id, loaded once. Its weights are never bundled: they are read from
@@ -790,6 +836,12 @@ impl KerfMcpRouter {
             })?),
             None => None,
         };
+        if let Some(font) = &input.font {
+            if !preset_only {
+                return Err(McpError::new("INVALID_ARGUMENTS", "use font alone"));
+            }
+            return Ok(font_description(font));
+        }
         if let Some(words) = &input.effects {
             if !(preset_only || area.is_some() && only_area_beside) {
                 return Err(McpError::new(

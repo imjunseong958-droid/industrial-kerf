@@ -228,6 +228,74 @@ fn fast_short_and_crowded_captions_are_flagged() {
     );
 }
 
+struct TestFont;
+
+impl kerf_text::fonts::FontSource for TestFont {
+    fn faces(&self) -> Vec<kerf_text::fonts::FaceInfo> {
+        vec![kerf_text::fonts::FaceInfo {
+            family: "Kerf Test Variable".into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            index: 0,
+            data: kerf_text::fonts::FaceData::Static(include_bytes!(
+                "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
+            )),
+            origin: "test",
+        }]
+    }
+}
+
+/// A title of 50 capital I in the variable test font, at 0.1 of the frame's height: each is 32.4
+/// pixels across at the font's default weight, or 1620 in all and inside title safe's 1728, and 54
+/// at its heaviest, or 2700.
+fn long_title(set: &str) -> Project {
+    kerf_text::fonts::add_source(&TestFont);
+    let text = "I".repeat(50);
+    project(&format!(
+        "set bg text=\"{text}\" font=\"Kerf Test Variable\" size=0.1 {set}"
+    ))
+}
+
+#[test]
+fn a_title_is_measured_at_its_axes() {
+    let safe = |set: &str| with(&run(&long_title(set)), "text.safe_area").len();
+    // The plain measure finds nothing, which is why this has to look further.
+    assert_eq!(safe(""), 0);
+    assert_eq!(safe("wght=400"), 0);
+    // At 500, 340 units each: 1836 across, centred on 1920, so 42 from the edge and 54 past safe.
+    let report = run(&long_title("wght=500"));
+    let outside = with(&report, "text.safe_area");
+    assert_eq!(outside.len(), 1);
+    let reach = outside[0].value.unwrap();
+    assert!((reach - 54.0).abs() < 2.0, "{reach}");
+    // Its picture is the frame, so at its heaviest it stops at the edge, 96 past safe.
+    assert_eq!(
+        with(&run(&long_title("wght=900")), "text.safe_area")[0].value,
+        Some(96.0)
+    );
+    // On another axis, too, and lightened it fits again.
+    assert_eq!(safe("wdth=200"), 1);
+    assert_eq!(safe("wght=100"), 0);
+    // An axis at 0 is left as the font has it.
+    assert_eq!(safe("wght=0"), 0);
+}
+
+#[test]
+fn a_keyed_axis_is_measured_at_the_widest_it_reaches() {
+    let safe = |set: &str| with(&run(&long_title(set)), "text.safe_area").len();
+    // Starts inside, and only its end reaches outside: the first frame alone would pass it.
+    let report = run(&long_title("wght={0f:400 24f:500}"));
+    let outside = with(&report, "text.safe_area");
+    assert_eq!(outside.len(), 1);
+    let reach = outside[0].value.unwrap();
+    assert!((reach - 54.0).abs() < 2.0, "{reach}");
+    // Over and back again, it is the middle that reaches furthest.
+    assert_eq!(safe("wght={0f:400 12f:900 24f:400}"), 1);
+    // Keyed but in reach all along.
+    assert_eq!(safe("wght={0f:100 24f:400}"), 0);
+}
+
 #[test]
 fn text_outside_title_safe_is_flagged() {
     // A title pushed toward the top edge, and one far too wide.

@@ -208,8 +208,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - A `title` comes in with `reveal={0f:0 24f:1}`, by `reveal_by=char|word`, `reveal_soft` of them at a
   time, from a look of `from_x`, `from_y`, `from_scale`, `from_rotation`, and `from_opacity`.
   In a variable font, `wght`, `wdth`, `slnt`, `opsz`, and `ital` set its axes, on the scale the font has
-  them, and animate: `wght={0f:100 24f:900}`. At 0 an axis stays as the font has it, and a font
-  without that axis takes no notice.
+  them, and animate: `wght={0f:100 24f:900}`. `look` with `font` names the axes a font has and each one's
+  least, default, and most. At 0 an axis stays as the font has it, and a font without that axis takes no
+  notice. Check measures a title at its axes, across all of a keyed one. Line height stays the font's.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

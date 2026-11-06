@@ -275,6 +275,72 @@ fn lists_the_four_tools_and_the_reference() {
         .contains("`color.basic@1`"));
 }
 
+struct TestFont;
+
+impl kerf_text::fonts::FontSource for TestFont {
+    fn faces(&self) -> Vec<kerf_text::fonts::FaceInfo> {
+        vec![kerf_text::fonts::FaceInfo {
+            family: "Kerf Test Variable".into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            index: 0,
+            data: kerf_text::fonts::FaceData::Static(include_bytes!(
+                "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
+            )),
+            origin: "test",
+        }]
+    }
+}
+
+#[test]
+fn look_says_what_axes_a_font_has_on_its_own_scale() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    kerf_text::fonts::add_source(&TestFont);
+    let font = ok(&router, "look", json!({"font":"kerf test variable"}));
+    assert_eq!(font["found"], true);
+    assert_eq!(font["faces"][0]["style"], "Regular");
+    assert_eq!(
+        font["faces"][0]["axes"],
+        json!([
+            {"tag":"wght", "min":100.0, "default":400.0, "max":900.0},
+            {"tag":"wdth", "min":50.0, "default":100.0, "max":200.0},
+            {"tag":"opsz", "min":8.0, "default":14.0, "max":144.0},
+            {"tag":"slnt", "min":-20.0, "default":0.0, "max":0.0},
+            {"tag":"ital", "min":0.0, "default":0.0, "max":1.0},
+        ])
+    );
+    // A font with no axes says so, and a generic name is the font it stands for.
+    let plain = ok(&router, "look", json!({"font":"sans-serif"}));
+    assert_eq!(plain["font"], "Inter");
+    assert_eq!(plain["found"], true);
+    assert!(plain["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|face| face["axes"] == json!([])));
+    // A name no font has: the families that contain it, and for nothing, all of them.
+    let near = ok(&router, "look", json!({"font":"kerf test"}));
+    assert_eq!(near["found"], false);
+    assert_eq!(near["families"], json!(["Kerf Test Variable"]));
+    let all = ok(&router, "look", json!({"font":""}));
+    assert!(all["families"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("Inter")));
+    assert_eq!(
+        ok(&router, "look", json!({"font":"nothing like it"}))["families"],
+        json!([])
+    );
+    // It stands alone.
+    assert_eq!(
+        error(&router, "look", json!({"font":"Inter", "at":["0f"]}))["code"],
+        "INVALID_ARGUMENTS"
+    );
+}
+
 #[test]
 fn look_shows_the_document_media_index_and_frames() {
     let Some((_directory, router)) = router() else {
