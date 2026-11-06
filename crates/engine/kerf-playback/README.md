@@ -27,8 +27,10 @@ Video frames are decoded in-process with libavformat/libavcodec/libavfilter
 to packed RGBA and delivered by `crates/surfaces/kerf-qt-bridge` to the Qt6 viewer.
 Audio uses cpal when a default output device is available and otherwise uses a
 monotonic clock fallback, still mixing (and metering) the program in real
-time, level with the clock. Both command and decode/event paths are bounded
-so media work does not block the UI thread.
+time, level with the clock. The clock waits while the device opens, so playing
+starts with its sound; a device still not open after a minute is treated as
+absent until it does open. Both command and decode/event paths are bounded so
+media work does not block the UI thread.
 
 Build requires system FFmpeg development libraries (`pkg-config` must see
 `libavcodec`, `libavformat`, `libavfilter`, `libswscale`, `libswresample`).
