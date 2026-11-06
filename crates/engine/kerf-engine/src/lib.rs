@@ -27,8 +27,8 @@ pub use encoder::{
     EncoderCapability, EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions, VideoCodec,
 };
 pub use error::{EngineError, Result};
-pub use index::{cached_media_index, media_index, MediaIndex, Peak, Tempo};
-pub use loudness::{measure_program, Loudness};
+pub use index::{cached_media_index, media_index, small_grey_frames, MediaIndex, Peak, Tempo};
+pub use loudness::{measure_file, measure_program, Loudness};
 pub use probe::{
     cached_exact_frames, cached_filmstrip, cached_waveform, cached_waveform_range,
     create_contact_sheet, detect_scenes, extract_exact_frames, extract_frames, info, media_info,

@@ -7,6 +7,7 @@
 pub mod camera;
 pub mod planar;
 pub mod roto;
+pub mod shot;
 
 pub use planar::{follow_plane, simplified_quads, FollowedPlane, Quad};
 pub use roto::{follow_object, simplified_object, simplified_outlines, FollowedObject, Hints};

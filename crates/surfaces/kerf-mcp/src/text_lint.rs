@@ -1,6 +1,7 @@
 //! Text a viewer cannot read: titles and captions outside title safe, text
-//! boxes drawn over each other, and captions that go by too fast, flash
-//! up too briefly, or follow each other too closely.
+//! boxes drawn over each other, captions that go by too fast, flash
+//! up too briefly, or follow each other too closely, and, from rendered
+//! frames, text too faint against what is behind it.
 //!
 //! Boxes are laid out by `kerf-text` exactly as the compositor lays them
 //! out (`kerf-compose` `draw.rs`, through `kerf-draw` `text::draw`): a
@@ -11,7 +12,9 @@
 
 use crate::qc::{Finding, Rect};
 use kerf_lang::Clock;
-use kerf_model::{Catalog, Clip, Content, Domain, Param, Sequence, Time, TrackKind, Value};
+use kerf_model::{
+    Catalog, Clip, Content, Domain, Param, Project, Rgba, Sequence, Time, TrackKind, Value,
+};
 use kerf_text::fonts::Axis;
 use kerf_text::{layout, Align, ParagraphStyle, TextStyle};
 
@@ -24,6 +27,20 @@ pub const SHORT_CAPTION_SIXTHS: i64 = 5;
 pub const CAPTION_GAP_FRAMES: i64 = 2;
 /// The part of the frame titles and captions stay inside.
 pub const TITLE_SAFE: f64 = 0.90;
+
+/// How much lighter than what is behind it text has to be, or darker, as a ratio of relative
+/// luminance: WCAG's least for text this large.
+pub const LEAST_CONTRAST: f64 = 3.0;
+/// How much of its ink may be faint before a text is: a little of it over a highlight still reads.
+const FAINT_SHARE: f64 = 0.2;
+/// A channel apart, in code values of 255, for a pixel to be said to be changed by the text.
+const INK: u8 = 8;
+/// How much light a pixel of a text drawn white on nothing has to give to be one of its glyphs.
+const GLYPH: f64 = 0.25;
+/// How many moments of a clip its contrast is read at, a little in from each end and in its middle.
+const CONTRAST_MOMENTS: usize = 3;
+/// How far past its box a text's outline or shadow is looked for, as a share of the frame's height.
+const CONTRAST_MARGIN: f64 = 0.01;
 
 /// Pixels a box may reach past title safe, or into another box, without a
 /// finding: what rounding to whole pixels moves.
@@ -343,6 +360,269 @@ fn normalised(sequence: &Sequence, [left, top, right, bottom]: [f64; 4]) -> Rect
     }
 }
 
+/// A frame as it draws: width, height, and RGBA bytes.
+pub(crate) type Drawn = (u32, u32, Vec<u8>);
+
+/// How much light a pixel gives, as WCAG reckons it, from 0 to 1.
+fn luminance(pixel: &[u8]) -> f64 {
+    fn light(code: u8) -> f64 {
+        let code = f64::from(code) / 255.0;
+        if code <= 0.04045 {
+            code / 12.92
+        } else {
+            ((code + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let alpha = f64::from(pixel[3]) / 255.0;
+    (0.2126 * light(pixel[0]) + 0.7152 * light(pixel[1]) + 0.0722 * light(pixel[2])) * alpha
+}
+
+/// What a viewer gets of a text at a moment, from the frame `with` it and `without` it, and its `glyphs`
+/// alone, in `area`.
+#[derive(Debug, PartialEq)]
+struct Reading {
+    /// The share of its ink that is faint, and how strong it is where it is faint.
+    faint: f64,
+    ratio: f64,
+    /// Whether anything of it changes the picture.
+    shows: bool,
+}
+
+/// Reads a text by the picture, as a viewer does. Its ink is where its glyphs are and whatever else it
+/// changes, each pixel set against what lies behind it there. That is read a patch at a time, about half
+/// a line across, by the strongest of it there, so that fill the colour of the background still reads
+/// if it has an outline to set it off, and a text going from a dark part of the picture to a light
+/// one is seen to. `None` when none of it is in the area.
+fn reading(
+    with: &Drawn,
+    without: &Drawn,
+    glyphs: &Drawn,
+    [left, top, right, bottom]: [usize; 4],
+) -> Option<Reading> {
+    let width = with.0 as usize;
+    let patch = ((bottom - top) / 2).max(6);
+    let mut patches: std::collections::BTreeMap<(usize, usize), Vec<f64>> = Default::default();
+    let (mut shows, mut any_glyph) = (false, false);
+    for y in top..bottom {
+        for x in left..right {
+            let at = (y * width + x) * 4;
+            let (here, behind) = (&with.2[at..at + 4], &without.2[at..at + 4]);
+            let changed = here.iter().zip(behind).any(|(a, b)| a.abs_diff(*b) >= INK);
+            let glyph = luminance(&glyphs.2[at..at + 4]) > GLYPH;
+            shows |= changed;
+            any_glyph |= glyph;
+            if changed || glyph {
+                let (a, b) = (luminance(here), luminance(behind));
+                let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                patches
+                    .entry((x / patch, y / patch))
+                    .or_default()
+                    .push(ratio);
+            }
+        }
+    }
+    if !any_glyph {
+        return None;
+    }
+    let total: usize = patches.values().map(Vec::len).sum();
+    let (mut faint, mut strengths) = (0, Vec::new());
+    for ratios in patches.values_mut() {
+        ratios.sort_by(f64::total_cmp);
+        let strongest = ratios[(ratios.len() * 9 / 10).min(ratios.len() - 1)];
+        if strongest < LEAST_CONTRAST {
+            faint += ratios.len();
+            strengths.push(strongest);
+        }
+    }
+    strengths.sort_by(f64::total_cmp);
+    Some(Reading {
+        faint: faint as f64 / total.max(1) as f64,
+        ratio: strengths
+            .get(strengths.len() / 2)
+            .copied()
+            .unwrap_or(f64::INFINITY),
+        shows,
+    })
+}
+
+/// `project` with the clip `id` of `sequence` left out.
+fn without_clip(project: &Project, sequence: &str, id: &kerf_model::Id) -> Project {
+    let mut project = project.clone();
+    project
+        .sequences
+        .iter_mut()
+        .filter(|found| found.id.as_str() == sequence)
+        .flat_map(|found| &mut found.tracks)
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id == *id)
+        .for_each(|clip| clip.enabled = false);
+    project
+}
+
+/// `project` with only the clip `id` of `sequence`, white and whole on nothing: where its glyphs are,
+/// whatever colour they are.
+fn only_glyphs(project: &Project, sequence: &str, id: &kerf_model::Id) -> Project {
+    let mut project = project.clone();
+    for clip in project
+        .sequences
+        .iter_mut()
+        .filter(|found| found.id.as_str() == sequence)
+        .flat_map(|found| &mut found.tracks)
+        .flat_map(|track| &mut track.clips)
+    {
+        if clip.id != *id {
+            clip.enabled = false;
+            continue;
+        }
+        clip.props.remove("opacity");
+        if let Content::Generator { params, .. } = &mut clip.content {
+            params.insert("color".into(), Param::Static(Value::Color(Rgba::WHITE)));
+        }
+    }
+    project
+}
+
+/// The moments of `clip`'s `CONTRAST_MOMENTS` to read it at, where it has come in as far as it does: not
+/// while it fades in or reveals itself, which is meant to be faint.
+fn steady_moments(clip: &Clip) -> Vec<Time> {
+    let at = |step: usize, of: usize| {
+        clip.start + Time::from_flicks(clip.duration.flicks() * step as i64 / of as i64)
+    };
+    let level = |moment: Time| {
+        let opacity = clip
+            .props
+            .get("opacity")
+            .and_then(|param| param.value_at(moment - clip.start).as_number())
+            .unwrap_or(1.0);
+        let reveal = match &clip.content {
+            Content::Generator { params, .. } => params
+                .get("reveal")
+                .and_then(|param| param.value_at(moment - clip.start).as_number())
+                .unwrap_or(1.0),
+            _ => 1.0,
+        };
+        opacity * reveal
+    };
+    let candidates: Vec<Time> = (1..=11).map(|step| at(step, 12)).collect();
+    let most = candidates
+        .iter()
+        .map(|moment| level(*moment))
+        .fold(0.0, f64::max);
+    let steady: Vec<Time> = candidates
+        .into_iter()
+        .filter(|moment| level(*moment) >= most * 0.98)
+        .collect();
+    if steady.len() <= CONTRAST_MOMENTS {
+        return steady;
+    }
+    (0..CONTRAST_MOMENTS)
+        .map(|place| steady[place * (steady.len() - 1) / (CONTRAST_MOMENTS - 1)])
+        .collect()
+}
+
+/// Titles and captions of `sequence` in `project`, whose media paths are resolved, within a range,
+/// too faint against what is behind them, read from the picture: `draw` gives the frame of a project
+/// at a moment, or `None` if it cannot be drawn. It draws at most `most` frames, spread over what
+/// there is, and returns how many clips it read and how many there were. Frames take time, so this
+/// is asked for and is not part of a check.
+pub(crate) fn contrast(
+    project: &Project,
+    sequence: &Sequence,
+    (from, to): (Time, Time),
+    most: usize,
+    mut draw: impl FnMut(&Project, Time) -> Option<Drawn>,
+    findings: &mut Vec<Finding>,
+) -> (usize, usize) {
+    let shown: Vec<Shown> = shown(sequence)
+        .into_iter()
+        .filter(|item| item.clip.start < to && item.clip.end() > from)
+        .collect();
+    let clock = Clock::of_sequence(sequence);
+    let id = sequence.id.as_str();
+    let of = shown.len();
+    let room = (most / (3 * CONTRAST_MOMENTS)).max(1);
+    let picked: Vec<&Shown> = if of <= room {
+        shown.iter().collect()
+    } else {
+        (0..room).map(|place| &shown[place * of / room]).collect()
+    };
+    for item in &picked {
+        let (behind, alone) = (
+            without_clip(project, id, &item.clip.id),
+            only_glyphs(project, id, &item.clip.id),
+        );
+        let mut worst: Option<(Reading, Time)> = None;
+        for moment in steady_moments(item.clip) {
+            let frames = draw(project, moment)
+                .and_then(|with| Some((with, draw(&behind, moment)?, draw(&alone, moment)?)));
+            let Some((with, without, glyphs)) = frames else {
+                continue;
+            };
+            let size = (with.0, with.1);
+            if size != (without.0, without.1) || size != (glyphs.0, glyphs.1) || with.1 == 0 {
+                continue;
+            }
+            let Some(bounds) = item.bounds(sequence, moment) else {
+                continue;
+            };
+            let scale = f64::from(with.1) / f64::from(sequence.height.max(1));
+            let margin = CONTRAST_MARGIN * f64::from(sequence.height);
+            let place = |value: f64, most: u32| {
+                ((value * scale).round().max(0.0) as usize).min(most as usize)
+            };
+            let area = [
+                place(bounds[0] - margin, with.0),
+                place(bounds[1] - margin, with.1),
+                place(bounds[2] + margin, with.0),
+                place(bounds[3] + margin, with.1),
+            ];
+            if area[0] >= area[2] || area[1] >= area[3] {
+                continue;
+            }
+            let Some(read) = reading(&with, &without, &glyphs, area) else {
+                continue;
+            };
+            if worst
+                .as_ref()
+                .is_none_or(|(worst, _)| read.faint > worst.faint)
+            {
+                worst = Some((read, moment));
+            }
+        }
+        let Some((read, when)) = worst else {
+            continue;
+        };
+        if read.faint < FAINT_SHARE {
+            continue;
+        }
+        let place = clock.print_position(when);
+        let message = if read.shows {
+            format!(
+                "{} is too faint against what is behind it at {place}: {:.1}:1 over {:.0}% of it, where {LEAST_CONTRAST}:1 is the least that reads; change its color or what is behind it",
+                item.describe(),
+                read.ratio,
+                read.faint * 100.0,
+            )
+        } else {
+            format!(
+                "{} does not show at {place}: something covers it, or it is the color of what is behind it",
+                item.describe(),
+            )
+        };
+        let ratio = if read.ratio.is_finite() {
+            read.ratio
+        } else {
+            1.0
+        };
+        findings.push(
+            Finding::warning("text.contrast", item.clip.id.as_str(), message)
+                .during(sequence, item.clip.start, item.clip.end())
+                .measured((ratio * 100.0).round() / 100.0, LEAST_CONTRAST, ":1"),
+        );
+    }
+    (picked.len(), of)
+}
+
 /// Titles and captions that reach outside title safe, and text boxes that
 /// cover each other while both show.
 pub(crate) fn text(sequence: &Sequence, findings: &mut Vec<Finding>) {
@@ -550,5 +830,164 @@ pub(crate) fn captions(sequence: &Sequence, findings: &mut Vec<Finding>) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+    use kerf_lang::parse_document;
+
+    fn project(body: &str) -> Project {
+        parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=640x360 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project
+    }
+
+    fn read(body: &str) -> Vec<Finding> {
+        let project = project(body);
+        let sequence = &project.sequences[0];
+        let mut findings = Vec::new();
+        let range = (Time::ZERO, sequence.duration());
+        contrast(
+            &project,
+            sequence,
+            range,
+            240,
+            |shown, at| {
+                kerf_engine::still::draw_frame(shown, Some("s1"), at, 1.0)
+                    .ok()
+                    .map(|frame| (frame.width, frame.height, frame.rgba))
+            },
+            &mut findings,
+        );
+        findings
+    }
+
+    /// A title in `color` over a solid in `behind`.
+    fn title_over(behind: &str, color: &str, more: &str) -> String {
+        format!(
+            "  track V1 video\n    clip back gen=solid@1 at=0f dur=48f\n      set color={behind}\n  track V2 video\n    clip words gen=title@1 at=0f dur=48f\n      set text=\"Plain words\" color={color} size=0.12{more}\n"
+        )
+    }
+
+    fn ratio_of(finding: &Finding) -> f64 {
+        finding.value.unwrap()
+    }
+
+    #[test]
+    fn text_that_stands_out_is_fine() {
+        for (behind, color) in [
+            ("#000000", "#ffffff"),
+            ("#ffffff", "#000000"),
+            // Just past 3:1: white on a mid grey of about 4.5 of luminance 0.18.
+            ("#808080", "#ffffff"),
+        ] {
+            let findings = read(&title_over(behind, color, ""));
+            assert!(findings.is_empty(), "{behind} {color}: {findings:?}");
+        }
+    }
+
+    #[test]
+    fn text_too_faint_is_flagged_with_how_faint() {
+        // A little apart: luminances 0.318 and 0.185 make (0.368) / (0.235) = 1.57:1.
+        let findings = read(&title_over("#777777", "#999999", ""));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "text.contrast");
+        assert_eq!(findings[0].entity.as_deref(), Some("words"));
+        let ratio = ratio_of(&findings[0]);
+        assert!((ratio - 1.57).abs() < 0.1, "{ratio}");
+        assert!(findings[0].at.is_some(), "{findings:?}");
+    }
+
+    #[test]
+    fn text_the_color_of_what_is_behind_it_does_not_show() {
+        let findings = read(&title_over("#ffffff", "#ffffff", ""));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].message.contains("does not show"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn text_covered_by_a_picture_does_not_show() {
+        let body = format!(
+            "{}  track V3 video\n    clip over gen=solid@1 at=0f dur=48f\n      set color=#ff0000\n",
+            title_over("#000000", "#ffffff", "")
+        );
+        let findings = read(&body);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].message.contains("does not show"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn text_over_a_bright_part_of_a_dark_picture_is_flagged_for_that_part() {
+        // White words, half of them over white and half of them over black.
+        let body = "  track V1 video\n    clip dark gen=solid@1 at=0f dur=48f\n      set color=#000000\n  track V2 video\n    clip light gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale=0.5 x=-0.25\n  track V3 video\n    clip words gen=title@1 at=0f dur=48f\n      set text=\"Plain words\" color=#ffffff size=0.12\n";
+        let findings = read(body);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].message.contains('%'), "{findings:?}");
+        // A little of it over a highlight is not worth saying.
+        let body = "  track V1 video\n    clip dark gen=solid@1 at=0f dur=48f\n      set color=#000000\n  track V2 video\n    clip light gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale=0.05 x=-0.15\n  track V3 video\n    clip words gen=title@1 at=0f dur=48f\n      set text=\"Plain words\" color=#ffffff size=0.12\n";
+        assert!(read(body).is_empty());
+    }
+
+    #[test]
+    fn a_title_that_fades_in_is_read_where_it_has_come_in() {
+        let findings = read(&title_over("#000000", "#ffffff", " opacity={0f:0 24f:1}"));
+        assert!(findings.is_empty(), "{findings:?}");
+        // And one that stays faint throughout is faint.
+        let findings = read(&title_over("#000000", "#ffffff", " opacity=0.1"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    #[test]
+    fn a_captions_outline_keeps_it_readable_over_anything() {
+        let captions =
+            "  track S1 subtitle\n    clip cap caption=\"Words to read\" at=0f dur=48f\n";
+        for color in ["#000000", "#808080", "#ffffff"] {
+            let body = format!(
+                "  track V1 video\n    clip back gen=solid@1 at=0f dur=48f\n      set color={color}\n{captions}"
+            );
+            let findings = read(&body);
+            assert!(findings.is_empty(), "{color}: {findings:?}");
+        }
+    }
+
+    #[test]
+    fn it_reads_no_more_frames_than_it_is_given() {
+        let body = (0..30)
+            .map(|at| {
+                format!(
+                    "    clip t{at} gen=title@1 at={}f dur=10f\n      set text=\"Word\"\n",
+                    at * 10
+                )
+            })
+            .collect::<String>();
+        let project = project(&format!("  track V1 video\n{body}"));
+        let sequence = &project.sequences[0];
+        let mut drawn = 0;
+        let (read, of) = contrast(
+            &project,
+            sequence,
+            (Time::ZERO, sequence.duration()),
+            18,
+            |_, _| {
+                drawn += 1;
+                None
+            },
+            &mut Vec::new(),
+        );
+        assert_eq!((read, of), (2, 30));
+        assert!(drawn <= 18, "{drawn}");
     }
 }
