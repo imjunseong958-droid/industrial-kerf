@@ -242,7 +242,8 @@ NumberFormat presentationFor(const QJsonObject &def, const PresentationContext &
     } else if ((name == QStringLiteral("scale") || name == QStringLiteral("scale_x") || name == QStringLiteral("scale_y")) &&
                unit == QStringLiteral("×")) {
         percent(100.0);
-    } else if (name == QStringLiteral("rotation") && unit == QStringLiteral("degrees")) {
+    } else if ((name == QStringLiteral("rotation") || name == QStringLiteral("rotate_x") || name == QStringLiteral("rotate_y")) &&
+               unit == QStringLiteral("degrees")) {
         format.unit = QStringLiteral("°");
         format.tightUnit = true;
         format.decimals = 1;
@@ -349,7 +350,8 @@ QString presentationLabel(const QJsonObject &def) {
         {QStringLiteral("pan"), QStringLiteral("Pan")},         {QStringLiteral("crop_l"), QStringLiteral("Left")},
         {QStringLiteral("crop_r"), QStringLiteral("Right")},    {QStringLiteral("crop_t"), QStringLiteral("Top")},
         {QStringLiteral("crop_b"), QStringLiteral("Bottom")},   {QStringLiteral("feather"), QStringLiteral("Feather")},
-        {QStringLiteral("expansion"), QStringLiteral("Expansion")},
+        {QStringLiteral("expansion"), QStringLiteral("Expansion")}, {QStringLiteral("three_d"), QStringLiteral("3D")},
+        {QStringLiteral("rotate_x"), QStringLiteral("Rotate X")},   {QStringLiteral("rotate_y"), QStringLiteral("Rotate Y")},
         // The sound effects' (audio.eq, audio.limiter).
         {QStringLiteral("lowcut_hz"), QStringLiteral("Low cut")},   {QStringLiteral("presence_db"), QStringLiteral("Presence")},
         {QStringLiteral("limit_db"), QStringLiteral("Limit")},      {QStringLiteral("release_ms"), QStringLiteral("Release")},

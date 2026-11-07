@@ -334,6 +334,10 @@ char *kerf_fx_catalog(void);
 // title and solid) and sound effects (domain: audio). Free with
 // kerf_bridge_string_free.
 char *kerf_fx_catalog_all(void);
+// The properties a clip has by its track's type, which that list leaves out:
+// {video: [def], audio: [def]}, as a timeline's properties carries them. Free
+// with kerf_bridge_string_free.
+char *kerf_clip_properties(void);
 // The project launcher, before any bridge exists. Synchronous and local.
 // {path} -> {path, exists, project (has project.kerf), name, repository,
 // branch, remote, modified (ISO 8601 of project.kerf), presets: count}.

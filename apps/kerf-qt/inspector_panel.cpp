@@ -325,7 +325,7 @@ void sliderTravel(const QString &name, const NumberFormat &format, double *minim
     if (name == QStringLiteral("scale") || name == QStringLiteral("scale_x") || name == QStringLiteral("scale_y")) {
         *minimum = 0.0;
         *maximum = 250.0;
-    } else if (name == QStringLiteral("rotation")) {
+    } else if (name == QStringLiteral("rotation") || name == QStringLiteral("rotate_x") || name == QStringLiteral("rotate_y")) {
         *minimum = -180.0;
         *maximum = 180.0;
     }
@@ -1883,6 +1883,8 @@ void InspectorPanel::refreshValues() {
         QStringList pieces;
         bool changed = false;
         for (const int rowIndex : entry.rows) {
+            // A row out of the way says nothing of a value that does nothing yet.
+            if (m_rows.at(rowIndex).row->isHidden()) continue;
             for (const Binding &binding : m_rows.at(rowIndex).values)
                 if (binding.summary)
                     if (const QString piece = binding.summary(); !piece.isEmpty()) pieces << piece;
@@ -1930,6 +1932,50 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section) {
         bindNumber(r, row(r)->controls(), prop("anchor_x"), def("anchor_x"))->setObjectName(QStringLiteral("prop_anchor_x"));
         bindNumber(r, row(r)->controls(), prop("anchor_y"), def("anchor_y"), false, false)->setObjectName(QStringLiteral("prop_anchor_y"));
     }
+    buildDepthRows(into, section);
+}
+
+// A clip in depth (kerf-compose `three_d.rs`). A camera and a light stand at a `z` whatever else is
+// on, and a null or an adjustment layer has no picture to place. Anything else goes into depth with
+// `three_d` and has these rows from then on; a bevel cuts a solid's edges, so it waits for a `depth`.
+void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
+    const Clip &first = m_clips.first();
+    const QString fx = first.clip.value(QStringLiteral("kind")).toString() == QStringLiteral("generator") ? first.clip.value(QStringLiteral("fx")).toString() : QString();
+    if (fx == QStringLiteral("null") || fx == QStringLiteral("adjustment")) return;
+    const auto number = [this, into, section, &first](const QString &name, bool withSlider) -> InspectorRow * {
+        const QJsonObject def = defNamed(first, name);
+        if (def.isEmpty()) return nullptr;
+        const int r = addRow(into, presentationLabel(def), section);
+        bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, withSlider)->setObjectName(QStringLiteral("prop_") + name);
+        return row(r);
+    };
+    if (fx == QStringLiteral("camera") || fx == QStringLiteral("light")) {
+        number(QStringLiteral("z"), false);
+        return;
+    }
+    const QJsonObject threeD = defNamed(first, QStringLiteral("three_d"));
+    if (threeD.isEmpty()) return;
+    const int toggle = addRow(into, presentationLabel(threeD), section);
+    bindValue(toggle, row(toggle)->controls(), Target{Target::Kind::Prop, QStringLiteral("three_d")}, threeD)->setObjectName(QStringLiteral("prop_three_d"));
+    // Bipolar about 0°, as Rotation is; the distances run too far for a slider to say much.
+    const QList<InspectorRow *> inDepth{number(QStringLiteral("z"), false), number(QStringLiteral("rotate_x"), true),
+                                        number(QStringLiteral("rotate_y"), true), number(QStringLiteral("depth"), false)};
+    InspectorRow *bevel = number(QStringLiteral("bevel"), false);
+    m_refreshers.append([this, inDepth, bevel] {
+        const Target depth{Target::Kind::Prop, QStringLiteral("depth")};
+        bool placed = false;
+        bool solid = false;
+        for (const Clip &clip : std::as_const(m_clips)) {
+            if (!clip.clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool()) continue;
+            placed = true;
+            const QJsonValue raw = rawValue(clip, depth);
+            const QJsonArray keys = raw.toArray();
+            solid |= raw.toDouble() > 0.0 || std::any_of(keys.cbegin(), keys.cend(), [](const QJsonValue &key) { return key.toObject().value(QStringLiteral("value")).toDouble() > 0.0; });
+        }
+        for (InspectorRow *entry : inDepth)
+            if (entry) entry->setVisible(placed);
+        if (bevel) bevel->setVisible(solid);
+    });
 }
 
 // Fit and Fill (the scale that shows the whole picture, or fills the frame,
