@@ -1147,6 +1147,81 @@ QList<std::optional<QPointF>> sampledPath(const QJsonObject &clip, const QSizeF 
     return places;
 }
 
+QJsonObject withPathPoints(const QJsonObject &clip, const QList<QPointF> &points) {
+    QStringList parts;
+    for (const QPointF &point : points) parts << QStringLiteral("%1,%2").arg(point.x(), 0, 'g', 17).arg(point.y(), 0, 'g', 17);
+    QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    props.insert(QStringLiteral("path"), parts.join(QLatin1Char(' ')));
+    QJsonObject moved = clip;
+    moved.insert(QStringLiteral("props"), props);
+    return moved;
+}
+
+namespace {
+
+// Where the anchor of `clip`, whose path is `points` said closely, is when at point `index` of it.
+std::optional<QPointF> anchorAtPoint(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime, const QTransform &parents,
+                                     const QJsonObject &timeline, const QList<QPointF> &points, int index) {
+    const double cw = std::max(1.0, canvas.width()), ch = std::max(1.0, canvas.height());
+    QJsonObject moved = withPathPoints(clip, points);
+    QJsonObject props = moved.value(QStringLiteral("props")).toObject();
+    props.insert(QStringLiteral("along"), graph::MotionPath(points, cw / ch).alongOf(index));
+    moved.insert(QStringLiteral("props"), props);
+    const Geometry g = geometryAt(clip, clipTime);
+    const QPointF anchor(g.cropL + (1.0 - g.cropL - g.cropR) * (0.5 + g.anchorX), g.cropT + (1.0 - g.cropT - g.cropB) * (0.5 + g.anchorY));
+    const QTransform placement = picturePlacement(moved, picture, fit, canvas, clipTime, parents, timeline);
+    if (!placement.isInvertible() || !inSight(placement, anchor)) return std::nullopt;
+    const QPointF on = placement.map(anchor);
+    return QPointF(on.x() / cw, on.y() / ch);
+}
+
+} // namespace
+
+QList<std::optional<QPointF>> sampledPathPoints(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                                const QTransform &parents, const QJsonObject &timeline, const QList<QPointF> &points) {
+    QList<std::optional<QPointF>> places;
+    for (qsizetype index = 0; index < points.size(); ++index)
+        places.append(anchorAtPoint(clip, picture, fit, canvas, clipTime, parents, timeline, points, int(index)));
+    return places;
+}
+
+std::optional<QPointF> sampledPathPointFor(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                           const QTransform &parents, const QJsonObject &timeline, const QList<QPointF> &points, int index,
+                                           const QPointF &seen) {
+    if (index < 0 || index >= points.size()) return std::nullopt;
+    // Far closer than the document can say a point, which is a ten-thousandth of the frame.
+    constexpr double kClose = 1e-7;
+    // How far a point is moved to see what that does, and the most a step may take it.
+    constexpr double kNudge = 1e-4, kMostStep = 0.5;
+    constexpr int kMostSteps = 12;
+    QList<QPointF> trying = points;
+    const auto landing = [&](const QPointF &point) {
+        trying[index] = point;
+        return anchorAtPoint(clip, picture, fit, canvas, clipTime, parents, timeline, trying, index);
+    };
+    QPointF point = points.at(index);
+    for (int step = 0; step < kMostSteps; ++step) {
+        const auto on = landing(point);
+        const auto across = landing(point + QPointF(kNudge, 0.0));
+        const auto down = landing(point + QPointF(0.0, kNudge));
+        if (!on || !across || !down) return std::nullopt;
+        const QPointF off = *on - seen;
+        if (std::hypot(off.x(), off.y()) < kClose) return point;
+        const double a = (across->x() - on->x()) / kNudge, b = (down->x() - on->x()) / kNudge;
+        const double c = (across->y() - on->y()) / kNudge, d = (down->y() - on->y()) / kNudge;
+        const double det = a * d - b * c;
+        if (std::abs(det) < 1e-12) return std::nullopt;
+        QPointF by((d * off.x() - b * off.y()) / det, (a * off.y() - c * off.x()) / det);
+        const double length = std::hypot(by.x(), by.y());
+        if (length > kMostStep) by *= kMostStep / length;
+        point -= by;
+    }
+    const auto on = landing(point);
+    if (!on) return std::nullopt;
+    const QPointF off = *on - seen;
+    return std::hypot(off.x(), off.y()) < kClose ? std::optional(point) : std::nullopt;
+}
+
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                             const QTransform &parents, const QJsonObject &timeline) {
     const QTransform flat = flatPlacement(clip, picture, fit, canvas, clipTime, parents);

@@ -112,6 +112,8 @@ public:
 
     // From two points up.
     MotionPath(const QList<QPointF> &points, double aspect);
+    // How far along it is at its point `index`, as `at` takes it.
+    double alongOf(int index) const;
     // On the curve, `u` points along.
     QPointF curve(double u) const;
     // Where a clip `along` of the way along is, from 0 to 1 of the distance.

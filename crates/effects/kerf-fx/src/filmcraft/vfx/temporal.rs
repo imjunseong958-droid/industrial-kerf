@@ -50,11 +50,13 @@ pub fn echo(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             layers.push((f, start * decay.powi(k as i32)));
         }
     }
-    *img = combine_echoes(&layers, op);
+    *img = combine_echoes(&layers, op, cx.working.is_hdr());
 }
 
-/// Combine echo layers (index 0 = the current frame) with an Echo Operator.
-pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32) -> Image {
+/// Combine echo layers (index 0 = the current frame) with an Echo Operator. In HDR, Screen keeps what
+/// lies above SDR white and below 0, a color past BT.709: what is between goes as ever, white screened
+/// over anything being white, and what is past either adds, as the other operators have it.
+pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32, hdr: bool) -> Image {
     let (w, h) = (layers[0].0.w, layers[0].0.h);
     let mut out = Image::new(w, h);
     let wsum: f32 = layers.iter().map(|l| l.1).sum::<f32>().max(1e-6);
@@ -71,6 +73,7 @@ pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32) -> Image {
             3 => [1.0; 4],
             _ => [0.0; 4],
         };
+        let mut past_white = [0.0f32; 4];
         match op {
             4 => {
                 // composite in back: the current frame in front, older echoes behind
@@ -91,6 +94,11 @@ pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32) -> Image {
                         acc[k] = match op {
                             1 => acc[k].max(p[k]),
                             2 => acc[k].min(p[k]),
+                            3 if hdr => {
+                                let inside = p[k].clamp(0.0, 1.0);
+                                past_white[k] += p[k] - inside;
+                                acc[k] * (1.0 - inside)
+                            }
                             3 => acc[k] * (1.0 - p[k].min(1.0)),
                             6 => acc[k] + p[k] / wsum,
                             _ => acc[k] + p[k],
@@ -98,7 +106,9 @@ pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32) -> Image {
                     }
                 }
                 if op == 3 {
-                    acc = acc.map(|v| 1.0 - v);
+                    for k in 0..4 {
+                        acc[k] = 1.0 - acc[k] + past_white[k];
+                    }
                 }
             }
         }

@@ -702,12 +702,45 @@ void ViewerWidget::setMotionPath(const QString &clip, const QString &text, const
 }
 
 void ViewerWidget::setSampledPath(const QList<std::optional<QPointF>> &places, const std::optional<QPointF> &now) {
+    // A drag in progress keeps its curve until it is let go.
+    if (m_sampledDrag >= 0) {
+        m_sampledNow = now;
+        return;
+    }
     const bool seen = std::any_of(places.cbegin(), places.cend(), [](const std::optional<QPointF> &place) { return place.has_value(); });
     const QList<std::optional<QPointF>> shown = seen ? places : QList<std::optional<QPointF>>{};
+    if (shown.isEmpty()) {
+        m_sampledEdit = {};
+        m_sampledHandles.clear();
+    }
     if (shown == m_sampledPath && now == m_sampledNow) return;
     m_sampledPath = shown;
     m_sampledNow = now;
     update();
+}
+
+void ViewerWidget::setSampledPathEdit(const SampledPathEdit &edit) {
+    if (m_sampledDrag >= 0) return;
+    m_sampledEdit = edit;
+    const QList<std::optional<QPointF>> handles = edit.handles ? edit.handles(edit.points) : QList<std::optional<QPointF>>{};
+    if (handles == m_sampledHandles) return;
+    m_sampledHandles = handles;
+    update();
+}
+
+QPointF ViewerWidget::sampledToWidget(const QPointF &share) const {
+    const QRectF canvas = pictureRect();
+    return {canvas.left() + share.x() * canvas.width(), canvas.top() + share.y() * canvas.height()};
+}
+
+int ViewerWidget::sampledPointAt(const QPointF &widget) const {
+    if (!m_sampledEdit.solve) return -1;
+    for (qsizetype index = m_sampledHandles.size() - 1; index >= 0; --index) {
+        if (!m_sampledHandles.at(index)) continue;
+        const QPointF delta = sampledToWidget(*m_sampledHandles.at(index)) - widget;
+        if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return int(index);
+    }
+    return -1;
 }
 
 QPointF ViewerWidget::pathToWidget(const QPointF &point) const {
@@ -868,7 +901,7 @@ QString ViewerWidget::maskAt(const QPointF &widget) const {
 
 void ViewerWidget::updateCursor(const QPointF &widget) {
     if (m_maskTool != MaskTool::None) setCursor(Qt::CrossCursor);
-    else if (m_pathDrag >= 0 || pathPointAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
+    else if (m_sampledDrag >= 0 || sampledPointAt(widget) >= 0 || m_pathDrag >= 0 || pathPointAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
     else if (handleAt(widget) < 0 && pathCurveAt(widget) >= 0.0) setCursor(Qt::CrossCursor);
     else if (!editsMasks()) unsetCursor();
     else if (m_dragHandle == kMoveMask) setCursor(Qt::ClosedHandCursor);
@@ -989,6 +1022,16 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
         return;
     }
     if (m_maskTool == MaskTool::None) {
+        if (const int point = sampledPointAt(position); point >= 0) {
+            setFocus(Qt::MouseFocusReason);
+            m_sampledDrag = point;
+            m_sampledBefore = m_sampledEdit.points;
+            m_sampledHeld = sampledToWidget(*m_sampledHandles.at(point)) - position;
+            m_sampledPressed = position;
+            m_sampledMoved = false;
+            updateCursor(position);
+            return;
+        }
         if (const int point = pathPointAt(position); point >= 0) {
             setFocus(Qt::MouseFocusReason);
             // One thing for Delete to take at a time.
@@ -1079,6 +1122,21 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         update();
         return;
     }
+    if (m_sampledDrag >= 0) {
+        if (!m_sampledMoved && QLineF(position, m_sampledPressed).length() < kPathDragStart) return;
+        m_sampledMoved = true;
+        const QRectF canvas = pictureRect();
+        const QPointF to = position + m_sampledHeld;
+        const QPointF share((to.x() - canvas.left()) / std::max(1.0, canvas.width()), (to.y() - canvas.top()) / std::max(1.0, canvas.height()));
+        // What cannot land there, as past a horizon, stays where it last was.
+        if (const auto at = m_sampledEdit.solve(m_sampledEdit.points, m_sampledDrag, share); at && graph::pathHolds(*at)) {
+            m_sampledEdit.points[m_sampledDrag] = *at;
+            m_sampledPath = m_sampledEdit.curve(m_sampledEdit.points);
+            m_sampledHandles = m_sampledEdit.handles(m_sampledEdit.points);
+        }
+        update();
+        return;
+    }
     if (m_pathDrag >= 0) {
         // A hand that wobbles while clicking has not moved anything.
         if (!m_pathMoved && QLineF(position, m_pathPressed).length() < kPathDragStart) return;
@@ -1152,6 +1210,17 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
                                                                        box.width() / 2.0, box.height() / 2.0})}});
         else
             addMask(QJsonObject{{QStringLiteral("rect"), fractions({box.left(), box.top(), box.right(), box.bottom()})}});
+        return;
+    }
+    if (m_sampledDrag >= 0) {
+        const bool moved = m_sampledMoved && m_sampledEdit.points != m_sampledBefore;
+        m_sampledDrag = -1;
+        m_sampledMoved = false;
+        updateCursor(event->position());
+        if (moved)
+            emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
+                                                      {QStringLiteral("clip"), m_sampledEdit.clip},
+                                                      {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_sampledEdit.points)}}}}});
         return;
     }
     if (m_pathDrag >= 0) {
@@ -1276,6 +1345,15 @@ void ViewerWidget::paintMotionPath(QPainter &p) {
             p.setPen(QPen(theme.maskHandleFill, 1.0));
             p.setBrush(theme.maskHandleBorder);
             p.drawEllipse(toWidget(*m_sampledNow), kHandleSize / 2.0, kHandleSize / 2.0);
+        }
+        // Its points are square, as those of any path are.
+        for (qsizetype index = 0; index < m_sampledHandles.size(); ++index) {
+            if (!m_sampledHandles.at(index)) continue;
+            const EditorTheme &theme = editorTheme();
+            const bool held = index == m_sampledDrag;
+            p.setPen(QPen(held ? theme.maskHandleFill : theme.maskHandleBorder, 1.0));
+            p.setBrush(held ? theme.maskHandleBorder : theme.maskHandleFill);
+            p.drawRect(QRectF(toWidget(*m_sampledHandles.at(index)) - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
         }
         p.restore();
     }

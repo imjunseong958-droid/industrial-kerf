@@ -307,6 +307,20 @@ QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool f
 // the clip's own placement is that far along, and none where that cannot be seen.
 QList<std::optional<QPointF>> sampledPath(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                                           const QTransform &parents, const QJsonObject &timeline, int count);
+// `clip` with `points` as its `path=`, said as closely as a double can: what the document says of them
+// is rounded when it is written.
+QJsonObject withPathPoints(const QJsonObject &clip, const QList<QPointF> &points);
+// Where the clip's anchor is when it is at each of `points` of its path, in shares of the canvas, as
+// sampledPath goes: none where that cannot be seen.
+QList<std::optional<QPointF>> sampledPathPoints(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                                const QTransform &parents, const QJsonObject &timeline, const QList<QPointF> &points);
+// The point to put at `index` of `points` for the clip's anchor, there, to land on `seen` in shares of
+// the canvas. How the clip is turned there depends on where that point is, so no one map takes `seen`
+// back to it: it is solved for from the clip's own placement, a few steps of Newton's method from where
+// the point is now. None where it does not come to that, as past the horizon.
+std::optional<QPointF> sampledPathPointFor(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                           const QTransform &parents, const QJsonObject &timeline, const QList<QPointF> &points, int index,
+                                           const QPointF &seen);
 
 QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                          const QTransform &parents, const QJsonObject &timeline = QJsonObject{});

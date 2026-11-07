@@ -521,4 +521,47 @@ fn a_full_check_says_which_text_the_frame_cuts_off() {
     assert_eq!(clipped(&words("x=0.45")), (1, false));
     // Moved wholly off it, there are no glyphs left to cut.
     assert_eq!(clipped(&words("x=3")), (0, true));
+    // Cut off only between the moments it is read at, on the way across and back.
+    assert_eq!(
+        clipped(&words("x={0f:0 11f:0 12f:0.47 13f:0 96f:0}")),
+        (1, false)
+    );
+    assert_eq!(
+        clipped(&words("x={0f:0 11f:0 12f:0.05 13f:0 96f:0}")),
+        (0, true)
+    );
+    // A crop that takes off glyphs, and one that takes off only the empty frame around them.
+    assert_eq!(clipped(&words("crop_l=0.5")), (1, false));
+    assert_eq!(clipped(&words("crop_l=0.02")), (0, true));
+    // A crop that moves is a reveal, and is taken as meant.
+    assert_eq!(clipped(&words("crop_l={0f:0.5 24f:0}")), (0, true));
+}
+
+/// What the check costs in frames of what these add: `cargo test --release -p kerf-mcp --test qc_full
+/// measure_clipped_text -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_clipped_text() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().expect("a folder");
+    let dir = directory.path();
+    for set in [
+        "x=0",
+        "x={0f:0 11f:0 12f:0.47 13f:0 96f:0}",
+        "crop_l=0.5",
+        "x=0.45",
+    ] {
+        let project = spot_with_title_set(dir, "#ffffff", set);
+        let mut times: Vec<f64> = (0..5)
+            .map(|_| {
+                let began = std::time::Instant::now();
+                check_full(&project, dir, &CancellationToken::new()).expect("check_full");
+                began.elapsed().as_secs_f64()
+            })
+            .collect();
+        times.sort_by(f64::total_cmp);
+        eprintln!("{set:<40} {:.3} s", times[2]);
+    }
 }
