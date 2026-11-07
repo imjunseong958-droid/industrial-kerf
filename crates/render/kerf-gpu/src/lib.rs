@@ -22,8 +22,14 @@ use wgpu::util::DeviceExt;
 
 pub mod depth;
 pub mod focus;
+pub mod kept;
 
 pub use wgpu;
+
+/// What is kept from frame to frame in textures. At 4K a title's picture is 133 MB, and what it takes to
+/// make again is 36 ms a frame; its distance field 33 MB and 41 ms. This is three of them at 4K and a
+/// dozen at 1080p, and each comes out of what the pool would have held for going up.
+const KEPT_BYTES: usize = 512 << 20;
 
 /// The format of every working picture.
 pub const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
@@ -88,6 +94,14 @@ pub struct Gpu {
     failed: Arc<AtomicBool>,
     depth: OnceLock<Option<depth::Kernels>>,
     focus: OnceLock<Option<focus::Kernels>>,
+    kept: Mutex<kept::Store<Kept>>,
+}
+
+/// What a frame keeps for the next: a picture, or a distance field.
+#[derive(Clone)]
+enum Kept {
+    Picture(Picture),
+    Distance(depth::Distance),
 }
 
 /// A frame as it decoded, in planes of Y'CbCr, for the GPU to make into RGB rather than have it made
@@ -556,7 +570,17 @@ impl Gpu {
             failed,
             depth: OnceLock::new(),
             focus: OnceLock::new(),
+            kept: Mutex::new(kept::Store::new(KEPT_BYTES)),
         })
+    }
+
+    fn kept(&self) -> std::sync::MutexGuard<'_, kept::Store<Kept>> {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The bytes kept from frame to frame.
+    pub fn kept_bytes(&self) -> usize {
+        self.kept().bytes()
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -583,6 +607,7 @@ impl Gpu {
 
     /// Start a frame.
     pub fn frame(&self) -> Frame<'_> {
+        self.kept().tick();
         Frame {
             gpu: self,
             encoder: self
@@ -654,6 +679,9 @@ pub struct Picture {
     pub h: u32,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    /// What it is kept under from frame to frame, which no kernel writes and no frame takes back.
+    /// Whatever is drawn from it is a new picture, so a picture with this is as it was made.
+    pub kept: Option<Arc<str>>,
 }
 
 /// One frame's work, recorded in order and submitted by [`Frame::finish`].
@@ -721,11 +749,15 @@ impl<'a> Frame<'a> {
             h,
             texture,
             view,
+            kept: None,
         }
     }
 
-    /// Done with `picture` for now: a later command of this frame may overwrite it.
+    /// Done with `picture` for now: a later command of this frame may overwrite it, unless it is kept.
     pub fn release(&mut self, picture: Picture) {
+        if picture.kept.is_some() {
+            return;
+        }
         self.working
             .entry((picture.w, picture.h))
             .or_default()
@@ -1280,6 +1312,64 @@ impl<'a> Frame<'a> {
             },
         );
         out
+    }
+
+    /// The picture `make` draws, and that `key` says all that goes into. From the second frame to ask
+    /// for it, it stays in a texture of its own and is neither drawn nor sent up again.
+    pub fn image_kept(&mut self, key: &str, make: impl FnOnce() -> Image) -> Picture {
+        let gpu = self.gpu;
+        if let Some(Kept::Picture(picture)) = gpu.kept().get(key) {
+            return picture;
+        }
+        let image = make();
+        let (w, h) = (image.w as u32, image.h as u32);
+        let bytes = image.w * image.h * 16;
+        if !gpu.kept().wants(key, bytes) {
+            return self.image(&image);
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("kerf-kept"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: WORKING_FORMAT,
+            usage: WORKING_USAGE,
+            view_formats: &[],
+        });
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&image.px),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 16),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&Default::default());
+        let picture = Picture {
+            w,
+            h,
+            texture,
+            view,
+            kept: Some(key.into()),
+        };
+        gpu.kept().put(key, bytes, Kept::Picture(picture.clone()));
+        picture
     }
 
     /// `picture` with every value by `coverage`, one number a pixel.

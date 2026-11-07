@@ -536,8 +536,8 @@ impl Drawing {
         }
         if self.captions {
             for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
-                let drawn = caption_on(caption, plan, scale, (w, h));
-                let picture = frame.image(&drawn);
+                let key = caption_key(caption, plan, scale, (w, h));
+                let picture = frame.image_kept(&key, || caption_on(caption, plan, scale, (w, h)));
                 let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
                 canvas = frame.composite(
                     canvas,
@@ -1123,7 +1123,10 @@ impl Drawing {
                 self.gpu_draw(frame, *nested, shown, scale, angle.as_ref())?
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
-            Source::Title(title) => frame.image(&title_on(title, (cw, ch), time)),
+            Source::Title(title) => {
+                let key = title_key(title, (cw, ch), time);
+                frame.image_kept(&key, || title_on(title, (cw, ch), time))
+            }
             Source::Motion(motion) => frame.image(&motion_on(*motion, &plan.clip, (cw, ch), time)),
             Source::Adjustment | Source::Nothing => return None,
         }))

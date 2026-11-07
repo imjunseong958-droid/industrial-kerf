@@ -1003,7 +1003,7 @@ impl Caster {
         }
         let beveled = (bevel > 0.0).then(|| {
             let per = self.plane.pixel_size();
-            let field = super::bevel::distance_field(
+            let field = super::bevel::kept_distance_field(
                 &self.picture,
                 self.crop,
                 bevel.min(depth / 2.0) / per,
@@ -1234,7 +1234,7 @@ fn projected(
             let per = plane.pixel_size() / by;
             let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
             SolidBevel {
-                field: super::bevel::distance_field(&source, read_crop, bevel / per),
+                field: super::bevel::kept_distance_field(&source, read_crop, bevel / per),
                 width: bevel / per,
                 depth: solid / per,
             }
@@ -1368,7 +1368,7 @@ fn inset_at(width: f64, depth: f64, along: f64) -> f64 {
 
 /// What a solid's bevel reads, in the pixels its picture is read at.
 struct SolidBevel {
-    field: Vec<f32>,
+    field: Arc<Vec<f32>>,
     width: f64,
     depth: f64,
 }

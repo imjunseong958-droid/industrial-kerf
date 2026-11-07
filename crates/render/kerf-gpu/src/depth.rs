@@ -809,6 +809,15 @@ impl Frame<'_> {
         jumps: &[u32],
         far: f32,
     ) -> Option<Distance> {
+        let key = picture
+            .kept
+            .as_ref()
+            .map(|kept| format!("{kept}|distance|{crop:?}|{jumps:?}|{far}"));
+        if let Some(key) = &key {
+            if let Some(Kept::Distance(distance)) = self.gpu.kept().get(key) {
+                return Some(distance);
+            }
+        }
         let gpu = self.gpu;
         let kernels = gpu.depth_kernels()?;
         let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -818,9 +827,33 @@ impl Frame<'_> {
             frame.used.push((key, texture.clone()));
             texture.create_view(&Default::default())
         };
+        // A picture that stays has a field that stays, in a texture of its own.
+        let bytes = picture.w as usize * picture.h as usize * 4;
+        let keep = key
+            .as_deref()
+            .filter(|key| self.gpu.kept().wants(key, bytes));
+        let distance = match keep {
+            Some(_) => gpu
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("kerf-kept-distance"),
+                    size: wgpu::Extent3d {
+                        width: picture.w,
+                        height: picture.h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R32Float,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
+            None => working(self, wgpu::TextureFormat::R32Float),
+        };
         let mut read = working(self, wgpu::TextureFormat::Rg32Float);
         let mut write = working(self, wgpu::TextureFormat::Rg32Float);
-        let distance = working(self, wgpu::TextureFormat::R32Float);
         let numbers = (crop, [far, 0.0]);
         self.distance_pass(
             &kernels.outline,
@@ -846,7 +879,11 @@ impl Frame<'_> {
             Some(&read),
             DistanceOut::Distance(&distance),
         );
-        Some(Distance { view: distance })
+        let distance = Distance { view: distance };
+        if let Some(key) = keep {
+            gpu.kept().put(key, bytes, Kept::Distance(distance.clone()));
+        }
+        Some(distance)
     }
 
     /// `picture` with its outline taken in by `inset` pixels.
