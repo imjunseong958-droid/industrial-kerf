@@ -1082,6 +1082,16 @@ fn bokeh_and_focus_blur() {
 }
 
 #[test]
+fn echoes_of_a_color_past_bt709_keep_what_is_below_0() {
+    let a = Image::filled(1, 1, [-0.2, 1.4, -0.1, 1.0]);
+    let layers = vec![(a.clone(), 1.0), (a.clone(), 0.5)];
+    let add = temporal::combine_echoes(&layers, 0);
+    assert!(close(add.get(0, 0)[0], -0.3, 1e-6) && close(add.get(0, 0)[1], 2.1, 1e-6));
+    let least = temporal::combine_echoes(&layers, 2);
+    assert!(close(least.get(0, 0)[0], -0.2, 1e-6));
+}
+
+#[test]
 fn echo_combines_operators() {
     let a = Image::filled(1, 1, [0.2, 0.4, 0.1, 1.0]);
     let b = Image::filled(1, 1, [0.6, 0.1, 0.3, 1.0]);

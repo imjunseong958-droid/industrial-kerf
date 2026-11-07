@@ -414,3 +414,213 @@ fn an_sdr_picture_in_an_hdr_sequence_is_held_by_nothing() {
         assert_eq!(sdr.rgba, again.rgba, "{fx}");
     }
 }
+
+/// A PQ signal in cd/m^2.
+fn nits(signal: f64) -> f64 {
+    let (m1, m2) = (2610.0 / 16384.0, 2523.0 / 4096.0 * 128.0);
+    let (c1, c2, c3) = (
+        3424.0 / 4096.0,
+        2413.0 / 4096.0 * 32.0,
+        2392.0 / 4096.0 * 32.0,
+    );
+    let p = signal.powf(1.0 / m2);
+    10000.0 * (((p - c1).max(0.0)) / (c2 - c3 * p)).powf(1.0 / m1)
+}
+
+/// A flat HLG picture of those code values, in BT.2020.
+fn flat_hlg_footage(dir: &Path, name: &str, rgb: &str) -> String {
+    let path = dir.join(format!("{name}.mov"));
+    let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
+    let output = Command::new(program)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!("color=c=0x{rgb}:s=128x72:r=24:d=1"))
+        .args([
+            "-vf",
+            "scale=in_range=pc:out_range=tv:out_color_matrix=bt2020nc,format=yuv422p10le,setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc=arib-std-b67",
+            "-c:v",
+            "prores_ks",
+        ])
+        .arg(&path)
+        .output()
+        .expect("ffmpeg runs");
+    assert!(output.status.success());
+    path.display().to_string()
+}
+
+fn hlg_document(path: &str, fx: &str) -> String {
+    let line = if fx.is_empty() {
+        String::new()
+    } else {
+        format!("      fx {fx}\n")
+    };
+    format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{path}\" rate=24 dur=24f video=128x72 bits=10 color=rec2100-hlg\nsequence s1 rate=24 size=128x72 audio=48000 color=rec2100-hlg\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n{line}"
+    )
+}
+
+/// What each way of holding values does to what an HLG picture holds, on what draws it.
+#[test]
+fn effects_written_for_0_to_1_keep_what_an_hlg_picture_holds() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let bright = flat_hlg_footage(dir.path(), "bright", "E8E8E8");
+    let wide = flat_hlg_footage(dir.path(), "wide", "00C000");
+    let high = signal(&hlg_document(&bright, ""), Accel::Never);
+    // SDR white sits at 0.75 of the signal: this is above it.
+    assert!(high > 0.8, "{high}");
+    let green = signals(&hlg_document(&wide, ""), Accel::Never);
+    assert!(
+        green[0] < 0.1 && green[2] < 0.1 && green[1] > 0.6,
+        "{green:?}"
+    );
+    for fx in [
+        "color.lumetri",
+        "color.levels",
+        "color.tint",
+        "color.gamma",
+        "key.color",
+        "stylize.vignette",
+        "blur.radialzoom",
+        "distort.bulge",
+        "distort.upscale",
+    ] {
+        for accel in [Accel::Never, Accel::Always] {
+            let held = signal(&hlg_document(&bright, fx), accel);
+            assert!(
+                (held - high).abs() < 0.015,
+                "{fx} on {accel:?} made {held} of {high}"
+            );
+        }
+    }
+    for fx in [
+        "color.asccdl",
+        "color.brightnesscontrast",
+        "color.channelmixer",
+        "color.gamma",
+        "color.procamp",
+        "stylize.vignette",
+        "key.color",
+        "blur.radialzoom",
+        "distort.bulge",
+        "distort.upscale",
+        "noise.removegrain",
+        "blur.sharpen",
+        "blur.unsharp",
+    ] {
+        for accel in [Accel::Never, Accel::Always] {
+            let held = signals(&hlg_document(&wide, fx), accel);
+            for (channel, (held, plain)) in held.iter().zip(&green).enumerate() {
+                assert!(
+                    (held - plain).abs() < 0.025,
+                    "{fx} on {accel:?}: channel {channel} is {held} of {plain}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_gpu_holds_an_hlg_picture_for_effects_as_the_cpu_does() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let bright = flat_hlg_footage(dir.path(), "bright", "E8E8E8");
+    let at = Rate::FPS_24.time_of(1);
+    for fx in [
+        "color.basic exposure=-0.3",
+        "color.brightnesscontrast contrast=10",
+        "color.gamma gamma=12",
+        "color.tint amount=60",
+        "blur.gaussian radius=2",
+        "light.wonderglow",
+    ] {
+        let document = hlg_document(&bright, fx);
+        let (gpu, cpu) = (
+            compositor(&document, Accel::Always),
+            compositor(&document, Accel::Never),
+        );
+        if !gpu.draws_on_gpu(at, 1.0) {
+            assert!(
+                !has_gpu_path(&hlg_document(&bright, "blur.gaussian radius=2")),
+                "{fx}"
+            );
+            return;
+        }
+        let (on_gpu, on_cpu) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
+        let (x, y) = (on_gpu.width / 2, on_gpu.height / 2);
+        let (a, b) = (code16(&on_gpu, x, y), code16(&on_cpu, x, y));
+        assert!(a.abs_diff(b) < 300, "{fx}: {a} on the GPU, {b} on the CPU");
+    }
+}
+
+#[test]
+fn echoes_add_up_a_color_past_bt709_and_do_not_wash_it_out() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = flat_footage(dir.path(), "wide", "00C000");
+    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
+    // Three of a flat picture at 1, 0.5, and 0.25 are 1.75 of it, each channel alike. It was 1491 cd/m²
+    // of red and 73 of blue on 757 of green, from what lifted it under 1 being added up with it.
+    let echoed = signals(
+        &pq_document(&path, "time.echo time=0.04 count=2 decay=0.5"),
+        Accel::Never,
+    )
+    .map(nits);
+    assert!(
+        (echoed[1] / plain[1] - 1.75).abs() < 0.05,
+        "{echoed:?} of {plain:?}"
+    );
+    assert!(echoed[0] < 5.0 && echoed[2] < 5.0, "{echoed:?}");
+    // The same in HLG, on a signal it stays low in.
+    let wide = flat_hlg_footage(dir.path(), "hlg", "00C000");
+    let plain = signals(&hlg_document(&wide, ""), Accel::Never);
+    let echoed = signals(
+        &hlg_document(&wide, "time.echo time=0.04 count=2 decay=0.5"),
+        Accel::Never,
+    );
+    assert!(echoed[1] > plain[1], "{echoed:?} of {plain:?}");
+    assert!(echoed[0] < 0.1 && echoed[2] < 0.1, "{echoed:?}");
+}
+
+#[test]
+fn glows_add_light_to_a_color_past_bt709_and_leave_what_it_is() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = flat_footage(dir.path(), "wide", "00C000");
+    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
+    let accels = |fx: &str| {
+        let on_gpu = has_gpu_path(&pq_document(&path, fx));
+        if on_gpu {
+            vec![Accel::Never, Accel::Always]
+        } else {
+            vec![Accel::Never]
+        }
+    };
+    // White light adds alike to every channel, so green stands as far past the other two as it did,
+    // or further where some of the light is its own.
+    for fx in [
+        "light.echoglow intensity=10 color=#ffffff",
+        "light.glint intensity=5 colorize=100 color=#ffffff",
+        "light.glint intensity=5 colorize=50 color=#ffffff",
+    ] {
+        for accel in accels(fx) {
+            let lit = signals(&pq_document(&path, fx), accel).map(nits);
+            assert!(
+                lit[0] > plain[0] + 20.0,
+                "{fx} on {accel:?} added nothing: {lit:?}"
+            );
+            let (past, was) = (lit[1] - lit[0], plain[1] - plain[0]);
+            assert!(
+                past >= was * 0.95,
+                "{fx} on {accel:?}: {past} past where it was {was}"
+            );
+        }
+    }
+    // Light taken from the picture itself is all green.
+    for accel in accels("light.glint intensity=5 colorize=0") {
+        let lit = signals(
+            &pq_document(&path, "light.glint intensity=5 colorize=0"),
+            accel,
+        )
+        .map(nits);
+        assert!(
+            lit[1] > plain[1] + 100.0 && lit[0] < 5.0 && lit[2] < 5.0,
+            "{accel:?} {lit:?}"
+        );
+    }
+}
