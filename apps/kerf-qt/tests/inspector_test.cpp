@@ -596,6 +596,16 @@ private slots:
         const QJsonArray ops = takeOps(window);
         QVERIFY(!ops.isEmpty());
         QCOMPARE(ops.last().toObject().value("props").toObject().value("size").toDouble(), 8.0);
+
+        // A track to wrap around the scene is only an environment light's to choose.
+        const auto image = [inspector] { return inspector->findChild<QWidget *>(QStringLiteral("prop_image")); };
+        QVERIFY(image() && rowOf(image())->isHidden());
+        window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProperties()}, {"generators", QJsonObject{{"light", light}}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "sun"}, {"kind", "generator"}, {"fx", "light"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                            {"props", QJsonObject{{"kind", "environment"}}}}}}}}}}}});
+        QVERIFY(image() && !rowOf(image())->isHidden());
     }
 
     // A clip's rows in depth come from the catalog as the bridge hands it over: a switch to go into

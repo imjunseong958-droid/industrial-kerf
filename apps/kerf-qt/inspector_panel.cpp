@@ -2678,6 +2678,7 @@ void InspectorPanel::buildCaption(QVBoxLayout *into) {
 void InspectorPanel::buildGenerator(QVBoxLayout *into) {
     const QJsonArray params = m_project.value(QStringLiteral("generators")).toObject().value(m_clips.first().clip.value(QStringLiteral("fx")).toString()).toArray();
     const int own = params.isEmpty() ? -1 : addSection(into, QStringLiteral("generator"), kindName(m_clips.first()), true);
+    const bool light = m_clips.first().clip.value(QStringLiteral("fx")).toString() == QStringLiteral("light");
     for (const QJsonValue &value : params) {
         const QJsonObject def = value.toObject();
         const QString name = def.value(QStringLiteral("name")).toString();
@@ -2686,6 +2687,14 @@ void InspectorPanel::buildGenerator(QVBoxLayout *into) {
             bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, def.contains(QStringLiteral("max")))->setObjectName(QStringLiteral("prop_") + name);
         else
             bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def)->setObjectName(QStringLiteral("prop_") + name);
+        // Only an environment light wraps a track around the scene.
+        if (light && name == QStringLiteral("image"))
+            m_refreshers.append([this, image = row(r)] {
+                const Target kind{Target::Kind::Prop, QStringLiteral("kind")};
+                image->setVisible(std::any_of(m_clips.cbegin(), m_clips.cend(), [this, &kind](const Clip &clip) {
+                    return rawValue(clip, kind).toString() == QStringLiteral("environment");
+                }));
+            });
     }
     buildEffectsSection(into, false);
     const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Compositing"));
