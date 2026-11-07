@@ -105,7 +105,8 @@ pub(crate) fn combine_echoes(layers: &[(Image, f32)], op: u32) -> Image {
         if op == 0 {
             acc[3] = acc[3].min(1.0);
         }
-        o.copy_from_slice(&acc.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 }));
+        // What is below 0 is a color past BT.709, which adds and weighs as any other.
+        o.copy_from_slice(&acc.map(|v| if v.is_finite() { v } else { 0.0 }));
     });
     out
 }

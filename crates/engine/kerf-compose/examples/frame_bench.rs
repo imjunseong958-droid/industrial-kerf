@@ -18,6 +18,8 @@ const SCENES: &[(&str, &str)] = &[
     ("plain", ""),
     ("placed", "      set scale=0.9\n"),
     ("lumetri", "      fx color.lumetri@2 exposure=0.5\n"),
+    ("color basic", "      fx color.basic exposure=0.3\n"),
+    ("unsharp", "      fx blur.unsharp amount=100 radius=3\n"),
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
     ("glow", "      fx light.wonderglow@1\n"),
     ("ultra key", "      fx key.ultra@1 key_color=#30c040\n"),
@@ -100,13 +102,15 @@ fn main() {
     let fields = std::env::var("KERF_BENCH_MEDIA").unwrap_or_default();
     let media =
         format!("media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160{fields}\n");
+    // What the sequence says of itself, such as ` color=rec2100-pq`.
+    let sequence = std::env::var("KERF_BENCH_SEQUENCE").unwrap_or_default();
     println!(
         "{:<10} {:>9} {:>11} {:>8}",
         "scene", "size", "median ms", "fps"
     );
     for (width, height) in [(1920, 1080), (3840, 2160)] {
         let head = format!(
-            "kerf 1\nproject name=\"bench\"\n{media}sequence s1 rate=24 size={width}x{height} audio=48000\n"
+            "kerf 1\nproject name=\"bench\"\n{media}sequence s1 rate=24 size={width}x{height} audio=48000{sequence}\n"
         );
         let clip_line = "    clip c1 media=m1 src=0f at=0f dur=48f\n";
         for (name, body) in SCENES.iter().filter(|(name, _)| name.contains(&only)) {

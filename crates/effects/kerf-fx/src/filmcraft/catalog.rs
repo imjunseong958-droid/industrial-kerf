@@ -179,7 +179,7 @@ pub fn headroom(id: &str) -> Headroom {
         | "distort.rollingshutterrepair" | "distort.upscale" | "image.fill"
         | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain"
         | "perspective.bevelalpha" | "stylize.coloremboss" | "stylize.emboss"
-        | "stylize.findedges" | "stylize.motiontile" | "stylize.strobe" | "time.echo" => Headroom::Whole,
+        | "stylize.findedges" | "stylize.motiontile" | "stylize.strobe" => Headroom::Whole,
         "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "light.echoglow" | "light.glint"
         | "light.lighting" | "light.wonderglow" | "vr.glow" | "vr.sharpen" => Headroom::Gamut,
         "channel.invert" | "color.asccdl" | "color.autocolor" | "color.autocontrast" | "color.basic"
