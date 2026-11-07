@@ -271,3 +271,148 @@ fn kerf_gpu_missing() -> bool {
     }
     missing
 }
+
+/// A second of test footage in `pixel` format, with what `args` says of its color.
+fn made_as(dir: &Path, name: &str, codec: &[&str], filter: &str) -> Option<String> {
+    let path = dir.join(name);
+    let output = Command::new(ffmpeg())
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+        .args(["-i", "testsrc2=s=320x180:r=24:d=1"])
+        .args(["-vf", filter])
+        .args(codec)
+        .arg(&path)
+        .output()
+        .expect("ffmpeg runs");
+    // Not every FFmpeg has every encoder at every depth.
+    output.status.success().then(|| path.display().to_string())
+}
+
+/// How far the GPU's frame of `document` is from the CPU's, as the mean and the worst of 999 in 1000
+/// of its channels, and the worst of them all. A clip a touch see-through goes to neither's shortcut.
+fn apart(document: &str) -> Option<(f64, u8, u8)> {
+    let project = parse_document(document, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let make = |accel| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                accel,
+                keep_frames: false,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(5);
+    let gpu = make(Accel::Always);
+    if !gpu.draws_on_gpu(at, 1.0) {
+        return None;
+    }
+    let (on_gpu, on_cpu) = (gpu.frame(at, 1.0), make(Accel::Never).frame(at, 1.0));
+    let mut off: Vec<u8> = on_gpu
+        .rgba
+        .iter()
+        .zip(&on_cpu.rgba)
+        .map(|(a, b)| a.abs_diff(*b))
+        .collect();
+    let mean = off.iter().map(|value| f64::from(*value)).sum::<f64>() / off.len() as f64;
+    off.sort_unstable();
+    Some((mean, off[off.len() * 999 / 1000], off[off.len() - 1]))
+}
+
+#[test]
+fn frames_the_gpu_makes_from_their_planes_match_what_the_cpu_makes_of_them() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let x264 = ["-c:v", "libx264", "-crf", "6"];
+    let tagged = |matrix: &str, trc: &str, primaries: &str, pixel: &str, range: &str| {
+        format!(
+            "scale=out_color_matrix={matrix}:out_range={range},format={pixel},setparams=range={range}:colorspace={matrix}:color_trc={trc}:color_primaries={primaries}"
+        )
+    };
+    let cases: Vec<(&str, Vec<&str>, String, &str)> = vec![
+        ("plain", x264.to_vec(), "format=yuv420p".to_owned(), ""),
+        (
+            "bt709",
+            x264.to_vec(),
+            tagged("bt709", "bt709", "bt709", "yuv420p", "tv"),
+            "",
+        ),
+        (
+            "bt601",
+            x264.to_vec(),
+            tagged("smpte170m", "smpte170m", "smpte170m", "yuv420p", "tv"),
+            "",
+        ),
+        (
+            "bt2020",
+            x264.to_vec(),
+            tagged("bt2020nc", "bt709", "bt2020", "yuv420p", "tv"),
+            "",
+        ),
+        (
+            "full",
+            x264.to_vec(),
+            tagged("bt709", "bt709", "bt709", "yuv420p", "pc"),
+            "",
+        ),
+        ("422", x264.to_vec(), "format=yuv422p".to_owned(), ""),
+        ("444", x264.to_vec(), "format=yuv444p".to_owned(), ""),
+        (
+            "422_10",
+            x264.to_vec(),
+            "format=yuv422p10le".to_owned(),
+            " bits=10",
+        ),
+        (
+            "420_10",
+            x264.to_vec(),
+            "format=yuv420p10le".to_owned(),
+            " bits=10",
+        ),
+        (
+            "prores",
+            vec!["-c:v", "prores_ks", "-profile:v", "3"],
+            "format=yuv422p10le".to_owned(),
+            " bits=10",
+        ),
+    ];
+    let mut read = 0;
+    for (name, codec, filter, fields) in cases {
+        let extension = if name == "prores" { "mov" } else { "mp4" };
+        let Some(path) = made_as(dir.path(), &format!("{name}.{extension}"), &codec, &filter)
+        else {
+            eprintln!("{name}: this FFmpeg cannot make it");
+            continue;
+        };
+        let document = format!(
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{path}\" rate=24 dur=24f video=320x180{fields}\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n      set opacity=0.99\n"
+        );
+        let Some((mean, most, worst)) = apart(&document) else {
+            eprintln!("no GPU to compare with");
+            return;
+        };
+        eprintln!("{name}: mean {mean:.3}, 99.9% within {most}, worst {worst}");
+        // Deep frames come within 3; 8-bit ones have to come to the same bytes, or a frame on the GPU
+        // would differ from the same frame that skips it.
+        if fields.is_empty() {
+            assert_eq!(worst, 0, "{name}: {mean} {most}");
+        } else {
+            assert!(mean < 0.5 && worst <= 3, "{name}: {mean} {most} {worst}");
+        }
+        read += 1;
+    }
+    assert!(read >= 7, "only {read} of the cases could be made");
+    // A width libswscale's fast paths do not take, and an odd height: as RGBA, as it always went.
+    let Some(path) = made_as(dir.path(), "odd.mp4", &x264, "scale=330:182,format=yuv420p") else {
+        return;
+    };
+    let document = format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{path}\" rate=24 dur=24f video=330x182\nsequence s1 rate=24 size=330x182 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n      set opacity=0.99\n"
+    );
+    if let Some((mean, most, worst)) = apart(&document) {
+        eprintln!("odd width: mean {mean:.3}, 99.9% within {most}, worst {worst}");
+        assert_eq!(worst, 0, "{mean} {most}");
+    }
+}
