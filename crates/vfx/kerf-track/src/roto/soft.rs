@@ -19,10 +19,13 @@ pub(super) struct Across {
     pub out: f64,
     /// How much to go by this, from 0 where the two sides look alike to 1 where they are plain.
     pub weight: f64,
+    /// How far the edge was read to either side, the lesser: an edge wider than this has no plain side
+    /// to be measured against.
+    pub room: f64,
 }
 
 /// How wide a hard edge reads, by way of its pixels and of the cut wandering along it.
-const HARD: f64 = 3.0;
+pub(super) const HARD: f64 = 3.0;
 /// How many steps at most there are from either side of an edge to the corner.
 const STEPS: f64 = 96.0;
 /// How little a measure may be gone by, on average around it, for anything to come of it.
@@ -57,7 +60,7 @@ fn gap2(a: [f32; 3], b: [f32; 3]) -> f32 {
 }
 
 /// What a mask draws at `from` pixels in from an edge `wide` across: `kerf_draw::mask`'s fall-off.
-fn fall_off(from: f64, wide: f64) -> f64 {
+pub(super) fn fall_off(from: f64, wide: f64) -> f64 {
     let u = (from / wide.max(1.0) + 0.5).clamp(0.0, 1.0);
     let smooth = u * u * (3.0 - 2.0 * u);
     u + (smooth - u) * wide.min(1.0)
@@ -218,6 +221,7 @@ pub(super) fn measured(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) ->
                 wide: wide.min(2.0 * inner.min(outer)),
                 out: off,
                 weight,
+                room: inner.min(outer),
             }
         })
         .collect()
@@ -257,6 +261,7 @@ pub(super) fn settled(frames: &[Vec<Across>]) -> Vec<Vec<Across>> {
                         wide: wide * plain,
                         out: out * plain,
                         weight,
+                        room: 0.0,
                     }
                 })
                 .collect()
@@ -302,6 +307,7 @@ mod tests {
             wide,
             out: 0.0,
             weight,
+            room: 0.0,
         };
         let frames = vec![vec![at(10.0, 1.0), at(40.0, 0.01), at(10.0, 1.0), at(10.0, 1.0)]; 3];
         let settled = settled(&frames);

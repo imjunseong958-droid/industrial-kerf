@@ -748,6 +748,10 @@ struct Hard {
     /// How much of a frame the shutter is open for, from 0 to 1.
     shutter: f64,
     alike: bool,
+    /// Pixels a frame up and down, on top of how it wanders.
+    rise: f64,
+    /// A rounded box rather than an ellipse.
+    boxy: bool,
 }
 
 impl Hard {
@@ -760,6 +764,13 @@ impl Hard {
         } else {
             along
         };
+        let tall = reach / 2.0;
+        let up = h as f64 - 2.0 * tall - 8.0;
+        if self.rise != 0.0 {
+            let by = (self.rise * t).rem_euclid(2.0 * up);
+            let by = if by > up { 2.0 * up - by } else { by };
+            return [reach + 4.0 + along, tall + 4.0 + by];
+        }
         [
             reach + 4.0 + along,
             h as f64 / 2.0 + (h as f64 / 2.0 - reach - 4.0) * 0.5 * (t * 0.4).sin(),
@@ -775,7 +786,29 @@ impl Hard {
         let (dx, dy) = ((px - c[0]) / by, (py - c[1]) / by);
         let (x, y) = (dx * co + dy * s, -dx * s + dy * co);
         let (a, b) = (self.radius, self.radius / 2.0);
+        if self.boxy {
+            return ([x, y], (x / a).powi(4) + (y / b).powi(4) < 1.0);
+        }
         ([x, y], (x / a).powi(2) + (y / b).powi(2) < 1.0)
+    }
+
+    /// What is covered more than half of the time: with an odd number of moments, since at 8 what is
+    /// covered for 4 would count, and that is a sixteenth of the blur further out than the true edge at
+    /// both ends.
+    fn half_covered(&self, (w, h): (usize, usize), frame: usize) -> Vec<bool> {
+        let moments: Vec<f64> = (0..33)
+            .map(|at| frame as f64 + self.shutter * 7.0 / 8.0 * f64::from(at) / 32.0)
+            .collect();
+        let at = |i: usize| {
+            let (px, py) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+            moments
+                .iter()
+                .filter(|t| self.on_it((w, h), **t, (px, py)).1)
+                .count()
+                * 2
+                > moments.len()
+        };
+        (0..w * h).into_par_iter().map(at).collect()
     }
 
     /// The frame as a shutter sees it, and how much of each pixel the subject covers.
@@ -834,6 +867,70 @@ impl Hard {
         (rgba, covered)
     }
 
+    /// What is measured for the table in `docs/architecture.md`, by the measure alone and with the shutter
+    /// when one is found: the overlap as [`Hard::overlap`] has it, the outline's area for the area of what
+    /// is more than half covered, and how far off the true alpha a mask drawn from it is.
+    fn measured(
+        &self,
+        size: (usize, usize),
+        frames: usize,
+    ) -> ([[f64; 4]; 2], Option<shutter::Shutter>) {
+        let (w, h) = (size.0 as f64, size.1 as f64);
+        let start = self.center(size, self.shutter / 2.0);
+        let hints = Hints {
+            inside: vec![[start[0] / w, start[1] / h]],
+            ..Hints::default()
+        };
+        let traced = || {
+            trace(frames, &hints, None, |frame| {
+                Some((size.0, size.1, self.scene(size, frame).0))
+            })
+        };
+        let of = |followed: &FollowedObject| {
+            let (mut sum, mut worst, mut area, mut alpha, mut read) = (0.0, 1.0f64, 0.0, 0.0, 0.0);
+            for (frame, outline) in followed.outlines.iter().enumerate() {
+                let polygon: Vec<[f64; 2]> =
+                    outline.iter().map(|at| [at[0] * w, at[1] * h]).collect();
+                let covered = self.half_covered(size, frame);
+                let (mut both, mut either, mut mine, mut truth) = (0usize, 0usize, 0usize, 0usize);
+                for y in 0..size.1 {
+                    for x in 0..size.0 {
+                        let a = in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]);
+                        let b = covered[y * size.0 + x];
+                        both += usize::from(a && b);
+                        either += usize::from(a || b);
+                        mine += usize::from(a);
+                        truth += usize::from(b);
+                    }
+                }
+                let overlap = both as f64 / either.max(1) as f64;
+                sum += overlap;
+                worst = worst.min(overlap);
+                area += mine as f64 / truth.max(1) as f64;
+                // Every fourth frame: the soft edge takes a while to read.
+                if frame % 4 == 2 {
+                    let true_alpha = self.scene(size, frame).1;
+                    let at = |x: f64, y: f64| {
+                        let (x, y) = (x as usize, y as usize);
+                        f64::from(true_alpha[y.min(size.1 - 1) * size.0 + x.min(size.0 - 1)])
+                    };
+                    alpha += against_the_truth(size, followed, frame, &at).0;
+                    read += 1.0;
+                }
+            }
+            let n = followed.outlines.len().max(1) as f64;
+            [sum / n, worst, area / n, alpha / f64::max(read, 1.0)]
+        };
+        let first = traced();
+        let found = shutter::fit(&first.raw, &first.across, first.shortest_blur());
+        let plain = of(&first.by_the_measure());
+        let with = match found {
+            Some(found) => of(&traced().under_a_shutter(found)),
+            None => plain,
+        };
+        ([plain, with], found)
+    }
+
     /// How well it is followed over `frames`: the mean and worst overlap with what is more than half
     /// covered, and how many frames it got to.
     fn overlap(&self, size: (usize, usize), frames: usize) -> (f64, f64, usize) {
@@ -849,12 +946,12 @@ impl Hard {
         let (mut sum, mut worst) = (0.0, 1.0f64);
         for (frame, outline) in followed.outlines.iter().enumerate() {
             let polygon: Vec<[f64; 2]> = outline.iter().map(|at| [at[0] * w, at[1] * h]).collect();
-            let covered = self.scene(size, frame).1;
+            let covered = self.half_covered(size, frame);
             let (mut both, mut either) = (0usize, 0usize);
             for y in 0..size.1 {
                 for x in 0..size.0 {
                     let a = in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]);
-                    let b = covered[y * size.0 + x] >= 0.5;
+                    let b = covered[y * size.0 + x];
                     both += usize::from(a && b);
                     either += usize::from(a || b);
                 }
@@ -881,6 +978,8 @@ fn measure_hard_subjects() {
         grow: 0.0,
         shutter: 0.0,
         alike: false,
+        rise: 0.0,
+        boxy: false,
     };
     let frames = 24;
     for alike in [false, true] {
@@ -1031,6 +1130,8 @@ fn hard() -> Hard {
         grow: 0.0,
         shutter: 0.0,
         alike: false,
+        rise: 0.0,
+        boxy: false,
     }
 }
 
@@ -1076,9 +1177,9 @@ fn a_subject_that_turns_and_changes_size_at_speed_is_kept_up_with() {
     }
 }
 
-/// Under an open shutter the outline sits inside what is more than half covered, by as much as the blur
-/// is long, since a cut keeps to what looks like the subject and a measure of the fall-off goes only so far
-/// around a turn. These say how far it goes, so that it cannot go further.
+/// Under an open shutter a cut takes in nearly all of the blur, and what is more than half covered is that
+/// drawn in along the way the subject went: see `shutter.rs`. These say how far it goes, so that it cannot
+/// go less far.
 #[test]
 fn a_subject_under_an_open_shutter_is_kept_up_with() {
     let size = (640, 360);
@@ -1097,7 +1198,7 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
                 shutter: 0.5,
                 ..hard()
             },
-            0.93,
+            0.95,
         ),
         (
             Hard {
@@ -1105,7 +1206,7 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
                 shutter: 1.0,
                 ..hard()
             },
-            0.84,
+            0.90,
         ),
         (
             Hard {
@@ -1114,15 +1215,252 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
                 alike: true,
                 ..hard()
             },
-            0.92,
+            0.93,
+        ),
+        (
+            Hard {
+                speed: 48.0,
+                rise: 40.0,
+                shutter: 1.0,
+                ..hard()
+            },
+            0.91,
+        ),
+        (
+            Hard {
+                speed: 64.0,
+                shutter: 1.0,
+                boxy: true,
+                ..hard()
+            },
+            0.93,
         ),
     ] {
         let (mean, worst, found) = shape.overlap(size, 12);
         assert_eq!(found, 12, "{shape:?}");
         assert!(
-            mean > least && worst > least - 0.04,
+            mean > least && worst > least - 0.14,
             "{shape:?}: {mean} {worst}"
         );
+    }
+}
+
+/// The cut takes in more than is half covered, and the measure alone brings it only so far back: 12% too
+/// much at 64 pixels with the shutter open all the time.
+#[test]
+fn an_outline_under_an_open_shutter_is_the_size_of_what_is_half_covered() {
+    let shape = Hard {
+        speed: 64.0,
+        shutter: 1.0,
+        ..hard()
+    };
+    let ([plain, with], found) = shape.measured((640, 360), 12);
+    assert!(found.is_some());
+    assert!(plain[2] > 1.08, "{plain:?}");
+    assert!((with[2] - 1.0).abs() < 0.06, "{with:?}");
+    // And a mask from it comes nearer the true alpha.
+    assert!(with[3] < plain[3] * 0.85, "{plain:?} {with:?}");
+}
+
+/// What has no long shutter is left to the measure, down to its bytes, at the cost of a sum over its corners.
+#[test]
+fn what_has_no_long_shutter_stays_as_it_was() {
+    let size = (640, 360);
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    for shape in [
+        Hard {
+            speed: 8.0,
+            shutter: 0.5,
+            ..hard()
+        },
+        Hard {
+            speed: 8.0,
+            shutter: 0.5,
+            alike: true,
+            ..hard()
+        },
+        Hard {
+            speed: 64.0,
+            ..hard()
+        },
+        hard(),
+    ] {
+        let start = shape.center(size, shape.shutter / 2.0);
+        let hints = Hints {
+            inside: vec![[start[0] / w, start[1] / h]],
+            ..Hints::default()
+        };
+        let traced = trace(8, &hints, None, |frame| {
+            Some((size.0, size.1, shape.scene(size, frame).0))
+        });
+        assert_eq!(
+            shutter::fit(&traced.raw, &traced.across, traced.shortest_blur()),
+            None,
+            "{shape:?}"
+        );
+    }
+}
+
+/// A subject out of focus reads as wide whichever way its edge faces, however fast it goes.
+#[test]
+fn a_subject_out_of_focus_and_moving_has_no_shutter() {
+    let (frames, size, radius) = (10, (400, 300), 64.0);
+    let center = |frame: usize| [90.0 + 16.0 * frame as f64, 140.0];
+    let alpha_at = |frame: usize| {
+        move |x: f64, y: f64| {
+            let c = center(frame);
+            1.0 / (1.0 + (((x - c[0]).hypot(y - c[1]) - radius) * 4.4 / 16.0).exp())
+        }
+    };
+    let start = center(0);
+    let hints = Hints {
+        inside: vec![[start[0] / size.0 as f64, start[1] / size.1 as f64]],
+        ..Hints::default()
+    };
+    let traced = trace(frames, &hints, None, |n| {
+        Some(soft_scene(size, alpha_at(n)))
+    });
+    assert_eq!(traced.followed.lost_at, None);
+    assert_eq!(
+        shutter::fit(&traced.raw, &traced.across, traced.shortest_blur()),
+        None
+    );
+}
+
+#[test]
+#[ignore]
+fn measure_shutters() {
+    let size = (640, 360);
+    let frames = 24;
+    for alike in [false, true] {
+        for (name, shape) in [
+            (
+                "half 8",
+                Hard {
+                    speed: 8.0,
+                    shutter: 0.5,
+                    ..hard()
+                },
+            ),
+            (
+                "half 64",
+                Hard {
+                    speed: 64.0,
+                    shutter: 0.5,
+                    ..hard()
+                },
+            ),
+            (
+                "half 128",
+                Hard {
+                    speed: 128.0,
+                    shutter: 0.5,
+                    ..hard()
+                },
+            ),
+            (
+                "half 64 turn 12",
+                Hard {
+                    speed: 64.0,
+                    turn: 12.0,
+                    shutter: 0.5,
+                    ..hard()
+                },
+            ),
+            (
+                "open 64",
+                Hard {
+                    speed: 64.0,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "open 32",
+                Hard {
+                    speed: 32.0,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "open 128",
+                Hard {
+                    speed: 128.0,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "half 64 diagonal",
+                Hard {
+                    speed: 48.0,
+                    rise: 40.0,
+                    shutter: 0.5,
+                    ..hard()
+                },
+            ),
+            (
+                "open 64 diagonal",
+                Hard {
+                    speed: 48.0,
+                    rise: 40.0,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "open 64 small",
+                Hard {
+                    radius: 50.0,
+                    speed: 64.0,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "open 48 turn+grow",
+                Hard {
+                    speed: 48.0,
+                    turn: 12.0,
+                    grow: 0.2,
+                    shutter: 1.0,
+                    ..hard()
+                },
+            ),
+            (
+                "open 64 box",
+                Hard {
+                    speed: 64.0,
+                    shutter: 1.0,
+                    boxy: true,
+                    ..hard()
+                },
+            ),
+            (
+                "rigid 64 no blur",
+                Hard {
+                    speed: 64.0,
+                    ..hard()
+                },
+            ),
+            ("still", Hard { ..hard() }),
+        ] {
+            let shape = Hard { alike, ..shape };
+            let ([plain, with], found) = shape.measured(size, frames);
+            eprintln!(
+                "{:<5} {name:<20} {:.3} {:.3} {:.3} {:.3} | {:.3} {:.3} {:.3} {:.3} | {found:?}",
+                if alike { "alike" } else { "apart" },
+                plain[0],
+                plain[1],
+                plain[2],
+                plain[3],
+                with[0],
+                with[1],
+                with[2],
+                with[3],
+            );
+        }
     }
 }
 
