@@ -17,7 +17,7 @@ use kerf_draw::{Affine, Blend, Image, Landing, Rect};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
 pub mod depth;
@@ -41,11 +41,17 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(8);
 /// allocating one costs more than compositing into it.
 const POOL_BYTES: usize = 1536 << 20;
 
+/// A size no frame has asked for in this long goes from the pool: playback changes the size it draws
+/// at, and every size it has been through otherwise stayed up to the budget, 1.9 GB on an 8 GB machine.
+const POOL_SIZE_STALE: Duration = Duration::from_secs(2);
+
 type TextureKey = (u32, u32, wgpu::TextureFormat, wgpu::TextureUsages);
 
 #[derive(Default)]
 struct Pool {
     free: HashMap<TextureKey, Vec<wgpu::Texture>>,
+    /// When a frame last asked for each size.
+    asked: HashMap<TextureKey, Instant>,
     staging: HashMap<u64, Vec<wgpu::Buffer>>,
     /// Those of clips in depth, by size.
     buffers: HashMap<u64, Vec<wgpu::Buffer>>,
@@ -628,6 +634,7 @@ impl Gpu {
     fn texture(&self, key: TextureKey) -> wgpu::Texture {
         {
             let mut pool = self.pool();
+            pool.asked.insert(key, Instant::now());
             if let Some(texture) = pool.free.get_mut(&key).and_then(Vec::pop) {
                 pool.bytes -= texture_bytes(key);
                 return texture;
@@ -657,6 +664,7 @@ impl Gpu {
             pool.bytes += texture_bytes(key);
             pool.free.entry(key).or_default().push(texture);
         }
+        pool.drop_stale_sizes(POOL_SIZE_STALE);
         while pool.bytes > POOL_BYTES {
             let Some(key) = pool.free.keys().next().copied() else {
                 break;
@@ -668,6 +676,28 @@ impl Gpu {
                     pool.free.remove(&key);
                 }
             }
+        }
+    }
+}
+
+impl Pool {
+    /// Let go of the free textures of every size no frame has asked for in `stale`.
+    fn drop_stale_sizes(&mut self, stale: Duration) {
+        let stale_keys: Vec<TextureKey> = self
+            .free
+            .keys()
+            .filter(|key| {
+                self.asked
+                    .get(key)
+                    .is_none_or(|asked| asked.elapsed() >= stale)
+            })
+            .copied()
+            .collect();
+        for key in stale_keys {
+            if let Some(textures) = self.free.remove(&key) {
+                self.bytes -= textures.len() * texture_bytes(key);
+            }
+            self.asked.remove(&key);
         }
     }
 }
@@ -1980,6 +2010,33 @@ mod tests {
             }
             assert!(worst < 2e-3, "{space:?} differs by {worst}");
         }
+    }
+
+    #[test]
+    fn a_size_no_frame_asks_for_goes_from_the_pool() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC;
+        // Sizes of their own, so that other tests sharing this device leave them alone.
+        let stale: TextureKey = (971, 13, WORKING_FORMAT, usage);
+        let fresh: TextureKey = (973, 13, WORKING_FORMAT, usage);
+        let old = gpu.texture(stale);
+        let new = gpu.texture(fresh);
+        gpu.give_back(vec![(stale, old), (fresh, new)]);
+        {
+            let mut pool = gpu.pool();
+            assert!(pool.free.contains_key(&stale), "asked for just now");
+            pool.asked.insert(
+                stale,
+                Instant::now() - POOL_SIZE_STALE - Duration::from_secs(1),
+            );
+        }
+        let new = gpu.texture(fresh);
+        gpu.give_back(vec![(fresh, new)]);
+        let pool = gpu.pool();
+        assert!(!pool.free.contains_key(&stale), "not asked for in a while");
+        assert!(pool.free.contains_key(&fresh), "still in use");
     }
 
     #[test]

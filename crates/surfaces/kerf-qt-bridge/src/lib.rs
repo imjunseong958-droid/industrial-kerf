@@ -1280,7 +1280,55 @@ fn preview_frame_size(project: &Project) -> (u32, u32) {
     )
 }
 
+/// With `KERF_PLAYBACK_STATS` set, a line on stderr every 5 seconds of playing: frames shown and
+/// dropped, and the size they came at, for measuring playback in the real editor.
+struct PlaybackStats {
+    on: bool,
+    since: Instant,
+    shown: u64,
+    dropped: u64,
+    dropped_before: u64,
+    size: (u32, u32),
+}
+
+impl PlaybackStats {
+    fn new() -> Self {
+        Self {
+            on: std::env::var_os("KERF_PLAYBACK_STATS").is_some(),
+            since: Instant::now(),
+            shown: 0,
+            dropped: 0,
+            dropped_before: 0,
+            size: (0, 0),
+        }
+    }
+
+    fn frame(&mut self, width: u32, height: u32) {
+        self.shown += 1;
+        self.size = (width, height);
+    }
+
+    fn clock(&mut self, dropped: u64) {
+        self.dropped = dropped;
+        if !self.on || self.since.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        let spent = self.since.elapsed().as_secs_f64();
+        eprintln!(
+            "playback: {:.1} shown/s, {:.1} dropped/s, {}x{}",
+            self.shown as f64 / spent,
+            dropped.saturating_sub(self.dropped_before) as f64 / spent,
+            self.size.0,
+            self.size.1
+        );
+        self.shown = 0;
+        self.dropped_before = dropped;
+        self.since = Instant::now();
+    }
+}
+
 fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared>) {
+    let mut stats = PlaybackStats::new();
     let mut session: Option<PlaybackSession> = None;
     let mut position = 0.0_f64;
     let mut playing = false;
@@ -1421,6 +1469,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             for event in session.drain_events() {
                 match event {
                     PlaybackEvent::Frame(frame) => {
+                        stats.frame(frame.width, frame.height);
                         position = frame.timeline_time;
                         let caption = frame
                             .captions
@@ -1434,6 +1483,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                         }
                     }
                     PlaybackEvent::Clock(clock) => {
+                        stats.clock(clock.dropped);
                         position = clock.position;
                         let _ = tx.try_send(json!({
                             "type": "clock",

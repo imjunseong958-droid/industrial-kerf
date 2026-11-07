@@ -4,7 +4,10 @@
 //! the clock while playing, the frame asked for after a seek. A frame drawn
 //! for an earlier seek is dropped, and one that arrives after its time is
 //! never shown. Playback draws smaller than a still frame, and smaller
-//! again while frames take longer than their time.
+//! again while frames take longer than their time, but not so small as to
+//! leave a GPU that can draw the frame: the CPU drawing a scene in depth at a
+//! fifth of the size took every core and gave fewer frames than the GPU at
+//! half of it.
 
 use crate::PlaybackError;
 use kerf_compose::{ComposeOptions, Compositor, Frame};
@@ -25,13 +28,35 @@ const MOVING_EDGE: f64 = 1280.0;
 /// The smallest share of the canvas playback draws at.
 const SMALLEST: f64 = 0.2;
 
+/// How far playback's size goes at a time, across and down.
+const SIZE_STEP: f64 = 0.8;
+
+/// Frames a size is given before it changes. A size that changed with each frame cost more than any
+/// one of them, since each new size builds its conversion and its textures anew: at a steady 960x540
+/// a scene played every frame on 160% of a core, and wandering around 750x420 it dropped 10% on 250%.
+const SETTLE_FRAMES: u32 = 12;
+
+/// The share of its time a frame may take for playback to stay at a size. Past that, frames come late
+/// now and then.
+const HEADROOM: f64 = 0.9;
+
+/// The share of its time a frame would take at the size above for playback to go up to it. Well under
+/// [`HEADROOM`], since how long a frame takes does not follow its area closely, and going up to a size
+/// and straight back drops frames each time.
+const ROOM_TO_GROW: f64 = 0.6;
+
 pub(crate) struct Drawn {
     rate: Rate,
     last: i64,
+    /// What draws them, to ask what it can draw.
+    compositor: Arc<Compositor>,
     /// The share of the canvas a still frame is drawn at, and the share
     /// playback draws at now.
     still: f64,
     moving: f64,
+    /// How long the frames at this size have taken, and how many there were.
+    took: f64,
+    frames: u32,
     jobs: Option<Sender<Job>>,
     /// Set when the pictures are no longer wanted, so the drawers leave the
     /// jobs still queued undrawn.
@@ -128,8 +153,11 @@ impl Drawn {
         Ok(Self {
             rate,
             last: frames.max(1) - 1,
+            compositor,
             still,
             moving: still.min(MOVING_EDGE / width.max(height)),
+            took: 0.0,
+            frames: 0,
             jobs: Some(jobs),
             closed,
             results,
@@ -200,7 +228,10 @@ impl Drawn {
                 Ok(drawing) => {
                     self.drawing.remove(&(drawing.index, drawing.epoch));
                     if playing && drawing.frame.is_some() {
-                        self.adapt(drawing.took);
+                        let on_gpu = self
+                            .compositor
+                            .draws_on_gpu(self.rate.time_of(drawing.index), drawing.scale);
+                        self.adapt(drawing.took, on_gpu);
                     }
                     drawn.push(drawing);
                 }
@@ -209,16 +240,45 @@ impl Drawn {
         }
     }
 
-    fn adapt(&mut self, took: Duration) {
+    /// `on_gpu` says whether the GPU could draw that frame, once it is ready.
+    fn adapt(&mut self, took: Duration, on_gpu: bool) {
         let budget = DRAWERS as f64 * f64::from(self.rate.den()) / f64::from(self.rate.num());
         let took = took.as_secs_f64();
-        let smallest = SMALLEST.min(self.still);
-        if took > budget {
-            self.moving = (self.moving * 0.85).max(smallest);
-        } else if took < budget * 0.5 {
-            self.moving = (self.moving * 1.05).min(self.still);
+        self.took += took;
+        self.frames += 1;
+        let smallest = smallest_moving(on_gpu, self.compositor.smallest_on_gpu(), self.still);
+        // A frame far over its time says so at once: that is no moment to wait and see.
+        let mean = (self.frames >= SETTLE_FRAMES || took > 2.0 * budget)
+            .then(|| self.took / f64::from(self.frames));
+        if mean.is_some() {
+            (self.took, self.frames) = (0.0, 0);
         }
+        self.moving = next_moving(self.moving, mean, budget, smallest, self.still);
     }
+}
+
+/// The least playback may draw at. What the GPU can draw stays large enough for it: shrinking past that
+/// hands the frame to the CPU, which is slower still, and from where the frames rarely come quickly
+/// enough to grow back.
+fn smallest_moving(on_gpu: bool, smallest_on_gpu: f64, still: f64) -> f64 {
+    let least = if on_gpu {
+        smallest_on_gpu.max(SMALLEST)
+    } else {
+        SMALLEST
+    };
+    least.min(still)
+}
+
+/// The size to draw at next: down a step when frames at this one take too long on `mean`, up one when
+/// they would still be on time at that size, as it goes by area. A size under `smallest` comes up to
+/// it, as one shrunk while the kernels were building does once they are ready.
+fn next_moving(moving: f64, mean: Option<f64>, budget: f64, smallest: f64, still: f64) -> f64 {
+    let next = match mean {
+        Some(mean) if mean > budget * HEADROOM => moving * SIZE_STEP,
+        Some(mean) if mean / (SIZE_STEP * SIZE_STEP) < budget * ROOM_TO_GROW => moving / SIZE_STEP,
+        _ => moving,
+    };
+    next.clamp(smallest, still)
 }
 
 impl Drop for Drawn {
@@ -238,5 +298,57 @@ mod tests {
     fn the_compositor_moves_between_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Compositor>();
+    }
+
+    #[test]
+    fn what_the_gpu_can_draw_is_never_shrunk_off_it() {
+        let (budget, still) = (0.125, 1.0);
+        // 1080p: a third of it is the least that goes to the GPU.
+        let on_gpu = smallest_moving(true, 1.0 / 3.0, still);
+        assert_eq!(on_gpu, 1.0 / 3.0);
+        let mut moving = 2.0 / 3.0;
+        for _ in 0..50 {
+            moving = next_moving(moving, Some(1.0), budget, on_gpu, still);
+        }
+        assert_eq!(moving, on_gpu);
+        // What only the CPU can draw goes as small as it must.
+        let on_cpu = smallest_moving(false, 1.0 / 3.0, still);
+        assert_eq!(on_cpu, SMALLEST);
+        for _ in 0..50 {
+            moving = next_moving(moving, Some(1.0), budget, on_cpu, still);
+        }
+        assert_eq!(moving, SMALLEST);
+        // Shrunk while the kernels were building, it comes back up as soon as they are ready, slow
+        // frames or not, since this is what the trap was: frames on the CPU too slow to grow.
+        assert_eq!(next_moving(SMALLEST, None, budget, on_gpu, still), on_gpu);
+        assert_eq!(
+            next_moving(SMALLEST, Some(1.0), budget, on_gpu, still),
+            on_gpu
+        );
+        // A still frame's size smaller than all of that stays the most it may be.
+        assert_eq!(smallest_moving(true, 1.0 / 3.0, 0.25), 0.25);
+    }
+
+    #[test]
+    fn a_size_holds_until_frames_say_otherwise() {
+        let (budget, smallest, still) = (0.125, 1.0 / 3.0, 1.0);
+        let at = 0.5;
+        // Nothing to go by yet.
+        assert_eq!(next_moving(at, None, budget, smallest, still), at);
+        // On time here, but not with room at the next size up, whose area is half as much again.
+        assert_eq!(next_moving(at, Some(0.09), budget, smallest, still), at);
+        assert_eq!(
+            next_moving(at, Some(0.12), budget, smallest, still),
+            at * SIZE_STEP
+        );
+        assert!(next_moving(at, Some(0.04), budget, smallest, still) > at);
+        // Up and down come back to where they were, so sizes do not spread.
+        let up = next_moving(at, Some(0.04), budget, smallest, still);
+        let down = next_moving(up, Some(0.12), budget, smallest, still);
+        assert!((down - at).abs() < 1e-12);
+        assert_eq!(
+            next_moving(still, Some(0.01), budget, smallest, still),
+            still
+        );
     }
 }

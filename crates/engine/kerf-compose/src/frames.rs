@@ -6,8 +6,9 @@ use crate::Frame;
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
-/// How many bytes of frames are kept.
-const BUDGET: usize = 768 << 20;
+/// How many bytes of frames are kept: about eight seconds of 1000x562 at 24 frames a second. What
+/// falls off is on disk where there is one, and past this it was all memory an 8 GB machine swapped.
+const BUDGET: usize = 384 << 20;
 
 #[derive(Default)]
 struct Frames {
