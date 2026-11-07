@@ -3,7 +3,10 @@
 //! ```text
 //! ffmpeg -f lavfi -i testsrc2=s=3840x2160:r=24:d=4 -pix_fmt yuv420p clip.mp4
 //! cargo run --release -p kerf-compose --example upload_bench -- clip.mp4 [more.mov …]
+//! KERF_BENCH_SIZE=1920x1080 cargo run --release -p kerf-compose --example upload_bench -- clip.mp4
 //! ```
+//!
+//! With a size, the frame is scaled on the way to RGBA, as footage shown smaller is.
 //!
 //! `decode` is left out of the table: frame threads read ahead, so a frame's turn says nothing of the
 //! work. For that, and for what VideoToolbox would take instead, time the whole file:
@@ -29,6 +32,13 @@ fn main() {
         "{:<24}{:>10}{:>10}{:>13}{:>12}",
         "clip", "to RGBA", "upload", "kernel, back", "whole frame"
     );
+    let scaled = std::env::var("KERF_BENCH_SIZE").ok().map(|size| {
+        let (w, h) = size.split_once('x').expect("a size as 1920x1080");
+        (
+            w.parse::<u32>().expect("a width"),
+            h.parse::<u32>().expect("a height"),
+        )
+    });
     for path in std::env::args().skip(1) {
         let mut input = ffmpeg::format::input(&path).expect("a clip to read");
         let stream = input
@@ -69,10 +79,10 @@ fn main() {
             .output("in", 0)
             .and_then(|parser| parser.input("out", 0))
             .and_then(|parser| {
-                parser.parse(if deep {
-                    "format=rgba64le"
-                } else {
-                    "format=rgba"
+                let format = if deep { "rgba64le" } else { "rgba" };
+                parser.parse(&match scaled {
+                    Some((w, h)) => format!("scale=w={w}:h={h}:flags=bicubic,format={format}"),
+                    None => format!("format={format}"),
                 })
             })
             .expect("a graph");
@@ -110,8 +120,9 @@ fn main() {
                 let mut on_gpu = gpu.frame();
                 let at = Instant::now();
                 // A deep frame as bytes alone: what takes it into light is the same however it came.
-                let width = if deep { w * 2 } else { w };
-                let picture = on_gpu.rgba8(rgba.data(0), width, h, rgba.stride(0) as u32, false);
+                let (out_w, out_h) = (rgba.width(), rgba.height());
+                let width = if deep { out_w * 2 } else { out_w };
+                let picture = on_gpu.rgba8(rgba.data(0), width, out_h, rgba.stride(0) as u32, false);
                 uploads.push(at.elapsed().as_secs_f64() * 1000.0);
                 let at = Instant::now();
                 std::hint::black_box(on_gpu.finish(&picture));
