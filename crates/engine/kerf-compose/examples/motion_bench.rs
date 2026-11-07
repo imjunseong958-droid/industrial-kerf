@@ -126,6 +126,14 @@ const SCENES: &[(&str, &str)] = &[
         "gen=solid@1 at=0f dur=96f\n      set color=#808080 three_d=true z=0.3\n  track V2 video\n    clip t gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 bevel=0.02\n  track V3 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4",
     ),
     (
+        "3d round bevel title",
+        "gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 bevel=0.02 bevel_profile=round rotate_y={0f:-20 96f:20}\n  track V2 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1",
+    ),
+    (
+        "3d round bevel title shadow",
+        "gen=solid@1 at=0f dur=96f\n      set color=#808080 three_d=true z=0.3\n  track V2 video\n    clip t gen=title@1 at=0f dur=96f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 bevel=0.02 bevel_profile=round\n  track V3 video\n    clip c2 gen=light@1 at=0f dur=96f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4",
+    ),
+    (
         "3d focus flat",
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=0.5 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.03",
     ),

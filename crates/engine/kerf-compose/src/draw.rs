@@ -730,7 +730,8 @@ impl Drawing {
                     let height = size.1 as f64;
                     let depth = three_d::depth_of(&shown.plan, time, height);
                     let bevel = three_d::bevel_of(&shown.plan, time, height);
-                    Some(caster.through_its_depth(depth, bevel, scene.is_wide()))
+                    let round = three_d::bevel_is_round(&shown.plan);
+                    Some(caster.through_its_depth(depth, (bevel, round), scene.is_wide()))
                 })
                 .flatten()
                 .collect();

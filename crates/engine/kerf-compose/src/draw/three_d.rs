@@ -664,6 +664,18 @@ impl Plane {
             .max(1e-6)
     }
 
+    /// How much wider across a pixel of its picture is than [`Self::pixel_size`], and narrower down:
+    /// 1 unless it is scaled unevenly.
+    pub(super) fn stretch(&self) -> f64 {
+        let stretch =
+            (dot(self.across, self.across) / dot(self.down, self.down).max(1e-12)).powf(0.25);
+        if (stretch - 1.0).abs() < 1e-6 {
+            1.0
+        } else {
+            stretch.max(1e-6)
+        }
+    }
+
     /// The plane this far behind this one, its picture lying over the same pixels.
     fn pushed(&self, by: f64) -> Self {
         Self {
@@ -831,7 +843,7 @@ impl Scene {
         &self,
         plane: &Plane,
         depth: f64,
-        bevel: f64,
+        (bevel, round): (f64, bool),
     ) -> Vec<(kerf_gpu::depth::Plane, f64)> {
         if depth <= 0.0 {
             return vec![(self.plane_for_gpu(plane), 0.0)];
@@ -840,7 +852,7 @@ impl Scene {
         (0..SLICES)
             .map(|slice| {
                 let by = depth * slice as f64 / (SLICES - 1) as f64;
-                let inset = inset_at(bevel, depth, by) / per;
+                let inset = inset_at(bevel, depth, by, round) / per;
                 (self.plane_for_gpu(&plane.pushed(by)), inset)
             })
             .collect()
@@ -997,7 +1009,12 @@ impl Caster {
     ///
     /// With a `bevel`, the planes within it of a face have the outline taken in as far as the bevel has
     /// at that depth.
-    pub fn through_its_depth(self, depth: f64, bevel: f64, wide: bool) -> Vec<Self> {
+    pub fn through_its_depth(
+        self,
+        depth: f64,
+        (bevel, round): (f64, bool),
+        wide: bool,
+    ) -> Vec<Self> {
         if depth <= 0.0 {
             return vec![self];
         }
@@ -1007,6 +1024,7 @@ impl Caster {
                 &self.picture,
                 self.crop,
                 bevel.min(depth / 2.0) / per,
+                self.plane.stretch(),
             );
             (field, per)
         });
@@ -1016,7 +1034,7 @@ impl Caster {
             None => (caster.picture.clone(), caster.held.clone()),
             Some((field, per)) => {
                 let along = depth * slice as f64 / (SLICES - 1) as f64;
-                let inset = inset_at(bevel.min(depth / 2.0), depth, along) / per;
+                let inset = inset_at(bevel.min(depth / 2.0), depth, along, round) / per;
                 if inset <= 0.0 {
                     return (caster.picture.clone(), caster.held.clone());
                 }
@@ -1233,10 +1251,13 @@ fn projected(
         let bevel = (bevel > 0.0).then(|| {
             let per = plane.pixel_size() / by;
             let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
+            let stretch = plane.stretch();
             SolidBevel {
-                field: super::bevel::kept_distance_field(&source, read_crop, bevel / per),
+                field: super::bevel::kept_distance_field(&source, read_crop, bevel / per, stretch),
                 width: bevel / per,
                 depth: solid / per,
+                round: bevel_is_round(plan),
+                stretch,
             }
         });
         let solid = Solid {
@@ -1360,10 +1381,32 @@ pub(super) fn bevel_of(plan: &ClipPlan, time: Time, height: f64) -> f64 {
     bevel.min(depth_of(plan, time, height) / 2.0)
 }
 
-/// How far a bevel `width` wide takes a solid's outline in, `along` its `depth` from its front. It goes
-/// in as fast as it goes back, so its surface is at 45 degrees to the face.
-fn inset_at(width: f64, depth: f64, along: f64) -> f64 {
-    (width - along).max(width - (depth - along)).max(0.0)
+/// Whether a clip's bevel is a curve rather than a flat cut.
+pub(super) fn bevel_is_round(plan: &ClipPlan) -> bool {
+    matches!(
+        param(&plan.clip, "bevel_profile"),
+        Param::Static(Value::Enum(word)) if word == "round"
+    )
+}
+
+/// How far a bevel `width` wide takes a solid's outline in, `along` its `depth` from its front. A flat
+/// one goes in as fast as it goes back, so its surface is at 45 degrees to the face. A round one is a
+/// quarter of a circle `width` across, meeting the face and the side each without a corner.
+fn inset_at(width: f64, depth: f64, along: f64, round: bool) -> f64 {
+    if !round {
+        return (width - along).max(width - (depth - along)).max(0.0);
+    }
+    let from_face = along.min(depth - along);
+    if from_face >= width {
+        return 0.0;
+    }
+    let toward_face = (width - from_face) / width;
+    width * (1.0 - (1.0 - toward_face * toward_face).max(0.0).sqrt())
+}
+
+/// As many steps as a bevel on a solid `depth` deep asks of a ray: half a pixel of depth at a time.
+pub(super) fn bevel_steps(depth: f64) -> f64 {
+    (depth * 2.0).ceil()
 }
 
 /// What a solid's bevel reads, in the pixels its picture is read at.
@@ -1371,6 +1414,9 @@ struct SolidBevel {
     field: Arc<Vec<f32>>,
     width: f64,
     depth: f64,
+    round: bool,
+    /// [`Plane::stretch`] of its front.
+    stretch: f64,
 }
 
 /// A clip with a depth: a solid between two planes, in the outline of its picture's alpha.
@@ -1411,16 +1457,24 @@ impl Solid<'_> {
         let at = |x: f64, y: f64| super::bevel::distance_at(&bevel.field, size, x, y);
         let across = at(x + f64::from(SIDE_REACH), y) - at(x - f64::from(SIDE_REACH), y);
         let down = at(x, y + f64::from(SIDE_REACH)) - at(x, y - f64::from(SIDE_REACH));
+        // Its field changes as the world does, so across a picture's pixel by that pixel's size.
         let out = unit(add(
-            times(unit(self.front.across), -across),
-            times(unit(self.front.down), -down),
+            times(unit(self.front.across), -across / bevel.stretch),
+            times(unit(self.front.down), -down * bevel.stretch),
         ));
         let face = if near_front {
             times(self.front.normal, -1.0)
         } else {
             self.front.normal
         };
-        unit(add(out, face))
+        if !bevel.round {
+            return unit(add(out, face));
+        }
+        // On a quarter of a circle the way it faces turns from the side at the outline to the face at
+        // the bevel's width, as how far in it is says.
+        let toward_side = 1.0 - (at(x, y) / bevel.width).clamp(0.0, 1.0);
+        let toward_face = (1.0 - toward_side * toward_side).max(0.0).sqrt();
+        unit(add(times(out, toward_side), times(face, toward_face)))
     }
 
     /// A row of the output picture. Each pixel's ray goes through the solid half a picture's pixel at a time,
@@ -1479,11 +1533,11 @@ impl Solid<'_> {
             }
             let across = (to.0 - from.0).abs().max((to.1 - from.1).abs()) * self.by;
             // A bevel changes as the ray goes in, however little it goes across.
-            let across = match &self.bevel {
-                Some(bevel) => across.max(bevel.depth),
-                None => across,
-            };
-            let steps = ((across * 2.0).ceil() as usize).clamp(1, MOST_STEPS);
+            let least = self
+                .bevel
+                .as_ref()
+                .map_or(0.0, |bevel| bevel_steps(bevel.depth));
+            let steps = ((across * 2.0).ceil().max(least) as usize).clamp(1, MOST_STEPS);
             // Out of the side it comes in by.
             let near_is_front = near_plane.origin == self.front.origin;
             let flat = if near_is_front {
@@ -1508,7 +1562,7 @@ impl Solid<'_> {
                 let (mut reached, mut on_bevel) = (pixel[3], None);
                 if let Some(bevel) = &self.bevel {
                     let in_depth = if near_is_front { along } else { 1.0 - along } * bevel.depth;
-                    let inset = inset_at(bevel.width, bevel.depth, in_depth);
+                    let inset = inset_at(bevel.width, bevel.depth, in_depth, bevel.round);
                     let size = (self.source.w, self.source.h);
                     let inside =
                         super::bevel::distance_at(&bevel.field, size, u * self.by, v * self.by);
@@ -1771,7 +1825,7 @@ mod tests {
                 Arc::new(Held::Solid),
                 (Arc::new(picture.clone()), 1.0),
             )
-            .through_its_depth(40.0, bevel, false)
+            .through_its_depth(40.0, (bevel, false), false)
         };
         let past = |casters: &[Caster], from: Vector, to: Vector| {
             let way = minus(to, from);

@@ -10,11 +10,11 @@ struct U {
     origin: vec4<f32>, // the plane's first pixel; w: how much of its size the picture is read at
     back: vec4<f32>,   // the same of the plane behind it, for a solid
     normal: vec4<f32>,
-    across: vec4<f32>, // a unit long, for a solid's sides
+    across: vec4<f32>, // a unit long, for a solid's sides; w: the least steps its bevel asks of a ray
     down: vec4<f32>,   // a unit long, for a solid's sides
     to_u: vec4<f32>,
     to_v: vec4<f32>,
-    bevel: vec4<f32>,  // how wide its bevel is and how deep the solid, in the pixels the picture is read at
+    bevel: vec4<f32>,  // how wide its bevel is and how deep the solid, in the pixels the picture is read at; 1 if round; `Plane::stretch`
 };
 
 struct Light {
@@ -621,8 +621,28 @@ fn bevel_facing(at: vec2<f32>, from_front: bool) -> vec3<f32> {
     let y = at.y * u.origin.w;
     let across = distance_at(x + SIDE_REACH, y) - distance_at(x - SIDE_REACH, y);
     let down = distance_at(x, y + SIDE_REACH) - distance_at(x, y - SIDE_REACH);
-    let out = unit(u.across.xyz * -across + u.down.xyz * -down);
-    return unit(out + select(u.normal.xyz, -u.normal.xyz, from_front));
+    let out = unit(u.across.xyz * (-across / u.bevel.w) + u.down.xyz * (-down * u.bevel.w));
+    let face = select(u.normal.xyz, -u.normal.xyz, from_front);
+    if u.bevel.z == 0.0 {
+        return unit(out + face);
+    }
+    let toward_side = 1.0 - clamp(distance_at(x, y) / u.bevel.x, 0.0, 1.0);
+    let toward_face = sqrt(max(1.0 - toward_side * toward_side, 0.0));
+    return unit(out * toward_side + face * toward_face);
+}
+
+// `inset_at`.
+fn bevel_inset(in_depth: f32) -> f32 {
+    let width = u.bevel.x;
+    if u.bevel.z == 0.0 {
+        return max(max(width - in_depth, width - (u.bevel.y - in_depth)), 0.0);
+    }
+    let from_face = min(in_depth, u.bevel.y - in_depth);
+    if from_face >= width {
+        return 0.0;
+    }
+    let toward_face = (width - from_face) / width;
+    return width * (1.0 - sqrt(max(1.0 - toward_face * toward_face, 0.0)));
 }
 
 // A clip with a depth (`Solid::draw_row`).
@@ -680,13 +700,11 @@ fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
         put(id.xy, vec4(0.0), near.ahead);
         return;
     }
-    // A bevel changes as the ray goes in, however little it goes across.
+    // A bevel changes as the ray goes in, however little it goes across. How many steps that takes comes
+    // worked out in 64 bits, since a solid's depth in pixels is often all but a whole number.
     let beveled = u.bevel.x > 0.0;
-    var across = max(abs(to.x - start.x), abs(to.y - start.y)) * by;
-    if beveled {
-        across = max(across, u.bevel.y);
-    }
-    let steps = clamp(u32(ceil(across * 2.0)), 1u, MOST_STEPS);
+    let across = max(abs(to.x - start.x), abs(to.y - start.y)) * by;
+    let steps = clamp(max(u32(ceil(across * 2.0)), u32(u.across.w)), 1u, MOST_STEPS);
     // Out of the side it comes in by.
     let flat_way = select(u.normal.xyz, -u.normal.xyz, near_front);
     var sum = vec3(0.0);
@@ -705,7 +723,7 @@ fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
         var from_front = false;
         if beveled {
             let in_depth = select(1.0 - along, along, near_front) * u.bevel.y;
-            let inset = max(max(u.bevel.x - in_depth, u.bevel.x - (u.bevel.y - in_depth)), 0.0);
+            let inset = bevel_inset(in_depth);
             let inside = distance_at(at.x * by, at.y * by);
             reached = min(reached, clamp(inside - inset + 0.5, 0.0, 1.0));
             on_bevel = inset > 0.0 && inside - inset < 1.5;

@@ -43,7 +43,7 @@ fn kept_fields() -> &'static Mutex<Store<Arc<Vec<f32>>>> {
 }
 
 /// What a distance field goes by: the alpha it is made from, the crop it stops at, and how far it asks.
-fn field_key(picture: &Image, crop: Rect, width: f64) -> String {
+fn field_key(picture: &Image, crop: Rect, width: f64, stretch: f64) -> String {
     let rows = picture
         .px
         .par_chunks(picture.w.max(1) * 4)
@@ -58,20 +58,26 @@ fn field_key(picture: &Image, crop: Rect, width: f64) -> String {
         (hash.rotate_left(7) ^ row).wrapping_mul(0x9E37_79B9_7F4A_7C15)
     });
     format!(
-        "{}x{}|{alpha:x}|{:x},{:x},{:x},{:x}|{:x}",
+        "{}x{}|{alpha:x}|{:x},{:x},{:x},{:x}|{:x}|{:x}",
         picture.w,
         picture.h,
         crop.x.to_bits(),
         crop.y.to_bits(),
         crop.w.to_bits(),
         crop.h.to_bits(),
-        first_jump(width)
+        first_jump(reaching(width, stretch)),
+        stretch.to_bits()
     )
 }
 
 /// [`distance_field`], kept while a picture's alpha stays the same from frame to frame.
-pub(super) fn kept_distance_field(picture: &Image, crop: Rect, width: f64) -> Arc<Vec<f32>> {
-    let key = field_key(picture, crop, width);
+pub(super) fn kept_distance_field(
+    picture: &Image,
+    crop: Rect,
+    width: f64,
+    stretch: f64,
+) -> Arc<Vec<f32>> {
+    let key = field_key(picture, crop, width, stretch);
     let lock = || kept_fields().lock().unwrap_or_else(PoisonError::into_inner);
     {
         let mut kept = lock();
@@ -80,7 +86,7 @@ pub(super) fn kept_distance_field(picture: &Image, crop: Rect, width: f64) -> Ar
             return field;
         }
     }
-    let field = Arc::new(distance_field(picture, crop, width));
+    let field = Arc::new(distance_field(picture, crop, width, stretch));
     let bytes = field.len() * 4;
     let mut kept = lock();
     if kept.wants(&key, bytes) {
@@ -89,9 +95,18 @@ pub(super) fn kept_distance_field(picture: &Image, crop: Rect, width: f64) -> Ar
     field
 }
 
-/// The distance of each pixel of `picture` from the outline of its alpha within `crop`, in pixels, more
-/// than 0 inside it and less outside, no further either way than [`reach`].
-pub(super) fn distance_field(picture: &Image, crop: Rect, width: f64) -> Vec<f32> {
+/// How far across a picture a width takes jumps, where a clip scaled unevenly has its pixels wider one
+/// way than the other: `stretch` is as many of the mean's pixels as a pixel across is, and one down is
+/// the inverse of that.
+pub(super) fn reaching(width: f64, stretch: f64) -> f64 {
+    width / stretch.min(1.0 / stretch)
+}
+
+/// The distance of each pixel of `picture` from the outline of its alpha within `crop`, more than 0
+/// inside it and less outside, no further either way than [`reach`]. It is measured as its pixels are in
+/// the world, in the mean of their two sizes, so that a clip scaled unevenly has a bevel as wide on each
+/// of its sides.
+pub(super) fn distance_field(picture: &Image, crop: Rect, width: f64, stretch: f64) -> Vec<f32> {
     let (w, h) = (picture.w, picture.h);
     let alpha = |x: i64, y: i64| -> f32 {
         if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
@@ -104,8 +119,9 @@ pub(super) fn distance_field(picture: &Image, crop: Rect, width: f64) -> Vec<f32
         picture.px[(y as usize * w + x as usize) * 4 + 3]
     };
     let place = |x: usize, y: usize| [x as f32 + 0.5, y as f32 + 0.5];
+    let (wide, tall) = (stretch as f32, (1.0 / stretch) as f32);
     let gap = |a: [f32; 2], b: [f32; 2]| {
-        let (x, y) = (a[0] - b[0], a[1] - b[1]);
+        let (x, y) = ((a[0] - b[0]) * wide, (a[1] - b[1]) * tall);
         x * x + y * y
     };
     // Each pixel beside the outline knows where along the way to its neighbor the alpha crosses a half.
@@ -131,7 +147,7 @@ pub(super) fn distance_field(picture: &Image, crop: Rect, width: f64) -> Vec<f32
                 }
             }
         });
-    let first = first_jump(width);
+    let first = first_jump(reaching(width, stretch));
     for jump in jumps(first) {
         let step = i64::from(jump);
         let from = seeds.clone();
@@ -230,31 +246,55 @@ mod kept_tests {
     fn a_kept_field_is_the_field_of_that_alpha() {
         let whole = Rect::new(0.0, 0.0, 64.0, 48.0);
         let (one, other) = (disk(64, 48, 17.5), disk(64, 48, 11.5));
-        let wanted = distance_field(&one, whole, 6.0);
+        let wanted = distance_field(&one, whole, 6.0, 1.0);
         // Made, made and kept, and then read back.
         for _ in 0..3 {
-            assert_eq!(*kept_distance_field(&one, whole, 6.0), wanted);
+            assert_eq!(*kept_distance_field(&one, whole, 6.0, 1.0), wanted);
         }
         // Another alpha, crop, or reach is another field.
         assert_eq!(
-            *kept_distance_field(&other, whole, 6.0),
-            distance_field(&other, whole, 6.0)
+            *kept_distance_field(&other, whole, 6.0, 1.0),
+            distance_field(&other, whole, 6.0, 1.0)
         );
         let cropped = Rect::new(8.0, 8.0, 32.0, 32.0);
         assert_eq!(
-            *kept_distance_field(&one, cropped, 6.0),
-            distance_field(&one, cropped, 6.0)
+            *kept_distance_field(&one, cropped, 6.0, 1.0),
+            distance_field(&one, cropped, 6.0, 1.0)
         );
         assert_eq!(
-            *kept_distance_field(&one, whole, 40.0),
-            distance_field(&one, whole, 40.0)
+            *kept_distance_field(&one, whole, 40.0, 1.0),
+            distance_field(&one, whole, 40.0, 1.0)
         );
+        // Scaled unevenly, it measures as the world does: a pixel across counts for 2 here, and one down
+        // for a half, so that an edge 4 pixels away comes to 8 across it and 2 down.
+        let mut rectangle = Image::new(64, 48);
+        for y in 4..44 {
+            for x in 8..56 {
+                rectangle.px[(y * 64 + x) * 4 + 3] = 1.0;
+            }
+        }
+        let stretched = kept_distance_field(&rectangle, whole, 6.0, 2.0);
+        let at = |field: &[f32], x: usize, y: usize| field[y * 64 + x];
+        let near = |found: f32, wanted: f32| (found - wanted).abs() < 1.5;
+        assert!(
+            near(at(&stretched, 51, 24), 8.0),
+            "{}",
+            at(&stretched, 51, 24)
+        );
+        assert!(
+            near(at(&stretched, 32, 39), 2.0),
+            "{}",
+            at(&stretched, 32, 39)
+        );
+        let plain = distance_field(&rectangle, whole, 6.0, 1.0);
+        assert!(near(at(&plain, 51, 24), 4.0), "{}", at(&plain, 51, 24));
+        assert!(near(at(&plain, 32, 39), 4.0), "{}", at(&plain, 32, 39));
         // And its alpha going on the same is the same field, whatever its color does.
         let mut colored = one.clone();
         colored
             .px
             .chunks_exact_mut(4)
             .for_each(|pixel| pixel[0] = 0.5);
-        assert_eq!(*kept_distance_field(&colored, whole, 6.0), wanted);
+        assert_eq!(*kept_distance_field(&colored, whole, 6.0, 1.0), wanted);
     }
 }
