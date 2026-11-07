@@ -60,20 +60,23 @@ const GEOMETRY: [&str; 12] = [
 type Result<T> = std::result::Result<T, ComposeError>;
 
 /// A program ready to draw.
-/// What an effect's picture was brought under 1 by.
+/// What an effect's picture was brought between 0 and 1 by.
 enum Held {
     Nothing,
-    Gains(Vec<f32>),
-    Scale(f32),
+    Unit(Vec<[f32; 2]>),
+    Gamut(Vec<f32>),
+    /// What the whole picture had taken from it, and what was left divided by.
+    Scale(f32, f32),
 }
 
 impl Held {
     fn put_back(self, picture: &mut Image) {
         match self {
             Held::Nothing => {}
-            Held::Gains(gains) if gains.len() * 4 == picture.px.len() => picture.from_unit(&gains),
-            Held::Gains(_) => {}
-            Held::Scale(scale) => picture.scale_rgb(scale),
+            Held::Unit(held) if held.len() * 4 == picture.px.len() => picture.from_unit(&held),
+            Held::Gamut(held) if held.len() * 4 == picture.px.len() => picture.from_gamut(&held),
+            Held::Unit(_) | Held::Gamut(_) => {}
+            Held::Scale(lift, by) => picture.unlift_rgb(lift, by),
         }
     }
 }
@@ -1149,8 +1152,8 @@ impl Drawing {
                         };
                         let read = |at: Time| {
                             let mut other = env.picture_at(plan.clip.start + at)?;
-                            if let Held::Scale(scale) = held {
-                                other.scale_rgb(1.0 / scale);
+                            if let Held::Scale(lift, by) = held {
+                                other.lift_rgb(lift, by);
                             }
                             Some(other)
                         };
@@ -1271,17 +1274,26 @@ impl Drawing {
         if way == Headroom::Keeps {
             return Held::Nothing;
         }
-        let peak = picture.peak();
-        if peak <= 1.0 {
+        let (peak, floor) = (picture.peak(), picture.floor());
+        if way == Headroom::Gamut {
+            return if floor < 0.0 {
+                Held::Gamut(picture.to_gamut())
+            } else {
+                Held::Nothing
+            };
+        }
+        if peak <= 1.0 && floor >= 0.0 {
             return Held::Nothing;
         }
         if way == Headroom::PerPixel {
-            return Held::Gains(picture.to_unit());
+            return Held::Unit(picture.to_unit());
         }
         // One scale for all footage up to the HDR peak, so it does not change between frames.
         let scale = peak.max((1000.0 / kerf_color::REFERENCE_WHITE_NITS) as f32);
-        picture.scale_rgb(1.0 / scale);
-        Held::Scale(scale)
+        let lift = floor.min(0.0);
+        let by = scale - lift;
+        picture.lift_rgb(lift, by);
+        Held::Scale(lift, by)
     }
 
     /// An adjustment layer: its effects on the picture beneath it, weighed

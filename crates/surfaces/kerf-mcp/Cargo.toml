@@ -16,6 +16,7 @@ path = "src/bin/kerf-mcp.rs"
 [dependencies]
 base64 = "0.23"
 kerf-agent = { path = "../../surfaces/kerf-agent" }
+kerf-color = { path = "../../foundation/kerf-color" }
 kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }

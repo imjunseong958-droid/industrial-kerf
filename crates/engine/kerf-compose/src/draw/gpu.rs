@@ -25,7 +25,11 @@ enum Op {
     Effect(GpuEffect),
     /// An effect written for 0 to 1 on a picture holding values over 1.
     Held(GpuEffect),
+    /// An effect that keeps what is over 1 and not what is below 0.
+    Gamut(GpuEffect),
     Correct(Correction),
+    /// [`Op::Correct`], written for 0 to 1, on a picture holding values over 1.
+    HeldCorrect(Correction),
 }
 
 /// What a clip's picture is before its effects, in numbers.
@@ -330,10 +334,14 @@ impl Drawing {
                     ops.push(Op::Effect(op));
                 }
             }
-            if way == Headroom::PerPixel && ops.len() > before {
-                match ops.pop() {
-                    Some(Op::Effect(op)) => ops.push(Op::Held(op)),
-                    other => ops.extend(other),
+            if ops.len() > before {
+                match (way, ops.pop()) {
+                    (Headroom::PerPixel, Some(Op::Effect(op))) => ops.push(Op::Held(op)),
+                    (Headroom::PerPixel, Some(Op::Correct(correction))) => {
+                        ops.push(Op::HeldCorrect(correction));
+                    }
+                    (Headroom::Gamut, Some(Op::Effect(op))) => ops.push(Op::Gamut(op)),
+                    (_, other) => ops.extend(other),
                 }
             }
         }
@@ -459,7 +467,13 @@ impl Drawing {
             picture = match op {
                 Op::Effect(op) => op.run(frame, picture)?,
                 Op::Held(op) => op.run_held(frame, picture)?,
+                Op::Gamut(op) => op.run_in_gamut(frame, picture)?,
                 Op::Correct(correction) => frame.correct(picture, correction),
+                Op::HeldCorrect(correction) => filmcraft::vfx::gpu::Kernel::held(
+                    frame,
+                    picture,
+                    |frame, unit| Some(frame.correct(unit, correction)),
+                )?,
             };
         }
         let reveal = shown
@@ -509,7 +523,13 @@ impl Drawing {
             adjusted = match op {
                 Op::Effect(op) => op.run(frame, adjusted)?,
                 Op::Held(op) => op.run_held(frame, adjusted)?,
+                Op::Gamut(op) => op.run_in_gamut(frame, adjusted)?,
                 Op::Correct(correction) => frame.correct(adjusted, correction),
+                Op::HeldCorrect(correction) => filmcraft::vfx::gpu::Kernel::held(
+                    frame,
+                    adjusted,
+                    |frame, unit| Some(frame.correct(unit, correction)),
+                )?,
             };
         }
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));

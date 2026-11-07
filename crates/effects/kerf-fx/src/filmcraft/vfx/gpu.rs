@@ -285,6 +285,27 @@ impl Kernel {
         Some(out)
     }
 
+    /// `effect` on a picture brought inside BT.709 and put back: `Image::to_gamut` and its way back.
+    pub fn in_gamut(
+        frame: &mut Frame<'static>,
+        picture: Picture,
+        effect: impl FnOnce(&mut Frame<'static>, Picture) -> Option<Picture>,
+    ) -> Option<Picture> {
+        let stage = stage(frame.gpu())?;
+        let inside = stage.pass(frame, &stage.to_gamut, &picture, None, &U::default());
+        let done = effect(frame, inside)?;
+        let out = stage.pass(
+            frame,
+            &stage.from_gamut,
+            &done,
+            Some(&picture),
+            &U::default(),
+        );
+        frame.release(done);
+        frame.release(picture);
+        Some(out)
+    }
+
     /// The kernel on `picture`, or `None` when the kernels did not build.
     pub fn run(&self, frame: &mut Frame<'static>, picture: Picture) -> Option<Picture> {
         let stage = stage(frame.gpu())?;
@@ -619,6 +640,8 @@ struct Stage {
     radial_zoom: wgpu::ComputePipeline,
     to_unit: wgpu::ComputePipeline,
     from_unit: wgpu::ComputePipeline,
+    to_gamut: wgpu::ComputePipeline,
+    from_gamut: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -663,6 +686,8 @@ impl Stage {
                 radial_zoom: kernel("radial_zoom"),
                 to_unit: kernel("to_unit"),
                 from_unit: kernel("from_unit"),
+                to_gamut: kernel("to_gamut"),
+                from_gamut: kernel("from_gamut"),
                 layout: layout.clone(),
             }
         });
@@ -987,6 +1012,10 @@ mod tests {
             for value in &mut pixel[..3] {
                 *value *= 8.0;
             }
+        }
+        // And a color past BT.709 at every fifth.
+        for pixel in image.px.chunks_exact_mut(4).step_by(5) {
+            pixel[0] = -0.3 * pixel[3];
         }
         // What the compositor's CPU path does, with Gamma as what runs in between.
         let gamma = FxOp::Gamma { g: 1.4 };

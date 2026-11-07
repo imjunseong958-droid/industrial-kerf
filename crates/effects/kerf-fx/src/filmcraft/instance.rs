@@ -144,6 +144,16 @@ impl GpuEffect {
         super::vfx::gpu::Kernel::held(frame, picture, |frame, unit| self.run(frame, unit))
     }
 
+    /// The effect on `picture` with each pixel brought inside BT.709 and put back, for a picture
+    /// holding colors past it and an effect that only keeps what is above 1.
+    pub fn run_in_gamut(
+        &self,
+        frame: &mut kerf_gpu::Frame<'static>,
+        picture: kerf_gpu::Picture,
+    ) -> Option<kerf_gpu::Picture> {
+        super::vfx::gpu::Kernel::in_gamut(frame, picture, |frame, inside| self.run(frame, inside))
+    }
+
     /// The effect on `picture`, or `None` when its kernels did not build.
     pub fn run(
         &self,

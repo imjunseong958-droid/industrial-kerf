@@ -245,3 +245,172 @@ fn lumetri_grades_highlights_in_an_hdr_sequence_alike_on_gpu_and_cpu() {
         "{cpu} on the CPU, {gpu} on the GPU"
     );
 }
+
+/// A flat 10-bit PQ picture in the color `rgb` of BT.2020, with what its signal is as code values.
+fn flat_footage(dir: &Path, name: &str, rgb: &str) -> String {
+    let path = dir.join(format!("{name}.mov"));
+    let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
+    let output = Command::new(program)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!("color=c=0x{rgb}:s=128x72:r=24:d=1"))
+        .args([
+            "-vf",
+            "scale=in_range=pc:out_range=tv:out_color_matrix=bt2020nc,format=yuv422p10le,setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084",
+            "-c:v",
+            "prores_ks",
+        ])
+        .arg(&path)
+        .output()
+        .expect("ffmpeg runs");
+    assert!(output.status.success());
+    path.display().to_string()
+}
+
+/// The signal of each channel in the middle of a frame.
+fn signals(document: &str, accel: Accel) -> [f64; 3] {
+    let frame = compositor(document, accel).frame16(Rate::FPS_24.time_of(1), 1.0);
+    let at = ((frame.height / 2 * frame.width + frame.width / 2) * 8) as usize;
+    [0, 2, 4].map(|channel| {
+        f64::from(u16::from_le_bytes([
+            frame.rgba[at + channel],
+            frame.rgba[at + channel + 1],
+        ])) / 65535.0
+    })
+}
+
+fn pq_document(path: &str, fx: &str) -> String {
+    let line = if fx.is_empty() {
+        String::new()
+    } else {
+        format!("      fx {fx}\n")
+    };
+    format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{path}\" rate=24 dur=24f video=128x72 bits=10 color=rec2100-pq\nsequence s1 rate=24 size=128x72 audio=48000 color=rec2100-pq\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n{line}"
+    )
+}
+
+/// Whether frames with `fx` on it would run on the GPU at all, for the GPU's half of a test: Linux CI
+/// has none.
+fn has_gpu_path(document: &str) -> bool {
+    compositor(document, Accel::Always).draws_on_gpu(Rate::FPS_24.time_of(1), 1.0)
+}
+
+#[test]
+fn looks_built_on_a_basic_correction_keep_highlights_apart() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let low = flat_footage(dir.path(), "low", "C0C0C0");
+    let high = flat_footage(dir.path(), "high", "E0E0E0");
+    let plain = (
+        signals(&pq_document(&low, ""), Accel::Never)[1],
+        signals(&pq_document(&high, ""), Accel::Never)[1],
+    );
+    // SDR white is at 0.58, and three of these clipped there, each at the same place.
+    assert!(plain.0 > 0.68 && plain.1 > 0.78, "{plain:?}");
+    for look in [
+        "look.noir@1",
+        "look.vhs@1",
+        "look.flash@1",
+        "color.basic@1 contrast=1.2 saturation=0.8",
+        "noise.noise amount=10",
+    ] {
+        for accel in [Accel::Never, Accel::Always] {
+            let (a, b) = (
+                signals(&pq_document(&low, look), accel)[1],
+                signals(&pq_document(&high, look), accel)[1],
+            );
+            assert!(a > 0.65 && b > 0.75, "{look} on {accel:?}: {a} {b}");
+            assert!(b - a > 0.07, "{look} on {accel:?}: {a} {b}");
+        }
+    }
+    // On the GPU where it has a path, alike.
+    let document = pq_document(&high, "look.noir@1");
+    if has_gpu_path(&document) {
+        let (cpu, gpu) = (
+            signals(&document, Accel::Never),
+            signals(&document, Accel::Always),
+        );
+        for (cpu, gpu) in cpu.iter().zip(&gpu) {
+            assert!((cpu - gpu).abs() < 0.01, "{cpu} {gpu}");
+        }
+    }
+}
+
+#[test]
+fn effects_written_for_0_to_1_keep_colors_past_bt709() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = flat_footage(dir.path(), "wide", "00C000");
+    let plain = signals(&pq_document(&path, ""), Accel::Never);
+    // Green of BT.2020, as little of the other two as a flat 4:2:2 picture leaves. Clipped to BT.709,
+    // they rise to 0.62 and 0.48.
+    assert!(
+        plain[0] < 0.1 && plain[2] < 0.1 && plain[1] > 0.7,
+        "{plain:?}"
+    );
+    // Each way of holding values, and what on the GPU has a path.
+    for fx in [
+        "color.asccdl",
+        "color.brightnesscontrast",
+        "color.channelmixer",
+        "color.gamma",
+        "color.procamp",
+        "stylize.vignette",
+        "key.color",
+        "blur.radialzoom",
+        "distort.bulge",
+        "distort.upscale",
+        "noise.removegrain",
+        "blur.sharpen",
+        "blur.unsharp",
+    ] {
+        let document = pq_document(&path, fx);
+        for accel in [Accel::Never, Accel::Always] {
+            let held = signals(&document, accel);
+            for (channel, (held, plain)) in held.iter().zip(&plain).enumerate() {
+                assert!(
+                    (held - plain).abs() < 0.02,
+                    "{fx} on {accel:?}: channel {channel} is {held} of {plain}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_grade_keeps_colors_past_bt709_as_it_changes_them() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = flat_footage(dir.path(), "wide", "00C000");
+    let plain = signals(&pq_document(&path, ""), Accel::Never);
+    // A grade that changes little of green's brightness, and a mono one that takes all of its color.
+    let warm = signals(
+        &pq_document(&path, "color.lumetri temperature=5"),
+        Accel::Never,
+    );
+    assert!(warm[0] < 0.35 && warm[2] < 0.2, "{warm:?} of {plain:?}");
+    let document = pq_document(&path, "look.grade.neutral-mono@1");
+    for accel in [Accel::Never, Accel::Always] {
+        let mono = signals(&document, accel);
+        assert!(
+            (mono[0] - mono[1]).abs() < 0.01 && (mono[1] - mono[2]).abs() < 0.01,
+            "{accel:?}: {mono:?}"
+        );
+    }
+}
+
+#[test]
+fn an_sdr_picture_in_an_hdr_sequence_is_held_by_nothing() {
+    // Under 1 and inside BT.709, no effect's hold touches it, so it meets an effect as it does in SDR.
+    let solid = |color: &str, fx: &str| {
+        format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000{color}\n  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n      set color=#c08040\n      fx {fx}\n"
+        )
+    };
+    for fx in [
+        "color.gamma gamma=12",
+        "blur.radialzoom amount=20",
+        "blur.sharpen",
+    ] {
+        let sdr = compositor(&solid("", fx), Accel::Never).frame(Rate::FPS_24.time_of(1), 1.0);
+        let again = compositor(&solid("", fx), Accel::Never).frame(Rate::FPS_24.time_of(1), 1.0);
+        assert_eq!(sdr.rgba, again.rgba, "{fx}");
+    }
+}

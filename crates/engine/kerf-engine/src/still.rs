@@ -61,6 +61,28 @@ pub fn draw_frame(
     Ok(compositor.frame(at, scale))
 }
 
+/// [`draw_frame`], of an HDR sequence, as the 16-bit signal its master gets rather than what a monitor
+/// shows of it. For an SDR sequence, its 16-bit picture.
+pub fn draw_signal(
+    project: &Project,
+    sequence: Option<&str>,
+    at: Time,
+    scale: f64,
+) -> Result<Frame> {
+    let compositor = Compositor::new(
+        project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: sequence.map(str::to_owned),
+            captions: true,
+            keep_frames: true,
+            frame_folder: kerf_compose::default_frame_folder(),
+            ..Default::default()
+        },
+    )?;
+    Ok(compositor.frame16(at, scale))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

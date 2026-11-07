@@ -116,9 +116,10 @@ Three limits remain, in this order:
    depth. A sequence with `color=rec2100-pq` or `rec2100-hlg` keeps BT.709 working primaries,
    with what lies past them as values below 0 and above 1, and `HdrOutput` (`output.wgsl`) turns
    them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
-   own signal. Other effects written for 0 to 1 get the picture brought under 1 and put back,
-   each pixel or the whole picture as `catalog::headroom` says. They still lose wide colors, and three looks still clip. ProRes and HEVC Main 10 carry HDR; H.264 is
-   8-bit, and scopes read the 8-bit SDR frame. An HDR10 file (`hevc_hdr`) says what it was mastered on
+   own signal. Other effects written for 0 to 1 get the picture brought between 0 and 1 and put back,
+   each pixel or the whole picture as `catalog::headroom` says: a color past BT.709 goes toward the gray of its own brightness until it fits and comes back around
+   the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. `time.echo`, `light.echoglow`, and `light.glint` with `colorize` still mix back in what they clipped, so a color past BT.709 fades in those, and what changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
+   8-bit. `look` with `scopes` reads an HDR sequence by its PQ or HLG signal, with what that comes to in cd/m² and how much of it BT.709 cannot hold; the Finish tray's scopes still read the 8-bit frame a monitor gets, since playback hands over only that. An HDR10 file (`hevc_hdr`) says what it was mastered on
    (P3 D65 at 1000 nits unless told otherwise) and its MaxCLL and MaxFALL, measured from the frames
    before encoding, which disk-kept frames make cheap; HLG carries its tags without them. On Apple, handing decoded surfaces to the
    GPU without a copy needs `unsafe`, which the workspace forbids, so that gets one small
@@ -164,7 +165,8 @@ corrections.
 
 `crates/color/kerf-scopes` reads a frame as a colorist reads scopes, and `look` gives the
 agent the numbers (`scopes: true`), so that it can grade by measuring: levels, clipping,
-tonal zones, a histogram, the cast, saturation, the skin tone line, and the densest colors.
+tonal zones, a histogram, the cast, saturation, the skin tone line, and the densest colors. In an HDR
+sequence they are of its signal, with `hdr` giving peak and mean cd/m², the share over SDR white, and the share past BT.709.
 Comparing `proposal` with the project shows what a grade did. A person reads the same frame in the
 Finish tray: a waveform, a vectorscope, and an RGB parade (`apps/kerf-qt/ui/scopes.h`).
 

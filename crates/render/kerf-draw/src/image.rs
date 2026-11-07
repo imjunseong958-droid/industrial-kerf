@@ -111,30 +111,90 @@ impl Image {
             .reduce(|| 0.0, f32::max)
     }
 
-    /// Bring each pixel under 1, hue and all, and say what to multiply it by to put it back.
-    pub fn to_unit(&mut self) -> Vec<f32> {
+    /// The lowest value any pixel holds, as a straight color: below 0 for a color BT.709 cannot hold.
+    pub fn floor(&self) -> f32 {
+        self.px
+            .par_chunks(4)
+            .map(|pixel| {
+                let lowest = pixel[0].min(pixel[1]).min(pixel[2]);
+                if pixel[3] > 0.0 {
+                    lowest / pixel[3]
+                } else {
+                    lowest.min(0.0)
+                }
+            })
+            .reduce(|| 0.0, f32::min)
+    }
+
+    /// Bring each pixel under 1 and inside BT.709, hue and all, and say what to put it back by.
+    pub fn to_unit(&mut self) -> Vec<[f32; 2]> {
         self.px
             .par_chunks_mut(4)
             .map(|pixel| {
+                let held = to_gamut(&mut pixel[..3]);
                 let gain = pixel[0].max(pixel[1]).max(pixel[2]).max(1.0);
                 for value in &mut pixel[..3] {
                     *value /= gain;
                 }
-                gain
+                [gain, held]
             })
             .collect()
     }
 
     /// Put each pixel back by what [`Image::to_unit`] said.
-    pub fn from_unit(&mut self, gains: &[f32]) {
+    pub fn from_unit(&mut self, held: &[[f32; 2]]) {
         self.px
             .par_chunks_mut(4)
-            .zip(gains)
-            .for_each(|(pixel, gain)| {
+            .zip(held)
+            .for_each(|(pixel, [gain, chroma])| {
                 for value in &mut pixel[..3] {
                     *value *= gain;
                 }
+                from_gamut(&mut pixel[..3], *chroma);
             });
+    }
+
+    /// Bring each pixel inside BT.709, leaving how bright it is alone, and say what to put it back by.
+    pub fn to_gamut(&mut self) -> Vec<f32> {
+        self.px
+            .par_chunks_mut(4)
+            .map(|pixel| to_gamut(&mut pixel[..3]))
+            .collect()
+    }
+
+    /// Put each pixel back by what [`Image::to_gamut`] said.
+    pub fn from_gamut(&mut self, held: &[f32]) {
+        self.px
+            .par_chunks_mut(4)
+            .zip(held)
+            .for_each(|(pixel, chroma)| from_gamut(&mut pixel[..3], *chroma));
+    }
+
+    /// Take `lift` from every straight color and divide what is left by `by`: an even way to bring a
+    /// whole picture between 0 and 1 that a filter over its pixels can run on and be undone from.
+    pub fn lift_rgb(&mut self, lift: f32, by: f32) {
+        if lift == 0.0 {
+            return self.scale_rgb(1.0 / by);
+        }
+        self.px.par_chunks_mut(4).for_each(|pixel| {
+            let under = lift * pixel[3];
+            for value in &mut pixel[..3] {
+                *value = (*value - under) / by;
+            }
+        });
+    }
+
+    /// Undo [`Image::lift_rgb`].
+    pub fn unlift_rgb(&mut self, lift: f32, by: f32) {
+        if lift == 0.0 {
+            return self.scale_rgb(by);
+        }
+        self.px.par_chunks_mut(4).for_each(|pixel| {
+            let under = lift * pixel[3];
+            for value in &mut pixel[..3] {
+                *value = *value * by + under;
+            }
+        });
     }
 
     /// Multiply the color of every pixel.
@@ -415,6 +475,43 @@ impl Image {
     }
 }
 
+fn brightness(rgb: &[f32]) -> f32 {
+    0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+}
+
+/// Pull a color BT.709 cannot hold, with a channel below 0, straight toward the gray of its own
+/// brightness until it can, and say how much of its color is left: 1 for a color it can hold, where
+/// nothing moves, and 0 for one with no light in it to keep, which comes to black.
+#[inline]
+fn to_gamut(rgb: &mut [f32]) -> f32 {
+    let lowest = rgb[0].min(rgb[1]).min(rgb[2]);
+    if lowest >= 0.0 {
+        return 1.0;
+    }
+    let gray = brightness(rgb);
+    if gray <= 0.0 {
+        rgb.fill(0.0);
+        return 0.0;
+    }
+    let left = gray / (gray - lowest);
+    for value in rgb.iter_mut() {
+        *value = gray + (*value - gray) * left;
+    }
+    left
+}
+
+/// Put back what [`to_gamut`] took, around the brightness the color has now.
+#[inline]
+fn from_gamut(rgb: &mut [f32], left: f32) {
+    if left >= 1.0 || left <= 0.0 {
+        return;
+    }
+    let gray = brightness(rgb);
+    for value in rgb.iter_mut() {
+        *value = gray + (*value - gray) / left;
+    }
+}
+
 /// Where a picture lands in another: the numbers that place it, whichever
 /// processor then samples it.
 #[derive(Clone, Debug, PartialEq)]
@@ -524,6 +621,109 @@ impl Placement<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One pixel, opaque.
+    fn pixel(rgb: [f32; 3]) -> Image {
+        let mut image = Image::new(1, 1);
+        image.px.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 1.0]);
+        image
+    }
+
+    fn near(found: &[f32], wanted: [f32; 3]) {
+        for (found, wanted) in found.iter().zip(wanted) {
+            assert!((found - wanted).abs() < 1e-5, "{found} of {wanted}");
+        }
+    }
+
+    #[test]
+    fn a_color_past_bt709_goes_inside_and_comes_back() {
+        // BT.2020's green, in BT.709's own terms.
+        let wide = [-0.5876, 1.1329, -0.1006];
+        let mut image = pixel(wide);
+        assert!((image.floor() + 0.5876).abs() < 1e-6);
+        let held = image.to_unit();
+        // Inside, nothing below 0 or above 1, and its brightness is its own.
+        assert!(image.px[..3]
+            .iter()
+            .all(|value| (0.0..=1.0).contains(value)));
+        assert!(image.px[0].min(image.px[2]) < 1e-5, "{:?}", image.px);
+        image.from_unit(&held);
+        near(&image.px[..3], wide);
+        // Without a gain, by the brightness alone.
+        let mut image = pixel(wide);
+        let brightness = |rgb: &[f32]| 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        let before = brightness(&image.px[..3]);
+        let held = image.to_gamut();
+        assert!((brightness(&image.px[..3]) - before).abs() < 1e-5);
+        assert!(image.px[..3].iter().all(|value| *value > -1e-6));
+        image.from_gamut(&held);
+        near(&image.px[..3], wide);
+    }
+
+    #[test]
+    fn what_an_effect_does_inside_stays_true_when_it_comes_back() {
+        // An effect taking all color leaves none to put back, and one halving light halves it all.
+        let wide = [-0.5876, 1.1329, -0.1006];
+        let mut image = pixel(wide);
+        let held = image.to_unit();
+        let gray = brightness(&image.px[..3]);
+        image.px[..3].fill(gray);
+        image.from_unit(&held);
+        assert_eq!(image.px[0], image.px[1]);
+        assert_eq!(image.px[1], image.px[2]);
+        let mut image = pixel(wide);
+        let held = image.to_gamut();
+        image.px[..3].iter_mut().for_each(|value| *value /= 2.0);
+        image.from_gamut(&held);
+        near(&image.px[..3], wide.map(|value| value / 2.0));
+    }
+
+    #[test]
+    fn colors_it_can_hold_move_as_they_did() {
+        // Above 1 and inside BT.709: only the gain, as it was, to the bit.
+        let bright = [4.0f32, 2.0, 0.5];
+        let mut image = pixel(bright);
+        assert_eq!(image.floor(), 0.0);
+        let held = image.to_unit();
+        assert_eq!(held, [[4.0, 1.0]]);
+        assert_eq!(&image.px[..3], &[1.0, 0.5, 0.125]);
+        image.from_unit(&held);
+        assert_eq!(&image.px[..3], &bright);
+        assert_eq!(image.to_gamut(), [1.0]);
+        assert_eq!(&image.px[..3], &bright);
+    }
+
+    #[test]
+    fn a_color_with_no_light_in_it_goes_to_black() {
+        let mut image = pixel([-0.2, 0.01, -0.3]);
+        let held = image.to_gamut();
+        assert_eq!(held, [0.0]);
+        assert_eq!(&image.px[..3], &[0.0, 0.0, 0.0]);
+        image.from_gamut(&held);
+        assert_eq!(&image.px[..3], &[0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_whole_picture_lifted_comes_back_and_goes_by_its_alpha() {
+        let mut image = Image::new(2, 1);
+        image
+            .px
+            .copy_from_slice(&[-0.5, 2.0, 0.25, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(image.floor(), -0.5);
+        let original = image.px.clone();
+        image.lift_rgb(-0.5, 5.0);
+        assert!(image.px[0].abs() < 1e-6);
+        // What is not there has nothing added to it.
+        assert_eq!(&image.px[4..8], &[0.0; 4]);
+        image.unlift_rgb(-0.5, 5.0);
+        for (found, wanted) in image.px.iter().zip(&original) {
+            assert!((found - wanted).abs() < 1e-5, "{found} of {wanted}");
+        }
+        // Nothing to lift is a plain scale, as it was.
+        let mut plain = pixel([2.0, 1.0, 0.5]);
+        plain.lift_rgb(0.0, 4.0);
+        assert_eq!(&plain.px[..3], &[2.0 * 0.25, 1.0 * 0.25, 0.5 * 0.25]);
+    }
 
     #[test]
     fn bytes_come_back_through_linear_light() {
