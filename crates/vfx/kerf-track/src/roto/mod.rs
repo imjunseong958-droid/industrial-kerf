@@ -4,7 +4,9 @@
 //! (GrabCut, Rother et al. 2004): what is known in or out is a hard constraint, every other pixel
 //! gets a data cost from the colour models and neighbours a contrast-sensitive smoothness cost, and
 //! the minimum s-t cut ([`maxflow`]) is the segmentation. Each next frame warps the matte by optical
-//! flow and cuts again in a band around its edge (in the spirit of Video SnapCut, Bai et al. 2009).
+//! flow and cuts again in a band around its edge (in the spirit of Video SnapCut, Bai et al. 2009). A
+//! subject that went further than that band is first found again by its own pixels ([`moved_by`]), and
+//! the flow then only says what changed of it, with the band wider the further it went.
 //! A trained model ([`kerf_segment::MaskModel`]) is optional and swappable: its foreground
 //! probability becomes a strong prior for the same cut, so hints stay hard and edges still snap to
 //! colour, and one that disagrees with the flow is ignored for that frame.
@@ -443,10 +445,153 @@ fn first_matte(
     labels.contains(&1).then_some((labels, fg, bg))
 }
 
-/// The matte warped from the frame before.
-fn warped(previous: &Picture, matte: &[u8], next: &Picture) -> Vec<f32> {
+/// The most a picture is searched at the coarsest, across the longer of its sides.
+const COARSEST: usize = 96;
+/// How many of a subject's pixels stand for it at any size.
+const MOST_READ: usize = 2500;
+/// How much better than where it was it must match to have gone anywhere.
+const CLEARLY_BETTER: f64 = 0.85;
+/// How many bands a subject may go in a frame for the flow alone to keep up, as measured: all of it so
+/// far at two, at any size.
+const FLOW_KEEPS_UP: f64 = 2.0;
+/// How many bands a band may grow to, with how far a subject went.
+const MOST_BANDS: f64 = 3.0;
+
+/// A picture at `by` of its size each way, each pixel the mean of those it covers.
+fn smaller(rgb: &[[f32; 3]], (w, h): (usize, usize), by: usize) -> (Vec<[f32; 3]>, usize, usize) {
+    let (sw, sh) = (w.div_ceil(by), h.div_ceil(by));
+    let mut sums = vec![([0.0f32; 3], 0u32); sw * sh];
+    for (index, color) in rgb.iter().enumerate() {
+        let at = (index / w) / by * sw + (index % w) / by;
+        let (sum, count) = &mut sums[at];
+        for k in 0..3 {
+            sum[k] += color[k];
+        }
+        *count += 1;
+    }
+    let out = sums
+        .into_iter()
+        .map(|(sum, count)| sum.map(|value| value / count.max(1) as f32))
+        .collect();
+    (out, sw, sh)
+}
+
+/// How far the subject in `matte` went from `previous` to `next`, in whole pixels, found by how well its
+/// own pixels match anywhere in the frame, and closer at each of a few sizes. Nothing where it matches
+/// no better there than where it was, or where it is all but the same.
+fn moved_by(previous: &Picture, matte: &[u8], next: &Picture) -> [i64; 2] {
     let (w, h) = (next.width, next.height);
-    let flow = block_flow(&next.image, &previous.image, 8, 4);
+    let mut by = 1;
+    while w.max(h) / by > COARSEST {
+        by *= 2;
+    }
+    let mut best = [0i64; 2];
+    let mut level = by;
+    let mut coarsest = true;
+    let mut where_it_was = f64::INFINITY;
+    let mut best_cost = f64::INFINITY;
+    while level >= 1 {
+        let (from, sw, sh) = smaller(&previous.rgb, (w, h), level);
+        let (to, _, _) = smaller(&next.rgb, (w, h), level);
+        // Its pixels at this size, well inside what is known of it, as few as stand for it.
+        let on: Vec<(i64, i64)> = (0..sw * sh)
+            .filter(|at| {
+                let (x, y) = ((at % sw) * level, (at / sw) * level);
+                matte[(y + level / 2).min(h - 1) * w + (x + level / 2).min(w - 1)] != 0
+            })
+            .map(|at| ((at % sw) as i64, (at / sw) as i64))
+            .collect();
+        let step = (on.len() / MOST_READ).max(1);
+        let read: Vec<(i64, i64)> = on.iter().copied().step_by(step).collect();
+        if read.is_empty() {
+            return [0, 0];
+        }
+        let cost = |dx: i64, dy: i64| -> f64 {
+            let (mut sum, mut count) = (0.0f64, 0usize);
+            for (x, y) in &read {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= sw as i64 || ny >= sh as i64 {
+                    continue;
+                }
+                let a = from[*y as usize * sw + *x as usize];
+                let b = to[ny as usize * sw + nx as usize];
+                sum += f64::from(
+                    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs(),
+                );
+                count += 1;
+            }
+            // Mostly out of the frame says nothing.
+            if count * 2 < read.len() {
+                f64::INFINITY
+            } else {
+                sum / count as f64
+            }
+        };
+        let (reach_x, reach_y, around) = if coarsest {
+            (sw as i64, sh as i64, [0i64, 0i64])
+        } else {
+            (2, 2, [best[0] / level as i64, best[1] / level as i64])
+        };
+        let tried: Vec<(i64, i64)> = (-reach_y..=reach_y)
+            .flat_map(|dy| (-reach_x..=reach_x).map(move |dx| (dx, dy)))
+            .collect();
+        let (dx, dy, least) = tried
+            .par_iter()
+            .map(|(dx, dy)| {
+                let (dx, dy) = (around[0] + dx, around[1] + dy);
+                (dx, dy, cost(dx, dy))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .unwrap_or((0, 0, f64::INFINITY));
+        best = [dx * level as i64, dy * level as i64];
+        best_cost = least;
+        where_it_was = cost(0, 0);
+        coarsest = false;
+        level /= 2;
+    }
+    if best_cost < where_it_was * CLEARLY_BETTER {
+        best
+    } else {
+        [0, 0]
+    }
+}
+
+/// The band to cut in, in pixels, for a frame of `(w, h)` whose subject went `moved`: wider the further
+/// it went, since what lets it go that far blurs and turns it too.
+fn band_of((w, h): (usize, usize), moved: [i64; 2]) -> f64 {
+    let base = (w.max(h) as f64 / 40.0).max(4.0);
+    let went = (moved[0] as f64).hypot(moved[1] as f64);
+    (went / 4.0).clamp(base, base * MOST_BANDS)
+}
+
+/// A picture's pixels moved by `by`, its edge carrying on past it.
+fn shifted_image(image: &Image, by: [i64; 2]) -> Image {
+    let (w, h) = (image.width as i64, image.height as i64);
+    let data = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let (fx, fy) = ((x - by[0]).clamp(0, w - 1), (y - by[1]).clamp(0, h - 1));
+            image.data[(fy * w + fx) as usize]
+        })
+        .collect();
+    Image {
+        width: image.width,
+        height: image.height,
+        data,
+    }
+}
+
+/// The matte warped from the frame before, whose subject went `moved`.
+fn warped(previous: &Picture, matte: &[u8], next: &Picture, moved: [i64; 2]) -> Vec<f32> {
+    let (w, h) = (next.width, next.height);
+    let shifted;
+    let from = if moved == [0, 0] {
+        &previous.image
+    } else {
+        shifted = shifted_image(&previous.image, moved);
+        &shifted
+    };
+    let flow = block_flow(&next.image, from, 8, 4);
     let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
     (0..w * h)
         .into_par_iter()
@@ -457,8 +602,8 @@ fn warped(previous: &Picture, matte: &[u8], next: &Picture) -> Vec<f32> {
                 &source,
                 w,
                 h,
-                x + f64::from(v[0]),
-                y + f64::from(v[1]),
+                x + f64::from(v[0]) - moved[0] as f64,
+                y + f64::from(v[1]) - moved[1] as f64,
             )
         })
         .collect()
@@ -525,17 +670,25 @@ fn prompt_from(soft: &[f32], w: usize, h: usize) -> Option<Prompt> {
     })
 }
 
-/// The next frame's matte from the one before.
+/// The next frame's matte from the one before, and how far its subject went, where that is further than
+/// a band: the flow keeps up with less, as it has done, and is left to.
 fn next_matte(
     previous: &Picture,
     matte: &[u8],
     next: &Picture,
     (fg, bg): (&Gmm, &Gmm),
     model: Option<&dyn MaskModel>,
-) -> Vec<u8> {
+) -> (Vec<u8>, [i64; 2]) {
     let (w, h) = (next.width, next.height);
-    let soft = warped(previous, matte, next);
-    let reach = (w.max(h) as f64 / 40.0).max(4.0);
+    let base = (w.max(h) as f64 / 40.0).max(4.0);
+    let went = moved_by(previous, matte, next);
+    let moved = if (went[0] as f64).hypot(went[1] as f64) > base * FLOW_KEEPS_UP {
+        went
+    } else {
+        [0, 0]
+    };
+    let soft = warped(previous, matte, next, moved);
+    let reach = band_of((w, h), moved);
     // A warped matte is uncertain by about the band it is searched in.
     let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
     let from_model = model.and_then(|model| {
@@ -557,7 +710,7 @@ fn next_matte(
     cut(&next.rgb, w, h, &mut labels, &free, &hard, fg, bg, Some(prior));
     let seeds = core_of(&soft, w, h, reach);
     clean(&mut labels, &seeds, &vec![false; w * h], w, h);
-    labels
+    (labels, moved)
 }
 
 /// The edge of the largest piece of a matte, walked around with the piece on one side, as points
@@ -761,9 +914,14 @@ pub fn follow_object(
             break;
         }
         let next = Picture::of(width, height, &rgba);
-        let labels = next_matte(&picture, &matte, &next, (&fg, &bg), model);
+        let (labels, went) = next_matte(&picture, &matte, &next, (&fg, &bg), model);
         let now = area_of(&labels);
-        let moved = aligned(&edge_of(&labels, width, height), &corners);
+        // Its corners go with it, and are matched where it went.
+        let before: Vec<[f64; 2]> = corners
+            .iter()
+            .map(|at| [at[0] + went[0] as f64, at[1] + went[1] as f64])
+            .collect();
+        let moved = aligned(&edge_of(&labels, width, height), &before);
         // A cut that loses the object or spills over it is no longer following it.
         if moved.is_empty() || now < area * 0.5 || now > area * 2.0 {
             lost_at = Some(index);

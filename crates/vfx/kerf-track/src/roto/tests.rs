@@ -534,3 +534,201 @@ fn softness_changing_alone_is_kept_as_keyframes() {
     assert_eq!(simplified_outlines(&followed.outlines, 0.01), [0, 4]);
     assert!(simplified_object(&followed, 0.01).contains(&2));
 }
+
+/// A textured disk `radius` across going back and forth across a textured frame at `speed` pixels a
+/// frame, curving a little as it goes: where it is on `frame`.
+fn fast_center((w, h): (usize, usize), radius: f64, speed: f64, frame: usize) -> [f64; 2] {
+    let room = w as f64 - 2.0 * radius - 8.0;
+    let along = (speed * frame as f64) % (2.0 * room);
+    let along = if along > room {
+        2.0 * room - along
+    } else {
+        along
+    };
+    let t = frame as f64;
+    [
+        radius + 4.0 + along,
+        h as f64 / 2.0 + (h as f64 / 2.0 - radius - 4.0) * 0.5 * (t * 0.4).sin(),
+    ]
+}
+
+fn fast_scene(
+    (w, h): (usize, usize),
+    radius: f64,
+    speed: f64,
+    frame: usize,
+    alike: bool,
+) -> (usize, usize, Vec<u8>) {
+    let c = fast_center((w, h), radius, speed, frame);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let color = if (px - c[0]).hypot(py - c[1]) < radius {
+                let n = noise(px - c[0] + 500.0, py - c[1] + 500.0, 11);
+                if alike {
+                    [0.35 + 0.3 * n, 0.4 + 0.3 * n, 0.3 + 0.3 * n]
+                } else {
+                    [0.75 + 0.25 * n, 0.35 + 0.3 * n, 0.1 + 0.15 * n]
+                }
+            } else {
+                let (n, m) = (noise(px, py, 5), noise(px * 1.7, py * 1.7, 9));
+                if alike {
+                    [0.1 + 0.4 * m, 0.2 + 0.4 * n, 0.15 + 0.4 * m]
+                } else {
+                    [0.05 + 0.25 * m, 0.3 + 0.4 * n, 0.45 + 0.4 * m]
+                }
+            };
+            for value in color {
+                rgba.push((value * 255.0) as u8);
+            }
+            rgba.push(255);
+        }
+    }
+    (w, h, rgba)
+}
+
+/// How well it follows that disk: the mean and worst overlap with the truth, and how many frames it
+/// found of `frames`.
+fn fast_overlap(
+    size: (usize, usize),
+    radius: f64,
+    speed: f64,
+    frames: usize,
+    alike: bool,
+) -> (f64, f64, usize) {
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    let start = fast_center(size, radius, speed, 0);
+    let hints = Hints {
+        inside: vec![[start[0] / w, start[1] / h]],
+        ..Hints::default()
+    };
+    let followed = follow_object(frames, &hints, None, |frame| {
+        Some(fast_scene(size, radius, speed, frame, alike))
+    });
+    let (mut sum, mut worst) = (0.0, 1.0f64);
+    for (frame, outline) in followed.outlines.iter().enumerate() {
+        let c = fast_center(size, radius, speed, frame);
+        let polygon: Vec<[f64; 2]> = outline.iter().map(|at| [at[0] * w, at[1] * h]).collect();
+        let (mut both, mut either) = (0usize, 0usize);
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                let (a, b) = (
+                    in_polygon(&polygon, [px, py]),
+                    (px - c[0]).hypot(py - c[1]) < radius,
+                );
+                both += usize::from(a && b);
+                either += usize::from(a || b);
+            }
+        }
+        let overlap = both as f64 / either.max(1) as f64;
+        sum += overlap;
+        worst = worst.min(overlap);
+    }
+    // A frame it never got to counts as none of it.
+    if followed.outlines.len() < frames {
+        worst = 0.0;
+    }
+    (sum / frames as f64, worst, followed.outlines.len())
+}
+
+#[test]
+fn a_subject_much_further_than_its_band_is_kept_up_with() {
+    // 640x360 has a band of 16 pixels, and the flow alone lost this within a few frames, at 0.17 and
+    // 0.04 on average.
+    for speed in [64.0, 128.0] {
+        for alike in [false, true] {
+            let (mean, worst, found) = fast_overlap((640, 360), 60.0, speed, 10, alike);
+            assert_eq!(found, 10, "{speed} {alike}");
+            assert!(
+                mean > 0.96 && worst > 0.94,
+                "{speed} {alike}: {mean} {worst}"
+            );
+        }
+    }
+}
+
+#[test]
+fn its_corners_go_with_a_fast_subject_one_for_one() {
+    let (size, speed) = ((640, 360), 64.0);
+    let start = fast_center(size, 60.0, speed, 0);
+    let hints = Hints {
+        inside: vec![[start[0] / 640.0, start[1] / 360.0]],
+        ..Hints::default()
+    };
+    let followed = follow_object(6, &hints, None, |frame| {
+        Some(fast_scene(size, 60.0, speed, frame, false))
+    });
+    assert_eq!(followed.outlines.len(), 6);
+    for (frame, pair) in followed.outlines.windows(2).enumerate() {
+        let (from, to) = (
+            fast_center(size, 60.0, speed, frame),
+            fast_center(size, 60.0, speed, frame + 1),
+        );
+        let went = [to[0] - from[0], to[1] - from[1]];
+        for (a, b) in pair[0].iter().zip(&pair[1]) {
+            let moved = [(b[0] - a[0]) * 640.0, (b[1] - a[1]) * 360.0];
+            let off = (moved[0] - went[0]).hypot(moved[1] - went[1]);
+            assert!(
+                off < 12.0,
+                "a corner slid {off} pixels off on frame {frame}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_subject_is_found_again_by_its_own_pixels_and_only_where_it_went() {
+    let size = (640, 360);
+    let (_, _, rgba) = fast_scene(size, 60.0, 0.0, 0, false);
+    let before = Picture::of(640, 360, &rgba);
+    let c = fast_center(size, 60.0, 0.0, 0);
+    let matte: Vec<u8> = (0..640 * 360)
+        .map(|at| {
+            let (x, y) = ((at % 640) as f64 + 0.5, (at / 640) as f64 + 0.5);
+            u8::from((x - c[0]).hypot(y - c[1]) < 60.0)
+        })
+        .collect();
+    // Where it stays, nothing.
+    assert_eq!(moved_by(&before, &matte, &before), [0, 0]);
+    // A frame later, wherever it has got to.
+    let (_, _, rgba) = fast_scene(size, 60.0, 100.0, 1, false);
+    let after = Picture::of(640, 360, &rgba);
+    let there = fast_center(size, 60.0, 100.0, 1);
+    let went = moved_by(&before, &matte, &after);
+    assert!(
+        (went[0] as f64 - (there[0] - c[0])).abs() <= 1.0,
+        "{went:?}"
+    );
+    assert!(
+        (went[1] as f64 - (there[1] - c[1])).abs() <= 1.0,
+        "{went:?}"
+    );
+    // The band goes with how far, between one and its most.
+    assert_eq!(band_of(size, [0, 0]), 16.0);
+    assert_eq!(band_of(size, [100, 0]), 25.0);
+    assert_eq!(band_of(size, [1000, 0]), 48.0);
+}
+
+#[test]
+#[ignore]
+fn measure_fast_subjects() {
+    for (size, radius) in [((200, 150), 32.0), ((640, 360), 60.0)] {
+        let band = (size.0 as f64 / 40.0).max(4.0);
+        for alike in [false, true] {
+            for by_band in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0] {
+                let speed = band * by_band;
+                let started = std::time::Instant::now();
+                let (mean, worst, found) = fast_overlap(size, radius, speed, 24, alike);
+                eprintln!(
+                    "{}x{} {} at {speed:.1} px a frame ({by_band} bands): mean {mean:.3}, worst {worst:.3}, {found} of 24 frames, {:.0} ms a frame",
+                    size.0,
+                    size.1,
+                    if alike { "alike" } else { "apart" },
+                    started.elapsed().as_secs_f64() * 1000.0 / 24.0
+                );
+            }
+        }
+    }
+}

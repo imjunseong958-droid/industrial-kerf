@@ -979,13 +979,23 @@ for line in sys.stdin:
         };
         assert!(error.contains("timed out"), "{error}");
         let pid = std::fs::read_to_string(&pid_file).unwrap();
-        let alive = Command::new("kill")
-            .args(["-0", pid.trim()])
-            .output()
-            .unwrap()
-            .status
-            .success();
-        assert!(!alive, "the launcher's child {pid} still runs");
+        // A signal takes its time, and a child left without its launcher stays a zombie until init
+        // reaps it, which `kill -0` cannot tell from one running. Only `ps` says which.
+        let runs = || {
+            let state = Command::new("ps")
+                .args(["-o", "stat=", "-p", pid.trim()])
+                .output()
+                .unwrap()
+                .stdout;
+            let state = String::from_utf8_lossy(&state);
+            let state = state.trim();
+            !state.is_empty() && !state.starts_with('Z')
+        };
+        let started = Instant::now();
+        while runs() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!runs(), "the launcher's child {pid} still runs");
     }
 
     #[test]
