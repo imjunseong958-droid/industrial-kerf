@@ -182,28 +182,29 @@ impl DiskFrames {
         let evicted = Arc::new(AtomicU64::new(0));
         let evicting = Arc::new(Mutex::new(()));
         let pending = Arc::new(AtomicU64::new(0));
-        for index in 0..WRITERS {
-            let writer = Writer {
-                jobs: jobs.clone(),
-                folder: folder.clone(),
-                budget,
-                total: total.clone(),
-                writes: writes.clone(),
-                evicted: evicted.clone(),
-                evicting: evicting.clone(),
-                pending: pending.clone(),
-            };
-            let root = root.to_owned();
-            let stamp = stamp.to_owned();
-            let _ = std::thread::Builder::new()
-                .name(format!("kerf-frames-{index}"))
-                .spawn(move || {
-                    if index == 0 {
-                        writer.tidy(&root, &stamp);
-                    }
-                    writer.run();
-                });
-        }
+        let writer = || Writer {
+            jobs: jobs.clone(),
+            folder: folder.clone(),
+            budget,
+            total: total.clone(),
+            writes: writes.clone(),
+            evicted: evicted.clone(),
+            evicting: evicting.clone(),
+            pending: pending.clone(),
+        };
+        let first = writer();
+        let others: Vec<Writer> = (1..WRITERS).map(|_| writer()).collect();
+        let (root, stamp) = (root.to_owned(), stamp.to_owned());
+        start_writer(0, move || {
+            // Before anyone writes: a frame written during the count might be counted as well,
+            // and a count too high sends frames away that fit.
+            first.count();
+            for (index, other) in (1..).zip(others) {
+                start_writer(index, move || other.run());
+            }
+            first.tidy(&root, &stamp);
+            first.run();
+        });
         Self {
             folder,
             queue,
@@ -276,6 +277,12 @@ impl DiskFrames {
     }
 }
 
+fn start_writer(index: usize, work: impl FnOnce() + Send + 'static) {
+    let _ = std::thread::Builder::new()
+        .name(format!("kerf-frames-{index}"))
+        .spawn(work);
+}
+
 struct Writer {
     jobs: Arc<Mutex<Receiver<Job>>>,
     folder: PathBuf,
@@ -289,10 +296,14 @@ struct Writer {
 }
 
 impl Writer {
-    /// Count what is there, and let another Kerf's frames go once nothing has read them for a while.
-    fn tidy(&self, root: &Path, stamp: &str) {
+    /// Count what is there.
+    fn count(&self) {
         let here: u64 = files_under(&self.folder).iter().map(|file| file.1).sum();
         self.total.fetch_add(here, Ordering::Relaxed);
+    }
+
+    /// Let another Kerf's frames go once nothing has read them for a while.
+    fn tidy(&self, root: &Path, stamp: &str) {
         let Ok(entries) = std::fs::read_dir(root) else {
             return;
         };
@@ -470,26 +481,62 @@ mod tests {
         let dir = tempfile::tempdir().expect("a folder");
         let one = encode(&frame(3, 64, 64, false), false).len() as u64;
         let frames = DiskFrames::new(dir.path(), "stamp", one * 4);
-        let wait = || std::thread::sleep(Duration::from_millis(30));
+        // Dated by hand, long ago and an hour apart, so that the order hangs neither on how long a
+        // step takes nor on how finely the file system tells the time.
+        let long_ago = SystemTime::now() - Duration::from_secs(24 * 3600);
         for key in 0..3u128 {
             frames.put(key, false, frame(3, 64, 64, false));
             frames.flush();
-            wait();
+            std::fs::File::options()
+                .write(true)
+                .open(DiskFrames::path(&frames.folder, key, false))
+                .expect("kept")
+                .set_modified(long_ago + Duration::from_secs(3600 * key as u64))
+                .expect("dated");
         }
         // Reading the first makes it the newest.
         assert!(frames.get(0, false).is_some());
-        wait();
         for key in 3..6u128 {
             frames.put(key, false, frame(3, 64, 64, false));
             frames.flush();
-            wait();
         }
-        assert!(frames.stats().evicted > 0);
+        // The fifth goes past the limit, and the two unread since 0 go to make room: only those.
+        assert_eq!(frames.stats().evicted, 2);
         assert!(frames.get(1, false).is_none(), "the oldest stays");
+        assert!(frames.get(2, false).is_none(), "the next oldest stays");
         assert!(frames.get(0, false).is_some(), "what was just used goes");
         assert!(frames.get(5, false).is_some(), "the newest goes");
         let on_disk: u64 = files_under(&frames.folder).iter().map(|f| f.1).sum();
         assert!(on_disk <= one * 4, "{on_disk} of {}", one * 4);
+    }
+
+    #[test]
+    fn what_is_written_while_the_folder_is_counted_counts_once() {
+        let dir = tempfile::tempdir().expect("a folder");
+        let kept = frame(3, 16, 9, false);
+        let one = encode(&kept, false).len() as u64;
+        let spread = |index: u64| (u128::from(index % 256) << 120) | u128::from(index);
+        // Enough already there, across every shard, that counting it takes a while.
+        let (there, soon, later) = (512u64, 32u64, 32u64);
+        for index in 0..there {
+            let path = DiskFrames::path(&dir.path().join("stamp"), spread(index), false);
+            std::fs::create_dir_all(path.parent().expect("a shard")).expect("made");
+            std::fs::write(path, encode(&kept, false)).expect("written");
+        }
+        // Exactly full once these are written, and not past it, so nothing has to go.
+        let frames = DiskFrames::new(dir.path(), "stamp", one * (there + soon + later));
+        // Some at once, which land while it counts...
+        for index in there..there + soon {
+            frames.put(spread(index), false, kept.clone());
+        }
+        // ...and some one by one, the last of which would see a count that came out too high.
+        for index in there + soon..there + soon + later {
+            frames.put(spread(index), false, kept.clone());
+            frames.flush();
+        }
+        let stats = frames.stats();
+        assert_eq!(stats.writes, soon + later, "{stats:?}");
+        assert_eq!(stats.evicted, 0, "{stats:?}");
     }
 
     #[test]
@@ -506,9 +553,12 @@ mod tests {
             .expect("opens");
         file.set_modified(SystemTime::now() - STALE - Duration::from_secs(60))
             .expect("set");
-        let frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-        frames.flush();
-        std::thread::sleep(Duration::from_millis(100));
+        let _frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
+        // Tidying goes on behind whatever is asked of the frames, and takes as long as it takes.
+        let since = std::time::Instant::now();
+        while old.exists() && since.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert!(!old.exists());
         assert!(recent.exists());
     }
