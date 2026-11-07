@@ -85,6 +85,12 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     } else if (panes.timeline) {
         out.timeline = QRect(stageLeft, toolbar, stageWidth, h);
     }
+    const int trayHeight = std::min(h, band);
+    const int trayTop = toolbar + h - trayHeight;
+    // An upright picture a tray would reach into moves into what the tray leaves. A wide one has the
+    // timeline under it, and goes under nothing.
+    if (panes.tray && !out.slot.isEmpty() && out.slot.bottom() >= trayTop && trayTop > toolbar)
+        out.slot.setBottom(trayTop - 1);
     out.picture = out.slot.isEmpty() ? out.slot : fitted(paddedSlot(out.slot), shape);
     // The strip floats over the picture's top: at its corner, or centred on an
     // upright one narrower than it.
@@ -100,13 +106,14 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     // reaches the timeline.
     const auto sheet = [&](int width) {
         const int shown = std::min(width, out.conversation.width());
-        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, out.conversation.height());
+        // It leaves a tray's panes in sight: the wheels are read against the scopes.
+        const int height = panes.tray && trayTop > out.conversation.top() ? trayTop - out.conversation.top() : out.conversation.height();
+        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, height);
     };
     out.media = sheet(bin);
     out.browser = sheet(browser);
     out.inspector = sheet(inspector);
-    const int tray = std::min(h, band);
-    out.tray = QRect(side, toolbar + h - tray, room, tray);
+    out.tray = QRect(side, trayTop, room, trayHeight);
     return out;
 }
 
@@ -436,7 +443,9 @@ void StageShell::transition(const QRect &pictureOrigin) {
 
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
-    stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
+    stage::Panes panes = m_panes;
+    panes.tray = m_tray != Tray::None;
+    stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, panes);
     for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector, &out.tray})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
@@ -455,7 +464,8 @@ void StageShell::toggleSheet(Sheet sheet) { setSheet(m_sheet == sheet ? Sheet::N
 void StageShell::setTray(Tray tray) {
     if (tray == m_tray) return;
     m_tray = tray;
-    place();
+    // What moves out of its way moves, as regions do.
+    transition();
     followEscape();
     emit trayChanged(tray);
 }

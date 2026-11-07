@@ -2012,6 +2012,21 @@ private slots:
         emit window.m_graphEditor->editRequested(QJsonArray{QJsonObject{{"op", "set"}, {"clip", "c1"}, {"props", QJsonObject{{"x", 0.5}}}}});
         QVERIFY(!window.m_lastCommand.isEmpty());
     }
+
+    // `{0f:0 96f:1}` on a clip of 96 frames is how a move across a clip is written, and its last key
+    // lies past the clip's last frame: it has to be on the plot, or it cannot be seen or dragged.
+    void aKeyAtTheClipsEndIsOnThePlot() {
+        Harness h;
+        h.set(QJsonObject{{"id", "c1"}, {"name", "Clip"}, {"timelineStart", 0.0}, {"durationFrames", 96}, {"props", QJsonObject{{"x", QJsonArray{key(0, 0.0), key(96, 1.0)}}}}});
+        const QPointF last = h.editor.plotPoint(0, 96.0, 1.0);
+        QVERIFY2(last.x() <= h.editor.width() - 12.0 + 0.5, qPrintable(QString::number(last.x())));
+        const QPointF first = h.editor.plotPoint(0, 0.0, 0.0);
+        QVERIFY(first.x() >= 0.0);
+        // A key past that, kept by a trim, stays where it was: off the plot, and so is the rest of it.
+        Harness trimmed;
+        trimmed.set(QJsonObject{{"id", "c1"}, {"name", "Clip"}, {"timelineStart", 0.0}, {"durationFrames", 24}, {"props", QJsonObject{{"x", QJsonArray{key(0, 0.0), key(96, 1.0)}}}}});
+        QVERIFY(trimmed.editor.plotPoint(0, 96.0, 1.0).x() > trimmed.editor.width());
+    }
 };
 
 } // namespace kerf

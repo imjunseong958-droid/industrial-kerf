@@ -2379,6 +2379,7 @@ private:
         }
         return QJsonObject{{"fps", 24}, {"sources", sources}, {"tracks", tracks}};
     }
+
 };
 
 } // namespace kerf

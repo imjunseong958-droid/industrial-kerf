@@ -215,9 +215,17 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         Content::Sequence { sequence, .. } => {
             object.insert("kind".into(), json!("sequence"));
             object.insert("sequenceId".into(), json!(sequence.as_str()));
-            object
-                .entry("name")
-                .or_insert_with(|| json!(sequence.as_str()));
+            // By the name it goes by, or its id with none.
+            object.entry("name").or_insert_with(|| {
+                let nested = project
+                    .sequences
+                    .iter()
+                    .find(|nested| nested.id == *sequence);
+                json!(nested
+                    .map(|nested| nested.name.trim())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(sequence.as_str()))
+            });
         }
         Content::Generator {
             fx,

@@ -678,6 +678,33 @@ fn a_second_daemon_for_a_project_refuses_to_start() {
 }
 
 #[test]
+fn a_document_kerfd_cannot_read_is_what_the_client_is_told() {
+    let directory = project_directory("unreadable");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("project.kerf"),
+        "kerf 1\nproject name=\"Bad\"\nsequence s1 rate=24 size=1920x1080 audio=48000\n  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n      fx color.lumetri@2 no_such_thing=1\n",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let client =
+        RuntimeClient::connect_or_spawn(&directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
+            .unwrap();
+    let error = client.get_state().unwrap_err();
+    // Says where and what, rather than that nothing was listening, and at once
+    // rather than at the end of the wait for a daemon that has already gone.
+    assert_eq!(error.code, "INVALID_PROJECT", "{}", error.message);
+    assert!(error.message.contains("6:"), "{}", error.message);
+    assert!(error.message.contains("no_such_thing"), "{}", error.message);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn a_client_starts_the_daemon_it_cannot_reach() {
     let directory = project_directory("spawn");
     fs::create_dir_all(&directory).unwrap();

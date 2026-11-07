@@ -53,9 +53,12 @@ struct Panes {
     // Watching a proposal's changes: the stage grows over the conversation,
     // with a strip floating over the picture.
     bool reel = false;
+    // A tray is up: what it would cover of an upright picture moves out from under it, and a sheet
+    // ends where it begins. The shell says this itself, from the tray it has.
+    bool tray = false;
     bool panelOpen() const { return picture || timeline; }
     bool operator==(const Panes &other) const {
-        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline && reel == other.reel;
+        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline && reel == other.reel && tray == other.tray;
     }
 };
 

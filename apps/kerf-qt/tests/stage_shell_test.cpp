@@ -1235,6 +1235,55 @@ private slots:
         QCOMPARE(sent.last().value("proposalId").toString(), QStringLiteral("pa"));
         window.close();
     }
+
+    // At a laptop's size a tray came up over the lower part of an upright picture, and a sheet over
+    // the scopes it is read beside. The picture now moves into what the tray leaves, and a sheet
+    // ends where the tray begins, over it as ever where they would meet. At the design's size the
+    // upright picture was clear of the tray already, and stays where it is.
+    void aTrayLeavesThePictureAndASheetLeavesTheTray() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1080, 1920)));
+        window.resize(1389, 868);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.activateWindow();
+        const QRect whole = window.m_shell->rects().picture;
+        for (const char *command : {"workspace.finish", "workspace.deliver"}) {
+            window.triggerCommand(QString::fromLatin1(command));
+            const QRect tray = inWindow(window.m_shell->tray() == StageShell::Tray::Finish ? static_cast<QWidget *>(window.m_finishTray) : static_cast<QWidget *>(window.m_deliverTray), &window);
+            QCOMPARE(tray.height(), 344);
+            const QRect picture = window.m_shell->rects().picture;
+            QVERIFY2(picture.bottom() + 40 < tray.top(), qPrintable(QStringLiteral("picture to %1, tray from %2").arg(picture.bottom() + 40).arg(tray.top())));
+            QVERIFY(picture.height() < whole.height());
+            QCOMPARE(picture.center().x(), whole.center().x());
+        }
+        const QJsonArray firstClips = window.m_project.value(QStringLiteral("tracks")).toArray().at(0).toObject().value(QStringLiteral("clips")).toArray();
+        window.selectClip(firstClips.at(0).toObject().value(QStringLiteral("id")).toString());
+        window.triggerCommand(QStringLiteral("workspace.finish"));
+        window.triggerCommand(QStringLiteral("window.inspector"));
+        const QRect tray = inWindow(window.m_finishTray, &window);
+        const QRect sheet = inWindow(window.m_inspectorColumn, &window);
+        QVERIFY2(sheet.bottom() < tray.top(), qPrintable(QStringLiteral("sheet to %1, tray from %2").arg(sheet.bottom()).arg(tray.top())));
+        QVERIFY(sheet.height() > 300);
+        // Closed, the picture has its room again.
+        window.triggerCommand(QStringLiteral("workspace.review"));
+        QCOMPARE(window.m_shell->rects().picture, whole);
+        QVERIFY(inWindow(window.m_inspectorColumn, &window).height() > sheet.height());
+        window.close();
+
+        // The design's size: nothing moves.
+        MainWindow large{QString(), QString()};
+        large.setConnection(QStringLiteral("ready"));
+        large.applySnapshot(snapshotOf(QSize(1080, 1920)));
+        large.resize(1600, 1000);
+        large.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&large));
+        const QRect there = large.m_shell->rects().picture;
+        large.triggerCommand(QStringLiteral("workspace.finish"));
+        QCOMPARE(large.m_shell->rects().picture, there);
+        large.close();
+    }
 };
 
 } // namespace kerf

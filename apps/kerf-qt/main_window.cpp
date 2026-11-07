@@ -1701,7 +1701,12 @@ void MainWindow::routeEvent(const QJsonObject &event) {
                                           : event.value(QStringLiteral("snapshot")).toObject();
         if (!snapshot.isEmpty()) applySnapshot(snapshot);
     } else if (type == QStringLiteral("viewer_reset")) {
-        m_viewer->clearFrame();
+        // What was showing stands in until the new playback's first frame, unless it would be
+        // stretched, or there is nothing to play and no first frame will come.
+        const QSize canvas = resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray());
+        const QSize shown = m_viewer->frameSize();
+        const bool sameShape = !shown.isEmpty() && !canvas.isEmpty() && qAbs(double(shown.width()) / shown.height() - double(canvas.width()) / canvas.height()) < 0.01;
+        if (!sameShape || m_snapshot.value(QStringLiteral("duration")).toDouble() <= 0.0) m_viewer->clearFrame();
         m_viewer->setCaption(QString());
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {

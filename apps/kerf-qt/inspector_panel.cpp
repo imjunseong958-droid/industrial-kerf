@@ -49,6 +49,9 @@ namespace kerf {
 
 namespace {
 
+// How many times what is usual a generator's number may range over and still have a slider.
+constexpr double kMostSliderRange = 100.0;
+
 // Effects show this many parameters before "N more" (N is 2 or more).
 constexpr int kEffectRowsShown = 5;
 // The clip header (spec 5.1): 44 tall, pad 4 8 4 12.
@@ -1911,6 +1914,12 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section) {
         bindNumber(r, row(r)->controls(), prop("x"), def("x"))->setObjectName(QStringLiteral("prop_x"));
         bindNumber(r, row(r)->controls(), prop("y"), def("y"), false, false)->setObjectName(QStringLiteral("prop_y"));
     }
+    // A camera turns by its own pan, tilt, and roll, and neither it nor a light has a size to scale.
+    const QString generator = first.clip.value(QStringLiteral("kind")).toString() == QStringLiteral("generator") ? first.clip.value(QStringLiteral("fx")).toString() : QString();
+    if (generator == QStringLiteral("camera") || generator == QStringLiteral("light")) {
+        buildDepthRows(into, section);
+        return;
+    }
     if (!def("rotation").isEmpty()) {
         // Bipolar about 0°, as the knob it replaces turned either way.
         const int r = addRow(into, QStringLiteral("Rotation"), section);
@@ -1933,6 +1942,12 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section) {
         bindNumber(r, row(r)->controls(), prop("anchor_y"), def("anchor_y"), false, false)->setObjectName(QStringLiteral("prop_anchor_y"));
     }
     buildDepthRows(into, section);
+}
+
+// A number above 0 at some moment, so one that grows as it goes counts.
+static bool everAboveZero(const QJsonValue &raw) {
+    const QJsonArray keys = raw.toArray();
+    return raw.toDouble() > 0.0 || std::any_of(keys.cbegin(), keys.cend(), [](const QJsonValue &key) { return key.toObject().value(QStringLiteral("value")).toDouble() > 0.0; });
 }
 
 // A clip in depth (kerf-compose `three_d.rs`). A camera and a light stand at a `z` whatever else is
@@ -1971,20 +1986,15 @@ void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
     m_refreshers.append([this, inDepth, bevel, profile] {
         const Target depth{Target::Kind::Prop, QStringLiteral("depth")};
         const Target cut{Target::Kind::Prop, QStringLiteral("bevel")};
-        // Above 0 at some moment, so one that grows as it goes counts.
-        const auto ever = [](const QJsonValue &raw) {
-            const QJsonArray keys = raw.toArray();
-            return raw.toDouble() > 0.0 || std::any_of(keys.cbegin(), keys.cend(), [](const QJsonValue &key) { return key.toObject().value(QStringLiteral("value")).toDouble() > 0.0; });
-        };
         bool placed = false;
         bool solid = false;
         bool cutting = false;
         for (const Clip &clip : std::as_const(m_clips)) {
             if (!clip.clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool()) continue;
             placed = true;
-            if (!ever(rawValue(clip, depth))) continue;
+            if (!everAboveZero(rawValue(clip, depth))) continue;
             solid = true;
-            cutting |= ever(rawValue(clip, cut));
+            cutting |= everAboveZero(rawValue(clip, cut));
         }
         for (InspectorRow *entry : inDepth)
             if (entry) entry->setVisible(placed);
@@ -2676,35 +2686,82 @@ void InspectorPanel::buildCaption(QVBoxLayout *into) {
 }
 
 void InspectorPanel::buildGenerator(QVBoxLayout *into) {
-    const QJsonArray params = m_project.value(QStringLiteral("generators")).toObject().value(m_clips.first().clip.value(QStringLiteral("fx")).toString()).toArray();
+    const QString fx = m_clips.first().clip.value(QStringLiteral("fx")).toString();
+    const QJsonArray params = m_project.value(QStringLiteral("generators")).toObject().value(fx).toArray();
     const int own = params.isEmpty() ? -1 : addSection(into, QStringLiteral("generator"), kindName(m_clips.first()), true);
-    const bool light = m_clips.first().clip.value(QStringLiteral("fx")).toString() == QStringLiteral("light");
+    // A clip's `kind`, the catalog's first when it says none.
+    QString firstKind;
+    for (const QJsonValue &value : params)
+        if (value.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("kind")) firstKind = value.toObject().value(QStringLiteral("default")).toString();
+    const auto kindOf = [this, firstKind](const Clip &clip) {
+        const QString kind = rawValue(clip, Target{Target::Kind::Prop, QStringLiteral("kind")}).toString();
+        return kind.isEmpty() ? firstKind : kind;
+    };
+    const auto ever = [this](const Clip &clip, const char *name) { return everAboveZero(rawValue(clip, Target{Target::Kind::Prop, QString::fromLatin1(name)})); };
+    // What a row waits for, so that it shows only where it would do something, as a bevel's profile
+    // waits for a bevel. A number that opens later counts.
+    const auto waitsFor = [&](const QString &name) -> std::function<bool(const Clip &)> {
+        if (fx == QStringLiteral("camera") && name == QStringLiteral("focus")) return [ever](const Clip &clip) { return ever(clip, "aperture"); };
+        if (fx == QStringLiteral("light")) {
+            const auto casts = [kindOf](const Clip &clip) { return kindOf(clip) == QStringLiteral("point") || kindOf(clip) == QStringLiteral("directional"); };
+            // Only an environment light wraps a track around the scene.
+            if (name == QStringLiteral("image")) return [kindOf](const Clip &clip) { return kindOf(clip) == QStringLiteral("environment"); };
+            if (name == QStringLiteral("shadow")) return casts;
+            if (name == QStringLiteral("size")) return [casts, ever](const Clip &clip) { return casts(clip) && ever(clip, "shadow"); };
+        }
+        if (fx == QStringLiteral("shape")) {
+            const auto ofKind = [kindOf](std::initializer_list<const char *> kinds) -> std::function<bool(const Clip &)> {
+                QStringList names;
+                for (const char *kind : kinds) names << QString::fromLatin1(kind);
+                return [kindOf, names](const Clip &clip) { return names.contains(kindOf(clip)); };
+            };
+            if (name == QStringLiteral("round")) return ofKind({"rect"});
+            if (name == QStringLiteral("sides")) return ofKind({"polygon", "star"});
+            if (name == QStringLiteral("inner")) return ofKind({"star"});
+            if (name == QStringLiteral("width") || name == QStringLiteral("height")) return ofKind({"rect", "ellipse", "polygon", "star"});
+            if (name == QStringLiteral("points") || name == QStringLiteral("smooth") || name == QStringLiteral("closed")) return ofKind({"path"});
+            if (name == QStringLiteral("stroke") || name.startsWith(QStringLiteral("trim_")) || name.startsWith(QStringLiteral("taper_")))
+                return [ever](const Clip &clip) { return ever(clip, "stroke_width"); };
+        }
+        return {};
+    };
     for (const QJsonValue &value : params) {
         const QJsonObject def = value.toObject();
         const QString name = def.value(QStringLiteral("name")).toString();
         const int r = addRow(sectionBody(own), presentationLabel(def), own);
-        if (def.value(QStringLiteral("type")).toString() == QStringLiteral("number"))
-            bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, def.contains(QStringLiteral("max")))->setObjectName(QStringLiteral("prop_") + name);
-        else
+        if (def.value(QStringLiteral("type")).toString() == QStringLiteral("number")) {
+            // A slider says something only where its range is near what is asked of it: at 50 of
+            // 100,000 a second one sits at its end and moves in leaps, and takes the figures' room.
+            const double span = def.value(QStringLiteral("max")).toDouble() - def.value(QStringLiteral("min")).toDouble();
+            const double usual = std::abs(def.value(QStringLiteral("default")).toDouble());
+            const bool slider = def.contains(QStringLiteral("max")) && (usual > 0.0 ? span / usual <= kMostSliderRange : span <= kMostSliderRange);
+            bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, slider)->setObjectName(QStringLiteral("prop_") + name);
+        } else {
             bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def)->setObjectName(QStringLiteral("prop_") + name);
-        // Only an environment light wraps a track around the scene.
-        if (light && name == QStringLiteral("image"))
-            m_refreshers.append([this, image = row(r)] {
-                const Target kind{Target::Kind::Prop, QStringLiteral("kind")};
-                image->setVisible(std::any_of(m_clips.cbegin(), m_clips.cend(), [this, &kind](const Clip &clip) {
-                    return rawValue(clip, kind).toString() == QStringLiteral("environment");
-                }));
-            });
+        }
+        if (const auto waits = waitsFor(name))
+            m_refreshers.append([this, entry = row(r), waits] { entry->setVisible(std::any_of(m_clips.cbegin(), m_clips.cend(), waits)); });
     }
-    buildEffectsSection(into, false);
-    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Compositing"));
-    m_sections.at(compositing).section->setEnable(InspectorSection::Enable::Always, QStringLiteral("Compositing is always applied"));
-    buildCompositingRows(sectionBody(compositing), compositing);
+    // A camera, a light, and a null draw nothing: nothing to run effects on, blend, crop, or mask.
+    const bool draws = fx != QStringLiteral("camera") && fx != QStringLiteral("light") && fx != QStringLiteral("null");
+    if (draws) {
+        buildEffectsSection(into, false);
+        const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Compositing"));
+        m_sections.at(compositing).section->setEnable(InspectorSection::Enable::Always, QStringLiteral("Compositing is always applied"));
+        buildCompositingRows(sectionBody(compositing), compositing);
+    }
     const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"));
     m_sections.at(transform).section->setEnable(InspectorSection::Enable::Always, QStringLiteral("Transform is always applied"));
     buildTransformRows(sectionBody(transform), transform);
-    buildCropSection(into);
-    if (m_maskable) buildMasksSection(into);
+    // An ambient light and an environment are nowhere.
+    if (fx == QStringLiteral("light"))
+        m_refreshers.append([this, kindOf, section = m_sections.at(transform).section] {
+            section->setVisible(std::any_of(m_clips.cbegin(), m_clips.cend(), [&kindOf](const Clip &clip) { return kindOf(clip) == QStringLiteral("point") || kindOf(clip) == QStringLiteral("directional"); }));
+        });
+    if (draws) {
+        buildCropSection(into);
+        if (m_maskable) buildMasksSection(into);
+    }
     buildTimeSection(into);
 }
 
@@ -3486,7 +3543,10 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     for (const QJsonValue &value : defs) {
         const QJsonObject param = value.toObject();
         ++paramIndex;
-        const QString group = presentationGroup(param);
+        // A group's switch is named after the group, and goes first in it.
+        const QString own = param.value(QStringLiteral("doc")).toString();
+        const bool groupSwitch = param.value(QStringLiteral("type")).toString() == QStringLiteral("bool") && groups.contains(own);
+        const QString group = groupSwitch ? own : presentationGroup(param);
         const bool inMore = groups.isEmpty() ? shownRows >= rowsShown : group != groups.first();
         QVBoxLayout *target = inMore ? moreLayout : paramsLayout;
         if (!group.isEmpty() && group != lastGroup) {
@@ -3500,7 +3560,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
         if (inMore && groups.isEmpty()) ++hidden;
         else if (!inMore) ++shownRows;
         const QString paramName = param.value(QStringLiteral("name")).toString();
-        const int r = addRow(target, shortLabels.at(paramIndex));
+        const int r = addRow(target, groupSwitch ? QStringLiteral("On") : shortLabels.at(paramIndex));
         // Effect rows count towards the Effects group (its reset, its hint).
         m_rowSections.insert(r, int(m_sections.size()) - 1);
         const Target t{Target::Kind::Effect, paramName, index};
@@ -3511,6 +3571,12 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
             bindValue(r, this->row(r)->controls(), t, param)->setObjectName(QStringLiteral("effectParam_") + paramName);
         }
         this->row(r)->label()->setToolTip(britishSpelling(param.value(QStringLiteral("doc")).toString(paramName)));
+        // Only an HDR sequence reads these.
+        if (paramName.startsWith(QStringLiteral("hdr_")))
+            m_refreshers.append([this, entry = this->row(r)] {
+                const QJsonArray sequences = m_project.value(QStringLiteral("sequences")).toArray();
+                entry->setVisible(!sequences.isEmpty() && sequences.first().toObject().value(QStringLiteral("color")).toString().startsWith(QStringLiteral("rec2100")));
+            });
     }
     paramsLayout->addWidget(moreRows);
     const QString moreKey = QStringLiteral("editor/inspector/fx/%1/more").arg(id);

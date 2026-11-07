@@ -963,6 +963,23 @@ void ProjectPanel::setTracks(const QJsonArray &tracks) {
     rebuildRoles();
 }
 
+// Track badges with what runs on as a range, "V1–V12 A1", so that a sequence of many tracks stays
+// inside the sheet.
+QString badgeRuns(const QStringList &badges) {
+    QStringList runs;
+    const auto numberOf = [](const QString &badge) { return badge.mid(1).toInt(); };
+    for (qsizetype from = 0; from < badges.size();) {
+        qsizetype to = from;
+        while (to + 1 < badges.size() && badges.at(to + 1).at(0) == badges.at(from).at(0) && numberOf(badges.at(to + 1)) == numberOf(badges.at(to)) + 1) ++to;
+        // Two in a row are as short said one by one.
+        if (to - from >= 2) runs << badges.at(from) + QStringLiteral("–") + badges.at(to).mid(1).prepend(badges.at(to).at(0));
+        else
+            for (qsizetype at = from; at <= to; ++at) runs << badges.at(at);
+        from = to + 1;
+    }
+    return runs.join(QLatin1Char(' '));
+}
+
 void ProjectPanel::rebuildRoles() {
     while (QLayoutItem *item = m_roleRows->takeAt(0)) {
         if (QWidget *widget = item->widget()) widget->deleteLater();
@@ -988,7 +1005,7 @@ void ProjectPanel::rebuildRoles() {
         rowLayout->addStretch(1);
         QStringList badges;
         for (const QString &track : group.tracks) badges << trackBadge(QJsonObject{{QStringLiteral("tracks"), m_tracks}}, track).badge;
-        rowLayout->addWidget(label(badges.join(QLatin1Char(' ')), tokens::monoSmall, tokens::ink3));
+        rowLayout->addWidget(label(badgeRuns(badges), tokens::monoSmall, tokens::ink3));
         m_roleRows->addWidget(row);
         m_roleChecks << check;
     }

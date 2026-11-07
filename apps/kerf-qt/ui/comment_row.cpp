@@ -109,6 +109,26 @@ double parseTimecode(const QString &text, double fps) {
     return double(frames) / std::max(1.0, fps);
 }
 
+// A word too long for any line a comment has, such as a file's name, may break anywhere: a QLabel
+// breaks only at spaces, and cuts off the rest. Applied to text not yet escaped.
+QString breakingLongWords(const QString &text) {
+    constexpr int kLongWord = 24;
+    static const QRegularExpression longWord(QStringLiteral("\\S{%1,}").arg(kLongWord));
+    QString out;
+    qsizetype from = 0;
+    for (auto it = longWord.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        out += text.mid(from, match.capturedStart() - from).toHtmlEscaped();
+        // Past each character, escaped alone so that no entity is broken.
+        for (const QChar c : match.captured(0)) {
+            out += QString(c).toHtmlEscaped();
+            if (!c.isHighSurrogate()) out += QChar(0x200B);
+        }
+        from = match.capturedEnd();
+    }
+    return out + text.mid(from).toHtmlEscaped();
+}
+
 QString richBody(const QString &body, double fps) {
     static const QRegularExpression token(
         QStringLiteral("(\\d{2}:\\d{2}:\\d{2}[:;]\\d{2})|(@[A-Za-z][A-Za-z0-9_.\\-]*)"));
@@ -119,7 +139,7 @@ QString richBody(const QString &body, double fps) {
     QRegularExpressionMatchIterator it = token.globalMatch(body);
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
-        out += body.mid(from, match.capturedStart() - from).toHtmlEscaped();
+        out += breakingLongWords(body.mid(from, match.capturedStart() - from));
         const QString text = match.captured(0);
         if (!match.captured(1).isEmpty()) {
             const double seconds = parseTimecode(text, fps);
@@ -133,7 +153,7 @@ QString richBody(const QString &body, double fps) {
         }
         from = match.capturedEnd();
     }
-    out += body.mid(from).toHtmlEscaped();
+    out += breakingLongWords(body.mid(from));
     out.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
     return QStringLiteral("<div style=\"line-height:20px;\">%1</div>").arg(out);
 }

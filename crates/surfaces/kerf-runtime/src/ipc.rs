@@ -240,6 +240,13 @@ impl std::fmt::Debug for RuntimeClient {
     }
 }
 
+/// Why a kerfd stopped, from the JSON it writes on stderr, if it said.
+#[cfg(any(unix, windows))]
+fn stopped_because(said: &Path) -> Option<RuntimeError> {
+    let bytes = fs::read(said).ok()?;
+    serde_json::from_slice(bytes.trim_ascii()).ok()
+}
+
 impl RuntimeClient {
     /// Create a client that connects only to an already-running daemon.
     pub fn new(directory: &Path) -> Result<Self, RuntimeError> {
@@ -828,7 +835,7 @@ impl RuntimeClient {
                 format!("no kerfd daemon is listening at {}", self.endpoint_label()),
             )
         })?;
-        let mut child = self.spawn_daemon(binary)?;
+        let (mut child, mut said) = self.spawn_daemon(binary)?;
         let mut respawned = false;
         let deadline = std::time::Instant::now() + self.inner.startup_timeout;
         let result = loop {
@@ -840,25 +847,42 @@ impl RuntimeClient {
                     if error.code == "IPC_PERMISSION_DENIED" {
                         break Err(error);
                     }
-                    // A kerfd on its way out can hold the project longer
-                    // than the child waits for it; start one more once.
-                    if !respawned && matches!(child.try_wait(), Ok(Some(_))) {
-                        respawned = true;
-                        child = match self.spawn_daemon(binary) {
-                            Ok(next) => next,
-                            Err(error) => break Err(error),
-                        };
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        // A document it cannot read stays so, and says why:
+                        // waiting cannot help, and that is what to show.
+                        if let Some(stopped) = stopped_because(&said)
+                            .filter(|stopped| stopped.code == "INVALID_PROJECT")
+                        {
+                            break Err(stopped);
+                        }
+                        // A kerfd on its way out can hold the project longer
+                        // than the child waits for it; start one more once.
+                        if !respawned {
+                            respawned = true;
+                            let _ = fs::remove_file(&said);
+                            (child, said) = match self.spawn_daemon(binary) {
+                                Ok(next) => next,
+                                Err(error) => {
+                                    said = PathBuf::new();
+                                    break Err(error);
+                                }
+                            };
+                        }
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
                 Err(error) => {
-                    break Err(RuntimeError::new(
-                        "RUNTIME_UNAVAILABLE",
-                        format!("kerfd did not become ready: {}", error.message),
-                    ));
+                    break Err(stopped_because(&said).unwrap_or_else(|| {
+                        RuntimeError::new(
+                            "RUNTIME_UNAVAILABLE",
+                            format!("kerfd did not become ready: {}", error.message),
+                        )
+                    }));
                 }
             }
         };
+        // Gone from the folder while kerfd may still hold it open, which is fine.
+        let _ = fs::remove_file(&said);
         // kerfd exits once it is idle, while this process may live on; reap
         // it then so it does not linger as a zombie.
         let _ = thread::Builder::new()
@@ -867,15 +891,26 @@ impl RuntimeClient {
         result
     }
 
+    /// Start kerfd, and the file its stderr goes to: it says there why it
+    /// cannot run at all, as JSON. A file and not a pipe, since kerfd outlives
+    /// this client, and would be left writing to a pipe with nobody on it.
     #[cfg(any(unix, windows))]
-    fn spawn_daemon(&self, binary: &Path) -> Result<std::process::Child, RuntimeError> {
+    fn spawn_daemon(&self, binary: &Path) -> Result<(std::process::Child, PathBuf), RuntimeError> {
+        let said = std::env::temp_dir().join(format!(
+            "kerfd-{}-{:016x}.stderr",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos() as u64)
+        ));
+        let stderr = fs::File::create(&said).map_or_else(|_| Stdio::null(), Stdio::from);
         let mut command = Command::new(binary);
         command
             .arg("--dir")
             .arg(&self.inner.directory)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(stderr);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -895,12 +930,14 @@ impl RuntimeClient {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 result => {
-                    return result.map_err(|error| {
+                    let child = result.map_err(|error| {
+                        let _ = fs::remove_file(&said);
                         RuntimeError::new(
                             "RUNTIME_UNAVAILABLE",
                             format!("failed to start kerfd at {}: {error}", binary.display()),
                         )
-                    });
+                    })?;
+                    return Ok((child, said));
                 }
             }
         }

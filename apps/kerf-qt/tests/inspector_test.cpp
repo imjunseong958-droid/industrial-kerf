@@ -2453,6 +2453,203 @@ private slots:
         QCoreApplication::processEvents();
         if (!shots.isEmpty()) QVERIFY(column->grab().toImage().save(QDir(shots).filePath(QStringLiteral("inspector-finish.png"))));
     }
+
+    // What a clip's rows say at the width they have, and which of them do anything. Particles'
+    // numbers were lost behind units as long as "frame heights a second"; a camera's Focus does
+    // nothing with no aperture, a light's Size with no shadow, and so on down a shape.
+    void generatorRowsSayWhatTheyDo() {
+        char *properties = kerf_clip_properties();
+        QVERIFY(properties);
+        const QJsonObject catalogProps = QJsonDocument::fromJson(properties).object();
+        kerf_bridge_string_free(properties);
+        char *all = kerf_fx_catalog_all();
+        QVERIFY(all);
+        const QJsonArray entries = QJsonDocument::fromJson(all).array();
+        kerf_bridge_string_free(all);
+        QJsonObject generators;
+        for (const QJsonValue &entry : entries)
+            if (entry.toObject().value("kind") == QLatin1String("generator")) generators.insert(entry.toObject().value("id").toString(), entry.toObject().value("params"));
+
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        int revision = 5;
+        const auto show = [&](const char *fx, const QJsonObject &props) {
+            window.applySnapshot(QJsonObject{{"revision", ++revision}, {"duration", 4}, {"timeline", QJsonObject{
+                {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProps}, {"generators", generators},
+                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "g"}, {"kind", "generator"}, {"fx", fx}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", props}}}}}}}}}});
+            window.selectClip(QStringLiteral("g"));
+        };
+        window.resize(1389, 868);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.triggerCommand(QStringLiteral("window.inspector"));
+        InspectorPanel *inspector = window.m_inspector;
+        const auto widget = [inspector](const char *name) { return inspector->findChild<QWidget *>(QString::fromLatin1(name)); };
+        const auto showing = [&widget](const char *name) { return widget(name) && !rowOf(widget(name))->isHidden(); };
+        const auto section = [inspector](const char *id) { return inspector->section(QString::fromLatin1(id)); };
+        const auto settle = [] { QCoreApplication::processEvents(); };
+
+        // Particles: every number shows, whole, beside a unit that fits.
+        show("particles", {{"rate", 40.0}, {"life", 2.0}, {"velocity", 0.3}, {"gravity", -0.1}});
+        settle();
+        for (const char *name : {"prop_rate", "prop_life", "prop_velocity", "prop_gravity", "prop_seed"}) {
+            auto *field = inspector->findChild<ScrubField *>(QString::fromLatin1(name));
+            QVERIFY2(field, name);
+            QVERIFY2(field->showsWhole(), name);
+            QVERIFY2(field->neededWidth() <= field->width(), qPrintable(QStringLiteral("%1 needs %2 of %3").arg(QString::fromLatin1(name)).arg(field->neededWidth()).arg(field->width())));
+            TextRecorder painted;
+            field->render(&painted);
+            bool figures = false;
+            for (const TextRecorder::Run &run : std::as_const(painted.runs))
+                figures = figures || run.text.contains(QRegularExpression(QStringLiteral("\\d")));
+            QVERIFY2(figures, name);
+        }
+        const auto unit = [inspector](const char *name) { return inspector->findChild<ScrubField *>(QString::fromLatin1(name))->unitText(); };
+        QCOMPARE(unit("prop_rate"), QStringLiteral("/s"));
+        QCOMPARE(unit("prop_life"), QStringLiteral("s"));
+        QCOMPARE(unit("prop_velocity"), QStringLiteral("px/s"));
+        QCOMPARE(unit("prop_gravity"), QStringLiteral("px/s²"));
+        QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("prop_velocity"))->text(), QStringLiteral("324"));
+        // A seed is a whole number and not a share of anything.
+        QCOMPARE(unit("prop_seed"), QString());
+        QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("prop_seed"))->text(), QStringLiteral("1"));
+
+        // A camera's Focus waits for an aperture, also one that opens later.
+        show("camera", {});
+        settle();
+        QVERIFY(!showing("prop_focus"));
+        QVERIFY(showing("prop_aperture"));
+        show("camera", {{"aperture", 0.03}});
+        settle();
+        QVERIFY(showing("prop_focus"));
+        show("camera", {{"aperture", QJsonArray{QJsonObject{{"at", 0.0}, {"frame", 0}, {"value", 0.0}}, QJsonObject{{"at", 1.0}, {"frame", 24}, {"value", 0.02}}}}});
+        settle();
+        QVERIFY(showing("prop_focus"));
+
+        // A light's Size waits for a shadow, and neither is any use on one that casts none.
+        show("light", {});
+        settle();
+        QVERIFY(showing("prop_shadow"));
+        QVERIFY(!showing("prop_size"));
+        show("light", {{"shadow", 0.8}});
+        settle();
+        QVERIFY(showing("prop_size"));
+        show("light", {{"kind", "ambient"}, {"shadow", 0.8}});
+        settle();
+        QVERIFY(!showing("prop_shadow"));
+        QVERIFY(!showing("prop_size"));
+        show("light", {{"kind", "environment"}, {"shadow", 0.8}});
+        settle();
+        QVERIFY(!showing("prop_shadow"));
+        QVERIFY(showing("prop_image"));
+
+        // What draws nothing has nothing to blend, crop, or mask.
+        for (const char *fx : {"camera", "light", "null"}) {
+            show(fx, {});
+            settle();
+            for (const char *id : {"effects", "compositing", "crop", "masks"})
+                QVERIFY2(!section(id) || section(id)->isHidden(), qPrintable(QStringLiteral("%1 on a %2").arg(QString::fromLatin1(id), QString::fromLatin1(fx))));
+            QVERIFY2(section("transform") && !section("transform")->isHidden(), fx);
+            QVERIFY2(section("time") && !section("time")->isHidden(), fx);
+        }
+        // A camera and a light are placed, not sized or turned by these; a null is, for its children.
+        show("camera", {});
+        settle();
+        QVERIFY(showing("prop_x") && showing("prop_z"));
+        QVERIFY(!widget("prop_scale") && !widget("prop_rotation") && !widget("prop_anchor_x"));
+        show("null", {});
+        settle();
+        QVERIFY(showing("prop_x") && showing("prop_rotation") && showing("prop_scale"));
+        // An ambient light is nowhere.
+        show("light", {{"kind", "ambient"}});
+        settle();
+        QVERIFY(section("transform")->isHidden());
+        // An adjustment layer's frame and masks weigh what it does.
+        show("adjustment", {});
+        settle();
+        for (const char *id : {"effects", "compositing", "transform", "crop", "masks"}) QVERIFY2(section(id) && !section(id)->isHidden(), id);
+
+        // A shape's rows follow its kind, and what a stroke does waits for a stroke.
+        show("shape", {{"kind", "star"}});
+        settle();
+        QVERIFY(showing("prop_sides") && showing("prop_inner") && showing("prop_width") && showing("prop_stroke_width"));
+        for (const char *name : {"prop_round", "prop_points", "prop_smooth", "prop_closed", "prop_stroke", "prop_trim_start", "prop_trim_end", "prop_trim_offset", "prop_taper_start", "prop_taper_end"})
+            QVERIFY2(!showing(name), name);
+        show("shape", {{"kind", "rect"}, {"stroke_width", 0.01}});
+        settle();
+        QVERIFY(showing("prop_round") && showing("prop_stroke") && showing("prop_trim_end") && showing("prop_taper_end"));
+        QVERIFY(!showing("prop_sides") && !showing("prop_inner"));
+        show("shape", {{"kind", "path"}, {"points", "0,0 0.1,0.1"}});
+        settle();
+        QVERIFY(showing("prop_points") && showing("prop_smooth") && showing("prop_closed"));
+        QVERIFY(!showing("prop_width") && !showing("prop_height") && !showing("prop_round"));
+        // With no kind said a shape is the catalog's first.
+        show("shape", {});
+        settle();
+        QVERIFY(showing("prop_round"));
+        window.close();
+    }
+
+    // A group's switch lies in its group, where it had fallen to the end of the group before; and
+    // what only an HDR sequence reads waits for one.
+    void anEffectsGroupKeepsItsSwitch() {
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector/fx")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const auto show = [&](int revision, const char *color) {
+            const QJsonObject effect{{"id", "e1"}, {"fx", "color.lumetri"}, {"enabled", true}, {"params", QJsonObject{}}};
+            const QJsonObject clip{{"id", "c"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"effects", QJsonArray{effect}}};
+            const QJsonObject track{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}};
+            window.applySnapshot(QJsonObject{{"revision", revision}, {"duration", 4}, {"timeline", QJsonObject{
+                {"fps", 24}, {"width", 1920}, {"height", 1080}, {"sequences", QJsonArray{QJsonObject{{"id", "s1"}, {"color", color}}}}, {"tracks", QJsonArray{track}}}}});
+            window.selectClip(QStringLiteral("c"));
+        };
+        window.resize(1389, 868);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        show(5, "rec709");
+        window.triggerCommand(QStringLiteral("window.inspector"));
+        InspectorPanel *inspector = window.m_inspector;
+        QCoreApplication::processEvents();
+        inspector->section(QStringLiteral("effects"))->setOpen(true);
+        const auto unfold = [inspector] {
+            for (GlyphButton *chevron : inspector->findChildren<GlyphButton *>(QStringLiteral("effectChevron")))
+                if (!chevron->isOpen()) chevron->click();
+            for (QAbstractButton *more : inspector->findChildren<QAbstractButton *>(QStringLiteral("effectMoreToggle")))
+                if (more->text() != QStringLiteral("Fewer")) more->click();
+            QCoreApplication::processEvents();
+        };
+        unfold();
+        QWidget *creativeOn = inspector->findChild<QWidget *>(QStringLiteral("effectParam_creative_on"));
+        QVERIFY(creativeOn);
+        QWidget *look = inspector->findChild<QWidget *>(QStringLiteral("effectParam_look"));
+        QVERIFY(look);
+        QLabel *creative = nullptr;
+        for (QLabel *label : inspector->findChildren<QLabel *>(QStringLiteral("effectGroup")))
+            if (label->text() == QStringLiteral("Creative")) creative = label;
+        QVERIFY(creative);
+        // In order down the column, by where each lies in the same parent.
+        const auto top = [inspector](QWidget *widget) { return widget->mapTo(inspector, QPoint(0, 0)).y(); };
+        QVERIFY2(top(creative) < top(creativeOn), qPrintable(QStringLiteral("header %1, switch %2").arg(top(creative)).arg(top(creativeOn))));
+        QVERIFY2(top(creativeOn) < top(look), qPrintable(QStringLiteral("switch %1, look %2").arg(top(creativeOn)).arg(top(look))));
+        // Its row says only that it is on: the header above it says what.
+        QCOMPARE(rowOf(creativeOn)->label()->text(), QStringLiteral("On"));
+
+        // In an SDR sequence nothing reads these.
+        QWidget *white = inspector->findChild<QWidget *>(QStringLiteral("effectParam_hdr_white"));
+        QWidget *specular = inspector->findChild<QWidget *>(QStringLiteral("effectParam_hdr_specular"));
+        QVERIFY(white && specular);
+        QVERIFY(rowOf(white)->isHidden() && rowOf(specular)->isHidden());
+        show(6, "rec2100-pq");
+        QCoreApplication::processEvents();
+        unfold();
+        white = inspector->findChild<QWidget *>(QStringLiteral("effectParam_hdr_white"));
+        specular = inspector->findChild<QWidget *>(QStringLiteral("effectParam_hdr_specular"));
+        QVERIFY(white && specular);
+        QVERIFY(!rowOf(white)->isHidden() && !rowOf(specular)->isHidden());
+        window.close();
+    }
 };
 
 } // namespace kerf

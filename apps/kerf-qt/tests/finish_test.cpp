@@ -605,7 +605,8 @@ private slots:
         QCOMPARE(view.rowThread(6), QStringLiteral("c-1708"));
         const QList<QToolButton *> links = view.findChildren<QToolButton *>(QStringLiteral("qcInThread"));
         QCOMPARE(links.size(), 2);
-        QCOMPARE(links.first()->size(), QSize(64, 28));
+        QCOMPARE(links.first()->height(), 28);
+        QVERIFY(links.first()->width() >= links.first()->fontMetrics().horizontalAdvance(links.first()->text()));
         links.first()->click();
         QCOMPARE(threads.size(), 1);
         QCOMPARE(threads.first().first().toString(), QStringLiteral("c-2718"));
@@ -634,7 +635,7 @@ private slots:
         TextRecorder narrow;
         clipped.render(&narrow);
         QCOMPARE(narrow.colorOf(QStringLiteral("Clipped text")), tokens::color(tokens::ink));
-        QCOMPARE(narrow.colorOf(QStringLiteral("1 ")), tokens::color(tokens::neg));
+        QCOMPARE(narrow.colorOf(QStringLiteral("1")), tokens::color(tokens::neg));
         QCOMPARE(ui::tipName(&clipped), QStringLiteral("Clipped text: 1 at 00:00:03:00"));
 
         // A new check over the result keeps the rows and shows its progress.
@@ -858,6 +859,94 @@ private slots:
         window.m_commands->action(QStringLiteral("workspace.review"))->trigger();
         QCoreApplication::processEvents();
         QTRY_VERIFY(!tray->analyser()->isActive());
+    }
+
+    // The walk at a laptop's size: every row of the full QC, failing with a thread, keeps its whole
+    // name in the narrowest pane it gets, and what it measured goes a whole word at a time, so that
+    // no number is ever cut.
+    void aQcRowKeepsItsNameAndWholeWords() {
+        const QStringList names{"Integrated loudness", "True peak", "Loudness range", "Gamut Rec.709", "Luma levels", "Title safe 90%", "Caption overlap", "Flash and black", "Text contrast",
+                                "Clipped text", "Media online", "Renders", "Document", "Frame edges", "Cuts in words", "Caption reading speed", "Caption duration", "Caption gaps"};
+        const QStringList whole{"−24.9 LUFS · −23 ±1", "−24.9 LUFS", "−24.9", "In thread"};
+        for (const int width : {240, 261, 266, 320, 404}) {
+            for (const QString &name : names) {
+                QcRow row(QJsonObject{{"code", "loudness.integrated"}, {"name", name}, {"passed", false}, {"commentId", "c-1"}, {"value", "−24.9 LUFS"}, {"limit", "−23 ±1"}});
+                row.resize(width, 28);
+                TextRecorder painted;
+                row.render(&painted);
+                bool nameShown = false;
+                for (const TextRecorder::Run &run : std::as_const(painted.runs)) {
+                    nameShown = nameShown || run.text == name;
+                    QVERIFY2(run.text == name || whole.contains(run.text), qPrintable(QStringLiteral("%1 at %2 painted %3").arg(name).arg(width).arg(run.text)));
+                }
+                QVERIFY2(nameShown, qPrintable(QStringLiteral("%1 at %2").arg(name).arg(width)));
+            }
+        }
+        // A roomy row has it all, and a row that passes takes the room its Fail or In thread would.
+        QcRow roomy(QJsonObject{{"code", "loudness.integrated"}, {"name", "Integrated loudness"}, {"passed", true}, {"value", "−23.1 LUFS"}, {"limit", "−23 ±1"}});
+        roomy.resize(404, 28);
+        TextRecorder all;
+        roomy.render(&all);
+        QVERIFY(all.colorOf(QStringLiteral("−23.1 LUFS · −23 ±1")).isValid());
+        QcRow passing(QJsonObject{{"code", "caption.reading_speed"}, {"name", "Caption reading speed"}, {"passed", true}, {"value", "0 too fast"}, {"limit", "at most 20 cps"}});
+        passing.resize(240, 28);
+        TextRecorder fits;
+        passing.render(&fits);
+        QVERIFY(fits.colorOf(QStringLiteral("Caption reading speed")).isValid());
+        QVERIFY(!fits.colorOf(QStringLiteral("0 too")).isValid() || fits.colorOf(QStringLiteral("0 too fast")).isValid());
+    }
+
+    // The tray beside the sidebar at a laptop's size is 1149 wide, and QC's rows read before a scope
+    // needs its last pixels. A tray at its design's width keeps its shares (panesFollowTheFluidRule).
+    void aLaptopsTrayLeavesQcItsRoom() {
+        for (const int width : {1149, 1200, 1285}) {
+            const auto spans = FinishTray::paneSpans(width);
+            QVERIFY2(spans[4].width >= 260, qPrintable(QStringLiteral("QC %1 at %2").arg(spans[4].width).arg(width)));
+            QVERIFY(spans[0].width >= 180 && spans[2].width >= 180);
+            QCOMPARE(spans[4].x + spans[4].width, width - 8);
+            for (int i = 1; i < 5; ++i) QCOMPARE(spans[size_t(i)].x, spans[size_t(i - 1)].x + spans[size_t(i - 1)].width + 8);
+        }
+    }
+
+    // In an HDR sequence the picture's rows read the frames a monitor gets, and QC says so rather
+    // than Rec.709.
+    void qcSaysItsPictureRowsReadTheSdrCopyInHdr() {
+        EditorBus bus;
+        QcView view(nullptr, &bus);
+        const auto with = [](const char *name) {
+            return QJsonObject{{"status", "done"}, {"summary", QJsonObject{{"passed", 1}, {"total", 1}, {"rows", QJsonArray{QJsonObject{{"code", "picture.out_of_range"}, {"name", name}, {"passed", true}, {"value", "legal"}}}}}}};
+        };
+        view.setCheck(with("Gamut Rec.709"));
+        QCOMPARE(view.standardsText(), QStringLiteral("Rec.709"));
+        view.setCheck(with("Gamut, SDR copy"));
+        QCOMPARE(view.standardsText(), QStringLiteral("SDR copy"));
+    }
+
+    // A pane's name stays whole, and what follows it gives way with an ellipsis: a scope's "Y' · PQ
+    // signal" ran over the waveform's own name in an HDR sequence.
+    void aScopesNameStaysWholeInAnHdrSequence() {
+        EditorBus bus;
+        FinishTray tray(nullptr, &bus);
+        tray.resize(1149, 344);
+        tray.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tray));
+        auto *meta = tray.findChild<QLabel *>(QStringLiteral("finishWaveformMeta"));
+        QVERIFY(meta);
+        meta->setText(QStringLiteral("Y' · PQ signal"));
+        QCoreApplication::processEvents();
+        auto *pane = tray.findChild<QWidget *>(QStringLiteral("finishPane_waveform"));
+        QVERIFY(pane);
+        QLabel *title = nullptr;
+        for (QLabel *label : pane->findChildren<QLabel *>())
+            if (label->text() == QStringLiteral("Waveform")) title = label;
+        QVERIFY(title);
+        pane->layout()->activate();
+        QVERIFY2(title->width() >= title->fontMetrics().horizontalAdvance(title->text()), qPrintable(QString::number(title->width())));
+        QVERIFY(meta->geometry().right() < pane->findChild<QWidget *>(QStringLiteral("finishWaveformMode"))->geometry().left());
+        TextRecorder painted;
+        meta->render(&painted);
+        QVERIFY(!painted.runs.isEmpty());
+        QVERIFY(painted.runs.first().text == meta->text() || painted.runs.first().text.endsWith(QStringLiteral("…")));
     }
 };
 

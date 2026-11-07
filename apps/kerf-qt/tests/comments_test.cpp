@@ -53,6 +53,7 @@
 #include <QTest>
 #include <QTextEdit>
 #include <QScopeGuard>
+#include <QTextDocument>
 
 #include <algorithm>
 #include <cmath>
@@ -1449,6 +1450,55 @@ private slots:
             save(*seeded.window.m_chat, QStringLiteral("drafting"));
             save(seeded.window, QStringLiteral("window"));
         }
+    }
+
+    // A word as wide as the conversation, such as a file's name, wraps where it has to: it ran past
+    // the row's edge and the rest of it could not be read.
+    void aLongWordInACommentWraps() {
+        const QString word = QStringLiteral("supercalifragilisticexpialidocious_filename_without_any_breaks_at_all.mov");
+        const QString html = review::richBody(QStringLiteral("See %1 at 00:00:01:00, and <this>").arg(word), 24.0);
+        QTextDocument document;
+        document.setDefaultFont(tokens::font(tokens::reading));
+        // As a QLabel with word wrap lays its text out.
+        QTextOption wrapping = document.defaultTextOption();
+        wrapping.setWrapMode(QTextOption::WordWrap);
+        document.setDefaultTextOption(wrapping);
+        document.setHtml(html);
+        document.setTextWidth(330);
+        QVERIFY2(document.idealWidth() <= 330.5, qPrintable(QString::number(document.idealWidth())));
+        // It still says what it said.
+        QString said = document.toPlainText();
+        said.remove(QChar(0x200B));
+        QVERIFY(said.contains(word));
+        QVERIFY(said.contains(QStringLiteral("<this>")));
+        QVERIFY(said.contains(QStringLiteral("00:00:01:00")));
+        // A sentence of ordinary words is as it was.
+        const QString plain = review::richBody(QStringLiteral("The bevel on the title reads well"), 24.0);
+        QVERIFY(!plain.contains(QChar(0x200B)));
+    }
+
+    // The accessibility press on "N changes" toggles it without a click: the card has to follow, as
+    // it does a click, or the chevron turns and nothing opens.
+    void aProposalCardFollowsItsExpanderHoweverItIsToggled() {
+        SeededWindow seeded;
+        ProposalCard *sea = seeded.window.m_chat->card("proposal-kg");
+        QVERIFY(sea);
+        sea->setOpen(false);
+        QSignalSpy toggled(sea, &ProposalCard::openToggled);
+        sea->changesLink()->toggle();
+        QVERIFY(sea->changesLink()->isChecked());
+        QVERIFY(!sea->m_changes->isHidden());
+        QCOMPARE(toggled.size(), 1);
+        sea->changesLink()->toggle();
+        QVERIFY(sea->m_changes->isHidden());
+        QCOMPARE(toggled.size(), 2);
+        // Set from outside it says nothing, as ever.
+        sea->setOpen(true);
+        QCOMPARE(toggled.size(), 2);
+        // And a click is one toggle.
+        sea->changesLink()->click();
+        QVERIFY(sea->m_changes->isHidden());
+        QCOMPARE(toggled.size(), 3);
     }
 };
 

@@ -285,9 +285,13 @@ sheet never covers the timeline, so a drag from Media or Effects reaches it.
 preflight, loudness and paperwork) are overlays 344 tall across the content beside
 the sidebar, at the bottom; the picture and the conversation stay where they are
 underneath, with that much more for the conversation to scroll, so a thread
-opened from a QC row's In thread comes out from under. A QC row's name reads
-before what it measured, which gives way to it in a narrow tray; the row's tip
-has both. Esc returns to the base state (⌥⇧2). The colour wheels are in the
+opened from a QC row's In thread comes out from under. An upright picture a tray
+would reach into, as one does at a laptop's size, moves into what the tray leaves,
+and a sheet ends where a tray begins, so the wheels are read against the scopes. A
+QC row's name reads before what it measured, which gives way to it a step at a
+time in a narrow tray and never in the middle of a word or a number: all of it, the
+measure before its limit, the measure's number, nothing; the row's tip has both.
+Below its design's width the tray gives QC its room before a scope's last pixels. Esc returns to the base state (⌥⇧2). The colour wheels are in the
 Inspector sheet while Finish is open, and the Inspector's Deliver pane while
 Deliver is.
 
@@ -430,8 +434,14 @@ and Speed for sound; Text, Font and size, Colour, Align and Place for a title
 names the effects that are on as far as they fit, then " +N" and " · 1 off",
 or just "1 on · 1 off": Crop, Anchor & flip, the linked clip's Audio, Masks,
 Effects, and Source (its file and format, and Source In and Out, which slip
-the clip). Values read in px, %, °, dB and timecode; a value at its default
+the clip). Values read in px, %, °, dB, s, /s and timecode; a value at its default
 is drawn quieter than a changed one, and a fill means it can be changed.
+A row shows only where it would do something: a bevel's profile waits for a
+bevel, a camera's Focus for an aperture, a light's Shadow for a light that casts
+one and its Size for a Shadow, a shape's rows for its kind and all a stroke does
+for a Stroke width, and a Lumetri's HDR White and HDR Specular for an HDR sequence.
+A camera, a light and a null draw nothing, so they have no Effects, Compositing,
+Crop or Masks, and an ambient light has no Transform.
 Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
 click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), and step with ↑↓
 while typing (a held key or a quick run of presses is one edit; Esc takes back
@@ -452,7 +462,7 @@ effect's values stay in the secondary ink, readable and editable;
 resets it all. Each effect has a switch, its name, a second line listing what
 changed while folded, five parameters before "N more" when that hides two or
 more (six show whole; grouped under quiet sub-headers when the catalog groups
-them), and ⋯ for Reset Parameters, Ask
+them, each group's own switch first in it), and ⋯ for Reset Parameters, Ask
 Kerf and Remove. Effect names read in Title Case and row labels in sentence
 case, on one 12-point line: a first word the effect's name already says goes
 ("Threshold" under Edge Glow), and a label still too long ends in an ellipsis,
@@ -472,7 +482,9 @@ it and allows four times that, as GitHub's shared macOS runner takes 17-21 ms).
 
 The Effects panel (Window → Effects) shows the catalog's picture effects as
 cards, narrowed by category and by words ("glow", "zoom", "retro"), each
-card the selected media clip's picture at the playhead through that effect.
+card the selected media clip's picture at the playhead through that effect,
+named as the Inspector will name it. Titles has a card for each generator, named
+for what it is, with what it does in its tip.
 Double-click a card, or press Return, to add the effect to the selected clip;
 the edit is an ordinary one, undone like any other. Dragging a card onto the
 Inspector inserts the effect where it lands. The Inspector lists the clip's
