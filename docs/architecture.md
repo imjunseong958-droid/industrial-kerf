@@ -244,7 +244,6 @@ the clip would be if those stayed. A plane edge on or wholly behind the camera s
 
 To add:
 
-- `three_d`, `z`, `rotate_x`, `rotate_y`, `depth`, and `bevel` in the Inspector, whose Transform rows are a fixed list: they are in the catalog and the language, and a generator's own parameters (a light's `shadow` and `size` among them) are all that it takes from the catalog as they come.
 - EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has.
 
 Expressions stay out. They exist so that a person need not write hundreds of

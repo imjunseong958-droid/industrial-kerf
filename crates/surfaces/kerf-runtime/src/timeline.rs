@@ -123,7 +123,9 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
     value
 }
 
-fn properties_json() -> Json {
+/// The properties a clip has by its track's type, `{video: [...], audio: [...]}`, as a timeline's
+/// `properties` carries them.
+pub fn properties_json() -> Json {
     [Domain::Video, Domain::Audio]
         .into_iter()
         .map(|domain| {

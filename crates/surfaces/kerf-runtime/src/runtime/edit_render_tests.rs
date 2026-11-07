@@ -125,6 +125,34 @@ fn keyframes_round_trip_through_typed_ops_and_the_timeline() {
 }
 
 #[test]
+fn a_clip_in_depth_reaches_the_document_as_the_inspector_sends_it() {
+    let (mut runtime, directory) = project("in-depth");
+    let state = ops(
+        &mut runtime,
+        json!([{"op": "set", "clip": "c1", "props": {
+            "three_d": true, "z": 0.5, "rotate_x": 45.0, "rotate_y": -90.0, "depth": 0.1, "bevel": 0.05
+        }}]),
+    )
+    .unwrap();
+    let props = &clip(&state.timeline, 0, 0)["props"];
+    assert_eq!(props["three_d"], json!(true));
+    assert_eq!(props["z"], json!(0.5));
+    assert_eq!(props["bevel"], json!(0.05));
+    let project = parse_document(&state.document).unwrap();
+    let parsed = &project.clip("c1").unwrap().props;
+    assert_eq!(
+        parsed["three_d"],
+        kerf_model::Param::Static(kerf_model::Value::Bool(true)),
+        "{}",
+        state.document
+    );
+    for name in ["z", "rotate_x", "rotate_y", "depth", "bevel"] {
+        assert!(parsed.contains_key(name), "{name}: {}", state.document);
+    }
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn keyframes_that_cannot_play_are_refused_with_the_reason() {
     let (mut runtime, directory) = project("keys-refused");
     let before = runtime.document(false);

@@ -2525,6 +2525,14 @@ pub extern "C" fn kerf_fx_catalog_all() -> *mut c_char {
     owned_json(kerf_runtime::fx_catalog_all_json())
 }
 
+/// The properties a clip has by its track's type, which `kerf_fx_catalog_all`
+/// does not list: `{video: [...], audio: [...]}`, as a timeline's `properties`
+/// carries them. Free the result with `kerf_bridge_string_free`.
+#[no_mangle]
+pub extern "C" fn kerf_clip_properties() -> *mut c_char {
+    owned_json(kerf_runtime::properties_json())
+}
+
 /// Why each command is unavailable in a JSON context, or null when it is
 /// available. Free the result with `kerf_bridge_string_free`.
 /// # Safety
