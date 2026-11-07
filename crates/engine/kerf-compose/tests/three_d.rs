@@ -1362,3 +1362,130 @@ fn a_bevels_shadow_is_cut_at_its_faces_only() {
         frame(&scene("depth=0.4 bevel=0.2", soft), 7).rgba
     );
 }
+
+#[test]
+fn a_round_bevel_turns_across_its_width() {
+    let front = "kind=directional z=1";
+    let round = frame(&beveled("bevel=0.1 bevel_profile=round", front), 3);
+    let flat = frame(&beveled("bevel=0.1", front), 3);
+    let row = |square: &Frame| {
+        (0..320)
+            .map(|x| linear(pixel(square, x, 90)[0]))
+            .collect::<Vec<_>>()
+    };
+    let (curved, cut) = (row(&round), row(&flat));
+    let lit: Vec<usize> = (0..320).filter(|x| curved[*x] > 0.02).collect();
+    let (left, right) = (lit[0], lit[lit.len() - 1]);
+    // Its face takes all of a light from straight in front, and it takes less toward the outline.
+    near(curved[(left + right) / 2], 1.0);
+    let band: Vec<f64> = (left..(left + right) / 2)
+        .map(|x| curved[x])
+        .take_while(|value| *value < 0.995)
+        .collect();
+    assert!(band.len() >= 10, "{band:?}");
+    // The cosine of the way it faces, turning without a step, where a flat cut has one value throughout.
+    for pair in band.windows(2) {
+        assert!(pair[1] + 0.02 >= pair[0], "{band:?}");
+        assert!(pair[1] - pair[0] < 0.35, "{band:?}");
+    }
+    assert!(band[1] < 0.5, "{band:?}");
+    assert!(*band.last().expect("a band") > 0.9, "{band:?}");
+    let spread = |values: &[f64]| {
+        values.iter().copied().fold(f64::MIN, f64::max)
+            - values.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let cut_band: Vec<f64> = (left + 2..left + 10).map(|x| cut[x]).collect();
+    assert!(spread(&cut_band) < 0.02, "{cut_band:?}");
+    assert!(spread(&band) > 0.5, "{band:?}");
+    // At a quarter of a circle, what lies a third of the way in faces as the circle says.
+    let wanted = |share: f64| (1.0 - (1.0 - share) * (1.0 - share)).sqrt();
+    let third = band[band.len() / 3];
+    assert!(
+        (third - wanted(1.0 / 3.0)).abs() < 0.12,
+        "{third} of {}",
+        wanted(1.0 / 3.0)
+    );
+    // A light from the left falls on its left side and turns away toward its face.
+    let side = frame(
+        &beveled("bevel=0.1 bevel_profile=round", "kind=directional x=1 z=0"),
+        3,
+    );
+    let side = row(&side);
+    assert!(side[left + 2] > 0.5, "{}", side[left + 2]);
+    assert!(side[left + 20] < side[left + 2], "{}", side[left + 20]);
+    assert!(side[right - 2] < 0.02, "{}", side[right - 2]);
+}
+
+#[test]
+fn a_flat_profile_is_what_a_bevel_always_was_and_a_round_one_is_another() {
+    let light = "kind=directional x=-0.4 y=0.3 z=1 shadow=1";
+    let flat = frame(&beveled("bevel=0.1 bevel_profile=flat", light), 3);
+    assert_eq!(flat.rgba, frame(&beveled("bevel=0.1", light), 3).rgba);
+    assert_ne!(
+        flat.rgba,
+        frame(&beveled("bevel=0.1 bevel_profile=round", light), 3).rgba
+    );
+    // With no bevel, or no depth, it has nothing to shape.
+    assert_eq!(
+        frame(&beveled("bevel_profile=round", light), 3).rgba,
+        frame(&beveled("", light), 3).rgba
+    );
+}
+
+/// How many pixels a bevel takes from the outline to the face, across the middle and down it.
+fn bevel_bands(set: &str) -> (usize, usize) {
+    let document = format!(
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=640x360 audio=48000\n  track V1 video\n    clip t gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true depth=0.3 bevel=0.05 {set}\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional z=1\n  track V3 video\n    clip k gen=camera@1 at=0f dur=24f\n      set fov=4 z=-12.9\n"
+    );
+    let project = parse_document(&document, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let drawn = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            accel: Accel::Never,
+            keep_frames: false,
+            frame_folder: None,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+    .frame(Rate::FPS_24.time_of(3), 1.0);
+    let (w, h) = (drawn.width, drawn.height);
+    let band = |line: Vec<u8>| {
+        let start = line.iter().position(|value| *value > 8).expect("it shows");
+        line[start..]
+            .iter()
+            .position(|value| *value >= 250)
+            .expect("it has a face")
+    };
+    (
+        band((0..w).map(|x| pixel(&drawn, x, h / 2)[0]).collect()),
+        band((0..h).map(|y| pixel(&drawn, w / 2, y)[0]).collect()),
+    )
+}
+
+/// A bevel goes by the world, so a clip scaled unevenly has it as wide across as it has it down, 18
+/// pixels here, through a long lens from far back, which takes nothing off for perspective. It used to go by the mean of
+/// its two scales, which at 2 to 0.5 came to 30 pixels and 9.
+#[test]
+fn a_clip_scaled_unevenly_has_a_bevel_as_wide_on_each_side() {
+    let (across, down) = bevel_bands("scale=0.4");
+    for profile in ["flat", "round"] {
+        for (wide, tall) in [(0.64, 0.32), (0.8, 0.2), (0.2, 0.6), (0.3, 0.9)] {
+            let (x, y) = bevel_bands(&format!(
+                "scale_x={wide} scale_y={tall} bevel_profile={profile}"
+            ));
+            assert!(
+                x.abs_diff(y) <= 3,
+                "{profile} at {wide} by {tall}: {x} across and {y} down"
+            );
+            assert!(
+                (12..=20).contains(&x) && (12..=20).contains(&y),
+                "{profile} at {wide} by {tall}: {x} across and {y} down"
+            );
+        }
+    }
+    assert!(across.abs_diff(down) <= 3, "{across} and {down}");
+}

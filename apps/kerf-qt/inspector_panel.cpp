@@ -1961,7 +1961,13 @@ void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
     const QList<InspectorRow *> inDepth{number(QStringLiteral("z"), false), number(QStringLiteral("rotate_x"), true),
                                         number(QStringLiteral("rotate_y"), true), number(QStringLiteral("depth"), false)};
     InspectorRow *bevel = number(QStringLiteral("bevel"), false);
-    m_refreshers.append([this, inDepth, bevel] {
+    InspectorRow *profile = nullptr;
+    if (const QJsonObject def = defNamed(first, QStringLiteral("bevel_profile")); !def.isEmpty()) {
+        const int r = addRow(into, presentationLabel(def), section);
+        bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("bevel_profile")}, def)->setObjectName(QStringLiteral("prop_bevel_profile"));
+        profile = row(r);
+    }
+    m_refreshers.append([this, inDepth, bevel, profile] {
         const Target depth{Target::Kind::Prop, QStringLiteral("depth")};
         bool placed = false;
         bool solid = false;
@@ -1975,6 +1981,7 @@ void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
         for (InspectorRow *entry : inDepth)
             if (entry) entry->setVisible(placed);
         if (bevel) bevel->setVisible(solid);
+        if (profile) profile->setVisible(solid);
     });
 }
 

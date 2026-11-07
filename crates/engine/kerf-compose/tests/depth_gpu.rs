@@ -223,6 +223,85 @@ fn bevels_hold_to_the_cpu() {
 }
 
 #[test]
+fn round_bevels_hold_to_the_cpu() {
+    let on = |set: &str, light: &str| {
+        format!(
+            "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.5\n  track V2 video\n    clip t {set}\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+        )
+    };
+    let title = "gen=title@1 at=0f dur=24f\n      set text=\"Cut\" size=0.3 three_d=true depth=0.1 bevel=0.03 bevel_profile=round";
+    let square = "gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.4 depth=0.2 bevel=0.04 bevel_profile=round rotate_y=30 rotate_x=-20";
+    holds(
+        "round title, lit",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1"),
+    );
+    holds(
+        "round square, turned",
+        &on(square, "kind=directional x=-0.4 y=0.3 z=1"),
+    );
+    holds(
+        "round title, point light",
+        &on(title, "x=0.3 y=-0.2 z=-0.7"),
+    );
+    holds(
+        "round title, hard shadow",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1 shadow=1"),
+    );
+    holds(
+        "round title, soft shadow",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4"),
+    );
+    holds(
+        "round square, soft shadow",
+        &on(square, "x=0.4 y=-0.3 z=-0.8 shadow=0.8 size=0.1"),
+    );
+}
+
+#[test]
+fn bevels_scaled_unevenly_hold_to_the_cpu() {
+    let on = |set: &str, light: &str| {
+        format!(
+            "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.5\n  track V2 video\n    clip t {set}\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+        )
+    };
+    let square = |profile: &str, rest: &str| {
+        format!("gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale_x=0.7 scale_y=0.25 depth=0.2 bevel=0.04 bevel_profile={profile} {rest}")
+    };
+    let title = |profile: &str| {
+        format!("gen=title@1 at=0f dur=24f\n      set text=\"Cut\" size=0.3 three_d=true depth=0.1 bevel=0.03 bevel_profile={profile} scale_x=1.5 scale_y=0.7")
+    };
+    // A size at which a solid's depth comes out as all but a whole number of pixels: a step more or
+    // less through it, between 32 and 64 bits, shows along an edge that is turned.
+    holds(
+        "beveled, with a depth of all but a whole number",
+        &on(
+            "gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.41833 depth=0.2 bevel=0.04 rotation=15",
+            "kind=directional x=-0.4 y=0.3 z=1",
+        ),
+    );
+    for profile in ["flat", "round"] {
+        holds(
+            &format!("{profile} square, uneven"),
+            &on(&square(profile, ""), "kind=directional x=-0.4 y=0.3 z=1"),
+        );
+        holds(
+            &format!("{profile} square, uneven and turned"),
+            &on(
+                &square(profile, "rotate_y=30 rotate_x=-20 rotation=15"),
+                "kind=directional x=-0.4 y=0.3 z=1",
+            ),
+        );
+        holds(
+            &format!("{profile} title, uneven, soft shadow"),
+            &on(
+                &title(profile),
+                "kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4",
+            ),
+        );
+    }
+}
+
+#[test]
 fn a_light_all_around_holds_to_the_cpu() {
     let around = "  track V9 video enabled=false\n    clip e gen=shape@1 at=0f dur=24f\n      set kind=ellipse width=0.6 height=0.9 fill=#ff8000\n";
     holds(

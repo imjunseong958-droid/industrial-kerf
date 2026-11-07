@@ -324,6 +324,11 @@ pub struct Bevel<'p> {
     pub distance: &'p Distance,
     pub width: f32,
     pub depth: f32,
+    pub round: bool,
+    /// How much wider across a pixel of its picture is than the mean of its sides, and narrower down.
+    pub stretch: f32,
+    /// As many steps as it asks of a ray to go through it, however little that goes across.
+    pub least_steps: f32,
 }
 
 /// How far each pixel of a picture is from its outline, for a bevel.
@@ -656,15 +661,23 @@ impl Frame<'_> {
             0.0,
         );
         push_way(&mut uniforms, plane.normal, 0.0);
-        push_way(&mut uniforms, plane.across, 0.0);
+        push_way(
+            &mut uniforms,
+            plane.across,
+            clip.bevel.as_ref().map_or(0.0, |bevel| bevel.least_steps),
+        );
         push_way(&mut uniforms, plane.down, 0.0);
         push_way(&mut uniforms, plane.to_u, 0.0);
         push_way(&mut uniforms, plane.to_v, 0.0);
-        let (width, deep) = clip
-            .bevel
-            .as_ref()
-            .map_or((0.0, 0.0), |bevel| (bevel.width, bevel.depth));
-        push(&mut uniforms, &[width, deep, 0.0, 0.0]);
+        let numbers = clip.bevel.as_ref().map_or([0.0, 0.0, 0.0, 1.0], |bevel| {
+            [
+                bevel.width,
+                bevel.depth,
+                f32::from(u8::from(bevel.round)),
+                bevel.stretch,
+            ]
+        });
+        push(&mut uniforms, &numbers);
         let buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -746,7 +759,7 @@ impl Frame<'_> {
         &mut self,
         pipeline: &wgpu::ComputePipeline,
         (picture, step): (&Picture, u32),
-        (crop, far): ([f32; 4], [f32; 2]),
+        (crop, far): ([f32; 4], [f32; 4]),
         read_in: Option<&wgpu::TextureView>,
         out: DistanceOut<'_>,
     ) {
@@ -757,7 +770,7 @@ impl Frame<'_> {
         let mut uniforms = Vec::with_capacity(48);
         push_whole(&mut uniforms, &[picture.w, picture.h, step, 0]);
         push(&mut uniforms, &crop);
-        push(&mut uniforms, &[far[0], far[1], 0.0, 0.0]);
+        push(&mut uniforms, &far);
         let buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -808,11 +821,12 @@ impl Frame<'_> {
         crop: [f32; 4],
         jumps: &[u32],
         far: f32,
+        stretch: f32,
     ) -> Option<Distance> {
         let key = picture
             .kept
             .as_ref()
-            .map(|kept| format!("{kept}|distance|{crop:?}|{jumps:?}|{far}"));
+            .map(|kept| format!("{kept}|distance|{crop:?}|{jumps:?}|{far}|{stretch}"));
         if let Some(key) = &key {
             if let Some(Kept::Distance(distance)) = self.gpu.kept().get(key) {
                 return Some(distance);
@@ -854,7 +868,7 @@ impl Frame<'_> {
         };
         let mut read = working(self, wgpu::TextureFormat::Rg32Float);
         let mut write = working(self, wgpu::TextureFormat::Rg32Float);
-        let numbers = (crop, [far, 0.0]);
+        let numbers = (crop, [far, 0.0, stretch, 1.0 / stretch]);
         self.distance_pass(
             &kernels.outline,
             (picture, 0),
@@ -898,7 +912,7 @@ impl Frame<'_> {
         self.distance_pass(
             &kernels.eroded,
             (picture, 0),
-            ([0.0; 4], [0.0, inset]),
+            ([0.0; 4], [0.0, inset, 1.0, 1.0]),
             Some(&distance.view),
             DistanceOut::Picture(&out.view),
         );

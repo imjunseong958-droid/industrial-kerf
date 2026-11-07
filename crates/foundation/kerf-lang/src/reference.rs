@@ -170,13 +170,13 @@ pub fn reference(catalog: &Catalog) -> String {
 }
 
 const KERF_TRANSITIONS: &str = "## Transitions from FilmCraft
-A video editor's transitions, drawn from both clips across the cut. Written
+Drawn from both clips across the cut, and written
 like any transition (`transition add from=c1 to=c2 fx=push@1 dur=12f
 direction=from-east`). A direction names the side the incoming clip enters
 from, and a center is `center_x`/`center_y` in fractions of the frame.";
 
 const KERF_EFFECTS: &str = "## Effects from FilmCraft
-A video editor's effects, run in stack order on a clip's picture after its
+Run in stack order on a clip's picture after its
 masks: Lumetri grades and color correction, blurs, keys and track mattes,
 glows and light leaks, distortions, moves, burn-ins, and 360° effects.
 Written like any effect (`fx c1 add color.lumetri@2 exposure=0.5`); `look`

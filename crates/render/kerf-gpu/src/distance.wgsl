@@ -5,7 +5,8 @@
 struct U {
     size: vec4<i32>, // w, h, how far this pass jumps
     crop: vec4<f32>, // left, top, right, bottom
-    far: vec4<f32>,  // how far counts; what is left of the outline taken in by this
+    far: vec4<f32>,  // how far counts; what is left of the outline taken in by this; how big a pixel is
+                     // across and down, for a clip scaled unevenly
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -30,7 +31,7 @@ fn alpha(x: i32, y: i32) -> f32 {
 }
 
 fn gap(a: vec2<f32>, b: vec2<f32>) -> f32 {
-    let d = a - b;
+    let d = (a - b) * u.far.zw;
     return dot(d, d);
 }
 

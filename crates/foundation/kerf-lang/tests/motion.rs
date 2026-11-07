@@ -254,6 +254,32 @@ fn a_solids_bevel_round_trips_and_a_bad_one_is_refused() {
 }
 
 #[test]
+fn a_bevels_profile_round_trips_and_a_bad_one_is_refused() {
+    let document = DEPTH.replace(
+        "depth={0f:0 24f:0.25}",
+        "depth=0.25 bevel=0.05 bevel_profile=round",
+    );
+    let once =
+        parse_document(&document, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    assert!(printed.contains("bevel_profile=round"), "{printed}");
+    // What it comes to when it is not said is flat, which the catalog says.
+    let def = Catalog::builtin()
+        .props(kerf_model::Domain::Video)
+        .iter()
+        .find(|def| def.name == "bevel_profile")
+        .expect("a property");
+    assert_eq!(def.default, kerf_model::Value::Enum("flat".to_owned()));
+    refused(
+        &DEPTH.replace("depth={0f:0 24f:0.25}", "bevel_profile=wavy"),
+        "bevel_profile",
+    );
+}
+
+#[test]
 fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
     let once =
         parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));

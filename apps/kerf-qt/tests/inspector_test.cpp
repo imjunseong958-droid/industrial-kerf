@@ -637,6 +637,8 @@ private slots:
         };
 
         // Flat: only the switch, whatever is left of the values it would use, and they say nothing.
+        const auto profile = [inspector] { return inspector->findChild<QComboBox *>(QStringLiteral("prop_bevel_profile")); };
+        const auto profileShows = [&profile] { return profile() && !rowOf(profile())->isHidden(); };
         show({{"z", 0.25}});
         window.selectClip(QStringLiteral("solid"));
         auto *threeD = inspector->findChild<InspectorSwitch *>(QStringLiteral("prop_three_d"));
@@ -658,6 +660,7 @@ private slots:
         QVERIFY(threeD->isChecked());
         QVERIFY(shown({"prop_z", "prop_rotate_x", "prop_rotate_y", "prop_depth"}));
         QVERIFY(hidden({"prop_bevel"}));
+        QVERIFY(profile() && !profileShows());
         QCOMPARE(field("prop_z")->text(), QStringLiteral("270"));
         QCOMPARE(field("prop_z")->format().unit, QStringLiteral("px"));
         QCOMPARE(field("prop_rotate_x")->text(), QStringLiteral("15"));
@@ -682,6 +685,13 @@ private slots:
         // A solid has a bevel, and one that becomes solid as it goes has it too.
         show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
         QVERIFY(shown({"prop_depth", "prop_bevel"}));
+        // Its profile waits with it, flat until it is said, and goes to the document by name.
+        QVERIFY(profileShows());
+        QCOMPARE(profile()->currentData().toString(), QStringLiteral("flat"));
+        takeOps(window);
+        profile()->setCurrentIndex(profile()->findData(QStringLiteral("round")));
+        Q_EMIT profile()->activated(profile()->currentIndex());
+        QCOMPARE(takeOps(window).last().toObject().value("props").toObject().value("bevel_profile").toString(), QStringLiteral("round"));
         QCOMPARE(field("prop_depth")->text(), QStringLiteral("108"));
         QCOMPARE(field("prop_bevel")->text(), QStringLiteral("27"));
         QCOMPARE(committed("prop_bevel", "54", "bevel"), 0.05);

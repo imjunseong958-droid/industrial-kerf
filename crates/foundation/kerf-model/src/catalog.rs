@@ -796,6 +796,8 @@ fn builtin_catalog() -> Catalog {
             .range(0.0, 50.0)
             .unit("frame heights")
             .doc("With `depth`, its edges cut back this far at each face."),
+        P::choice("bevel_profile", &["flat", "round"])
+            .doc("With `bevel`, a 45-degree cut or a curve."),
         P::number("rotate_x", 0.0)
             .range(-36000.0, 36000.0)
             .unit("degrees")

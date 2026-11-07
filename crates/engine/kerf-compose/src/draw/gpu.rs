@@ -707,12 +707,13 @@ impl Drawing {
                 let height = size.1 as f64;
                 let deep = three_d::depth_of(&shown.plan, time, height);
                 let bevel = three_d::bevel_of(&shown.plan, time, height);
+                let round = three_d::bevel_is_round(&shown.plan);
                 let number = depth_numbers.len() as u32;
                 depth_numbers.push(shown.plan.clip.id.clone());
                 let crop = one.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
                 let distance = if bevel > 0.0 {
-                    let distance =
-                        gpu_distance(frame, &one.picture, crop, bevel / plane.pixel_size())?;
+                    let width = bevel / plane.pixel_size();
+                    let distance = gpu_distance(frame, &one.picture, crop, width, plane.stretch())?;
                     distances.push((shown.plan.clip.id.clone(), distance.clone()));
                     Some(distance)
                 } else {
@@ -720,7 +721,7 @@ impl Drawing {
                 };
                 // One stand-in to each way its outline is taken in, as few as a bevel makes of them.
                 let mut by_inset: Vec<(f64, Vec<kerf_gpu::depth::Plane>)> = Vec::new();
-                for (plane, inset) in scene.casting_planes(&plane, deep, bevel) {
+                for (plane, inset) in scene.casting_planes(&plane, deep, (bevel, round)) {
                     match by_inset.iter_mut().find(|(kept, _)| *kept == inset) {
                         Some((_, planes)) => planes.push(plane),
                         None => by_inset.push((inset, vec![plane])),
@@ -850,7 +851,7 @@ impl Drawing {
             let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
             Some(match kept {
                 Some(distance) => distance,
-                None => gpu_distance(frame, reading, read_crop, bevel / per)?,
+                None => gpu_distance(frame, reading, read_crop, bevel / per, plane.stretch())?,
             })
         } else {
             None
@@ -868,6 +869,9 @@ impl Drawing {
                     distance,
                     width: (bevel / per) as f32,
                     depth: (deep / per) as f32,
+                    round: three_d::bevel_is_round(plan),
+                    stretch: plane.stretch() as f32,
+                    least_steps: three_d::bevel_steps(deep / per) as f32,
                 }),
             },
             size,
@@ -1221,12 +1225,14 @@ fn gpu_distance(
     picture: &GpuPicture,
     crop: Rect,
     width: f64,
+    stretch: f64,
 ) -> Option<kerf_gpu::depth::Distance> {
-    let first = bevel::first_jump(width);
+    let first = bevel::first_jump(bevel::reaching(width, stretch));
     frame.distance(
         picture,
         edges(crop),
         &bevel::jumps(first),
         bevel::reach(first),
+        stretch as f32,
     )
 }
