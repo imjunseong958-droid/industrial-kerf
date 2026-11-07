@@ -25,6 +25,8 @@ constexpr int kRowHeight = tokens::height::h28;
 constexpr int kPad = tokens::space::s12;
 constexpr int kActionWidth = 64;
 constexpr int kDot = 6;
+// The least of a row's width its value keeps beside a long name.
+constexpr int kLeastValue = 24;
 
 // "In thread": UI 12 ink2, accent-ink on hover, right-aligned in its 64.
 class ThreadLink final : public QToolButton {
@@ -68,6 +70,7 @@ QcRow::QcRow(const QJsonObject &row, QWidget *parent) : QWidget(parent) {
     m_thread = row.value(QStringLiteral("commentId")).toString();
     setFixedHeight(kRowHeight);
     setAttribute(Qt::WA_Hover);
+    ui::setTip(this, m_value.isEmpty() ? m_name : QStringLiteral("%1: %2").arg(m_name, m_value));
     if (!m_passed && !m_thread.isEmpty()) {
         auto *link = new ThreadLink(this);
         auto *layout = new QHBoxLayout(this);
@@ -116,11 +119,15 @@ void QcRow::paintEvent(QPaintEvent *) {
     const int valueWidth = ui::snapWidth(tokens::monoSmall, m_value);
     const double nameLeft = kPad + kDot + tokens::space::s8;
     const double valueRight = action.left() - tokens::space::s8;
-    const double valueLeft = std::max(nameLeft + 24, valueRight - valueWidth);
+    // In a narrow tray the name reads first, since it says what the row is, and what it measured
+    // gives way to it, down to a stub; the tip has them whole.
+    const double nameEnd = nameLeft + ui::snapWidth(tokens::control, m_name) + tokens::space::s8;
+    const double valueLeft = std::max(valueRight - valueWidth, std::min(nameEnd, valueRight - kLeastValue));
     p.setFont(mono);
     p.setPen(valueColor());
+    // The measure comes before the limit, so it is the limit that goes.
     p.drawText(QRectF(valueLeft, 0, valueRight - valueLeft, height()), Qt::AlignRight | Qt::AlignVCenter,
-               QFontMetrics(mono).elidedText(m_value, Qt::ElideLeft, int(valueRight - valueLeft)));
+               QFontMetrics(mono).elidedText(m_value, Qt::ElideRight, int(valueRight - valueLeft)));
     const QFont ui = tokens::font(tokens::control);
     const int nameRoom = int(valueLeft - tokens::space::s8 - nameLeft);
     p.setFont(ui);

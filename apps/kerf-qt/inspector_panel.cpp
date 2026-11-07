@@ -1937,7 +1937,8 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section) {
 
 // A clip in depth (kerf-compose `three_d.rs`). A camera and a light stand at a `z` whatever else is
 // on, and a null or an adjustment layer has no picture to place. Anything else goes into depth with
-// `three_d` and has these rows from then on; a bevel cuts a solid's edges, so it waits for a `depth`.
+// `three_d` and has these rows from then on; a bevel cuts a solid's edges, so it waits for a `depth`,
+// and its profile for a bevel.
 void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
     const Clip &first = m_clips.first();
     const QString fx = first.clip.value(QStringLiteral("kind")).toString() == QStringLiteral("generator") ? first.clip.value(QStringLiteral("fx")).toString() : QString();
@@ -1969,19 +1970,27 @@ void InspectorPanel::buildDepthRows(QVBoxLayout *into, int section) {
     }
     m_refreshers.append([this, inDepth, bevel, profile] {
         const Target depth{Target::Kind::Prop, QStringLiteral("depth")};
+        const Target cut{Target::Kind::Prop, QStringLiteral("bevel")};
+        // Above 0 at some moment, so one that grows as it goes counts.
+        const auto ever = [](const QJsonValue &raw) {
+            const QJsonArray keys = raw.toArray();
+            return raw.toDouble() > 0.0 || std::any_of(keys.cbegin(), keys.cend(), [](const QJsonValue &key) { return key.toObject().value(QStringLiteral("value")).toDouble() > 0.0; });
+        };
         bool placed = false;
         bool solid = false;
+        bool cutting = false;
         for (const Clip &clip : std::as_const(m_clips)) {
             if (!clip.clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool()) continue;
             placed = true;
-            const QJsonValue raw = rawValue(clip, depth);
-            const QJsonArray keys = raw.toArray();
-            solid |= raw.toDouble() > 0.0 || std::any_of(keys.cbegin(), keys.cend(), [](const QJsonValue &key) { return key.toObject().value(QStringLiteral("value")).toDouble() > 0.0; });
+            if (!ever(rawValue(clip, depth))) continue;
+            solid = true;
+            cutting |= ever(rawValue(clip, cut));
         }
         for (InspectorRow *entry : inDepth)
             if (entry) entry->setVisible(placed);
         if (bevel) bevel->setVisible(solid);
-        if (profile) profile->setVisible(solid);
+        // With no bevel, there is no cut for a profile to shape.
+        if (profile) profile->setVisible(cutting);
     });
 }
 

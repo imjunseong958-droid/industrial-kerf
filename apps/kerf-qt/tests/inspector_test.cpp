@@ -683,9 +683,15 @@ private slots:
         QCOMPARE(committed("prop_depth", "108", "depth"), 0.1);
 
         // A solid has a bevel, and one that becomes solid as it goes has it too.
-        show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
+        show({{"three_d", true}, {"depth", 0.1}});
         QVERIFY(shown({"prop_depth", "prop_bevel"}));
-        // Its profile waits with it, flat until it is said, and goes to the document by name.
+        // A profile has nothing to shape with no bevel, as the real window showed.
+        QVERIFY(!profileShows());
+        show({{"three_d", true}, {"depth", 0.1}, {"bevel", QJsonArray{QJsonObject{{"at", 0.0}, {"value", 0.0}, {"interp", "linear"}},
+                                                                     QJsonObject{{"at", 1.0}, {"value", 0.02}, {"interp", "linear"}}}}});
+        QVERIFY(profileShows());
+        show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
+        // With one it shows, flat until it is said, and goes to the document by name.
         QVERIFY(profileShows());
         QCOMPARE(profile()->currentData().toString(), QStringLiteral("flat"));
         takeOps(window);

@@ -2029,6 +2029,8 @@ void MainWindow::applyTray() {
                         : tray == StageShell::Tray::Deliver ? QStringLiteral("Deliver")
                                                             : QStringLiteral("Review"),
                         /*reapplied=*/true);
+    const QWidget *open = m_shell->widgetOf(tray);
+    m_chat->setCoveredBelow(open ? open->height() : 0);
     syncPanelCommands();
     settleFocus();
 }

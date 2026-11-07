@@ -6,7 +6,8 @@
 //! ```
 //!
 //! `transition` as the scene draws each transition in the catalog between the two clips, and
-//! `transition push,iris-round` just those.
+//! `transition push,iris-round` just those. No number comes out of a scene until its footage has
+//! decoded and its frames differ: a clip gone from a temporary folder draws the same frame fast.
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};
 use kerf_lang::parse_document;
@@ -111,10 +112,12 @@ const SCENES: &[(&str, &str)] = &[
     ("find edges", "      fx stylize.findedges@2\n"),
     ("emboss", "      fx stylize.emboss@2\n"),
     ("color emboss", "      fx stylize.coloremboss@2\n"),
-    ("mosaic", "      fx stylize.mosaic@2 blocks_x=60 blocks_y=34\n"),
+    ("mosaic", "      fx stylize.mosaic@2 horizontal=60 vertical=34\n"),
     ("brush strokes", "      fx stylize.brushstrokes@2\n"),
     ("rough edges", "      fx stylize.roughenedges@2\n"),
     ("replicate", "      fx stylize.replicate@1 count=3\n"),
+    ("bokeh", "      fx blur.bokeh@1\n"),
+    ("remove grain", "      fx noise.removegrain@1\n"),
 ];
 
 /// A LUT as a look might load: 33 points to a side, S-curved.
@@ -172,17 +175,40 @@ fn time_from(document: &str, from: i64, frames: i64) -> (f64, f64) {
             compositor.frame(Rate::FPS_24.time_of(index), 1.0);
         }
     }
+    let mut drawn = Vec::new();
     let mut times: Vec<f64> = (from..from + frames)
         .map(|index| {
             let began = Instant::now();
             let frame = compositor.frame(Rate::FPS_24.time_of(index), 1.0);
             std::hint::black_box(frame.rgba.len());
-            began.elapsed().as_secs_f64() * 1000.0
+            let spent = began.elapsed().as_secs_f64() * 1000.0;
+            drawn.push(frame.rgba);
+            // The first and the last are what is compared; the rest would hold gigabytes.
+            if drawn.len() > 2 {
+                drawn.swap_remove(1);
+            }
+            spent
         })
         .collect();
+    assert_footage_drew(&drawn, document);
     let first = times.remove(0);
     times.sort_by(f64::total_cmp);
     (first, times[times.len() / 2])
+}
+
+/// That what was timed was footage: something to see at all, and not the same picture twice.
+fn assert_footage_drew(drawn: &[Vec<u8>], document: &str) {
+    assert_eq!(drawn.len(), 2, "two frames to compare");
+    assert!(
+        drawn[0]
+            .chunks_exact(4)
+            .any(|pixel| pixel[..3] != [0, 0, 0]),
+        "only black came of its footage:\n{document}"
+    );
+    assert!(
+        drawn[0] != drawn[1],
+        "its first and last frames are the same, so its footage did not decode:\n{document}"
+    );
 }
 
 fn main() {

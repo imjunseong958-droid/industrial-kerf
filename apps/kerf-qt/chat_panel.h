@@ -166,6 +166,9 @@ public:
     void openThread(const QString &threadId, bool flash = true);
     // Scrolls the list so the thread's root sits 12 under the list's top.
     void scrollToThread(const QString &threadId);
+    // What lies over the panel's bottom, such as a tray: the list gets as much more to scroll, so
+    // that its last thread can still come out from under.
+    void setCoveredBelow(int pixels);
     // The first-show placement (spec 4.5); runs once.
     void placeFirst();
     bool placed() const { return m_placed; }
@@ -418,6 +421,7 @@ private:
     ui::FadeScrollArea *m_list = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
+    int m_coveredBelow = 0;
     QList<ThreadWidget *> m_threads;
     FootageSheet *m_footage = nullptr;
     bool m_holdingProposals = false;

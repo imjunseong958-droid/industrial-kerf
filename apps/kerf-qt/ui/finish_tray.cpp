@@ -24,6 +24,21 @@ namespace kerf {
 
 namespace {
 
+// A line of a pane's header that gives way to what comes before it, with an ellipsis rather than
+// cut off at the card's edge.
+class ClippedMeta final : public QLabel {
+public:
+    QSize minimumSizeHint() const override { return QSize(0, QLabel::minimumSizeHint().height()); }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setFont(font());
+        p.setPen(palette().color(QPalette::WindowText));
+        p.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(font()).elidedText(text(), Qt::ElideRight, width()));
+    }
+};
+
 using shell::TrayPane;
 using shell::text;
 
@@ -136,7 +151,8 @@ FinishTray::FinishTray(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus
     m_paradeMeta->setObjectName(QStringLiteral("finishParadeMeta"));
     m_qcMeta = text(QString(), tokens::meta, tokens::ink3);
     m_qcMeta->setObjectName(QStringLiteral("finishQcMeta"));
-    m_qcStandards = text(QString(), tokens::meta, tokens::ink3);
+    m_qcStandards = new ClippedMeta;
+    shell::setTextStyle(m_qcStandards, tokens::meta, tokens::ink3);
     m_qcStandards->setObjectName(QStringLiteral("finishQcStandards"));
     const struct {
         const char *id;
