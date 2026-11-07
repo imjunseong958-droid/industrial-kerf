@@ -360,30 +360,29 @@ fn logo_cutout(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, p, vec4(dec3(col) * na, na));
 }
 
-// `color::ultra_key` without its matte cleanup's blurs. p0: the key's y, cb, cr, |key|²;
-// p1: gain, highlight, shadow, tolerance; p2: pedestal, contrast, mid point, spill;
-// p3: desaturate, range, spill luma; p4: color correction's saturation, hue, luminance.
-// a.x output, a.y the dominant channel, a.z whether to correct color.
-@compute @workgroup_size(16, 16)
-fn ultra_key(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    var v = enc3(straight(c));
-    var alpha = 0.0;
-    if c.a > 1e-6 {
-        let k = u.p0.xyz;
-        let kmag2 = u.p0.w;
-        let y = ycbcr709(v);
-        let proj = (y.y * k.y + y.z * k.z) / kmag2;
-        let perp = length(y.yz - proj * k.yz) / sqrt(kmag2);
-        let keyness = clamp(proj, 0.0, 1.5) * (1.0 - smoothstep(0.0, u.p1.w, perp));
-        var m = clamp(1.0 - keyness * u.p1.x, 0.0, 1.0);
-        m += max(y.x - k.x, 0.0) * u.p1.y * 2.0 * min(keyness, 1.0);
-        m += max(k.x - y.x, 0.0) * u.p1.z * 2.0 * min(keyness, 1.0);
-        let pedestal = u.p2.x;
-        alpha = clamp((clamp(m, 0.0, 1.0) - pedestal) / (1.0 - pedestal), 0.0, 1.0);
+// `color::ultra_key`. p0: the key's y, cb, cr, |key|²; p1: gain, highlight, shadow, tolerance;
+// p2: pedestal, contrast, mid point, spill; p3: desaturate, range, spill luma; p4: color correction's
+// saturation, hue, luminance. a.x output, a.y the dominant channel, a.z whether to correct color.
+fn ultra_matte_of(c: vec4<f32>, v: vec3<f32>) -> f32 {
+    if c.a <= 1e-6 {
+        return 0.0;
     }
+    let k = u.p0.xyz;
+    let kmag2 = u.p0.w;
+    let y = ycbcr709(v);
+    let proj = (y.y * k.y + y.z * k.z) / kmag2;
+    let perp = length(y.yz - proj * k.yz) / sqrt(kmag2);
+    let keyness = clamp(proj, 0.0, 1.5) * (1.0 - smoothstep(0.0, u.p1.w, perp));
+    var m = clamp(1.0 - keyness * u.p1.x, 0.0, 1.0);
+    m += max(y.x - k.x, 0.0) * u.p1.y * 2.0 * min(keyness, 1.0);
+    m += max(k.x - y.x, 0.0) * u.p1.z * 2.0 * min(keyness, 1.0);
+    let pedestal = u.p2.x;
+    return clamp((clamp(m, 0.0, 1.0) - pedestal) / (1.0 - pedestal), 0.0, 1.0);
+}
+
+fn ultra_finish(p: vec2<i32>, c: vec4<f32>, encoded: vec3<f32>, matte: f32) {
+    var v = encoded;
+    var alpha = matte;
     let contrast = u.p2.y;
     if contrast > 0.0 {
         let g = 1.0 + contrast * 4.0;
@@ -426,6 +425,45 @@ fn ultra_key(@builtin(global_invocation_id) id: vec3<u32>) {
             textureStore(dst, p, vec4(l * na, na));
         }
     }
+}
+
+// All of it in a pass, when the matte is not cleaned up.
+@compute @workgroup_size(16, 16)
+fn ultra_key(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let v = enc3(straight(c));
+    ultra_finish(p, c, v, ultra_matte_of(c, v));
+}
+
+// Its matte alone, in red, for its Choke and Soften to blur.
+@compute @workgroup_size(16, 16)
+fn ultra_matte(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    textureStore(dst, p, vec4(ultra_matte_of(c, enc3(straight(c))), 0.0, 0.0, 0.0));
+}
+
+// Choke: the matte and its blur (aux), by how far it chokes (p0.x).
+@compute @workgroup_size(16, 16)
+fn ultra_choke(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let at = u.p0.x;
+    let blurred = textureLoad(aux, p, 0).x;
+    let choked = clamp((blurred - at) / (1.0 - at), 0.0, 1.0);
+    textureStore(dst, p, vec4(min(textureLoad(src, p, 0).x, choked), 0.0, 0.0, 0.0));
+}
+
+// The rest of it, with its matte cleaned up in aux.
+@compute @workgroup_size(16, 16)
+fn ultra_keyed(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    ultra_finish(p, c, enc3(straight(c)), textureLoad(aux, p, 0).x);
 }
 
 // `kept::encoded`: premultiplied and sRGB-encoded, as EffectCraft's effects read pictures.
@@ -571,4 +609,493 @@ fn from_gamut(@builtin(global_invocation_id) id: vec3<u32>) {
     let c = textureLoad(src, p, 0);
     let before = textureLoad(aux, p, 0);
     textureStore(dst, p, vec4(put_outside(c.rgb, color_left(before.rgb)), c.a));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lumetri past its plain numbers: `lumetri`, `lumetri_advanced`, and `hsl_secondary` in `effects.rs`.
+// aux is a table: three rows of curves, when there are any (luma, red, green, blue; hue vs sat, hue vs
+// hue, hue vs luma, luma vs sat; sat vs sat), then a LUT's cube below them, a row to each blue.
+
+const CURVE_POINTS: i32 = 1024;
+
+// `Lut3d::apply`, a cube of `size` from row `first` of aux, over its domain.
+fn lut_at(r: i32, g: i32, b: i32, size: i32, first: i32) -> vec3<f32> {
+    return textureLoad(aux, vec2(r + g * size, first + b), 0).xyz;
+}
+
+fn lut_apply(rgb: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, size: i32, first: i32) -> vec3<f32> {
+    let n = vec3<f32>(f32(size - 1));
+    let at = clamp((rgb - lo) / (hi - lo), vec3(0.0), vec3(1.0)) * n;
+    let r0 = min(i32(at.x), size - 2);
+    let g0 = min(i32(at.y), size - 2);
+    let b0 = min(i32(at.z), size - 2);
+    let fr = at.x - f32(r0);
+    let fg = at.y - f32(g0);
+    let fb = at.z - f32(b0);
+    let c000 = lut_at(r0, g0, b0, size, first);
+    let c111 = lut_at(r0 + 1, g0 + 1, b0 + 1, size, first);
+    var ca: vec3<f32>;
+    var cb: vec3<f32>;
+    var w: vec4<f32>;
+    if fr > fg {
+        if fg > fb {
+            ca = lut_at(r0 + 1, g0, b0, size, first);
+            cb = lut_at(r0 + 1, g0 + 1, b0, size, first);
+            w = vec4(1.0 - fr, fr - fg, fg - fb, fb);
+        } else if fr > fb {
+            ca = lut_at(r0 + 1, g0, b0, size, first);
+            cb = lut_at(r0 + 1, g0, b0 + 1, size, first);
+            w = vec4(1.0 - fr, fr - fb, fb - fg, fg);
+        } else {
+            ca = lut_at(r0, g0, b0 + 1, size, first);
+            cb = lut_at(r0 + 1, g0, b0 + 1, size, first);
+            w = vec4(1.0 - fb, fb - fr, fr - fg, fg);
+        }
+    } else if fb > fg {
+        ca = lut_at(r0, g0, b0 + 1, size, first);
+        cb = lut_at(r0, g0 + 1, b0 + 1, size, first);
+        w = vec4(1.0 - fb, fb - fg, fg - fr, fr);
+    } else if fb > fr {
+        ca = lut_at(r0, g0 + 1, b0, size, first);
+        cb = lut_at(r0, g0 + 1, b0 + 1, size, first);
+        w = vec4(1.0 - fg, fg - fb, fb - fr, fr);
+    } else {
+        ca = lut_at(r0, g0 + 1, b0, size, first);
+        cb = lut_at(r0 + 1, g0 + 1, b0, size, first);
+        w = vec4(1.0 - fg, fg - fr, fr - fb, fb);
+    }
+    return w.x * c000 + w.y * ca + w.z * cb + w.w * c111;
+}
+
+// Each pixel as `gs.encode`, `f`, and `gs.decode` have it, skipping what has no alpha.
+// a.x the cube's size, a.y where it starts. p0: its domain's low, p1: its high.
+@compute @workgroup_size(16, 16)
+fn lumetri_input(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    if c.a <= 1e-6 {
+        textureStore(dst, p, c);
+        return;
+    }
+    let v = clamp(enc3(c.rgb / c.a), vec3(0.0), vec3(1.0));
+    let out = lut_apply(v, u.p0.xyz, u.p1.xyz, i32(u.a.x), i32(u.a.y));
+    textureStore(dst, p, vec4(dec3(out) * c.a, c.a));
+}
+
+const MORE_LUT: u32 = 1u;
+const MORE_WHEELS: u32 = 2u;
+const MORE_LUMA: u32 = 4u;
+const MORE_RED: u32 = 8u;
+const MORE_GREEN: u32 = 16u;
+const MORE_BLUE: u32 = 32u;
+const MORE_HUE_SAT: u32 = 64u;
+const MORE_HUE_HUE: u32 = 128u;
+const MORE_HUE_LUMA: u32 = 256u;
+const MORE_LUMA_SAT: u32 = 512u;
+const MORE_SAT_SAT: u32 = 1024u;
+const MORE_HUES: u32 = 1984u;
+
+fn curve_at(row: i32, channel: i32, x: f32) -> f32 {
+    let at = clamp(x, 0.0, 1.0) * f32(CURVE_POINTS - 1);
+    let i = i32(at);
+    let j = min(i + 1, CURVE_POINTS - 1);
+    let a = textureLoad(aux, vec2(i, row), 0)[channel];
+    let b = textureLoad(aux, vec2(j, row), 0)[channel];
+    return a + (b - a) * (at - f32(i));
+}
+
+// a.x which parts run, a.y the cube's size, a.z where it starts. p0: its domain's low, and how much
+// of it; p1: its high; p2, p3, p4: the wheels' lift, mid, and gain.
+@compute @workgroup_size(16, 16)
+fn lumetri_more(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    if c.a <= 1e-6 {
+        textureStore(dst, p, c);
+        return;
+    }
+    let parts = u.a.x;
+    var v = enc3(c.rgb / c.a);
+    if (parts & MORE_LUT) != 0u {
+        let unit = clamp(v, vec3(0.0), vec3(1.0));
+        let looked = lut_apply(unit, u.p0.xyz, u.p1.xyz, i32(u.a.y), i32(u.a.z));
+        v = v + (looked - v) * u.p0.w;
+    }
+    if (parts & MORE_WHEELS) != 0u {
+        let l = clamp(luma(v), 0.0, 1.0);
+        let wsh = (1.0 - l) * (1.0 - l);
+        let whi = l * l;
+        let wmid = max(1.0 - wsh - whi, 0.0);
+        v = v + u.p2.xyz * wsh;
+        v = v + u.p3.xyz * wmid;
+        v = v * (vec3(1.0) + u.p4.xyz * whi);
+    }
+    if (parts & MORE_LUMA) != 0u {
+        v = vec3(curve_at(0, 0, v.x), curve_at(0, 0, v.y), curve_at(0, 0, v.z));
+    }
+    if (parts & MORE_RED) != 0u {
+        v.x = curve_at(0, 1, v.x);
+    }
+    if (parts & MORE_GREEN) != 0u {
+        v.y = curve_at(0, 2, v.y);
+    }
+    if (parts & MORE_BLUE) != 0u {
+        v.z = curve_at(0, 3, v.z);
+    }
+    if (parts & MORE_HUES) != 0u {
+        var h = rgb_to_hsl(clamp(v, vec3(0.0), vec3(1.0)));
+        let h0 = h.x;
+        let s0 = h.y;
+        let l0 = h.z;
+        if (parts & MORE_HUE_HUE) != 0u {
+            h.x = fract(h.x + (curve_at(1, 1, h0) - 0.5));
+        }
+        var sm = 1.0;
+        if (parts & MORE_HUE_SAT) != 0u {
+            sm *= curve_at(1, 0, h0) * 2.0;
+        }
+        if (parts & MORE_LUMA_SAT) != 0u {
+            sm *= curve_at(1, 3, l0) * 2.0;
+        }
+        if (parts & MORE_SAT_SAT) != 0u {
+            sm *= curve_at(2, 0, s0) * 2.0;
+        }
+        h.y = clamp(h.y * sm, 0.0, 1.0);
+        if (parts & MORE_HUE_LUMA) != 0u {
+            h.z = clamp(h.z + (curve_at(1, 2, h0) - 0.5) * 0.5, 0.0, 1.0);
+        }
+        v = hsl_to_rgb(h);
+    }
+    textureStore(dst, p, vec4(dec3(v) * c.a, c.a));
+}
+
+// The HSL Secondary's key, in red. p0: hue center, hue range, saturation min, luma min; p1: luma max,
+// soften.
+@compute @workgroup_size(16, 16)
+fn hsl_key(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    var key = 0.0;
+    if c.a > 1e-6 {
+        let h = rgb_to_hsl(clamp(enc3(c.rgb / c.a), vec3(0.0), vec3(1.0)));
+        let soft = u.p1.y;
+        let dh = min(abs(h.x - u.p0.x), 1.0 - abs(h.x - u.p0.x));
+        let mh = 1.0 - clamp((dh - u.p0.y / 2.0) / soft, 0.0, 1.0);
+        let ms = clamp((h.y - u.p0.z) / soft, 0.0, 1.0);
+        let ml = min(
+            clamp((h.z - u.p0.w) / soft, 0.0, 1.0),
+            clamp((u.p1.x - h.z) / soft, 0.0, 1.0),
+        );
+        key = mh * ms * ml;
+    }
+    textureStore(dst, p, vec4(key, 0.0, 0.0, 0.0));
+}
+
+// What it does inside its key (aux). a.x which mask it shows, 0 for none. p0: temperature, tint,
+// saturation, hue shift.
+@compute @workgroup_size(16, 16)
+fn hsl_apply(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    if c.a <= 1e-6 {
+        textureStore(dst, p, c);
+        return;
+    }
+    let m = textureLoad(aux, p, 0).x;
+    let v = clamp(enc3(c.rgb / c.a), vec3(0.0), vec3(1.0));
+    var out: vec3<f32>;
+    switch u.a.x {
+        case 1u: {
+            let g = rgb_to_hsl(v).z;
+            out = g + (v - g) * m;
+        }
+        case 2u: {
+            out = v * m;
+        }
+        case 3u: {
+            out = vec3(m);
+        }
+        default: {
+            var hh = rgb_to_hsl(v);
+            hh.x = fract(hh.x + u.p0.w);
+            hh.y = clamp(hh.y * u.p0.z, 0.0, 1.0);
+            var moved = hsl_to_rgb(hh);
+            moved.x *= 1.0 + 0.25 * u.p0.x;
+            moved.z *= 1.0 - 0.25 * u.p0.x;
+            moved.y *= 1.0 - 0.2 * u.p0.y;
+            out = v + (moved - v) * m;
+        }
+    }
+    textureStore(dst, p, vec4(dec3(out) * c.a, c.a));
+}
+
+// ---------------------------------------------------------------------------------------------
+// `light_leaks`, on `noise3`, whose hash is 64 bits a step, as two words here: x the low, y the high.
+
+fn high_of_product(a: u32, b: u32) -> u32 {
+    let a0 = a & 0xffffu;
+    let a1 = a >> 16u;
+    let b0 = b & 0xffffu;
+    let b1 = b >> 16u;
+    let low = a0 * b0;
+    let cross0 = a0 * b1;
+    let cross1 = a1 * b0;
+    let mid = (low >> 16u) + (cross0 & 0xffffu) + (cross1 & 0xffffu);
+    return a1 * b1 + (cross0 >> 16u) + (cross1 >> 16u) + (mid >> 16u);
+}
+
+fn times64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+    return vec2(a.x * b.x, high_of_product(a.x, b.x) + a.x * b.y + a.y * b.x);
+}
+
+// `x as u64` from what fits in an i32.
+fn wide(x: i32) -> vec2<u32> {
+    return vec2(u32(x), select(0u, 0xffffffffu, x < 0));
+}
+
+// `hash_u` with the seed already multiplied.
+fn hash_u(x: i32, y: i32, z: i32, seed: vec2<u32>) -> vec2<u32> {
+    var h = times64(wide(x), vec2(0x7F4A7C15u, 0x9E3779B9u))
+        ^ times64(wide(y), vec2(0x27D4EB4Fu, 0xC2B2AE3Du))
+        ^ times64(wide(z), vec2(0x9E3779F9u, 0x165667B1u))
+        ^ seed;
+    h = vec2(h.x ^ ((h.x >> 31u) | (h.y << 1u)), h.y ^ (h.y >> 31u));
+    h = times64(h, vec2(0x1CE4E5B9u, 0xBF58476Du));
+    h = vec2(h.x ^ ((h.x >> 29u) | (h.y << 3u)), h.y ^ (h.y >> 29u));
+    h = times64(h, vec2(0x133111EBu, 0x94D049BBu));
+    return vec2(h.x ^ h.y, h.y);
+}
+
+fn grad3(h: vec2<u32>, x: f32, y: f32, z: f32) -> f32 {
+    // `h % 12`, 2^32 being 4 more than a multiple of 12.
+    switch ((h.y % 12u) * 4u + (h.x % 12u)) % 12u {
+        case 0u: { return x + y; }
+        case 1u: { return -x + y; }
+        case 2u: { return x - y; }
+        case 3u: { return -x - y; }
+        case 4u: { return x + z; }
+        case 5u: { return -x + z; }
+        case 6u: { return x - z; }
+        case 7u: { return -x - z; }
+        case 8u: { return y + z; }
+        case 9u: { return -y + z; }
+        case 10u: { return y - z; }
+        default: { return -y - z; }
+    }
+}
+
+fn fade(t: f32) -> f32 {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+fn noise3(x: f32, y: f32, z: f32, seed: vec2<u32>) -> f32 {
+    let xi = floor(x);
+    let yi = floor(y);
+    let zi = floor(z);
+    let xf = x - xi;
+    let yf = y - yi;
+    let zf = z - zi;
+    let ix = i32(xi);
+    let iy = i32(yi);
+    let iz = i32(zi);
+    let ux = fade(xf);
+    let vy = fade(yf);
+    let wz = fade(zf);
+    let g000 = grad3(hash_u(ix, iy, iz, seed), xf, yf, zf);
+    let g100 = grad3(hash_u(ix + 1, iy, iz, seed), xf - 1.0, yf, zf);
+    let g010 = grad3(hash_u(ix, iy + 1, iz, seed), xf, yf - 1.0, zf);
+    let g110 = grad3(hash_u(ix + 1, iy + 1, iz, seed), xf - 1.0, yf - 1.0, zf);
+    let g001 = grad3(hash_u(ix, iy, iz + 1, seed), xf, yf, zf - 1.0);
+    let g101 = grad3(hash_u(ix + 1, iy, iz + 1, seed), xf - 1.0, yf, zf - 1.0);
+    let g011 = grad3(hash_u(ix, iy + 1, iz + 1, seed), xf, yf - 1.0, zf - 1.0);
+    let g111 = grad3(hash_u(ix + 1, iy + 1, iz + 1, seed), xf - 1.0, yf - 1.0, zf - 1.0);
+    let x00 = g000 + (g100 - g000) * ux;
+    let x10 = g010 + (g110 - g010) * ux;
+    let x01 = g001 + (g101 - g001) * ux;
+    let x11 = g011 + (g111 - g011) * ux;
+    let y0 = x00 + (x10 - x00) * vy;
+    let y1 = x01 + (x11 - x01) * vy;
+    return (y0 + (y1 - y0) * wz) * 0.9;
+}
+
+// `fbm` at a whole number of octaves. Each octave's seed, already multiplied, is in a.
+fn fbm_leak(x: f32, y: f32, z: f32, octaves: u32) -> f32 {
+    var sum = 0.0;
+    var amp = 1.0;
+    var freq = 1.0;
+    var norm = 0.0;
+    for (var i = 0u; i < octaves; i++) {
+        let seed = select(select(u.b.xy, u.b.zw, i == 2u), u.a.zw, i == 0u);
+        sum += noise3(x * freq, y * freq, z * freq + f32(i) * 17.13, seed) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    return sum / max(norm, 1e-6);
+}
+
+fn leak_step(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = clamp((x - e0) / max(e1 - e0, 1e-6), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn screen_on(b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
+    return vec3(1.0) - (vec3(1.0) - min(b, vec3(1.0))) * (vec3(1.0) - min(s, vec3(1.0)));
+}
+
+fn overlay_on(b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
+    let dark = 2.0 * b * s;
+    let light = vec3(1.0) - 2.0 * (vec3(1.0) - min(b, vec3(1.0))) * (vec3(1.0) - min(s, vec3(1.0)));
+    return select(light, dark, b < vec3(0.5));
+}
+
+// a.x the mode, a.zw and b.xy and b.zw: the seeds of octaves 0, 1, and 2, each by `hash_u`'s constant.
+// p0: first color, intensity; p1: second color, scale; p2: direction, time.
+@compute @workgroup_size(16, 16)
+fn light_leaks(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let at = vec2<i32>(id.xy);
+    let c = textureLoad(src, at, 0);
+    let size = vec2<f32>(textureDimensions(dst));
+    let x = f32(id.x) + 0.5;
+    let y = f32(id.y) + 0.5;
+    let scale = u.p1.w;
+    let dx = u.p2.x;
+    let dy = u.p2.y;
+    let t = u.p2.z;
+    let up = x / scale;
+    let vp = y / scale;
+    let along = ((x / size.x - 0.5) * dx + (y / size.y - 0.5) * dy) * 2.0;
+    let bias = leak_step(-0.2, 1.0, -along);
+    let n = fbm_leak(up + dx * t * 0.3, vp + dy * t * 0.3, t * 0.15, 3u) * 0.5 + 0.5;
+    let m = fbm_leak(up * 0.7 + 5.2, vp * 0.7, t * 0.1 + 9.0, 2u) * 0.5 + 0.5;
+    let k = leak_step(0.35, 0.85, n) * bias * u.p0.w;
+    let light = (u.p0.xyz + (u.p1.xyz - u.p0.xyz) * m) * k;
+    let base = straight(c);
+    var o: vec3<f32>;
+    switch u.a.x {
+        case 1u: {
+            o = base + light;
+        }
+        case 2u: {
+            let s = light + vec3(0.5);
+            o = overlay_on(base, base + (s - base) * min(k, 1.0));
+        }
+        default: {
+            o = screen_on(base, light);
+        }
+    }
+    let a = c.a + (1.0 - c.a) * min(k, 1.0);
+    textureStore(dst, at, vec4(o * a, a));
+}
+
+// ---------------------------------------------------------------------------------------------
+// `add_grain` of `noise.rs`, on what `encode_kept` makes.
+
+fn lattice(ix: i32, iy: i32, iz: i32, seed: u32) -> f32 {
+    var h = (u32(ix) * 0x27d4eb2du) ^ (u32(iy) * 0x165667b1u) ^ (u32(iz) * 0x9e3779b9u)
+        ^ (seed * 0x85ebca6bu);
+    h ^= h >> 15u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12u;
+    h *= 0x297a2d39u;
+    h ^= h >> 15u;
+    return f32(h & 0xffffu) / 65535.0;
+}
+
+fn value_noise(x: f32, y: f32, z: f32, seed: u32) -> f32 {
+    let x0 = floor(x);
+    let y0 = floor(y);
+    let z0 = floor(z);
+    let fx = fade(x - x0);
+    let fy = fade(y - y0);
+    let fz = fade(z - z0);
+    let ix = i32(x0);
+    let iy = i32(y0);
+    let iz = i32(z0);
+    let c00 = lattice(ix, iy, iz, seed) + (lattice(ix + 1, iy, iz, seed) - lattice(ix, iy, iz, seed)) * fx;
+    let c10 = lattice(ix, iy + 1, iz, seed)
+        + (lattice(ix + 1, iy + 1, iz, seed) - lattice(ix, iy + 1, iz, seed)) * fx;
+    let c01 = lattice(ix, iy, iz + 1, seed)
+        + (lattice(ix + 1, iy, iz + 1, seed) - lattice(ix, iy, iz + 1, seed)) * fx;
+    let c11 = lattice(ix, iy + 1, iz + 1, seed)
+        + (lattice(ix + 1, iy + 1, iz + 1, seed) - lattice(ix, iy + 1, iz + 1, seed)) * fx;
+    let a = c00 + (c10 - c00) * fy;
+    let b = c01 + (c11 - c01) * fy;
+    return a + (b - a) * fz;
+}
+
+fn grain_step(e0: f32, e1: f32, x: f32) -> f32 {
+    if abs(e1 - e0) < 1e-9 {
+        return select(1.0, 0.0, x < e0);
+    }
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn grain_blend(c: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    var o: vec3<f32>;
+    switch u.a.x {
+        case 1u: {
+            o = c * (vec3(1.0) + n);
+        }
+        case 2u: {
+            o = c + n;
+        }
+        case 3u: {
+            o = vec3(1.0) - (vec3(1.0) - c) * (vec3(1.0) - abs(n));
+        }
+        case 4u: {
+            o = c + n * 4.0 * c * (vec3(1.0) - c);
+        }
+        default: {
+            o = c + n * (vec3(1.0) - 0.5 * c);
+        }
+    }
+    return max(o, vec3(0.0));
+}
+
+// a.x the blending mode, a.y whether one plane does for all three; b.xyz each plane's seed. p0: what
+// each channel's grain is multiplied by, and the aspect ratio; p1: each channel's grain size, and the
+// grain's time; p2: shadows, midtones, highlights, midpoint; p3.x: saturation.
+@compute @workgroup_size(16, 16)
+fn add_grain(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let at = vec2<i32>(id.xy);
+    let px = textureLoad(src, at, 0);
+    if px.a <= 0.0 {
+        textureStore(dst, at, px);
+        return;
+    }
+    var c = vec3(0.0);
+    if px.a > 1e-6 {
+        c = px.rgb / px.a;
+    }
+    let l = clamp(0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b, 0.0, 1.0);
+    let mid = u.p2.w;
+    let s = 1.0 - grain_step(0.0, mid, l);
+    let hi = grain_step(mid, 1.0, l);
+    let weight = u.p2.x * s + u.p2.y * (1.0 - s - hi) + u.p2.z * hi;
+    let x = f32(id.x);
+    let y = f32(id.y);
+    let aspect = u.p0.w;
+    let frame = u.p1.w;
+    var g: vec3<f32>;
+    if u.a.y != 0u {
+        g = vec3(value_noise(x / (u.p1.x * aspect), y / u.p1.x, frame, u.b.x) - 0.5);
+    } else {
+        g = vec3(
+            value_noise(x / (u.p1.x * aspect), y / u.p1.x, frame, u.b.x) - 0.5,
+            value_noise(x / (u.p1.y * aspect), y / u.p1.y, frame, u.b.y) - 0.5,
+            value_noise(x / (u.p1.z * aspect), y / u.p1.z, frame, u.b.z) - 0.5,
+        );
+        let gm = (g.x + g.y + g.z) / 3.0;
+        g = gm + (g - gm) * u.p3.x;
+    }
+    let o = grain_blend(c, g * u.p0.xyz * weight);
+    textureStore(dst, at, vec4(o * px.a, px.a));
 }

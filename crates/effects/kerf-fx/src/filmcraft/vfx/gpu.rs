@@ -3,12 +3,15 @@
 //! compares each kernel with [`effects::apply`](crate::filmcraft::effects::apply).
 
 use super::*;
-use crate::filmcraft::effects::gaussian_boxes;
+use crate::filmcraft::effects::{
+    boxes_for_gauss, choice, curve_lut, curve_param, f, gaussian_boxes, grade_space, hue_lut,
+    is_identity_curve, on, text, Wheels,
+};
 use crate::filmcraft::gpu::run as run_ops;
 use crate::filmcraft::gpufx::FxOp;
-use kerf_color::{rgb_to_ycbcr, Matrix};
+use kerf_color::{luma709, rgb_to_ycbcr, Lut, Matrix};
 use kerf_gpu::{wgpu, Frame, Gpu, Picture};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// One of these effects with its parameters read.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,11 +80,377 @@ pub enum Kernel {
         arc: f32,
         quality: f32,
     },
+    /// A Lumetri using what its plain numbers do not say.
+    Lumetri(Box<Lumetri>),
+    Leaks {
+        colors: [[f32; 3]; 2],
+        intensity: f32,
+        scale: f32,
+        direction: [f32; 2],
+        time: f32,
+        /// `hash_u`'s seed for the first octave, and the second, and the third.
+        seeds: [u64; 3],
+        mode: u32,
+    },
+    /// Add Grain, whose picture is encoded and decoded as a kept effect's is.
+    Grain(Box<Grain>),
+}
+
+/// What a Lumetri does that [`FxOp::Lumetri`] does not, in the order `lumetri` does it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lumetri {
+    input: Option<Arc<Lut>>,
+    /// Its plain numbers, and its named look and wheels when nothing has to come before those.
+    base: FxOp,
+    more: Option<LumetriMore>,
+    hsl: Option<HslSecondary>,
+    sharpen: Option<FxOp>,
+}
+
+/// `lumetri_advanced`'s curves, and a look's LUT and the wheels that come after it.
+#[derive(Clone, Debug, PartialEq)]
+struct LumetriMore {
+    look: Option<(Arc<Lut>, f32)>,
+    wheels: Option<Wheels>,
+    /// Luma, red, green, blue; hue vs sat, hue vs hue, hue vs luma, luma vs sat; sat vs sat.
+    curves: [Option<Vec<f32>>; 9],
+}
+
+/// `hsl_secondary` with no Denoise: its key, the blur over it, and what it does inside it.
+#[derive(Clone, Debug, PartialEq)]
+struct HslSecondary {
+    hue: [f32; 2],
+    saturation: f32,
+    luma: [f32; 2],
+    soft: f32,
+    blur: Option<FxOp>,
+    show_mask: u32,
+    /// Temperature, tint, saturation, hue shift.
+    correct: [f32; 4],
+}
+
+/// `add_grain`'s numbers, from [`kerf_raster_fx::GrainLook`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Grain {
+    pub mode: u32,
+    pub mono: bool,
+    pub seeds: [u32; 3],
+    /// What each channel's grain is multiplied by.
+    pub gains: [f32; 3],
+    pub aspect: f32,
+    /// Each channel's grain size, in pixels.
+    pub sizes: [f32; 3],
+    pub frame: f32,
+    pub tones: [f32; 3],
+    pub midpoint: f32,
+    pub saturation: f32,
+}
+
+const CURVE_POINTS: usize = 1024;
+
+/// `hash_u`'s constant on its seed.
+const HASH_SEED: u64 = 0x27D4_EB2F_1656_67C5;
+
+/// The first, in `Kernel::Lumetri`'s table, of a LUT's rows: three when there are curves.
+fn lut_first_row(more: &LumetriMore) -> usize {
+    if more.curves.iter().any(Option::is_some) {
+        3
+    } else {
+        0
+    }
+}
+
+/// A LUT's cube, or `None` for a shaper or for no cube, which a kernel does not read.
+fn cube_of(lut: &Lut) -> Option<&kerf_color::Lut3d> {
+    lut.cube.as_ref().filter(|_| lut.shaper.is_none())
+}
+
+/// The table `lumetri_more` and `lumetri_input` read: curves in rows, a cube below them.
+fn lumetri_table(curves: &[Option<Vec<f32>>; 9], first: usize, lut: Option<&Lut>) -> Image {
+    let cube = lut.and_then(cube_of);
+    let size = cube.map_or(0, |cube| cube.size);
+    let w = (size * size).max(if first > 0 { CURVE_POINTS } else { 1 });
+    let h = first + size;
+    let mut px = vec![0.0; w * h.max(1) * 4];
+    for (index, curve) in curves.iter().enumerate() {
+        let Some(curve) = curve else {
+            continue;
+        };
+        let (row, channel) = (index / 4, index % 4);
+        for (x, value) in curve.iter().enumerate() {
+            px[(row * w + x) * 4 + channel] = *value;
+        }
+    }
+    if let Some(cube) = cube {
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    let value = cube.at(r, g, b);
+                    let at = ((first + b) * w + r + g * size) * 4;
+                    px[at..at + 3].copy_from_slice(&value);
+                }
+            }
+        }
+    }
+    Image { w, h: h.max(1), px }
+}
+
+impl Lumetri {
+    /// A Lumetri that its plain numbers do not say all of, or `None`: when they do, which the op
+    /// draws; in HDR; and for what stays on the CPU, a LUT with a 1D shaper and the HSL Secondary's
+    /// Denoise, a median that costs the GPU what it costs the CPU.
+    fn eval(e: &EffectInstance, cx: &FxCtx, (w, h): (usize, usize)) -> Option<Self> {
+        let mut base = FxOp::eval(e, cx, w, h)?;
+        let FxOp::Lumetri {
+            plain,
+            gpu_capable,
+            look,
+            wheels,
+            ..
+        } = &mut base
+        else {
+            return None;
+        };
+        if *plain {
+            return None;
+        }
+        if grade_space(e, cx, "hdr_white").is_hdr()
+            || grade_space(e, cx, "curves_hdr_range").is_hdr()
+        {
+            return None;
+        }
+        *plain = true;
+        *gpu_capable = true;
+        let (basic_on, creative_on, curves_on) =
+            (on(e, "basic_on"), on(e, "creative_on"), on(e, "curves_on"));
+        let cube = |id: &str| {
+            let lut = crate::filmcraft::luts::resolve(cx.project, text(e, id));
+            lut.filter(|lut| cube_of(lut).is_some())
+        };
+        let input = if basic_on && !text(e, "input_lut").is_empty() {
+            Some(cube("input_lut")?)
+        } else {
+            None
+        };
+        let look_lut = if creative_on && !text(e, "look_lut").is_empty() {
+            Some(cube("look_lut")?)
+        } else {
+            None
+        };
+        // A look's LUT comes before the wheels.
+        let wheels_after = if look_lut.is_some() {
+            wheels.take()
+        } else {
+            None
+        };
+        if look_lut.is_some() {
+            *look = 0;
+        }
+        let lut = |id: &str| {
+            curve_param(e, id)
+                .filter(|curve| curves_on && !is_identity_curve(curve))
+                .map(|curve| curve_lut(&curve, CURVE_POINTS))
+        };
+        let hue = |id: &str| {
+            curve_param(e, id)
+                .filter(|_| curves_on)
+                .and_then(|curve| hue_lut(&curve, CURVE_POINTS))
+        };
+        let curves = [
+            lut("curve_luma"),
+            lut("curve_red"),
+            lut("curve_green"),
+            lut("curve_blue"),
+            hue("hue_vs_sat"),
+            hue("hue_vs_hue"),
+            hue("hue_vs_luma"),
+            hue("luma_vs_sat"),
+            hue("sat_vs_sat"),
+        ];
+        let more =
+            (look_lut.is_some() || wheels_after.is_some() || curves.iter().any(Option::is_some))
+                .then(|| LumetriMore {
+                    look: look_lut.map(|lut| (lut, f(e, "look_intensity", cx) / 100.0)),
+                    wheels: wheels_after,
+                    curves,
+                });
+        let hsl = if crate::filmcraft::effects::b(e, "hsl_on") {
+            let denoise = f(e, "hsl_denoise", cx).clamp(0.0, 100.0) / 100.0;
+            if denoise > 0.0 {
+                return None;
+            }
+            let sigma = f(e, "hsl_blur", cx).clamp(0.0, 100.0) / 100.0 * 20.0 * cx.px_scale;
+            let radii = || {
+                boxes_for_gauss(sigma, 3)
+                    .into_iter()
+                    .map(|r| r as u32)
+                    .collect::<Vec<u32>>()
+            };
+            Some(HslSecondary {
+                hue: [
+                    f(e, "hsl_hue", cx) / 360.0,
+                    (f(e, "hsl_hue_range", cx) / 360.0).max(1e-3),
+                ],
+                saturation: f(e, "hsl_sat_min", cx) / 100.0,
+                luma: [
+                    f(e, "hsl_luma_min", cx) / 100.0,
+                    f(e, "hsl_luma_max", cx) / 100.0,
+                ],
+                soft: (f(e, "hsl_soft", cx) / 100.0 * 0.3).max(0.01),
+                blur: (sigma >= 0.3).then(|| FxOp::Gaussian {
+                    rx: radii(),
+                    ry: radii(),
+                    repeat: true,
+                }),
+                show_mask: choice(e, "hsl_show_mask"),
+                correct: [
+                    f(e, "hsl_temp", cx) / 100.0,
+                    f(e, "hsl_tint", cx) / 100.0,
+                    f(e, "hsl_sat", cx) / 100.0,
+                    f(e, "hsl_hue_shift", cx) / 360.0,
+                ],
+            })
+        } else {
+            None
+        };
+        let sharpen = if creative_on {
+            f(e, "sharpen", cx) / 100.0
+        } else {
+            0.0
+        };
+        let sharpen = (sharpen.abs() > 1e-3).then(|| {
+            let radius = 1.2 * cx.px_scale.max(0.35);
+            let (rx, ry) = gaussian_boxes(w, h, radius, radius);
+            FxOp::Unsharp {
+                rx,
+                ry,
+                amount: sharpen.max(-1.0),
+                threshold: 0.0,
+            }
+        });
+        Some(Self {
+            input,
+            base,
+            more,
+            hsl,
+            sharpen,
+        })
+    }
+
+    fn run(&self, frame: &mut Frame<'static>, picture: Picture) -> Option<Picture> {
+        let stage = stage(frame.gpu())?;
+        let mut picture = picture;
+        if let Some(cube) = self.input.as_deref().and_then(cube_of) {
+            let none: [Option<Vec<f32>>; 9] = Default::default();
+            let table = lumetri_table(&none, 0, self.input.as_deref());
+            let table = frame.image(&table);
+            let next = stage.pass(
+                frame,
+                &stage.lumetri_input,
+                &picture,
+                Some(&table),
+                &U {
+                    a: [cube.size as u32, 0, 0, 0],
+                    p0: [
+                        cube.domain_min[0],
+                        cube.domain_min[1],
+                        cube.domain_min[2],
+                        0.0,
+                    ],
+                    p1: [
+                        cube.domain_max[0],
+                        cube.domain_max[1],
+                        cube.domain_max[2],
+                        0.0,
+                    ],
+                    ..U::default()
+                },
+            );
+            frame.release(table);
+            frame.release(picture);
+            picture = next;
+        }
+        picture = run_ops(frame, picture, std::slice::from_ref(&self.base))?;
+        if let Some(more) = &self.more {
+            let first = lut_first_row(more);
+            let lut = more.look.as_ref().map(|(lut, _)| &**lut);
+            let table = frame.image(&lumetri_table(&more.curves, first, lut));
+            let cube = lut.and_then(cube_of);
+            let mut parts = u32::from(cube.is_some()) | u32::from(more.wheels.is_some()) << 1;
+            for (index, curve) in more.curves.iter().enumerate() {
+                parts |= u32::from(curve.is_some()) << (index + 2);
+            }
+            let (low, high, size) = cube.map_or(([0.0; 3], [1.0; 3], 0), |cube| {
+                (cube.domain_min, cube.domain_max, cube.size as u32)
+            });
+            let amount = more.look.as_ref().map_or(0.0, |(_, amount)| *amount);
+            let [lift, mid, gain] = more.wheels.map_or([[0.0; 3]; 3], |wheels| {
+                [wheels.lift, wheels.mid, wheels.gain]
+            });
+            let next = stage.pass(
+                frame,
+                &stage.lumetri_more,
+                &picture,
+                Some(&table),
+                &U {
+                    a: [parts, size, first as u32, 0],
+                    p0: [low[0], low[1], low[2], amount],
+                    p1: [high[0], high[1], high[2], 0.0],
+                    p2: [lift[0], lift[1], lift[2], 0.0],
+                    p3: [mid[0], mid[1], mid[2], 0.0],
+                    p4: [gain[0], gain[1], gain[2], 0.0],
+                    ..U::default()
+                },
+            );
+            frame.release(table);
+            frame.release(picture);
+            picture = next;
+        }
+        if let Some(hsl) = &self.hsl {
+            let key = stage.pass(
+                frame,
+                &stage.hsl_key,
+                &picture,
+                None,
+                &U {
+                    p0: [hsl.hue[0], hsl.hue[1], hsl.saturation, hsl.luma[0]],
+                    p1: [hsl.luma[1], hsl.soft, 0.0, 0.0],
+                    ..U::default()
+                },
+            );
+            let key = match &hsl.blur {
+                Some(blur) => run_ops(frame, key, std::slice::from_ref(blur))?,
+                None => key,
+            };
+            let next = stage.pass(
+                frame,
+                &stage.hsl_apply,
+                &picture,
+                Some(&key),
+                &U {
+                    a: [hsl.show_mask, 0, 0, 0],
+                    p0: hsl.correct,
+                    ..U::default()
+                },
+            );
+            frame.release(key);
+            frame.release(picture);
+            picture = next;
+        }
+        if let Some(sharpen) = &self.sharpen {
+            picture = run_ops(frame, picture, std::slice::from_ref(sharpen))?;
+        }
+        Some(picture)
+    }
 }
 
 /// Ultra Key's numbers as `color::ultra_key` works them out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UltraKey {
+    /// How far its matte is cleaned up, which blurs it, and the size of a pixel for that.
+    choke: f32,
+    soften: f32,
+    px_scale: f32,
     key: [f32; 3],
     key_size: f32,
     gain: f32,
@@ -221,16 +590,15 @@ impl Kernel {
                         })
                         .unwrap_or_else(|| fv(e, id, cx))
                 };
-                // Cleaning up the matte blurs it, which the CPU does.
-                if pf("choke") > 0.0 || pf("soften") > 0.0 {
-                    return None;
-                }
                 let correction = [
                     fv(e, "cc_saturation", cx) / 100.0,
                     fv(e, "cc_hue", cx) / 360.0,
                     fv(e, "cc_luminance", cx) / 100.0,
                 ];
                 Kernel::UltraKey(Box::new(UltraKey {
+                    choke: pf("choke") / 100.0,
+                    soften: pf("soften") / 100.0,
+                    px_scale: cx.px_scale,
                     key,
                     key_size: (key[1] * key[1] + key[2] * key[2]).max(1e-6),
                     gain: 1.0 + 2.0 * pf("transparency") / 100.0,
@@ -257,6 +625,20 @@ impl Kernel {
                         || correction[1].abs() > 1e-6
                         || (correction[2] - 1.0).abs() > 1e-4,
                 }))
+            }
+            "lumetri" => Kernel::Lumetri(Box::new(Lumetri::eval(e, cx, size)?)),
+            "light_leaks" => {
+                let direction = fv(e, "direction", cx).to_radians();
+                let seed = fv(e, "seed", cx).max(0.0) as u64;
+                Kernel::Leaks {
+                    colors: [lin(cv(e, "c1", cx)), lin(cv(e, "c2", cx))],
+                    intensity: fv(e, "intensity", cx) / 100.0,
+                    scale: (fv(e, "scale", cx) / 100.0).max(0.05) * size.0.max(size.1) as f32 * 0.6,
+                    direction: [direction.cos(), direction.sin()],
+                    time: (cx.seconds * f64::from(fv(e, "speed", cx))) as f32,
+                    seeds: [seed, seed + 1, seed + 2].map(|one| one.wrapping_mul(HASH_SEED)),
+                    mode: chv(e, "mode"),
+                }
             }
             _ => return None,
         })
@@ -539,21 +921,42 @@ impl Kernel {
                 out
             }
             Kernel::UltraKey(key) => {
-                let out = stage.pass(
-                    frame,
-                    &stage.ultra_key,
-                    &picture,
-                    None,
-                    &U {
-                        a: [key.output, key.dominant, u32::from(key.corrects), 0],
-                        p0: [key.key[0], key.key[1], key.key[2], key.key_size],
-                        p1: [key.gain, key.highlight, key.shadow, key.tolerance],
-                        p2: [key.pedestal, key.contrast, key.mid, key.spill],
-                        p3: [key.desaturate, key.range, key.spill_luma, 0.0],
-                        p4: [key.correction[0], key.correction[1], key.correction[2], 0.0],
-                        ..U::default()
-                    },
-                );
+                let numbers = U {
+                    a: [key.output, key.dominant, u32::from(key.corrects), 0],
+                    p0: [key.key[0], key.key[1], key.key[2], key.key_size],
+                    p1: [key.gain, key.highlight, key.shadow, key.tolerance],
+                    p2: [key.pedestal, key.contrast, key.mid, key.spill],
+                    p3: [key.desaturate, key.range, key.spill_luma, 0.0],
+                    p4: [key.correction[0], key.correction[1], key.correction[2], 0.0],
+                    ..U::default()
+                };
+                let out = if key.choke > 0.0 || key.soften > 0.0 {
+                    let mut matte = stage.pass(frame, &stage.ultra_matte, &picture, None, &numbers);
+                    if key.choke > 0.0 {
+                        let copy = frame.copy(&matte);
+                        let sigma = (key.choke * 4.0 * key.px_scale).max(0.5);
+                        let blurred = blur_plane(frame, copy, sigma)?;
+                        let choked = stage.pass(
+                            frame,
+                            &stage.ultra_choke,
+                            &matte,
+                            Some(&blurred),
+                            &U::floats([key.choke * 0.5, 0.0, 0.0, 0.0]),
+                        );
+                        frame.release(blurred);
+                        frame.release(matte);
+                        matte = choked;
+                    }
+                    if key.soften > 0.0 {
+                        matte = blur_plane(frame, matte, key.soften * 10.0 * key.px_scale)?;
+                    }
+                    let out =
+                        stage.pass(frame, &stage.ultra_keyed, &picture, Some(&matte), &numbers);
+                    frame.release(matte);
+                    out
+                } else {
+                    stage.pass(frame, &stage.ultra_key, &picture, None, &numbers)
+                };
                 frame.release(picture);
                 out
             }
@@ -583,8 +986,97 @@ impl Kernel {
                 frame.release(blurred);
                 out
             }
+            Kernel::Lumetri(lumetri) => return lumetri.run(frame, picture),
+            Kernel::Leaks {
+                colors,
+                intensity,
+                scale,
+                direction,
+                time,
+                seeds,
+                mode,
+            } => {
+                let low = |value: u64| value as u32;
+                let high = |value: u64| (value >> 32) as u32;
+                let out = stage.pass(
+                    frame,
+                    &stage.light_leaks,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*mode, 0, low(seeds[0]), high(seeds[0])],
+                        b: [low(seeds[1]), high(seeds[1]), low(seeds[2]), high(seeds[2])],
+                        p0: [colors[0][0], colors[0][1], colors[0][2], *intensity],
+                        p1: [colors[1][0], colors[1][1], colors[1][2], *scale],
+                        p2: [direction[0], direction[1], *time, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Grain(grain) => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                frame.release(picture);
+                let grained = stage.pass(
+                    frame,
+                    &stage.add_grain,
+                    &encoded,
+                    None,
+                    &U {
+                        a: [grain.mode, u32::from(grain.mono), 0, 0],
+                        b: [grain.seeds[0], grain.seeds[1], grain.seeds[2], 0],
+                        p0: [grain.gains[0], grain.gains[1], grain.gains[2], grain.aspect],
+                        p1: [grain.sizes[0], grain.sizes[1], grain.sizes[2], grain.frame],
+                        p2: [
+                            grain.tones[0],
+                            grain.tones[1],
+                            grain.tones[2],
+                            grain.midpoint,
+                        ],
+                        p3: [grain.saturation, 0.0, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &grained, None, &U::default());
+                frame.release(grained);
+                out
+            }
         })
     }
+}
+
+/// `blur_plane` of `vfx`, with its plane in the red of a picture.
+fn blur_plane(frame: &mut Frame<'static>, plane: Picture, sigma: f32) -> Option<Picture> {
+    if sigma <= 0.3 {
+        return Some(plane);
+    }
+    let (rx, ry) = gaussian_boxes(plane.w as usize, plane.h as usize, sigma, sigma);
+    run_ops(
+        frame,
+        plane,
+        &[FxOp::Gaussian {
+            rx,
+            ry,
+            repeat: false,
+        }],
+    )
+}
+
+/// The tint and balance of Add Grain's Color, as `GrainLook::color` applies them, with its intensity.
+pub fn grain_gains(look: &kerf_raster_fx::GrainLook) -> [f32; 3] {
+    let amp = look.intensity * 0.25;
+    let tint = look.tint;
+    let tinted = |k: usize| {
+        if look.tint_amount > 0.0 {
+            let l = luma709(tint[0], tint[1], tint[2]).max(1e-3);
+            (1.0 - look.tint_amount) + look.tint_amount * tint[k] / l
+        } else {
+            1.0
+        }
+    };
+    [0, 1, 2].map(|k| tinted(k) * look.balance[k] * amp * look.channel_intensity[k])
 }
 
 /// `U` in `kernels.wgsl`.
@@ -635,6 +1127,15 @@ struct Stage {
     luma_key: wgpu::ComputePipeline,
     logo_cutout: wgpu::ComputePipeline,
     ultra_key: wgpu::ComputePipeline,
+    ultra_matte: wgpu::ComputePipeline,
+    ultra_choke: wgpu::ComputePipeline,
+    ultra_keyed: wgpu::ComputePipeline,
+    lumetri_input: wgpu::ComputePipeline,
+    lumetri_more: wgpu::ComputePipeline,
+    hsl_key: wgpu::ComputePipeline,
+    hsl_apply: wgpu::ComputePipeline,
+    light_leaks: wgpu::ComputePipeline,
+    add_grain: wgpu::ComputePipeline,
     encode_kept: wgpu::ComputePipeline,
     decode_kept: wgpu::ComputePipeline,
     radial_zoom: wgpu::ComputePipeline,
@@ -681,6 +1182,15 @@ impl Stage {
                 luma_key: kernel("luma_key"),
                 logo_cutout: kernel("logo_cutout"),
                 ultra_key: kernel("ultra_key"),
+                ultra_matte: kernel("ultra_matte"),
+                ultra_choke: kernel("ultra_choke"),
+                ultra_keyed: kernel("ultra_keyed"),
+                lumetri_input: kernel("lumetri_input"),
+                lumetri_more: kernel("lumetri_more"),
+                hsl_key: kernel("hsl_key"),
+                hsl_apply: kernel("hsl_apply"),
+                light_leaks: kernel("light_leaks"),
+                add_grain: kernel("add_grain"),
                 encode_kept: kernel("encode_kept"),
                 decode_kept: kernel("decode_kept"),
                 radial_zoom: kernel("radial_zoom"),
@@ -966,6 +1476,38 @@ mod tests {
                     ("cc_luminance", fl(80.0)),
                 ],
             ),
+            // Its presets set these, so only as they are set by hand.
+            (
+                "ultra_key",
+                vec![("setting", choice(3)), ("choke", fl(20.0))],
+            ),
+            (
+                "ultra_key",
+                vec![("setting", choice(3)), ("soften", fl(30.0))],
+            ),
+            (
+                "ultra_key",
+                vec![
+                    ("setting", choice(3)),
+                    ("choke", fl(60.0)),
+                    ("soften", fl(10.0)),
+                    ("contrast", fl(30.0)),
+                    ("output", choice(1)),
+                ],
+            ),
+            ("light_leaks", vec![]),
+            (
+                "light_leaks",
+                vec![
+                    ("mode", choice(1)),
+                    ("seed", fl(7.0)),
+                    ("direction", fl(70.0)),
+                ],
+            ),
+            (
+                "light_leaks",
+                vec![("mode", choice(2)), ("scale", fl(30.0)), ("speed", fl(3.0))],
+            ),
         ];
         let image = picture(96, 54);
         let mut failures = Vec::new();
@@ -989,16 +1531,154 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes
+    /// before them in the effect, where the order shows.
     #[test]
-    fn a_matte_cleaned_up_stays_on_the_cpu() {
-        let e = effect(
-            "ultra_key",
+    fn lumetri_past_its_plain_numbers_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let fl = ParamValue::Float;
+        let on = ParamValue::Bool(true);
+        let curve = |points: &[[f32; 2]]| ParamValue::Curve(points.to_vec());
+        let bend = curve(&[[0.0, 0.0], [0.3, 0.2], [0.7, 0.85], [1.0, 1.0]]);
+        let around = curve(&[[0.0, 0.5], [0.33, 0.85], [0.66, 0.25]]);
+        let lut = ParamValue::Text("builtin:look-bleach-bypass".into());
+        let log = ParamValue::Text("builtin:slog3-sgamut3cine-to-rec709".into());
+        let cases: Vec<(&str, Vec<(&str, ParamValue)>)> = vec![
+            ("sharpen", vec![("sharpen", fl(50.0))]),
+            ("soften by sharpening", vec![("sharpen", fl(-40.0))]),
+            ("luma curve", vec![("curve_luma", bend.clone())]),
+            ("red curve", vec![("curve_red", bend.clone())]),
+            (
+                "green and blue curves",
+                vec![("curve_green", bend.clone()), ("curve_blue", bend.clone())],
+            ),
+            ("hue vs sat", vec![("hue_vs_sat", around.clone())]),
+            ("hue vs hue", vec![("hue_vs_hue", around.clone())]),
+            ("hue vs luma", vec![("hue_vs_luma", around.clone())]),
+            ("luma vs sat", vec![("luma_vs_sat", around.clone())]),
+            ("sat vs sat", vec![("sat_vs_sat", around.clone())]),
+            ("look LUT", vec![("look_lut", lut.clone())]),
+            (
+                "half a look LUT, then wheels",
+                vec![
+                    ("look_lut", lut.clone()),
+                    ("look_intensity", fl(50.0)),
+                    ("wheel_shadows_l", fl(30.0)),
+                ],
+            ),
+            ("input LUT", vec![("input_lut", log.clone())]),
+            (
+                "named look and curve",
+                vec![
+                    ("look", ParamValue::Choice(6)),
+                    ("curve_luma", bend.clone()),
+                ],
+            ),
+            ("HSL", vec![("hsl_on", on.clone()), ("hsl_hue", fl(200.0))]),
+            (
+                "HSL corrected",
+                vec![
+                    ("hsl_on", on.clone()),
+                    ("hsl_hue", fl(120.0)),
+                    ("hsl_hue_range", fl(90.0)),
+                    ("hsl_sat", fl(150.0)),
+                    ("hsl_hue_shift", fl(30.0)),
+                    ("hsl_temp", fl(40.0)),
+                    ("hsl_tint", fl(-30.0)),
+                ],
+            ),
+            (
+                "HSL blurred",
+                vec![
+                    ("hsl_on", on.clone()),
+                    ("hsl_hue_range", fl(120.0)),
+                    ("hsl_sat", fl(40.0)),
+                    ("hsl_blur", fl(20.0)),
+                ],
+            ),
+            (
+                "HSL mask, gray",
+                vec![
+                    ("hsl_on", on.clone()),
+                    ("hsl_show_mask", ParamValue::Choice(1)),
+                ],
+            ),
+            (
+                "HSL mask, black",
+                vec![
+                    ("hsl_on", on.clone()),
+                    ("hsl_show_mask", ParamValue::Choice(2)),
+                ],
+            ),
+            (
+                "HSL mask, white",
+                vec![
+                    ("hsl_on", on.clone()),
+                    ("hsl_show_mask", ParamValue::Choice(3)),
+                ],
+            ),
+            (
+                "everything at once",
+                vec![
+                    ("exposure", fl(0.4)),
+                    ("input_lut", log.clone()),
+                    ("look_lut", lut.clone()),
+                    ("wheel_shadows_l", fl(20.0)),
+                    ("curve_luma", bend.clone()),
+                    ("hue_vs_sat", around.clone()),
+                    ("hsl_on", on.clone()),
+                    ("hsl_sat", fl(60.0)),
+                    ("sharpen", fl(30.0)),
+                    ("vignette_amount", fl(-2.0)),
+                ],
+            ),
+        ];
+        let image = picture(96, 54);
+        let mut failures = Vec::new();
+        for (name, params) in cases {
+            let e = effect("lumetri", &params);
+            let cx = context(0.0);
+            let kernel = Kernel::eval(&e, &cx, (image.w, image.h))
+                .unwrap_or_else(|| panic!("{name} has no kernel"));
+            let mut cpu = image.clone();
+            apply(&mut cpu, &e, &cx);
+            assert_ne!(cpu.px, image.px, "{name} changes nothing");
+            let gpu_px = on_gpu(gpu, &image, &kernel);
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&gpu_px)
+                .map(|(a, b)| (a - b).abs() / (1.0 + a.abs()))
+                .fold(0.0f32, f32::max);
+            if worst > 2e-3 {
+                failures.push(format!("{name}: differs by {worst:.2e}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(kerf_gpu::shared().is_some(), "the device failed");
+    }
+
+    #[test]
+    fn what_a_lumetri_leaves_to_the_cpu() {
+        let cx = context(0.0);
+        let text = |value: &str| ParamValue::Text(value.into());
+        // Its plain numbers go as an op.
+        assert_eq!(Kernel::eval(&effect("lumetri", &[]), &cx, (8, 8)), None);
+        // A median a pixel costs the GPU what it costs the CPU.
+        let denoised = effect(
+            "lumetri",
             &[
-                ("setting", ParamValue::Choice(3)),
-                ("soften", ParamValue::Float(20.0)),
+                ("hsl_on", ParamValue::Bool(true)),
+                ("hsl_denoise", ParamValue::Float(50.0)),
             ],
         );
-        assert_eq!(Kernel::eval(&e, &context(0.0), (8, 8)), None);
+        assert_eq!(Kernel::eval(&denoised, &cx, (8, 8)), None);
+        // A LUT that cannot be read does nothing on the CPU, and comes out of the plain path too.
+        let missing = effect("lumetri", &[("look_lut", text("lib:nowhere"))]);
+        assert_eq!(Kernel::eval(&missing, &cx, (8, 8)), None);
     }
 
     #[test]

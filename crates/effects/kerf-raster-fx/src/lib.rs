@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub use kerf_raster::Image;
+pub use noise::GrainLook;
 
 #[cfg(test)]
 /// Effect categories in Effects & Presets order.

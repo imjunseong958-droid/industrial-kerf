@@ -345,7 +345,7 @@ impl Drawing {
     ) -> Option<Vec<Op>> {
         let mut ops = Vec::with_capacity(plan.effects.len());
         let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
-        for effect in &plan.effects {
+        for (index, effect) in plan.effects.iter().enumerate() {
             if filmcraft::instance::leaves_alone(effect, time, self.working()) {
                 continue;
             }
@@ -384,6 +384,18 @@ impl Drawing {
                         time,
                         shape.size,
                         shape.per_source,
+                    )?;
+                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
+                }
+                "noise.addgrain" => {
+                    let seed =
+                        kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32);
+                    let kernel = kerf_fx::kept::grain_kernel(
+                        effect,
+                        time,
+                        shape.size,
+                        shape.per_source,
+                        seed,
                     )?;
                     ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
                 }

@@ -934,7 +934,7 @@ fn lumetri(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
 // ---------- blur kernels ----------
 
 /// Box radii for an n-pass box blur approximating a Gaussian of sigma (Kovesi / Wells).
-fn boxes_for_gauss(sigma: f32, n: usize) -> Vec<usize> {
+pub(crate) fn boxes_for_gauss(sigma: f32, n: usize) -> Vec<usize> {
     let wideal = ((12.0 * sigma * sigma / n as f32) + 1.0).sqrt();
     let mut wl = wideal.floor() as i32;
     if wl % 2 == 0 {
@@ -1337,7 +1337,7 @@ pub fn curve_lut(points: &[[f32; 2]], n: usize) -> Vec<f32> {
 }
 
 /// Periodic (hue) curve: points around the colour wheel, neutral 0.5 where there are none.
-fn hue_lut(points: &[[f32; 2]], n: usize) -> Option<Vec<f32>> {
+pub(crate) fn hue_lut(points: &[[f32; 2]], n: usize) -> Option<Vec<f32>> {
     if points.is_empty() {
         return None;
     }

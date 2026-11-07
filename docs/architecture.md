@@ -83,13 +83,12 @@ A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title to
 lights, shadows, and solids; masks,
 crops, letterboxing, placing, opacity, wipes and dissolves, dips, 71 of the 72 transitions carried from FilmCraft (`kerf-fx/src/transitions/kernels.wgsl`), all 27 blend modes,
 adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
-`FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
-Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 playful looks and all
-18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
+`FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, Light Leaks, Add Grain, and
+Noise, Color, Luma, and Ultra Keys with their mattes cleaned up, Logo Cutout, Extract, and Radial Zoom Blur, and a Lumetri's curves, LUTs, HSL Secondary, and sharpening. So all 15 playful looks and all
+18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut, Zoom Through), since a look
 transition is layers rather than a mix.
-**What sends a frame to the CPU:** Morph Cut, whose optical flow would need both clips read back, every other
-effect (other lights, stylize, Ultra Key's Choke and Soften, and the kept EffectCraft ones, which is
-what Film and Zoom Through need), and a Lumetri using a LUT, curves, sharpening, or an HSL secondary, which none of the 18 grades does. In HDR, so does an effect that
+**What sends a frame to the CPU:** Morph Cut, whose optical flow would need both clips read back; every other
+effect (other lights, stylize, and the other kept EffectCraft ones); a Lumetri with an HSL Secondary's Denoise, a median at each pixel, or a LUT with a 1D shaper; Add Grain with a Softness, whose planes are blurred, or showing its matte; and in HDR, a Lumetri using a LUT, curves, sharpening, or an HSL Secondary, none of which any grade does. In HDR, so does an effect that
 needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
 each pixel under 1 (`catalog::headroom`) stay on the GPU. Glow gains least
 (13 to 15 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
@@ -116,6 +115,40 @@ Three limits remain, in this order:
    | Glow | 47 | 39 | 264 | 102 |
 
    So at 1080p 69 of the 72 play past 24 fps, where 30 did, and at 4K all but Morph Cut are between 5 and 20 fps, where the blurs through a cut took up to 3.6 s a frame. Two take least from it, since what they do is blur: Blur Dissolve and Glow, whose box passes cost what they cost.
+
+   Of the effects, what a look or a grade reaches came first, and then what a person grading reaches. Film was the only look left on the CPU; Zoom Through, which this list used to name with it, had been on the GPU since Radial Zoom Blur was carried. They are held to the CPU per value as the rest are (`vfx/gpu.rs`, `kept.rs`, within 2e-3) and per frame (`tests/gpu.rs`). With `examples/frame_bench.rs` on 4K H.264, median frame in ms, decode included; a Lumetri with its plain numbers alone is 12 and 25 on the GPU:
+
+   | Effect | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
+   |---|---|---|---|---|
+   | Film (look) | 134 | 26 | 511 | 81 |
+   | Add Grain | 57 | 14 | 206 | 34 |
+   | Light Leaks | 60 | 21 | 219 | 61 |
+   | Lumetri, luma curve | 47 | 13 | 175 | 29 |
+   | Lumetri, hue vs sat | 59 | 14 | 226 | 29 |
+   | Lumetri, LUT of 33 | 57 | 14 | 226 | 30 |
+   | Lumetri, sharpening | 51 | 16 | 203 | 49 |
+   | Lumetri, HSL Secondary | 66 | 15 | 255 | 35 |
+   | Lumetri, HSL Secondary with Blur | 74 | 23 | 289 | 66 |
+   | Ultra Key, Choke | 51 | 19 | 195 | 56 |
+   | Ultra Key, Soften | 52 | 18 | 202 | 65 |
+
+   What was measured and left, on the CPU, in the same terms: no look or grade reaches any of it, and a frame reaching them is a person's choice of a stylized picture rather than a frame of a grade, so kernels for them would be written for few frames.
+
+   | Effect | 1080p CPU | 4K CPU |
+   |---|---|---|
+   | Brush Strokes | 151 | 784 |
+   | Echo Glow | 100 | 444 |
+   | Volumetric Rays | 96 | 178 |
+   | Edge Glow | 74 | 354 |
+   | Roughen Edges | 64 | 216 |
+   | Color Emboss | 39 | 118 |
+   | Emboss | 32 | 106 |
+   | Alpha Glow | 32 | 120 |
+   | Find Edges | 24 | 69 |
+   | Replicate | 21 | 58 |
+   | Lumetri, HSL Secondary with Denoise | 79 | 454 |
+
+   Blur Bokeh (456 at 1080p) and Remove Grain (202) cost most of all, at their defaults, and no look or grade reaches those either.
 2. **Kept frames.** Playback, previews, and `look` keep frames by a hash of what they depend on
    (`Drawing::frame_key`), in memory (`frames.rs`) and on disk (`disk.rs`, after EffectCraft's
    `render/src/disk_cache.rs`), so a frame comes back from any compositor, an edit, which makes a new

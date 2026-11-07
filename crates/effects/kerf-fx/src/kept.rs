@@ -104,11 +104,73 @@ pub fn radial_zoom_kernel(
     let center = values.v2("center");
     Some(Kernel::RadialZoom {
         kind: values.e("type"),
-        center: [(center[0] * per_source) as f32, (center[1] * per_source) as f32],
+        center: [
+            (center[0] * per_source) as f32,
+            (center[1] * per_source) as f32,
+        ],
         zoom: ((amount / 100.0).clamp(-1.0, 1.0) * 0.5) as f32,
         arc: (amount.to_radians() * 0.25) as f32,
         quality: values.f("quality").clamp(1.0, 100.0) as f32,
     })
+}
+
+/// Add Grain as a kernel, with its parameters read as [`apply`] reads them, or `None` for what stays
+/// on the CPU: a Softness, whose blur of each plane costs what it costs there, and a view of its
+/// matte or a preview of its region.
+pub fn grain_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+    seed: u32,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::{grain_gains, Grain, Kernel};
+    let spec = spec("noise.addgrain")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let ctx = EffectCtx {
+        params: &values,
+        time: at.seconds(),
+        layer_size,
+        seed,
+        adjustment: false,
+        env: EffectEnv::default(),
+    };
+    let look = kerf_raster_fx::GrainLook::from_params(&ctx);
+    if values.e("viewingMode") != 2 || look.softness * per_source > 0.05 {
+        return None;
+    }
+    if look.intensity <= 0.0 {
+        return Some(Kernel::Nothing);
+    }
+    let size = look.size * per_source as f32;
+    let sizes = [0, 1, 2].map(|k| {
+        let by = if look.mono {
+            1.0
+        } else {
+            look.channel_size[k].max(0.05)
+        };
+        (size * by).max(0.05)
+    });
+    Some(Kernel::Grain(Box::new(Grain {
+        mode: look.mode,
+        mono: look.mono,
+        seeds: [0u32, 1, 2].map(|k| look.seed.wrapping_add(k * 101)),
+        gains: grain_gains(&look),
+        aspect: look.aspect,
+        sizes,
+        frame: look.frame,
+        tones: look.tones,
+        midpoint: look.midpoint,
+        saturation: look.saturation,
+    })))
 }
 
 /// Run the kept effect `effect` on `picture`, premultiplied linear light.
@@ -124,10 +186,15 @@ pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
         .iter()
         .map(|mask| kerf_raster_fx::MaskShape {
             name: mask.name.to_string(),
-            points: kerf_draw::mask::outline(&mask.shape.at(run.at), layer_size[0], layer_size[1], 1.0)
-                .into_iter()
-                .map(|[x, y]| [f64::from(x), f64::from(y)])
-                .collect(),
+            points: kerf_draw::mask::outline(
+                &mask.shape.at(run.at),
+                layer_size[0],
+                layer_size[1],
+                1.0,
+            )
+            .into_iter()
+            .map(|[x, y]| [f64::from(x), f64::from(y)])
+            .collect(),
             closed: mask.shape.is_closed(),
             inverted: mask.inverted,
         })
@@ -286,7 +353,11 @@ mod tests {
                 let bright = (x / 9 + y / 7) % 3 == 0;
                 let a = if y % 11 == 0 { 0.5 } else { 1.0 };
                 let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
-                let c = if bright { [1.0, 0.9, 0.7] } else { [u, v, 1.0 - u] };
+                let c = if bright {
+                    [1.0, 0.9, 0.7]
+                } else {
+                    [u, v, 1.0 - u]
+                };
                 px.extend_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
             }
         }
@@ -342,6 +413,131 @@ mod tests {
             assert!(worst < 4e-3, "{kind}: differs by {worst:.2e}");
             assert_ne!(cpu.px, image.px, "{kind} changes nothing");
         }
+    }
+
+    /// Add Grain, its kernel against the effect, in each blending mode and each way it colors.
+    #[test]
+    fn the_grain_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let (w, h) = (128usize, 72usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let a = if y % 11 == 0 { 0.5 } else { 1.0 };
+                let a = if y % 13 == 0 { 0.0 } else { a };
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                px.extend_from_slice(&[u * a, v * a, (1.0 - u) * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |name: &str, value: f64| {
+            (
+                name.to_owned(),
+                kerf_model::Param::Static(Value::Number(value)),
+            )
+        };
+        let choice = |name: &str, value: &str| {
+            (
+                name.to_owned(),
+                kerf_model::Param::Static(Value::Enum(value.into())),
+            )
+        };
+        let flag = |name: &str, value: bool| {
+            (
+                name.to_owned(),
+                kerf_model::Param::Static(Value::Bool(value)),
+            )
+        };
+        let cases = [
+            vec![number("tweaking/intensity", 1.0)],
+            vec![
+                number("tweaking/intensity", 3.0),
+                choice("application/blendingMode", "multiply"),
+            ],
+            vec![
+                number("tweaking/intensity", 2.0),
+                choice("application/blendingMode", "add"),
+                number("tweaking/size", 2.5),
+            ],
+            vec![
+                number("tweaking/intensity", 2.0),
+                choice("application/blendingMode", "screen"),
+                number("tweaking/aspectRatio", 2.0),
+            ],
+            vec![
+                number("tweaking/intensity", 2.0),
+                choice("application/blendingMode", "overlay"),
+                flag("color/monochromatic", true),
+            ],
+            vec![
+                number("tweaking/intensity", 4.0),
+                number("color/saturation", 0.4),
+                number("color/tintAmount", 0.6),
+                number("color/redBalance", 1.5),
+                number("application/highlights", 0.2),
+                number("animation/randomSeed", 9.0),
+                number("tweaking/channelSize/greenSize", 2.0),
+                number("tweaking/channelIntensities/blueIntensity", 2.0),
+            ],
+        ];
+        let at = Time::from_seconds(0.5).expect("a time");
+        for params in cases {
+            let effect = Effect {
+                fx: kerf_model::Id::new("noise.addgrain").unwrap(),
+                version: 1,
+                enabled: true,
+                params: params.into_iter().collect(),
+            };
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at,
+                    sequence_time: 0.5,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 11,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            assert_ne!(cpu.px, image.px, "{:?} changes nothing", effect.params);
+            let kernel = grain_kernel(&effect, at, (w, h), 1.0, 11).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 2e-3, "{:?}: differs by {worst:.2e}", effect.params);
+        }
+        assert!(kerf_gpu::shared().is_some(), "the device failed");
+    }
+
+    #[test]
+    fn a_softened_or_previewed_grain_stays_on_the_cpu() {
+        let with = |name: &str, value: Value| Effect {
+            fx: kerf_model::Id::new("noise.addgrain").unwrap(),
+            version: 1,
+            enabled: true,
+            params: [(name.to_owned(), kerf_model::Param::Static(value))]
+                .into_iter()
+                .collect(),
+        };
+        let kernel = |effect: &Effect| grain_kernel(effect, Time::ZERO, (8, 8), 1.0, 1);
+        assert!(kernel(&with("tweaking/softness", Value::Number(1.0))).is_none());
+        assert!(kernel(&with("viewingMode", Value::Enum("preview".into()))).is_none());
+        assert!(kernel(&with("tweaking/intensity", Value::Number(1.0))).is_some());
     }
 
     use super::*;
