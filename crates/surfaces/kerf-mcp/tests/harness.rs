@@ -1229,6 +1229,131 @@ fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
 }
 
 #[test]
+fn look_says_which_text_is_too_faint_from_the_frames() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // The shot is red and then blue: a white title reads over both, and a red one over the red not at all.
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "track add V2 video\noverwrite gen=title dur=30f at=0f on=V2 as=fine\nset fine text=\"Plain\" color=#ffffff\noverwrite gen=title dur=30f at=30f on=V2 as=lost\nset lost text=\"Plain\" color=#ff0000"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let read = ok(
+        &router,
+        "look",
+        json!({"contrast": true, "proposal": proposal}),
+    );
+    assert_eq!(
+        (read["read"].as_u64(), read["of"].as_u64()),
+        (Some(2), Some(2)),
+        "{read}"
+    );
+    let found = read["contrast"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "{read}");
+    assert_eq!(found[0]["code"], "text.contrast");
+    assert_eq!(found[0]["entity"], "lost");
+    // Only where it was asked.
+    let early = ok(
+        &router,
+        "look",
+        json!({"contrast": true, "proposal": proposal, "from": "0f", "to": "20f"}),
+    );
+    assert_eq!(early["of"], 1, "{early}");
+    assert_eq!(early["contrast"].as_array().unwrap().len(), 0, "{early}");
+    for refused in [
+        json!({"contrast": true, "at": ["0f"]}),
+        json!({"contrast": true, "media": "m1"}),
+        json!({"contrast": true, "sheet": 4}),
+    ] {
+        assert_eq!(
+            error(&router, "look", refused.clone())["code"],
+            "INVALID_ARGUMENTS",
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn look_gives_a_fact_sheet_of_media_and_says_what_it_leaves_out() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let sheet = ok(&router, "look", json!({"media": "m1", "facts": true}));
+    let facts = &sheet["facts"];
+    // A flat red and a flat blue, cut at 2 seconds, with a tone that stops at 3.
+    let shots = facts["shots"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{sheet}"));
+    assert_eq!(shots.len(), 2, "{sheet}");
+    assert_eq!(shots[0]["camera"], json!(["unknown"]), "{sheet}");
+    assert_eq!(facts["cuts"], 1, "{sheet}");
+    assert_eq!(facts["pauses"]["count"], 1, "{sheet}");
+    assert!(facts["loudness"]["integrated"].is_number(), "{sheet}");
+    assert!(facts["loudness"]["truePeak"].is_number(), "{sheet}");
+    assert_eq!(facts["sound"]["rate"], 48000, "{sheet}");
+    assert_eq!(facts["picture"]["width"], 320, "{sheet}");
+    for left_out in ["faces", "subject", "onScreenText"] {
+        assert!(
+            facts["notMeasured"][left_out].is_string(),
+            "{left_out}: {sheet}"
+        );
+    }
+    // The second look reads what the first found.
+    let again = ok(&router, "look", json!({"media": "m1", "facts": true}));
+    assert_eq!(again["facts"], sheet["facts"]);
+    // Without asking, it is as it was.
+    let plain = ok(&router, "look", json!({"media": "m1"}));
+    assert!(plain.get("facts").is_none(), "{plain}");
+    // A window going right over a test pattern, at 40 pixels a second of 320, an eighth of the frame.
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:size=640x360:rate=30:duration=3,geq=lum='128+60*sin(X*0.21)*sin(Y*0.13)+40*sin(X*0.07+Y*0.11)':cb=128:cr=128",
+        ])
+        .args(["-vf", "crop=320:180:x='t*40':y=90"])
+        .arg(directory.path().join("pan.mp4"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "media add m2 path=\"pan.mp4\" rate=30 dur=90f video=320x180"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let panning = ok(
+        &router,
+        "look",
+        json!({"media": "m2", "facts": true, "proposal": proposal}),
+    );
+    let facts = &panning["facts"];
+    let shots = facts["shots"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{panning}"));
+    assert_eq!(shots.len(), 1, "{panning}");
+    assert_eq!(shots[0]["camera"][0], "pan right", "{panning}");
+    let pan = shots[0]["pan"].as_f64().unwrap();
+    assert!((pan - 0.125).abs() < 0.02, "{pan}: {panning}");
+    assert!(facts.get("loudness").is_none(), "{panning}");
+    assert!(facts.get("sound").is_none(), "{panning}");
+    assert_eq!(
+        error(&router, "look", json!({"facts": true}))["code"],
+        "INVALID_ARGUMENTS"
+    );
+}
+
+#[test]
 fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
     let Some((_directory, router)) = router() else {
         return;

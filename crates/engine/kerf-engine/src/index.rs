@@ -185,6 +185,42 @@ pub fn media_index(
     Ok(index)
 }
 
+/// Every frame of `rate` a second of the picture of `src` from its start, as `width` by `height` bytes
+/// of grey, going to `each` with how far in it is in seconds. One FFmpeg pass decodes it as it goes, so
+/// that a long file takes no more memory than a short one.
+pub fn small_grey_frames(
+    src: &Path,
+    rate: u32,
+    (width, height): (u32, u32),
+    mut each: impl FnMut(f64, &[u8]),
+) -> Result<()> {
+    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+        .args(video_decode_prefix())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(src)
+        .args(["-map", "0:v:0", "-vf"])
+        .arg(format!("fps={rate},scale={width}:{height},format=gray"))
+        .args(["-f", "rawvideo", "-"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut grey = vec![0u8; (width * height) as usize];
+    let mut frame = 0u64;
+    while std::io::Read::read_exact(&mut stdout, &mut grey).is_ok() {
+        each(frame as f64 / f64::from(rate), &grey);
+        frame += 1;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(EngineError::msg(format!(
+            "the picture could not be read: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
 /// One loudness per hop, in dBFS, from `ametadata` print output.
 fn parse_envelope(text: &str) -> Vec<f64> {
     text.lines()

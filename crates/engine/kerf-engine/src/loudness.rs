@@ -197,6 +197,35 @@ pub fn measure_program_with_progress(
     Ok(loudness)
 }
 
+/// The loudness of the first sound stream of the media file `src`, as it is, with nothing of a
+/// programme around it.
+pub fn measure_file(src: &Path, cancellation: &CancellationToken) -> Result<Loudness> {
+    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+    command
+        .args(["-hide_banner", "-nostats", "-i"])
+        .arg(src)
+        .args(["-vn", "-map", "0:a:0"])
+        .args(["-af", "ebur128=peak=true:metadata=1,ametadata=mode=print"])
+        .args(["-f", "null", "-"]);
+    let mut parser = Parser::default();
+    let mut duration = 0.0f64;
+    let finished = sidecar::run(command, cancellation, |line| {
+        if let Some(at) = parser.line(line) {
+            duration = duration.max(at);
+        }
+    })?;
+    if !finished.status.success() {
+        return Err(EngineError::Ffmpeg {
+            code: finished.status.code().unwrap_or(-1),
+            stderr: format!(
+                "loudness measurement failed: {}",
+                tail(finished.stderr.trim(), 2000)
+            ),
+        });
+    }
+    Ok(parser.finish(duration))
+}
+
 /// The FFmpeg arguments (without the binary) that run the program's
 /// sound graph `argv` through `ebur128` into nothing.
 fn measure_args(argv: &[String]) -> Result<Vec<String>> {

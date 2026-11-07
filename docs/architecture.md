@@ -282,6 +282,18 @@ The agent still gets four tools and a document it can read. Each area adds
 vocabulary to the language and numbers to `look`, and no new tool: scopes as
 measurements, tracks as data, and check findings for what a viewer would notice.
 
+`look` with `contrast` reads each title and caption against what is behind it, from three frames at each
+of three moments it has come in by: as drawn, without it, and its glyphs alone, white on nothing, so that a
+title the colour of its background is seen not to show. Each patch about half a line across goes by the
+strongest of its ink, so a caption's outline counts and a title half over a highlight is caught, and
+it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of a check, and
+it is not in the Finish tray's QC table yet.
+
+`look` with `media` and `facts` gives a fact sheet beside the index: what the camera does in each shot, from the one move, turn, and zoom that
+most of the picture agrees on between small frames four times a second (`kerf_track::shot`, so a subject crossing the frame is left out), and R128 loudness.
+60 seconds of 1080p takes 7 s the first time, and it is kept with the media's other derivatives. It reads a push in as a zoom and a move sideways as a pan, and only `track` with `camera` tells those apart. It says in `notMeasured` what it
+leaves out, since silence would read as a finding: faces and the subject, which take a trained model, and on-screen text, which without one cannot be found reliably.
+
 ## What others do, and what to take
 
 - **Resolve 21** added a Photo page, and Fusion effects in the Edit page's
@@ -301,6 +313,4 @@ measurements, tracks as data, and check findings for what a viewer would notice.
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. These ideas are worth doing our own way: one kernel source
   run on the CPU and compiled to WGSL, which would end writing every effect twice;
-  decoded IOSurfaces as wgpu textures, to skip the copy; a fact sheet for footage (faces, the
-  subject, on-screen text, camera motion) beside what `kerfd` indexes now; and
-  checks for clipped text, contrast, and safe areas.
+  decoded IOSurfaces as wgpu textures, to skip the copy; and a check for clipped text. The fact sheet and the contrast check are in `look`.
