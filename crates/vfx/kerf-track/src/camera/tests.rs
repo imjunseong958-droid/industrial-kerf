@@ -261,23 +261,230 @@ fn a_picture_of_nothing_is_said_to_be() {
     );
 }
 
-#[test]
-fn a_lens_that_changes_reads_as_a_move_and_shows_in_the_error() {
-    let points = scattered(400, 7, [0.0, 0.0, 10.0], [16.0, 9.0, 8.0]);
-    let steady =
-        solve_followed(&paths_of(&points, &moving(40, 1000.0), 0.1, 8), None).expect("solves");
-    let mut shots = moving(40, 1000.0);
+/// A lens going from `from` to `to` over a shot, smoothly.
+fn zoomed(mut shots: Vec<Shot>, from: f64, to: f64) -> Vec<Shot> {
+    let last = (shots.len() - 1) as f64;
     for (frame, shot) in shots.iter_mut().enumerate() {
-        shot.focal = 700.0 + 20.0 * frame as f64;
+        let t = frame as f64 / last;
+        let eased = t * t * (3.0 - 2.0 * t);
+        shot.focal = from * (to / from).powf(eased);
     }
-    let zooming = solve_followed(&paths_of(&points, &shots, 0.1, 8), None).expect("solves");
-    // One lens cannot say it, so a push in stands for the zoom, and fits less well.
+    shots
+}
+
+/// How far the solved lens is from the true one, at worst, in degrees down the frame.
+fn lens_off(shot: &SolvedShot, truth: &[Shot]) -> f64 {
+    shot.cameras
+        .iter()
+        .map(|camera| (camera.fov - fov_of(truth[camera.frame].focal, H)).abs())
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn a_lens_that_changes_is_found_and_the_way_with_it() {
+    let points = scattered(400, 7, [0.0, 0.0, 10.0], [16.0, 9.0, 8.0]);
+    let shots = zoomed(moving(60, 1000.0), 700.0, 1400.0);
+    let followed = paths_of(&points, &shots, 0.1, 8);
+    let one = reconstruct::solve_one_lens(&followed).expect("one lens fits somehow");
+    let shot = solve_followed(&followed, None).expect("solves");
+    assert!(shot.zooms && !shot.zoom_or_push);
+    assert!(shot.error < 0.2, "{}", shot.error);
     assert!(
-        zooming.error > 2.0 * steady.error,
+        shot.error < 0.5 * one.error,
         "{} and {}",
-        zooming.error,
-        steady.error
+        shot.error,
+        one.error
     );
+    let off = lens_off(&shot, &shots);
+    assert!(off < 1.0, "{off} degrees");
+    let (way, turned) = way_off(&shot, &shots);
+    assert!(way < 0.03, "{way}");
+    assert!(turned < 0.5, "{turned}");
+}
+
+#[test]
+fn a_zoom_with_a_push_in_is_told_by_what_lies_at_other_depths() {
+    let points = scattered(500, 11, [0.0, 0.0, 9.0], [14.0, 8.0, 10.0]);
+    let shots: Vec<Shot> = (0..60)
+        .map(|frame| {
+            let t = frame as f64 / 59.0;
+            Shot::looking(
+                [-0.5 + t, 0.2 * t, -2.0 + 3.0 * t],
+                [0.0, 0.0, 10.0],
+                0.0,
+                1000.0,
+            )
+        })
+        .collect();
+    let shots = zoomed(shots, 800.0, 1300.0);
+    let shot = solve_followed(&paths_of(&points, &shots, 0.1, 12), None).expect("solves");
+    assert!(shot.zooms, "error {}", shot.error);
+    let off = lens_off(&shot, &shots);
+    assert!(off < 1.5, "{off} degrees");
+    let (way, _) = way_off(&shot, &shots);
+    assert!(way < 0.05, "{way}");
+}
+
+#[test]
+fn one_lens_comes_out_as_it_did_with_nothing_said_of_a_zoom() {
+    let points = scattered(400, 7, [0.0, 0.0, 10.0], [16.0, 9.0, 8.0]);
+    let followed = paths_of(&points, &moving(40, 1000.0), 0.1, 8);
+    let one = reconstruct::solve_one_lens(&followed).expect("solves");
+    let shot = solve_followed(&followed, None).expect("solves");
+    assert!(!shot.zooms && !shot.zoom_or_push);
+    assert_eq!(Some(&shot), written(&followed, &one).as_ref());
+    assert!(shot.cameras.iter().all(|camera| camera.fov == shot.fov));
+    // A push in, by a lens that holds, with things at many depths: the picture grows, and no zoom is
+    // found in it, which is the case a lens that changes could most be mistaken for.
+    let shots: Vec<Shot> = (0..60)
+        .map(|frame| {
+            let t = frame as f64 / 59.0;
+            Shot::looking(
+                [-0.5 + t, 0.2 * t, -2.0 + 3.0 * t],
+                [0.0, 0.0, 10.0],
+                0.0,
+                1000.0,
+            )
+        })
+        .collect();
+    let points = scattered(500, 11, [0.0, 0.0, 9.0], [14.0, 8.0, 10.0]);
+    let followed = paths_of(&points, &shots, 0.1, 12);
+    let one = reconstruct::solve_one_lens(&followed).expect("solves");
+    let shot = solve_followed(&followed, None).expect("solves");
+    assert!(!shot.zooms && !shot.zoom_or_push, "error {}", shot.error);
+    assert_eq!(Some(&shot), written(&followed, &one).as_ref());
+}
+
+#[test]
+fn a_told_lens_holds_whatever_the_picture_does() {
+    let points = scattered(400, 7, [0.0, 0.0, 10.0], [16.0, 9.0, 8.0]);
+    let shots = zoomed(moving(40, 1000.0), 900.0, 1100.0);
+    let fov = fov_of(1000.0, H);
+    let shot = solve_followed(&paths_of(&points, &shots, 0.1, 8), Some(fov));
+    if let Ok(shot) = shot {
+        assert!(!shot.zooms);
+        assert!(shot.cameras.iter().all(|camera| camera.fov == shot.fov));
+    }
+}
+
+#[test]
+fn a_zoom_at_a_flat_wall_and_a_push_in_at_one_are_said_to_be_the_same() {
+    // A wall square to the camera, whose every point grows alike, whichever did it.
+    let points = scattered(300, 3, [0.0, 0.0, 10.0], [20.0, 12.0, 0.0]);
+    let pushed: Vec<Shot> = (0..50)
+        .map(|frame| {
+            let t = frame as f64 / 49.0;
+            Shot::looking([0.0, 0.0, 3.0 * t], [0.0, 0.0, 10.0], 0.0, 1000.0)
+        })
+        .collect();
+    let still: Vec<Shot> = (0..50)
+        .map(|_| Shot::looking([0.0, 0.0, 0.0], [0.0, 0.0, 10.0], 0.0, 1000.0))
+        .collect();
+    let zoomed_in = zoomed(still, 1000.0, 1000.0 * 10.0 / 7.0);
+    for shots in [&pushed, &zoomed_in] {
+        let followed = paths_of(&points, shots, 0.05, 4);
+        let shot = solve_followed(&followed, None).expect("solves");
+        assert!(shot.zoom_or_push, "error {}", shot.error);
+        assert!(!shot.zooms);
+    }
+}
+
+#[test]
+fn a_camera_that_only_turns_and_zooms_is_said_to() {
+    let points = scattered(500, 21, [0.0, 0.0, 10.0], [24.0, 14.0, 8.0]);
+    let shots: Vec<Shot> = (0..50)
+        .map(|frame| {
+            let t = frame as f64 / 49.0;
+            Shot::looking([0.0; 3], [-2.0 + 4.0 * t, 0.0, 10.0], 0.0, 1000.0)
+        })
+        .collect();
+    let shots = zoomed(shots, 800.0, 1200.0);
+    let solved = solve_followed(&paths_of(&points, &shots, 0.05, 2), None);
+    assert!(
+        matches!(solved, Err(Unsolved::TurnsAndZooms))
+            || solved.as_ref().is_ok_and(|s| s.zoom_or_push),
+        "{:?}",
+        solved.map(|shot| (shot.zooms, shot.error))
+    );
+}
+
+#[test]
+#[ignore]
+fn measure_lenses_that_zoom() {
+    let room = scene::room();
+    let (width, height) = (960usize, 540usize);
+    for (name, shots, truly_zooms) in [
+        ("held lens", wandering(120, 760.0), false),
+        (
+            "zoom 2x",
+            zoomed(wandering(120, 760.0), 500.0, 1000.0),
+            true,
+        ),
+        (
+            "zoom 1.2x",
+            zoomed(wandering(120, 760.0), 700.0, 840.0),
+            true,
+        ),
+    ] {
+        let started = std::time::Instant::now();
+        let followed = follow::follow(shots.len(), |frame| {
+            Some((
+                width,
+                height,
+                scene::picture(&room, &shots[frame], width, height),
+            ))
+        });
+        let followed_at = started.elapsed();
+        let started = std::time::Instant::now();
+        let one = reconstruct::solve_one_lens(&followed)
+            .ok()
+            .and_then(|one| written(&followed, &one));
+        eprintln!(
+            "{name}: one lens solved in {:.2} s",
+            started.elapsed().as_secs_f64()
+        );
+        let started = std::time::Instant::now();
+        let shot = solve_followed(&followed, None);
+        let solved = started.elapsed();
+        match shot {
+            Ok(shot) => {
+                let (way, turned) = way_off(&shot, &shots);
+                let lens_of = |shot: &SolvedShot| {
+                    shot.cameras
+                        .iter()
+                        .map(|camera| {
+                            (camera.fov - fov_of(shots[camera.frame].focal, height as f64)).abs()
+                        })
+                        .fold(0.0, f64::max)
+                };
+                let lens = lens_of(&shot);
+                if let Some(one) = &one {
+                    let (way, turned) = way_off(one, &shots);
+                    eprintln!(
+                        "{name}, one lens: error {:.3} px; way off {:.3}%, turned off {:.3} deg, field of view off {:.3} deg",
+                        one.error,
+                        way * 100.0,
+                        turned,
+                        lens_of(one)
+                    );
+                }
+                eprintln!(
+                    "{name}: zooms {} (true {truly_zooms}), cannot tell {}; error {:.3} px; \
+                     way off {:.3}%, turned off {:.3} deg, field of view off {:.3} deg; followed in {:.1} s, solved in {:.1} s; {} keyframes",
+                    shot.zooms,
+                    shot.zoom_or_push,
+                    shot.error,
+                    way * 100.0,
+                    turned,
+                    lens,
+                    followed_at.as_secs_f64(),
+                    solved.as_secs_f64(),
+                    shot.simplified(0.5).len(),
+                );
+            }
+            Err(error) => eprintln!("{name}: {error}"),
+        }
+    }
 }
 
 #[test]
@@ -379,6 +586,7 @@ fn few_keyframes_keep_the_way_within_their_tolerance() {
                 pan: mix(a.pan, b.pan),
                 tilt: mix(a.tilt, b.tilt),
                 roll: mix(a.roll, b.roll),
+                fov: mix(a.fov, b.fov),
             };
             for point in shot.points.iter().step_by(25) {
                 if let (Some(p), Some(q)) = (
@@ -474,6 +682,7 @@ fn the_camera_angles_are_the_compositors() {
             pan,
             tilt,
             roll,
+            fov: REST_FOV,
         };
         let turn = turn_of(&camera);
         assert!((determinant(&turn) - 1.0).abs() < 1e-12);

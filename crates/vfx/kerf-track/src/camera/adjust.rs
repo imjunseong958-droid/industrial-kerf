@@ -1,10 +1,10 @@
 //! Bundle adjustment: Levenberg-Marquardt over cameras and points, with the Schur complement taking
 //! the points out of the normal equations (Triggs et al., "Bundle Adjustment: A Modern Synthesis",
 //! 2000; Hartley & Zisserman, Appendix 6), and a Huber loss so that what does not fit pulls only so
-//! hard. EffectCraft's `track/src/camtrack/bundle.rs`, with no lens distortion and no zoom.
+//! hard. EffectCraft's `track/src/camtrack/bundle.rs`, with no lens distortion.
 //!
 //! A camera turns by small rotations from where it is, and all cameras share one focal length when it
-//! is let go, adjusted by how much it grows.
+//! is let go, or have one each for a lens that zooms, adjusted by how much it grows.
 
 use super::math::*;
 use super::views::View;
@@ -29,6 +29,8 @@ pub struct Sighting {
 pub struct Options {
     /// Whether the shared focal length moves.
     pub free_focal: bool,
+    /// Whether each camera has a focal length of its own, which moves.
+    pub own_focals: bool,
     /// Whether the points stay, for a camera found from them.
     pub fixed_points: bool,
     /// Which cameras stay, by index; one must for the world to hold still.
@@ -88,6 +90,8 @@ struct Layout {
     /// A camera's first parameter, or none when it stays.
     start: Vec<Option<usize>>,
     focal: Option<usize>,
+    /// Each camera's own focal length.
+    own: Vec<Option<usize>>,
     size: usize,
 }
 
@@ -107,7 +111,20 @@ impl Layout {
             size += 1;
             size - 1
         });
-        Self { start, focal, size }
+        let own = (0..count)
+            .map(|_| {
+                options.own_focals.then(|| {
+                    size += 1;
+                    size - 1
+                })
+            })
+            .collect();
+        Self {
+            start,
+            focal,
+            own,
+            size,
+        }
     }
 }
 
@@ -173,7 +190,7 @@ fn point_system(
                 camera_terms.push((start + 3 + axis, [dot(a[0], g), dot(a[1], g)]));
             }
         }
-        if let Some(focal) = layout.focal {
+        if let Some(focal) = layout.focal.or(layout.own[which]) {
             camera_terms.push((focal, landed));
         }
         let of_point = if options.fixed_points {
@@ -350,7 +367,7 @@ pub fn adjust(
                         [step[start + 3], step[start + 4], step[start + 5]],
                     );
                 }
-                if let Some(focal) = layout.focal {
+                if let Some(focal) = layout.focal.or(layout.own[index]) {
                     camera.focal *= step[focal].clamp(-0.5, 0.5).exp();
                 }
             }
@@ -446,6 +463,7 @@ mod tests {
             &sightings,
             &Options {
                 free_focal: false,
+                own_focals: false,
                 fixed_points: false,
                 fixed: vec![true, true, false, false, false, false],
                 huber: 2.0,
@@ -453,6 +471,52 @@ mod tests {
             },
         );
         assert!((cost / sightings.len() as f64).sqrt() < 1e-4, "{cost}");
+    }
+
+    #[test]
+    fn it_finds_a_focal_length_for_each_camera() {
+        let mut part = parts(5);
+        let points: Vec<Vector> = (0..120)
+            .map(|_| [part() * 6.0, part() * 4.0, 7.0 + part() * 5.0])
+            .collect();
+        let camera = |index: usize, focal: f64| Camera {
+            view: View {
+                turn: rotation([0.02 * index as f64, -0.06 * index as f64, 0.0]),
+                place: [0.4 * index as f64, 0.05 * index as f64, 0.2 * index as f64],
+            },
+            focal,
+        };
+        let true_focal = |index: usize| 800.0 + 60.0 * index as f64;
+        let mut sightings = Vec::new();
+        for c in 0..6 {
+            for (p, point) in points.iter().enumerate() {
+                sightings.push(Sighting {
+                    camera: c as u32,
+                    point: p as u32,
+                    at: off(&camera(c, true_focal(c)), *point, [0.0, 0.0]).unwrap(),
+                });
+            }
+        }
+        let mut cameras: Vec<Camera> = (0..6).map(|c| camera(c, true_focal(c) * 0.97)).collect();
+        cameras[0].focal = true_focal(0);
+        let mut moved = points.clone();
+        adjust(
+            &mut cameras,
+            &mut moved,
+            &sightings,
+            &Options {
+                free_focal: false,
+                own_focals: true,
+                fixed_points: false,
+                fixed: vec![true],
+                huber: 2.0,
+                iterations: 60,
+            },
+        );
+        for (index, camera) in cameras.iter().enumerate() {
+            let off = (camera.focal - true_focal(index)).abs();
+            assert!(off < 2.0, "{index}: {}", camera.focal);
+        }
     }
 
     #[test]
@@ -486,6 +550,7 @@ mod tests {
             &sightings,
             &Options {
                 free_focal: true,
+                own_focals: false,
                 fixed_points: false,
                 fixed: vec![true],
                 huber: 2.0,
