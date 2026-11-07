@@ -37,7 +37,7 @@ line, applied in order and atomically.
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels, over `feather`.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
-- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross.
+- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02` makes it a solid with its edges cut back.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as

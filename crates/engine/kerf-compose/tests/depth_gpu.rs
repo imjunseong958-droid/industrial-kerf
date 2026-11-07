@@ -60,6 +60,8 @@ fn holds(name: &str, body: &str) {
     assert!(gpu.draws_on_gpu(at, 1.0), "{name} went to the CPU");
     let cpu = compositor(body, Accel::Never);
     let (drawn, reference) = (gpu.frame(at, 1.0), cpu.frame(at, 1.0));
+    // A kernel the device refuses sends the frame to the CPU, which would pass for a match.
+    assert!(kerf_gpu::shared().is_some(), "{name} failed the device");
     assert!(
         reference.rgba.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
         "{name} draws nothing"
@@ -182,6 +184,37 @@ fn solids_hold_to_the_cpu() {
     holds(
         "deep title, no light",
         "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 rotate_y=-30 rotate_x=10\n",
+    );
+}
+
+#[test]
+fn bevels_hold_to_the_cpu() {
+    let on = |set: &str, light: &str| {
+        format!(
+            "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.5\n  track V2 video\n    clip t {set}\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+        )
+    };
+    let title = "gen=title@1 at=0f dur=24f\n      set text=\"Cut\" size=0.3 three_d=true depth=0.1 bevel=0.03";
+    let square = "gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.4 depth=0.2 bevel=0.04 rotate_y=30 rotate_x=-20";
+    holds(
+        "beveled title, lit",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1"),
+    );
+    holds(
+        "beveled square, turned",
+        &on(square, "kind=directional x=-0.4 y=0.3 z=1"),
+    );
+    holds(
+        "beveled title, hard shadow",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1 shadow=1"),
+    );
+    holds(
+        "beveled title, soft shadow",
+        &on(title, "kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4"),
+    );
+    holds(
+        "beveled square, soft shadow",
+        &on(square, "x=0.4 y=-0.3 z=-0.8 shadow=0.8 size=0.1"),
     );
 }
 

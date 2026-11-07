@@ -239,6 +239,21 @@ fn a_clips_depth_round_trips_and_a_bad_one_is_refused() {
 }
 
 #[test]
+fn a_solids_bevel_round_trips_and_a_bad_one_is_refused() {
+    let document = DEPTH.replace("depth={0f:0 24f:0.25}", "depth=0.25 bevel={0f:0 24f:0.05}");
+    let once =
+        parse_document(&document, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    assert!(printed.contains("bevel={0f:0 24f:0.05}"), "{printed}");
+    for bad in ["bevel=-1", "bevel=51", "bevel=wide"] {
+        refused(&DEPTH.replace("depth={0f:0 24f:0.25}", bad), "bevel");
+    }
+}
+
+#[test]
 fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
     let once =
         parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));

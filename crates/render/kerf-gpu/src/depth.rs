@@ -26,8 +26,17 @@ pub struct Kernels {
     irradiance: wgpu::ComputePipeline,
     by_depth_layout: wgpu::BindGroupLayout,
     by_depth: wgpu::ComputePipeline,
+    distance_layout: wgpu::BindGroupLayout,
+    outline: wgpu::ComputePipeline,
+    jump: wgpu::ComputePipeline,
+    signed_distance: wgpu::ComputePipeline,
+    eroded: wgpu::ComputePipeline,
     /// What a kernel writes depth to when nobody wants it.
     no_depth: wgpu::TextureView,
+    /// What a kernel reads and writes in place of a texture it does not use.
+    no_distance: wgpu::TextureView,
+    no_places: wgpu::TextureView,
+    no_picture: wgpu::TextureView,
 }
 
 fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -93,6 +102,7 @@ impl Kernels {
                 buffer_entry(6, true),
                 buffer_entry(7, true),
                 buffer_entry(8, true),
+                texture_entry(9),
             ],
         });
         let project = pipelines(
@@ -134,22 +144,45 @@ impl Kernels {
             ),
             &by_depth_layout,
         );
-        let no_depth = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("kerf-no-depth"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
+        let distance_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("kerf-distance"),
+            entries: &[
+                uniform_entry(0),
+                texture_entry(1),
+                texture_entry(2),
+                storage_entry(3, wgpu::TextureFormat::Rg32Float),
+                storage_entry(4, wgpu::TextureFormat::R32Float),
+                storage_entry(5, WORKING_FORMAT),
+            ],
+        });
+        let distance = pipelines(
+            "kerf-distance",
+            include_str!("distance.wgsl").to_owned(),
+            &distance_layout,
+        );
+        let tiny = |format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("kerf-tiny"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let both = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
+        let no_depth = tiny(wgpu::TextureFormat::R32Float, both);
+        let no_places = tiny(wgpu::TextureFormat::Rg32Float, both);
+        let no_distance = tiny(wgpu::TextureFormat::R32Float, both);
+        let no_picture = tiny(WORKING_FORMAT, both);
         Self {
             flat: pipeline(&project, "flat"),
             solid: pipeline(&project, "solid"),
@@ -162,7 +195,15 @@ impl Kernels {
             prep_layout,
             by_depth: pipeline(&by_depth, "by_depth"),
             by_depth_layout,
+            outline: pipeline(&distance, "outline"),
+            jump: pipeline(&distance, "jump"),
+            signed_distance: pipeline(&distance, "signed_distance"),
+            eroded: pipeline(&distance, "eroded"),
+            distance_layout,
             no_depth,
+            no_distance,
+            no_places,
+            no_picture,
         }
     }
 }
@@ -274,6 +315,21 @@ pub struct Project<'p> {
     /// The plane of its back, when it has a depth, and whether its picture is known to be opaque.
     pub back: Option<([f32; 3], bool)>,
     pub crop: [f32; 4],
+    /// Its bevel, when it has one.
+    pub bevel: Option<Bevel<'p>>,
+}
+
+/// A solid's bevel, in the pixels its picture is read at.
+pub struct Bevel<'p> {
+    pub distance: &'p Distance,
+    pub width: f32,
+    pub depth: f32,
+}
+
+/// How far each pixel of a picture is from its outline, for a bevel.
+#[derive(Clone)]
+pub struct Distance {
+    view: wgpu::TextureView,
 }
 
 /// Pictures of clips that cross, one below another, with how far off each is at each pixel.
@@ -282,6 +338,13 @@ pub struct Layers {
     depths_view: wgpu::TextureView,
     h: u32,
     laid: Vec<[u8; 16]>,
+}
+
+/// What a kernel of `distance.wgsl` writes.
+enum DistanceOut<'v> {
+    Places(&'v wgpu::TextureView),
+    Distance(&'v wgpu::TextureView),
+    Picture(&'v wgpu::TextureView),
 }
 
 impl Layers {
@@ -587,6 +650,11 @@ impl Frame<'_> {
         push_way(&mut uniforms, plane.down, 0.0);
         push_way(&mut uniforms, plane.to_u, 0.0);
         push_way(&mut uniforms, plane.to_v, 0.0);
+        let (width, deep) = clip
+            .bevel
+            .as_ref()
+            .map_or((0.0, 0.0), |bevel| (bevel.width, bevel.depth));
+        push(&mut uniforms, &[width, deep, 0.0, 0.0]);
         let buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -636,6 +704,14 @@ impl Frame<'_> {
                     binding: 8,
                     resource: own.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(
+                        clip.bevel
+                            .as_ref()
+                            .map_or(&kernels.no_distance, |bevel| &bevel.distance.view),
+                    ),
+                },
             ],
         });
         let mut pass = self
@@ -652,6 +728,133 @@ impl Frame<'_> {
         pass.set_bind_group(0, &group, &[]);
         pass.dispatch_workgroups(size.0.div_ceil(16), size.1.div_ceil(16), 1);
         drop(pass);
+        Some(out)
+    }
+
+    /// Run a kernel of `distance.wgsl`.
+    fn distance_pass(
+        &mut self,
+        pipeline: &wgpu::ComputePipeline,
+        (picture, step): (&Picture, u32),
+        (crop, far): ([f32; 4], [f32; 2]),
+        read_in: Option<&wgpu::TextureView>,
+        out: DistanceOut<'_>,
+    ) {
+        let gpu = self.gpu;
+        let Some(kernels) = gpu.depth_kernels() else {
+            return;
+        };
+        let mut uniforms = Vec::with_capacity(48);
+        push_whole(&mut uniforms, &[picture.w, picture.h, step, 0]);
+        push(&mut uniforms, &crop);
+        push(&mut uniforms, &[far[0], far[1], 0.0, 0.0]);
+        let buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("kerf-uniforms"),
+                contents: &uniforms,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let view = |binding, view| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(view),
+        };
+        let (places, distance, taken_in) = match out {
+            DistanceOut::Places(places) => (places, &kernels.no_distance, &kernels.no_picture),
+            DistanceOut::Distance(distance) => (&kernels.no_places, distance, &kernels.no_picture),
+            DistanceOut::Picture(picture) => (&kernels.no_places, &kernels.no_distance, picture),
+        };
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kerf-distance"),
+            layout: &kernels.distance_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                view(1, &picture.view),
+                view(2, read_in.unwrap_or(&gpu.dummy)),
+                view(3, places),
+                view(4, distance),
+                view(5, taken_in),
+            ],
+        });
+        let mut pass = self
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("kerf-distance"),
+                timestamp_writes: None,
+            });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(picture.w.div_ceil(16), picture.h.div_ceil(16), 1);
+    }
+
+    /// How far each pixel of `picture` is from the outline of its alpha within `crop`, by `jumps` from
+    /// `bevel::distance_field`, out to `far`.
+    pub fn distance(
+        &mut self,
+        picture: &Picture,
+        crop: [f32; 4],
+        jumps: &[u32],
+        far: f32,
+    ) -> Option<Distance> {
+        let gpu = self.gpu;
+        let kernels = gpu.depth_kernels()?;
+        let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
+        let working = |frame: &mut Self, format| {
+            let key = (picture.w, picture.h, format, usage);
+            let texture = frame.gpu.texture(key);
+            frame.used.push((key, texture.clone()));
+            texture.create_view(&Default::default())
+        };
+        let mut read = working(self, wgpu::TextureFormat::Rg32Float);
+        let mut write = working(self, wgpu::TextureFormat::Rg32Float);
+        let distance = working(self, wgpu::TextureFormat::R32Float);
+        let numbers = (crop, [far, 0.0]);
+        self.distance_pass(
+            &kernels.outline,
+            (picture, 0),
+            numbers,
+            None,
+            DistanceOut::Places(&read),
+        );
+        for jump in jumps {
+            self.distance_pass(
+                &kernels.jump,
+                (picture, *jump),
+                numbers,
+                Some(&read),
+                DistanceOut::Places(&write),
+            );
+            std::mem::swap(&mut read, &mut write);
+        }
+        self.distance_pass(
+            &kernels.signed_distance,
+            (picture, 0),
+            numbers,
+            Some(&read),
+            DistanceOut::Distance(&distance),
+        );
+        Some(Distance { view: distance })
+    }
+
+    /// `picture` with its outline taken in by `inset` pixels.
+    pub fn eroded(
+        &mut self,
+        picture: &Picture,
+        distance: &Distance,
+        inset: f32,
+    ) -> Option<Picture> {
+        let kernels = self.gpu.depth_kernels()?;
+        let out = self.take(picture.w, picture.h);
+        self.distance_pass(
+            &kernels.eroded,
+            (picture, 0),
+            ([0.0; 4], [0.0, inset]),
+            Some(&distance.view),
+            DistanceOut::Picture(&out.view),
+        );
         Some(out)
     }
 

@@ -45,6 +45,7 @@ use std::sync::Arc;
 
 mod focus;
 mod gpu;
+mod bevel;
 mod three_d;
 
 /// Nested sequences deeper than this are refused, as the graph refuses
@@ -721,7 +722,9 @@ impl Drawing {
                         time,
                     );
                     let height = size.1 as f64;
-                    Some(caster.through_its_depth(three_d::depth_of(&shown.plan, time, height)))
+                    let depth = three_d::depth_of(&shown.plan, time, height);
+                    let bevel = three_d::bevel_of(&shown.plan, time, height);
+                    Some(caster.through_its_depth(depth, bevel, scene.is_wide()))
                 })
                 .flatten()
                 .collect();

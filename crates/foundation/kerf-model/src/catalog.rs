@@ -792,6 +792,10 @@ fn builtin_catalog() -> Catalog {
             .range(0.0, 100.0)
             .unit("frame heights")
             .doc("With `three_d`, a solid that deep behind the clip, in its picture's outline."),
+        P::number("bevel", 0.0)
+            .range(0.0, 50.0)
+            .unit("frame heights")
+            .doc("With `depth`, how far its edges are cut back at each face, at most half its depth."),
         P::number("rotate_x", 0.0)
             .range(-36000.0, 36000.0)
             .unit("degrees")
