@@ -21,6 +21,7 @@ use std::time::Duration;
 use wgpu::util::DeviceExt;
 
 pub mod depth;
+pub mod focus;
 
 pub use wgpu;
 
@@ -86,6 +87,7 @@ pub struct Gpu {
     building: Mutex<()>,
     failed: Arc<AtomicBool>,
     depth: OnceLock<Option<depth::Kernels>>,
+    focus: OnceLock<Option<focus::Kernels>>,
 }
 
 /// A frame as it decoded, in planes of Y'CbCr, for the GPU to make into RGB rather than have it made
@@ -553,6 +555,7 @@ impl Gpu {
             building: Mutex::new(()),
             failed,
             depth: OnceLock::new(),
+            focus: OnceLock::new(),
         })
     }
 
@@ -1574,6 +1577,22 @@ impl<'a> Frame<'a> {
         buffer: wgpu::Buffer,
         read: impl FnOnce(&[u8]) -> T,
     ) -> Option<T> {
+        let submission = self.submit();
+        self.working.clear();
+        self.gpu.give_back(std::mem::take(&mut self.used));
+        self.gpu
+            .keep_buffers(std::mem::take(&mut self.used_buffers));
+        self.wait_and_read(submission, buffer, read)
+    }
+
+    /// Run what was recorded so far, and wait to read `buffer`, with the frame going on after it: its
+    /// pictures are still in use, so its textures stay its own.
+    fn read_midway<T>(&mut self, buffer: wgpu::Buffer, read: impl FnOnce(&[u8]) -> T) -> Option<T> {
+        let submission = self.submit();
+        self.wait_and_read(submission, buffer, read)
+    }
+
+    fn submit(&mut self) -> wgpu::SubmissionIndex {
         let encoder = std::mem::replace(
             &mut self.encoder,
             self.gpu
@@ -1582,11 +1601,15 @@ impl<'a> Frame<'a> {
                     label: Some("kerf-unused"),
                 }),
         );
-        let submission = self.gpu.queue.submit([encoder.finish()]);
-        self.working.clear();
-        self.gpu.give_back(std::mem::take(&mut self.used));
-        self.gpu
-            .keep_buffers(std::mem::take(&mut self.used_buffers));
+        self.gpu.queue.submit([encoder.finish()])
+    }
+
+    fn wait_and_read<T>(
+        &mut self,
+        submission: wgpu::SubmissionIndex,
+        buffer: wgpu::Buffer,
+        read: impl FnOnce(&[u8]) -> T,
+    ) -> Option<T> {
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

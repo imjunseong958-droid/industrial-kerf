@@ -6,7 +6,8 @@
 //! shapes or highlights. Each clip is blurred alone, before it goes down, so a sharp clip keeps its
 //! edges against a soft one behind it. A wide blur gathers at a lower resolution, since it has no
 //! detail to lose, which keeps what a frame costs near constant in the radius. Past the frame's edge a
-//! picture reads as its edge, or a clip that fills the frame would fade towards it.
+//! picture reads as its edge, or a clip that fills the frame would fade towards it. The GPU does the
+//! same in `kerf-gpu/src/focus.wgsl`, from what is here.
 
 use kerf_draw::Image;
 use rayon::prelude::*;
@@ -16,9 +17,11 @@ const MOST_LEVELS: usize = 7;
 /// How far apart two radii may be, as a ratio, for what is between them to look like either.
 const LEVEL_RATIO: f32 = 1.6;
 /// A radius this small, in pixels, does nothing to see.
-const NO_BLUR: f32 = 0.3;
+pub(super) const NO_BLUR: f32 = 0.3;
 /// A blur gathers at a resolution that leaves it this many pixels of radius, or more.
 const GATHERED_RADIUS: f32 = 4.0;
+/// Gathered small and grown again, a blur reaches some way past its radius: this much of it, and more.
+pub(super) const MARGIN: (f32, f32) = (1.9, 2.0);
 
 /// The radius in pixels of the circle of confusion at `depth`, from the eye: nothing at the focus,
 /// and approaching `aperture` far away. EffectCraft's `Dof::coc`, halved to a radius.
@@ -32,7 +35,7 @@ pub(super) fn radius_at(depth: f32, focus: f32, aperture: f32, most: f32) -> f32
 /// The radii to blur at for those in `radius`: from the least to the most, at no more than
 /// [`LEVEL_RATIO`] apart where [`MOST_LEVELS`] allows. EffectCraft's `blur_levels`, spaced by ratio, as
 /// a radius of 2 is further from 1 than one of 40 is from 39.
-fn levels(least: f32, most: f32) -> Vec<f32> {
+pub(super) fn levels(least: f32, most: f32) -> Vec<f32> {
     if most - least < 0.75 {
         return vec![(least + most) / 2.0];
     }
@@ -52,6 +55,16 @@ fn levels(least: f32, most: f32) -> Vec<f32> {
         .into_iter()
         .chain((0..count).map(|index| base * (most / base).powf(index as f32 / (count - 1) as f32)))
         .collect()
+}
+
+/// How much smaller a blur of `radius` is gathered.
+pub(super) fn gathered_by(radius: f32) -> usize {
+    ((radius / GATHERED_RADIUS).floor() as usize).max(1)
+}
+
+/// How far a blur reaches past what it has, whose largest radius there is `reach`.
+pub(super) fn margin(reach: f32) -> usize {
+    (reach * MARGIN.0).ceil() as usize + MARGIN.1 as usize
 }
 
 /// `picture` shrunk by a whole `by`, each pixel the mean of those it covers.
@@ -206,8 +219,7 @@ pub(super) fn blurred(picture: &Image, radius: &[f32]) -> Image {
     if right < left {
         return Image::new(w, h);
     }
-    // Gathered small and grown again, a blur reaches some way past its radius.
-    let margin = (reach * 1.9).ceil() as usize + 2;
+    let margin = margin(reach);
     let (left, top) = (left.saturating_sub(margin), top.saturating_sub(margin));
     let (right, bottom) = ((right + margin).min(w - 1), (bottom + margin).min(h - 1));
     let (mut least, mut most) = (f32::MAX, 0.0f32);
@@ -224,7 +236,7 @@ pub(super) fn blurred(picture: &Image, radius: &[f32]) -> Image {
     let drawn: Vec<(Image, f32)> = levels
         .iter()
         .map(|radius| {
-            let by = ((radius / GATHERED_RADIUS).floor() as usize).max(1);
+            let by = gathered_by(*radius);
             let small = |at: usize| at / by;
             if by == 1 {
                 (gathered(picture, *radius, top..=bottom, left..=right), 1.0)
