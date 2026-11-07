@@ -64,7 +64,77 @@ const SCENES: &[(&str, &str)] = &[
         "fill big",
         "      mask k1 rect=0.2,0.2,0.8,0.8 mode=none\n      fx image.fill@1 path=k1\n",
     ),
+    // What a grade can reach past the 18 grades, which none of them do.
+    (
+        "lumetri sharpen",
+        "      fx color.lumetri@2 exposure=0.5 sharpen=50\n",
+    ),
+    (
+        "lumetri curve",
+        "      fx color.lumetri@2 exposure=0.5 curve_luma=\"0,0 0.25,0.2 0.75,0.82 1,1\"\n",
+    ),
+    (
+        "lumetri hue curve",
+        "      fx color.lumetri@2 exposure=0.5 hue_vs_sat=\"0,0.5 0.33,0.8 0.66,0.3\"\n",
+    ),
+    (
+        "lumetri hsl",
+        "      fx color.lumetri@2 exposure=0.5 hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150\n",
+    ),
+    (
+        "lumetri hsl blur",
+        "      fx color.lumetri@2 exposure=0.5 hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150 hsl_blur=30\n",
+    ),
+    (
+        "lumetri hsl denoise",
+        "      fx color.lumetri@2 exposure=0.5 hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150 hsl_denoise=50\n",
+    ),
+    (
+        "lumetri lut",
+        "      fx color.lumetri@2 exposure=0.5 look_lut=\"$LUT\"\n",
+    ),
+    (
+        "ultra choke",
+        "      fx key.ultra@1 key_color=#30c040 setting=custom choke=20\n",
+    ),
+    (
+        "ultra soften",
+        "      fx key.ultra@1 key_color=#30c040 setting=custom soften=20\n",
+    ),
+    ("look film", "      fx look.film@1\n"),
+    ("add grain", "      fx noise.addgrain@1\n"),
+    ("leaks", "      fx light.leaks@1\n"),
+    ("echo glow", "      fx light.echoglow@1\n"),
+    ("edge glow", "      fx light.edgeglow@1\n"),
+    ("alpha glow", "      fx light.alphaglow@1\n"),
+    ("rays", "      fx light.rays@1\n"),
+    ("find edges", "      fx stylize.findedges@2\n"),
+    ("emboss", "      fx stylize.emboss@2\n"),
+    ("color emboss", "      fx stylize.coloremboss@2\n"),
+    ("mosaic", "      fx stylize.mosaic@2 blocks_x=60 blocks_y=34\n"),
+    ("brush strokes", "      fx stylize.brushstrokes@2\n"),
+    ("rough edges", "      fx stylize.roughenedges@2\n"),
+    ("replicate", "      fx stylize.replicate@1 count=3\n"),
 ];
+
+/// A LUT as a look might load: 33 points to a side, S-curved.
+fn lut_file() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join("kerf_frame_bench.cube");
+    let mut text = String::from("LUT_3D_SIZE 33\n");
+    for b in 0..33 {
+        for g in 0..33 {
+            for r in 0..33 {
+                let curve = |at: i32| {
+                    let v = f64::from(at) / 32.0;
+                    v * v * (3.0 - 2.0 * v)
+                };
+                text += &format!("{:.6} {:.6} {:.6}\n", curve(r), curve(g), curve(b));
+            }
+        }
+    }
+    std::fs::write(&path, text).expect("a LUT");
+    path
+}
 
 fn time(document: &str, frames: i64) -> (f64, f64) {
     time_from(document, 0, frames)
@@ -132,6 +202,7 @@ fn main() {
         "{:<10} {:>9} {:>11} {:>8}",
         "scene", "size", "median ms", "fps"
     );
+    let lut = lut_file();
     for (width, height) in [(1920, 1080), (3840, 2160)] {
         let head = format!(
             "kerf 1\nproject name=\"bench\"\n{media}sequence s1 rate=24 size={width}x{height} audio=48000{sequence}\n"
@@ -160,6 +231,7 @@ fn main() {
         }
         let clip_line = "    clip c1 media=m1 src=0f at=0f dur=48f\n";
         for (name, body) in SCENES.iter().filter(|(name, _)| name.contains(&only)) {
+            let body = body.replace("$LUT", &lut.display().to_string());
             let document = format!("{head}  track V1 video\n{clip_line}{body}");
             let (_, median) = time(&document, FRAMES);
             println!(

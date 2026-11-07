@@ -143,6 +143,15 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("ultra key", clip("      fx key.ultra key_color=#30c040\n")),
         ("radial zoom", clip("      fx blur.radialzoom amount=30 quality=30\n")),
         ("radial spin", clip("      fx blur.radialzoom type=rotate-fading amount=-20 center_x=0.3 center_y=0.6\n")),
+        ("ultra choked", clip("      fx key.ultra key_color=#30c040 setting=custom choke=30\n")),
+        ("ultra softened", clip("      fx key.ultra key_color=#30c040 setting=custom soften=25 contrast=20\n")),
+        ("lumetri sharpened", clip("      fx color.lumetri exposure=0.3 sharpen=60\n")),
+        ("lumetri curves", clip("      fx color.lumetri curve_luma=\"0,0 0.3,0.2 0.7,0.85 1,1\" curve_red=\"0,0 0.5,0.6 1,1\"\n")),
+        ("lumetri hue curves", clip("      fx color.lumetri hue_vs_sat=\"0,0.5 0.33,0.8 0.66,0.3\" hue_vs_hue=\"0,0.5 0.5,0.6\"\n")),
+        ("lumetri HSL", clip("      fx color.lumetri hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150 hsl_blur=20\n")),
+        ("leaks", clip("      fx light.leaks intensity=80\n")),
+        ("grain", clip("      fx noise.addgrain tweaking/intensity=2\n")),
+        ("look.film", clip("      fx look.film\n")),
     ]);
     for look in [
         "look.dreamy",
@@ -155,7 +164,7 @@ fn scenes() -> Vec<(&'static str, String)> {
     ] {
         scenes.push((look, clip(&format!("      fx {look}\n"))));
     }
-    for look in ["look.whip", "look.flash-cut"] {
+    for look in ["look.whip", "look.flash-cut", "look.zoom-through"] {
         scenes.push((look, format!("  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx={look} dur=12f\n")));
     }
     for mode in [
@@ -329,7 +338,7 @@ fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     );
     let time = Rate::FPS_24.time_of(6);
     let refused = [
-        format!("{CLIP}      fx light.leaks\n"),
+        format!("{CLIP}      fx light.echoglow\n"),
         "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=morph-cut@1 dur=12f\n".to_owned(),
     ];
     for body in refused {
