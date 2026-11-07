@@ -1422,6 +1422,43 @@ fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
     }
 }
 
+/// All that goes into what [`title_on`] draws at `time`, to keep that picture by. Most titles have no
+/// keys and come to the same each frame, as a reveal does once it is over; one whose numbers move has
+/// a key of its own at each frame, which is never kept.
+fn title_key(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> String {
+    use std::fmt::Write;
+    let mut key = format!(
+        "title|{w}x{h}|{:?}|{:?}|{:x}|{:?}|{:?}",
+        title.text,
+        title.font,
+        title.size.to_bits(),
+        title.color,
+        title.justify
+    );
+    let mut value = |param: &Param| {
+        let _ = write!(key, "|{:x}", number(&param.value_at(time)).to_bits());
+    };
+    for (_, param) in &title.axes {
+        value(param);
+    }
+    if let Some(reveal) = &title.reveal {
+        value(&reveal.reveal);
+        value(&reveal.soft);
+        value(&reveal.from[0]);
+        value(&reveal.from[1]);
+        value(&reveal.scale);
+        value(&reveal.rotation);
+        value(&reveal.opacity);
+    }
+    for (tag, _) in &title.axes {
+        let _ = write!(key, "|{tag:?}");
+    }
+    if let Some(reveal) = &title.reveal {
+        let _ = write!(key, "|{}", reveal.by_word);
+    }
+    key
+}
+
 /// A title drawn on a transparent `w` × `h` picture.
 fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
     let mut image = Image::new(w, h);
@@ -1673,6 +1710,26 @@ fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
 }
 
 /// A caption drawn on a transparent `w` × `h` picture.
+/// All that goes into what [`caption_on`] draws, to keep that picture by.
+fn caption_key(
+    caption: &CaptionPlan,
+    sequence: &SequencePlan,
+    scale: f64,
+    (w, h): (usize, usize),
+) -> String {
+    let size = caption_size(sequence, scale);
+    let text = caption_text(caption, size);
+    format!(
+        "caption|{w}x{h}|{:?}|{:?}|{:x}|{:?}|{:?}|{:?}",
+        text.text,
+        text.font,
+        text.size.to_bits(),
+        text.color,
+        text.justify,
+        text.outline
+    )
+}
+
 fn caption_on(
     caption: &CaptionPlan,
     sequence: &SequencePlan,

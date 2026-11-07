@@ -7,7 +7,9 @@
 //! pixel from its alpha, which keeps the slope of a bevel smooth.
 
 use kerf_draw::{Image, Rect};
+use kerf_gpu::kept::Store;
 use rayon::prelude::*;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Where a pixel with no point of the outline near it says it is.
 const NOWHERE: [f32; 2] = [-1e6, -1e6];
@@ -29,6 +31,62 @@ pub(super) fn jumps(first_jump: u32) -> Vec<u32> {
 /// How far from the outline counts, either way: what comes of [`first_jump`] and the jumps after it.
 pub(super) fn reach(first_jump: u32) -> f32 {
     (first_jump * 2) as f32
+}
+
+/// Kept distance fields, by all that goes into them: 33 MB at 4K, where making one takes 476 ms a frame
+/// and hashing a picture's alpha 3, so this is four at 4K.
+const KEPT_FIELD_BYTES: usize = 136 << 20;
+
+fn kept_fields() -> &'static Mutex<Store<Arc<Vec<f32>>>> {
+    static KEPT: OnceLock<Mutex<Store<Arc<Vec<f32>>>>> = OnceLock::new();
+    KEPT.get_or_init(|| Mutex::new(Store::new(KEPT_FIELD_BYTES)))
+}
+
+/// What a distance field goes by: the alpha it is made from, the crop it stops at, and how far it asks.
+fn field_key(picture: &Image, crop: Rect, width: f64) -> String {
+    let rows = picture
+        .px
+        .par_chunks(picture.w.max(1) * 4)
+        .map(|row| {
+            row.chunks_exact(4)
+                .fold(0xcbf2_9ce4_8422_2325u64, |hash, pixel| {
+                    (hash ^ u64::from(pixel[3].to_bits())).wrapping_mul(0x0000_0100_0000_01b3)
+                })
+        })
+        .collect::<Vec<u64>>();
+    let alpha = rows.iter().fold(0u64, |hash, row| {
+        (hash.rotate_left(7) ^ row).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    });
+    format!(
+        "{}x{}|{alpha:x}|{:x},{:x},{:x},{:x}|{:x}",
+        picture.w,
+        picture.h,
+        crop.x.to_bits(),
+        crop.y.to_bits(),
+        crop.w.to_bits(),
+        crop.h.to_bits(),
+        first_jump(width)
+    )
+}
+
+/// [`distance_field`], kept while a picture's alpha stays the same from frame to frame.
+pub(super) fn kept_distance_field(picture: &Image, crop: Rect, width: f64) -> Arc<Vec<f32>> {
+    let key = field_key(picture, crop, width);
+    let lock = || kept_fields().lock().unwrap_or_else(PoisonError::into_inner);
+    {
+        let mut kept = lock();
+        kept.tick();
+        if let Some(field) = kept.get(&key) {
+            return field;
+        }
+    }
+    let field = Arc::new(distance_field(picture, crop, width));
+    let bytes = field.len() * 4;
+    let mut kept = lock();
+    if kept.wants(&key, bytes) {
+        kept.put(&key, bytes, field.clone());
+    }
+    field
 }
 
 /// The distance of each pixel of `picture` from the outline of its alpha within `crop`, in pixels, more
@@ -150,4 +208,53 @@ pub(super) fn eroded(picture: &Image, field: &[f32], inset: f64) -> Image {
             }
         });
     out
+}
+
+#[cfg(test)]
+mod kept_tests {
+    use super::*;
+
+    fn disk(w: usize, h: usize, radius: f32) -> Image {
+        let mut image = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - w as f32 / 2.0, y as f32 - h as f32 / 2.0);
+                let a = (radius - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
+                image.px[(y * w + x) * 4 + 3] = a;
+            }
+        }
+        image
+    }
+
+    #[test]
+    fn a_kept_field_is_the_field_of_that_alpha() {
+        let whole = Rect::new(0.0, 0.0, 64.0, 48.0);
+        let (one, other) = (disk(64, 48, 17.5), disk(64, 48, 11.5));
+        let wanted = distance_field(&one, whole, 6.0);
+        // Made, made and kept, and then read back.
+        for _ in 0..3 {
+            assert_eq!(*kept_distance_field(&one, whole, 6.0), wanted);
+        }
+        // Another alpha, crop, or reach is another field.
+        assert_eq!(
+            *kept_distance_field(&other, whole, 6.0),
+            distance_field(&other, whole, 6.0)
+        );
+        let cropped = Rect::new(8.0, 8.0, 32.0, 32.0);
+        assert_eq!(
+            *kept_distance_field(&one, cropped, 6.0),
+            distance_field(&one, cropped, 6.0)
+        );
+        assert_eq!(
+            *kept_distance_field(&one, whole, 40.0),
+            distance_field(&one, whole, 40.0)
+        );
+        // And its alpha going on the same is the same field, whatever its color does.
+        let mut colored = one.clone();
+        colored
+            .px
+            .chunks_exact_mut(4)
+            .for_each(|pixel| pixel[0] = 0.5);
+        assert_eq!(*kept_distance_field(&colored, whole, 6.0), wanted);
+    }
 }

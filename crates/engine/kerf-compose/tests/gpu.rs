@@ -326,6 +326,137 @@ fn a_transition_keeps_what_its_clips_are() {
     }
 }
 
+/// A compositor that draws each frame it is asked for, so that a kept frame cannot pass for a drawn one.
+fn drawing_every_frame(document: &str) -> Compositor {
+    let project = parse_document(document, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            accel: Accel::Always,
+            keep_frames: false,
+            frame_folder: None,
+            captions: true,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+}
+
+/// A title's picture and distance field stay from the second frame that asks for them, which must not
+/// change a byte: whether it was drawn or kept, and whatever has been drawn from it.
+#[test]
+fn a_kept_title_draws_what_it_drew() {
+    if kerf_gpu_missing() {
+        return;
+    }
+    let head = "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=640x360 audio=48000\n";
+    let light = "  track V3 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4\n";
+    let wall = "  track V1 video\n    clip w1 gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.3\n";
+    let title = |rest: &str| {
+        format!("  track V2 video\n    clip t1 gen=title@1 at=0f dur=24f\n      set text=\"Kept\" size=0.3{rest}\n")
+    };
+    let scenes = [
+        ("flat", title("")),
+        ("placed", title(" scale=0.7 rotation=12")),
+        (
+            "masked",
+            format!(
+                "{}      mask k1 ellipse=0.5,0.5,0.3,0.3 feather=12\n",
+                title("")
+            ),
+        ),
+        (
+            "blurred",
+            format!("{}      fx blur.gaussian radius=20\n", title("")),
+        ),
+        (
+            "graded",
+            format!("{}      fx color.basic exposure=0.5\n", title("")),
+        ),
+        (
+            "in depth",
+            format!("{wall}{}{light}", title(" three_d=true")),
+        ),
+        (
+            "solid",
+            format!("{}{light}", title(" three_d=true depth=0.1")),
+        ),
+        (
+            "beveled",
+            format!("{}{light}", title(" three_d=true depth=0.1 bevel=0.02")),
+        ),
+        (
+            "beveled, with a soft shadow",
+            format!(
+                "{wall}{}{light}",
+                title(" three_d=true depth=0.1 bevel=0.02")
+            ),
+        ),
+        (
+            "turning, beveled",
+            format!(
+                "{}{light}",
+                title(" three_d=true depth=0.1 bevel=0.02 rotate_y={0f:-20 24f:20}")
+            ),
+        ),
+        ("revealed", title(" reveal={0f:0 4f:1} from_y=0.05")),
+        (
+            "under a caption",
+            format!(
+                "{}  track S1 subtitle\n    clip k1 caption=\"Line\" at=0f dur=24f\n",
+                title("")
+            ),
+        ),
+    ];
+    let time = Rate::FPS_24.time_of(10);
+    for (name, body) in &scenes {
+        let compositor = drawing_every_frame(&format!("{head}{body}"));
+        assert!(compositor.draws_on_gpu(time, 1.0), "{name}");
+        let drawn = compositor.frame(time, 1.0);
+        assert!(
+            drawn.rgba.chunks_exact(4).any(|pixel| pixel[0] > 40),
+            "{name} draws nothing"
+        );
+        // Made, then made and kept, then read back twice.
+        for _ in 0..3 {
+            assert_eq!(compositor.frame(time, 1.0), drawn, "{name}");
+        }
+        assert!(
+            compositor.draws_on_gpu(time, 1.0),
+            "{name} failed the device"
+        );
+    }
+    // What was drawn from a kept picture leaves it as it was, in another compositor too.
+    let plain = drawing_every_frame(&format!("{head}{}", title(" scale=0.9")));
+    let before = plain.frame(time, 1.0);
+    let blurred = drawing_every_frame(&format!(
+        "{head}{}      mask k1 ellipse=0.5,0.5,0.2,0.2\n      fx blur.gaussian radius=30\n      fx channel.invert\n",
+        title(" scale=0.9")
+    ));
+    for _ in 0..3 {
+        assert_ne!(blurred.frame(time, 1.0), before);
+    }
+    for _ in 0..3 {
+        assert_eq!(plain.frame(time, 1.0), before);
+    }
+    // Other words, and a number that moves, are not what was kept.
+    let other = drawing_every_frame(&format!("{head}  track V2 video\n    clip t1 gen=title@1 at=0f dur=24f\n      set text=\"Tept\" size=0.3 scale=0.9\n"));
+    for _ in 0..2 {
+        assert_ne!(other.frame(time, 1.0), before);
+    }
+    let moving = drawing_every_frame(&format!("{head}{}", title(" reveal={0f:0 24f:1}")));
+    let frames: Vec<Frame> = (6..10)
+        .map(|at| moving.frame(Rate::FPS_24.time_of(at), 1.0))
+        .collect();
+    for pair in frames.windows(2) {
+        assert_ne!(pair[0], pair[1], "a reveal under way stayed where it was");
+    }
+    assert!(plain.draws_on_gpu(time, 1.0), "the device failed");
+}
+
 #[test]
 fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     if kerf_gpu_missing() {
