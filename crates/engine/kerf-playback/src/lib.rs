@@ -517,6 +517,12 @@ impl Drop for PlaybackSession {
     }
 }
 
+/// The first frame to draw while frame `now` is due. The one showing is not drawn again: it would take a
+/// drawer from those ahead, and send a decoder back for it.
+fn first_to_draw(now: i64, shown: Option<i64>) -> i64 {
+    shown.map_or(now, |shown| now.max(shown + 1))
+}
+
 /// Configuration for the in-process libav decoder and bounded worker queues.
 #[derive(Clone, Debug)]
 pub struct PlaybackConfig {
@@ -1221,7 +1227,7 @@ impl Worker {
         let now = drawn.index_at(position);
         let ahead = self.config.decode_queue_capacity.max(1) as i64;
         let scale = drawn.moving();
-        for index in now..=(now + ahead).min(drawn.last()) {
+        for index in first_to_draw(now, self.drawn_shown)..=(now + ahead).min(drawn.last()) {
             if !self.drawn_ready.contains_key(&index)
                 && !drawn.request(index, scale, self.serve_epoch)
             {
@@ -1462,6 +1468,19 @@ fn can_reuse_ffmpeg_decoder(
 
 #[cfg(test)]
 mod reuse_tests {
+    #[test]
+    fn a_frame_showing_is_not_drawn_again() {
+        use super::first_to_draw;
+        // Nothing shown yet, or the frame due still to come: from the frame due.
+        assert_eq!(first_to_draw(10, None), 10);
+        assert_eq!(first_to_draw(10, Some(9)), 10);
+        assert_eq!(first_to_draw(10, Some(4)), 10);
+        // Showing already: the one after it.
+        assert_eq!(first_to_draw(10, Some(10)), 11);
+        // Asked to go back: what is shown stands until a seek says otherwise.
+        assert_eq!(first_to_draw(10, Some(12)), 13);
+    }
+
     use super::{can_reuse_ffmpeg_decoder, frame_interval, SMALL_FORWARD_SEEK_SECONDS};
 
     #[test]

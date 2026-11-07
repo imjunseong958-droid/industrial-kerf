@@ -6,8 +6,9 @@
 //! the clip's source in and speed. A frame is the one whose display starts
 //! at or before that source time, as a cut shows it. Decoders keep their
 //! place in a file and read on to the next frame; they seek only to go
-//! back or far ahead. A frame just after one being read waits for that
-//! decoder rather than opening another, so frames drawn on several threads
+//! back further than the frames they keep, or far ahead. A frame just after
+//! or just before one being read waits for that decoder rather than opening
+//! another, so frames drawn on several threads, which finish in any order,
 //! still decode each file once. Frames are converted to RGBA by
 //! libavfilter, as the graph converts them, and kept in a bounded cache;
 //! a frame for the GPU at its full size stays in its planes for the GPU to
@@ -23,11 +24,25 @@ use kerf_color::{ColorPipeline, ColorSpace, InputTransform, Range};
 use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Rate, Retime, Speed, Time};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Decoders kept open across reads.
 const MAX_DECODERS: usize = 8;
+
+/// How long a decoder is kept with nothing reading from it. Each holds the frames of its threads, about
+/// 300 MB at 4K, and one left behind by a seek would otherwise hold them for good.
+const DECODER_IDLE: Duration = Duration::from_secs(5);
+
+/// How many bytes of frames as they decoded are kept, for a frame drawn again, as after an edit. A
+/// dozen frames at 4K, sixty at 1000x562. Going forward they are not asked for twice.
+const DECODED_BUDGET: usize = 128 << 20;
+
+/// The frames a decoder keeps behind the one it last read. Frames drawn on several threads ask a
+/// little out of order, by about how many are drawn at once, and with nothing kept each of those
+/// sent another decoder through every frame of the file.
+const KEPT_BEHIND: usize = 6;
 
 /// How far ahead a decoder reads on instead of seeking.
 const READ_AHEAD_SECONDS: i64 = 2;
@@ -209,7 +224,12 @@ impl DecoderPool {
 
     /// Frame `index` of `clip`'s file for the GPU at `size`: as it decoded if the GPU can take it so,
     /// or else as [`Self::picture`] makes it.
-    fn for_gpu(&self, clip: &ClipSource, index: i64, size: (u32, u32)) -> Option<Arc<frame::Video>> {
+    fn for_gpu(
+        &self,
+        clip: &ClipSource,
+        index: i64,
+        size: (u32, u32),
+    ) -> Option<Arc<frame::Video>> {
         let (loan, mut decoder) = match self.checkout(clip, index) {
             Ok(checked_out) => checked_out,
             Err(problem) => {
@@ -221,7 +241,9 @@ impl DecoderPool {
             if !clip.alpha && (shown.width(), shown.height()) == size && yuv_of(&shown).is_some() {
                 Ok(shown)
             } else {
-                decoder.picture(index, size, clip.deep.is_some()).map(Arc::new)
+                decoder
+                    .picture(index, size, clip.deep.is_some())
+                    .map(Arc::new)
             }
         });
         self.give_back(loan, decoder);
@@ -248,7 +270,7 @@ impl DecoderPool {
                 .filter_map(|(at, decoder)| {
                     decoder
                         .position()
-                        .filter(|position| reads_on(*position))
+                        .filter(|position| reads_on(*position) || decoder.keeps(index))
                         .map(|position| (at, position))
                 })
                 .max_by_key(|(_, position)| *position)
@@ -257,10 +279,11 @@ impl DecoderPool {
                 let decoder = decoders.idle.remove(at);
                 return Ok((decoders.lend(&clip.path, index), decoder));
             }
-            let coming = decoders
-                .busy
-                .iter()
-                .any(|(_, path, to)| *path == clip.path && reads_on(*to));
+            // One being read to around it has it or soon will, whichever finishes first.
+            let coming = decoders.busy.iter().any(|(_, path, to)| {
+                *path == clip.path
+                    && (reads_on(*to) || (index..=index + KEPT_BEHIND as i64).contains(to))
+            });
             if !coming {
                 break;
             }
@@ -289,10 +312,16 @@ impl DecoderPool {
     fn give_back(&self, loan: u64, decoder: Decoder) {
         let mut decoders = lock(&self.decoders);
         decoders.busy.retain(|(lent, ..)| *lent != loan);
-        decoders.idle.push(decoder);
+        decoders.idle.push(Decoder {
+            returned: Instant::now(),
+            ..decoder
+        });
         if decoders.idle.len() > MAX_DECODERS {
             decoders.idle.remove(0);
         }
+        decoders
+            .idle
+            .retain(|decoder| decoder.returned.elapsed() < DECODER_IDLE);
         drop(decoders);
         self.returned.notify_all();
     }
@@ -314,7 +343,7 @@ impl Pictures {
             clips,
             pool: DecoderPool::new(),
             cache: Mutex::new(FrameCache::new(CACHE_BUDGET, picture_bytes)),
-            decoded: Mutex::new(FrameCache::new(CACHE_BUDGET, decoded_bytes)),
+            decoded: Mutex::new(FrameCache::new(DECODED_BUDGET, decoded_bytes)),
         }
     }
 
@@ -581,6 +610,12 @@ struct Decoder {
     /// the last one ends.
     current: Option<(i64, Arc<frame::Video>)>,
     ahead: Option<(i64, Arc<frame::Video>)>,
+    /// The frames read before `current`, oldest first, one after the other.
+    behind: VecDeque<(i64, Arc<frame::Video>)>,
+    /// Frames this decoder has been given by libav, to say what reading costs.
+    read: u64,
+    /// When it was last given back.
+    returned: Instant,
     eof: bool,
     convert: Option<Convert>,
 }
@@ -630,6 +665,9 @@ impl Decoder {
             rate,
             current: None,
             ahead: None,
+            behind: VecDeque::new(),
+            read: 0,
+            returned: Instant::now(),
             eof: false,
             convert: None,
         })
@@ -638,6 +676,27 @@ impl Decoder {
     /// The index of the last frame read, by the media's rate.
     fn position(&self) -> Option<i64> {
         self.current.as_ref().map(|(pts, _)| self.index_of(*pts))
+    }
+
+    /// Whether frame `index` is among those kept behind the last one read.
+    fn keeps(&self, index: i64) -> bool {
+        self.kept(index).is_some()
+    }
+
+    /// The frame kept behind the last one read that frame `index` shows: the last starting by its
+    /// start, give or take half a frame, as [`Self::shown`] takes it, with a later one kept to
+    /// show where it ends.
+    fn kept(&self, index: i64) -> Option<&Arc<frame::Video>> {
+        let limit = (self.pts_of(index) + self.pts_of(index + 1)) / 2;
+        // Only behind: at the last one read or past it, reading goes on as ever.
+        if self.current.as_ref().is_none_or(|(pts, _)| *pts <= limit) {
+            return None;
+        }
+        self.behind
+            .iter()
+            .rev()
+            .find(|(pts, _)| *pts <= limit)
+            .map(|(_, frame)| frame)
     }
 
     /// Where frame `index` starts, in the stream's time base.
@@ -683,6 +742,11 @@ impl Decoder {
     /// Frame `index` as it decoded: the last frame starting by its start, give or take half a frame
     /// for timestamps that round.
     fn shown(&mut self, index: i64) -> Result<&Arc<frame::Video>, String> {
+        if self.keeps(index) {
+            return self
+                .kept(index)
+                .ok_or_else(|| format!("{}: frame {index} could not be read", self.path));
+        }
         let target = self.pts_of(index);
         let limit = (target + self.pts_of(index + 1)) / 2;
         let ahead = i64::from(self.rate.num()) * READ_AHEAD_SECONDS / i64::from(self.rate.den());
@@ -699,7 +763,15 @@ impl Decoder {
                 self.ahead = self.next()?;
             }
             match &self.ahead {
-                Some((pts, _)) if *pts <= limit => self.current = self.ahead.take(),
+                Some((pts, _)) if *pts <= limit => {
+                    if let Some(passed) = self.current.take() {
+                        if self.behind.len() == KEPT_BEHIND {
+                            self.behind.pop_front();
+                        }
+                        self.behind.push_back(passed);
+                    }
+                    self.current = self.ahead.take();
+                }
                 _ => break,
             }
         }
@@ -723,6 +795,7 @@ impl Decoder {
         self.decoder.flush();
         self.current = None;
         self.ahead = None;
+        self.behind.clear();
         self.eof = false;
         Ok(())
     }
@@ -740,6 +813,7 @@ impl Decoder {
                             .or(self.current.as_ref())
                             .map_or(self.first, |(pts, _)| pts + self.pts_of(1) - self.first)
                     });
+                    self.read += 1;
                     return Ok(Some((pts, Arc::new(decoded))));
                 }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
@@ -885,6 +959,123 @@ mod tests {
 
     fn at(frames: i64, rate: Rate) -> Time {
         rate.time_of(frames)
+    }
+
+    /// A small H.264 file with a keyframe every half second, or none where FFmpeg is not installed.
+    fn encoded(directory: &std::path::Path) -> Option<String> {
+        let path = directory.join("clip.mp4");
+        let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
+        let made = std::process::Command::new(program)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .args([
+                "testsrc2=s=64x64:r=24:d=4",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                "12",
+            ])
+            .arg(&path)
+            .status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("skipped: no ffmpeg to make a file with");
+            return None;
+        }
+        Some(path.to_string_lossy().into_owned())
+    }
+
+    fn file_clip(path: &str) -> ClipSource {
+        ClipSource {
+            path: path.to_owned(),
+            frames: 96,
+            width: 64,
+            height: 64,
+            ..clip(0, "1", 96)
+        }
+    }
+
+    /// The order three drawers finish three frames at a time in, when the second is the quickest.
+    fn drawers_order(frames: i64) -> impl Iterator<Item = i64> {
+        (0..frames / 3).flat_map(|at| [3 * at + 1, 3 * at, 3 * at + 2])
+    }
+
+    #[test]
+    fn frames_asked_a_little_out_of_order_are_read_once_and_are_the_same_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let Some(path) = encoded(directory.path()) else {
+            return;
+        };
+        let mut in_order = Decoder::open(&path, Rate::FPS_24).unwrap();
+        let frames: Vec<Vec<u8>> = (0..90)
+            .map(|index| in_order.shown(index).unwrap().data(0).to_vec())
+            .collect();
+        let mut decoder = Decoder::open(&path, Rate::FPS_24).unwrap();
+        for index in drawers_order(90) {
+            let shown = decoder.shown(index).unwrap().data(0).to_vec();
+            assert!(shown == frames[index as usize], "frame {index}");
+        }
+        // It read each frame once, and the one past where it stopped. Going back for each would have
+        // read a half-second's frames again every time.
+        assert!(
+            decoder.read <= in_order.read + 2,
+            "read {} and in order {}",
+            decoder.read,
+            in_order.read
+        );
+        // Further back than it keeps, it goes back and reads, and it is the same frame.
+        let before = decoder.read;
+        let shown = decoder.shown(40).unwrap().data(0).to_vec();
+        assert!(shown == frames[40]);
+        assert!(decoder.read > before);
+    }
+
+    #[test]
+    fn frames_drawn_out_of_order_on_one_decoder_do_not_open_more() {
+        let directory = tempfile::tempdir().unwrap();
+        let Some(path) = encoded(directory.path()) else {
+            return;
+        };
+        let clip = file_clip(&path);
+        let pool = DecoderPool::new();
+        for index in drawers_order(90) {
+            assert!(
+                pool.picture(&clip, index, (64, 64)).is_some(),
+                "frame {index}"
+            );
+        }
+        let decoders = lock(&pool.decoders);
+        assert_eq!(decoders.idle.len(), 1, "one decoder is enough");
+        assert!(
+            decoders.idle[0].read <= 92,
+            "read {} frames for 90",
+            decoders.idle[0].read
+        );
+    }
+
+    #[test]
+    fn a_decoder_left_idle_lets_go_of_its_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let Some(path) = encoded(directory.path()) else {
+            return;
+        };
+        let clip = file_clip(&path);
+        let pool = DecoderPool::new();
+        let (first, left) = pool.checkout(&clip, 0).unwrap();
+        let (second, kept) = pool.checkout(&clip, 90).unwrap();
+        pool.give_back(first, left);
+        assert_eq!(lock(&pool.decoders).idle.len(), 1);
+        lock(&pool.decoders).idle[0].returned =
+            Instant::now() - DECODER_IDLE - Duration::from_secs(1);
+        // The one coming back stays, and the one long idle goes.
+        pool.give_back(second, kept);
+        assert_eq!(lock(&pool.decoders).idle.len(), 1);
     }
 
     #[test]

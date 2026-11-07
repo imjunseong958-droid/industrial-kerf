@@ -138,6 +138,12 @@ impl Compositor {
         self.frame_key(at, scale).is_some_and(frames::has)
     }
 
+    /// The least share of the canvas that goes to the GPU when nothing says it must: smaller frames
+    /// are the CPU's, which at [`Accel::Auto`] can cost a scene in depth every core it has.
+    pub fn smallest_on_gpu(&self) -> f64 {
+        self.drawing.smallest_on_gpu()
+    }
+
     /// Whether the GPU would draw the frame at sequence time `at`, at `scale` of the canvas: every
     /// part of it has a kernel, and there is a GPU to run them. A frame that is one clip untouched
     /// is the decoded picture itself and draws on neither.

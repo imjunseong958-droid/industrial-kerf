@@ -16,6 +16,19 @@ use std::sync::Once;
 /// over.
 const SMALLEST_PIXELS: usize = 640 * 360;
 
+/// The least share of a canvas whose frame has [`SMALLEST_PIXELS`], once rounded to whole pixels.
+fn smallest_on_gpu_of(width: u32, height: u32) -> f64 {
+    let area = f64::from(width.max(1)) * f64::from(height.max(1));
+    let mut scale = (SMALLEST_PIXELS as f64 / area).sqrt().min(1.0);
+    while scale < 1.0 && {
+        let (w, h) = output_size(width, height, scale);
+        w * h < SMALLEST_PIXELS
+    } {
+        scale = (scale * 1.01).min(1.0);
+    }
+    scale
+}
+
 /// The device, once it and every kernel are built.
 fn ready_gpu() -> Option<&'static Gpu> {
     kerf_gpu::shared().filter(|gpu| {
@@ -156,6 +169,12 @@ impl Drawing {
                 }
             }
         }
+    }
+
+    /// The least of the canvas [`Self::gpu_frame_as`] goes to the GPU for at [`Accel::Auto`].
+    pub(crate) fn smallest_on_gpu(&self) -> f64 {
+        let plan = &self.sequences[0];
+        smallest_on_gpu_of(plan.width, plan.height)
     }
 
     /// Whether the GPU would draw the frame at `at`.
@@ -1235,4 +1254,31 @@ fn gpu_distance(
         bevel::reach(first),
         stretch as f32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{output_size, smallest_on_gpu_of, SMALLEST_PIXELS};
+
+    #[test]
+    fn the_least_share_on_the_gpu_has_the_pixels_it_needs() {
+        for (width, height) in [
+            (1920, 1080),
+            (3840, 2160),
+            (1080, 1920),
+            (1280, 720),
+            (1001, 777),
+        ] {
+            let scale = smallest_on_gpu_of(width, height);
+            let (w, h) = output_size(width, height, scale);
+            assert!(
+                w * h >= SMALLEST_PIXELS,
+                "{width}x{height} at {scale} is {w}x{h}"
+            );
+            assert!(scale < 1.0);
+        }
+        assert!((smallest_on_gpu_of(1920, 1080) - 1.0 / 3.0).abs() < 1e-3);
+        // A canvas already under it has nowhere further to go.
+        assert_eq!(smallest_on_gpu_of(320, 180), 1.0);
+    }
 }
