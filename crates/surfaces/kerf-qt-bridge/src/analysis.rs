@@ -15,6 +15,10 @@
 //! - `media_index {media}`: where a file's picture cuts and its sound
 //!   pauses, and its loudest moments (`kerf_engine::media_index`, from the
 //!   project's derivative cache when kerfd's import already made it).
+//! - `scope_signal {time, sequence?}`: an HDR sequence's frame at `time` as the signal its master gets,
+//!   small, for the Finish tray's scopes to read through `kerf_bridge_signal`, on a thread of its own:
+//!   only the newest request waits for one that runs. `scope_signal {status}` says when it starts or
+//!   stops being a sequence with one. An SDR sequence draws nothing here.
 
 use crate::{emit, Shared};
 use kerf_engine::derivatives::DerivativeCache;
@@ -37,6 +41,31 @@ pub(crate) struct Analysis {
     indexing: Mutex<HashSet<String>>,
     /// Cancelled when the bridge closes, which stops every FFmpeg here.
     cancel: CancellationToken,
+    /// What the scopes' frames are drawn with.
+    signal: Mutex<SignalState>,
+    /// The newest signal frame, until the editor takes it.
+    pub(crate) signal_frame: Mutex<Option<SignalFrame>>,
+}
+
+/// A frame of an HDR sequence's signal: 16-bit little-endian RGBA in BT.2020.
+pub(crate) struct SignalFrame {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub time: f64,
+    /// 1 for PQ, 2 for HLG.
+    pub curve: u32,
+}
+
+#[derive(Default)]
+struct SignalState {
+    busy: bool,
+    /// A request that came while one ran: its time and sequence.
+    next: Option<(f64, Option<String>)>,
+    /// Whether the last request found a signal to read.
+    was_hdr: bool,
+    /// The project and sequence the compositor is for, which opening footage makes worth keeping.
+    drawing: Option<(Project, Option<String>, kerf_compose::Compositor)>,
 }
 
 #[derive(Default)]
@@ -67,6 +96,111 @@ fn with_sequence(mut event: Value, sequence: Option<&str>) -> Value {
         event["sequence"] = json!(sequence);
     }
     event
+}
+
+// ---------------------------------------------------------------- scopes
+
+/// How wide a frame is drawn for the scopes to read: they take a 160 by 90 grab, at most twice over.
+const SIGNAL_WIDTH: f64 = 480.0;
+
+/// `scope_signal {time, sequence?}`.
+pub(crate) fn scope_signal(
+    shared: Arc<Shared>,
+    tx: SyncSender<Value>,
+    time: f64,
+    sequence: Option<String>,
+) {
+    {
+        let mut state = lock(&shared.analysis.signal);
+        if state.busy {
+            state.next = Some((time, sequence));
+            return;
+        }
+        state.busy = true;
+    }
+    std::thread::spawn(move || {
+        let (mut time, mut sequence) = (time, sequence);
+        loop {
+            draw_signal(&shared, &tx, time, sequence.as_deref());
+            let mut state = lock(&shared.analysis.signal);
+            match state.next.take() {
+                Some(next) if !shared.closed.load(std::sync::atomic::Ordering::SeqCst) => {
+                    (time, sequence) = next;
+                }
+                _ => {
+                    state.busy = false;
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// The curve of an HDR sequence's signal: 1 for PQ, 2 for HLG; none for SDR.
+fn signal_curve(project: &Project, sequence: Option<&str>) -> Option<u32> {
+    let sequence = match sequence {
+        Some(id) => project.sequence(id),
+        None => project.sequences.first(),
+    }?;
+    match sequence.color.curve() {
+        kerf_color::Curve::Pq => Some(1),
+        kerf_color::Curve::Hlg => Some(2),
+        _ => None,
+    }
+}
+
+fn draw_signal(shared: &Shared, tx: &SyncSender<Value>, time: f64, sequence: Option<&str>) {
+    let Some(project) = lock(&shared.model).clone() else {
+        return;
+    };
+    let curve = signal_curve(&project, sequence);
+    let hdr = curve.is_some();
+    let drawing = {
+        let mut state = lock(&shared.analysis.signal);
+        if state.was_hdr != hdr {
+            state.was_hdr = hdr;
+            let status = if hdr { "hdr" } else { "sdr" };
+            emit(tx, json!({"type": "scope_signal", "status": status}));
+        }
+        state.drawing.take()
+    };
+    let Some(curve) = curve else {
+        return;
+    };
+    let same = |(kept, kept_sequence, _): &(Project, Option<String>, kerf_compose::Compositor)| {
+        *kept == project && kept_sequence.as_deref() == sequence
+    };
+    let drawing = drawing.filter(same).or_else(|| {
+        let compositor = kerf_compose::Compositor::new(
+            &project,
+            kerf_model::Catalog::builtin(),
+            &kerf_compose::ComposeOptions {
+                sequence: sequence.map(str::to_owned),
+                captions: true,
+                ..Default::default()
+            },
+        )
+        .ok()?;
+        Some((project.clone(), sequence.map(str::to_owned), compositor))
+    });
+    let Some(drawing) = drawing else {
+        return;
+    };
+    let width = match sequence {
+        Some(id) => project.sequence(id),
+        None => project.sequences.first(),
+    }
+    .map_or(SIGNAL_WIDTH, |found| f64::from(found.width.max(1)));
+    let at = kerf_model::Time::from_seconds(time.max(0.0)).unwrap_or(kerf_model::Time::ZERO);
+    let frame = drawing.2.frame16(at, (SIGNAL_WIDTH / width).min(1.0));
+    *lock(&shared.analysis.signal_frame) = Some(SignalFrame {
+        pixels: frame.rgba,
+        width: frame.width,
+        height: frame.height,
+        time,
+        curve,
+    });
+    lock(&shared.analysis.signal).drawing = Some(drawing);
 }
 
 // ---------------------------------------------------------------- loudness

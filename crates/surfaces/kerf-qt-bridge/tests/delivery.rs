@@ -6,7 +6,8 @@
 //! kerfd`) and FFmpeg; without FFmpeg it says so and passes.
 
 use kerf_qt_bridge::{
-    kerf_bridge_free, kerf_bridge_new, kerf_bridge_poll, kerf_bridge_send, kerf_bridge_string_free,
+    kerf_bridge_free, kerf_bridge_new, kerf_bridge_poll, kerf_bridge_send, kerf_bridge_signal,
+    kerf_bridge_string_free, KerfSignal,
 };
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -389,4 +390,69 @@ fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
         .0
         .join(".kerf/looks/look.harbor_warm@1.kerflook")
         .is_file());
+}
+
+/// The signal frame `scope_signal` drew, once it has: its curve, width, height, and first red code.
+fn signal_frame(editor: &Editor, within: Duration) -> Option<(u32, u32, u32, u16)> {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        let mut signal = KerfSignal {
+            pixels: std::ptr::null(),
+            length: 0,
+            width: 0,
+            height: 0,
+            time: 0.0,
+            curve: 0,
+        };
+        // SAFETY: the bridge is live, only this thread uses it, and the output is writable.
+        if unsafe { kerf_bridge_signal(editor.bridge, &mut signal) } {
+            assert_eq!(
+                signal.length,
+                signal.width as usize * signal.height as usize * 8
+            );
+            // SAFETY: the bridge keeps the pixels until the next call.
+            let pixels = unsafe { std::slice::from_raw_parts(signal.pixels, signal.length) };
+            let at = (signal.height as usize / 2 * signal.width as usize
+                + signal.width as usize / 2)
+                * 8;
+            return Some((
+                signal.curve,
+                signal.width,
+                signal.height,
+                u16::from_le_bytes([pixels[at], pixels[at + 1]]),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+#[test]
+fn an_hdr_sequences_signal_comes_for_the_scopes_and_an_sdr_ones_does_not() {
+    let document = |color: &str| {
+        format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=1920x1080 audio=48000{color}\n  track V1 video\n    clip c1 gen=solid@1 at=0f dur=48f\n      set color=#ffffff\n"
+        )
+    };
+    let hdr = Project::new("signal-hdr");
+    fs::write(hdr.0.join("project.kerf"), document(" color=rec2100-pq")).unwrap();
+    let mut editor = Editor::open(&hdr.0);
+    editor.state("the document", |_| true);
+    assert!(editor.send(json!({"type": "scope_signal", "time": 0.5})));
+    editor.expect("a signal to read", |event| {
+        event["type"] == "scope_signal" && event["status"] == "hdr"
+    });
+    let (curve, width, height, red) =
+        signal_frame(&editor, Duration::from_secs(30)).expect("a frame");
+    assert_eq!((curve, width, height), (1, 480, 270));
+    // White in an HDR sequence is SDR white on the signal, 0.58 of it, and not the top.
+    let signal = f64::from(red) / 65535.0;
+    assert!((signal - 0.58).abs() < 0.01, "{signal}");
+    drop(editor);
+    let sdr = Project::new("signal-sdr");
+    fs::write(sdr.0.join("project.kerf"), document("")).unwrap();
+    let mut editor = Editor::open(&sdr.0);
+    editor.state("the document", |_| true);
+    assert!(editor.send(json!({"type": "scope_signal", "time": 0.5})));
+    assert_eq!(signal_frame(&editor, Duration::from_secs(1)), None);
 }

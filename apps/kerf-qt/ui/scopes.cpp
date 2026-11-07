@@ -86,6 +86,9 @@ ScopeTraces analyse(const QImage &frame, const ScopeLayout &layout) {
     traces.bitDepth = bitDepth(frame);
     traces.frameSize = frame.size();
     traces.mode = layout.mode;
+    traces.curve = layout.curve;
+    scope::Options measured;
+    measured.bt2020 = layout.curve != 0;
     const QImage source = scope::scopeSource(frame, sampleSize(frame.size(), dpr));
     traces.sampled = source.size();
 
@@ -93,7 +96,7 @@ ScopeTraces analyse(const QImage &frame, const ScopeLayout &layout) {
         const scope::WaveformGeometry g = scope::waveformGeometry(QSizeF(layout.waveform));
         const QSize grid = traceGrid(g.x1 - g.x0, g.bottom - g.top, dpr);
         if (layout.mode == WaveformMode::Luma) {
-            traces.waveform = scope::render(scope::waveformLuma(source, grid.width(), grid.height()), lumaTrace);
+            traces.waveform = scope::render(scope::waveformLuma(source, grid.width(), grid.height(), measured), lumaTrace);
         } else {
             const auto cells = scope::parade(source, grid.width(), grid.height());
             traces.waveform = plus({scope::render(cells[0], kChannelTraces[0]), scope::render(cells[1], kChannelTraces[1]),
@@ -116,7 +119,7 @@ ScopeTraces analyse(const QImage &frame, const ScopeLayout &layout) {
         geometry.centre *= dpr;
         geometry.radius *= dpr;
         geometry.scale *= dpr;
-        scope::Options options;
+        scope::Options options = measured;
         options.chromaJitter *= dpr;
         const QSize grid(devicePixels(plot.width(), dpr), devicePixels(plot.height(), dpr));
         traces.vectorscope =
@@ -152,16 +155,35 @@ void ScopeAnalyser::setActive(bool active) {
 }
 
 void ScopeAnalyser::setLayout(const ScopeLayout &layout) {
-    if (m_layout == layout) return;
-    m_layout = layout;
+    ScopeLayout next = layout;
+    next.curve = m_layout.curve;
+    if (m_layout == next) return;
+    m_layout = next;
     if (!m_frame.isNull()) m_dirty = true;
     schedule();
 }
 
 void ScopeAnalyser::setFrame(const QImage &frame) {
-    if (frame.isNull()) return;
+    m_monitorFrame = frame;
+    if (frame.isNull() || m_layout.curve != 0) return;
     m_frame = frame;
     m_dirty = true;
+    schedule();
+}
+
+void ScopeAnalyser::setSignal(const QImage &frame, int curve) {
+    if (frame.isNull() || curve == 0) return;
+    m_layout.curve = curve;
+    m_frame = frame;
+    m_dirty = true;
+    schedule();
+}
+
+void ScopeAnalyser::clearSignal() {
+    if (m_layout.curve == 0) return;
+    m_layout.curve = 0;
+    m_frame = m_monitorFrame;
+    m_dirty = !m_frame.isNull();
     schedule();
 }
 
@@ -236,6 +258,14 @@ void ScopePlot::paintWaveformGraticule(QPainter &painter, const QRectF &plot, bo
         painter.drawLine(QPointF(g.x0, y), QPointF(g.x1, y));
         painter.setPen(tokens::color(tokens::ink3));
         painter.drawText(QRectF(0, y - 6, g.x0 - 4, 16), Qt::AlignRight | Qt::AlignVCenter, QString::number(code));
+    }
+    if (m_analyser && m_analyser->traces().curve != 0) {
+        // Where SDR white falls on the signal: what is above it is over white.
+        const double y = std::round(g.y(scopes::referenceWhiteCode(m_analyser->traces().curve))) + 0.5;
+        QPen pen(tokens::color(tokens::ink3), 1, Qt::DashLine);
+        painter.setPen(pen);
+        painter.drawLine(QPointF(g.x0, y), QPointF(g.x1, y));
+        painter.drawText(QRectF(g.x0 + 4, y - 16, 40, 14), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("SDR"));
     }
     if (!parade) return;
     static const char *const names[] = {"R", "G", "B"};

@@ -1457,6 +1457,7 @@ dependencies = [
  "kerf-agent",
  "kerf-cloud",
  "kerf-collab",
+ "kerf-color",
  "kerf-commands",
  "kerf-compose",
  "kerf-core",
