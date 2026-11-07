@@ -145,6 +145,12 @@ impl Compositor {
         self.drawing.draws_on_gpu(at, scale)
     }
 
+    /// The picture at sequence time `at` as the GPU draws it, or `None` where [`Self::frame`] would give
+    /// it to the CPU, even partway through, which a test cannot tell from a match by the picture.
+    pub fn frame_on_gpu(&self, at: Time, scale: f64) -> Option<Frame> {
+        self.drawing.frame_on_gpu(at, scale)
+    }
+
     /// Media that could not be read, each with why. Their clips draw
     /// nothing.
     pub fn problems(&self) -> Vec<String> {

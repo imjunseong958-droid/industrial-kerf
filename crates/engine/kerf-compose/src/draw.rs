@@ -421,6 +421,12 @@ impl Drawing {
         frame
     }
 
+    /// The frame at `at` as the GPU draws it, or `None` where [`Drawing::frame`] would give it to the
+    /// CPU, even partway through.
+    pub(crate) fn frame_on_gpu(&self, at: Time, scale: f64) -> Option<Frame> {
+        self.gpu_frame(at, scale.clamp(1.0 / 16.0, 1.0))
+    }
+
     fn draw_frame16(&self, at: Time, scale: f64) -> Frame {
         let scale = scale.clamp(1.0 / 16.0, 1.0);
         if let Some(frame) = self.gpu_frame16(at, scale) {

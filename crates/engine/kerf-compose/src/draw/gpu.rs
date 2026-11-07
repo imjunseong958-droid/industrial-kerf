@@ -41,6 +41,8 @@ struct Depth {
     /// The distance fields of those with a bevel that stand in a light's way, which drawing them need
     /// not make again.
     distances: Vec<(kerf_model::Id, kerf_gpu::depth::Distance)>,
+    /// Where a clip that does not cross another writes how far off it is, for a camera's blur.
+    depths: Option<kerf_gpu::depth::Depths>,
 }
 
 impl Depth {
@@ -184,7 +186,8 @@ impl Drawing {
     }
 
     /// Whether the kernels can draw what is in depth in this sequence at its time `at`. A camera's
-    /// blur is only on the CPU; and a light all around may read a track that does not show.
+    /// blur needs a little more room than a picture; and a light all around may read a track that does
+    /// not show.
     fn gpu_can_draw_depth(
         &self,
         gpu: &Gpu,
@@ -209,7 +212,7 @@ impl Drawing {
             return false;
         }
         let scene = three_d::Scene::at(plan, at, (w, h));
-        if scene.has_aperture() {
+        if scene.has_aperture() && !gpu.fits(w + kerf_gpu::focus::SUMS_WIDER, h) {
             return false;
         }
         scene.environments().iter().all(|wanted| {
@@ -705,10 +708,12 @@ impl Drawing {
             ready,
             numbers: depth_numbers,
             distances,
+            depths: None,
         })
     }
 
-    /// A clip in depth, on a picture of `size`, transparent around it.
+    /// A clip in depth, on a picture of `size`, transparent around it, out of focus as far as the camera
+    /// has it.
     fn gpu_project(
         &self,
         frame: &mut GpuFrame<'static>,
@@ -716,10 +721,18 @@ impl Drawing {
         (plan, time): (&ClipPlan, Time),
         ready: &GpuReady,
         size: (u32, u32),
-        layers: Option<(&kerf_gpu::depth::Layers, u32)>,
+        depths: Option<kerf_gpu::depth::Depths>,
     ) -> Option<GpuPicture> {
         let (pw, ph) = (f64::from(ready.picture.w), f64::from(ready.picture.h));
         let number = depth.number(&plan.clip.id);
+        let depths = depths.or_else(|| {
+            depth.scene.has_aperture().then(|| {
+                depth
+                    .depths
+                    .get_or_insert_with(|| frame.depths(size))
+                    .clone()
+            })
+        });
         let scene = &depth.scene;
         let plane = three_d::Plane::of(scene, plan, (pw, ph), &ready.to_output, time);
         let smaller = three_d::read_smaller(scene, &plane, (pw, ph)).map(|by| {
@@ -774,12 +787,17 @@ impl Drawing {
                 }),
             },
             size,
-            layers,
+            depths.as_ref(),
         );
         if let Some((small, _)) = smaller {
             frame.release(small);
         }
-        drawn
+        match (drawn, depths) {
+            (Some(drawn), Some(depths)) if scene.has_aperture() => {
+                gpu_out_of_focus(frame, scene, drawn, &depths)
+            }
+            (drawn, _) => drawn,
+        }
     }
 
     /// Clips in depth that cross, each cut where it meets another, over `canvas`.
@@ -803,7 +821,7 @@ impl Drawing {
             let Some(ready) = ready else {
                 continue;
             };
-            let row = layers.laid();
+            let depths = layers.next_depths();
             let time = at - shown.plan.clip.start;
             let drawn = self.gpu_project(
                 frame,
@@ -811,7 +829,7 @@ impl Drawing {
                 (&shown.plan, time),
                 &ready,
                 size,
-                Some((&layers, row)),
+                Some(depths),
             )?;
             frame.lay(&mut layers, &drawn, ready.opacity, shown.plan.blend);
             frame.release(drawn);
@@ -1039,6 +1057,65 @@ fn edges(rect: Rect) -> [f32; 4] {
 }
 
 /// How far each pixel of `picture` is from its outline, as far as a bevel `width` pixels wide asks.
+/// `drawn` with each pixel blurred by its own radius, as `focus::blurred` makes it on the CPU: the same
+/// box, radii, and sizes, from what the frame has drawn so far, which takes waiting for it.
+fn gpu_out_of_focus(
+    frame: &mut GpuFrame<'static>,
+    scene: &three_d::Scene,
+    drawn: GpuPicture,
+    depths: &kerf_gpu::depth::Depths,
+) -> Option<GpuPicture> {
+    let focus = scene.focus_for_gpu();
+    let found = frame.focus_found(&drawn, depths, &focus)?;
+    let (w, h) = (drawn.w as usize, drawn.h as usize);
+    // With no alpha there is nothing to spread, and with no radius nowhere to spread it.
+    if found.right < found.left || found.most < super::focus::NO_BLUR {
+        return Some(drawn);
+    }
+    let margin = super::focus::margin(found.reach);
+    let area = [
+        found.left.saturating_sub(margin),
+        found.top.saturating_sub(margin),
+        (found.right + margin).min(w - 1),
+        (found.bottom + margin).min(h - 1),
+    ];
+    let levels = super::focus::levels(found.least, found.most);
+    let mut gathered = Vec::with_capacity(levels.len());
+    for (index, radius) in levels.iter().enumerate() {
+        // A radius this small is the picture itself.
+        if *radius < super::focus::NO_BLUR {
+            gathered.push((None, *radius, 1));
+            continue;
+        }
+        let by = super::focus::gathered_by(*radius);
+        // A pixel reads the levels either side of its radius.
+        let least = index.checked_sub(1).map_or(-1.0, |below| levels[below]);
+        let most = levels.get(index + 1).copied().unwrap_or(f32::MAX);
+        let picture = frame.focus_gathered(
+            &drawn,
+            depths,
+            &focus,
+            (*radius, by as u32),
+            area,
+            (least, most),
+        )?;
+        gathered.push((Some(picture), *radius, by));
+    }
+    let reading: Vec<(&GpuPicture, f32, u32)> = gathered
+        .iter()
+        .map(|(picture, radius, by)| (picture.as_ref().unwrap_or(&drawn), *radius, *by as u32))
+        .collect();
+    let out = frame.focused(depths, &focus, &reading, area, (drawn.w, drawn.h));
+    drop(reading);
+    for (picture, ..) in gathered {
+        if let Some(picture) = picture {
+            frame.release(picture);
+        }
+    }
+    frame.release(drawn);
+    out
+}
+
 fn gpu_distance(
     frame: &mut GpuFrame<'static>,
     picture: &GpuPicture,

@@ -340,6 +340,13 @@ pub struct Layers {
     laid: Vec<[u8; 16]>,
 }
 
+/// Where [`Frame::project`] writes how far off a clip is at each pixel.
+#[derive(Clone)]
+pub struct Depths {
+    pub(super) view: wgpu::TextureView,
+    pub(super) first_row: u32,
+}
+
 /// What a kernel of `distance.wgsl` writes.
 enum DistanceOut<'v> {
     Places(&'v wgpu::TextureView),
@@ -348,9 +355,12 @@ enum DistanceOut<'v> {
 }
 
 impl Layers {
-    /// How many are laid, which is the row where the next one's depth goes.
-    pub fn laid(&self) -> u32 {
-        self.laid.len() as u32
+    /// Where the next one's depth goes.
+    pub fn next_depths(&self) -> Depths {
+        Depths {
+            view: self.depths_view.clone(),
+            first_row: self.laid.len() as u32 * self.h,
+        }
     }
 }
 
@@ -602,13 +612,13 @@ impl Frame<'_> {
     }
 
     /// Draw a clip in depth on a picture of `size`, transparent around it, writing how far off it is at
-    /// each pixel to `depth`'s row of `layers` when asked to.
+    /// each pixel to `depths` when asked to.
     pub fn project(
         &mut self,
         scene: &Scene,
         clip: &Project<'_>,
         size: (u32, u32),
-        layers: Option<(&Layers, u32)>,
+        depths: Option<&Depths>,
     ) -> Option<Picture> {
         let gpu = self.gpu;
         let kernels = gpu.depth_kernels()?;
@@ -633,8 +643,8 @@ impl Frame<'_> {
                 picture.w,
                 picture.h,
                 clip.clip,
-                u32::from(layers.is_some()),
-                layers.map_or(0, |(layers, row)| row * layers.h),
+                u32::from(depths.is_some()),
+                depths.map_or(0, |depths| depths.first_row),
                 u32::from(summed),
             ],
         );
@@ -663,7 +673,7 @@ impl Frame<'_> {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let out = self.take(size.0, size.1);
-        let depth = layers.map_or(&kernels.no_depth, |(layers, _)| &layers.depths_view);
+        let depth = depths.map_or(&kernels.no_depth, |depths| &depths.view);
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("kerf-depth"),
             layout: &kernels.project_layout,
@@ -856,6 +866,22 @@ impl Frame<'_> {
             DistanceOut::Picture(&out.view),
         );
         Some(out)
+    }
+
+    /// Room for how far off one clip at a time is on a canvas of `(w, h)`.
+    pub fn depths(&mut self, (w, h): (u32, u32)) -> Depths {
+        let key = (
+            w,
+            h,
+            wgpu::TextureFormat::R32Float,
+            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let texture = self.gpu.texture(key);
+        self.used.push((key, texture.clone()));
+        Depths {
+            view: texture.create_view(&Default::default()),
+            first_row: 0,
+        }
     }
 
     /// Room for `count` clips that cross on a canvas of `(w, h)`.

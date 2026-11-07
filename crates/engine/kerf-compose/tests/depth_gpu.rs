@@ -59,8 +59,12 @@ fn holds(name: &str, body: &str) {
     let gpu = compositor(body, Accel::Always);
     assert!(gpu.draws_on_gpu(at, 1.0), "{name} went to the CPU");
     let cpu = compositor(body, Accel::Never);
-    let (drawn, reference) = (gpu.frame(at, 1.0), cpu.frame(at, 1.0));
-    // A kernel the device refuses sends the frame to the CPU, which would pass for a match.
+    // A frame given up partway goes to the CPU, which would pass for a match.
+    let drawn = gpu
+        .frame_on_gpu(at, 1.0)
+        .unwrap_or_else(|| panic!("{name} gave up on the GPU"));
+    let reference = cpu.frame(at, 1.0);
+    // And so does a kernel the device refuses.
     assert!(kerf_gpu::shared().is_some(), "{name} failed the device");
     assert!(
         reference.rgba.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
@@ -257,4 +261,105 @@ fn a_clip_in_depth_in_hdr_holds_to_the_cpu() {
             ),
         );
     }
+}
+
+/// What a camera's blur has to hold: a scene, with a camera over it.
+fn focused(camera: &str, clips: &str) -> String {
+    format!(
+        "{clips}  track V9 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set {camera}\n"
+    )
+}
+
+#[test]
+fn a_cameras_blur_holds_to_the_cpu() {
+    let square = |set: &str| {
+        format!(
+            "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true {set}\n"
+        )
+    };
+    holds(
+        "focus flat",
+        &focused("aperture=0.03", &square("z=0.5 scale=0.6")),
+    );
+    holds(
+        "focus wide, one level",
+        &focused("aperture=0.1", &square("z=2 scale=0.6")),
+    );
+    holds(
+        "focus turned, many levels",
+        &focused("aperture=0.05", &square("rotate_y=60 scale=0.6")),
+    );
+    holds(
+        "focus racked to a plane",
+        &focused("aperture=0.1 focus=0.5", &square("z=0.5 scale=0.6")),
+    );
+    holds(
+        "focus off the frame's edge",
+        &focused("aperture=0.05", &square("z=0.5 scale=2")),
+    );
+    holds(
+        "focus, plane past the camera",
+        &focused("aperture=0.05", &square("rotate_y=85 scale=2 z=-0.2")),
+    );
+    holds(
+        "focus, camera moved",
+        &focused(
+            "aperture=0.05 focus=0.3 x=0.1 z=-0.2 pan=10 tilt=-5 roll=8",
+            &square("rotate_x=25 scale=0.7"),
+        ),
+    );
+    holds(
+        "focus on a title, turned",
+        &focused(
+            "aperture=0.08",
+            "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Far\" size=0.3 three_d=true rotate_y=50\n",
+        ),
+    );
+}
+
+#[test]
+fn a_cameras_blur_through_more_holds_to_the_cpu() {
+    holds(
+        "focus, two apart",
+        &focused(
+            "aperture=0.05",
+            "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true z=0.6\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.2\n",
+        ),
+    );
+    holds(
+        "focus, two crossing",
+        &focused(
+            "aperture=0.05",
+            "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.6 z=0.1 rotate_y=45\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.6 rotate_y=-30\n",
+        ),
+    );
+    holds(
+        "focus on a deep title",
+        &focused(
+            "aperture=0.05",
+            "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Deep\" size=0.3 three_d=true depth=0.1 rotate_y=30 z=0.3\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 y=0.3 z=1\n",
+        ),
+    );
+    holds(
+        "focus, beveled, soft shadow",
+        &focused(
+            "aperture=0.04",
+            "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.5\n  track V2 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Cut\" size=0.3 three_d=true depth=0.1 bevel=0.03\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4\n",
+        ),
+    );
+    holds(
+        "focus, half there, blended",
+        &focused(
+            "aperture=0.06",
+            "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#40c040\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#ff8000 three_d=true scale=0.5 z=0.8 opacity=0.5 blend=screen\n",
+        ),
+    );
+    holds(
+        "focus in hdr",
+        "sequence s1 rate=24 size=960x540 audio=48000 color=rec2100-pq\n  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.5 z=0.5 rotate_y=30\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional z=1 intensity=2\n  track V9 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.05\n",
+    );
+    holds(
+        "focus in a sequence in depth",
+        "  track V1 video\n    clip n seq=inner src=0f at=0f dur=24f\n      set three_d=true rotate_y=25 scale=0.8\nsequence inner rate=24 size=960x540 audio=48000\n  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#40c040 three_d=true scale=0.5 z=0.5\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.05\n",
+    );
 }

@@ -723,9 +723,19 @@ fn narrow(a: Vector) -> [f32; 3] {
 }
 
 impl Scene {
-    /// Whether a camera here blurs what is out of focus, which only the CPU does.
+    /// Whether a camera here blurs what is out of focus.
     pub(super) fn has_aperture(&self) -> bool {
         self.aperture > 0.0
+    }
+
+    /// What goes into [`Self::blur_radii`], for the GPU.
+    pub(super) fn focus_for_gpu(&self) -> kerf_gpu::focus::Focus {
+        kerf_gpu::focus::Focus {
+            focus: self.focus as f32,
+            aperture: self.aperture as f32,
+            most: (self.height * MOST_BLUR) as f32,
+            margin: super::focus::MARGIN,
+        }
     }
 
     /// The tracks of the lights all around, by the place of each among the lights.
