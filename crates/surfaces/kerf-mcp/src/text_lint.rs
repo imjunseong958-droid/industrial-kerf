@@ -41,6 +41,11 @@ const GLYPH: f64 = 0.25;
 const CONTRAST_MOMENTS: usize = 3;
 /// How far past its box a text's outline or shadow is looked for, as a share of the frame's height.
 const CONTRAST_MARGIN: f64 = 0.01;
+/// The height frames are drawn at to read text against what is behind it. Half of a 1080p frame draws a
+/// caption's strokes a few pixels wide.
+const CONTRAST_HEIGHT: f64 = 540.0;
+/// The most frames a contrast check draws at a time; three for each moment of each clip it reads.
+const MOST_CONTRAST_FRAMES: usize = 360;
 
 /// Pixels a box may reach past title safe, or into another box, without a
 /// finding: what rounding to whole pixels moves.
@@ -520,11 +525,53 @@ fn steady_moments(clip: &Clip) -> Vec<Time> {
         .collect()
 }
 
+/// [`contrast`] by the compositor, adding to `findings`: how many clips it read and how many there were.
+/// `going_on` says how far along it is, from 0 to 1, and whether to keep on, and it reads no more
+/// once told not to.
+pub(crate) fn contrast_of(
+    project: &Project,
+    sequence: &Sequence,
+    range: (Time, Time),
+    mut going_on: impl FnMut(f64) -> bool,
+    findings: &mut Vec<Finding>,
+) -> (usize, usize) {
+    let scale = (CONTRAST_HEIGHT / f64::from(sequence.height.max(1))).min(1.0);
+    let id = sequence.id.as_str();
+    let mut drawn = 0usize;
+    let room = contrast_frames(sequence, range).max(1);
+    let draw = |shown: &Project, at: Time| {
+        drawn += 1;
+        if !going_on((drawn as f64 / room as f64).min(1.0)) {
+            return None;
+        }
+        kerf_engine::still::draw_frame(shown, Some(id), at, scale)
+            .ok()
+            .map(|frame| (frame.width, frame.height, frame.rgba))
+    };
+    contrast(
+        project,
+        sequence,
+        range,
+        MOST_CONTRAST_FRAMES,
+        draw,
+        findings,
+    )
+}
+
+/// About how many frames [`contrast_of`] draws, for saying how far along it is.
+fn contrast_frames(sequence: &Sequence, (from, to): (Time, Time)) -> usize {
+    let of = shown(sequence)
+        .iter()
+        .filter(|item| item.clip.start < to && item.clip.end() > from)
+        .count();
+    (of * 3 * CONTRAST_MOMENTS).min(MOST_CONTRAST_FRAMES)
+}
+
 /// Titles and captions of `sequence` in `project`, whose media paths are resolved, within a range,
 /// too faint against what is behind them, read from the picture: `draw` gives the frame of a project
 /// at a moment, or `None` if it cannot be drawn. It draws at most `most` frames, spread over what
 /// there is, and returns how many clips it read and how many there were. Frames take time, so this
-/// is asked for and is not part of a check.
+/// is for `look` to be asked for, and for the full check, and is not part of the fast one.
 pub(crate) fn contrast(
     project: &Project,
     sequence: &Sequence,
@@ -961,6 +1008,67 @@ mod contrast_tests {
             let findings = read(&body);
             assert!(findings.is_empty(), "{color}: {findings:?}");
         }
+    }
+
+    /// Whether a title in `color` is flagged over a moving, busy picture of everything from black to
+    /// white, with how faint it is.
+    fn over_busy_footage(dir: &std::path::Path, color: &str) -> Option<Vec<f64>> {
+        let path = dir.join("busy.mp4");
+        if !path.exists() {
+            let output = std::process::Command::new("ffmpeg")
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+                .args(["-i", "testsrc2=s=640x360:r=24:d=2"])
+                .args([
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&path)
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+        }
+        let body = format!(
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=48f video=640x360\nsequence s1 rate=24 size=640x360 audio=48000\n  track V1 video\n    clip c media=m src=0f at=0f dur=48f\n  track V2 video\n    clip words gen=title@1 at=0f dur=48f\n      set text=\"Plain words\" color={color} size=0.12\n",
+            path.display()
+        );
+        let project = parse_document(&body, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let sequence = &project.sequences[0];
+        let mut findings = Vec::new();
+        contrast_of(
+            &project,
+            sequence,
+            (Time::ZERO, sequence.duration()),
+            |_| true,
+            &mut findings,
+        );
+        Some(
+            findings
+                .iter()
+                .filter_map(|finding| finding.value)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn over_a_busy_picture_it_goes_by_the_parts_of_the_text() {
+        let dir = tempfile::tempdir().expect("a folder");
+        let Some(white) = over_busy_footage(dir.path(), "#ffffff") else {
+            eprintln!("no ffmpeg");
+            return;
+        };
+        let gray = over_busy_footage(dir.path(), "#808080").expect("as above");
+        let black = over_busy_footage(dir.path(), "#000000").expect("as above");
+        eprintln!("over testsrc2: white {white:?}, gray {gray:?}, black {black:?}");
+        // Mid gray has little to set it off from a picture with as much either side of it.
+        assert_eq!(gray.len(), 1, "{gray:?}");
     }
 
     #[test]
