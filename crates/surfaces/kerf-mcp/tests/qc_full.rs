@@ -181,6 +181,34 @@ fn a_clean_spot_passes_the_measured_rows_with_their_readings() {
 }
 
 #[test]
+fn an_hdr_sequence_says_its_picture_rows_read_the_sdr_copy() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg is not installed");
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    picture(directory.path(), "picture.mp4", 4.0, false);
+    tone(
+        directory.path(),
+        "sound.wav",
+        4.0,
+        amplitude_for(-23.0),
+        None,
+    );
+    let mut project = spot(directory.path());
+    project.sequences[0].color = kerf_model::ColorSpace::Rec2100Pq;
+    let report = check_full(&project, directory.path(), &CancellationToken::new()).unwrap();
+    assert_eq!(
+        row(&report, kerf_engine::qc::CODE_OUT_OF_RANGE).name,
+        "Gamut, SDR copy"
+    );
+    assert_eq!(
+        row(&report, kerf_engine::qc::CODE_LUMA_LEVELS).name,
+        "Luma, SDR copy"
+    );
+}
+
+#[test]
 fn a_spot_mixed_at_minus_14_lufs_fails_integrated_loudness() {
     if !ffmpeg_available() {
         eprintln!("skipping: ffmpeg is not installed");

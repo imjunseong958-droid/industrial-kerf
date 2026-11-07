@@ -47,6 +47,10 @@ constexpr int kFixedWidth = 240; // the vectorscope and loudness panes
 // The waveform, parade and QC panes share the rest in this ratio.
 constexpr int kShare[3] = {352, 352, 368};
 constexpr int kShareTotal = kShare[0] + kShare[1] + kShare[2];
+// Below the design's width QC's rows read before a scope needs its last pixels: QC has this much for
+// as long as the scopes keep their least.
+constexpr int kRoomyQc = 261;
+constexpr int kLeastScope = 180;
 const QString kModeKey = QStringLiteral("finish/waveformMode");
 
 // "−23", "−1": a target as the design writes it.
@@ -143,11 +147,13 @@ FinishTray::FinishTray(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus
     // ---- the panes --------------------------------------------------------
     m_loudness = new LoudnessView(nullptr, bus);
     m_qc = new QcView(nullptr, bus);
-    m_waveMeta = text(QString(), tokens::meta, tokens::ink3);
+    m_waveMeta = new ClippedMeta;
+    shell::setTextStyle(m_waveMeta, tokens::meta, tokens::ink3);
     m_waveMeta->setObjectName(QStringLiteral("finishWaveformMeta"));
     m_vectorMeta = text(QStringLiteral("75%"), tokens::meta, tokens::ink3);
     m_vectorMeta->setObjectName(QStringLiteral("finishVectorscopeMeta"));
-    m_paradeMeta = text(QString(), tokens::meta, tokens::ink3);
+    m_paradeMeta = new ClippedMeta;
+    shell::setTextStyle(m_paradeMeta, tokens::meta, tokens::ink3);
     m_paradeMeta->setObjectName(QStringLiteral("finishParadeMeta"));
     m_qcMeta = text(QString(), tokens::meta, tokens::ink3);
     m_qcMeta->setObjectName(QStringLiteral("finishQcMeta"));
@@ -233,9 +239,10 @@ QSize FinishTray::minimumSizeHint() const {
 
 std::array<FinishTray::Span, 5> FinishTray::paneSpans(int width) {
     const int rest = std::max(0, width - 6 * kGap - 2 * kFixedWidth);
-    const int waveform = int(std::lround(double(rest) * kShare[0] / kShareTotal));
-    const int parade = int(std::lround(double(rest) * kShare[1] / kShareTotal));
-    const int qc = rest - waveform - parade;
+    const int shared = int(std::lround(double(rest) * kShare[2] / kShareTotal));
+    const int qc = std::max(shared, std::min(kRoomyQc, rest - 2 * kLeastScope));
+    const int waveform = (rest - qc) / 2;
+    const int parade = rest - qc - waveform;
     const int widths[5] = {waveform, kFixedWidth, parade, kFixedWidth, qc};
     std::array<Span, 5> spans{};
     int x = kGap;

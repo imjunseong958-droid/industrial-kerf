@@ -1,4 +1,5 @@
 #include "effects_panel.h"
+#include "inspector_presentation.h"
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "ui/components.h"
@@ -163,11 +164,10 @@ protected:
     }
 };
 
-// A generator's name as the catalog writes it is its doc's first sentence
-// ("A line of text. Position it…"): the first sentence only.
-QString shortName(const QString &name) {
-    const QString first = name.section(QStringLiteral(". "), 0, 0).trimmed();
-    return first.isEmpty() ? name : first;
+// A generator's name as the catalog writes it is its doc's first sentence, which says what it does
+// and goes in its tip. Its card says what it is.
+QString generatorName(const QString &id) {
+    return id.isEmpty() ? id : id.at(0).toUpper() + id.mid(1);
 }
 
 } // namespace
@@ -319,8 +319,8 @@ void EffectsPanel::setCatalog(const QJsonArray &catalog) {
         const QString id = fx.value(QStringLiteral("id")).toString();
         const QString category = fx.value(QStringLiteral("category")).toString();
         const QString group = m_mode == Mode::Titles ? QStringLiteral("generator") : domain;
-        const QString name = m_mode == Mode::Titles ? shortName(fx.value(QStringLiteral("name")).toString())
-                                                    : fx.value(QStringLiteral("name")).toString();
+        // As the Inspector's rows name it, once it is on a clip.
+        const QString name = m_mode == Mode::Titles ? generatorName(id) : presentationEffectName(fx.value(QStringLiteral("name")).toString());
         auto *item = new QListWidgetItem(placeholder(group, ratio), name);
         item->setData(kIdRole, id);
         item->setData(kCategoryRole, category);

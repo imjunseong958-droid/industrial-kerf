@@ -943,7 +943,7 @@ private slots:
         catalogTitles.setCatalog(real);
         QVERIFY(catalogTitles.m_items.contains(QStringLiteral("title")));
         QVERIFY(catalogTitles.m_items.contains(QStringLiteral("solid")));
-        QCOMPARE(catalogTitles.m_items.value(QStringLiteral("title"))->text(), QStringLiteral("A line of text"));
+        QCOMPARE(catalogTitles.m_items.value(QStringLiteral("title"))->text(), QStringLiteral("Title"));
         QCOMPARE(catalogTitles.categories().constFirst().name, QStringLiteral("All titles"));
     }
 
@@ -1407,6 +1407,59 @@ private slots:
         // The category ghost and the count share the row.
         QCOMPARE(effects.m_categoryButton->mapTo(&effects, QPoint()).x(), 4);
         QCOMPARE(effects.m_count->mapTo(&effects, QPoint(effects.m_count->width(), 0)).x(), effects.width() - EffectsPanel::kPadX);
+    }
+
+    // A role's tracks say themselves within the sheet: twelve picture tracks ran past its edge, with
+    // the last two out of reach. Tracks in a row read as a range, and what is left gives way.
+    void aRolesTracksStayInsideTheSheet() {
+        MediaArtwork artwork;
+        ProjectPanel panel(&artwork);
+        panel.resize(272, 600);
+        QJsonArray tracks;
+        for (int number = 1; number <= 12; ++number)
+            tracks.append(QJsonObject{{"id", QStringLiteral("V%1").arg(number)}, {"type", "video"}, {"enabled", true}, {"clips", QJsonArray{}}});
+        tracks.append(QJsonObject{{"id", "A1"}, {"type", "audio"}, {"enabled", true}, {"clips", QJsonArray{}}});
+        panel.setTracks(tracks);
+        panel.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&panel));
+        QCoreApplication::processEvents();
+        const QList<QWidget *> rows = panel.findChildren<QWidget *>(QRegularExpression(QStringLiteral("^binRole_")));
+        QVERIFY(!rows.isEmpty());
+        bool sawVideo = false;
+        for (QWidget *row : rows) {
+            row->layout()->activate();
+            // The widest row sets all of their widths, and pushed the others' tracks off the sheet too.
+            QVERIFY2(row->width() <= panel.width(), qPrintable(QStringLiteral("%1 wide in %2").arg(row->width()).arg(panel.width())));
+            TextRecorder painted;
+            row->render(&painted);
+            for (const TextRecorder::Run &run : std::as_const(painted.runs))
+                QVERIFY2(!run.text.contains(QStringLiteral("V2 V3")), qPrintable(run.text));
+            for (QLabel *label : row->findChildren<QLabel *>()) {
+                QVERIFY2(label->geometry().right() < row->width(), qPrintable(label->text()));
+                QVERIFY2(label->width() >= label->fontMetrics().horizontalAdvance(label->text()), qPrintable(label->text()));
+                sawVideo = sawVideo || label->text() == QStringLiteral("V1–V12");
+            }
+        }
+        QVERIFY(sawVideo);
+    }
+
+    // A generator's card names it. Its name in the catalog is its doc's first sentence, which
+    // shrank to "What `three_d`…" on a card a third of the sheet wide.
+    void aGeneratorsCardNamesIt() {
+        char *all = kerf_fx_catalog_all();
+        QVERIFY(all);
+        const QJsonArray real = QJsonDocument::fromJson(all).array();
+        kerf_bridge_string_free(all);
+        EffectsPanel titles(nullptr, EffectsPanel::Mode::Titles);
+        titles.setCatalog(real);
+        const QHash<QString, QString> names{{"title", "Title"}, {"solid", "Solid"}, {"shape", "Shape"}, {"particles", "Particles"}, {"adjustment", "Adjustment"}, {"camera", "Camera"}, {"light", "Light"}, {"null", "Null"}};
+        for (auto it = names.cbegin(); it != names.cend(); ++it) {
+            QListWidgetItem *item = titles.m_items.value(it.key());
+            QVERIFY2(item, qPrintable(it.key()));
+            QCOMPARE(item->text(), it.value());
+            // What it does is in its tip, as an effect's is.
+            QVERIFY2(!item->toolTip().isEmpty(), qPrintable(it.key()));
+        }
     }
 };
 

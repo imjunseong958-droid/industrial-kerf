@@ -361,6 +361,13 @@ void GraphEditor::setInterp(const QString &interp) {
     commit(m_selected.keys());
 }
 
+double GraphEditor::wholeSpan() const {
+    const bool keyAtEnd = std::any_of(m_channels.cbegin(), m_channels.cend(), [this](const Channel &channel) {
+        return std::any_of(channel.keys.cbegin(), channel.keys.cend(), [this](const Key &key) { return key.frame == m_duration; });
+    });
+    return double(std::max<qint64>(1, keyAtEnd ? m_duration : m_duration - 1));
+}
+
 void GraphEditor::setView(double start, double span) {
     const double whole = wholeSpan();
     m_viewSpan = std::clamp(span, std::min(kFewestFrames, whole), whole);
@@ -570,7 +577,7 @@ void GraphEditor::paintEvent(QPaintEvent *) {
     const double perFrame = area.width() / m_viewSpan;
     const qint64 step = tickStep(perFrame, 56.0);
     painter.setFont(tokens::font(tokens::monoSmall));
-    const qint64 lastFrame = std::min(m_duration - 1, qint64(std::floor(m_viewStart + m_viewSpan)));
+    const qint64 lastFrame = std::min(m_duration, qint64(std::floor(m_viewStart + m_viewSpan)));
     for (qint64 frame = qint64(std::ceil(m_viewStart / double(step))) * step; frame <= lastFrame; frame += step) {
         const double x = xOf(double(frame));
         painter.setPen(QColor::fromRgba(tokens::line));

@@ -41,6 +41,7 @@ repeating their numbers, so changing a value does not make it wrong.
 | Pick a version | "Use this" | The card goes to the picture and gives way to it; the others fall | `MainWindow::useVersion`, `CompareView::playPick` | `anUnusedCardKeepsItsPosterWhenTheStateChanges`, `aPickedCardIsNotCalledBack` |
 | Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
+| A tray over an upright picture | A tray comes up where the picture would go under it | The picture moves into what the tray leaves, and back as it goes | `StageShell::setTray`, `stage::rects` | `aTrayLeavesThePictureAndASheetLeavesTheTray` |
 
 "none" means it has only been checked in a real window. Motion can only be judged
 there, or from screenshots taken while it runs.

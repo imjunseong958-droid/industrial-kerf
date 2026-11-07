@@ -258,6 +258,16 @@ pub fn check_full_with(
 
     let mut report = CheckReport::new(findings, FULL_ROWS);
     label_rows(&mut report, sound.as_ref(), measured.as_ref(), limits);
+    // These read the 8-bit frames a monitor gets, as Rec.709 video, and say nothing of an HDR master.
+    if target.color.is_hdr() {
+        for row in &mut report.summary.rows {
+            if row.code == picture::CODE_OUT_OF_RANGE {
+                row.name = "Gamut, SDR copy".into();
+            } else if row.code == picture::CODE_LUMA_LEVELS {
+                row.name = "Luma, SDR copy".into();
+            }
+        }
+    }
     Ok(report)
 }
 

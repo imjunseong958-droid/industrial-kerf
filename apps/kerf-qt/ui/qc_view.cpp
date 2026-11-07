@@ -25,8 +25,6 @@ constexpr int kRowHeight = tokens::height::h28;
 constexpr int kPad = tokens::space::s12;
 constexpr int kActionWidth = 64;
 constexpr int kDot = 6;
-// The least of a row's width its value keeps beside a long name.
-constexpr int kLeastValue = 24;
 
 // "In thread": UI 12 ink2, accent-ink on hover, right-aligned in its 64.
 class ThreadLink final : public QToolButton {
@@ -35,7 +33,7 @@ public:
         setObjectName(QStringLiteral("qcInThread"));
         setText(QStringLiteral("In thread"));
         setCursor(Qt::PointingHandCursor);
-        setFixedSize(kActionWidth, kRowHeight);
+        setFixedSize(ui::snapWidth(tokens::control, text()) + tokens::space::s2, kRowHeight);
         setAttribute(Qt::WA_Hover);
         ui::setTip(this, QStringLiteral("Open the thread this finding is in"));
     }
@@ -56,6 +54,18 @@ QString rowValueText(const QJsonObject &row) {
     if (limit.isEmpty()) return measured;
     if (measured.isEmpty()) return limit;
     return QStringLiteral("%1 · %2").arg(measured, limit);
+}
+
+// As much of a row's value as fits, each step saying less and none of them cutting a word, since a
+// number cut short reads as another number: all of it, the measure before its limit, or the measure's
+// first word, which is its number. Nothing when not even that fits; the tip has it all.
+QString valueThatFits(const QString &value, const tokens::TypeStyle &style, double room) {
+    const auto fits = [&style, room](const QString &text) { return ui::snapWidth(style, text) <= room; };
+    if (fits(value)) return value;
+    const QString measure = value.section(QStringLiteral(" · "), 0, 0);
+    if (fits(measure)) return measure;
+    const QString number = measure.section(QLatin1Char(' '), 0, 0);
+    return fits(number) ? number : QString();
 }
 
 } // namespace
@@ -108,28 +118,29 @@ void QcRow::paintEvent(QPaintEvent *) {
     p.drawEllipse(QRectF(kPad, (height() - kDot) / 2.0, kDot, kDot));
     p.setRenderHint(QPainter::Antialiasing, false);
 
+    const QString outcome = m_thread.isEmpty() || m_passed ? (m_passed ? QStringLiteral("Pass") : QStringLiteral("Fail")) : QString();
     const QRectF action(width() - kPad - kActionWidth, 0, kActionWidth, height());
-    if (m_passed || m_thread.isEmpty()) {
+    if (!outcome.isEmpty()) {
         // A failing row no comment carries has nothing to open.
         p.setFont(tokens::font(tokens::control));
         p.setPen(tokens::color(m_passed ? tokens::ink3 : tokens::neg));
-        p.drawText(action, Qt::AlignRight | Qt::AlignVCenter, m_passed ? QStringLiteral("Pass") : QStringLiteral("Fail"));
+        p.drawText(action, Qt::AlignRight | Qt::AlignVCenter, outcome);
     }
-    const QFont mono = tokens::font(tokens::monoSmall);
-    const int valueWidth = ui::snapWidth(tokens::monoSmall, m_value);
     const double nameLeft = kPad + kDot + tokens::space::s8;
-    const double valueRight = action.left() - tokens::space::s8;
-    // In a narrow tray the name reads first, since it says what the row is, and what it measured
-    // gives way to it, down to a stub; the tip has them whole.
-    const double nameEnd = nameLeft + ui::snapWidth(tokens::control, m_name) + tokens::space::s8;
-    const double valueLeft = std::max(valueRight - valueWidth, std::min(nameEnd, valueRight - kLeastValue));
-    p.setFont(mono);
+    const double nameEnd = nameLeft + ui::snapWidth(tokens::control, m_name);
+    // The values line up at the column an In thread needs, and one that does not fit there has what
+    // this row's own action leaves. The name reads first, since it says what the row is.
+    const double ownAction = ui::snapWidth(tokens::control, outcome.isEmpty() ? QStringLiteral("In thread") : outcome);
+    const double column = action.left() - tokens::space::s8;
+    const double furthest = width() - kPad - ownAction - tokens::space::s8;
+    const bool inColumn = ui::snapWidth(tokens::monoSmall, m_value) <= column - nameEnd - tokens::space::s8;
+    const double valueRight = inColumn ? column : furthest;
+    const QString value = valueThatFits(m_value, tokens::monoSmall, valueRight - nameEnd - tokens::space::s8);
+    p.setFont(tokens::font(tokens::monoSmall));
     p.setPen(valueColor());
-    // The measure comes before the limit, so it is the limit that goes.
-    p.drawText(QRectF(valueLeft, 0, valueRight - valueLeft, height()), Qt::AlignRight | Qt::AlignVCenter,
-               QFontMetrics(mono).elidedText(m_value, Qt::ElideRight, int(valueRight - valueLeft)));
+    p.drawText(QRectF(nameEnd, 0, valueRight - nameEnd, height()), Qt::AlignRight | Qt::AlignVCenter, value);
     const QFont ui = tokens::font(tokens::control);
-    const int nameRoom = int(valueLeft - tokens::space::s8 - nameLeft);
+    const int nameRoom = int(furthest + tokens::space::s8 - nameLeft);
     p.setFont(ui);
     p.setPen(tokens::color(tokens::ink));
     p.drawText(QRectF(nameLeft, 0, qMax(0, nameRoom), height()), Qt::AlignLeft | Qt::AlignVCenter,
@@ -261,16 +272,18 @@ QString QcView::summaryText() const {
 
 QString QcView::standardsText() const {
     const QJsonArray rows = m_result.value(QStringLiteral("summary")).toObject().value(QStringLiteral("rows")).toArray();
-    bool loudness = false, gamut = false, captions = false;
+    bool loudness = false, gamut = false, copy = false, captions = false;
     for (const QJsonValue &value : rows) {
         const QString code = value.toObject().value(QStringLiteral("code")).toString();
         loudness = loudness || code.startsWith(QStringLiteral("loudness."));
         gamut = gamut || code == QStringLiteral("picture.out_of_range");
+        // An HDR sequence's: what it read is not what is mastered.
+        copy = copy || (code == QStringLiteral("picture.out_of_range") && value.toObject().value(QStringLiteral("name")).toString().contains(QStringLiteral("SDR copy")));
         captions = captions || code.startsWith(QStringLiteral("caption.")) || code == QStringLiteral("text.overlap");
     }
     QStringList parts;
     if (loudness) parts << QStringLiteral("R128");
-    if (gamut) parts << QStringLiteral("Rec.709");
+    if (gamut) parts << (copy ? QStringLiteral("SDR copy") : QStringLiteral("Rec.709"));
     if (captions) parts << QStringLiteral("captions");
     return parts.join(QStringLiteral(" · "));
 }

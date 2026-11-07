@@ -46,6 +46,9 @@ TrayPane::TrayPane(const QString &objectName, const QString &name, QLabel *meta,
     header->setSpacing(tokens::space::s8);
     auto *title = text(name, tokens::controlStrong, tokens::ink);
     title->setFixedHeight(tokens::height::h28);
+    // The name stays whole, and what follows it gives way.
+    title->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    title->setMinimumWidth(title->sizeHint().width());
     header->addWidget(title);
     if (meta) header->addWidget(meta);
     header->addStretch(1);

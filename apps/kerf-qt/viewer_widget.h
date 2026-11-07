@@ -43,6 +43,8 @@ public:
     void setFrame(const QImage &frame, double time);
     QImage frame() const { return m_frame; }
     void clearFrame();
+    // The size of the frame showing, empty with none.
+    QSize frameSize() const { return m_frame.size(); }
     // The next frame wipes in over this one, for a change of what is showing.
     void wipeToNextFrame();
     // A still of what the picture was: it wipes to and fro over what plays, with

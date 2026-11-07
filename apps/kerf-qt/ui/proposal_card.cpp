@@ -287,9 +287,11 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     second->setSpacing(8);
     m_changesLink = new ChatExpander;
     m_changesLink->setText(QStringLiteral("0 changes"));
-    connect(m_changesLink, &QAbstractButton::clicked, this, [this] {
-        setOpen(!m_open);
-        emit openToggled(m_open);
+    // Toggled rather than clicked: an accessibility press toggles it without a click.
+    connect(m_changesLink, &QAbstractButton::toggled, this, [this](bool open) {
+        if (open == m_open) return;
+        setOpen(open);
+        emit openToggled(open);
     });
     second->addWidget(m_changesLink);
     second->addStretch(1);

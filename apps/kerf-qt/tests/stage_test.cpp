@@ -1001,6 +1001,42 @@ private slots:
         QCOMPARE(window.m_toolbarWiring->subtitleText(), QStringLiteral("Preview ready"));
     }
 
+
+    // Accepting a proposal starts the program's playback again: what was showing stands in until its
+    // first frame, where a blank "Your viewer" stood for up to two seconds. A window with nothing to
+    // show does not keep the frame.
+    void aNewPlaybackKeepsThePictureUntilItsFirstFrame() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject clip{{"id", "c1"}, {"kind", "solid"}, {"timelineStart", 0.0}, {"duration", 2.0}};
+        const auto snapshot = [&](int revision, const QJsonArray &clips, int width) {
+            return QJsonObject{{"revision", revision}, {"duration", clips.isEmpty() ? 0 : 2}, {"timeline", QJsonObject{{"fps", 24}, {"width", width}, {"height", 1080}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", clips}}}}}}};
+        };
+        window.applySnapshot(snapshot(1, QJsonArray{clip}, 1920));
+        window.resize(1389, 868);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto blank = [&window] {
+            TextRecorder painted;
+            window.m_viewer->render(&painted);
+            return painted.colorOf(QStringLiteral("Your viewer")).isValid();
+        };
+        QImage frame(1920, 1080, QImage::Format_RGB32);
+        frame.fill(Qt::darkGreen);
+        window.m_viewer->setFrame(frame, 0.0);
+        QVERIFY(!blank());
+        window.handleEvent(QJsonObject{{"type", "viewer_reset"}});
+        QVERIFY(!blank());
+        // Of another shape it would be stretched, and with nothing to play it would stay for good.
+        window.applySnapshot(snapshot(2, QJsonArray{clip}, 1080));
+        window.handleEvent(QJsonObject{{"type", "viewer_reset"}});
+        QVERIFY(blank());
+        window.m_viewer->setFrame(frame, 0.0);
+        window.applySnapshot(snapshot(3, QJsonArray{}, 1920));
+        window.handleEvent(QJsonObject{{"type", "viewer_reset"}});
+        QVERIFY(blank());
+        window.close();
+    }
 };
 
 #undef KERF_NEAR

@@ -277,6 +277,18 @@ NumberFormat presentationFor(const QJsonObject &def, const PresentationContext &
         pixels(context.sequenceHeight);
         format.decimals = 0;
         format.smallStep = 1.0;
+    } else if (unit == QStringLiteral("frame heights a second") || unit == QStringLiteral("frame heights a second a second")) {
+        // Short enough to leave the figures in sight.
+        pixels(context.sequenceHeight);
+        format.decimals = 0;
+        format.smallStep = 1.0;
+        format.unit = unit == QStringLiteral("frame heights a second") ? QStringLiteral("px/s") : QStringLiteral("px/s²");
+    } else if (name == QStringLiteral("seed")) {
+        // A whole number, and not a share of anything.
+        format.decimals = 0;
+        format.step = 1.0;
+        format.bigStep = 10.0;
+        format.smallStep = 1.0;
     } else {
         tabled = false;
         if (unit == QStringLiteral("frame widths") || unit == QStringLiteral("picture widths")) {
@@ -292,6 +304,9 @@ NumberFormat presentationFor(const QJsonObject &def, const PresentationContext &
             format.tightUnit = true;
         } else if (unit == QStringLiteral("%")) {
             format.unit = QStringLiteral("%");
+            format.tightUnit = true;
+        } else if (unit == QStringLiteral("a second") || unit == QStringLiteral("seconds")) {
+            format.unit = unit == QStringLiteral("seconds") ? QStringLiteral("s") : QStringLiteral("/s");
             format.tightUnit = true;
         } else if (unit == QStringLiteral("fraction") || (unit.isEmpty() && bounded && modelMin >= 0.0 && defaultValue == 1.0)) {
             format.unit = QStringLiteral("%");

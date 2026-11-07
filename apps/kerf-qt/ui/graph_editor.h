@@ -118,7 +118,8 @@ private:
     void seekTo(double x);
     // Show `span` frames from `start`, held to the clip.
     void setView(double start, double span);
-    double wholeSpan() const { return double(std::max<qint64>(1, m_duration - 1)); }
+    // The clip's frames, and its end if a key lies there: a move across a clip is written to it.
+    double wholeSpan() const;
     // Alt with the wheel, on the selected number's value axis.
     void wheelValues(QWheelEvent *event);
     // Show the selected number from `low` to `high`, within what the zoom allows.
