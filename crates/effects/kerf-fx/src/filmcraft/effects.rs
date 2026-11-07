@@ -958,44 +958,16 @@ fn box_rows(px: &mut [f32], w: usize, r: usize, repeat: bool) {
     }
     px.par_chunks_mut(w * 4).for_each_init(
         || vec![0f32; w * 4],
-        |tmp, row| {
-            tmp.copy_from_slice(row);
-            let inv = 1.0 / (2 * r + 1) as f32;
-            let fetch = |i: isize| -> usize {
-                if repeat {
-                    i.clamp(0, w as isize - 1) as usize
-                } else {
-                    i as usize
-                }
-            };
-            let mut acc = [0f32; 4];
-            for i in -(r as isize)..=(r as isize) {
-                if repeat || (i >= 0 && (i as usize) < w) {
-                    let j = fetch(i);
-                    for k in 0..4 {
-                        acc[k] += tmp[j * 4 + k];
-                    }
-                }
-            }
-            for x in 0..w {
-                for k in 0..4 {
-                    row[x * 4 + k] = acc[k] * inv;
-                }
-                let out_i = x as isize - r as isize;
-                let in_i = x as isize + r as isize + 1;
-                if repeat || out_i >= 0 {
-                    let j = fetch(out_i);
-                    for k in 0..4 {
-                        acc[k] -= tmp[j * 4 + k];
-                    }
-                }
-                if repeat || (in_i as usize) < w {
-                    let j = fetch(in_i);
-                    for k in 0..4 {
-                        acc[k] += tmp[j * 4 + k];
-                    }
-                }
-            }
+        |from, to| {
+            from.copy_from_slice(to);
+            kerf_kernel::box_line(&mut kerf_kernel::Row {
+                from,
+                to,
+                width: w as isize,
+                radius: r as isize,
+                repeat,
+                sum: [0.0; 4],
+            });
         },
     );
 }

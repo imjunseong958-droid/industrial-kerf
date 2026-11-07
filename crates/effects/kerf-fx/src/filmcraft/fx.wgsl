@@ -331,19 +331,6 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
         case OP_BLACK_WHITE: {
             return vec3(luma709(c));
         }
-        case OP_COLOR_BALANCE: {
-            let e = enc(c);
-            let l = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
-            let ws = (1.0 - l) * (1.0 - l);
-            let wh = l * l;
-            let wm = 1.0 - ws - wh;
-            var o = e + u.p0.xyz * ws + u.p1.xyz * max(wm, 0.0) + u.p2.xyz * wh;
-            if u.i1.x != 0u {
-                let l2 = 0.2126 * o.x + 0.7152 * o.y + 0.0722 * o.z;
-                o = o + (l - l2);
-            }
-            return dec(o);
-        }
         case OP_LEAVE_COLOR: {
             let amt = u.p0.x; let kh = u.p0.y; let tol = u.p0.z; let soft = u.p0.w;
             let h = rgb_to_hsl(enc(c)).x;
@@ -768,6 +755,10 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             let res = vec3(enc_to_linear_limiter(out_enc.x), enc_to_linear_limiter(out_enc.y), enc_to_linear_limiter(out_enc.z));
             return vec4(res * a, a);
         }
+        // Written out from `kerf_kernel`, as the CPU runs it.
+        case OP_COLOR_BALANCE: {
+            return color_balance_px(ld(p));
+        }
         case OP_LUMETRI: {
             let o = ld(p);
             let a = o.a;
@@ -806,39 +797,5 @@ fn fx_px(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, p, pixel(u.i0.x, p));
 }
 
-// A box pass as a running sum along one row (i1.z = 0) or column (1) per invocation: O(1) per
-// pixel for any radius, the arithmetic of `effects::box_rows`.
-@compute @workgroup_size(64)
-fn fx_run(@builtin(global_invocation_id) id: vec3<u32>) {
-    let s = size();
-    let vertical = u.i1.z != 0u;
-    let n = select(s.x, s.y, vertical);
-    let lines = select(s.y, s.x, vertical);
-    let line = i32(id.x);
-    if line >= lines {
-        return;
-    }
-    let r = i32(u.i1.x);
-    let repeat = u.i1.y != 0u;
-    let inv = 1.0 / f32(2 * r + 1);
-    var acc = vec4(0.0);
-    for (var i = -r; i <= r; i++) {
-        if repeat || (i >= 0 && i < n) {
-            let j = clamp(i, 0, n - 1);
-            acc += ld(select(vec2(j, line), vec2(line, j), vertical));
-        }
-    }
-    for (var x = 0; x < n; x++) {
-        textureStore(dst, select(vec2(x, line), vec2(line, x), vertical), acc * inv);
-        let out_i = x - r;
-        let in_i = x + r + 1;
-        if repeat || out_i >= 0 {
-            let j = clamp(out_i, 0, n - 1);
-            acc -= ld(select(vec2(j, line), vec2(line, j), vertical));
-        }
-        if repeat || in_i < n {
-            let j = clamp(in_i, 0, n - 1);
-            acc += ld(select(vec2(j, line), vec2(line, j), vertical));
-        }
-    }
-}
+// `fx_run`, a box pass as a running sum along one row or column per invocation, and `color_balance_px`
+// are written out from `kerf_kernel` and go on the end of this.

@@ -23,6 +23,10 @@ const SCENES: &[(&str, &str)] = &[
     ("placed", "      set scale=0.9\n"),
     ("lumetri", "      fx color.lumetri@2 exposure=0.5\n"),
     ("color basic", "      fx color.basic exposure=0.3\n"),
+    (
+        "color balance",
+        "      fx color.colorbalance@2 shadow_r=20 mid_g=-15 hi_b=25\n",
+    ),
     ("unsharp", "      fx blur.unsharp amount=100 radius=3\n"),
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
     ("glow", "      fx light.wonderglow@1\n"),

@@ -398,7 +398,15 @@ impl Stage {
         let built = gpu.build(|device| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("kerf-fx"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("fx.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}{}{}",
+                        include_str!("fx.wgsl"),
+                        kerf_kernel::color_balance_wgsl(),
+                        kerf_kernel::box_line_wgsl()
+                    )
+                    .into(),
+                ),
             });
             let layout = kerf_gpu::kernel_layout(device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

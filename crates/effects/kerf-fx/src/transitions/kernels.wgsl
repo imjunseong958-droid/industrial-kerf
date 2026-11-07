@@ -300,9 +300,7 @@ fn field(x: f32, y: f32) -> f32 {
             return along + abs(idx - (count - 1.0) / 2.0) * n(13);
         }
         case W_IRIS_ROUND: {
-            let rx = x - n(8);
-            let ry = y - n(9);
-            return sqrt(rx * rx + ry * ry);
+            return iris_round(x, y, n(8), n(9));
         }
         case W_IRIS_BOX: {
             return max(abs(x - n(8)), abs(y - n(9)) * n(10));
@@ -331,17 +329,8 @@ fn field(x: f32, y: f32) -> f32 {
     }
 }
 
-// `wipe_px` with its style in the first numbers.
-fn wipe_px(a: vec4<f32>, b: vec4<f32>, d: f32) -> vec4<f32> {
-    let s = (n(0) + n(2)) * 0.5;
-    let kb = 1.0 - sstep(-s, s, d);
-    var ko = kb;
-    if n(1) > 0.0 {
-        ko = 1.0 - sstep(n(1) - s, n(1) + s, d);
-    }
-    ko = max(ko, kb);
-    return a * (1.0 - ko) + n4(4) * (ko - kb) + b * kb;
-}
+// `wipe_px`, with its style in the first numbers, and `iris_round` are written out from `kerf_kernel`
+// and go on the end of this.
 
 @compute @workgroup_size(16, 16)
 fn wipes(@builtin(global_invocation_id) id: vec3<u32>) {
