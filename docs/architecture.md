@@ -375,13 +375,24 @@ average, not as strands, which is all a soft edge along an outline can say. A su
 | Growing and shrinking by 20% over ten frames, 64 px | 0.995 | 0.967 |
 | Turning 12 and growing 20%, 64 px | 0.995 | 0.967 |
 | Turning 20 and growing 30%, 128 px | 0.994 | 0.968 |
-| Shutter open half the frame, 8 px | 0.978 | 0.948 |
-| Shutter open half the frame, 64 px | 0.949 | 0.939 |
-| Shutter open half the frame, 128 px | 0.881 | 0.911 |
-| Shutter open half the frame, turning 12, 64 px | 0.937 | 0.923 |
-| Shutter open all the frame, 64 px | 0.863 | 0.895 |
+So turning and changing size cost it nothing a band cannot follow, and blur is what is left. This used to say that the outline sits inside what is half covered at the ends of a blur. Measured, it is the other way: a cut goes by color in code values, in which a little of a bright subject's light is a lot, so it takes in nearly all of the blur, out to 44% of the blur's length from the middle where the end is at 50% on a subject plainly apart from what is behind it, and the measure across the edge brings it only part of the way back. An outline with the shutter open all the frame at 64 pixels was 12% larger than what is more than half covered. That middle is the subject at the middle of the exposure, and from what the cut took in it lies back along the way each edge went, by as far at the front as at the rear, around a turn as along a straight edge (`roto/shutter.rs`). So what edges measure where they can be read past their blur gives one number for a shot, how far the middle is from the cut, and how long the shutter was open, which is the camera's; the motion from frame to frame, with its turn and change of size, says the rest; and a picture of the cut is drawn in along that motion. A mask's soft edge there is as wide as that edge went while the shutter was open, and 1.33 times that, since a mask's fall-off is an S and a blur's a straight line. Where a frame turned around, the frames either side say little and its own edges are gone by. Over 24 frames at 640x360, by the overlap with what is covered more than half of the time, by the measure alone and then with this, an ellipse unless it says otherwise:
 
-So turning and changing size cost it nothing a band cannot follow, and blur is what is left: the outline sits inside what is half covered by about half of how long the blur is at its ends, since the cut keeps to what looks like the subject and a measure of the fall-off goes only so far around a turn. A mask's soft edge makes up some of that where it is drawn. A trained model is optional and swappable (`kerf_segment::MaskModel`):
+| Shot | Plain, measure | Plain, shutter | Close, measure | Close, shutter |
+|---|---|---|---|---|
+| Open half the frame, 8 px | 0.977 | 0.977 | 0.946 | 0.946 |
+| Open half the frame, 64 px | 0.950 | 0.958 | 0.935 | 0.954 |
+| Open half the frame, 128 px | 0.851 | 0.942 | 0.880 | 0.919 |
+| Open half the frame, turning 12, 64 px | 0.941 | 0.954 | 0.917 | 0.935 |
+| Open half the frame, 48 across and 40 down | 0.934 | 0.958 | 0.915 | 0.942 |
+| Open all the frame, 32 px | 0.938 | 0.961 | 0.929 | 0.951 |
+| Open all the frame, 64 px | 0.827 | 0.941 | 0.854 | 0.919 |
+| Open all the frame, 48 across and 40 down | 0.868 | 0.932 | 0.836 | 0.898 |
+| Open all the frame, turning 12 and growing 20%, 48 px | 0.885 | 0.916 | 0.874 | 0.912 |
+| Open all the frame, a rounded box, 64 px | 0.886 | 0.967 | 0.878 | 0.930 |
+| Open all the frame, 128 px | 0.643 | 0.702 | 0.728 | 0.780 |
+| Open all the frame, half the size, 64 px | 0.649 | 0.649 | 0.700 | 0.749 |
+
+These are not the numbers this table used to give, which counted what is covered for just half of 8 moments as more than half and so put the truth a sixteenth of the blur further out at both ends; the pictures still have 8 moments, and the truth now has 33. A mask drawn from it comes nearer the true alpha as well, 0.160 off to 0.106 at the longest of these with a hard subject that can be read, and an outline's area comes within 5% of what is half covered there. It takes 39.0 ms a frame at 640x360 on a shot it applies to, from 37.4. A blur has to be a band and a half long for this to apply, below which the measure does as well or better: a disk 128 across under a blur of 12 pixels comes within 0.052 of the true alpha by the measure and 0.077 by this. Anything else stays as it was, to its bytes and its time: a still subject, one going slowly, one going fast and sharp, and one out of focus, which reads as wide whichever way its edge faces. What stays hard is a blur near as long as the subject is wide, where no pixel shows it plainly: 0.649 to 0.78 above. All of this is on synthetic shots, as the repository holds no footage of a real shutter; real shutters that open and close gradually have not been tried. A trained model is optional and swappable (`kerf_segment::MaskModel`):
 it only sharpens the cut's prior, and one that disagrees with the flow is left out for that frame.
 MobileSAM runs in plain Rust; its weights are never bundled, and `look` names the file to fetch. On a
 disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at

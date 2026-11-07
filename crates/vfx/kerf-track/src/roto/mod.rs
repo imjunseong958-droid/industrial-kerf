@@ -19,6 +19,7 @@
 pub mod gmm;
 pub mod matting;
 pub mod maxflow;
+mod shutter;
 mod soft;
 
 use gmm::Gmm;
@@ -936,28 +937,96 @@ pub fn follow_object(
     count: usize,
     hints: &Hints,
     model: Option<&dyn MaskModel>,
-    mut frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
+    frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
 ) -> FollowedObject {
+    let traced = trace(count, hints, model, frame);
+    match shutter::fit(&traced.raw, &traced.across, traced.shortest_blur()) {
+        Some(shutter) => traced.under_a_shutter(shutter),
+        None => traced.by_the_measure(),
+    }
+}
+
+/// What following an object finds, before saying where its edge is.
+struct Traced {
+    followed: FollowedObject,
+    /// The outline of the cut in each frame, in pixels.
+    raw: Vec<Vec<[f64; 2]>>,
+    /// What the edge was measured to be at each of its corners.
+    across: Vec<Vec<soft::Across>>,
+    width: usize,
+    height: usize,
+}
+
+impl Traced {
+    /// How long a blur must be to be gone by: a band and a half, below which the measure does as well or
+    /// better, as a disk 128 across under a blur of 12 pixels comes within 0.052 of the true alpha by it
+    /// and 0.077 by the model.
+    fn shortest_blur(&self) -> f64 {
+        (self.width.max(self.height) as f64 / 40.0).max(4.0) * 1.5
+    }
+
+    fn fraction(&self, corners: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        corners.iter().map(|c| [c[0] / self.width as f64, c[1] / self.height as f64]).collect()
+    }
+
+    /// An edge's middle is where the fall-off says, which a cut through a soft edge only comes near.
+    fn by_the_measure(mut self) -> FollowedObject {
+        for (corners, across) in self.raw.iter().zip(soft::settled(&self.across)) {
+            let moved: Vec<[f64; 2]> = corners
+                .iter()
+                .zip(soft::normals(corners))
+                .zip(&across)
+                .map(|((at, out), edge)| [at[0] + out[0] * edge.out, at[1] + out[1] * edge.out])
+                .collect();
+            self.followed.outlines.push(self.fraction(&moved));
+            self.followed
+                .soft
+                .push(across.iter().map(|edge| edge.wide / self.width as f64).collect());
+        }
+        self.followed
+    }
+
+    /// An edge's middle is where a shutter puts it, given how far the cut was from there.
+    fn under_a_shutter(mut self, shutter: shutter::Shutter) -> FollowedObject {
+        let (width, height) = (self.width, self.height);
+        for ((corners, go), measured) in self.raw.iter().zip(shutter::going(&self.raw)).zip(&self.across) {
+            let frame = shutter.frame(corners, measured, go);
+            let half = shutter.half_covered(corners, &frame, width, height);
+            let moved = aligned(&edge_of(&half, width, height), corners);
+            // Nothing is left where a blur is longer than the subject is wide: it stays as it was cut.
+            let moved = if moved.is_empty() { corners.clone() } else { moved };
+            self.followed.soft.push(shutter.widths(&moved, &frame).iter().map(|wide| wide / width as f64).collect());
+            self.followed.outlines.push(self.fraction(&moved));
+        }
+        self.followed
+    }
+}
+
+/// Cut out what `hints` point at in each of `count` frames.
+fn trace(
+    count: usize,
+    hints: &Hints,
+    model: Option<&dyn MaskModel>,
+    mut frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
+) -> Traced {
     let mut followed = FollowedObject::default();
+    let nothing = |followed| Traced { followed, raw: Vec::new(), across: Vec::new(), width: 0, height: 0 };
     let Some((width, height, rgba)) = frame(0) else {
-        return followed;
+        return nothing(followed);
     };
     if width == 0 || height == 0 || rgba.len() < width * height * 4 {
-        return followed;
+        return nothing(followed);
     }
     let (w, h) = (width as f64, height as f64);
     let mut picture = Picture::of(width, height, &rgba);
     let Some((mut matte, fg, bg)) = first_matte(&picture, hints, model) else {
         followed.lost_at = Some(0);
-        return followed;
-    };
-    let fraction = |corners: &[[f64; 2]]| -> Vec<[f64; 2]> {
-        corners.iter().map(|c| [c[0] / w, c[1] / h]).collect()
+        return nothing(followed);
     };
     let mut corners = resampled(&edge_of(&matte, width, height), OUTLINE_CORNERS, 0.0);
     if corners.is_empty() {
         followed.lost_at = Some(0);
-        return followed;
+        return nothing(followed);
     }
     let area_of = |matte: &[u8]| matte.iter().filter(|v| **v != 0).count() as f64 / (w * h);
     let mut area = area_of(&matte);
@@ -999,20 +1068,7 @@ pub fn follow_object(
         followed.areas.push(area);
     }
     followed.lost_at = lost_at;
-    // An edge's middle is where the fall-off says, which a cut through a soft edge only comes near.
-    for (corners, across) in raw.iter().zip(soft::settled(&across)) {
-        let moved: Vec<[f64; 2]> = corners
-            .iter()
-            .zip(soft::normals(corners))
-            .zip(&across)
-            .map(|((at, out), edge)| [at[0] + out[0] * edge.out, at[1] + out[1] * edge.out])
-            .collect();
-        followed.outlines.push(fraction(&moved));
-        followed
-            .soft
-            .push(across.iter().map(|edge| edge.wide / w).collect());
-    }
-    followed
+    Traced { followed, raw, across, width, height }
 }
 
 /// The frames of a followed outline that shape its way, within `tolerance` of the frame's width:
