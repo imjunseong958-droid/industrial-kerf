@@ -38,6 +38,9 @@ struct Depth {
     ready: Vec<(kerf_model::Id, GpuReady)>,
     /// A number for each clip, to tell the one drawn from those in a light's way.
     numbers: Vec<kerf_model::Id>,
+    /// The distance fields of those with a bevel that stand in a light's way, which drawing them need
+    /// not make again.
+    distances: Vec<(kerf_model::Id, kerf_gpu::depth::Distance)>,
 }
 
 impl Depth {
@@ -595,7 +598,8 @@ impl Drawing {
         let scene = three_d::Scene::at(plan, at, size);
         let canvas = (size.0 as u32, size.1 as u32);
         let mut depth_numbers = Vec::new();
-        let mut ready = Vec::new();
+        let mut distances = Vec::new();
+        let mut ready: Vec<(kerf_model::Id, GpuReady)> = Vec::new();
         let mut casters = Vec::new();
         if scene.casts_shadows() {
             for shown in tracks
@@ -613,10 +617,39 @@ impl Drawing {
                 let time = at - shown.plan.clip.start;
                 let (pw, ph) = (f64::from(one.picture.w), f64::from(one.picture.h));
                 let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &one.to_output, time);
-                let deep = three_d::depth_of(&shown.plan, time, size.1 as f64);
+                let height = size.1 as f64;
+                let deep = three_d::depth_of(&shown.plan, time, height);
+                let bevel = three_d::bevel_of(&shown.plan, time, height);
                 let number = depth_numbers.len() as u32;
                 depth_numbers.push(shown.plan.clip.id.clone());
-                casters.push((number, scene.casting_planes(&plane, deep), (pw, ph)));
+                let crop = one.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+                let distance = if bevel > 0.0 {
+                    let distance =
+                        gpu_distance(frame, &one.picture, crop, bevel / plane.pixel_size())?;
+                    distances.push((shown.plan.clip.id.clone(), distance.clone()));
+                    Some(distance)
+                } else {
+                    None
+                };
+                // One stand-in to each way its outline is taken in, as few as a bevel makes of them.
+                let mut by_inset: Vec<(f64, Vec<kerf_gpu::depth::Plane>)> = Vec::new();
+                for (plane, inset) in scene.casting_planes(&plane, deep, bevel) {
+                    match by_inset.iter_mut().find(|(kept, _)| *kept == inset) {
+                        Some((_, planes)) => planes.push(plane),
+                        None => by_inset.push((inset, vec![plane])),
+                    }
+                }
+                let place = ready.len();
+                for (inset, planes) in by_inset {
+                    let taken_in = match (&distance, inset > 0.0) {
+                        (Some(distance), true) => {
+                            let eroded = frame.eroded(&one.picture, distance, inset as f32)?;
+                            Some(eroded)
+                        }
+                        _ => None,
+                    };
+                    casters.push((number, planes, crop, place, taken_in));
+                }
                 ready.push((shown.plan.clip.id.clone(), one));
             }
         }
@@ -635,17 +668,16 @@ impl Drawing {
             }
         }
         let standing: Vec<kerf_gpu::depth::Caster<'_>> = casters
-            .into_iter()
-            .zip(&ready)
-            .map(|((clip, planes, (pw, ph)), (_, one))| {
-                let crop = one.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+            .iter()
+            .map(|(clip, planes, crop, place, taken_in)| {
+                let one = &ready[*place].1;
                 kerf_gpu::depth::Caster {
-                    clip,
-                    picture: &one.picture,
-                    opaque: one.opaque,
+                    clip: *clip,
+                    picture: taken_in.as_ref().unwrap_or(&one.picture),
+                    opaque: one.opaque && taken_in.is_none(),
                     opacity: one.opacity,
-                    crop: edges(crop),
-                    planes,
+                    crop: edges(*crop),
+                    planes: planes.clone(),
                 }
             })
             .collect();
@@ -662,11 +694,17 @@ impl Drawing {
         for (_, picture) in around {
             frame.release(picture);
         }
+        for (.., taken_in) in casters {
+            if let Some(picture) = taken_in {
+                frame.release(picture);
+            }
+        }
         Some(Depth {
             scene,
             built,
             ready,
             numbers: depth_numbers,
+            distances,
         })
     }
 
@@ -698,17 +736,42 @@ impl Drawing {
             );
             (small, by)
         });
-        let deep = three_d::depth_of(plan, time, f64::from(size.1));
+        let height = f64::from(size.1);
+        let deep = three_d::depth_of(plan, time, height);
+        let bevel = three_d::bevel_of(plan, time, height);
         let crop = ready.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+        let by = smaller.as_ref().map_or(1.0, |(_, by)| *by);
+        let reading = smaller.as_ref().map_or(&ready.picture, |(small, _)| small);
+        // In the pixels it is read at.
+        let per = plane.pixel_size() / by;
+        let distance = if bevel > 0.0 {
+            let kept = depth
+                .distances
+                .iter()
+                .find(|(id, _)| *id == plan.clip.id && by == 1.0)
+                .map(|(_, distance)| distance.clone());
+            let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
+            Some(match kept {
+                Some(distance) => distance,
+                None => gpu_distance(frame, reading, read_crop, bevel / per)?,
+            })
+        } else {
+            None
+        };
         let drawn = frame.project(
             &depth.built,
             &kerf_gpu::depth::Project {
-                picture: smaller.as_ref().map_or(&ready.picture, |(small, _)| small),
-                by: smaller.as_ref().map_or(1.0, |(_, by)| *by) as f32,
+                picture: reading,
+                by: by as f32,
                 clip: number,
                 plane: scene.plane_for_gpu(&plane),
                 back: (deep > 0.0).then(|| (scene.back_for_gpu(&plane, deep), ready.opaque)),
                 crop: edges(crop),
+                bevel: distance.as_ref().map(|distance| kerf_gpu::depth::Bevel {
+                    distance,
+                    width: (bevel / per) as f32,
+                    depth: (deep / per) as f32,
+                }),
             },
             size,
             layers,
@@ -973,4 +1036,20 @@ fn edges(rect: Rect) -> [f32; 4] {
         rect.right() as f32,
         rect.bottom() as f32,
     ]
+}
+
+/// How far each pixel of `picture` is from its outline, as far as a bevel `width` pixels wide asks.
+fn gpu_distance(
+    frame: &mut GpuFrame<'static>,
+    picture: &GpuPicture,
+    crop: Rect,
+    width: f64,
+) -> Option<kerf_gpu::depth::Distance> {
+    let first = bevel::first_jump(width);
+    frame.distance(
+        picture,
+        edges(crop),
+        &bevel::jumps(first),
+        bevel::reach(first),
+    )
 }

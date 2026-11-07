@@ -439,7 +439,7 @@ impl Scene {
     }
 
     /// Whether a light here sends many rays, so that it pays to know what is opaque.
-    fn is_wide(&self) -> bool {
+    pub(super) fn is_wide(&self) -> bool {
         self.lights.iter().any(|light| {
             matches!(
                 light,
@@ -657,6 +657,13 @@ impl Plane {
         }
     }
 
+    /// How many pixels of the world a pixel of its picture is, however its sides differ.
+    pub(super) fn pixel_size(&self) -> f64 {
+        (dot(self.across, self.across) * dot(self.down, self.down))
+            .powf(0.25)
+            .max(1e-6)
+    }
+
     /// The plane this far behind this one, its picture lying over the same pixels.
     fn pushed(&self, by: f64) -> Self {
         Self {
@@ -808,15 +815,23 @@ impl Scene {
     }
 
     /// The planes of a clip for what stands in a light's way: itself, and through its depth as
-    /// [`Caster::through_its_depth`] has them.
-    pub(super) fn casting_planes(&self, plane: &Plane, depth: f64) -> Vec<kerf_gpu::depth::Plane> {
+    /// [`Caster::through_its_depth`] has them, each with how far a `bevel` takes its outline in there,
+    /// in pixels of its picture.
+    pub(super) fn casting_planes(
+        &self,
+        plane: &Plane,
+        depth: f64,
+        bevel: f64,
+    ) -> Vec<(kerf_gpu::depth::Plane, f64)> {
         if depth <= 0.0 {
-            return vec![self.plane_for_gpu(plane)];
+            return vec![(self.plane_for_gpu(plane), 0.0)];
         }
+        let per = plane.pixel_size();
         (0..SLICES)
             .map(|slice| {
                 let by = depth * slice as f64 / (SLICES - 1) as f64;
-                self.plane_for_gpu(&plane.pushed(by))
+                let inset = inset_at(bevel, depth, by) / per;
+                (self.plane_for_gpu(&plane.pushed(by)), inset)
             })
             .collect()
     }
@@ -969,25 +984,66 @@ impl Caster {
     /// This clip again as what stands in a light's way a little behind it, for a clip with a depth: a
     /// solid's shadow is what the planes through it cast between them. One clip casts for each, so none
     /// of them falls on the solid itself.
-    pub fn through_its_depth(self, depth: f64) -> Vec<Self> {
+    ///
+    /// With a `bevel`, the planes within it of a face have the outline taken in as far as the bevel has
+    /// at that depth.
+    pub fn through_its_depth(self, depth: f64, bevel: f64, wide: bool) -> Vec<Self> {
         if depth <= 0.0 {
             return vec![self];
         }
+        let beveled = (bevel > 0.0).then(|| {
+            let per = self.plane.pixel_size();
+            let field = super::bevel::distance_field(
+                &self.picture,
+                self.crop,
+                bevel.min(depth / 2.0) / per,
+            );
+            (field, per)
+        });
+        // Those with an outline as a bevel leaves it, each made once.
+        let mut made: Vec<(f64, Arc<Image>, Arc<Held>)> = Vec::new();
+        let mut at = |slice: usize, caster: &Self| match &beveled {
+            None => (caster.picture.clone(), caster.held.clone()),
+            Some((field, per)) => {
+                let along = depth * slice as f64 / (SLICES - 1) as f64;
+                let inset = inset_at(bevel.min(depth / 2.0), depth, along) / per;
+                if inset <= 0.0 {
+                    return (caster.picture.clone(), caster.held.clone());
+                }
+                if let Some((_, picture, held)) = made.iter().find(|(kept, ..)| *kept == inset) {
+                    return (picture.clone(), held.clone());
+                }
+                let picture = Arc::new(super::bevel::eroded(&caster.picture, field, inset));
+                let held = Arc::new(if wide {
+                    Held::of(&picture)
+                } else {
+                    Held::Solid
+                });
+                made.push((inset, picture.clone(), held.clone()));
+                (picture, held)
+            }
+        };
         let mut slices: Vec<Self> = (1..SLICES)
             .map(|slice| {
                 let plane = self
                     .plane
                     .pushed(depth * slice as f64 / (SLICES - 1) as f64);
+                let (picture, held) = at(slice, &self);
                 Self::on(
                     self.clip.clone(),
                     plane,
                     self.crop,
-                    self.held.clone(),
-                    (self.picture.clone(), self.opacity),
+                    held,
+                    (picture, self.opacity),
                 )
             })
             .collect();
-        slices.push(self);
+        let (picture, held) = at(0, &self);
+        slices.push(Self {
+            picture,
+            held,
+            ..self
+        });
         slices
     }
 
@@ -1163,6 +1219,16 @@ fn projected(
     let solid = depth_of(plan, time, scene.height);
     if solid > 0.0 {
         let held = Held::of(&source);
+        let bevel = bevel_of(plan, time, scene.height);
+        let bevel = (bevel > 0.0).then(|| {
+            let per = plane.pixel_size() / by;
+            let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
+            SolidBevel {
+                field: super::bevel::distance_field(&source, read_crop, bevel / per),
+                width: bevel / per,
+                depth: solid / per,
+            }
+        });
         let solid = Solid {
             front: plane,
             back: plane.pushed(solid),
@@ -1170,6 +1236,7 @@ fn projected(
             by,
             crop,
             held,
+            bevel,
         };
         let row_size = w.max(1) * 4;
         let mut depth = vec![
@@ -1276,6 +1343,26 @@ pub(super) fn depth_of(plan: &ClipPlan, time: Time, height: f64) -> f64 {
     number(&param(&plan.clip, "depth").value_at(time)).max(0.0) * height
 }
 
+/// How far in a clip's edges are cut at each face at clip time `time`, in pixels of a frame `height`
+/// high: at most half of its depth, which is where the two bevels meet.
+pub(super) fn bevel_of(plan: &ClipPlan, time: Time, height: f64) -> f64 {
+    let bevel = number(&param(&plan.clip, "bevel").value_at(time)).max(0.0) * height;
+    bevel.min(depth_of(plan, time, height) / 2.0)
+}
+
+/// How far a bevel `width` wide takes a solid's outline in, `along` its `depth` from its front. It goes
+/// in as fast as it goes back, so its surface is at 45 degrees to the face.
+fn inset_at(width: f64, depth: f64, along: f64) -> f64 {
+    (width - along).max(width - (depth - along)).max(0.0)
+}
+
+/// What a solid's bevel reads, in the pixels its picture is read at.
+struct SolidBevel {
+    field: Vec<f32>,
+    width: f64,
+    depth: f64,
+}
+
 /// A clip with a depth: a solid between two planes, in the outline of its picture's alpha.
 struct Solid<'a> {
     front: Plane,
@@ -1286,6 +1373,7 @@ struct Solid<'a> {
     crop: Rect,
     /// For passing over the empty parts of its picture without reading them.
     held: Held,
+    bevel: Option<SolidBevel>,
 }
 
 impl Solid<'_> {
@@ -1303,6 +1391,26 @@ impl Solid<'_> {
             times(unit(self.front.across), -f64::from(across)),
             times(unit(self.front.down), -f64::from(down)),
         )))
+    }
+
+    /// Which way a bevel faces at `(u, v)` of the picture: out of the outline and toward the face it is
+    /// cut from.
+    fn bevel_facing(&self, bevel: &SolidBevel, (u, v): (f64, f64), near_front: bool) -> Vector {
+        let (x, y) = (u * self.by, v * self.by);
+        let size = (self.source.w, self.source.h);
+        let at = |x: f64, y: f64| super::bevel::distance_at(&bevel.field, size, x, y);
+        let across = at(x + f64::from(SIDE_REACH), y) - at(x - f64::from(SIDE_REACH), y);
+        let down = at(x, y + f64::from(SIDE_REACH)) - at(x, y - f64::from(SIDE_REACH));
+        let out = unit(add(
+            times(unit(self.front.across), -across),
+            times(unit(self.front.down), -down),
+        ));
+        let face = if near_front {
+            times(self.front.normal, -1.0)
+        } else {
+            self.front.normal
+        };
+        unit(add(out, face))
     }
 
     /// A row of the output picture. Each pixel's ray goes through the solid half a picture's pixel at a time,
@@ -1360,9 +1468,15 @@ impl Solid<'_> {
                 continue;
             }
             let across = (to.0 - from.0).abs().max((to.1 - from.1).abs()) * self.by;
+            // A bevel changes as the ray goes in, however little it goes across.
+            let across = match &self.bevel {
+                Some(bevel) => across.max(bevel.depth),
+                None => across,
+            };
             let steps = ((across * 2.0).ceil() as usize).clamp(1, MOST_STEPS);
             // Out of the side it comes in by.
-            let flat = if near_plane.origin == self.front.origin {
+            let near_is_front = near_plane.origin == self.front.origin;
+            let flat = if near_is_front {
                 times(self.front.normal, -1.0)
             } else {
                 self.front.normal
@@ -1380,21 +1494,34 @@ impl Solid<'_> {
                 let pixel = self
                     .source
                     .sample_bilinear((u * self.by) as f32, (v * self.by) as f32);
-                if pixel[3] <= covered {
+                // What a bevel leaves of it this far in, and whether the ray is on the bevel.
+                let (mut reached, mut on_bevel) = (pixel[3], None);
+                if let Some(bevel) = &self.bevel {
+                    let in_depth = if near_is_front { along } else { 1.0 - along } * bevel.depth;
+                    let inset = inset_at(bevel.width, bevel.depth, in_depth);
+                    let size = (self.source.w, self.source.h);
+                    let inside =
+                        super::bevel::distance_at(&bevel.field, size, u * self.by, v * self.by);
+                    reached = reached.min(super::bevel::left_of(inside, inset) as f32);
+                    if inset > 0.0 && inside - inset < 1.5 {
+                        on_bevel = Some(in_depth < bevel.depth / 2.0);
+                    }
+                }
+                if reached <= covered {
                     continue;
                 }
-                let more = pixel[3] - covered;
+                let more = reached - covered;
                 let hit = add(near.0, times(minus(far.0, near.0), along));
-                let facing = if step == 0 {
-                    flat
-                } else {
-                    self.side_facing((u, v)).unwrap_or(flat)
+                let facing = match (&self.bevel, on_bevel) {
+                    (Some(bevel), Some(from_front)) => self.bevel_facing(bevel, (u, v), from_front),
+                    _ if step == 0 => flat,
+                    _ => self.side_facing((u, v)).unwrap_or(flat),
                 };
                 let light = scene.lit_outside(id, hit, facing).unwrap_or([1.0; 3]);
                 for ((sum, color), light) in sum.iter_mut().zip(&pixel[..3]).zip(light) {
                     *sum += color / pixel[3] * light * more;
                 }
-                covered = pixel[3];
+                covered = reached;
                 if first.is_none() && covered >= 0.5 {
                     first = Some(near.1 + (far.1 - near.1) * along);
                 }
@@ -1613,6 +1740,51 @@ mod tests {
             passed > 1000 && met > 100 && whole > 10,
             "{passed} {met} {whole}"
         );
+    }
+
+    #[test]
+    fn what_a_bevel_takes_off_lets_light_past_a_solid_and_no_more() {
+        // A square 100 across, 40 deep, in the middle of a picture with room around it, whose front face
+        // lies at z = 0 and whose planes go back along z.
+        let mut picture = Image::new(120, 120);
+        for y in 10..110 {
+            for x in 10..110 {
+                picture.px[(y * 120 + x) * 4 + 3] = 1.0;
+            }
+        }
+        let crop = Rect::new(0.0, 0.0, 120.0, 120.0);
+        let solid = |bevel: f64| {
+            Caster::on(
+                Id::new("c").unwrap(),
+                plane([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                crop,
+                Arc::new(Held::Solid),
+                (Arc::new(picture.clone()), 1.0),
+            )
+            .through_its_depth(40.0, bevel, false)
+        };
+        let past = |casters: &[Caster], from: Vector, to: Vector| {
+            let way = minus(to, from);
+            let reach = dot(way, way).sqrt();
+            casters
+                .iter()
+                .map(|caster| caster.lets_through(from, unit(way), reach))
+                .product::<f32>()
+        };
+        let (whole, cut) = (solid(0.0), solid(20.0));
+        assert_eq!((whole.len(), cut.len()), (SLICES, SLICES));
+        // Straight through by the edge: the outline is whole in the middle of its depth, so both block.
+        let (from, to) = ([12.0, 60.0, 100.0], [12.0, 60.0, -100.0]);
+        assert_eq!(past(&whole, from, to), 0.0);
+        assert_eq!(past(&cut, from, to), 0.0);
+        // Straight through the middle, the same.
+        let (from, to) = ([60.0, 60.0, 100.0], [60.0, 60.0, -100.0]);
+        assert_eq!(past(&cut, from, to), 0.0);
+        // Across the corner of its front, through where a bevel took the solid off and missing the plane
+        // at its middle: the solid blocks this and the bevel does not.
+        let (over, under) = ([20.0, 60.0, -5.0], [5.0, 60.0, 15.0]);
+        assert_eq!(past(&whole, over, under), 0.0);
+        assert_eq!(past(&cut, over, under), 1.0);
     }
 
     #[test]

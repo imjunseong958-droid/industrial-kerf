@@ -1244,3 +1244,122 @@ fn clips_that_cross_are_cut_and_blurred() {
     let right = pixel(&drawn, 195, 90);
     assert!(right[0] > 200, "{right:?}");
 }
+
+/// A square solid, looked at straight on, with a light.
+fn beveled(set: &str, light: &str) -> String {
+    deep(&format!("depth=0.4 {set}"), light)
+}
+
+#[test]
+fn a_bevel_of_nothing_is_no_bevel_and_it_needs_a_depth() {
+    let light = "kind=directional x=-0.4 y=0.3 z=1";
+    assert_eq!(
+        frame(&beveled("", light), 3).rgba,
+        frame(&beveled("bevel=0", light), 3).rgba
+    );
+    // Without a depth there is nothing to cut.
+    assert_eq!(
+        frame(&deep("", light), 3).rgba,
+        frame(&deep("bevel=0.1", light), 3).rgba
+    );
+    // Two bevels meet at half its depth, and no further.
+    assert_eq!(
+        frame(&beveled("bevel=0.2", light), 3).rgba,
+        frame(&beveled("bevel=5", light), 3).rgba
+    );
+}
+
+#[test]
+fn a_bevel_faces_out_of_the_outline_and_toward_the_face() {
+    // The light comes from straight in front. The face takes all of it and a bevel, at 45 degrees to it,
+    // the cosine of that, in linear light.
+    let front = "kind=directional z=1";
+    let square = frame(&beveled("bevel=0.1", front), 3);
+    let row = (0..320)
+        .map(|x| linear(pixel(&square, x, 90)[0]))
+        .collect::<Vec<_>>();
+    let lit: Vec<usize> = (0..320).filter(|x| row[*x] > 0.02).collect();
+    let (left, right) = (lit[0], lit[lit.len() - 1]);
+    let middle = (left + right) / 2;
+    near(row[middle], 1.0);
+    near(row[left + 4], std::f64::consts::FRAC_1_SQRT_2);
+    near(row[right - 4], std::f64::consts::FRAC_1_SQRT_2);
+    // Its bevel is as wide as it says: 0.1 of 180 pixels, near the face's scale.
+    let band = lit.iter().filter(|x| row[**x] < 0.9).count();
+    assert!((band as i64 - 36).abs() <= 8, "{band}");
+    // Narrower than it was without one, but only by perspective: its whole outline lies a bevel further
+    // back from the eye, 36 pixels at 247, on a half width of 40.
+    let plain = frame(&beveled("", front), 3);
+    let width = |frame: &Frame| (0..320).filter(|x| pixel(frame, *x, 90)[0] > 8).count();
+    assert!(width(&square) < width(&plain));
+    assert!(
+        width(&plain) - width(&square) <= 12,
+        "{}",
+        width(&plain) - width(&square)
+    );
+    // A light from the left, which shines to the right, falls on the left bevel and not the right.
+    let side = "kind=directional x=1 z=0";
+    let from_left = frame(&beveled("bevel=0.1", side), 3);
+    let row = (0..320)
+        .map(|x| linear(pixel(&from_left, x, 90)[0]))
+        .collect::<Vec<_>>();
+    near(row[left + 4], std::f64::consts::FRAC_1_SQRT_2);
+    assert!(row[right - 4] < 0.01, "{}", row[right - 4]);
+    assert!(row[middle] < 0.01, "{}", row[middle]);
+}
+
+#[test]
+fn a_title_keeps_its_holes_and_gains_shades_with_a_bevel() {
+    let title = |set: &str| {
+        format!(
+            "  track V1 video\n    clip words gen=title@1 at=0f dur=24f\n      set text=\"O\" size=0.8 color=#ffffff three_d=true depth=0.2 {set}\n  track V2 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.5 y=0.4 z=1\n"
+        )
+    };
+    let (plain, cut) = (frame(&title(""), 3), frame(&title("bevel=0.03"), 3));
+    assert_ne!(plain.rgba, cut.rgba);
+    assert_eq!(pixel(&cut, 160, 90)[0], 0);
+    let levels = |frame: &Frame| {
+        let mut seen = std::collections::BTreeSet::new();
+        for at in 0..frame.width * frame.height {
+            seen.insert(pixel(frame, at % frame.width, at / frame.width)[0]);
+        }
+        seen.len()
+    };
+    assert!(
+        levels(&cut) > levels(&plain),
+        "{} {}",
+        levels(&cut),
+        levels(&plain)
+    );
+}
+
+#[test]
+fn a_bevels_shadow_is_cut_at_its_faces_only() {
+    let scene = |set: &str, light: &str| {
+        format!(
+            "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true z=0.6\n  track V2 video\n    clip s gen=solid@1 at=0f dur=24f\n      set color=#000000 three_d=true scale=0.3 {set}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set {light}\n"
+        )
+    };
+    let dark = |frame: &Frame| {
+        (0..frame.width * frame.height)
+            .filter(|at| pixel(frame, at % frame.width, at / frame.width)[0] < 128)
+            .count() as f64
+    };
+    // Sideways, it runs across the planes through the solid, and those at the faces are smaller: less of
+    // the shadow falls, and yet not so much less as a solid with no depth at all.
+    let sideways = "kind=directional x=-1 z=1 shadow=1";
+    let (plain, cut) = (
+        frame(&scene("depth=0.4", sideways), 3),
+        frame(&scene("depth=0.4 bevel=0.2", sideways), 3),
+    );
+    let flat = frame(&scene("depth=0", sideways), 3);
+    assert_ne!(plain.rgba, cut.rgba);
+    assert!(dark(&cut) < dark(&plain), "{} {}", dark(&cut), dark(&plain));
+    assert!(dark(&cut) > dark(&flat), "{} {}", dark(&cut), dark(&flat));
+    // Soft, the same frame comes every time.
+    let soft = "kind=directional x=-1 z=1 shadow=1 size=6";
+    assert_eq!(
+        frame(&scene("depth=0.4 bevel=0.2", soft), 3).rgba,
+        frame(&scene("depth=0.4 bevel=0.2", soft), 7).rgba
+    );
+}

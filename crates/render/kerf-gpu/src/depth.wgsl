@@ -14,6 +14,7 @@ struct U {
     down: vec4<f32>,   // a unit long, for a solid's sides
     to_u: vec4<f32>,
     to_v: vec4<f32>,
+    bevel: vec4<f32>,  // how wide its bevel is and how deep the solid, in the pixels the picture is read at
 };
 
 struct Light {
@@ -53,6 +54,7 @@ struct Caster {
 @group(0) @binding(6) var<storage, read> floats: array<f32>;
 @group(0) @binding(7) var<storage, read> tables: array<u32>;
 @group(0) @binding(8) var<storage, read> own_table: array<u32>;
+@group(0) @binding(9) var distance: texture_2d<f32>;
 
 const RAYS: u32 = 32u;
 const MOST_STEPS: u32 = 1024u;
@@ -597,6 +599,32 @@ fn side_facing(at: vec2<f32>) -> vec3<f32> {
     return unit(u.across.xyz * -across + u.down.xyz * -down);
 }
 
+// `bevel::distance_at`.
+fn distance_at(x: f32, y: f32) -> f32 {
+    let size = vec2<i32>(textureDimensions(distance));
+    let f = clamp(vec2(x, y) - 0.5, vec2(0.0), vec2<f32>(size - 1));
+    let p0 = vec2<i32>(floor(f));
+    let p1 = min(p0 + 1, size - 1);
+    let t = f - vec2<f32>(p0);
+    let a = textureLoad(distance, p0, 0).r;
+    let b = textureLoad(distance, vec2(p1.x, p0.y), 0).r;
+    let c = textureLoad(distance, vec2(p0.x, p1.y), 0).r;
+    let d = textureLoad(distance, p1, 0).r;
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+// `Solid::bevel_facing`.
+fn bevel_facing(at: vec2<f32>, from_front: bool) -> vec3<f32> {
+    let x = at.x * u.origin.w;
+    let y = at.y * u.origin.w;
+    let across = distance_at(x + SIDE_REACH, y) - distance_at(x - SIDE_REACH, y);
+    let down = distance_at(x, y + SIDE_REACH) - distance_at(x, y - SIDE_REACH);
+    let out = unit(u.across.xyz * -across + u.down.xyz * -down);
+    return unit(out + select(u.normal.xyz, -u.normal.xyz, from_front));
+}
+
 // A clip with a depth (`Solid::draw_row`).
 @compute @workgroup_size(16, 16)
 fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -652,7 +680,12 @@ fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
         put(id.xy, vec4(0.0), near.ahead);
         return;
     }
-    let across = max(abs(to.x - start.x), abs(to.y - start.y)) * by;
+    // A bevel changes as the ray goes in, however little it goes across.
+    let beveled = u.bevel.x > 0.0;
+    var across = max(abs(to.x - start.x), abs(to.y - start.y)) * by;
+    if beveled {
+        across = max(across, u.bevel.y);
+    }
     let steps = clamp(u32(ceil(across * 2.0)), 1u, MOST_STEPS);
     // Out of the side it comes in by.
     let flat_way = select(u.normal.xyz, -u.normal.xyz, near_front);
@@ -666,13 +699,27 @@ fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
             continue;
         }
         let color = sample(at.x * by, at.y * by);
-        if color.a <= covered {
+        // What a bevel leaves of it this far in, and whether the ray is on the bevel.
+        var reached = color.a;
+        var on_bevel = false;
+        var from_front = false;
+        if beveled {
+            let in_depth = select(1.0 - along, along, near_front) * u.bevel.y;
+            let inset = max(max(u.bevel.x - in_depth, u.bevel.x - (u.bevel.y - in_depth)), 0.0);
+            let inside = distance_at(at.x * by, at.y * by);
+            reached = min(reached, clamp(inside - inset + 0.5, 0.0, 1.0));
+            on_bevel = inset > 0.0 && inside - inset < 1.5;
+            from_front = in_depth < u.bevel.y / 2.0;
+        }
+        if reached <= covered {
             continue;
         }
-        let more = color.a - covered;
+        let more = reached - covered;
         let hit = near.hit + (far.hit - near.hit) * along;
         var facing = flat_way;
-        if step != 0u {
+        if on_bevel {
+            facing = bevel_facing(at, from_front);
+        } else if step != 0u {
             let side = side_facing(at);
             if any(side != vec3(0.0)) {
                 facing = side;
@@ -683,7 +730,7 @@ fn solid(@builtin(global_invocation_id) id: vec3<u32>) {
             light = lit(hit, facing, true);
         }
         sum += color.rgb / color.a * light * more;
-        covered = color.a;
+        covered = reached;
         if first < 0.0 && covered >= 0.5 {
             first = near.ahead + (far.ahead - near.ahead) * along;
         }

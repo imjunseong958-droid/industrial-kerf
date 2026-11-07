@@ -792,14 +792,18 @@ fn builtin_catalog() -> Catalog {
             .range(0.0, 100.0)
             .unit("frame heights")
             .doc("With `three_d`, a solid that deep behind the clip, in its picture's outline."),
+        P::number("bevel", 0.0)
+            .range(0.0, 50.0)
+            .unit("frame heights")
+            .doc("With `depth`, its edges cut back this far at each face."),
         P::number("rotate_x", 0.0)
             .range(-36000.0, 36000.0)
             .unit("degrees")
-            .doc("With `three_d`, the clip tipped about the line across its middle."),
+            .doc("With `three_d`, tipped about the line across its middle."),
         P::number("rotate_y", 0.0)
             .range(-36000.0, 36000.0)
             .unit("degrees")
-            .doc("With `three_d`, the clip turned about the line down its middle."),
+            .doc("With `three_d`, turned about the line down its middle."),
         P::number("scale", 1.0)
             .range(0.0, 100.0)
             .unit("×")

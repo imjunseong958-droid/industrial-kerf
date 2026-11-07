@@ -197,7 +197,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
   showing (`x y z pan tilt roll fov focus aperture`, animatable, and `parent=` works), and at its defaults a clip at
   z=0 looks as it does in 2D. `depth=0.1` makes a clip in depth a solid that deep behind it, in the outline of its picture's alpha, so a title
-  has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
+  has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
   light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near,
   and two clips that cross are each cut where they meet, with nothing to say: a clip in a transition or a dip keeps its place whole.

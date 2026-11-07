@@ -218,6 +218,8 @@ Median frame with `examples/motion_bench.rs` on an M1 with 8 GB, in ms, the byte
 
 A title gains least, since its glyphs are still drawn on the CPU and go up as floats. So depth plays past 24 fps at 1080p in every row here; at 4K a hard shadow is about 24 fps, a soft one 17 to 21, and a solid title with a soft shadow 8.
 
+A solid's `bevel` cuts its edges back at each face at 45 degrees, with no mesh either: at each step a ray asks how far inside the picture's outline it is, against how far a bevel takes the outline in at that depth, from a distance field made by jump flooding (`draw/bevel.rs`, `distance.wgsl`, the same passes on both). So a title's bevel follows its letters and leaves its holes, and is lit as a surface facing out of the outline and toward its face. Lights fall on it as on any surface, and its shadow is the same five planes through the solid, those within a bevel of a face with their outline taken in, each its own alpha and table. On an M1, a 1080p title with a bevel takes 36 ms on the GPU and 170 on the CPU, and 4K 171 and 894; with a soft shadow on a wall, 67 and 438, and 267 and 2021. Bevels are flat cuts, not rounded, and a clip scaled unevenly has them by the mean of its two scales. A bevel holds to the CPU as the rest does (`tests/depth_gpu.rs`).
+
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model.
 
@@ -236,7 +238,7 @@ To add:
 - A camera's `aperture` on the GPU: its frames are the last in depth on the CPU.
 - A path on a clip in depth with `orient` and an anchor off its middle, turned: its anchor leaves the plane by a different amount at each
   point, which no one map shows, so it shows no curve rather than a wrong one.
-- EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has. Bevels are its next piece for a solid.
+- EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has.
 
 Expressions stay out. They exist so that a person need not write hundreds of
 keyframes, and an agent writes them gladly; a look covers the reusable case.
