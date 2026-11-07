@@ -10,8 +10,9 @@
 //! about as far away.
 //!
 //! EffectCraft's camera tracker, in Kerf's terms ([`reconstruct`]). Lens distortion is left out, having
-//! no place in a document, and so is a lens that changes during a shot, which cannot be told from the
-//! camera moving along its line without being told it zooms: either shows in the error.
+//! no place in a document. A lens that changes during a shot is solved where what is in the picture
+//! lies at enough depths to tell it from a camera moving along its line, which grows near things more
+//! than far ones where a zoom grows all alike. Where nothing can tell them apart it says so.
 
 mod adjust;
 mod follow;
@@ -48,6 +49,8 @@ pub enum Unsolved {
     Still,
     /// The camera only turns, and without moving nothing tells how far away anything is.
     OnlyTurns,
+    /// The camera only turns, and its lens zooms.
+    TurnsAndZooms,
     /// No one camera explains what the picture does.
     DoesNotFit,
 }
@@ -63,6 +66,10 @@ impl std::fmt::Display for Unsolved {
             Self::OnlyTurns => {
                 "the camera only turns, as on a tripod: without it moving nothing shows how far away \
                  anything is, so it cannot be solved. A pan is pinned to with `corners` instead"
+            }
+            Self::TurnsAndZooms => {
+                "the camera only turns and its lens zooms: without it moving nothing shows how far \
+                 away anything is, so it cannot be solved"
             }
             Self::DoesNotFit => {
                 "no one camera explains what the picture does: more of it may be moving by itself \
@@ -84,6 +91,8 @@ pub struct SolvedCamera {
     pub pan: f64,
     pub tilt: f64,
     pub roll: f64,
+    /// Down the frame, in degrees.
+    pub fov: f64,
 }
 
 /// A place in the world that something in the picture stands at: a clip's `x`, `y`, and `z`.
@@ -104,8 +113,13 @@ pub struct SolvedPoint {
 pub struct SolvedShot {
     /// One for each frame it could be found on, in order.
     pub cameras: Vec<SolvedCamera>,
-    /// Down the frame, in degrees.
+    /// Down the frame, in degrees, on its first frame.
     pub fov: f64,
+    /// Whether the lens changes over the shot, so that each camera's `fov` is its own.
+    pub zooms: bool,
+    /// Whether the picture cannot tell a zoom from a camera moving along its line, each explaining it
+    /// as well: this says what one lens makes of it, a move.
+    pub zoom_or_push: bool,
     /// Whether the picture says what the lens is. A camera that never turns does not, and any lens
     /// fits: `fov` is then the default.
     pub lens_known: bool,
@@ -213,6 +227,7 @@ fn written(followed: &Followed, solved: &reconstruct::Solved) -> Option<SolvedSh
             pan,
             tilt,
             roll,
+            fov: fov_of_focal(height, camera.focal),
         });
     }
     let cameras_end = cameras.last().map(|camera| camera.frame + 1);
@@ -239,6 +254,8 @@ fn written(followed: &Followed, solved: &reconstruct::Solved) -> Option<SolvedSh
     Some(SolvedShot {
         cameras,
         fov: fov_of_focal(height, focal),
+        zooms: solved.zooms,
+        zoom_or_push: solved.zoom_or_push,
         lens_known: solved.lens_known,
         points,
         error: solved.error,
@@ -270,7 +287,7 @@ impl SolvedShot {
         if seen[2] <= 1e-6 {
             return None;
         }
-        let focal = focal_of_fov(h, self.fov);
+        let focal = focal_of_fov(h, camera.fov);
         Some([
             focal * seen[0] / seen[2] + w / 2.0,
             focal * seen[1] / seen[2] + h / 2.0,
@@ -306,6 +323,7 @@ impl SolvedShot {
                     pan: mix(a.pan, b.pan),
                     tilt: mix(a.tilt, b.tilt),
                     roll: mix(a.roll, b.roll),
+                    fov: mix(a.fov, b.fov),
                 };
                 let off = watched
                     .iter()

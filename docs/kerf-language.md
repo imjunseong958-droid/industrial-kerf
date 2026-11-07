@@ -207,7 +207,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   its plane is from that at each pixel, up to `aperture` frame heights far away: 0, the default, blurs nothing, both animate (`focus={0f:0 24f:0.5}` racks focus), and
   each clip is blurred alone, so a sharp one keeps its edge over a soft one behind it. Frames with an `aperture` draw on the CPU; others in depth draw on the GPU where there is one.
   `look` with `track: {"camera": true}` over a shot solves where its camera went, and writes it as these keyframes: `set cam x={0f:0 24f:0.1} y={…} z={…} pan={…} tilt={…} roll={…} fov=38.4`.
-  Its first frame is the 2D picture at the shot's own lens, with z=0 at the middle depth of what shows. It also gives places in the world: `set pin three_d=true x=0.21 y=-0.04 z=0.3` with one of those stays on that spot of the footage on every frame. It says so when a shot cannot be solved, such as a camera that only turns.
+  Its first frame is the 2D picture at the shot's own lens, with z=0 at the middle depth of what shows. A lens that zooms comes out as `fov` keyframes and `zooms: true`; where the picture cannot tell a zoom from a push in, `zoomOrPush` says so and the move is written with one lens. It also gives places in the world: `set pin three_d=true x=0.21 y=-0.04 z=0.3` with one of those stays on that spot of the footage on every frame. It says so when a shot cannot be solved, such as a camera that only turns.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

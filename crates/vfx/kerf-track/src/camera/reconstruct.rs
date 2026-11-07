@@ -5,6 +5,11 @@
 //! more; bundle adjustment settles it all; and the frames between are found last. The focal length is
 //! searched for, by how well a short reconstruction fits at each.
 //!
+//! A lens that zooms ([`solve`]) is one more reconstruction, of the paths with how much the picture grew
+//! taken out of them, whose cameras then each get the focal length that grew and adjust it. It stands
+//! only where it fits clearly better than one lens does, so a shot that one lens explains comes out as
+//! it would have.
+//!
 //! Nothing here comes out of a doubtful shot: a picture that does not move, a camera that only turns,
 //! and a reconstruction that does not fit are each said to be so ([`Unsolved`]).
 
@@ -133,6 +138,48 @@ fn key_frames(seen: &Seen) -> Vec<usize> {
     keys
 }
 
+/// What moves of the focal length when cameras adjust.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focal {
+    Held,
+    Shared,
+    Own,
+}
+
+/// The lens a reconstruction goes by: one length, or a base to scale by frame, where the picture grows.
+#[derive(Clone, Copy)]
+struct Lens<'a> {
+    base: f64,
+    scales: Option<&'a [f64]>,
+}
+
+impl Lens<'_> {
+    fn at(&self, frame: usize) -> f64 {
+        match self.scales {
+            Some(scales) => self.base * scales[frame],
+            None => self.base,
+        }
+    }
+
+    /// What moves of the focal length when cameras adjust as a reconstruction grows.
+    fn adjusting(&self) -> Focal {
+        if self.scales.is_some() {
+            Focal::Own
+        } else {
+            Focal::Held
+        }
+    }
+
+    /// A focal length for `frame`, from how the cameras nearest it have come out against the scales.
+    fn near(&self, cameras: &BTreeMap<usize, Camera>, frame: usize) -> Option<f64> {
+        let scales = self.scales?;
+        let nearest = cameras
+            .iter()
+            .min_by_key(|(other, _)| other.abs_diff(frame))?;
+        Some(nearest.1.focal / scales[*nearest.0] * scales[frame])
+    }
+}
+
 /// Cameras and points as far as they go.
 #[derive(Clone, Default)]
 struct Reconstruction {
@@ -176,7 +223,7 @@ impl Reconstruction {
     }
 
     /// Adjust the cameras of `frames`, the first staying where it is, and what they see.
-    fn adjusted(&mut self, seen: &Seen, frames: &[usize], free_focal: bool, iterations: usize) {
+    fn adjusted(&mut self, seen: &Seen, frames: &[usize], focal: Focal, iterations: usize) {
         let (mut cameras, mut points, sightings, paths) = self.sightings(seen, frames);
         if sightings.is_empty() {
             return;
@@ -188,7 +235,8 @@ impl Reconstruction {
             &mut points,
             &sightings,
             &Options {
-                free_focal,
+                free_focal: focal == Focal::Shared,
+                own_focals: focal == Focal::Own,
                 fixed_points: false,
                 fixed,
                 huber: seen.noise,
@@ -272,7 +320,13 @@ impl Reconstruction {
 
     /// The camera of `frame` from the points it sees, starting at `start`, with the paths of the
     /// sightings that do not agree, or none when too few agree.
-    fn resected(&self, seen: &Seen, frame: usize, start: Camera) -> Option<(Camera, Vec<u32>)> {
+    fn resected(
+        &self,
+        seen: &Seen,
+        frame: usize,
+        start: Camera,
+        free_focal: bool,
+    ) -> Option<(Camera, Vec<u32>)> {
         let (mut points, mut sightings, mut paths) = (Vec::new(), Vec::new(), Vec::new());
         for (path, at) in &seen.by_frame[frame] {
             if let Some(point) = self.points.get(path) {
@@ -290,7 +344,8 @@ impl Reconstruction {
         }
         let limit = seen.tolerance().powi(2);
         let options = |huber: f64| Options {
-            free_focal: false,
+            free_focal,
+            own_focals: false,
             fixed_points: true,
             fixed: vec![false],
             huber,
@@ -439,18 +494,19 @@ type Start = (View, BTreeMap<u32, Vector>);
 
 /// Ways to start from frames `a` and `b` at `focal`: from the essential matrix, and from a homography
 /// for what is flat.
-fn starts(seen: &Seen, a: usize, b: usize, focal: f64) -> Vec<Start> {
+fn starts(seen: &Seen, a: usize, b: usize, lens: Lens<'_>) -> Vec<Start> {
     let shared = seen.shared(a, b);
     if shared.len() < 12 {
         return Vec::new();
     }
+    let (focal, focal_b) = (lens.at(a), lens.at(b));
     let first: Vec<[f64; 2]> = shared
         .iter()
         .map(|s| [s.1[0] / focal, s.1[1] / focal])
         .collect();
     let second: Vec<[f64; 2]> = shared
         .iter()
-        .map(|s| [s.2[0] / focal, s.2[1] / focal])
+        .map(|s| [s.2[0] / focal_b, s.2[1] / focal_b])
         .collect();
     let tolerance = 2.0 * seen.noise;
     let mut views_found: Vec<View> = Vec::new();
@@ -466,10 +522,11 @@ fn starts(seen: &Seen, a: usize, b: usize, focal: f64) -> Vec<Start> {
     let (from, to): (Vec<[f64; 2]>, Vec<[f64; 2]>) = shared.iter().map(|s| (s.1, s.2)).unzip();
     if let Some((h, agree)) = fit_robustly(&from, &to, tolerance) {
         let h = h.0;
-        // Calibrated: K⁻¹ H K, with K = diag(f, f, 1).
+        // Calibrated: K⁻¹ H K, with K = diag(f, f, 1) on each side.
+        let grew = focal / focal_b;
         let calibrated = [
-            [h[0][0], h[0][1], h[0][2] / focal],
-            [h[1][0], h[1][1], h[1][2] / focal],
+            [h[0][0] * grew, h[0][1] * grew, h[0][2] / focal_b],
+            [h[1][0] * grew, h[1][1] * grew, h[1][2] / focal_b],
             [h[2][0] * focal, h[2][1] * focal, h[2][2]],
         ];
         let (p, q) = agreeing_pairs(&first, &second, &agree);
@@ -522,10 +579,15 @@ const START_REACH: usize = 6;
 
 /// The second key frame after `keys[at]` that gives the most points with the widest angle between
 /// their rays, and all the ways to start from there.
-fn best_starts(seen: &Seen, keys: &[usize], at: usize, focal: f64) -> Option<(usize, Vec<Start>)> {
+fn best_starts(
+    seen: &Seen,
+    keys: &[usize],
+    at: usize,
+    lens: Lens<'_>,
+) -> Option<(usize, Vec<Start>)> {
     let mut best: Option<(f64, usize, Vec<Start>)> = None;
     for offset in 1..START_REACH.min(keys.len() - at) {
-        let found = starts(seen, keys[at], keys[at + offset], focal);
+        let found = starts(seen, keys[at], keys[at + offset], lens);
         let score = found
             .iter()
             .map(|(view, points)| {
@@ -552,7 +614,7 @@ fn grown(
     keys: &[usize],
     (at, offset): (usize, usize),
     start: &Start,
-    focal: f64,
+    lens: Lens<'_>,
 ) -> Option<Reconstruction> {
     let (a, b) = (keys[at], keys[at + offset]);
     let mut reconstruction = Reconstruction::default();
@@ -560,24 +622,28 @@ fn grown(
         a,
         Camera {
             view: View::AT_REST,
-            focal,
+            focal: lens.at(a),
         },
     );
     reconstruction.cameras.insert(
         b,
         Camera {
             view: start.0,
-            focal,
+            focal: lens.at(b),
         },
     );
     reconstruction.points = start.1.clone();
-    reconstruction.adjusted(seen, &[a, b], false, 10);
+    reconstruction.adjusted(seen, &[a, b], lens.adjusting(), 10);
     reconstruction.rejected(seen);
     let add_one = |reconstruction: &mut Reconstruction, frame: usize, added: &mut usize| {
-        let Some(from) = guess(reconstruction, frame) else {
+        let Some(mut from) = guess(reconstruction, frame) else {
             return false;
         };
-        let Some((camera, off)) = reconstruction.resected(seen, frame, from) else {
+        if let Some(focal) = lens.near(&reconstruction.cameras, frame) {
+            from.focal = focal;
+        }
+        let free = lens.scales.is_some();
+        let Some((camera, off)) = reconstruction.resected(seen, frame, from, free) else {
             return false;
         };
         reconstruction.cameras.insert(frame, camera);
@@ -588,7 +654,7 @@ fn grown(
         *added += 1;
         let frames: Vec<usize> = reconstruction.cameras.keys().copied().collect();
         if added.is_multiple_of(3) || frames.len() <= 6 {
-            reconstruction.adjusted(seen, &frames, false, 10);
+            reconstruction.adjusted(seen, &frames, lens.adjusting(), 10);
             reconstruction.rejected(seen);
         }
         true
@@ -614,7 +680,7 @@ fn grown(
         }
     }
     let frames: Vec<usize> = reconstruction.cameras.keys().copied().collect();
-    reconstruction.adjusted(seen, &frames, false, 10);
+    reconstruction.adjusted(seen, &frames, lens.adjusting(), 10);
     reconstruction.rejected(seen);
     (reconstruction.cameras.len() >= 2 && reconstruction.points.len() >= 8)
         .then_some(reconstruction)
@@ -626,13 +692,13 @@ fn best_reconstruction(
     seen: &Seen,
     keys: &[usize],
     at: usize,
-    focal: f64,
+    lens: Lens<'_>,
 ) -> Option<(f64, Reconstruction)> {
-    let (offset, found) = best_starts(seen, keys, at, focal)?;
+    let (offset, found) = best_starts(seen, keys, at, lens)?;
     found
         .par_iter()
         .filter_map(|start| {
-            let reconstruction = grown(seen, keys, (at, offset), start, focal)?;
+            let reconstruction = grown(seen, keys, (at, offset), start, lens)?;
             if reconstruction.errors(seen).is_empty() {
                 return None;
             }
@@ -717,14 +783,45 @@ fn search_focal(width: f64, error: &(dyn Fn(f64) -> f64 + Sync)) -> Search {
 
 /// How much a camera that only turns leaves unexplained between two frames, in pixels: a quarter of
 /// what they share lands further than this from where the best rotation puts it.
-fn left_between(seen: &Seen, a: usize, b: usize, focal: f64) -> Option<f64> {
+fn left_between(seen: &Seen, a: usize, b: usize, lens: Lens<'_>) -> Option<f64> {
     let shared = seen.shared(a, b);
     if shared.len() < FEWEST_SHARED {
         return None;
     }
-    let ray = |at: [f64; 2]| unit([at[0] / focal, at[1] / focal, 1.0]);
-    let from: Vec<Vector> = shared.iter().map(|s| ray(s.1)).collect();
-    let to: Vec<Vector> = shared.iter().map(|s| ray(s.2)).collect();
+    let Some(_) = lens.scales else {
+        return left_at(&shared, lens.at(a), lens.at(b));
+    };
+    // How much the picture grew was only read off it, and a camera that only turns gets the lens that
+    // suits it best before anything is said to be left over.
+    let (focal_a, focal_b) = (lens.at(a), lens.at(b));
+    let left = |log: f64| left_at(&shared, focal_a, focal_b * log.exp()).unwrap_or(f64::INFINITY);
+    let (mut low, mut high) = (-LENS_LEEWAY, LENS_LEEWAY);
+    let golden = 0.618_033_988_75;
+    let (mut x1, mut x2) = (high - golden * (high - low), low + golden * (high - low));
+    let (mut e1, mut e2) = (left(x1), left(x2));
+    for _ in 0..8 {
+        if e1 < e2 {
+            high = x2;
+            x2 = x1;
+            e2 = e1;
+            x1 = high - golden * (high - low);
+            e1 = left(x1);
+        } else {
+            low = x1;
+            x1 = x2;
+            e1 = e2;
+            x2 = low + golden * (high - low);
+            e2 = left(x2);
+        }
+    }
+    Some(e1.min(e2).min(left(0.0)))
+}
+
+/// [`left_between`] of what two frames `shared`, at a focal length each.
+fn left_at(shared: &[(u32, [f64; 2], [f64; 2])], focal_a: f64, focal: f64) -> Option<f64> {
+    let ray = |at: [f64; 2], focal: f64| unit([at[0] / focal, at[1] / focal, 1.0]);
+    let from: Vec<Vector> = shared.iter().map(|s| ray(s.1, focal_a)).collect();
+    let to: Vec<Vector> = shared.iter().map(|s| ray(s.2, focal)).collect();
     let offs = |turn: &Matrix| -> Vec<f64> {
         from.iter()
             .zip(&to)
@@ -756,7 +853,7 @@ fn left_between(seen: &Seen, a: usize, b: usize, focal: f64) -> Option<f64> {
 /// The most a camera that only turns leaves unexplained, between key frames as far apart as still
 /// share enough, which is where depth shows most, past what the tracker may have wandered by then:
 /// none if no frames are far apart.
-fn left_by_turning(seen: &Seen, keys: &[usize], focal: f64) -> Option<f64> {
+fn left_by_turning(seen: &Seen, keys: &[usize], lens: Lens<'_>) -> Option<f64> {
     let step = (keys.len() / 24).max(1);
     keys.iter()
         .enumerate()
@@ -766,18 +863,18 @@ fn left_by_turning(seen: &Seen, keys: &[usize], focal: f64) -> Option<f64> {
                 .iter()
                 .rev()
                 .find(|b| seen.shared(*a, **b).len() >= FEWEST_SHARED)?;
-            let left = left_between(seen, *a, *b, focal)?;
+            let left = left_between(seen, *a, *b, lens)?;
             Some(left - WANDER_PER_FRAME * (*b - *a) as f64)
         })
         .max_by(f64::total_cmp)
 }
 
 /// The key frame that a start's reach from it shows the most depth.
-fn where_depth_shows(seen: &Seen, keys: &[usize], focal: f64) -> usize {
+fn where_depth_shows(seen: &Seen, keys: &[usize], lens: Lens<'_>) -> usize {
     let mut most = (0.0, 0);
     for (index, a) in keys.iter().enumerate() {
         let b = keys[(index + START_REACH - 1).min(keys.len() - 1)];
-        let left = (b > *a).then(|| left_between(seen, *a, b, focal)).flatten();
+        let left = (b > *a).then(|| left_between(seen, *a, b, lens)).flatten();
         if let Some(left) = left {
             if left > most.0 {
                 most = (left, index);
@@ -787,6 +884,12 @@ fn where_depth_shows(seen: &Seen, keys: &[usize], focal: f64) -> usize {
     most.1
 }
 
+/// How far a lens may be from what the picture's growing says, as a logarithm, for a camera that only
+/// turns.
+const LENS_LEEWAY: f64 = 0.15;
+/// How much a lens may have come apart from what the picture's growing says, where a camera also moves
+/// along its line, before it is not what happened.
+const MOST_FROM_GROWING: f64 = 2.0;
 /// How much a camera that only turns can be left unexplained by, in pixels, past the tracker's wander.
 const ONLY_TURNING_BELOW: f64 = 0.75;
 /// How far a followed point wanders for each frame it is followed, in pixels, as all of them do the
@@ -798,6 +901,7 @@ const LEAST_BASELINE: f64 = 0.01;
 const LEAST_MOTION: f64 = 1.0;
 
 /// A reconstruction as it is written out.
+#[derive(Clone)]
 pub struct Solved {
     pub cameras: BTreeMap<usize, Camera>,
     /// What it placed: the frames it is first and last seen on, where it is first seen, where it is.
@@ -808,6 +912,11 @@ pub struct Solved {
     pub worst: f64,
     /// What share of all that was seen on solved frames agrees.
     pub agreeing: f64,
+    /// Whether its lens changes over the shot.
+    pub zooms: bool,
+    /// Whether it is as well explained by a lens that zooms as by a camera moving along its line, which
+    /// nothing in the picture tells apart.
+    pub zoom_or_push: bool,
 }
 
 /// The most sightings may be off on average, in pixels, for a solve to be worth keeping.
@@ -837,8 +946,150 @@ fn most_motion(seen: &Seen, keys: &[usize]) -> f64 {
     most
 }
 
-/// Solve the camera of what was `followed`, at a focal length if it is known.
+/// How much the picture must grow or shrink over a shot, at the most apart, to be asked whether a lens
+/// did it.
+const LEAST_ZOOM: f64 = 0.03;
+/// As much as a picture growing is worth asking about: past this, what was read of it is not a lens.
+const MOST_ZOOM: f64 = 20.0;
+/// How much a focal length must change for a lens to be said to zoom.
+const LEAST_FOCAL_CHANGE: f64 = 0.02;
+/// How much of one lens's error a lens that zooms may leave, to stand for it.
+const ZOOM_BETTER_BY: f64 = 0.75;
+/// How much more than one lens's error it may leave and still be as good an account of the shot.
+const AS_GOOD_BY: f64 = 1.1;
+
+/// How much bigger the picture is on each frame than on the first, from how far apart what it shows is:
+/// no move, no turn, and no roll changes that, but for what a move does by depth, which comes out even.
+fn scales_over(seen: &Seen) -> Vec<f64> {
+    let least = 0.05 * seen.width;
+    let mut scales = vec![1.0; seen.frames];
+    for frame in 1..seen.frames {
+        let shared = seen.shared(frame - 1, frame);
+        let half = shared.len() / 2;
+        let mut ratios: Vec<f64> = (0..shared.len())
+            .filter_map(|index| {
+                let (a, b) = (&shared[index], &shared[(index + half) % shared.len()]);
+                let before = (a.1[0] - b.1[0]).hypot(a.1[1] - b.1[1]);
+                let after = (a.2[0] - b.2[0]).hypot(a.2[1] - b.2[1]);
+                (before >= least).then(|| after / before)
+            })
+            .collect();
+        ratios.sort_by(f64::total_cmp);
+        let ratio = if ratios.len() >= FEWEST_SEEN {
+            ratios[ratios.len() / 2]
+        } else {
+            1.0
+        };
+        scales[frame] = scales[frame - 1] * ratio;
+    }
+    scales
+}
+
+/// How far apart the most and the least of `values` are, as a share of the least.
+fn spread(values: impl Iterator<Item = f64>) -> f64 {
+    let (least, most) = values.fold((f64::MAX, 0.0f64), |(least, most), value| {
+        (least.min(value), most.max(value))
+    });
+    most / least.max(1e-12) - 1.0
+}
+
+/// The shot with a lens that changes: each frame starts from how much the picture grew, and its own
+/// focal length then goes wherever fits, against what stands at other depths.
+fn with_a_zoom(followed: &Followed, scales: &[f64]) -> Result<Solved, Unsolved> {
+    let found = one_lens(followed, None, Some(scales))?;
+    let mut solved = written(
+        &found.seen,
+        &found.reconstruction,
+        found.parallax,
+        found.lens_known,
+    )?;
+    let from_growing = solved
+        .cameras
+        .iter()
+        .map(|(frame, camera)| camera.focal / scales[*frame]);
+    if spread(from_growing) > MOST_FROM_GROWING {
+        return Err(Unsolved::DoesNotFit);
+    }
+    solved.zooms = spread(solved.cameras.values().map(|camera| camera.focal)) >= LEAST_FOCAL_CHANGE;
+    Ok(solved)
+}
+
+/// Solve the camera of what was `followed`, at a focal length if it is known, which then holds. Else
+/// with one lens; and where the picture grows or shrinks, also with a lens that changes, which stands
+/// if one lens explains the shot clearly less well. Where each does as well, nothing tells them apart,
+/// and the one lens stands and says so.
 pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved> {
+    let one = one_lens(followed, known, None).and_then(|found| {
+        written(
+            &found.seen,
+            &found.reconstruction,
+            found.parallax,
+            found.lens_known,
+        )
+    });
+    if known.is_some() || followed.frames < 3 {
+        return one;
+    }
+    let scales = scales_over(&Seen::new(followed));
+    let grew = spread(scales.iter().copied());
+    if !(LEAST_ZOOM..MOST_ZOOM).contains(&grew) {
+        return one;
+    }
+    let says_so = |solved: Solved| Solved {
+        zoom_or_push: true,
+        ..solved
+    };
+    match (one, with_a_zoom(followed, &scales)) {
+        (Ok(one), Ok(zoom)) => {
+            if !zoom.zooms {
+                Ok(one)
+            } else if zoom.error < ZOOM_BETTER_BY * one.error {
+                Ok(zoom)
+            } else if zoom.error <= AS_GOOD_BY * one.error {
+                Ok(says_so(one))
+            } else {
+                Ok(one)
+            }
+        }
+        // With the zoom taken out nothing shows any depth, and yet a move along its line fits.
+        (Ok(one), Err(Unsolved::OnlyTurns | Unsolved::Still)) => Ok(says_so(one)),
+        (Ok(one), Err(_)) => Ok(one),
+        // One lens explains it by turning, and the picture's growing is what wide lenses do at the edges.
+        (Err(Unsolved::OnlyTurns), _) => Err(Unsolved::OnlyTurns),
+        (Err(_), Ok(zoom)) => Ok(zoom),
+        (Err(_), Err(Unsolved::OnlyTurns | Unsolved::Still)) => Err(Unsolved::TurnsAndZooms),
+        (Err(error), Err(_)) => Err(error),
+    }
+}
+
+/// What one lens makes of the shot, as a shot that was not asked about a zoom would come out.
+#[cfg(test)]
+pub fn solve_one_lens(followed: &Followed) -> Result<Solved, Unsolved> {
+    one_lens(followed, None, None).and_then(|found| {
+        written(
+            &found.seen,
+            &found.reconstruction,
+            found.parallax,
+            found.lens_known,
+        )
+    })
+}
+
+/// A reconstruction, before it is written out.
+struct OneLens {
+    seen: Seen,
+    reconstruction: Reconstruction,
+    parallax: f64,
+    lens_known: bool,
+}
+
+/// The reconstruction of what was `followed`, with one lens, known or searched for, or a base searched
+/// for and `scales` of it to start each frame from.
+fn one_lens(
+    followed: &Followed,
+    known: Option<f64>,
+    scales: Option<&[f64]>,
+) -> Result<OneLens, Unsolved> {
     let mut seen = Seen::new(followed);
     if seen.frames < 3 {
         return Err(Unsolved::TooShort);
@@ -851,24 +1102,26 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
         return Err(Unsolved::Still);
     }
     // What a camera that only turns leaves unexplained, at the lens it would fit best with.
-    let left = |focal: f64| left_by_turning(&seen, &keys, focal).unwrap_or(f64::INFINITY);
+    let lens = |base: f64| Lens { base, scales };
+    let left = |focal: f64| left_by_turning(&seen, &keys, lens(focal)).unwrap_or(f64::INFINITY);
     let turning = match known {
         Some(focal) => focal,
         None => search_focal(seen.width, &left).focal,
     };
-    let parallax = left_by_turning(&seen, &keys, turning);
+    let parallax = left_by_turning(&seen, &keys, lens(turning));
     if parallax.is_some_and(|parallax| parallax < ONLY_TURNING_BELOW) {
         return Err(Unsolved::OnlyTurns);
     }
     // The keys the search reads begin where things show most depth.
     let begin =
-        where_depth_shows(&seen, &keys, turning).min(keys.len().saturating_sub(SEARCH_KEYS));
+        where_depth_shows(&seen, &keys, lens(turning)).min(keys.len().saturating_sub(SEARCH_KEYS));
     let some = &keys[begin..(begin + SEARCH_KEYS).min(keys.len())];
     let (focal, lens_known) = match known {
         Some(focal) => (focal, true),
         None => {
             let error = |focal: f64| {
-                best_reconstruction(&seen, some, 0, focal).map_or(f64::INFINITY, |found| found.0)
+                best_reconstruction(&seen, some, 0, lens(focal))
+                    .map_or(f64::INFINITY, |found| found.0)
             };
             let search = search_focal(seen.width, &error);
             if search.told {
@@ -879,8 +1132,14 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
         }
     };
     let (_, mut reconstruction) =
-        best_reconstruction(&seen, &keys, begin, focal).ok_or(Unsolved::DoesNotFit)?;
-    let let_go = lens_known && known.is_none();
+        best_reconstruction(&seen, &keys, begin, lens(focal)).ok_or(Unsolved::DoesNotFit)?;
+    let let_go = if scales.is_some() {
+        Focal::Own
+    } else if lens_known && known.is_none() {
+        Focal::Shared
+    } else {
+        Focal::Held
+    };
     let frames: Vec<usize> = reconstruction.cameras.keys().copied().collect();
     reconstruction.adjusted(&seen, &frames, let_go, 40);
     reconstruction.rejected(&seen);
@@ -902,11 +1161,28 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
     let between: Vec<usize> = (0..seen.frames)
         .filter(|frame| !reconstruction.cameras.contains_key(frame))
         .collect();
+    // Between the key frames a lens that changes goes straight, with how much the picture grew taken out.
+    let focal_between = |frame: usize| {
+        let scales = scales?;
+        let log = |(key, camera): (&usize, &Camera)| (*key, (camera.focal / scales[*key]).ln());
+        let cameras = &reconstruction.cameras;
+        let before = cameras.range(..frame).next_back().map(log);
+        let after = cameras.range(frame + 1..).next().map(log);
+        let log = match (before, after) {
+            (Some((a, la)), Some((b, lb))) => la + (lb - la) * (frame - a) as f64 / (b - a) as f64,
+            (Some((_, only)), None) | (None, Some((_, only))) => only,
+            (None, None) => return None,
+        };
+        Some(log.exp() * scales[frame])
+    };
     let found: Vec<(usize, Option<(Camera, Vec<u32>)>)> = between
         .par_iter()
         .map(|frame| {
-            let from = guess(&reconstruction, *frame);
-            let found = from.and_then(|from| reconstruction.resected(&seen, *frame, from));
+            let from = guess(&reconstruction, *frame).map(|camera| Camera {
+                focal: focal_between(*frame).unwrap_or(camera.focal),
+                ..camera
+            });
+            let found = from.and_then(|from| reconstruction.resected(&seen, *frame, from, false));
             (*frame, found)
         })
         .collect();
@@ -919,12 +1195,12 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
         }
     }
     reconstruction.rejected(&seen);
-    written(
-        &seen,
-        &reconstruction,
-        parallax.unwrap_or(f64::INFINITY),
+    Ok(OneLens {
+        seen,
+        reconstruction,
+        parallax: parallax.unwrap_or(f64::INFINITY),
         lens_known,
-    )
+    })
 }
 
 /// The focal length of the camera a document starts from, for frames of that `height`.
@@ -998,5 +1274,7 @@ fn written(
         error,
         worst,
         agreeing,
+        zooms: false,
+        zoom_or_push: false,
     })
 }

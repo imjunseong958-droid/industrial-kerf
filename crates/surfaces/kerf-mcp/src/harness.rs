@@ -2469,8 +2469,13 @@ fn solved_camera(
         format!("{{{}}}", words.join(" "))
     };
     let fov = rounded(shot.fov, 3);
+    let lens = if shot.zooms {
+        keys(&|camera| camera.fov, 3)
+    } else {
+        fov.to_string()
+    };
     let params = format!(
-        "x={} y={} z={} pan={} tilt={} roll={} fov={fov}",
+        "x={} y={} z={} pan={} tilt={} roll={} fov={lens}",
         keys(&|camera| camera.x, 5),
         keys(&|camera| camera.y, 5),
         keys(&|camera| camera.z, 5),
@@ -2511,6 +2516,14 @@ fn solved_camera(
         .map(|index| format!("{}f", first + index as i64)));
     result["fov"] = json!(fov);
     result["lensKnown"] = json!(shot.lens_known);
+    result["zooms"] = json!(shot.zooms);
+    if shot.zoom_or_push {
+        result["zoomOrPush"] = json!(
+            "This shot cannot tell a zoom from a push in: what is in the picture grows alike, which \
+             either would do. It is written as the camera moving along its line with one lens, and \
+             if the lens zoomed that way is not true."
+        );
+    }
     result["fit"] = json!({
         "error": rounded(shot.error / scale, 3),
         "worst": rounded(shot.worst / scale, 3),

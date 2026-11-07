@@ -285,7 +285,18 @@ turn 0.15 degrees at worst, and the field of view 0.2 degrees, with 0.13 pixels 
 in 31 ms a frame after the frames are drawn (28 of it following points). A clip pinned under a 55
 degree lens for 36 frames at 480x270 stays within 0.72 pixels of its spot.
 
-To add: a lens that zooms during a camera solve, which now reads as moving along its line with more error. Optical flow is in
+A lens that changes during a shot is solved too, and goes in as `fov` keyframes on `gen=camera@1`. How much the picture grew from frame to frame, read from how far apart what it shows is, starts each frame's lens, and each key frame's focal length then goes wherever fits, against what lies at other depths: a zoom grows all of a picture alike, and a move along its line grows what is near more. It stands only where it leaves under three quarters of one lens's error, so a shot one lens explains comes out as it did. A camera that holds its lens, in a room filmed over 120 frames at 960x540, has the same 0.099 pixels, way off by 0.097%, turned off by 0.136 degrees, and a field of view off by 0.26; asking costs a second solve wherever the picture grows or shrinks by 3%, which on that shot takes 2.2 s where one lens took 0.83. Over the same way:
+
+| Lens | Solve | Reprojection error | Way | Turn at worst | Field of view at worst |
+|---|---|---|---|---|---|
+| 1.2x | One lens | 0.37 px | 25.6% | 9.6 deg | 19.1 deg |
+| 1.2x | Zooming | 0.14 px | 0.54% | 0.17 deg | 0.46 deg |
+| 2x | One lens | 0.45 px | 68.1% | 17.8 deg | 42.1 deg |
+| 2x | Zooming | 0.17 px | 0.43% | 0.24 deg | 1.25 deg |
+
+A zoom at a flat wall square to the camera and a push in at one are the same picture, and so is a tripod turning under a zoom if a move can also be made to fit it. There `look` says so (`zoomOrPush`) and writes the move with one lens; and a camera that plainly only turns under a zoom is refused, as one that only turns is. A clip pinned under a zoom of 1.6x for 36 frames at 480x270 stays within 1.2 pixels of its spot.
+
+Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.
 
 ### Image

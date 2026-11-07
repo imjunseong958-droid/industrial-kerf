@@ -2077,6 +2077,119 @@ fn look_solves_a_shots_camera_and_a_clip_stays_where_it_is_pinned() {
 }
 
 #[test]
+fn look_solves_a_lens_that_zooms_and_a_clip_stays_where_it_is_pinned() {
+    let (width, height) = (480, 270);
+    let (w, h) = (width as f64, height as f64);
+    let mut shots = scene::across_the_room(36, 260.0);
+    for (frame, shot) in shots.iter_mut().enumerate() {
+        let t = frame as f64 / 35.0;
+        shot.focal = 220.0 * (1.6f64).powf(t * t * (3.0 - 2.0 * t));
+    }
+    let room = scene::room();
+    let Some((directory, router)) = filmed(&room, &shots, (width, height)) else {
+        return;
+    };
+    let solved = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true}, "from": "0f", "to": "36f"}),
+    );
+    assert_eq!(solved["solved"], true, "{solved}");
+    assert_eq!(solved["zooms"], true, "{solved}");
+    assert!(solved["zoomOrPush"].is_null(), "{solved}");
+    let true_fov = (2.0 * (h / 2.0 / 220.0).atan()).to_degrees();
+    let fov = solved["fov"].as_f64().unwrap();
+    assert!((fov - true_fov).abs() < 2.0, "{fov} not {true_fov}");
+    let script = solved["script"].as_str().unwrap();
+    assert!(script.contains(" fov={0f:"), "{script}");
+
+    let spot_of = |place: &Value| {
+        let at = [
+            (place["at"][0].as_f64().unwrap() - 0.5) * w,
+            (place["at"][1].as_f64().unwrap() - 0.5) * h,
+        ];
+        scene::point_at(&room, &shots[0], at)
+    };
+    let in_view = |spot: [f64; 3]| {
+        shots.iter().all(|shot| {
+            shot.shows(spot)
+                .is_some_and(|at| at[0].abs() < w / 2.0 - 12.0 && at[1].abs() < h / 2.0 - 12.0)
+        })
+    };
+    let place = solved["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|place| place["frame"] == 0 && place["lastFrame"] == 35)
+        .find(|place| spot_of(place).is_some_and(in_view))
+        .unwrap_or_else(|| panic!("nothing stays in view: {solved}"));
+    let spot = spot_of(place).unwrap();
+    let camera = ok(&router, "edit", json!({ "script": script }));
+    let proposal = camera["proposal"]["id"]
+        .as_str()
+        .or_else(|| camera["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{camera}"));
+    let pinned = ok(
+        &router,
+        "edit",
+        json!({
+            "extend": proposal,
+            "script": format!(
+                "track add V3 video\noverwrite gen=solid dur=36f at=0f on=V3 as=pin\nset pin color=#ff00ff scale=0.025 three_d=true x={} y={} z={}",
+                place["x"], place["y"], place["z"]
+            ),
+        }),
+    );
+    let proposal = pinned["proposal"]["id"]
+        .as_str()
+        .or_else(|| pinned["proposal"].as_str())
+        .unwrap_or(proposal);
+    let document = ok(&router, "look", json!({ "proposal": proposal }));
+    let text = document["document"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{document}"));
+    let mut project = kerf_lang::parse_document(text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    kerf_runtime::resolve_media_paths(&mut project, directory.path());
+    let mut worst = 0.0f64;
+    for frame in (0..36).step_by(5) {
+        let found = marker_at(&project, frame as i64)
+            .unwrap_or_else(|| panic!("no marker on frame {frame}"));
+        let known = shots[frame].shows(spot).unwrap();
+        let known = [known[0] + w / 2.0, known[1] + h / 2.0];
+        worst = worst.max((found[0] - known[0]).hypot(found[1] - known[1]));
+    }
+    eprintln!("the pinned clip was at worst {worst:.2} pixels off, under a zoom");
+    assert!(worst < 2.5, "at worst {worst} pixels off");
+}
+
+#[test]
+fn look_says_when_a_shot_cannot_tell_a_zoom_from_a_push_in() {
+    let (width, height) = (480, 270);
+    let shots: Vec<scene::Shot> = (0..30)
+        .map(|frame| {
+            let t = frame as f64 / 29.0;
+            scene::Shot::looking([0.0, 0.0, 3.0 * t], [0.0, 0.0, 10.0], 0.0, 300.0)
+        })
+        .collect();
+    let Some((_directory, router)) = filmed(&scene::wall(), &shots, (width, height)) else {
+        return;
+    };
+    let solved = ok(
+        &router,
+        "look",
+        json!({"track": {"camera": true}, "from": "0f", "to": "30f"}),
+    );
+    assert_eq!(solved["solved"], true, "{solved}");
+    assert_eq!(solved["zooms"], false, "{solved}");
+    let said = solved["zoomOrPush"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{solved}"));
+    assert!(said.contains("cannot tell a zoom from a push in"), "{said}");
+}
+
+#[test]
 fn look_says_plainly_when_a_shot_cannot_be_solved() {
     let (width, height) = (320, 180);
     // A camera on a tripod, panning across a flat wall and then a room.
