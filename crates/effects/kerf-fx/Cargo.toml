@@ -14,6 +14,7 @@ kerf-model = { path = "../../foundation/kerf-model" }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-geom = { path = "../../foundation/kerf-geom" }
 kerf-gpu = { path = "../../render/kerf-gpu" }
+kerf-kernel = { path = "../../render/kerf-kernel" }
 kerf-text = { path = "../../foundation/kerf-text" }
 kerf-raster-fx = { path = "../../effects/kerf-raster-fx" }
 rayon = "1"

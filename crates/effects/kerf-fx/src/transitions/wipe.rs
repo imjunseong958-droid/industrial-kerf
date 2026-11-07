@@ -32,28 +32,16 @@ impl WipeStyle {
     }
 }
 
-/// Coverage of (B, B+border) at signed distance `d` (negative = inside the B region).
-#[inline]
-pub(crate) fn coverage(st: &WipeStyle, d: f32) -> (f32, f32) {
-    let s = (st.feather + st.aa) * 0.5;
-    let kb = 1.0 - smoothstep(-s, s, d);
-    let ko = if st.border > 0.0 {
-        1.0 - smoothstep(st.border - s, st.border + s, d)
-    } else {
-        kb
-    };
-    (kb, ko.max(kb))
-}
-
-/// Composite one pixel of A/B/border for signed distance `d`.
+/// Composite one pixel of A/B/border for signed distance `d` (negative = inside the B region).
 #[inline]
 pub(crate) fn wipe_px(st: &WipeStyle, a: [f32; 4], b: [f32; 4], d: f32) -> [f32; 4] {
-    let (kb, ko) = coverage(st, d);
-    let mut o = [0.0; 4];
-    for k in 0..4 {
-        o[k] = a[k] * (1.0 - ko) + st.border_color[k] * (ko - kb) + b[k] * kb;
-    }
-    o
+    let edge = kerf_kernel::WipeEdge {
+        feather: st.feather,
+        border: st.border,
+        border_color: st.border_color,
+        aa: st.aa,
+    };
+    kerf_kernel::wipe(&edge, a, b, d)
 }
 
 /// Min/max of `field` over a coarse grid covering the frame (edges included).
@@ -263,9 +251,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             })
         }
         // Legacy wipes rebuilt on the field engine (border / anti-aliasing / centre).
-        "iris_round" => field_wipe(t, st, move |x, y| {
-            ((x - cx).powi(2) + (y - cy).powi(2)).sqrt()
-        }),
+        "iris_round" => field_wipe(t, st, move |x, y| kerf_kernel::iris_round(x, y, cx, cy)),
         "iris_box" => field_wipe(t, st, move |x, y| (x - cx).abs().max((y - cy).abs() * asp)),
         "iris_diamond" => field_wipe(t, st, move |x, y| (x - cx).abs() + (y - cy).abs() * asp),
         "iris_cross" => field_wipe(t, st, move |x, y| {

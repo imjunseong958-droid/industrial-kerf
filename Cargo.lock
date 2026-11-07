@@ -1338,6 +1338,7 @@ dependencies = [
  "kerf-draw",
  "kerf-geom",
  "kerf-gpu",
+ "kerf-kernel",
  "kerf-model",
  "kerf-raster-fx",
  "kerf-text",
@@ -1381,6 +1382,13 @@ dependencies = [
  "kerf-model",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "kerf-kernel"
+version = "0.1.0"
+dependencies = [
+ "naga",
 ]
 
 [[package]]

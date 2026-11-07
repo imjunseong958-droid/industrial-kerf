@@ -464,7 +464,7 @@ fn how_wipe(id: &str, t: &Tx) -> Option<How> {
             wipe(t, st, 5, &field, &[dx, dy, count, lo, span, step])
         }
         "iris_round" => {
-            let field = move |x: f32, y: f32| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+            let field = move |x: f32, y: f32| kerf_kernel::iris_round(x, y, cx, cy);
             wipe(t, st, 6, &field, &[cx, cy])
         }
         "iris_box" => {
@@ -1029,7 +1029,14 @@ impl Stage {
         let built = gpu.build(|device| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("kerf-transitions"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("kernels.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}{}",
+                        include_str!("kernels.wgsl"),
+                        kerf_kernel::wipe_wgsl()
+                    )
+                    .into(),
+                ),
             });
             let layout = kerf_gpu::kernel_layout(device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

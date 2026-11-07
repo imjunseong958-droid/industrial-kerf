@@ -985,23 +985,16 @@ impl FxOp {
                 hi,
                 preserve,
             } => {
-                let preserve = *preserve;
-                img.map_rgb(|c, _, _| {
-                    let c = enc(c);
-                    let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-                    let ws = (1.0 - l).powi(2);
-                    let wh = l.powi(2);
-                    let wm = 1.0 - ws - wh;
-                    let mut o = [0.0; 3];
-                    for k in 0..3 {
-                        o[k] = c[k] + sh[k] * ws + md[k] * wm.max(0.0) + hi[k] * wh;
+                let told = kerf_kernel::Balance {
+                    shadows: *sh,
+                    middles: *md,
+                    highlights: *hi,
+                    keep: if *preserve { 1.0 } else { 0.0 },
+                };
+                img.px.par_chunks_mut(img.w * 4).for_each(|row| {
+                    for pixel in row.as_chunks_mut::<4>().0 {
+                        *pixel = kerf_kernel::color_balance(*pixel, &told);
                     }
-                    if preserve {
-                        let l2 = 0.2126 * o[0] + 0.7152 * o[1] + 0.0722 * o[2];
-                        let d = l - l2;
-                        o = o.map(|v| v + d);
-                    }
-                    dec(o)
                 });
             }
             FxOp::LeaveColor {
