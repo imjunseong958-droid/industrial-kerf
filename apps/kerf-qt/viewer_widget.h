@@ -16,6 +16,9 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+#include <optional>
+
 #include <optional>
 
 class QGraphicsOpacityEffect;
@@ -149,9 +152,20 @@ public:
     // `path=` as one edit.
     void setMotionPath(const QString &clip, const QString &text, const QTransform &placement, double along);
     // A curve to show where no placement can: its places in shares of the canvas, none where it cannot
-    // be seen, and where the clip is now. It is drawn and not edited, since no one map takes a drag back
-    // to a point of `path=`. Empty shows none.
+    // be seen, and where the clip is now. Empty shows none.
     void setSampledPath(const QList<std::optional<QPointF>> &places, const std::optional<QPointF> &now);
+    // What it takes to drag the points of such a curve: no one map takes a drag back to a point of
+    // `path=`, so each step asks `solve` what point lands there, and `reshape` for the curve that comes
+    // of it. A point is dragged, and written as one edit; adding and removing them stay with a path
+    // one map can show.
+    struct SampledPathEdit {
+        QString clip;
+        QList<QPointF> points;
+        std::function<std::optional<QPointF>(const QList<QPointF> &, int, const QPointF &)> solve;
+        std::function<QList<std::optional<QPointF>>(const QList<QPointF> &)> curve;
+        std::function<QList<std::optional<QPointF>>(const QList<QPointF> &)> handles;
+    };
+    void setSampledPathEdit(const SampledPathEdit &edit);
     bool showsSampledPath() const { return !m_sampledPath.isEmpty(); }
     bool showsMotionPath() const { return !m_pathClip.isEmpty(); }
     // Its points, the curve through them, and where the clip is on it, all in
@@ -310,6 +324,16 @@ private:
     QTransform m_pathPlacement;
     QList<std::optional<QPointF>> m_sampledPath;
     std::optional<QPointF> m_sampledNow;
+    // The points of it that a drag can take, where they are, and the one in hand.
+    SampledPathEdit m_sampledEdit;
+    QList<std::optional<QPointF>> m_sampledHandles;
+    int m_sampledDrag = -1;
+    QPointF m_sampledHeld;
+    QPointF m_sampledPressed;
+    bool m_sampledMoved = false;
+    QList<QPointF> m_sampledBefore;
+    int sampledPointAt(const QPointF &widget) const;
+    QPointF sampledToWidget(const QPointF &share) const;
     double m_pathAlong = 0.0;
     int m_pathSelected = -1;
     // The point in hand, what the path was before it, and from the pointer to

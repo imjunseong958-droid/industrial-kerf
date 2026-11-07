@@ -334,7 +334,7 @@ private slots:
         const auto gone = sampledPath(QJsonObject{{"id", "c1"}, {"props", behind}}, canvas, false, canvas, 0.0, parents, QJsonObject{}, 8);
         QVERIFY(std::none_of(gone.cbegin(), gone.cend(), [](const auto &place) { return place.has_value(); }));
 
-        // Shown and not edited, since no one map takes a drag back to a point of it.
+        // No one map takes a drag back to a point of it, which `aPathFacingAlongItselfIsDragged` solves.
         ViewerWidget viewer;
         viewer.resize(640, 360);
         viewer.setSampledPath(places, places.at(4));
@@ -344,6 +344,96 @@ private slots:
         viewer.setSampledPath(gone, std::nullopt);
         QVERIFY(!viewer.showsSampledPath());
         QVERIFY(with != viewer.grab().toImage());
+    }
+
+    // A drag on a point of such a path is solved for from the clip's own placement at that point, and
+    // lands there as nearly as the document can say a point, a ten-thousandth of the frame: 0.19 pixels.
+    void aPathFacingAlongItselfIsDragged() {
+        const QSizeF canvas(1920, 1080);
+        const QTransform parents;
+        const QList<QPointF> points{{0.0, 0.0}, {0.2, 0.3}, {0.5, -0.1}};
+        const auto solving = [&](const QJsonObject &props) {
+            const QJsonObject clip{{"id", "c1"}, {"props", props}};
+            QVERIFY(!pathPlacement(clip, canvas, false, canvas, 0.0, parents).isInvertible());
+            for (int index = 0; index < points.size(); ++index) {
+                const auto from = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, points).at(index);
+                QVERIFY(from.has_value());
+                for (const QPointF &by : {QPointF(0.03, 0.05), QPointF(-0.1, 0.02), QPointF(0.2, -0.15)}) {
+                    const QPointF wanted = *from + by;
+                    const auto point = sampledPathPointFor(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, points, index, wanted);
+                    QVERIFY(point.has_value());
+                    QList<QPointF> moved = points;
+                    moved[index] = *point;
+                    // Exactly, as far as a double is said.
+                    const auto exact = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, moved).at(index);
+                    QVERIFY(exact && QLineF(*exact, wanted).length() < 1e-6);
+                    // Through what the document says of it, as it will be drawn from then on.
+                    const auto written = graph::parsePath(graph::pathText(moved));
+                    QVERIFY(written.has_value());
+                    const auto landed = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, *written).at(index);
+                    QVERIFY(landed.has_value());
+                    const double off = std::hypot((landed->x() - wanted.x()) * canvas.width(), (landed->y() - wanted.y()) * canvas.height());
+                    QVERIFY2(off < 0.3, qPrintable(QStringLiteral("point %1 off by %2 pixels").arg(index).arg(off)));
+                    // What it lands on is the curve the clip goes along.
+                    const auto along = sampledPath(withPathPoints(clip, moved), canvas, false, canvas, 0.0, parents, QJsonObject{}, 96);
+                    double nearest = 1e9;
+                    for (const auto &place : along)
+                        if (place) nearest = std::min(nearest, QLineF(*place, wanted).length());
+                    QVERIFY(nearest < 0.02);
+                }
+            }
+        };
+        solving({{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"z", 0.2}, {"path", "0,0 0.2,0.3 0.5,-0.1"}});
+        solving({{"three_d", true}, {"orient", true}, {"anchor_x", -0.3}, {"anchor_y", 0.2}, {"rotate_x", -25.0}, {"rotate_y", 40.0}, {"scale", 0.6}, {"path", "0,0 0.2,0.3 0.5,-0.1"}});
+
+        // Behind the camera there is no such point to find.
+        const QJsonObject held{{"id", "c1"}, {"props", QJsonObject{{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"z", -5.0}, {"path", "0,0 0.2,0.3 0.5,-0.1"}}}};
+        QVERIFY(!sampledPathPointFor(held, canvas, false, canvas, 0.0, parents, QJsonObject{}, points, 1, QPointF(0.5, 0.5)).has_value());
+
+        // In the viewer: a drag takes the point there and writes it as one edit, and a click writes nothing.
+        const QJsonObject clip{{"id", "c1"}, {"props", QJsonObject{{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"z", 0.2}, {"scale", 0.5}, {"path", "0,0 0.1,0.1 0.2,-0.1"}}}};
+        const QList<QPointF> start{{0.0, 0.0}, {0.1, 0.1}, {0.2, -0.1}};
+        ViewerWidget::SampledPathEdit edit;
+        edit.clip = QStringLiteral("c1");
+        edit.points = start;
+        edit.solve = [&](const QList<QPointF> &now, int index, const QPointF &seen) {
+            return sampledPathPointFor(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, now, index, seen);
+        };
+        edit.curve = [&](const QList<QPointF> &now) { return sampledPath(withPathPoints(clip, now), canvas, false, canvas, 0.0, parents, QJsonObject{}, 96); };
+        edit.handles = [&](const QList<QPointF> &now) { return sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, now); };
+        ViewerWidget viewer;
+        viewer.resize(960, 540);
+        viewer.show();
+        viewer.setSampledPath(edit.curve(start), std::nullopt);
+        viewer.setSampledPathEdit(edit);
+        QSignalSpy edits(&viewer, &ViewerWidget::editRequested);
+        const auto widgetOf = [&](const QPointF &share) {
+            const QRectF picture = viewer.pictureRect();
+            return QPointF(picture.left() + share.x() * picture.width(), picture.top() + share.y() * picture.height());
+        };
+        const QPointF on = widgetOf(*edit.handles(start).at(1));
+        QTest::mouseClick(&viewer, Qt::LeftButton, {}, on.toPoint());
+        QCOMPARE(edits.count(), 0);
+        const QImage before = viewer.grab().toImage();
+        const QPoint to = on.toPoint() + QPoint(40, -30);
+        QTest::mousePress(&viewer, Qt::LeftButton, {}, on.toPoint());
+        QTest::mouseMove(&viewer, to);
+        QCoreApplication::processEvents();
+        QVERIFY(before != viewer.grab().toImage());
+        QTest::mouseRelease(&viewer, Qt::LeftButton, {}, to);
+        QCOMPARE(edits.count(), 1);
+        const QJsonObject op = edits.takeFirst().at(0).toJsonArray().at(0).toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
+        const auto written = graph::parsePath(op.value("props").toObject().value("path").toString());
+        QVERIFY(written.has_value() && written->size() == 3);
+        QCOMPARE(written->at(0), start.at(0));
+        QCOMPARE(written->at(2), start.at(2));
+        QVERIFY(written->at(1) != start.at(1));
+        const auto landed = edit.handles(*written).at(1);
+        QVERIFY(landed.has_value());
+        const QPointF heldBy = on - on.toPoint();
+        QVERIFY2(QLineF(widgetOf(*landed), QPointF(to) + heldBy).length() < 0.5,
+                 qPrintable(QStringLiteral("landed %1 pixels off").arg(QLineF(widgetOf(*landed), QPointF(to) + heldBy).length())));
     }
 
     void aPlaneThatCannotBeSeenPlacesNothing() {

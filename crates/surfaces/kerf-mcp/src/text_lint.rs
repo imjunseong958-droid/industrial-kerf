@@ -558,6 +558,12 @@ pub(crate) fn contrast_of(
     )
 }
 
+/// A clip's crops, which take what they take off a text on purpose if they move.
+const CROPS: [&str; 4] = ["crop_l", "crop_r", "crop_t", "crop_b"];
+
+/// How much of a text's ink a crop that cuts none of it leaves, going by pixels.
+const CROP_LEAVES: f64 = 0.99;
+
 /// About how many frames [`contrast_of`] draws, for saying how far along it is.
 fn contrast_frames(sequence: &Sequence, (from, to): (Time, Time)) -> usize {
     let of = shown(sequence)
@@ -586,6 +592,83 @@ fn cut_by_frame(glyphs: &Drawn, bounds: [f64; 4], scale: f64) -> bool {
         || (past[1] && (0..w).any(|x| ink(x, 0)))
         || (past[2] && (0..h).any(|y| ink(w - 1, y)))
         || (past[3] && (0..w).any(|x| ink(x, h - 1)))
+}
+
+/// `project` with the clip `id` of `sequence` uncropped, for what a crop takes off it.
+fn uncropped(mut project: Project, sequence: &str, id: &kerf_model::Id) -> Project {
+    project
+        .sequences
+        .iter_mut()
+        .filter(|found| found.id.as_str() == sequence)
+        .flat_map(|found| &mut found.tracks)
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id == *id)
+        .for_each(|clip| {
+            for name in CROPS {
+                clip.props.remove(name);
+            }
+        });
+    project
+}
+
+/// Whether a crop that does not move takes anything off a clip, which a crop that moves is meant to, as
+/// a reveal.
+fn cropped_still(clip: &Clip) -> bool {
+    let at_all = CROPS.iter().any(|name| {
+        clip.props
+            .get(*name)
+            .and_then(|param| param.value_at(Time::ZERO).as_number())
+            .is_some_and(|value| value > 0.0)
+    });
+    at_all
+        && !CROPS
+            .iter()
+            .any(|name| matches!(clip.props.get(*name), Some(Param::Animated(_))))
+}
+
+/// Whether `cropped` has fewer of a text's glyphs than `whole`. By how much ink, not by where, since a crop
+/// also moves what it leaves to the middle of the frame; a little either way is its edges falling on
+/// other pixels.
+fn crop_cuts(whole: &Drawn, cropped: &Drawn) -> bool {
+    let ink = |drawn: &Drawn| {
+        drawn
+            .2
+            .chunks_exact(4)
+            .filter(|pixel| f64::from(pixel[0]) / 255.0 >= GLYPH)
+            .count() as f64
+    };
+    ink(cropped) < ink(whole) * CROP_LEAVES
+}
+
+/// The moment within `(from, to)` where a text that moves goes furthest past an edge of a frame `(w, h)`
+/// with some of it left in the frame, which is not at any of the moments already read: when none is,
+/// nothing more need be drawn. Its boxes take no frames to work out.
+fn furthest_past(
+    item: &Shown,
+    sequence: &Sequence,
+    (from, to): (Time, Time),
+    (w, h): (f64, f64),
+) -> Option<Time> {
+    if !item.animated() || to <= from {
+        return None;
+    }
+    let past = |at: Time| {
+        let [left, top, right, bottom] = item.bounds(sequence, at)?;
+        if right <= 0.0 || bottom <= 0.0 || left >= w || top >= h {
+            return None;
+        }
+        let by = (-left).max(-top).max(right - w).max(bottom - h);
+        (by > 0.0).then_some(by)
+    };
+    // On the frames the clip has, which what keys it goes by.
+    let frame = sequence.rate.frame_duration().flicks().max(1);
+    let into = (from - item.clip.start).flicks() / frame + 1;
+    let first = item.clip.start + Time::from_flicks(frame * into);
+    samples(sequence, &[item], first, to)
+        .into_iter()
+        .filter_map(|at| Some((at, past(at)?)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(at, _)| at)
 }
 
 /// Titles and captions of `sequence` in `project`, whose media paths are resolved, within a range,
@@ -621,7 +704,9 @@ pub(crate) fn contrast(
         );
         let mut worst: Option<(Reading, Time)> = None;
         let mut cut: Option<Time> = None;
-        for moment in steady_moments(item.clip) {
+        let mut cropped: Option<(Drawn, Time)> = None;
+        let moments = steady_moments(item.clip);
+        for moment in moments.iter().copied() {
             let frames = draw(project, moment)
                 .and_then(|with| Some((with, draw(&behind, moment)?, draw(&alone, moment)?)));
             let Some((with, without, glyphs)) = frames else {
@@ -637,6 +722,9 @@ pub(crate) fn contrast(
             let scale = f64::from(with.1) / f64::from(sequence.height.max(1));
             if cut.is_none() && cut_by_frame(&glyphs, bounds, scale) {
                 cut = Some(moment);
+            }
+            if cropped.is_none() && cropped_still(item.clip) {
+                cropped = Some((glyphs.clone(), moment));
             }
             let margin = CONTRAST_MARGIN * f64::from(sequence.height);
             let place = |value: f64, most: u32| {
@@ -661,6 +749,20 @@ pub(crate) fn contrast(
                 worst = Some((read, moment));
             }
         }
+        // Between the moments read, where a box says so, one more frame of glyphs tells.
+        if let (None, Some(first), Some(last)) = (cut, moments.first(), moments.last()) {
+            let frame = (f64::from(sequence.width), f64::from(sequence.height));
+            if let Some(moment) = furthest_past(item, sequence, (*first, *last), frame) {
+                if let (Some(glyphs), Some(bounds)) =
+                    (draw(&alone, moment), item.bounds(sequence, moment))
+                {
+                    let scale = f64::from(glyphs.1) / f64::from(sequence.height.max(1));
+                    if cut_by_frame(&glyphs, bounds, scale) {
+                        cut = Some(moment);
+                    }
+                }
+            }
+        }
         if let Some(when) = cut {
             let place = clock.print_position(when);
             findings.push(
@@ -674,6 +776,21 @@ pub(crate) fn contrast(
                 )
                 .during(sequence, item.clip.start, item.clip.end()),
             );
+        }
+        // A crop that does not move: one frame of its glyphs whole says what it takes off.
+        if let Some((glyphs, when)) = cropped {
+            let whole = uncropped(alone.clone(), id, &item.clip.id);
+            if draw(&whole, when).is_some_and(|whole| crop_cuts(&whole, &glyphs)) {
+                let place = clock.print_position(when);
+                findings.push(
+                    Finding::warning(
+                        "text.clipped",
+                        item.clip.id.as_str(),
+                        format!("{} is cut off by its crop at {place}", item.describe()),
+                    )
+                    .during(sequence, item.clip.start, item.clip.end()),
+                );
+            }
         }
         let Some((read, when)) = worst else {
             continue;

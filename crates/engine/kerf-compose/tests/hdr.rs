@@ -579,6 +579,32 @@ fn echoes_add_up_a_color_past_bt709_and_do_not_wash_it_out() {
 }
 
 #[test]
+fn an_echo_screened_keeps_what_lies_above_sdr_white() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let path = flat_footage(dir.path(), "wide", "00C000");
+    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
+    assert!(plain[1] > 400.0, "{plain:?}");
+    // Two of a flat picture, at 1 and at a half, screened: white, and what each has past it, which the
+    // second has little of. It stopped at SDR white, 203 cd/m², however bright what went in.
+    let echoed = signals(
+        &pq_document(
+            &path,
+            "time.echo time=0.04 count=1 decay=0.5 operator=screen",
+        ),
+        Accel::Never,
+    )
+    .map(nits);
+    assert!(echoed[1] > plain[1] * 1.1, "{echoed:?} of {plain:?}");
+    assert!(echoed[1] < plain[1] * 1.75, "{echoed:?} of {plain:?}");
+    // And its color stays about what it was, past BT.709 as it is. It is not added up, so it moves a
+    // little, where what is between 0 and white is screened and the rest is not.
+    assert!(
+        echoed[0] < 5.0 && echoed[2] < echoed[1] * 0.06,
+        "{echoed:?}"
+    );
+}
+
+#[test]
 fn glows_add_light_to_a_color_past_bt709_and_leave_what_it_is() {
     let dir = tempfile::tempdir().expect("a folder");
     let path = flat_footage(dir.path(), "wide", "00C000");

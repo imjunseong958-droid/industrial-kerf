@@ -1085,9 +1085,9 @@ fn bokeh_and_focus_blur() {
 fn echoes_of_a_color_past_bt709_keep_what_is_below_0() {
     let a = Image::filled(1, 1, [-0.2, 1.4, -0.1, 1.0]);
     let layers = vec![(a.clone(), 1.0), (a.clone(), 0.5)];
-    let add = temporal::combine_echoes(&layers, 0);
+    let add = temporal::combine_echoes(&layers, 0, false);
     assert!(close(add.get(0, 0)[0], -0.3, 1e-6) && close(add.get(0, 0)[1], 2.1, 1e-6));
-    let least = temporal::combine_echoes(&layers, 2);
+    let least = temporal::combine_echoes(&layers, 2, false);
     assert!(close(least.get(0, 0)[0], -0.2, 1e-6));
 }
 
@@ -1096,11 +1096,11 @@ fn echo_combines_operators() {
     let a = Image::filled(1, 1, [0.2, 0.4, 0.1, 1.0]);
     let b = Image::filled(1, 1, [0.6, 0.1, 0.3, 1.0]);
     let layers = vec![(a.clone(), 1.0), (b.clone(), 0.5)];
-    let add = temporal::combine_echoes(&layers, 0);
+    let add = temporal::combine_echoes(&layers, 0, false);
     assert!(close(add.get(0, 0)[0], 0.5, 1e-6) && close(add.get(0, 0)[3], 1.0, 1e-6));
-    let max = temporal::combine_echoes(&layers, 1);
+    let max = temporal::combine_echoes(&layers, 1, false);
     assert!(close(max.get(0, 0)[0], 0.3, 1e-6) && close(max.get(0, 0)[1], 0.4, 1e-6));
-    let back = temporal::combine_echoes(&layers, 4);
+    let back = temporal::combine_echoes(&layers, 4, false);
     assert_eq!(
         back.get(0, 0),
         a.get(0, 0),
@@ -1606,4 +1606,44 @@ fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
     for frame in [60, 90, 120] {
         assert!(delta(frame) > 1e-3, "frame {frame} moves but is sharp");
     }
+}
+
+/// Screen in HDR keeps what lies above SDR white, and goes as it always did below it.
+#[test]
+fn an_echo_screens_up_to_white_and_adds_what_is_past_it_in_hdr() {
+    let picture = |value: f32, alpha: f32| {
+        let mut image = Image::new(1, 1);
+        image.px.copy_from_slice(&[value, 0.25, 0.0, alpha]);
+        image
+    };
+    let of = |values: &[(f32, f32)], hdr: bool| {
+        let layers: Vec<(Image, f32)> = values
+            .iter()
+            .map(|(value, weight)| (picture(*value, 1.0), *weight))
+            .collect();
+        let out = temporal::combine_echoes(&layers, 3, hdr);
+        [out.px[0], out.px[1], out.px[2], out.px[3]]
+    };
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+    // Below white, the two are the same, bit for bit.
+    let below = [(0.5, 1.0), (0.25, 0.5)];
+    assert_eq!(of(&below, true), of(&below, false));
+    assert!(close(of(&below, true)[0], 1.0 - 0.5 * (1.0 - 0.125)));
+    // A value of 3 stopped at 1, and now is what it is, whatever goes under it.
+    assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], false)[0], 1.0));
+    assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], true)[0], 3.0));
+    // What is past white in two layers adds, weighed as they are.
+    assert!(close(of(&[(3.0, 1.0), (4.0, 0.5)], true)[0], 1.0 + 2.0 + 1.0));
+    // It leaves no step at white: just past it and just under it are about as bright.
+    let (under, past) = (of(&[(0.999, 1.0)], true)[0], of(&[(1.001, 1.0)], true)[0]);
+    assert!(past > under && past - under < 0.01, "{under} {past}");
+    // What is below 0, a color past BT.709, adds too, where multiplying sent it further.
+    assert!(close(of(&[(-0.5, 1.0), (-0.5, 0.5)], true)[0], -0.75));
+    assert!(close(of(&[(-0.5, 1.0), (-0.5, 0.5)], false)[0], 1.0 - 1.5 * 1.25));
+    // It goes up with what goes in.
+    let values: Vec<f32> = [0.5, 1.0, 1.5, 2.0, 4.0]
+        .iter()
+        .map(|value| of(&[(*value, 1.0), (0.4, 0.5)], true)[0])
+        .collect();
+    assert!(values.windows(2).all(|pair| pair[1] > pair[0]), "{values:?}");
 }

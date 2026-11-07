@@ -138,6 +138,21 @@ void MainWindow::updateViewerMasks() {
     const auto places = sampledPath(clip, picture, fit, canvas, clipTime, parents, m_project, kSampledPathSteps);
     const double along = propertyAt(props, QStringLiteral("along"), clipTime, 0.0);
     m_viewer->setSampledPath(places, places.value(int(std::lround(std::clamp(along, 0.0, 1.0) * kSampledPathSteps))));
+    // Each point goes where a drag puts it, by solving from the clip's own placement there.
+    const auto points = graph::parsePath(props.value(QStringLiteral("path")).toString());
+    if (!points) return;
+    const QJsonObject timeline = m_project;
+    ViewerWidget::SampledPathEdit edit;
+    edit.clip = m_selectedClip;
+    edit.points = *points;
+    edit.solve = [=](const QList<QPointF> &now, int index, const QPointF &seen) {
+        return sampledPathPointFor(clip, picture, fit, canvas, clipTime, parents, timeline, now, index, seen);
+    };
+    edit.curve = [=](const QList<QPointF> &now) {
+        return sampledPath(withPathPoints(clip, now), picture, fit, canvas, clipTime, parents, timeline, kSampledPathSteps);
+    };
+    edit.handles = [=](const QList<QPointF> &now) { return sampledPathPoints(clip, picture, fit, canvas, clipTime, parents, timeline, now); };
+    m_viewer->setSampledPathEdit(edit);
 }
 
 QTransform MainWindow::parentsMotion(const QJsonObject &clip, const QSizeF &canvas, double at) const {

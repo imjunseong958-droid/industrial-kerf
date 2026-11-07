@@ -314,6 +314,12 @@ QPointF MotionPath::curve(double u) const {
     return lerped(b1, b2, at, t1, t2);
 }
 
+double MotionPath::alongOf(int index) const {
+    const double total = m_distances.last();
+    if (total <= 0.0) return 0.0;
+    return m_distances.at(std::clamp<qsizetype>(index, 0, m_points.size() - 1) * kPathSamples) / total;
+}
+
 double MotionPath::atDistance(double along) const {
     const double total = m_distances.last();
     if (total <= 0.0) return 0.0;
