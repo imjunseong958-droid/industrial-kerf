@@ -192,13 +192,13 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
   is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
   showing (`x y z pan tilt roll fov focus aperture`, animatable, and `parent=` works), and at its defaults a clip at
-  z=0 looks as it does in 2D. `gen=light@1` (`kind=point|ambient|directional color intensity shadow`, with
+  z=0 looks as it does in 2D. `gen=light@1` (`kind=point|ambient|directional color intensity shadow size`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
   light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near,
   and two clips that cross are each cut where they meet, with nothing to say: a clip in a transition or a dip keeps its place whole.
   `gen=light@1 shadow=0.8` has other clips in depth block that much of the light, by how opaque they are where
   its ray meets them, wherever their tracks are and whichever way they are turned: 0, the default, is none, it animates, and an ambient light
-  takes no notice. Shadows have hard edges. `gen=camera@1 focus=0.5 aperture=0.05` keeps the `z` it names sharp, and blurs each clip by how far
+  takes no notice. `size` softens a shadow's edges: a point light is a disc that many frame heights across, a directional one fills that many degrees, 0, the default, is a hard edge, and it animates (`size={0f:0 24f:5}`). The further what casts it is from what it falls on, the softer. `gen=camera@1 focus=0.5 aperture=0.05` keeps the `z` it names sharp, and blurs each clip by how far
   its plane is from that at each pixel, up to `aperture` frame heights far away: 0, the default, blurs nothing, both animate (`focus={0f:0 24f:0.5}` racks focus), and
   each clip is blurred alone, so a sharp one keeps its edge over a soft one behind it. Frames with a clip in depth draw on the CPU.
   `look` with `track: {"camera": true}` over a shot solves where its camera went, and writes it as these keyframes: `set cam x={0f:0 24f:0.1} y={…} z={…} pan={…} tilt={…} roll={…} fov=38.4`.

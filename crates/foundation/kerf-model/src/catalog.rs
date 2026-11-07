@@ -1279,6 +1279,11 @@ fn builtin_catalog() -> Catalog {
             P::number("shadow", 0.0)
                 .range(0.0, 1.0)
                 .doc("How much other `three_d` clips block; 0 is none."),
+        )
+        .param(
+            P::number("size", 0.0)
+                .range(0.0, 90.0)
+                .doc("Softens shadows: a point light's width in frame heights, a directional one's in degrees; 0 is hard."),
         ),
         FxDef::new(
             "null",

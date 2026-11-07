@@ -38,7 +38,6 @@ line, applied in order and atomically.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. `look` with `sync` lines cameras up by sound.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross.
-- `speed={0f:1 24f:1 36f:1/4}` changes speed over a clip, keyframes as above but with no overshoot.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
@@ -49,7 +48,7 @@ blur.gaussian@1`); leave it out to take the current one.
 ```
 use <sequence>                          choose the sequence when there are several
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
-                                        open time on every unlocked track; several tracks get linked clips
+    open time on every unlocked track; several tracks get linked clips
 overwrite <same arguments as insert>    replace what occupies the range on the target tracks
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
 delete <clip> …                         remove clips (and linked partners), leaving gaps
@@ -57,7 +56,7 @@ ripple-delete <clip> …                  remove and close the gap on every unlo
 lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
-                                        src= puts the edge on that source position, such as a word's time
+    src= puts the edge on that source position, such as a word's time
 roll <clip> <amount>|to=<pos>           move the cut after the clip
 slip <clip> <amount>                    play different source frames in the same place
 slide <clip> <amount>|to=<pos>          move a clip between its neighbors
@@ -65,20 +64,19 @@ split <clip> at=<pos> [as=<id>]
 blade at=<pos> [tracks=…]               split every clip crossing a point
 move <clip> [on=<track>] [at=<pos>|by=<amount>]
 set <clip> <prop>=<value> … [name="…"] [enabled=false] [caption="…"] [reset=<prop>,…]
-speed <clip> <speed>                    2, 0.5, -1 for reverse, or {0f:1 24f:1/4} to change over the clip; keeps the source range
+speed <clip> <speed>                    2, 0.5, -1 for reverse, or {0f:1 24f:1/4} to change over the clip, with no overshoot; keeps the source range
 fx <clip> add <effect> [at=<n>] [<param>=<value> …]
 fx <clip> set <n|effect> [enabled=…] [reset=…] [<param>=<value> …]
 fx <clip> remove <n|effect>  ·  fx <clip> move <n|effect> to=<n>
 mask <clip> add <name> rect=L,T,R,B|ellipse=X,Y,RX,RY|points="x,y x,y …" [closed=false] [mode=…] [inverted=true] [feather=<px>] [opacity=<0-1>] [expansion=<px>] [at=<n>]
-                                        a picture clip's mask, in fractions of its picture (0,0 top left)
+    a picture clip's mask, in fractions of its picture (0,0 top left)
 mask <clip> set <name> [outline] [mode=…] [inverted=…] [reset=…] [<prop>=<value> …]  ·  mask <clip> remove <name>
 transition add from=<clip> to=<clip> fx=<transition> dur=<dur> [align=center|start|end] [as=<id>] [<param>=<value> …]
 transition set <id> [dur=…] [align=…] [<param>=<value> …]  ·  transition remove <id>
 marker add at=<pos> [dur=<dur>] [name="…"] [color=<color>] [note="…"] [as=<id>]
 marker set <id> …  ·  marker remove <id>
 captions <clip> on=<subtitle track> [words=<n>]
-                                        caption what the clip says, timed to its speech, from a
-                                        transcript of its media made earlier; it runs as the caption lines
+    caption what the clip says, timed to its speech, from its media's transcript
 link <clip> <clip> … [as=<group>]  ·  unlink <clip> …
 track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] [locked=true]
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
@@ -86,8 +84,7 @@ bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|ef
 track set <id> [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
 media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"]
 media replace <id> <same arguments as media add>
-                                        swap the file behind a media id; clips keep their timing and
-                                        must still fit (length, streams, transition handles)
+    swap the file behind an id; clips keep their timing and must still fit
 media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```

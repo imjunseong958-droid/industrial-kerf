@@ -83,6 +83,22 @@ const SCENES: &[(&str, &str)] = &[
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set x=0.2 y=-0.1 z=-0.6 shadow=1",
     ),
     (
+        "3d soft",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional x=0.2 z=1 shadow=1 size=5",
+    ),
+    (
+        "3d point soft",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set x=0.2 y=-0.1 z=-0.6 shadow=1 size=0.1",
+    ),
+    (
+        "3d soft all over",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=solid@1 at=0f dur=96f\n      set color=#0000ff three_d=true z=-0.3\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional z=1 shadow=1 size=30",
+    ),
+    (
+        "3d soft title",
+        "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip c2 gen=title@1 at=0f dur=96f\n      set text=\"Soft\" size=0.4 three_d=true z=-0.2\n  track V3 video\n    clip c3 gen=light@1 at=0f dur=96f\n      set kind=directional x=0.2 z=1 shadow=1 size=10",
+    ),
+    (
         "3d focus flat",
         "gen=solid@1 at=0f dur=96f\n      set color=#ffffff three_d=true z=0.5 scale=0.6\n  track V2 video\n    clip c2 gen=camera@1 at=0f dur=96f\n      set aperture=0.03",
     ),

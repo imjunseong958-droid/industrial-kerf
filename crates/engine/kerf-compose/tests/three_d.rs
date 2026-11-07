@@ -572,6 +572,226 @@ fn only_what_is_opaque_casts() {
     assert!(at(85, 40)[0] > 40, "{:?}", at(85, 40));
 }
 
+/// A wall at z = 0, and on it, nearer by `z` of the frame's height, a clip 160 by 90 pixels whose right
+/// edge is at x = -60 about the frame's middle, or column 100, with a light.
+fn edge(z: f64, light: &str) -> String {
+    format!(
+        "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.5 x=-0.4375 z=-{z}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set {light}\n"
+    )
+}
+
+/// How much of the light gets to each column of the frame's middle row, by what that row is with its
+/// shadow and with none.
+fn light_getting_there(z: f64, light: &str) -> Vec<f64> {
+    let with = frame(&edge(z, &format!("{light} shadow=1")), 0);
+    let without = frame(&edge(z, light), 0);
+    (0..with.width)
+        .map(|x| linear(pixel(&with, x, 90)[0]) / linear(pixel(&without, x, 90)[0]).max(1e-6))
+        .collect()
+}
+
+/// From the last column where a caster's edge takes all of the light to the first where it takes none,
+/// looking out from `around`, so as not to take in the wall behind the clip as it is seen.
+fn penumbra(getting: &[f64], around: usize) -> (usize, usize) {
+    let dark = (0..=around).rev().find(|x| getting[*x] < 0.01);
+    let lit = (around..getting.len()).find(|x| getting[*x] > 0.99);
+    (dark.expect("goes dark"), lit.expect("goes light"))
+}
+
+#[test]
+fn a_directional_lights_penumbra_is_as_wide_as_its_angle_says() {
+    // Rays from either side of the light's angle pass the edge `z` frame heights up, at 180 z tan(θ/2)
+    // pixels either side of right below it.
+    for (z, size) in [(0.25, 20.0f64), (0.5, 20.0), (0.25, 10.0), (0.5, 5.0)] {
+        let light = format!("kind=directional z=1 size={size}");
+        let getting = light_getting_there(z, &light);
+        let half = 180.0 * z * (size.to_radians() / 2.0).tan();
+        let (dark, lit) = penumbra(&getting, 100);
+        let (dark, lit) = (dark as f64 + 0.5, lit as f64 + 0.5);
+        assert!(
+            (dark - (100.0 - half)).abs() < 2.0 && (lit - (100.0 + half)).abs() < 2.0,
+            "{z} {size}: from {dark} to {lit}, not {half} about 100"
+        );
+        // Half of it right below the edge, and more of it the further from it.
+        let middle = (getting[99] + getting[100]) / 2.0;
+        assert!((middle - 0.5).abs() < 0.05, "{z} {size}: {middle}");
+        for x in dark as usize..lit as usize {
+            assert!(getting[x + 1] >= getting[x] - 0.005, "{x}: {getting:?}");
+        }
+    }
+}
+
+#[test]
+fn a_point_lights_penumbra_is_as_wide_as_its_disc_says() {
+    // The light is 135 pixels up, right over the edge, and 18 across: what is d from the wall has a
+    // penumbra 18 d / (135 - d) wide about right below it.
+    let light = "x=-0.1875 z=-0.75 size=0.1";
+    let width = |z: f64| {
+        let getting = light_getting_there(z, light);
+        let (dark, lit) = penumbra(&getting, 100);
+        let middle = (getting[99] + getting[100]) / 2.0;
+        assert!((middle - 0.5).abs() < 0.05, "{z}: {middle}");
+        (lit - dark) as f64
+    };
+    for (z, wanted) in [(0.25, 9.0), (0.5, 36.0)] {
+        let found = width(z);
+        assert!((found - wanted).abs() < 3.0, "{z}: {found}, not {wanted}");
+    }
+    // The further from the wall it is, the wider, and the nearer the less.
+    let (near, middle, far) = (width(0.1), width(0.3), width(0.5));
+    assert!(near < middle && middle < far, "{near} {middle} {far}");
+}
+
+#[test]
+fn a_wide_lights_penumbra_has_no_steps_in_it() {
+    // 48 pixels wide across a straight edge, it falls off as a whole disc going behind that edge does,
+    // at most 2 / (pi 24) a column. A ray that read one place would make a thirty-second of the whole
+    // in a single column, between columns that changed by far less.
+    let getting = light_getting_there(0.5, "kind=directional z=1 size=30");
+    let (dark, lit) = penumbra(&getting, 100);
+    assert!(lit - dark > 40, "from {dark} to {lit}");
+    let change: Vec<f64> = (dark..lit).map(|x| getting[x + 1] - getting[x]).collect();
+    let most = change.iter().copied().fold(0.0, f64::max);
+    assert!(most < 1.3 * 2.0 / (std::f64::consts::PI * 24.0), "{most}");
+    let jump = change
+        .windows(2)
+        .map(|two| (two[1] - two[0]).abs())
+        .fold(0.0, f64::max);
+    assert!(jump < 0.012, "{jump}");
+}
+
+#[test]
+fn a_clip_with_holes_casts_a_soft_shadow_with_them() {
+    // Lit from far to one side, so that its shadow falls clear of it: a clip whose left half a mask
+    // takes away casts as a solid clip as wide as what is left, read through its alpha.
+    let scene = |caster: &str| {
+        format!(
+            "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true z=-0.25 {caster}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=0.7 z=1 size=20 shadow=1\n"
+        )
+    };
+    let holed = frame(
+        &scene("scale=0.5 x=-0.4375\n      mask m rect=0.5,0,1,1"),
+        0,
+    );
+    let solid = frame(&scene("scale_x=0.25 scale_y=0.5 x=-0.3125"), 0);
+    for x in 90..320 {
+        let (a, b) = (
+            linear(pixel(&holed, x, 90)[0]),
+            linear(pixel(&solid, x, 90)[0]),
+        );
+        assert!((a - b).abs() < 0.03, "{x}: {a} {b}");
+    }
+    // That is a shadow, and only that.
+    assert!(linear(pixel(&holed, 120, 90)[0]) < 0.01);
+    assert!(linear(pixel(&holed, 200, 90)[0]) > 0.5);
+}
+
+#[test]
+fn a_light_with_no_size_draws_as_it_did() {
+    for (with, without) in [
+        (
+            "kind=directional x=0.5 z=1 shadow=1 size=0",
+            "kind=directional x=0.5 z=1 shadow=1",
+        ),
+        (
+            "x=-0.2 y=0 z=-0.5 shadow=1 intensity=2 size=0",
+            "x=-0.2 y=0 z=-0.5 shadow=1 intensity=2",
+        ),
+        // With nothing to block, it does not matter how wide it is.
+        (
+            "kind=directional x=0.5 z=1 size=20",
+            "kind=directional x=0.5 z=1",
+        ),
+        ("x=-0.2 z=-0.5 size=0.2", "x=-0.2 z=-0.5"),
+        (
+            "kind=ambient intensity=0.5 size=20",
+            "kind=ambient intensity=0.5",
+        ),
+    ] {
+        assert_eq!(
+            frame(&shadowed(CASTER, with), 3).rgba,
+            frame(&shadowed(CASTER, without), 3).rgba,
+            "{with}"
+        );
+    }
+}
+
+#[test]
+fn a_soft_shadow_holds_still_from_frame_to_frame() {
+    let scene = edge(0.25, "kind=directional z=1 size=20 shadow=1");
+    let first = frame(&scene, 0);
+    assert_eq!(first.rgba, frame(&scene, 7).rgba);
+    assert_eq!(first.rgba, frame(&scene, 19).rgba);
+}
+
+#[test]
+fn a_lights_size_animates() {
+    let scene = edge(0.25, "kind=directional z=1 size={0f:0 23f:20} shadow=1");
+    let hard = frame(&edge(0.25, "kind=directional z=1 shadow=1"), 0);
+    assert_eq!(frame(&scene, 0).rgba, hard.rgba);
+    let wider = frame(&scene, 23);
+    assert_eq!(
+        wider.rgba,
+        frame(&edge(0.25, "kind=directional z=1 size=20 shadow=1"), 0).rgba
+    );
+    assert_ne!(wider.rgba, hard.rgba);
+}
+
+#[test]
+fn what_two_clips_take_of_a_light_between_them_is_all_of_it() {
+    // Side by side at z = -45 with the line between them at x = -60: from x = -20 on the wall, the
+    // rays go up past x = -77 to -48 there, so each clip takes about half of them and together nearly
+    // all, where a clip at a time would leave a quarter. Neither hides that part of the wall.
+    let scene = |left: bool, right: bool, shadow: f64| {
+        let mut body = String::from(
+            "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n",
+        );
+        if left {
+            body += "  track V2 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.5 x=-0.4375 z=-0.25\n";
+        }
+        if right {
+            body += "  track V3 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale_x=0.0625 scale_y=0.5 x=-0.15625 z=-0.25\n";
+        }
+        body += &format!(
+            "  track V4 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=0.5 z=1 size=20 shadow={shadow}\n"
+        );
+        linear(pixel(&frame(&body, 0), 140, 90)[0])
+    };
+    let whole = scene(true, true, 0.0);
+    assert!(whole > 0.5, "{whole}");
+    let (left, right) = (
+        scene(true, false, 1.0) / whole,
+        scene(false, true, 1.0) / whole,
+    );
+    assert!(
+        (left - 0.5).abs() < 0.05 && (right - 0.5).abs() < 0.05,
+        "{left} {right}"
+    );
+    let both = scene(true, true, 1.0) / whole;
+    assert!(both < 0.08, "{both}");
+}
+
+#[test]
+fn a_lights_size_is_in_the_frames_key() {
+    let compositor = |light: &str| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
+                shadowed(CASTER, light)
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(3);
+    assert_ne!(
+        compositor("kind=directional z=1 shadow=1 size=2").frame_key(at, 1.0),
+        compositor("kind=directional z=1 shadow=1 size=3").frame_key(at, 1.0)
+    );
+}
+
 #[test]
 fn a_shadow_falls_on_a_clip_that_is_cut() {
     // Crossing and in shadow at once: the wall is cut by a turned clip, and both still take shadows.
