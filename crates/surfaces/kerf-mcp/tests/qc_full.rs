@@ -157,7 +157,7 @@ fn a_clean_spot_passes_the_measured_rows_with_their_readings() {
             "picture.flash_black",
         ]
     );
-    assert_eq!(report.summary.total, 16);
+    assert_eq!(report.summary.total, 17);
     for code in &codes[..8] {
         assert!(row(&report, code).passed, "{:#?}", row(&report, code));
     }
@@ -377,4 +377,113 @@ fn a_project_target_and_an_unmeasurable_program_are_reported() {
         check_full(&project, directory.path(), &cancel),
         Err(EngineError::Cancelled)
     ));
+}
+
+/// A spot of plain mid gray with a title over it, in `color`, made in `directory`.
+fn spot_with_title(directory: &Path, color: &str) -> Project {
+    tone(directory, "sound.wav", 4.0, 0.05, None);
+    picture(directory, "picture.mp4", 4.0, false);
+    let document = format!(
+        "kerf 1
+project name=\"Spot\"
+media m1 path=\"picture.mp4\" rate=30 dur=00:00:04:00 video=320x180
+media m2 path=\"sound.wav\" rate=30 dur=00:00:04:00 audio=2ch@48000
+sequence s1 rate=30 size=320x180
+  track V1 video
+    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00
+  track A1 audio
+    clip c2 media=m2 at=00:00:00:00 dur=00:00:04:00
+  track T1 video
+    clip words gen=title@1 at=00:00:01:00 dur=00:00:01:00
+      set text=\"Plain words\" color={color} size=0.12
+"
+    );
+    let mut project = kerf_lang::parse_document(&document, Catalog::builtin())
+        .unwrap_or_else(|error| panic!("{error:#?}"))
+        .project;
+    kerf_runtime::resolve_media_paths(&mut project, directory);
+    project
+}
+
+fn contrast_row(report: &CheckReport) -> Row {
+    report
+        .summary
+        .rows
+        .iter()
+        .find(|row| row.code == "text.contrast")
+        .expect("the row")
+        .clone()
+}
+
+#[test]
+fn a_full_check_says_which_text_is_too_faint() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().expect("a folder");
+    let dir = directory.path();
+    // White on mid gray reads, at 3.9:1, and the row passes; the first eight rows are as the mockup has
+    // them.
+    let fine = spot_with_title(dir, "#ffffff");
+    let report = check_full(&fine, dir, &CancellationToken::new()).expect("check_full");
+    let row = contrast_row(&report);
+    assert!(row.passed, "{row:?}");
+    assert_eq!(row.name, "Text contrast");
+    assert_eq!(row.limit.as_deref(), Some("3:1"));
+    assert_eq!(report.summary.rows[7].code, "picture.flash_black");
+    assert_eq!(report.summary.rows[8].code, "text.contrast");
+    // A gray a little lighter than that, at 1.5:1, does not, and it goes to the end, only forward.
+    let faint = spot_with_title(dir, "#a0a0a0");
+    let mut fractions = Vec::new();
+    let report = check_full_with(
+        &faint,
+        None,
+        dir,
+        &QcLimits::default(),
+        &CancellationToken::new(),
+        |done| fractions.push(done),
+    )
+    .expect("check_full_with");
+    let found = with(&report, "text.contrast");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].entity.as_deref(), Some("words"));
+    let row = contrast_row(&report);
+    assert!(!row.passed, "{row:?}");
+    assert!(
+        fractions.windows(2).all(|pair| pair[1] >= pair[0] - 1e-9),
+        "{fractions:?}"
+    );
+    assert_eq!(fractions.last(), Some(&1.0));
+    // And nothing of it runs in the fast check.
+    let fast = kerf_mcp::check(&faint, dir);
+    assert!(fast
+        .findings
+        .iter()
+        .all(|finding| finding.code != "text.contrast"));
+    assert!(fast
+        .summary
+        .rows
+        .iter()
+        .all(|row| row.code != "text.contrast"));
+}
+
+#[test]
+fn cancelling_stops_reading_text() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().expect("a folder");
+    let dir = directory.path();
+    let project = spot_with_title(dir, "#ffffff");
+    let cancel = CancellationToken::new();
+    let result = check_full_with(&project, None, dir, &QcLimits::default(), &cancel, |done| {
+        if done > 0.9 {
+            cancel.cancel();
+        }
+    });
+    assert!(
+        matches!(result, Err(EngineError::Cancelled)),
+        "{:?}",
+        result.err()
+    );
 }

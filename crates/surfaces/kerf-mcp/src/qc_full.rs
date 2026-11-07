@@ -3,8 +3,10 @@
 //! (integrated loudness, true peak, loudness range) by
 //! `kerf_engine::loudness`, and every frame is drawn and measured for
 //! Rec.709 gamut, luma levels, photosensitive flashing, and black by
-//! `kerf_engine::qc`. That takes about as long as a draft render, so MCP
-//! tools keep using the fast [`check`] and the editor's QC runs this one.
+//! `kerf_engine::qc`, and titles and captions are read against what is
+//! behind them from frames drawn for it. That takes about as long as a draft
+//! render, so MCP tools keep using the fast [`check`] and the editor's QC
+//! runs this one.
 //!
 //! Each measured finding sits at its worst sample: the loudest short-term
 //! window of a programme that is too loud, the stretch over the true-peak
@@ -120,6 +122,13 @@ pub const FULL_ROWS: &[RowDef] = &[
         noun: "",
         limit: None,
     },
+    RowDef {
+        code: "text.contrast",
+        name: "Text contrast",
+        codes: &["text.contrast"],
+        noun: "faint",
+        limit: Some("3:1"),
+    },
     MEDIA,
     RENDER,
     DOCUMENT,
@@ -130,8 +139,9 @@ pub const FULL_ROWS: &[RowDef] = &[
     CAPTION_GAPS,
 ];
 
-/// Share of the progress the sound takes; the picture takes the rest.
+/// Share of the progress the sound takes, and the picture after it; reading text takes the rest.
 const SOUND_SHARE: f64 = 0.3;
+const PICTURE_SHARE: f64 = 0.6;
 
 /// Everything [`check`] finds, and the program's loudness and picture
 /// measured on the first sequence, to EBU R128. `project` has its media
@@ -196,7 +206,7 @@ pub fn check_full_with(
     on_progress(SOUND_SHARE);
 
     let measured = picture::picture_qc_with_progress(project, id, dir, cancel, |done| {
-        on_progress(SOUND_SHARE + done * (1.0 - SOUND_SHARE))
+        on_progress(SOUND_SHARE + done * PICTURE_SHARE)
     });
     let measured = match measured {
         Ok(measured) => {
@@ -222,6 +232,21 @@ pub fn check_full_with(
             None
         }
     };
+    on_progress(SOUND_SHARE + PICTURE_SHARE);
+
+    crate::text_lint::contrast_of(
+        project,
+        target,
+        whole(target),
+        |done| {
+            on_progress(SOUND_SHARE + PICTURE_SHARE + done * (1.0 - SOUND_SHARE - PICTURE_SHARE));
+            !cancel.is_cancelled()
+        },
+        &mut findings,
+    );
+    if cancel.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     on_progress(1.0);
 
     let mut report = CheckReport::new(findings, FULL_ROWS);

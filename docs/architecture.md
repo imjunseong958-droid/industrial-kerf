@@ -287,8 +287,7 @@ measurements, tracks as data, and check findings for what a viewer would notice.
 of three moments it has come in by: as drawn, without it, and its glyphs alone, white on nothing, so that a
 title the colour of its background is seen not to show. Each patch about half a line across goes by the
 strongest of its ink, so a caption's outline counts and a title half over a highlight is caught, and
-it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of a check, and
-it is not in the Finish tray's QC table yet.
+it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of the fast check; the full QC has it as a row, Text contrast, after the eight of the Finish tray's mockup, in the last tenth of its progress, and it adds 0.36 s a clip at 1080p, for at most 40 clips spread over the sequence.
 
 `look` with `media` and `facts` gives a fact sheet beside the index: what the camera does in each shot, from the one move, turn, and zoom that
 most of the picture agrees on between small frames four times a second (`kerf_track::shot`, so a subject crossing the frame is left out), and R128 loudness.
