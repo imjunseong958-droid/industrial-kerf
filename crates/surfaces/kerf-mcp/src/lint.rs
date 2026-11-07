@@ -4,7 +4,7 @@
 //! inside a word, and text and captions a viewer cannot read (see
 //! `text_lint`).
 
-use crate::qc::Finding;
+use crate::qc::{Finding, Severity};
 use crate::text_lint;
 use kerf_lang::{Breaks, Clock, Facts, Speech};
 use kerf_model::{Clip, Content, Param, Project, Sequence, Time, TrackKind, Value};
@@ -29,8 +29,146 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         cuts_in_words(project, sequence, facts, &mut findings);
         text_lint::text(sequence, &mut findings);
         text_lint::captions(sequence, &mut findings);
+        does_nothing(sequence, &mut findings);
     }
     findings
+}
+
+/// Numbers and choices set where nothing reads them, which validation has no reason to refuse and which
+/// show nothing in a frame. As information: a person may mean to come back to them.
+fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
+    let clips = || sequence.tracks.iter().flat_map(|track| &track.clips);
+    let in_depth_over = |clip: &Clip| {
+        clips().any(|other| {
+            other.id != clip.id
+                && is_set_true(other.props.get("three_d"))
+                && other.start < clip.start + clip.duration
+                && clip.start < other.start + other.duration
+        })
+    };
+    for clip in clips() {
+        let id = clip.id.as_str();
+        let mut says = |message: String| {
+            findings.push(
+                Finding::new(
+                    Severity::Info,
+                    NO_EFFECT,
+                    Some(id),
+                    format!("`{id}`: {message}"),
+                )
+                .during(sequence, clip.start, clip.start + clip.duration),
+            );
+        };
+        let prop = |name: &str| clip.props.get(name);
+        let generator = match &clip.content {
+            Content::Generator { fx, params, .. } => Some((fx.as_str(), params)),
+            _ => None,
+        };
+        let fx = generator.map(|(fx, _)| fx);
+        let draws_nothing = matches!(fx, Some("camera" | "light" | "null"));
+        if draws_nothing {
+            if !clip.masks.is_empty() || !clip.effects.is_empty() {
+                says("masks and effects on it do nothing, since it draws nothing".to_owned());
+            }
+        } else {
+            if !is_set_true(prop("three_d")) {
+                for name in ["z", "rotate_x", "rotate_y", "depth", "bevel"] {
+                    if prop(name).is_some() {
+                        says(format!("`{name}` does nothing without `three_d`"));
+                    }
+                }
+            } else if ever_above_zero(prop("bevel")) && !ever_above_zero(prop("depth")) {
+                says("`bevel` does nothing without a `depth` to cut".to_owned());
+            }
+            if prop("bevel_profile").is_some() && !ever_above_zero(prop("bevel")) {
+                says("`bevel_profile` does nothing without a `bevel`".to_owned());
+            }
+            if let (
+                Some(Param::Static(Value::Number(bevel))),
+                Some(Param::Static(Value::Number(depth))),
+            ) = (prop("bevel"), prop("depth"))
+            {
+                if *depth > 0.0 && *bevel > *depth / 2.0 {
+                    says(format!(
+                        "`bevel` stops at half its `depth`, {}",
+                        depth / 2.0
+                    ));
+                }
+            }
+        }
+        if prop("path").is_none() {
+            for name in ["along", "orient"] {
+                if prop(name).is_some() {
+                    says(format!("`{name}` does nothing without a `path`"));
+                }
+            }
+        } else if prop("along").is_none() {
+            says("`path` holds at its first point until `along` moves".to_owned());
+        }
+        for (name, param) in clip.props.iter() {
+            if let Param::Animated(keys) = param {
+                if keys.last().is_some_and(|key| key.at > clip.duration) {
+                    says(format!(
+                        "`{name}` has a key past the clip's end, whose value is not reached"
+                    ));
+                }
+            }
+        }
+        let Some((fx, params)) = generator else {
+            continue;
+        };
+        match fx {
+            "light" => {
+                let kind = match params.get("kind") {
+                    Some(Param::Static(Value::Enum(kind))) => kind.as_str(),
+                    _ => "point",
+                };
+                let casts = kind == "point" || kind == "directional";
+                if !casts && params.get("shadow").is_some() {
+                    says(format!("`shadow` does nothing on a {kind} light"));
+                }
+                if !casts && params.get("size").is_some() {
+                    says(format!("`size` does nothing on a {kind} light"));
+                }
+                if casts && params.get("size").is_some() && !ever_above_zero(params.get("shadow")) {
+                    says("`size` softens a shadow, and there is no `shadow`".to_owned());
+                }
+                if kind != "environment" && params.get("image").is_some() {
+                    says("`image` does nothing unless `kind=environment`".to_owned());
+                }
+                if !in_depth_over(clip) {
+                    says("a light falls only on clips in depth, and none shows with it".to_owned());
+                }
+            }
+            "camera" => {
+                if params.get("focus").is_some() && !ever_above_zero(params.get("aperture")) {
+                    says("`focus` does nothing without an `aperture`".to_owned());
+                }
+                if ever_above_zero(params.get("aperture")) && !in_depth_over(clip) {
+                    says("`aperture` blurs only clips in depth, and none shows with it".to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What [`does_nothing`] calls what it finds.
+const NO_EFFECT: &str = "no_effect";
+
+fn is_set_true(param: Option<&Param>) -> bool {
+    matches!(param, Some(Param::Static(Value::Bool(true))))
+}
+
+/// A number above 0 at some moment, so one that grows as it goes counts.
+fn ever_above_zero(param: Option<&Param>) -> bool {
+    match param {
+        Some(Param::Static(Value::Number(number))) => *number > 0.0,
+        Some(Param::Animated(keys)) => keys
+            .iter()
+            .any(|key| matches!(key.value, Value::Number(number) if number > 0.0)),
+        _ => false,
+    }
 }
 
 fn finding(code: &str, entity: &str, message: String) -> Finding {

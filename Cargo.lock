@@ -1401,6 +1401,7 @@ dependencies = [
  "base64",
  "kerf-agent",
  "kerf-color",
+ "kerf-compose",
  "kerf-engine",
  "kerf-lang",
  "kerf-model",

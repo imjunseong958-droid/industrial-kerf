@@ -501,7 +501,15 @@ impl Editor<'_> {
                         "add the sequence empty, then add tracks",
                     ));
                 }
-                self.claim(&sequence.id)?;
+                self.claim(&sequence.id).map_err(|mut error| {
+                    if error.code == "id.taken" {
+                        error.message = format!(
+                            "{}; `sequence set {} …` changes the one there is",
+                            error.message, sequence.id
+                        );
+                    }
+                    error
+                })?;
                 self.project.sequences.push(sequence.clone());
                 Ok(())
             }
@@ -1038,9 +1046,19 @@ impl Editor<'_> {
             .iter()
             .position(|track| track.id == *id)
             .ok_or_else(|| {
+                let has: Vec<&str> = sequence.tracks.iter().map(|track| track.id.as_str()).collect();
+                let kind = match id.as_str().chars().next() {
+                    Some('A') => "audio",
+                    Some('S') => "subtitle",
+                    _ => "video",
+                };
                 fail(
                     "ref.missing",
-                    format!("sequence `{}` has no track `{id}`", sequence.id),
+                    format!(
+                        "sequence `{}` has no track `{id}` (it has {}); `track add {id} {kind}` adds one",
+                        sequence.id,
+                        if has.is_empty() { "none".to_owned() } else { has.join(", ") }
+                    ),
                 )
             })
     }
@@ -1048,7 +1066,7 @@ impl Editor<'_> {
     fn locate(&self, clip: &Id) -> Outcome<ClipAt> {
         self.project
             .locate(clip.as_str())
-            .ok_or_else(|| fail("ref.missing", format!("no clip `{clip}`")))
+            .ok_or_else(|| fail("ref.missing", self.project.no_clip(clip.as_str())))
     }
 
     /// Locate a clip known to exist.

@@ -1273,7 +1273,7 @@ fn builtin_catalog() -> Catalog {
             P::number("aperture", 0.0)
                 .range(0.0, 1.0)
                 .unit("frame heights")
-                .doc("The blur far from `focus`; 0 is none."),
+                .doc("Depth of field: the blur far from `focus`; 0 is none."),
         ),
         FxDef::new(
             "light",
@@ -1353,11 +1353,55 @@ pub fn retired(id: &str) -> Option<&'static str> {
         })
 }
 
+/// The name in `names` nearest `wanted`, if a slip of a letter or two could have made it.
+pub fn nearest<'a>(wanted: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let most = (wanted.chars().count() / 3).clamp(1, 3);
+    names
+        .into_iter()
+        .map(|name| (edits_between(wanted, name), name))
+        .filter(|(edits, _)| *edits <= most)
+        .min()
+        .map(|(_, name)| name)
+}
+
+/// How many letters to change, add, or take away to make one word the other, whatever their case.
+fn edits_between(first: &str, second: &str) -> usize {
+    let second: Vec<char> = second.chars().flat_map(char::to_lowercase).collect();
+    let mut row: Vec<usize> = (0..=second.len()).collect();
+    for (across, letter) in first.chars().flat_map(char::to_lowercase).enumerate() {
+        let mut previous = row[0];
+        row[0] = across + 1;
+        for (down, other) in second.iter().enumerate() {
+            let cost = previous + usize::from(letter != *other);
+            previous = row[down + 1];
+            row[down + 1] = cost.min(previous + 1).min(row[down] + 1);
+        }
+    }
+    row[second.len()]
+}
+
 /// Why `id` names no `kind` (`effect`, `transition`) in the catalog: it is
 /// unknown, or retired, with what to use instead.
 pub fn unknown(kind: &str, id: &str) -> String {
     match retired(id) {
-        None => format!("unknown {kind} `{id}`"),
+        None => {
+            let wanted = match kind {
+                "effect" => Some(FxKind::Effect),
+                "transition" => Some(FxKind::Transition),
+                "generator" => Some(FxKind::Generator),
+                _ => None,
+            };
+            let names = Catalog::builtin()
+                .all()
+                .filter(|fx| wanted.is_none_or(|kind| fx.kind == kind))
+                .map(|fx| fx.id.as_str());
+            match nearest(id, names) {
+                Some(near) => format!("unknown {kind} `{id}`; did you mean `{near}`?"),
+                None => format!(
+                    "unknown {kind} `{id}`; `look` with `effects` finds one by what it does"
+                ),
+            }
+        }
         Some("") => format!("`{id}` was an EffectCraft {kind}, which Kerf no longer has"),
         Some(instead) if instead.contains(' ') => format!(
             "`{id}` was an EffectCraft {kind}, which Kerf no longer has; use {instead} instead"
@@ -1599,7 +1643,10 @@ mod tests {
             unknown("effect", "stylize.glow"),
             "`stylize.glow` was an EffectCraft effect, which Kerf no longer has; use `light.wonderglow@1` instead"
         );
-        assert_eq!(unknown("effect", "nope"), "unknown effect `nope`");
+        assert_eq!(
+            unknown("effect", "nope"),
+            "unknown effect `nope`; `look` with `effects` finds one by what it does"
+        );
     }
 
     #[test]

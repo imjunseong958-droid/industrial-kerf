@@ -177,6 +177,89 @@ impl Drawing {
         smallest_on_gpu_of(plan.width, plan.height)
     }
 
+    /// Why the CPU draws the frame at `at`, one line a cause; none where the GPU draws it.
+    pub(crate) fn why_on_cpu(&self, at: Time, scale: f64) -> Vec<String> {
+        let scale = scale.clamp(1.0 / 16.0, 1.0);
+        let Some(gpu) = ready_gpu() else {
+            return vec!["no GPU on this machine".to_owned()];
+        };
+        if self.gpu_can_draw(gpu, 0, at, scale) {
+            return Vec::new();
+        }
+        let plan = &self.sequences[0];
+        let (w, h) = output_size(plan.width, plan.height, scale);
+        let mut why = Vec::new();
+        if !gpu.fits(w, h) {
+            why.push(format!("{w}x{h} is larger than the GPU can hold"));
+        }
+        if !self.gpu_can_draw_depth(gpu, plan, at, scale, None) {
+            why.push("more clips in depth at once than the GPU can hold".to_owned());
+        }
+        for track in plan.tracks.iter().filter(|track| track.drawn(None)) {
+            for (index, shown) in track.shown.iter().enumerate() {
+                if !shown.shows(at) {
+                    continue;
+                }
+                let size = output_size(plan.width, plan.height, scale);
+                if let Some(pair) = track.pair_at(index, at) {
+                    if transition_kernel(pair, at, size, scale).is_none() {
+                        why.push(format!(
+                            "a transition at clip `{}` has no kernel",
+                            shown.plan.clip.id
+                        ));
+                    }
+                }
+                self.why_clip_on_cpu(gpu, plan, shown, at, scale, &mut why);
+            }
+        }
+        if why.is_empty() {
+            why.push("something in it has no kernel".to_owned());
+        }
+        why
+    }
+
+    fn why_clip_on_cpu(
+        &self,
+        gpu: &Gpu,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        at: Time,
+        scale: f64,
+        why: &mut Vec<String>,
+    ) {
+        if self.gpu_can_draw_clip(gpu, sequence, shown, at, scale) {
+            return;
+        }
+        let plan = &shown.plan;
+        let clip = plan.clip.id.as_str();
+        if plan.clip.retime != kerf_model::Retime::Frames {
+            why.push(format!(
+                "clip `{clip}` makes frames between frames with `retime`"
+            ));
+            return;
+        }
+        let time = at - plan.clip.start;
+        let shape = self.gpu_shape(sequence, plan, time, scale);
+        if !gpu.fits(shape.source.0, shape.source.1) {
+            why.push(format!("clip `{clip}` is larger than the GPU can hold"));
+        }
+        let mut named = false;
+        for (index, effect) in plan.effects.iter().enumerate() {
+            if self
+                .gpu_ops_of(sequence, plan, (time, at, scale), &shape, Some(index))
+                .is_none()
+            {
+                why.push(format!("clip `{clip}`: `{}` has no kernel here", effect.fx));
+                named = true;
+            }
+        }
+        if !named && matches!(plan.source, Source::Nested { .. }) {
+            why.push(format!(
+                "clip `{clip}`: something in its sequence has no kernel"
+            ));
+        }
+    }
+
     /// Whether the GPU would draw the frame at `at`.
     pub(crate) fn draws_on_gpu(&self, at: Time, scale: f64) -> bool {
         self.gpu()
@@ -362,9 +445,25 @@ impl Drawing {
         scale: f64,
         shape: &Shape,
     ) -> Option<Vec<Op>> {
+        self.gpu_ops_of(sequence, plan, (time, at, scale), shape, None)
+    }
+
+    /// [`Self::gpu_ops`] for all of a clip's effects, or for `only` the one, to say which has no kernel.
+    /// `moment` is the time in the clip, the time in the sequence, and the scale.
+    fn gpu_ops_of(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        (time, at, scale): (Time, Time, f64),
+        shape: &Shape,
+        only: Option<usize>,
+    ) -> Option<Vec<Op>> {
         let mut ops = Vec::with_capacity(plan.effects.len());
         let density = scale / shape.to_output.determinant().abs().sqrt().max(1e-6);
         for (index, effect) in plan.effects.iter().enumerate() {
+            if only.is_some_and(|only| only != index) {
+                continue;
+            }
             if filmcraft::instance::leaves_alone(effect, time, self.working()) {
                 continue;
             }

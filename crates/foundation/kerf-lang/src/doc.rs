@@ -359,7 +359,9 @@ impl Parser<'_> {
             .ok_or_else(|| line.error(1, "missing `at=`"))?;
         let duration = fields
             .take_with("dur", |text| clock.duration(text))?
-            .ok_or_else(|| line.error(1, "missing `dur=`"))?;
+            .ok_or_else(|| {
+                line.error(1, "missing `dur=`; `look` with `file` gives the whole line")
+            })?;
         let mut clip = Clip::new(id, content, start, duration);
         clip.name = fields.take_text("name")?.map(str::to_owned);
         clip.enabled = fields.take_bool("enabled")?.unwrap_or(true);
@@ -660,7 +662,12 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
         .to_owned();
     let rate = fields
         .take_with("rate", |text| Rate::parse(text).map_err(|e| e.to_string()))?
-        .ok_or_else(|| line.error(1, "missing `rate=`"))?;
+        .ok_or_else(|| {
+            line.error(
+                1,
+                "missing `rate=`; `look` with `file` gives the whole line",
+            )
+        })?;
     let (start, drop_frame) = fields
         .take_with("tc", |text| {
             parse_timecode(text, rate).map_err(|e| e.to_string())
@@ -947,7 +954,10 @@ pub(crate) fn take_mask_shape(
             .collect::<Result<Vec<_>, _>>()?;
         // A corner that says nothing of how soft the edge is there says 0.
         let soft = if corners.iter().any(|(_, soft)| soft.is_some()) {
-            corners.iter().map(|(_, soft)| soft.unwrap_or(0.0)).collect()
+            corners
+                .iter()
+                .map(|(_, soft)| soft.unwrap_or(0.0))
+                .collect()
         } else {
             Vec::new()
         };
@@ -974,7 +984,9 @@ pub(crate) fn mask_shape_text(shape: &MaskShape, rate: Rate) -> String {
         points
             .iter()
             .enumerate()
-            .map(|(corner, point)| list(&point.iter().copied().chain(at(corner)).collect::<Vec<_>>()))
+            .map(|(corner, point)| {
+                list(&point.iter().copied().chain(at(corner)).collect::<Vec<_>>())
+            })
             .collect()
     };
     match shape {

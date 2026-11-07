@@ -2248,3 +2248,362 @@ fn look_says_plainly_when_a_shot_cannot_be_solved() {
         );
     }
 }
+
+/// A router on a folder with footage and a document of `lines` under one video track.
+fn router_with(lines: &str) -> Option<(TempDir, KerfMcpRouter)> {
+    let (directory, router) = router()?;
+    drop(router);
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        format!(
+            "kerf 1
+project name=\"Harness\"
+media m1 path=\"shot.mp4\" rate=30 dur=00:00:04:00 video=320x180 audio=1ch@48000
+sequence s1 rate=30 size=320x180
+  track V1 video
+{lines}"
+        ),
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    Some((directory, router))
+}
+
+fn message(value: &Value) -> String {
+    value["message"].as_str().unwrap_or_default().to_owned()
+}
+
+/// A fresh folder: footage beside the document, and nothing in it yet.
+#[test]
+fn a_fresh_folder_says_what_footage_it_could_add_and_how() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    footage(directory.path());
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    // What is there and not in the document.
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(looked["unplaced"], json!(["shot.mp4"]), "{looked}");
+    // The line to add it, measured from the file, with what a person has no way to guess.
+    let file = ok(&router, "look", json!({"file": "shot.mp4"}));
+    let line = file["add"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        line.starts_with("media add shot path=\"shot.mp4\" rate=30"),
+        "{file}"
+    );
+    assert!(line.contains("video=320x180"), "{line}");
+    assert!(line.contains("audio="), "{line}");
+    assert_eq!(file["seconds"], json!(4.0), "{file}");
+    // And it runs as it is.
+    let staged = ok(&router, "edit", json!({"script": line}));
+    assert!(staged["proposal"].is_string(), "{staged}");
+    // A file that is not there says so.
+    let missing = error(&router, "look", json!({"file": "nothing.mp4"}));
+    assert!(message(&missing).contains("nothing.mp4"), "{missing}");
+    // With the line left short, the refusal says where the rest comes from.
+    let short = error(
+        &router,
+        "edit",
+        json!({"script": "media add m9 path=\"shot.mp4\""}),
+    );
+    assert!(message(&short).contains("`look` with `file`"), "{short}");
+}
+
+/// A refused edit says what to do next, not only what is wrong.
+#[test]
+fn a_refused_edit_says_what_to_do() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let refused = |script: &str| message(&error(&router, "edit", json!({"script": script})));
+    let track = refused("overwrite gen=solid at=0f dur=24f on=V9");
+    assert!(track.contains("V1"), "names the tracks it has: {track}");
+    assert!(track.contains("track add V9 video"), "{track}");
+    let audio = refused("overwrite media=m1 at=0f dur=24f on=A7");
+    assert!(audio.contains("track add A7 audio"), "{audio}");
+    let generator = refused("overwrite gen=solidd at=0f dur=24f on=V1");
+    assert!(generator.contains("`solid`"), "{generator}");
+    let transition = refused("transition add from=c1 to=c1 fx=dissolvee dur=4f");
+    assert!(transition.contains("`dissolve`"), "{transition}");
+    let effect = refused("fx c1 add blur.gausian");
+    assert!(effect.contains("`blur.gaussian`"), "{effect}");
+    let nothing_near = refused("fx c1 add zzzzzz");
+    assert!(
+        nothing_near.contains("`look` with `effects`"),
+        "{nothing_near}"
+    );
+    let clip = refused("set c2 opacity=0.5");
+    assert!(clip.contains("`c1`"), "{clip}");
+    let sequence = refused("sequence add s1 rate=24 size=320x180");
+    assert!(sequence.contains("sequence set s1"), "{sequence}");
+}
+
+/// What only a pending proposal has is found by saying so, wherever an agent trips on it.
+#[test]
+fn what_a_pending_proposal_holds_is_pointed_to() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "media add m2 path=\"shot.mp4\" rate=30 dur=4s video=320x180\noverwrite gen=solid at=4s dur=30f on=V1 as=later"}),
+    );
+    let id = staged["proposal"].as_str().unwrap().to_owned();
+    // Building on it without saying so.
+    let on = message(&error(
+        &router,
+        "edit",
+        json!({"script": "set later opacity=0.5"}),
+    ));
+    assert!(on.contains(&id) && on.contains("`extend`"), "{on}");
+    let media = message(&error(
+        &router,
+        "edit",
+        json!({"script": "overwrite media=m2 at=0f dur=30f on=V1"}),
+    ));
+    assert!(media.contains(&id) && media.contains("`extend`"), "{media}");
+    // Looking at it without saying so.
+    let looked = message(&error(&router, "look", json!({"media": "m2"})));
+    assert!(
+        looked.contains(&id) && looked.contains("`proposal`"),
+        "{looked}"
+    );
+    let frame = message(&error(&router, "look", json!({"at": ["4.5s"]})));
+    assert!(
+        frame.contains(&id) && frame.contains("`proposal`"),
+        "{frame}"
+    );
+    // `revise` starts again from the project, which is not what it looks like from here.
+    let revising = message(&error(
+        &router,
+        "edit",
+        json!({"script": "set later opacity=0.5", "revise": id}),
+    ));
+    assert!(
+        revising.contains(&id) && revising.contains("`extend`"),
+        "{revising}"
+    );
+    // With `extend` the same line goes through.
+    let extended = ok(
+        &router,
+        "edit",
+        json!({"script": "set later opacity=0.5", "extend": id}),
+    );
+    assert!(extended["proposal"].is_string(), "{extended}");
+}
+
+#[test]
+fn rendering_nothing_is_refused_and_says_where_the_cut_is() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    footage(directory.path());
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let empty = message(&error(&router, "render", json!({})));
+    assert!(empty.contains("empty"), "{empty}");
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "track add V1 video\noverwrite gen=solid at=0f dur=30f on=V1"}),
+    );
+    let id = staged["proposal"].as_str().unwrap();
+    let pending = message(&error(&router, "render", json!({})));
+    assert!(
+        pending.contains(id) && pending.contains("`proposal`"),
+        "{pending}"
+    );
+}
+
+/// What is set and can do nothing is said in the check, as information, without failing anything.
+#[test]
+fn the_check_says_what_does_nothing() {
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00
+  track V2 video
+    clip s1a gen=solid@1 at=00:00:00:00 dur=00:00:04:00
+",
+    ) else {
+        return;
+    };
+    // Each in place of the last, since only so many proposals may wait.
+    let last = std::cell::RefCell::new(None::<String>);
+    let run = |script: &str| {
+        let mut arguments = json!({"script": script});
+        if let Some(id) = last.borrow().as_ref() {
+            arguments["revise"] = json!(id);
+        }
+        let staged = ok(&router, "edit", arguments);
+        *last.borrow_mut() = staged["proposal"].as_str().map(str::to_owned);
+        staged
+    };
+    let says = |script: &str, wanted: &str| {
+        let staged = run(script);
+        let findings = staged["check"]["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let found = findings.iter().find(|finding| {
+            finding["code"] == "no_effect"
+                && finding["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(wanted)
+        });
+        assert!(
+            found.is_some(),
+            "`{script}` should say `{wanted}`: {findings:?}"
+        );
+        assert_eq!(found.unwrap()["severity"], "info", "{script}");
+        assert_eq!(staged["check"]["valid"], true, "{script}");
+    };
+    says("set s1a z=0.5", "`three_d`");
+    says("set s1a three_d=true bevel=0.02", "`depth`");
+    says("set s1a three_d=true depth=0.1 bevel=0.08", "half");
+    says(
+        "set s1a three_d=true depth=0.1 bevel_profile=round",
+        "`bevel`",
+    );
+    says("set s1a along={0f:0 30f:1}", "`path`");
+    says("set s1a path=\"0,0 0.1,0.1\"", "`along`");
+    says("set s1a orient=true", "`path`");
+    says("set s1a rotation={0f:0 500f:90}", "past");
+    says(
+        "track add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=ambient shadow=0.5 as=lamp",
+        "`shadow`",
+    );
+    says(
+        "track add V3 video\noverwrite gen=light at=0f dur=30f on=V3 size=3 as=lamp",
+        "`size`",
+    );
+    says(
+        "track add V3 video\noverwrite gen=light at=0f dur=30f on=V3 image=V1 as=lamp",
+        "`image`",
+    );
+    says(
+        "track add V3 video\noverwrite gen=camera at=0f dur=30f on=V3 focus=0.5 as=lens",
+        "`focus`",
+    );
+    says(
+        "track add V3 video\noverwrite gen=camera at=0f dur=30f on=V3 aperture=0.03 as=lens",
+        "in depth",
+    );
+    says(
+        "track add V3 video\noverwrite gen=camera at=0f dur=30f on=V3 as=lens\nmask lens add k1 rect=0,0,1,1",
+        "draws nothing",
+    );
+    // A scene that means what it says has none of them.
+    let clean = run("set c1 three_d=true z=0.4\nset s1a three_d=true depth=0.1 bevel=0.02 bevel_profile=round\ntrack add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=directional shadow=0.5 size=3 as=lamp\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 aperture=0.03 focus=0.1 as=lens");
+    let findings = clean["check"]["findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["code"] == "no_effect"),
+        "{findings:?}"
+    );
+}
+
+/// `look` says who draws a frame, why, and what it costs.
+#[test]
+fn look_says_who_draws_a_frame_and_what_it_costs() {
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:02:00
+      fx color.basic@1 exposure=0.2
+    clip c2 media=m1 src=00:00:02:00 at=00:00:02:00 dur=00:00:02:00
+      fx stylize.emboss@2
+",
+    ) else {
+        return;
+    };
+    let costs = ok(&router, "look", json!({"cost": true, "at": ["10f", "70f"]}));
+    assert!(
+        (costs["frameMs"].as_f64().unwrap() - 1000.0 / 30.0).abs() < 0.1,
+        "{costs}"
+    );
+    let rows = costs["costs"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{costs}");
+    assert_eq!(rows[0]["at"], "10f");
+    for row in rows {
+        assert!(row["ms"].as_f64().unwrap() > 0.0, "{row}");
+    }
+    if rows[0]["draws"] == "gpu" {
+        assert_eq!(rows[0]["because"], json!([]), "{row}", row = rows[0]);
+        assert_eq!(rows[1]["draws"], "cpu", "{}", rows[1]);
+        let because = rows[1]["because"].to_string();
+        assert!(
+            because.contains("c2") && because.contains("stylize.emboss"),
+            "{because}"
+        );
+    } else {
+        // A machine with no GPU says that.
+        assert!(
+            rows[0]["because"].to_string().contains("no GPU"),
+            "{}",
+            rows[0]
+        );
+    }
+    // Where it is not asked for sensibly, it says how.
+    let alone = message(&error(&router, "look", json!({"cost": true})));
+    assert!(alone.contains("`at`"), "{alone}");
+    let on_media = message(&error(
+        &router,
+        "look",
+        json!({"cost": true, "at": ["0f"], "media": "m1"}),
+    ));
+    assert!(on_media.contains("program"), "{on_media}");
+}
+
+/// Looking something up by what it does reaches what the clip properties and generators can do.
+#[test]
+fn look_finds_what_is_in_properties_and_parameters() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let found = |words: &str| ok(&router, "look", json!({"effects": words}));
+    let ids = |value: &Value, list: &str| -> Vec<String> {
+        value[list]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| row["id"].as_str().unwrap_or_default().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let bevel = found("bevel");
+    assert!(
+        ids(&bevel, "properties").contains(&"bevel".to_owned()),
+        "{bevel}"
+    );
+    let shadow = found("shadow");
+    assert!(
+        ids(&shadow, "effects").contains(&"light".to_owned()),
+        "{shadow}"
+    );
+    let focus = found("depth of field");
+    assert!(
+        ids(&focus, "effects").contains(&"camera".to_owned()),
+        "{focus}"
+    );
+    // A property is looked up as an effect is.
+    let property = ok(&router, "look", json!({"effect": "bevel"}));
+    assert_eq!(property["property"], "bevel", "{property}");
+    assert!(
+        property["reference"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("`bevel=0`"),
+        "{property}"
+    );
+    // A name near one says so.
+    let near = message(&error(&router, "look", json!({"effect": "solidd"})));
+    assert!(near.contains("`solid`"), "{near}");
+}

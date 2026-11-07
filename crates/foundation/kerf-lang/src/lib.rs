@@ -18,6 +18,6 @@ pub use captions::{caption_script, to_srt, to_vtt, Word};
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
 pub use facts::{Breaks, Facts, NoFacts, Snap, Speech};
-pub use reference::{fx_reference, reference};
+pub use reference::{fx_reference, property_reference, reference};
 pub use script::{apply_script, apply_script_with, print_op, print_ops, Applied};
 pub use text::Clock;

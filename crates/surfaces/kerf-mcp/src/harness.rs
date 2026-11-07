@@ -66,6 +66,8 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document. \
+With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
@@ -274,9 +276,11 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "proposal": {"type": "string", "description": proposal},
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
-                    "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
+                    "effect": {"type": "string", "description": "An effect, transition, generator, or clip property: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
+                    "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. With no arguments `look` gives in `unplaced` the footage there not yet in the document. Use alone."},
+                    "cost": {"type": "boolean", "description": "With `at`, program positions: who draws each frame and what it costs. `draws` is `gpu` or `cpu`, `because` says what sends it to the CPU, one line a cause, `ms` is a frame at full size and `msHalf` at half, against `frameMs`, a frame's share of the time. Playing, the editor draws smaller until frames keep up, and a frame the CPU draws takes every core."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
-                    "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone, or with `area`."},
+                    "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, guidance, or parameters match, best first, each with when to use it, and in `properties` the clip properties that do. Use alone, or with `area`."},
                     "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
                 },
                 "additionalProperties": false
@@ -327,7 +331,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             json!({
                 "type": "object",
                 "properties": {
-                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "Default draft."},
+                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate."},
                     "from": {"type": "string", "description": format!("Sequence position. {time}")},
                     "to": {"type": "string", "description": "Sequence position."},
                     "sequence": {"type": "string", "description": sequence},
@@ -404,6 +408,9 @@ struct LookInput {
     width: Option<u32>,
     sequence: Option<String>,
     proposal: Option<String>,
+    file: Option<String>,
+    #[serde(default)]
+    cost: bool,
 }
 
 /// What `look` says of a font: its faces and axes, or the families a name no font has could mean.
@@ -835,6 +842,184 @@ impl KerfMcpRouter {
         Ok((revision, proposed.project))
     }
 
+    /// What a pending proposal holds that the project does not, and how to reach it: ` <id> is in
+    /// pending proposal p: pass it as `extend`` for what to say after a name was not found.
+    fn in_pending(&self, name: &str, argument: &str) -> String {
+        let Ok(state) = self.runtime.get_state() else {
+            return String::new();
+        };
+        let holds = |script: &str| {
+            script
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+                .any(|word| word == name)
+        };
+        state
+            .proposals
+            .iter()
+            .filter(|entry| entry.status == "pending")
+            .find(|entry| holds(&entry.script))
+            .map_or_else(String::new, |entry| {
+                format!(
+                    "; `{name}` is in pending proposal {}: pass it as `{argument}`",
+                    entry.proposal_id
+                )
+            })
+    }
+
+    /// Where the rest of a cut may be, for a sequence that has too little in it.
+    fn any_pending(&self, argument: &str) -> String {
+        let Ok(state) = self.runtime.get_state() else {
+            return String::new();
+        };
+        state
+            .proposals
+            .iter()
+            .find(|entry| entry.status == "pending")
+            .map_or_else(String::new, |entry| {
+                format!(
+                    ", which stays as it is until a proposal is accepted; to see pending proposal {}, pass it as `{argument}`",
+                    entry.proposal_id
+                )
+            })
+    }
+
+    /// `look` with no arguments adds this: footage in the project's folder not yet in the document.
+    fn unplaced(&self, project: &Project) -> Vec<String> {
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let known: Vec<std::path::PathBuf> = resolved
+            .media
+            .iter()
+            .map(|media| std::path::PathBuf::from(&media.path))
+            .collect();
+        let mut files: Vec<String> = std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_file() && is_footage(&entry.path()))
+            .filter(|entry| !known.contains(&entry.path()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// What a file holds, and the `media add` line that puts it in the document.
+    fn look_at_file(&self, file: &str) -> Result<Value, McpError> {
+        let path = self.dir.join(file);
+        if !path.is_file() {
+            return Err(McpError::new(
+                "UNKNOWN_FILE",
+                format!("no file `{file}` in the project's folder"),
+            ));
+        }
+        let info = kerf_engine::info(&path.to_string_lossy())
+            .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
+        let fps = info.fps.unwrap_or(30.0);
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("media");
+        let id: String = stem
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let seconds = info.duration.unwrap_or(0.0);
+        // Whole frames and stereo at 48 kHz, as an import reads a file.
+        let mut line = format!(
+            "media add {id} path={file:?} rate={} dur={}f",
+            fps_text(fps),
+            (seconds * fps).floor() as i64
+        );
+        if let (Some(width), Some(height)) = (info.width, info.height) {
+            line.push_str(&format!(" video={width}x{height}"));
+        }
+        if info.has_audio == Some(true) {
+            line.push_str(" audio=2ch@48000");
+        }
+        Ok(json!({
+            "file": file,
+            "seconds": seconds,
+            "fps": fps,
+            "width": info.width,
+            "height": info.height,
+            "add": line,
+        }))
+    }
+
+    /// Who draws each frame at `at`, why, and what it costs.
+    fn frame_costs(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        revision: u64,
+        at: &[String],
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, sequence)?;
+        let clock = Clock::of_sequence(sequence);
+        let duration = sequence.duration();
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let compositor = kerf_compose::Compositor::new(
+            &resolved,
+            catalog(),
+            &kerf_compose::ComposeOptions {
+                sequence: Some(sequence.id.to_string()),
+                accel: kerf_compose::Accel::Always,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        // The middle of three, the first having had a decoder to open.
+        let median_ms = |at: Time, scale: f64| {
+            let _ = compositor.frame(at, scale);
+            let mut times: Vec<f64> = (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let _ = compositor.frame(at, scale);
+                    started.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            (times[1] * 10.0).round() / 10.0
+        };
+        let mut costs = Vec::with_capacity(at.len());
+        for text in at {
+            let time = position(&clock, text)?;
+            if time.is_negative() || time >= duration {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "`{text}` is outside sequence `{}`{}",
+                        sequence.id,
+                        self.any_pending("proposal")
+                    ),
+                ));
+            }
+            let because = compositor.why_on_cpu(time, 1.0);
+            costs.push(json!({
+                "at": text,
+                "draws": if because.is_empty() { "gpu" } else { "cpu" },
+                "because": because,
+                "ms": median_ms(time, 1.0),
+                "msHalf": median_ms(time, 0.5),
+            }));
+        }
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "size": format!("{}x{}", sequence.width, sequence.height),
+            "frameMs": (1000.0 / sequence.rate.fps() * 10.0).round() / 10.0,
+            "costs": costs,
+        }))
+    }
+
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
@@ -861,7 +1046,9 @@ impl KerfMcpRouter {
                     "use effects alone, or with area",
                 ));
             }
-            return Ok(json!({"effects": find_fx(words, area)}));
+            return Ok(
+                json!({"effects": find_fx(words, area), "properties": find_properties(words)}),
+            );
         }
         if area.is_some() {
             return Err(McpError::new(
@@ -873,10 +1060,25 @@ impl KerfMcpRouter {
             if !preset_only {
                 return Err(McpError::new("INVALID_ARGUMENTS", "use effect alone"));
             }
+            if let Some(property) = clip_properties().find(|param| param.name == id.as_str()) {
+                return Ok(json!({
+                    "property": property.name,
+                    "reference": kerf_lang::property_reference(property),
+                }));
+            }
             let fx = catalog().fx(id).ok_or_else(|| {
                 let message = match kerf_model::catalog::retired(id) {
                     Some(_) => kerf_model::catalog::unknown("effect", id),
-                    None => format!("no effect `{id}` in the catalog"),
+                    None => {
+                        let names = catalog()
+                            .all()
+                            .map(|fx| fx.id.as_str())
+                            .chain(clip_properties().map(|param| param.name.as_str()));
+                        match kerf_model::catalog::nearest(id, names) {
+                            Some(near) => format!("no effect `{id}` in the catalog; did you mean `{near}`?"),
+                            None => format!("no effect `{id}` in the catalog; `effects` finds one by what it does"),
+                        }
+                    }
                 };
                 McpError::new("INVALID_ARGUMENTS", message)
             })?;
@@ -887,6 +1089,12 @@ impl KerfMcpRouter {
                 "engine": fx.engine.name(),
                 "reference": kerf_lang::fx_reference(fx),
             }));
+        }
+        if let Some(file) = &input.file {
+            if !preset_only {
+                return Err(McpError::new("INVALID_ARGUMENTS", "use file alone"));
+            }
+            return self.look_at_file(file);
         }
         if input.preset.is_some() || input.presets {
             if !preset_only {
@@ -905,6 +1113,22 @@ impl KerfMcpRouter {
                 "INVALID_ARGUMENTS",
                 "`sequence` chooses program frames or what a sequence says; not with `media`",
             ));
+        }
+        if input.cost {
+            if input.media.is_some() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`cost` is of program frames, not with `media`",
+                ));
+            }
+            if input.at.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`cost` is of the frames at `at`: pass the positions to read",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.frame_costs(&project, input.sequence.as_deref(), revision, &input.at);
         }
         if !input.sync.is_empty() {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
@@ -1000,10 +1224,13 @@ impl KerfMcpRouter {
         {
             let (revision, document) = self.runtime.get_document(true)?;
             let state = self.runtime.get_state()?;
+            let unplaced =
+                parse(&document).map_or_else(|_| Vec::new(), |project| self.unplaced(&project));
             return Ok(json!({
                 "revision": revision,
                 "document": document,
                 "proposal": proposals_status(&state),
+                "unplaced": unplaced,
             }));
         }
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
@@ -1038,7 +1265,10 @@ impl KerfMcpRouter {
                 let media = project.media(media_id).ok_or_else(|| {
                     McpError::new(
                         "UNKNOWN_MEDIA",
-                        format!("no media `{media_id}` in the project"),
+                        format!(
+                            "no media `{media_id}` in the project{}",
+                            self.in_pending(media_id, "proposal")
+                        ),
                     )
                 })?;
                 if input.sheet.is_some() {
@@ -1505,7 +1735,11 @@ impl KerfMcpRouter {
                 if time.is_negative() || time >= duration {
                     return Err(McpError::new(
                         "INVALID_ARGUMENTS",
-                        format!("`{text}` is outside sequence `{}`", sequence.id),
+                        format!(
+                            "`{text}` is outside sequence `{}`{}",
+                            sequence.id,
+                            self.any_pending("proposal")
+                        ),
                     ));
                 }
                 Ok(time)
@@ -1759,8 +1993,14 @@ impl KerfMcpRouter {
             // How soft its edge is, in the pixels of what the mask goes on, and said only of an
             // object that has one.
             let pixels = picture_width(project, target).unwrap_or(f64::from(sequence.width));
-            let softly = |frame: usize, corner: usize| (followed.soft[frame][corner] * pixels * 10.0).round() / 10.0;
-            let any_soft = followed.soft.iter().flatten().any(|soft| soft * pixels >= 0.05);
+            let softly = |frame: usize, corner: usize| {
+                (followed.soft[frame][corner] * pixels * 10.0).round() / 10.0
+            };
+            let any_soft = followed
+                .soft
+                .iter()
+                .flatten()
+                .any(|soft| soft * pixels >= 0.05);
             let words: Vec<String> = kept
                 .iter()
                 .map(|index| {
@@ -1923,13 +2163,8 @@ impl KerfMcpRouter {
         let mut resolved = project.clone();
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
         let mut findings = Vec::new();
-        let (read, of) = crate::text_lint::contrast_of(
-            &resolved,
-            sequence,
-            (from, to),
-            |_| true,
-            &mut findings,
-        );
+        let (read, of) =
+            crate::text_lint::contrast_of(&resolved, sequence, (from, to), |_| true, &mut findings);
         // The same frames say what the edge of the frame cuts off.
         let (clipped, findings): (Vec<_>, Vec<_>) = findings
             .into_iter()
@@ -1979,8 +2214,7 @@ impl KerfMcpRouter {
                 Some(_) => kerf_engine::still::draw_signal(&resolved, id, time, scale),
                 None => kerf_engine::still::draw_frame(&resolved, id, time, scale),
             };
-            let frame =
-                drawn.map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            let frame = drawn.map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
             let (w, h) = (frame.width as usize, frame.height as usize);
             let reading = match hdr {
                 Some(curve) => kerf_scopes::read_signal(&frame.rgba, w, h, curve),
@@ -2094,6 +2328,27 @@ impl KerfMcpRouter {
     }
 
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
+        // `revise` starts again from the project, so what its proposal added is not there either.
+        let building_on = arguments.get("extend").is_some();
+        self.run_edit(arguments).map_err(|mut error| {
+            // What is not in the project may be in a proposal not built on.
+            if !building_on && error.code == "SCRIPT_REFUSED" {
+                let hint = ["no clip `", "unknown media `", "no clip or marker `"]
+                    .iter()
+                    .find_map(|before| {
+                        let (_, rest) = error.message.split_once(before)?;
+                        rest.split_once('`').map(|(name, _)| name.to_owned())
+                    })
+                    .map(|name| self.in_pending(&name, "extend"));
+                if let Some(hint) = hint {
+                    error.message.push_str(&hint);
+                }
+            }
+            error
+        })
+    }
+
+    fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
         if [
             input.script.is_some(),
@@ -2397,6 +2652,16 @@ impl KerfMcpRouter {
         };
         let (_, project) = self.project_at(input.proposal.as_deref())?;
         let sequence = program(&project, input.sequence.as_deref())?;
+        if !sequence.duration().is_positive() {
+            return Err(McpError::new(
+                "EMPTY_SEQUENCE",
+                format!(
+                    "sequence `{}` is empty{}",
+                    sequence.id,
+                    self.any_pending("proposal")
+                ),
+            ));
+        }
         let mut range = None;
         if input.from.is_some() || input.to.is_some() {
             let clock = Clock::of_sequence(sequence);
@@ -2586,7 +2851,13 @@ fn find_fx(words: &str, area: Option<kerf_model::Area>) -> Vec<Value> {
         .all()
         .filter(|fx| area.is_none_or(|area| fx.area() == area))
         .filter_map(|fx| {
-            let haystack = format!("{} {} {}", fx.id, fx.category, fx.doc).to_lowercase();
+            // What its parameters are for counts too: a light is what casts a shadow.
+            let params: String = fx
+                .params
+                .iter()
+                .map(|param| format!(" {} {}", param.name, param.doc))
+                .collect();
+            let haystack = format!("{} {} {}{params}", fx.id, fx.category, fx.doc).to_lowercase();
             let whole: Vec<&str> = haystack
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|word| !word.is_empty())
@@ -2622,6 +2893,63 @@ fn find_fx(words: &str, area: Option<kerf_model::Area>) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// The clip properties, of pictures and of sound.
+fn clip_properties() -> impl Iterator<Item = &'static kerf_model::ParamDef> {
+    [kerf_model::Domain::Video, kerf_model::Domain::Audio]
+        .into_iter()
+        .flat_map(|domain| catalog().props(domain).iter())
+}
+
+/// How many clip properties `effects` gives.
+const MAX_FOUND_PROPERTIES: usize = 6;
+
+/// The clip properties whose name or guidance match `words`, best first: what no effect does, such as a
+/// `bevel`, is found the way an effect is.
+fn find_properties(words: &str) -> Vec<Value> {
+    let words: Vec<String> = words
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let mut found: Vec<(usize, &kerf_model::ParamDef)> = clip_properties()
+        .filter_map(|param| {
+            let haystack = format!("{} {}", param.name, param.doc).to_lowercase();
+            let score = words
+                .iter()
+                .filter(|word| haystack.contains(word.as_str()))
+                .count();
+            (score > 0).then_some((score, param))
+        })
+        .collect();
+    found.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    found
+        .into_iter()
+        .take(MAX_FOUND_PROPERTIES)
+        .map(|(_, param)| json!({"id": param.name, "reference": kerf_lang::property_reference(param)}))
+        .collect()
+}
+
+/// Whether a file's extension says it is footage: what an import takes.
+fn is_footage(path: &std::path::Path) -> bool {
+    const FOOTAGE: [&str; 16] = [
+        "mp4", "mov", "m4v", "mkv", "webm", "avi", "mxf", "mts", "wav", "mp3", "m4a", "aac",
+        "flac", "png", "jpg", "jpeg",
+    ];
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| FOOTAGE.contains(&extension.to_lowercase().as_str()))
+}
+
+/// A frame rate as a document writes it.
+fn fps_text(fps: f64) -> String {
+    let whole = fps.round();
+    if (fps - whole).abs() < 1e-3 {
+        format!("{whole}")
+    } else {
+        format!("{:.3}", fps)
+    }
 }
 
 fn refused(errors: Vec<kerf_model::Diagnostic>) -> McpError {

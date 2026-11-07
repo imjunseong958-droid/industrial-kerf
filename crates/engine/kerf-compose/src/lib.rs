@@ -151,6 +151,11 @@ impl Compositor {
         self.drawing.draws_on_gpu(at, scale)
     }
 
+    /// Why the CPU draws the frame at sequence time `at`, one line a cause: none where the GPU does.
+    pub fn why_on_cpu(&self, at: Time, scale: f64) -> Vec<String> {
+        self.drawing.why_on_cpu(at, scale)
+    }
+
     /// The picture at sequence time `at` as the GPU draws it, or `None` where [`Self::frame`] would give
     /// it to the CPU, even partway through, which a test cannot tell from a match by the picture.
     pub fn frame_on_gpu(&self, at: Time, scale: f64) -> Option<Frame> {
