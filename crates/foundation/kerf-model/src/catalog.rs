@@ -1273,7 +1273,7 @@ fn builtin_catalog() -> Catalog {
             P::number("aperture", 0.0)
                 .range(0.0, 1.0)
                 .unit("frame heights")
-                .doc("Depth of field: the blur far from `focus`; 0 is none."),
+                .doc("Blur for depth of field, far from `focus`; 0 is none."),
         ),
         FxDef::new(
             "light",
