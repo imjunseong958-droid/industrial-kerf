@@ -33,7 +33,7 @@ pub use kernel::{
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
 pub use review::{Author, Comment, CommentPatch, NewComment, ReviewLog, Stroke};
-pub use timeline::{fx_catalog_all_json, fx_catalog_json};
+pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
 
 use kerf_model::Project;
 use runtime::runtime_actor;

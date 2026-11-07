@@ -598,6 +598,119 @@ private slots:
         QCOMPARE(ops.last().toObject().value("props").toObject().value("size").toDouble(), 8.0);
     }
 
+    // A clip's rows in depth come from the catalog as the bridge hands it over: a switch to go into
+    // depth, the rest once it is on, a bevel once there is a solid to cut, and each edit goes to the
+    // document. A camera and a light have a `z` of their own; what has no picture to place has none.
+    void aClipInDepthIsInTheInspector() {
+        char *properties = kerf_clip_properties();
+        QVERIFY(properties);
+        const QJsonObject catalogProps = QJsonDocument::fromJson(properties).object();
+        kerf_bridge_string_free(properties);
+        char *all = kerf_fx_catalog_all();
+        QVERIFY(all);
+        const QJsonArray entries = QJsonDocument::fromJson(all).array();
+        kerf_bridge_string_free(all);
+        QJsonObject generators;
+        for (const QJsonValue &entry : entries)
+            if (entry.toObject().value("kind") == QLatin1String("generator")) generators.insert(entry.toObject().value("id").toString(), entry.toObject().value("params"));
+        for (const char *generator : {"solid", "camera", "light", "null", "adjustment"}) QVERIFY(generators.contains(QLatin1String(generator)));
+
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        int revision = 5;
+        const auto show = [&](const QJsonObject &props) {
+            const auto generator = [](const char *id, const QJsonObject &own = {}) {
+                return QJsonObject{{"id", id}, {"kind", "generator"}, {"fx", id}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", own}};
+            };
+            window.applySnapshot(QJsonObject{{"revision", ++revision}, {"duration", 4}, {"timeline", QJsonObject{
+                {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProps}, {"generators", generators},
+                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    generator("solid", props), generator("camera", {{"z", -0.5}}), generator("light", {{"z", 0.25}}), generator("null"), generator("adjustment")}}}}}}}});
+        };
+        InspectorPanel *inspector = window.m_inspector;
+        const auto field = [inspector](const char *name) { return inspector->findChild<ScrubField *>(QString::fromLatin1(name)); };
+        const auto hidden = [&field](std::initializer_list<const char *> names) {
+            return std::all_of(names.begin(), names.end(), [&field](const char *name) { return field(name) && rowOf(field(name))->isHidden(); });
+        };
+        const auto shown = [&field](std::initializer_list<const char *> names) {
+            return std::all_of(names.begin(), names.end(), [&field](const char *name) { return field(name) && !rowOf(field(name))->isHidden(); });
+        };
+
+        // Flat: only the switch, whatever is left of the values it would use, and they say nothing.
+        show({{"z", 0.25}});
+        window.selectClip(QStringLiteral("solid"));
+        auto *threeD = inspector->findChild<InspectorSwitch *>(QStringLiteral("prop_three_d"));
+        QVERIFY(threeD);
+        QVERIFY(!threeD->isChecked());
+        QVERIFY(!threeD->isHidden());
+        QVERIFY(hidden({"prop_z", "prop_rotate_x", "prop_rotate_y", "prop_depth", "prop_bevel"}));
+        InspectorSection *transform = inspector->section(QStringLiteral("transform"));
+        QVERIFY(transform->summary().isEmpty());
+        QVERIFY(!transform->isChanged());
+        threeD->click();
+        QJsonArray ops = takeOps(window);
+        QVERIFY(!ops.isEmpty());
+        QCOMPARE(ops.last().toObject().value("clip").toString(), QStringLiteral("solid"));
+        QCOMPARE(ops.last().toObject().value("props").toObject().value("three_d").toBool(), true);
+
+        // In depth: its values, in the frame's pixels and degrees, with no bevel until it is a solid.
+        show({{"three_d", true}, {"z", 0.25}, {"rotate_x", 15.0}, {"rotate_y", -30.0}});
+        QVERIFY(threeD->isChecked());
+        QVERIFY(shown({"prop_z", "prop_rotate_x", "prop_rotate_y", "prop_depth"}));
+        QVERIFY(hidden({"prop_bevel"}));
+        QCOMPARE(field("prop_z")->text(), QStringLiteral("270"));
+        QCOMPARE(field("prop_z")->format().unit, QStringLiteral("px"));
+        QCOMPARE(field("prop_rotate_x")->text(), QStringLiteral("15"));
+        QCOMPARE(field("prop_rotate_x")->format().unit, QStringLiteral("°"));
+        QCOMPARE(field("prop_rotate_x")->format().step, 1.0);
+        QCOMPARE(field("prop_rotate_y")->text(), QStringLiteral("−30"));
+        QCOMPARE(rowOf(field("prop_rotate_x"))->label()->fullText(), QStringLiteral("Rotate X"));
+        QCOMPARE(rowOf(threeD)->label()->fullText(), QStringLiteral("3D"));
+        QVERIFY(transform->summary().contains(QStringLiteral("3D")));
+        QVERIFY(transform->summary().contains(QStringLiteral("Z 270 px")));
+        QVERIFY(transform->isChanged());
+        const auto committed = [&](const char *name, const char *text, const char *prop) {
+            field(name)->commitText(QString::fromLatin1(text));
+            const QJsonArray sent = takeOps(window);
+            return sent.isEmpty() ? std::nan("") : sent.last().toObject().value("props").toObject().value(QString::fromLatin1(prop)).toDouble();
+        };
+        QCOMPARE(committed("prop_z", "540", "z"), 0.5);
+        QCOMPARE(committed("prop_rotate_x", "45", "rotate_x"), 45.0);
+        QCOMPARE(committed("prop_rotate_y", "-90", "rotate_y"), -90.0);
+        QCOMPARE(committed("prop_depth", "108", "depth"), 0.1);
+
+        // A solid has a bevel, and one that becomes solid as it goes has it too.
+        show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
+        QVERIFY(shown({"prop_depth", "prop_bevel"}));
+        QCOMPARE(field("prop_depth")->text(), QStringLiteral("108"));
+        QCOMPARE(field("prop_bevel")->text(), QStringLiteral("27"));
+        QCOMPARE(committed("prop_bevel", "54", "bevel"), 0.05);
+        show({{"three_d", true}, {"depth", QJsonArray{QJsonObject{{"at", 0.0}, {"value", 0.0}, {"interp", "linear"}},
+                                                     QJsonObject{{"at", 1.0}, {"value", 0.1}, {"interp", "linear"}}}}});
+        QVERIFY(shown({"prop_bevel"}));
+
+        // Out of depth again they go, though the document keeps them.
+        show({{"depth", 0.1}, {"bevel", 0.025}});
+        QVERIFY(hidden({"prop_z", "prop_depth", "prop_bevel"}));
+        QVERIFY(transform->summary().isEmpty());
+
+        // A camera and a light stand at their `z`, with nothing to switch on.
+        for (const char *placed : {"camera", "light"}) {
+            window.selectClip(QString::fromLatin1(placed));
+            QVERIFY(shown({"prop_z"}));
+            QVERIFY(!inspector->findChild<InspectorSwitch *>(QStringLiteral("prop_three_d")));
+            QVERIFY(!field("prop_rotate_x") && !field("prop_depth") && !field("prop_bevel"));
+        }
+        QCOMPARE(field("prop_z")->text(), QStringLiteral("270"));
+        QCOMPARE(committed("prop_z", "-540", "z"), -0.5);
+        // A null and an adjustment layer have no picture to place.
+        for (const char *unplaced : {"null", "adjustment"}) {
+            window.selectClip(QString::fromLatin1(unplaced));
+            QVERIFY(field("prop_x"));
+            QVERIFY(!field("prop_z") && !inspector->findChild<InspectorSwitch *>(QStringLiteral("prop_three_d")));
+        }
+    }
+
     // Inspector rows for the catalog's properties of the clip's track type,
     // with units: position in px of the frame, scale and opacity in %, gain
     // in dB, pan L…R; a title's text, font, size and colour; an effect's

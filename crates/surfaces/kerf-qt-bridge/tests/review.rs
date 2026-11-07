@@ -6,7 +6,7 @@
 
 use kerf_qt_bridge::{
     kerf_bridge_free, kerf_bridge_new, kerf_bridge_poll, kerf_bridge_send, kerf_bridge_string_free,
-    kerf_fx_catalog_all,
+    kerf_clip_properties, kerf_fx_catalog_all,
 };
 use kerf_runtime::{Author, NewComment, RuntimeClient};
 use serde_json::{json, Value};
@@ -303,6 +303,20 @@ fn the_whole_catalog_lists_generators_and_sound() {
     assert!(entries
         .iter()
         .any(|entry| entry["kind"] == "effect" && entry["domain"] == "video"));
+}
+
+#[test]
+fn a_clips_properties_are_listed_by_track_type() {
+    let properties = take(kerf_clip_properties());
+    let named = |domain: &str, name: &str| {
+        properties[domain]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|def| def["name"] == name)
+    };
+    assert!(named("video", "three_d") && named("video", "bevel"));
+    assert!(named("audio", "gain") && !named("audio", "three_d"));
 }
 
 /// A provider that speaks OpenAI's chat API: the first request is answered

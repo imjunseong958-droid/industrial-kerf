@@ -260,6 +260,7 @@ private:
     void buildSequence(QVBoxLayout *into);
     void buildWheels(QVBoxLayout *into);
     void buildTransformRows(QVBoxLayout *into, int section);
+    void buildDepthRows(QVBoxLayout *into, int section);
     void buildFitFill(int section);
     void buildCompositingRows(QVBoxLayout *into, int section);
     void buildCropSection(QVBoxLayout *into);
