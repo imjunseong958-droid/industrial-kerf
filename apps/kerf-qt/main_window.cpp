@@ -166,6 +166,12 @@ void MainWindow::pollBridge() {
     }
     KerfFrame frame{};
     if (kerf_bridge_frame(m_bridge, &frame)) showProgramFrame(frame);
+    KerfSignal signal{};
+    if (kerf_bridge_signal(m_bridge, &signal) && signal.pixels && signal.width && signal.height &&
+        signal.length >= size_t(signal.width) * size_t(signal.height) * 8) {
+        const QImage image(signal.pixels, int(signal.width), int(signal.height), int(signal.width) * 8, QImage::Format_RGBA64);
+        m_bus->setProgramSignal(image.copy(), int(signal.curve));
+    }
 }
 
 bool MainWindow::showProgramFrame(const KerfFrame &frame) {

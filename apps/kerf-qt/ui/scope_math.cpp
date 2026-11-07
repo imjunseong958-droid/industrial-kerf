@@ -112,6 +112,12 @@ Chroma chroma(int r, int g, int b) {
     return {(bf - y) / 1.8556, (rf - y) / 1.5748};
 }
 
+Chroma chroma2020(int r, int g, int b) {
+    const double rf = r / 255.0, gf = g / 255.0, bf = b / 255.0;
+    const double y = 0.2627 * rf + 0.678 * gf + 0.0593 * bf;
+    return {(bf - y) / 1.8814, (rf - y) / 1.4746};
+}
+
 int codeRow(int code, int height) {
     if (height <= 1) return 0;
     const int clamped = std::clamp(code, 0, 1023);
@@ -121,7 +127,11 @@ int codeRow(int code, int height) {
 Density waveformLuma(const QImage &frame, int width, int height, const Options &options) {
     Density d = emptyDensity(width, height);
     const Pixels px(frame);
-    trace(d, px, options, options.seed, [](int r, int g, int b) { return luma(r, g, b); });
+    if (options.bt2020) {
+        trace(d, px, options, options.seed, [](int r, int g, int b) { return (0.2627 * r + 0.678 * g + 0.0593 * b) / 255.0; });
+    } else {
+        trace(d, px, options, options.seed, [](int r, int g, int b) { return luma(r, g, b); });
+    }
     return d;
 }
 
@@ -148,7 +158,7 @@ Density vectorscope(const QImage &frame, QSize size, const VectorscopeGeometry &
     for (int y = 0; y < px.height; ++y) {
         for (int x = 0; x < px.width; ++x) {
             const uchar *p = px.pixel(x, y);
-            const QPointF at = geometry.point(chroma(p[0], p[1], p[2]), gain);
+            const QPointF at = geometry.point(options.bt2020 ? chroma2020(p[0], p[1], p[2]) : chroma(p[0], p[1], p[2]), gain);
             for (int s = 0; s < samples; ++s) {
                 const double jx = jitter.bell() * options.chromaJitter, jy = jitter.bell() * options.chromaJitter;
                 hit(d, int(std::floor(at.x() + jx)), int(std::floor(at.y() + jy)));

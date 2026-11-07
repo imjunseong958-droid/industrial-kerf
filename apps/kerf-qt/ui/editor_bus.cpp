@@ -82,4 +82,8 @@ void EditorBus::setProgramFrame(const QImage &frame) {
     emit programFrameChanged(frame);
 }
 
+void EditorBus::setProgramSignal(const QImage &frame, int curve) {
+    emit programSignalChanged(frame, curve);
+}
+
 } // namespace kerf

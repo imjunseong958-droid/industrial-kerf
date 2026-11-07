@@ -314,6 +314,9 @@ void kerf_bridge_string_free(char *value);
 struct KerfFrame { const uint8_t *pixels; size_t length; uint32_t width; uint32_t height; double time; };
 // Latest RGBA frame only. Bytes live until the next frame poll or bridge free.
 bool kerf_bridge_frame(void *bridge, KerfFrame *frame);
+// An HDR sequence's frame as its signal: 16-bit little-endian RGBA in BT.2020, on curve 1 (PQ) or 2 (HLG).
+struct KerfSignal { const uint8_t *pixels; size_t length; uint32_t width; uint32_t height; double time; uint32_t curve; };
+bool kerf_bridge_signal(void *bridge, KerfSignal *signal);
 // The command registry (kerf-commands). Synchronous and pure, so it can be
 // called before a bridge exists. Results are owned JSON strings, freed with
 // kerf_bridge_string_free.

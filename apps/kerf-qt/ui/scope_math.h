@@ -45,6 +45,8 @@ struct Chroma {
     double cr;
 };
 Chroma chroma(int r, int g, int b);
+// The same by BT.2020's weights, for a signal in its primaries.
+Chroma chroma2020(int r, int g, int b);
 
 // A grid of hit counts, row-major, `width` x `height`.
 struct Density {
@@ -65,6 +67,7 @@ struct Options {
     double codeJitter = 0.006;   // waveform and parade: spread, as a fraction of full scale
     double chromaJitter = 0.8;   // vectorscope: spread in plot points
     quint32 seed = 11;           // the jitter is deterministic for a seed
+    bool bt2020 = false;         // the frame is in BT.2020: luma and chroma go by its weights
 };
 
 // The row a 10-bit code lands on in a grid `height` rows tall: code 1023 is

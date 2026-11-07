@@ -159,6 +159,12 @@ enum Command {
         #[serde(default)]
         sequence: Option<String>,
     },
+    /// An HDR sequence's frame for the Finish tray's scopes: `scope_signal`.
+    ScopeSignal {
+        time: f64,
+        #[serde(default)]
+        sequence: Option<String>,
+    },
     /// What the media files say of themselves: `media_info`.
     MediaInfo {
         #[serde(default)]
@@ -375,6 +381,7 @@ struct Bridge {
     events: Receiver<Value>,
     shared: Arc<Shared>,
     displayed_frame: Option<PlaybackFrame>,
+    displayed_signal: Option<analysis::SignalFrame>,
 }
 
 struct AgentRequest {
@@ -2154,6 +2161,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         events,
         shared,
         displayed_frame: None,
+        displayed_signal: None,
     }))
     .cast()
 }
@@ -2260,6 +2268,15 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
         }
         Command::Loudness { sequence } => {
             analysis::loudness(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        Command::ScopeSignal { time, sequence } => {
+            analysis::scope_signal(
+                bridge.shared.clone(),
+                bridge.events_tx.clone(),
+                time,
+                sequence,
+            );
             true
         }
         Command::MediaInfo { media } => {
@@ -2548,6 +2565,55 @@ pub struct KerfFrame {
     pub width: u32,
     pub height: u32,
     pub time: f64,
+}
+
+/// An HDR sequence's frame as its signal, for the Finish tray's scopes.
+#[repr(C)]
+pub struct KerfSignal {
+    /// 16-bit little-endian RGBA, in BT.2020.
+    pub pixels: *const u8,
+    pub length: usize,
+    pub width: u32,
+    pub height: u32,
+    pub time: f64,
+    /// 1 for PQ, 2 for HLG.
+    pub curve: u32,
+}
+
+/// Take the newest signal frame that `scope_signal` drew, without copying its pixels.
+/// # Safety
+/// `bridge` must be live and exclusively accessed. `output` must point to a
+/// writable `KerfSignal`. Previously returned pixels expire on this call.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_bridge_signal(bridge: *mut c_void, output: *mut KerfSignal) -> bool {
+    if bridge.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: Both pointers and exclusive access are guaranteed by the caller.
+    let bridge = unsafe { &mut *bridge.cast::<Bridge>() };
+    let Some(frame) = bridge
+        .shared
+        .analysis
+        .signal_frame
+        .try_lock()
+        .ok()
+        .and_then(|mut frame| frame.take())
+    else {
+        return false;
+    };
+    let frame = bridge.displayed_signal.insert(frame);
+    // SAFETY: output is writable and pixels remain owned by this bridge.
+    unsafe {
+        *output = KerfSignal {
+            pixels: frame.pixels.as_ptr(),
+            length: frame.pixels.len(),
+            width: frame.width,
+            height: frame.height,
+            time: frame.time,
+            curve: frame.curve,
+        };
+    }
+    true
 }
 
 /// Take the newest frame without copying its pixels.

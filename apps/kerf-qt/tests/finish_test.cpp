@@ -122,6 +122,78 @@ private slots:
 
     // ---- scopes ------------------------------------------------------------
 
+    // An HDR sequence's signal: 58% of PQ is SDR white, and what the waveform shows of a frame of it
+    // is that row, where the frame a monitor gets would show the top.
+    void anHdrSignalIsMeasuredWhereItIs() {
+        QImage signal(QSize(160, 90), QImage::Format_RGBA64);
+        signal.fill(QColor::fromRgbF(0.5807f, 0.5807f, 0.5807f));
+        ScopeLayout layout = designLayout();
+        layout.curve = 1;
+        const ScopeTraces traces = scopes::analyse(signal, layout);
+        QCOMPARE(traces.curve, 1);
+        QCOMPARE(traces.bitDepth, 16);
+        const auto brightestRow = [](const QImage &image) {
+            int best = -1, most = -1;
+            for (int y = 0; y < image.height(); ++y) {
+                int sum = 0;
+                for (int x = 0; x < image.width(); ++x) sum += qRed(image.pixel(x, y));
+                if (sum > most) {
+                    most = sum;
+                    best = y;
+                }
+            }
+            return double(best) / qMax(1, image.height() - 1);
+        };
+        // From the top of the plot: 1 - 594 / 1023 is about 0.42.
+        const double row = brightestRow(traces.waveform);
+        QVERIFY2(std::abs(row - 0.42) < 0.03, qPrintable(QString::number(row)));
+        QCOMPARE(scopes::referenceWhiteCode(1), 594);
+        QCOMPARE(scopes::referenceWhiteCode(2), 767);
+        // A monitor's white goes to the top, and with no curve it is as it was.
+        QImage monitor(QSize(160, 90), QImage::Format_RGBA8888);
+        monitor.fill(Qt::white);
+        const ScopeTraces shown = scopes::analyse(monitor, designLayout());
+        QCOMPARE(shown.curve, 0);
+        QCOMPARE(shown.bitDepth, 8);
+        QVERIFY(brightestRow(shown.waveform) < 0.03);
+    }
+
+    // Once a signal comes, the frames a monitor gets are left out, until it stops being one.
+    void theAnalyserGoesByTheSignalWhileThereIsOne() {
+        ScopeAnalyser analyser;
+        analyser.setLayout(designLayout());
+        analyser.setActive(true);
+        const auto settled = [&analyser] {
+            QTRY_VERIFY(!analyser.running() && !analyser.pending());
+        };
+        QImage monitor(QSize(160, 90), QImage::Format_RGBA8888);
+        monitor.fill(Qt::white);
+        analyser.setFrame(monitor);
+        settled();
+        QCOMPARE(analyser.traces().curve, 0);
+        QImage signal(QSize(160, 90), QImage::Format_RGBA64);
+        signal.fill(QColor::fromRgbF(0.5807f, 0.5807f, 0.5807f));
+        analyser.setSignal(signal, 1);
+        settled();
+        QCOMPARE(analyser.traces().curve, 1);
+        QCOMPARE(analyser.layout().curve, 1);
+        // A frame a monitor gets does not take its place, and a layout does not forget it.
+        const int started = analyser.started();
+        analyser.setFrame(monitor);
+        QVERIFY(!analyser.pending());
+        QCOMPARE(analyser.started(), started);
+        ScopeLayout wider = designLayout();
+        wider.waveform = QSize(400, 268);
+        analyser.setLayout(wider);
+        settled();
+        QCOMPARE(analyser.traces().curve, 1);
+        // An SDR sequence goes back to the frame a monitor got last.
+        analyser.clearSignal();
+        settled();
+        QCOMPARE(analyser.traces().curve, 0);
+        QCOMPARE(analyser.traces().bitDepth, 8);
+    }
+
     // A frame half black and half white puts every waveform sample on the
     // bottom (code 0) or top (1023) line, in its half, two per sampled
     // pixel; the analysis draws exactly scope_math's density.

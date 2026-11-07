@@ -39,9 +39,11 @@ struct ScopeLayout {
     QSize parade;
     qreal dpr = 1;
     WaveformMode mode = WaveformMode::Luma;
+    // The frame is an HDR sequence's signal in BT.2020 on this curve: 1 for PQ, 2 for HLG; 0 for SDR.
+    int curve = 0;
     bool operator==(const ScopeLayout &other) const {
         return waveform == other.waveform && vectorscope == other.vectorscope && parade == other.parade && qFuzzyCompare(dpr, other.dpr) &&
-               mode == other.mode;
+               mode == other.mode && curve == other.curve;
     }
 };
 
@@ -55,6 +57,7 @@ struct ScopeTraces {
     QSize frameSize;               // the program frame measured
     QSize sampled;                 // the grid it was sampled at
     WaveformMode mode = WaveformMode::Luma;
+    int curve = 0;                 // the signal measured, as in ScopeLayout
     bool isNull() const { return frameSize.isEmpty(); }
 };
 
@@ -71,6 +74,9 @@ constexpr QRgb targetBox = tokens::dis;     // the 75% boxes (#5c5c5c)
 constexpr double traceGain = 2.2;  // the vectorscope trace
 constexpr double targetGain = 1.0; // the 75% targets
 constexpr int cellGap = 6;         // between parade cells
+
+// Where SDR white falls in a signal on `curve`, as a 10-bit code: 203 cd/m² on PQ, 75% on HLG.
+constexpr int referenceWhiteCode(int curve) { return curve == 1 ? 594 : 767; }
 
 // Bits per channel of a frame as it is stored: 8 for RGBA8 (what the bridge
 // hands over), 10 for the 10-bit formats, 16 for RGBA64; 0 for none.
@@ -108,6 +114,10 @@ public:
     // intervalMs ago and none runs, otherwise when that time is up (only the
     // newest frame waiting is measured).
     void setFrame(const QImage &frame);
+    // An HDR sequence's frame as its signal: from now on what is measured, the frames a monitor gets
+    // left out, until clearSignal. 1 for PQ, 2 for HLG.
+    void setSignal(const QImage &frame, int curve);
+    void clearSignal();
     // The newest analysis (null before the first).
     const ScopeTraces &traces() const { return m_traces; }
     // Analyses started so far, and whether one runs now.
@@ -128,6 +138,8 @@ private:
     QTimer m_timer;
     QElapsedTimer m_since;
     ScopeLayout m_layout;
+    // The last frame a monitor gets, which an HDR signal stands in for.
+    QImage m_monitorFrame;
     ScopeTraces m_traces;
     QImage m_frame;
     bool m_dirty = false;

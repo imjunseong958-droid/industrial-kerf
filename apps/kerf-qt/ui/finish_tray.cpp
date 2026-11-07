@@ -183,8 +183,12 @@ FinishTray::FinishTray(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus
         connect(m_bus, &EditorBus::playheadChanged, this, &FinishTray::updateBar);
         connect(m_bus, &EditorBus::snapshotChanged, this, &FinishTray::updateBar);
         connect(m_bus, &EditorBus::programFrameChanged, m_analyser, &ScopeAnalyser::setFrame);
+        connect(m_bus, &EditorBus::programFrameChanged, this, &FinishTray::askForSignal);
+        connect(m_bus, &EditorBus::programSignalChanged, m_analyser, &ScopeAnalyser::setSignal);
         connect(m_bus, &EditorBus::event, this, [this](const QString &type, const QJsonObject &event) {
             if (type == QStringLiteral("media_info")) mergeMediaInfo(event.value(QStringLiteral("media")).toObject());
+            if (type == QStringLiteral("scope_signal") && event.value(QStringLiteral("status")).toString() == QStringLiteral("sdr"))
+                m_analyser->clearSignal();
             if (type == QStringLiteral("loudness") || type == QStringLiteral("check") || type == QStringLiteral("media_info") ||
                 type == QStringLiteral("connection")) {
                 // (QcView and LoudnessView, made first, have heard it already:
@@ -244,6 +248,13 @@ void FinishTray::showEvent(QShowEvent *) {
     pushLayout();
     if (m_bus && !m_bus->programFrame().isNull() && m_analyser->traces().isNull()) m_analyser->setFrame(m_bus->programFrame());
     m_analyser->setActive(true);
+    askForSignal();
+}
+
+void FinishTray::askForSignal() {
+    // Only while the scopes are in sight: an HDR sequence draws its frame again for them.
+    if (!m_bus || !m_analyser->isActive()) return;
+    m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("scope_signal")}, {QStringLiteral("time"), m_bus->playhead()}});
 }
 
 void FinishTray::hideEvent(QHideEvent *) {
@@ -353,9 +364,13 @@ QString FinishTray::paneMeta(const QString &id) const {
 
 void FinishTray::updateScopeMeta() {
     // The precision of the frame measured, as it is: frames come as RGBA8,
-    // so 8-bit (never a claim of more).
+    // so 8-bit (never a claim of more), and an HDR sequence's as its signal.
     const int bits = m_analyser->traces().bitDepth;
-    const QString depth = bits > 0 ? QStringLiteral("%1-bit").arg(bits) : QString();
+    const int curve = m_analyser->traces().curve;
+    const QString depth = curve == 1   ? QStringLiteral("PQ signal")
+                          : curve == 2 ? QStringLiteral("HLG signal")
+                          : bits > 0   ? QStringLiteral("%1-bit").arg(bits)
+                                       : QString();
     const QString channel = m_mode == WaveformMode::Luma ? QStringLiteral("Y′") : QStringLiteral("R′G′B′");
     m_waveMeta->setText(depth.isEmpty() ? channel : QStringLiteral("%1 · %2").arg(channel, depth));
     m_paradeMeta->setText(depth);

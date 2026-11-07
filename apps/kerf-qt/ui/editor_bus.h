@@ -94,6 +94,7 @@ public:
     // theirs (dim, the Inspector's page and kind).
     void setWorkspace(const QString &name, bool reapplied = false);
     void setProgramFrame(const QImage &frame);
+    void setProgramSignal(const QImage &frame, int curve);
 
 signals:
     // Every bridge event. (The name hides QObject::event(QEvent *) for
@@ -108,6 +109,8 @@ signals:
     // Workspace): a region applies the workspace's stage when it hears it.
     void workspaceChanged(const QString &name);
     void programFrameChanged(const QImage &frame);
+    // An HDR sequence's frame as its signal, for the scopes: 1 for PQ, 2 for HLG.
+    void programSignalChanged(const QImage &frame, int curve);
     void reviewChanged();
     void identityChanged(const QJsonObject &identity);
     void viewAsChanged(const QString &person);

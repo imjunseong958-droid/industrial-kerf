@@ -95,6 +95,7 @@ private:
     void mergeMediaInfo(const QJsonObject &media);
     void updateBar();
     void updateScopeMeta();
+    void askForSignal();
     void followActions();
     void placePanes();
     void pushLayout();
