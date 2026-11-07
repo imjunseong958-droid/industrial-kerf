@@ -21,8 +21,7 @@ line, applied in order and atomically.
   `beat1.end` past its duration), or `c3@<media timecode>`, where clip c3
   plays that media position. Each takes an optional amount, such as
   `at=c3.end`, `to=c3.start-6f`, `at=beat1+2f`, or `at=c3@00:12:04:10`.
-  Prefer anchors to computing timecode: a time seen in a clip's media is
-  `c3@` that time.
+  Prefer anchors to computing timecode.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
   media's first frame, or a quoted phrase a transcript heard (`src="so we
   closed"`): an in point where it starts, an out point where it ends.
@@ -34,15 +33,14 @@ line, applied in order and atomically.
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
-  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels, over `feather`.
+  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
-- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02` makes it a solid with its edges cut back.
+- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
-`id@version`. Documents keep the version an edit used (`fx c1 add
-blur.gaussian@1`); leave it out to take the current one.
+`id@version`. Documents keep the version an edit used; leave it out for the current one.
 
 ## Operations
 ```
