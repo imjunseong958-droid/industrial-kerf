@@ -1012,6 +1012,20 @@ impl Project {
         self.sequences.iter().position(|sequence| sequence.id == id)
     }
 
+    /// What to say of a clip that is not there: its name, and a name it could be a slip for.
+    pub fn no_clip(&self, id: &str) -> String {
+        let names = self
+            .sequences
+            .iter()
+            .flat_map(|sequence| &sequence.tracks)
+            .flat_map(|track| &track.clips)
+            .map(|clip| clip.id.as_str());
+        match crate::catalog::nearest(id, names) {
+            Some(near) => format!("no clip `{id}`; did you mean `{near}`?"),
+            None => format!("no clip `{id}`"),
+        }
+    }
+
     pub fn locate(&self, clip: &str) -> Option<ClipAt> {
         self.sequences.iter().enumerate().find_map(|(s, sequence)| {
             sequence.tracks.iter().enumerate().find_map(|(t, track)| {

@@ -290,11 +290,11 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 ```
 
 - Lines run in order and atomically: if any line fails, nothing changes, and
-  the error names the line and column.
+  the error names the line and column, and what to do where it can.
 - Later lines see what earlier lines did, so `as=` names let a script refer to
   the clips it creates.
 - `insert` opens time on every unlocked track and `overwrite` replaces what
-  is underneath. `on=V1,A1` places a picture and its sound as linked clips;
+  is underneath, which is what lays a clip over others. `on=V1,A1` places a picture and its sound as linked clips;
   `out=` gives a source out point instead of `dur=`.
 - `ripple-delete`, `extract`, and ripple trims keep every unlocked track in
   sync, and refuse when they would cut through another track's clip. Lock a

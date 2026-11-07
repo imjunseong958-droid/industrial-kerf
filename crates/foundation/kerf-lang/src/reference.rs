@@ -21,12 +21,12 @@ line, applied in order and atomically.
   `beat1.end` past its duration), or `c3@<media timecode>`, where clip c3
   plays that media position. Each takes an optional amount, such as
   `at=c3.end`, `to=c3.start-6f`, `at=beat1+2f`, or `at=c3@00:12:04:10`.
-  Prefer anchors to computing timecode.
+  Prefer anchors to timecode.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
   media's first frame, or a quoted phrase a transcript heard (`src="so we
   closed"`): an in point where it starts, an out point where it ends.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
-  Seconds round to the nearest frame.
+  Seconds round to a frame.
 - Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
   Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve
   `x1,y1,x2,y2` that may overshoot: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
@@ -44,10 +44,10 @@ Effects, transitions, and generators have versions, listed below as
 
 ## Operations
 ```
-use <sequence>                          choose the sequence when there are several
+use <sequence>                          choose a sequence
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
     open time on every unlocked track; several tracks get linked clips
-overwrite <same arguments as insert>    replace what occupies the range on the target tracks
+overwrite <same arguments as insert>    replace the range on the target tracks: lays a clip over others, where insert pushes them along
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
 delete <clip> …                         remove clips (and linked partners), leaving gaps
 ripple-delete <clip> …                  remove and close the gap on every unlocked track
@@ -56,7 +56,7 @@ extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
     src= puts the edge on that source position
 roll <clip> <amount>|to=<pos>           move the cut after the clip
-slip <clip> <amount>                    play different source frames in the same place
+slip <clip> <amount>                    other source frames in the same place
 slide <clip> <amount>|to=<pos>          move a clip between its neighbors
 split <clip> at=<pos> [as=<id>]
 blade at=<pos> [tracks=…]               split every clip crossing a point
@@ -214,6 +214,11 @@ that names what to use instead.";
 
 /// One catalog definition as the reference lists it: its id, domain, and
 /// doc, then a line per parameter.
+pub fn property_reference(param: &ParamDef) -> String {
+    format!("- {}\n", describe(param))
+}
+
+/// One effect, transition, or generator as the reference lists it.
 pub fn fx_reference(fx: &FxDef) -> String {
     let mut out = format!(
         "- `{}@{}` ({}): {}\n",

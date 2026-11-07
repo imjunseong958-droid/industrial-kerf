@@ -444,7 +444,7 @@ impl Script<'_> {
         let at = self
             .project
             .locate(id.as_str())
-            .ok_or_else(|| line.error(1, format!("no clip `{id}`")))?;
+            .ok_or_else(|| line.error(1, self.project.no_clip(id.as_str())))?;
         Ok((
             self.project.clip_at(at),
             Positions::of(&self.project, at.sequence),
