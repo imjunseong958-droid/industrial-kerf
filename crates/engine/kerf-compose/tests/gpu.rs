@@ -207,6 +207,116 @@ fn every_scene_draws_as_the_cpu_draws_it() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A transition's two clips between frames drawn both ways, each moment one the GPU really draws. The
+/// CPU's `apply_scaled` is the reference, and `kerf-fx/src/transitions/gpu_tests.rs` holds each kernel
+/// to it per value; this holds what goes around them: the clips placed and masked and turned on their
+/// way in, the blend out, and frames from footage.
+#[test]
+fn every_transition_draws_as_the_cpu_draws_it() {
+    if kerf_gpu_missing() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("a folder");
+    let media = format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n",
+        footage(dir.path())
+    );
+    let mut failures = Vec::new();
+    let transitions = Catalog::builtin()
+        .all()
+        .filter(|def| kerf_fx::transitions::filmcraft_id(def.id.as_str()).is_some())
+        .map(|def| def.id.as_str())
+        .filter(|id| !["morph-cut"].contains(id));
+    for id in transitions {
+        let document = format!(
+            "{media}  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx={id}@1 dur=12f\n"
+        );
+        let gpu = compositor(&document, Accel::Always, false);
+        let cpu = compositor(&document, Accel::Never, false);
+        for moment in [7, 11, 15] {
+            let time = Rate::FPS_24.time_of(moment);
+            if !gpu.draws_on_gpu(time, 1.0) {
+                failures.push(format!("{id}: the CPU drew {moment}f"));
+                continue;
+            }
+            let (mean, off) = difference(&gpu.frame(time, 1.0), &cpu.frame(time, 1.0), 2);
+            // As `every_scene_draws_as_the_cpu_draws_it` allows, and a little more for where a hard
+            // threshold of Film Roll lands on a pixel of this size.
+            if mean > 0.6 || off > 0.005 {
+                failures.push(format!(
+                    "{id} at {moment}f: mean {mean:.3}, {:.3}% off by more than 2",
+                    off * 100.0
+                ));
+            }
+            // A device that failed has the CPU draw, which would pass for a match.
+            assert!(gpu.draws_on_gpu(time, 1.0), "{id} failed the device");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// What goes around a transition's kernel: each side as it would draw alone, its blend, and a clip that
+/// enters from nothing.
+#[test]
+fn a_transition_keeps_what_its_clips_are() {
+    if kerf_gpu_missing() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("a folder");
+    let media = format!(
+        "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n",
+        footage(dir.path())
+    );
+    let under = "  track V1 video\n    clip u media=m src=0f at=0f dur=24f\n";
+    let cases = [
+        (
+            "placed, masked, and graded",
+            format!("{under}  track V2 video\n    clip c1 media=m src=0f at=0f dur=12f\n      set scale=0.7 rotation=10\n      mask k1 ellipse=0.5,0.5,0.4,0.4\n      fx color.basic exposure=0.3\n    clip c2 media=m src=6f at=12f dur=12f\n      set scale=0.5 x=0.1\n    transition t1 from=c1 to=c2 fx=iris-round@1 dur=12f\n"),
+        ),
+        (
+            "over what is below, from nothing, by its blend",
+            format!("{under}  track V2 video\n    clip c0 media=m src=0f at=0f dur=12f enabled=false\n    clip c1 media=m src=6f at=12f dur=12f\n      set blend=screen scale=0.8\n    transition t1 from=c0 to=c1 fx=glow@1 dur=8f\n"),
+        ),
+        (
+            "in depth",
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      set three_d=true rotate_y=25 z=0.3\n    clip c2 media=m src=6f at=12f dur=12f\n      set three_d=true rotate_x=-15\n    transition t1 from=c1 to=c2 fx=push@1 dur=12f\n  track V2 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 z=1\n".to_owned(),
+        ),
+        (
+            "in HDR, whose values go past 1",
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      fx color.basic exposure=1.5\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=light-sweep@1 dur=12f\n".to_owned(),
+        ),
+        (
+            "nested",
+            "  track V1 video\n    clip c1 seq=inner src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=roll-3d@1 dur=12f\n".to_owned(),
+        ),
+    ];
+    for (name, body) in cases {
+        let inner = "sequence inner rate=24 size=320x180 audio=48000\n  track V1 video\n    clip n1 media=m src=0f at=0f dur=24f\n      fx look.grade.sepia@1\n";
+        let document = if name == "nested" {
+            format!("{media}{body}{inner}")
+        } else if name.starts_with("in HDR") {
+            let hdr = media.replace("audio=48000", "audio=48000 color=rec2100-pq");
+            format!("{hdr}{body}")
+        } else {
+            format!("{media}{body}")
+        };
+        let gpu = compositor(&document, Accel::Always, false);
+        let cpu = compositor(&document, Accel::Never, false);
+        for moment in [8, 12, 15] {
+            let time = Rate::FPS_24.time_of(moment);
+            assert!(gpu.draws_on_gpu(time, 1.0), "{name} at {moment}f");
+            let (mean, off) = difference(&gpu.frame(time, 1.0), &cpu.frame(time, 1.0), 2);
+            assert!(
+                mean <= 0.6 && off <= 0.005,
+                "{name} at {moment}f: mean {mean:.3}, {:.3}% off by more than 2",
+                off * 100.0
+            );
+            // A device that failed has the CPU draw, which would pass for a match.
+            assert!(gpu.draws_on_gpu(time, 1.0), "{name} failed the device");
+        }
+    }
+}
+
 #[test]
 fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     if kerf_gpu_missing() {
@@ -220,7 +330,7 @@ fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     let time = Rate::FPS_24.time_of(6);
     let refused = [
         format!("{CLIP}      fx light.leaks\n"),
-        "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=push@1 dur=12f\n".to_owned(),
+        "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=morph-cut@1 dur=12f\n".to_owned(),
     ];
     for body in refused {
         let document = format!("{media}{body}");

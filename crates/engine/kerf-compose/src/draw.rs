@@ -849,10 +849,7 @@ impl Drawing {
             if !shown.shows(at) {
                 continue;
             }
-            let pair = track.pairs.iter().find(|pair| {
-                pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
-            });
-            match pair {
+            match track.pair_at(index, at) {
                 // Drawn once, at the first of its clips that shows.
                 Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
                     self.pair(canvas, sequence, track, pair, moment);
@@ -1922,6 +1919,13 @@ impl TrackPlan {
         }
     }
 
+    /// The transition mixing its clip `index` at `at`.
+    fn pair_at(&self, index: usize, at: Time) -> Option<&Pair> {
+        self.pairs.iter().find(|pair| {
+            pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
+        })
+    }
+
     /// The one clip in depth it shows at `at`, drawing a picture of its own: not in a transition or a
     /// dip, whose mixes are of whole pictures, which cannot be cut.
     fn lone_in_depth(&self, at: Time) -> Option<&Shown> {
@@ -1931,10 +1935,7 @@ impl TrackPlan {
             .enumerate()
             .filter(|(_, shown)| shown.shows(at));
         let (index, shown) = showing.next()?;
-        let mixed = self.dips.iter().any(|dip| dip.shows(at))
-            || self.pairs.iter().any(|pair| {
-                pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
-            });
+        let mixed = self.dips.iter().any(|dip| dip.shows(at)) || self.pair_at(index, at).is_some();
         let drawn = !matches!(shown.plan.source, Source::Nothing | Source::Adjustment);
         (showing.next().is_none() && shown.plan.three_d && drawn && !mixed).then_some(shown)
     }

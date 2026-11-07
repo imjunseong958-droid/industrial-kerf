@@ -33,7 +33,7 @@ on, and Kerf does not follow upstream.
 | `crates/engine/kerf-compose/src/draw/focus.rs` | EffectCraft's circle of confusion and progressive blur for depth of field (`render/three_d/bokeh.rs`) |
 | `crates/motion/kerf-motion/src/outline.rs` | EffectCraft's path offsetting and how it uses the sweep (`crates/path`), on polygons rather than curves |
 | `crates/render/kerf-gpu/src/picture.wgsl` | FilmCraft's blend modes and dissolve pattern in WGSL |
-| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions, with its GPU effect kernels (`filmcraft/gpu.rs`, `fx.wgsl`) |
+| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions, with its GPU effect kernels (`filmcraft/gpu.rs`, `fx.wgsl`), and its transitions' arithmetic in WGSL (`transitions/kernels.wgsl`) |
 
 That code is MIT OR Apache-2.0, at your option: `LICENSE-MIT-ArtCraft` and
 `LICENSE-APACHE-2.0`. The ArtCraft name, wordmark, and logos are trademarks

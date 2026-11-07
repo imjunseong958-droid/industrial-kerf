@@ -26,6 +26,7 @@ use rayon::prelude::*;
 pub mod cards;
 mod dissolve;
 mod flow;
+pub mod gpu;
 mod grunge;
 mod legacy;
 mod lights;
@@ -33,6 +34,8 @@ mod motion;
 mod special;
 pub mod wipe;
 
+#[cfg(test)]
+mod gpu_tests;
 #[cfg(test)]
 mod tests;
 
