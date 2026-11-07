@@ -7,6 +7,7 @@ description = "Kerf's drawing on the GPU: pictures in textures, and the kernels 
 
 # The kernels are carried from FilmCraft's GPU compositor (see licenses/README.md).
 [dependencies]
+bytemuck = "1"
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-draw = { path = "../kerf-draw" }
 pollster = "0.4"

@@ -17,7 +17,37 @@ const SMALLEST_PIXELS: usize = 640 * 360;
 
 /// The device, once it and every kernel are built.
 fn ready_gpu() -> Option<&'static Gpu> {
-    kerf_gpu::shared().filter(|gpu| filmcraft::gpu::available(gpu))
+    kerf_gpu::shared().filter(|gpu| filmcraft::gpu::available(gpu) && gpu.depth_kernels().is_some())
+}
+
+/// A clip's picture with all done to it that is done to the picture itself, as [`Ready`] on the CPU.
+struct GpuReady {
+    picture: GpuPicture,
+    to_output: Affine,
+    crop: Option<Rect>,
+    opacity: f32,
+    /// Nothing can have left a hole in it.
+    opaque: bool,
+}
+
+/// How the clips in depth of a sequence are seen and lit at a moment, and what they read ready.
+struct Depth {
+    scene: three_d::Scene,
+    built: kerf_gpu::depth::Scene,
+    /// The pictures of those that stand in a light's way, which drawing them need not make again.
+    ready: Vec<(kerf_model::Id, GpuReady)>,
+    /// A number for each clip, to tell the one drawn from those in a light's way.
+    numbers: Vec<kerf_model::Id>,
+}
+
+impl Depth {
+    fn number(&mut self, clip: &kerf_model::Id) -> u32 {
+        let place = self.numbers.iter().position(|id| id == clip);
+        place.unwrap_or_else(|| {
+            self.numbers.push(clip.clone());
+            self.numbers.len() - 1
+        }) as u32
+    }
 }
 
 /// One effect of a clip as a kernel.
@@ -142,10 +172,50 @@ impl Drawing {
         if !gpu.fits(w, h) {
             return false;
         }
-        plan.tracks
-            .iter()
-            .filter(|track| track.drawn(angle))
-            .all(|track| self.gpu_can_draw_track(gpu, plan, track, at, scale))
+        self.gpu_can_draw_depth(gpu, plan, at, scale, angle)
+            && plan
+                .tracks
+                .iter()
+                .filter(|track| track.drawn(angle))
+                .all(|track| self.gpu_can_draw_track(gpu, plan, track, at, scale))
+    }
+
+    /// Whether the kernels can draw what is in depth in this sequence at its time `at`. A camera's
+    /// blur is only on the CPU; and a light all around may read a track that does not show.
+    fn gpu_can_draw_depth(
+        &self,
+        gpu: &Gpu,
+        plan: &SequencePlan,
+        at: Time,
+        scale: f64,
+        angle: Option<&kerf_model::Id>,
+    ) -> bool {
+        let tracks = || plan.tracks.iter().filter(|track| track.drawn(angle));
+        let in_depth = tracks().filter(|track| {
+            track
+                .shown
+                .iter()
+                .any(|shown| shown.shows(at) && shown.plan.three_d)
+        });
+        let count = in_depth.count();
+        if count == 0 {
+            return true;
+        }
+        let (w, h) = output_size(plan.width, plan.height, scale);
+        if count > kerf_gpu::depth::MOST_LAYERS || !gpu.fits(w, h * count) {
+            return false;
+        }
+        let scene = three_d::Scene::at(plan, at, (w, h));
+        if scene.has_aperture() {
+            return false;
+        }
+        scene.environments().iter().all(|wanted| {
+            plan.tracks
+                .iter()
+                .find(|track| track.id.as_str() == wanted)
+                .and_then(|track| track.shown.iter().find(|shown| shown.shows(at)))
+                .is_none_or(|shown| self.gpu_can_draw_clip(gpu, plan, shown, at, scale))
+        })
     }
 
     fn gpu_can_draw_track(
@@ -164,35 +234,43 @@ impl Drawing {
             let mixed = track.pairs.iter().any(|pair| {
                 pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
             });
-            if mixed {
-                return false;
-            }
-            let plan = &shown.plan;
-            // Frames between frames are made on the CPU, and so are clips in depth.
-            if plan.clip.retime != kerf_model::Retime::Frames || plan.three_d {
-                return false;
-            }
-            let time = at - plan.clip.start;
-            if let Source::Nested {
-                sequence: nested,
-                source_in,
-                speed,
-                duration,
-                angle,
-            } = &plan.source
-            {
-                let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-                if !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
-                    return false;
-                }
-            }
-            let shape = self.gpu_shape(sequence, plan, time, scale);
-            gpu.fits(shape.source.0, shape.source.1)
-                && self
-                    .gpu_ops(sequence, plan, time, at, scale, &shape)
-                    .is_some()
+            !mixed && self.gpu_can_draw_clip(gpu, sequence, shown, at, scale)
         })
+    }
+
+    fn gpu_can_draw_clip(
+        &self,
+        gpu: &Gpu,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        at: Time,
+        scale: f64,
+    ) -> bool {
+        let plan = &shown.plan;
+        // Frames between frames are made on the CPU.
+        if plan.clip.retime != kerf_model::Retime::Frames {
+            return false;
+        }
+        let time = at - plan.clip.start;
+        if let Source::Nested {
+            sequence: nested,
+            source_in,
+            speed,
+            duration,
+            angle,
+        } = &plan.source
+        {
+            let inner = &self.sequences[*nested];
+            let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+            if !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
+                return false;
+            }
+        }
+        let shape = self.gpu_shape(sequence, plan, time, scale);
+        gpu.fits(shape.source.0, shape.source.1)
+            && self
+                .gpu_ops(sequence, plan, time, at, scale, &shape)
+                .is_some()
     }
 
     /// The numbers [`Drawing::input`] works out for a clip's picture.
@@ -360,9 +438,40 @@ impl Drawing {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = frame.clear(w as u32, h as u32);
-        for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
+        let tracks = self.in_order(plan, at, scale, angle);
+        let in_depth = tracks.iter().any(|track| {
+            track
+                .shown
+                .iter()
+                .any(|shown| shown.shows(at) && shown.plan.three_d)
+        });
+        let mut depth = if in_depth {
+            Some(self.gpu_depth(frame, plan, &tracks, at, scale, (w, h))?)
+        } else {
+            None
+        };
+        let mut next = 0;
+        while next < tracks.len() {
+            let crossing = match &depth {
+                Some(depth) => {
+                    let moment = Moment {
+                        at,
+                        scale,
+                        scene: Some(&depth.scene),
+                    };
+                    self.crossing_run(plan, &tracks[next..], &moment)
+                }
+                None => Vec::new(),
+            };
+            if let (false, Some(depth)) = (crossing.is_empty(), &mut depth) {
+                next += crossing.len();
+                canvas = self.gpu_crossing(frame, canvas, plan, &crossing, depth, (at, scale))?;
+                continue;
+            }
+            let track = tracks[next];
+            next += 1;
             for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
-                canvas = self.gpu_layer(frame, canvas, plan, shown, at, scale)?;
+                canvas = self.gpu_layer(frame, canvas, plan, shown, depth.as_mut(), (at, scale))?;
             }
             for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
                 let opacity = f64::from(dip.color.a) / 255.0
@@ -413,8 +522,8 @@ impl Drawing {
         canvas: GpuPicture,
         sequence: &SequencePlan,
         shown: &Shown,
-        at: Time,
-        scale: f64,
+        depth: Option<&mut Depth>,
+        (at, scale): (Time, f64),
     ) -> Option<GpuPicture> {
         let plan = &shown.plan;
         let clip = &plan.clip;
@@ -422,14 +531,251 @@ impl Drawing {
         if matches!(plan.source, Source::Nothing) {
             return Some(canvas);
         }
-        let shape = self.gpu_shape(sequence, plan, time, scale);
-        let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         if matches!(plan.source, Source::Adjustment) {
+            let shape = self.gpu_shape(sequence, plan, time, scale);
+            let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
             return self.gpu_adjust(frame, canvas, (sequence, plan, time, scale), &ops);
         }
+        let size = (canvas.w, canvas.h);
+        if let (true, Some(depth)) = (plan.three_d, depth) {
+            let ready = match depth.ready.iter().position(|(id, _)| *id == clip.id) {
+                Some(place) => Some(depth.ready.swap_remove(place).1),
+                None => self.gpu_ready(frame, sequence, shown, at, scale, size)?,
+            };
+            // Media that cannot be read draws nothing, as on the CPU.
+            let Some(ready) = ready else {
+                return Some(canvas);
+            };
+            let drawn = self.gpu_project(frame, depth, (plan, time), &ready, size, None)?;
+            let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            let canvas = frame.composite(
+                canvas,
+                &drawn,
+                &Affine::IDENTITY,
+                whole,
+                ready.opacity,
+                plan.blend,
+            );
+            frame.release(drawn);
+            frame.release(ready.picture);
+            return Some(canvas);
+        }
+        let Some(ready) = self.gpu_ready(frame, sequence, shown, at, scale, size)? else {
+            return Some(canvas);
+        };
+        let whole = Rect::new(
+            0.0,
+            0.0,
+            f64::from(ready.picture.w),
+            f64::from(ready.picture.h),
+        );
+        let canvas = frame.composite(
+            canvas,
+            &ready.picture,
+            &ready.to_output,
+            ready.crop.unwrap_or(whole),
+            ready.opacity,
+            plan.blend,
+        );
+        frame.release(ready.picture);
+        Some(canvas)
+    }
+
+    /// How the clips in depth of `tracks` are seen and lit at `at`, with their pictures ready when a
+    /// light casts shadows, and only then, and the pictures of the lights all around.
+    fn gpu_depth(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        plan: &SequencePlan,
+        tracks: &[&TrackPlan],
+        at: Time,
+        scale: f64,
+        size: (usize, usize),
+    ) -> Option<Depth> {
+        let scene = three_d::Scene::at(plan, at, size);
+        let canvas = (size.0 as u32, size.1 as u32);
+        let mut depth_numbers = Vec::new();
+        let mut ready = Vec::new();
+        let mut casters = Vec::new();
+        if scene.casts_shadows() {
+            for shown in tracks
+                .iter()
+                .flat_map(|track| &track.shown)
+                .filter(|shown| {
+                    shown.shows(at)
+                        && shown.plan.three_d
+                        && !matches!(shown.plan.source, Source::Nothing | Source::Adjustment)
+                })
+            {
+                let Some(one) = self.gpu_ready(frame, plan, shown, at, scale, canvas)? else {
+                    continue;
+                };
+                let time = at - shown.plan.clip.start;
+                let (pw, ph) = (f64::from(one.picture.w), f64::from(one.picture.h));
+                let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &one.to_output, time);
+                let deep = three_d::depth_of(&shown.plan, time, size.1 as f64);
+                let number = depth_numbers.len() as u32;
+                depth_numbers.push(shown.plan.clip.id.clone());
+                casters.push((number, scene.casting_planes(&plane, deep), (pw, ph)));
+                ready.push((shown.plan.clip.id.clone(), one));
+            }
+        }
+        let mut around = Vec::new();
+        for (light, wanted) in scene.environments_by_light() {
+            let shown = plan
+                .tracks
+                .iter()
+                .find(|track| track.id.as_str() == wanted)
+                .and_then(|track| track.shown.iter().find(|shown| shown.shows(at)));
+            let Some(shown) = shown else {
+                continue;
+            };
+            if let Some(one) = self.gpu_ready(frame, plan, shown, at, scale, canvas)? {
+                around.push((light, one.picture));
+            }
+        }
+        let standing: Vec<kerf_gpu::depth::Caster<'_>> = casters
+            .into_iter()
+            .zip(&ready)
+            .map(|((clip, planes, (pw, ph)), (_, one))| {
+                let crop = one.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+                kerf_gpu::depth::Caster {
+                    clip,
+                    picture: &one.picture,
+                    opaque: one.opaque,
+                    opacity: one.opacity,
+                    crop: edges(crop),
+                    planes,
+                }
+            })
+            .collect();
+        let environments: Vec<kerf_gpu::depth::Environment<'_>> = around
+            .iter()
+            .map(|(light, picture)| kerf_gpu::depth::Environment {
+                light: *light,
+                picture,
+            })
+            .collect();
+        let built = frame.depth_scene(&scene.seen(), &standing, &environments)?;
+        drop(standing);
+        drop(environments);
+        for (_, picture) in around {
+            frame.release(picture);
+        }
+        Some(Depth {
+            scene,
+            built,
+            ready,
+            numbers: depth_numbers,
+        })
+    }
+
+    /// A clip in depth, on a picture of `size`, transparent around it.
+    fn gpu_project(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        depth: &mut Depth,
+        (plan, time): (&ClipPlan, Time),
+        ready: &GpuReady,
+        size: (u32, u32),
+        layers: Option<(&kerf_gpu::depth::Layers, u32)>,
+    ) -> Option<GpuPicture> {
+        let (pw, ph) = (f64::from(ready.picture.w), f64::from(ready.picture.h));
+        let number = depth.number(&plan.clip.id);
+        let scene = &depth.scene;
+        let plane = three_d::Plane::of(scene, plan, (pw, ph), &ready.to_output, time);
+        let smaller = three_d::read_smaller(scene, &plane, (pw, ph)).map(|by| {
+            let (sw, sh) = three_d::smaller_size((pw, ph), by);
+            let empty = frame.clear(sw as u32, sh as u32);
+            let whole = Rect::new(0.0, 0.0, pw, ph);
+            let small = frame.composite(
+                empty,
+                &ready.picture,
+                &Affine::scale(by, by),
+                whole,
+                1.0,
+                Blend::Normal,
+            );
+            (small, by)
+        });
+        let deep = three_d::depth_of(plan, time, f64::from(size.1));
+        let crop = ready.crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+        let drawn = frame.project(
+            &depth.built,
+            &kerf_gpu::depth::Project {
+                picture: smaller.as_ref().map_or(&ready.picture, |(small, _)| small),
+                by: smaller.as_ref().map_or(1.0, |(_, by)| *by) as f32,
+                clip: number,
+                plane: scene.plane_for_gpu(&plane),
+                back: (deep > 0.0).then(|| (scene.back_for_gpu(&plane, deep), ready.opaque)),
+                crop: edges(crop),
+            },
+            size,
+            layers,
+        );
+        if let Some((small, _)) = smaller {
+            frame.release(small);
+        }
+        drawn
+    }
+
+    /// Clips in depth that cross, each cut where it meets another, over `canvas`.
+    fn gpu_crossing(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        canvas: GpuPicture,
+        sequence: &SequencePlan,
+        run: &[&Shown],
+        depth: &mut Depth,
+        (at, scale): (Time, f64),
+    ) -> Option<GpuPicture> {
+        let size = (canvas.w, canvas.h);
+        let mut layers = frame.depth_layers(size, run.len() as u32);
+        for shown in run {
+            let id = &shown.plan.clip.id;
+            let ready = match depth.ready.iter().position(|(kept, _)| kept == id) {
+                Some(place) => Some(depth.ready.swap_remove(place).1),
+                None => self.gpu_ready(frame, sequence, shown, at, scale, size)?,
+            };
+            let Some(ready) = ready else {
+                continue;
+            };
+            let row = layers.laid();
+            let time = at - shown.plan.clip.start;
+            let drawn = self.gpu_project(
+                frame,
+                depth,
+                (&shown.plan, time),
+                &ready,
+                size,
+                Some((&layers, row)),
+            )?;
+            frame.lay(&mut layers, &drawn, ready.opacity, shown.plan.blend);
+            frame.release(drawn);
+            frame.release(ready.picture);
+        }
+        frame.by_depth(canvas, layers)
+    }
+
+    /// A shown clip's picture with its effects and reveal done, as [`Drawing::ready`] makes it. `None`
+    /// when the frame has to go to the CPU, and `Some(None)` when the clip draws nothing.
+    fn gpu_ready(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        at: Time,
+        scale: f64,
+        canvas: (u32, u32),
+    ) -> Option<Option<GpuReady>> {
+        let plan = &shown.plan;
+        let clip = &plan.clip;
+        let time = at - clip.start;
+        let shape = self.gpu_shape(sequence, plan, time, scale);
+        let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         // Media that cannot be read draws nothing, as on the CPU.
         let Some(picture) = self.gpu_source(frame, sequence, plan, time, scale, &shape)? else {
-            return Some(canvas);
+            return Some(None);
         };
         let mut picture = picture;
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
@@ -446,7 +792,7 @@ impl Drawing {
                 Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
             let m = place.then_apply(&Affine::scale(1.0 / source_per, 1.0 / source_per));
             let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
-            let boxed = frame.filled(canvas.w, canvas.h, [0.0, 0.0, 0.0, 1.0]);
+            let boxed = frame.filled(canvas.0, canvas.1, [0.0, 0.0, 0.0, 1.0]);
             let boxed = frame.composite(
                 boxed,
                 &picture,
@@ -469,11 +815,11 @@ impl Drawing {
                 Op::Held(op) => op.run_held(frame, picture)?,
                 Op::Gamut(op) => op.run_in_gamut(frame, picture)?,
                 Op::Correct(correction) => frame.correct(picture, correction),
-                Op::HeldCorrect(correction) => filmcraft::vfx::gpu::Kernel::held(
-                    frame,
-                    picture,
-                    |frame, unit| Some(frame.correct(unit, correction)),
-                )?,
+                Op::HeldCorrect(correction) => {
+                    filmcraft::vfx::gpu::Kernel::held(frame, picture, |frame, unit| {
+                        Some(frame.correct(unit, correction))
+                    })?
+                }
             };
         }
         let reveal = shown
@@ -494,17 +840,20 @@ impl Drawing {
             _ => 1.0,
         };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
-        let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
-        let canvas = frame.composite(
-            canvas,
-            &picture,
-            &shape.to_output,
-            crop.unwrap_or(whole),
+        let opaque = ops.is_empty()
+            && reveal.is_none()
+            && clip.masks.is_empty()
+            && match &plan.source {
+                Source::Solid(color) => color.a == 255,
+                _ => plan.letterboxed,
+            };
+        Some(Some(GpuReady {
+            picture,
+            to_output: shape.to_output,
+            crop,
             opacity,
-            plan.blend,
-        );
-        frame.release(picture);
-        Some(canvas)
+            opaque,
+        }))
     }
 
     /// An adjustment layer, as [`Drawing::adjust`] draws it: its effects on the picture beneath
@@ -525,11 +874,11 @@ impl Drawing {
                 Op::Held(op) => op.run_held(frame, adjusted)?,
                 Op::Gamut(op) => op.run_in_gamut(frame, adjusted)?,
                 Op::Correct(correction) => frame.correct(adjusted, correction),
-                Op::HeldCorrect(correction) => filmcraft::vfx::gpu::Kernel::held(
-                    frame,
-                    adjusted,
-                    |frame, unit| Some(frame.correct(unit, correction)),
-                )?,
+                Op::HeldCorrect(correction) => {
+                    filmcraft::vfx::gpu::Kernel::held(frame, adjusted, |frame, unit| {
+                        Some(frame.correct(unit, correction))
+                    })?
+                }
             };
         }
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
@@ -614,4 +963,14 @@ impl Drawing {
             Source::Adjustment | Source::Nothing => return None,
         }))
     }
+}
+
+/// A rectangle by its edges: left, top, right, bottom.
+fn edges(rect: Rect) -> [f32; 4] {
+    [
+        rect.x as f32,
+        rect.y as f32,
+        rect.right() as f32,
+        rect.bottom() as f32,
+    ]
 }

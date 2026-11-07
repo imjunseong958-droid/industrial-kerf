@@ -20,6 +20,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 use wgpu::util::DeviceExt;
 
+pub mod depth;
+
 pub use wgpu;
 
 /// The format of every working picture.
@@ -38,6 +40,8 @@ type TextureKey = (u32, u32, wgpu::TextureFormat, wgpu::TextureUsages);
 struct Pool {
     free: HashMap<TextureKey, Vec<wgpu::Texture>>,
     staging: HashMap<u64, Vec<wgpu::Buffer>>,
+    /// Those of clips in depth, by size.
+    buffers: HashMap<u64, Vec<wgpu::Buffer>>,
     bytes: usize,
 }
 
@@ -81,6 +85,7 @@ pub struct Gpu {
     /// Held while kernels build: a device's error scopes nest, so two at once would cross.
     building: Mutex<()>,
     failed: Arc<AtomicBool>,
+    depth: OnceLock<Option<depth::Kernels>>,
 }
 
 /// A frame as it decoded, in planes of Y'CbCr, for the GPU to make into RGB rather than have it made
@@ -547,6 +552,7 @@ impl Gpu {
             pool: Mutex::default(),
             building: Mutex::new(()),
             failed,
+            depth: OnceLock::new(),
         })
     }
 
@@ -583,6 +589,7 @@ impl Gpu {
                 }),
             working: HashMap::new(),
             used: Vec::new(),
+            used_buffers: Vec::new(),
         }
     }
 
@@ -655,6 +662,8 @@ pub struct Frame<'a> {
     working: HashMap<(u32, u32), Vec<Picture>>,
     /// Every texture the frame holds, to give back when it is submitted.
     used: Vec<(TextureKey, wgpu::Texture)>,
+    /// Every working buffer it holds, the same way.
+    used_buffers: Vec<wgpu::Buffer>,
 }
 
 const WORKING_USAGE: wgpu::TextureUsages = wgpu::TextureUsages::TEXTURE_BINDING
@@ -1254,8 +1263,8 @@ impl<'a> Frame<'a> {
     /// A picture the CPU drew, such as a title.
     pub fn image(&mut self, image: &Image) -> Picture {
         let (w, h) = (image.w as u32, image.h as u32);
-        let bytes: Vec<u8> = image.px.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let source = self.upload(WORKING_FORMAT, (w, h), &bytes, w * 16);
+        let bytes: &[u8] = bytemuck::cast_slice(&image.px);
+        let source = self.upload(WORKING_FORMAT, (w, h), bytes, w * 16);
         // Into a working picture, which later commands may write.
         let out = self.take(w, h);
         self.encoder.copy_texture_to_texture(
@@ -1576,6 +1585,8 @@ impl<'a> Frame<'a> {
         let submission = self.gpu.queue.submit([encoder.finish()]);
         self.working.clear();
         self.gpu.give_back(std::mem::take(&mut self.used));
+        self.gpu
+            .keep_buffers(std::mem::take(&mut self.used_buffers));
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

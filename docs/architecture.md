@@ -79,14 +79,15 @@ Measured on an Apple Silicon Mac with `examples/frame_bench.rs` in
 A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title took
 3.3 s against 7.4 s, 46 dB from the CPU's after encoding.
 
-**What the GPU draws:** media, nested sequences, solids, titles, captions; masks,
+**What the GPU draws:** media, nested sequences, solids, titles, captions; clips in depth with their
+lights, shadows, and solids; masks,
 crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes,
 adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
 `FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
 Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 playful looks and all
 18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
 transition is layers rather than a mix.
-**What sends a frame to the CPU:** the transitions carried from FilmCraft, every other
+**What sends a frame to the CPU:** a camera with an `aperture`, the transitions carried from FilmCraft, every other
 effect (other lights, stylize, Ultra Key's Choke and Soften, and the kept EffectCraft ones, which is
 what Film and Zoom Through need), and a Lumetri using a LUT, curves, sharpening, or an HSL secondary, which none of the 18 grades does. In HDR, so does an effect that
 needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
@@ -191,11 +192,32 @@ Has: keyframes (hold, linear, easings, Bezier curves) with a graph editor in the
 word, set in variable fonts at any axis (`wght`, `wdth`, `slnt`, `opsz`, `ital`, which animate, in `glyf` or CFF2 outlines, with line height left at the font's own since none of those axes changes it by more than 0.7% in any of 50 variable faces tried), shapes whose outlines combine and offset (`fx shape.outline@1`, `offset`, on a sweep carried from
 EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
-perspective is true and lighting is per pixel, on the CPU. Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
+perspective is true and lighting is per pixel, on the GPU where there is one (see below). Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
-reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
+reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: on the CPU at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
 carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.
-A clip with a `depth` is a solid with no mesh: each pixel's ray goes between the planes of its front and its back, half a picture's pixel at a time, reading the picture's alpha, and takes the color of whatever more of it it reaches, lit by the plane's normal at the front and by the slope of the alpha on a side. So a title's sides are its letters', its holes stay holes, and its edges are as soft as a pixel. What is empty of alpha is passed over by a summed table without being read. Lights fall only on the way a solid's surface faces, and its shadow is what five planes through it cast between them. A 1080p title takes 25 ms for 16 flat, and 4K 108 for 70; with a soft shadow on a wall, 200 and 763. An environment light (`kind=environment image=V3`) is a track's picture wrapped around the scene as a panorama and reduced to how much light reaches each way a surface can face, a table of 32 by 16 made for each frame, which is all that a surface with no gloss shows of it, and such a frame is not kept, since it reads another track.
+A clip with a `depth` is a solid with no mesh: each pixel's ray goes between the planes of its front and its back, half a picture's pixel at a time, reading the picture's alpha, and takes the color of whatever more of it it reaches, lit by the plane's normal at the front and by the slope of the alpha on a side. So a title's sides are its letters', its holes stay holes, and its edges are as soft as a pixel. What is empty of alpha is passed over by a summed table without being read. Lights fall only on the way a solid's surface faces, and its shadow is what five planes through it cast between them. On the CPU a 1080p title takes 25 ms for 16 flat, and 4K 108 for 70; with a soft shadow on a wall, 200 and 763. An environment light (`kind=environment image=V3`) is a track's picture wrapped around the scene as a panorama and reduced to how much light reaches each way a surface can face, a table of 32 by 16 made for each frame, which is all that a surface with no gloss shows of it, and such a frame is not kept, since it reads another track.
+
+On the GPU all of that but the camera's blur is one kernel (`kerf-gpu/src/depth.wgsl`) doing the same arithmetic in 32 bits, with the compositor's 64-bit numbers measured from the eye so that nothing is lost by it. A kernel cannot take a varying number of textures, so what stands in a light's way goes into buffers first: its alpha for a hard shadow, its summed table for a soft one, neither for a solid color, and a track around the scene into its table of light. Clips that cross go down one below another in a tall texture and are put in order at each pixel (`by_depth.wgsl`). Held to the CPU by `tests/depth_gpu.rs` and `tests/gpu.rs`: on flat clips, crossings, hard and soft shadows, solids, and the environment light, 960x540, the mean is at most 0.001 of 255, and at most 0.013% of pixels are off by more than 2, those on a solid's sides facing straight up or down, where a table of light has no one way round; the test allows 0.05 and 0.05%. A camera's `aperture` was not carried over, so its frames stay on the CPU.
+
+Median frame with `examples/motion_bench.rs` on an M1 with 8 GB, in ms, the bytes read back included:
+
+| Scene | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
+|---|---|---|---|---|
+| Two apart | 26 | 10 | 102 | 38 |
+| Two crossing | 28 | 12 | 110 | 44 |
+| Lit | 36 | 12 | 142 | 41 |
+| Hard shadow | 51 | 12 | 204 | 42 |
+| Soft shadow | 73 | 13 | 292 | 48 |
+| Soft shadow from a point | 116 | 16 | 469 | 56 |
+| Soft shadow all over | 139 | 16 | 563 | 58 |
+| Soft shadow of a title | 98 | 25 | 393 | 82 |
+| Solid square | 20 | 7 | 79 | 26 |
+| Solid title | 23 | 18 | 95 | 60 |
+| Flat title | 14 | 13 | 57 | 48 |
+| Solid title with a soft shadow | 176 | 33 | 698 | 130 |
+
+A title gains least, since its glyphs are still drawn on the CPU and go up as floats. So depth plays past 24 fps at 1080p in every row here; at 4K a hard shadow is about 24 fps, a soft one 17 to 21, and a solid title with a soft shadow 8.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model.
@@ -212,6 +234,7 @@ the clip would be if those stayed. A plane edge on or wholly behind the camera s
 
 To add:
 
+- A camera's `aperture` on the GPU: its frames are the last in depth on the CPU.
 - A path on a clip in depth with `orient` and an anchor off its middle, turned: its anchor leaves the plane by a different amount at each
   point, which no one map shows, so it shows no curve rather than a wrong one.
 - EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has. Bevels are its next piece for a solid.

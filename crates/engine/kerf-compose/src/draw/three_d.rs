@@ -711,6 +711,122 @@ impl Plane {
     }
 }
 
+fn narrow(a: Vector) -> [f32; 3] {
+    [a[0] as f32, a[1] as f32, a[2] as f32]
+}
+
+impl Scene {
+    /// Whether a camera here blurs what is out of focus, which only the CPU does.
+    pub(super) fn has_aperture(&self) -> bool {
+        self.aperture > 0.0
+    }
+
+    /// The tracks of the lights all around, by the place of each among the lights.
+    pub(super) fn environments_by_light(&self) -> Vec<(usize, String)> {
+        self.lights
+            .iter()
+            .enumerate()
+            .filter_map(|(place, light)| match light {
+                Light::Environment(_, track, _) => Some((place, track.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How this scene is seen and lit, for the GPU: its world from the eye, in 32 bits.
+    pub(super) fn seen(&self) -> kerf_gpu::depth::Seen {
+        use kerf_gpu::depth::{Light as GpuLight, LightKind};
+        let lights = self
+            .lights
+            .iter()
+            .map(|light| match light {
+                Light::Ambient(color) => GpuLight {
+                    kind: LightKind::Ambient,
+                    place: [0.0; 3],
+                    color: *color,
+                    shadow: 0.0,
+                    wide: 0.0,
+                },
+                Light::Point(place, color, shadow, radius) => GpuLight {
+                    kind: LightKind::Point,
+                    place: narrow(minus(*place, self.eye)),
+                    color: *color,
+                    shadow: *shadow,
+                    wide: *radius as f32,
+                },
+                Light::Directional(way, color, shadow, spread) => GpuLight {
+                    kind: LightKind::Directional,
+                    place: narrow(times(*way, -1.0)),
+                    color: *color,
+                    shadow: *shadow,
+                    wide: *spread as f32,
+                },
+                Light::Environment(color, _, _) => GpuLight {
+                    kind: LightKind::Environment,
+                    place: [0.0; 3],
+                    color: *color,
+                    shadow: 0.0,
+                    wide: 0.0,
+                },
+            })
+            .collect();
+        kerf_gpu::depth::Seen {
+            right: narrow(self.right),
+            down: narrow(self.down),
+            forward: narrow(self.forward),
+            focal: self.focal as f32,
+            center: [self.center.0 as f32, self.center.1 as f32],
+            near: (NEAR * self.height) as f32,
+            lights,
+            spiral: spiral()
+                .iter()
+                .map(|(a, b)| [*a as f32, *b as f32])
+                .collect(),
+            share: share() as f32,
+        }
+    }
+
+    /// `plane`, for the GPU.
+    pub(super) fn plane_for_gpu(&self, plane: &Plane) -> kerf_gpu::depth::Plane {
+        let per = |way: Vector| 1.0 / dot(way, way).sqrt().max(1e-12);
+        kerf_gpu::depth::Plane {
+            origin: narrow(minus(plane.origin, self.eye)),
+            normal: narrow(plane.normal),
+            to_u: narrow(times(
+                cross(plane.down, plane.perpendicular),
+                1.0 / plane.area,
+            )),
+            to_v: narrow(times(
+                cross(plane.perpendicular, plane.across),
+                1.0 / plane.area,
+            )),
+            across: narrow(unit(plane.across)),
+            down: narrow(unit(plane.down)),
+            per_across: per(plane.across) as f32,
+            per_down: per(plane.down) as f32,
+        }
+    }
+
+    /// The planes of a clip for what stands in a light's way: itself, and through its depth as
+    /// [`Caster::through_its_depth`] has them.
+    pub(super) fn casting_planes(&self, plane: &Plane, depth: f64) -> Vec<kerf_gpu::depth::Plane> {
+        if depth <= 0.0 {
+            return vec![self.plane_for_gpu(plane)];
+        }
+        (0..SLICES)
+            .map(|slice| {
+                let by = depth * slice as f64 / (SLICES - 1) as f64;
+                self.plane_for_gpu(&plane.pushed(by))
+            })
+            .collect()
+    }
+
+    /// Where the back of a solid `depth` deep lies, from the eye.
+    pub(super) fn back_for_gpu(&self, plane: &Plane, depth: f64) -> [f32; 3] {
+        narrow(minus(plane.pushed(depth).origin, self.eye))
+    }
+}
+
 /// What a clip does to the rays from a pixel to a light with a size.
 enum Takes {
     Nothing,
@@ -1034,22 +1150,13 @@ fn projected(
 ) -> (Image, Vec<f32>) {
     let (pw, ph) = (picture.w as f64, picture.h as f64);
     let plane = Plane::of(scene, plan, (pw, ph), to_output, time);
-    // Far smaller than it was drawn, it reads from a smaller copy, or it would sparkle.
-    let to_eye = dot(minus(plane.middle, scene.eye), scene.forward).max(1.0);
-    let shrink = (to_eye / scene.focal)
-        / (dot(plane.across, plane.across) * dot(plane.down, plane.down))
-            .powf(0.25)
-            .max(1e-6);
-    let (source, by) = if shrink >= 2.0 {
-        let by = 1.0 / shrink.min(16.0);
-        let small = picture.transformed(
-            ((pw * by).ceil() as usize).max(1),
-            ((ph * by).ceil() as usize).max(1),
-            &Affine::scale(by, by),
-        );
-        (std::borrow::Cow::Owned(small), by)
-    } else {
-        (std::borrow::Cow::Borrowed(picture), 1.0)
+    let (source, by) = match read_smaller(scene, &plane, (pw, ph)) {
+        Some(by) => {
+            let (sw, sh) = smaller_size((pw, ph), by);
+            let small = picture.transformed(sw, sh, &Affine::scale(by, by));
+            (std::borrow::Cow::Owned(small), by)
+        }
+        None => (std::borrow::Cow::Borrowed(picture), 1.0),
     };
     let mut out = Image::new(w, h);
     let crop = crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
@@ -1143,6 +1250,25 @@ fn projected(
             .for_each(|(y, row)| draw_row(y, row, None));
         (out, Vec::new())
     }
+}
+
+/// How much of its size to read a picture at when it lands far smaller than it was drawn, or it would
+/// sparkle; `None` for all of it.
+pub(super) fn read_smaller(scene: &Scene, plane: &Plane, _size: (f64, f64)) -> Option<f64> {
+    let to_eye = dot(minus(plane.middle, scene.eye), scene.forward).max(1.0);
+    let shrink = (to_eye / scene.focal)
+        / (dot(plane.across, plane.across) * dot(plane.down, plane.down))
+            .powf(0.25)
+            .max(1e-6);
+    (shrink >= 2.0).then(|| 1.0 / shrink.min(16.0))
+}
+
+/// The size of a picture read at `by` of its size.
+pub(super) fn smaller_size((pw, ph): (f64, f64), by: f64) -> (usize, usize) {
+    (
+        ((pw * by).ceil() as usize).max(1),
+        ((ph * by).ceil() as usize).max(1),
+    )
 }
 
 /// How deep a clip is at clip time `time`, in pixels of a frame `height` high.

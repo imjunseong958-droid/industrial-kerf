@@ -1356,6 +1356,7 @@ dependencies = [
 name = "kerf-gpu"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "kerf-color",
  "kerf-draw",
  "pollster",

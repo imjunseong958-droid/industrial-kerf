@@ -72,6 +72,19 @@ fn scenes() -> Vec<(&'static str, String)> {
     let over = |body: &str| format!("{CLIP}{OVER}{body}");
     let mut scenes = vec![
         ("scaled", clip("      set scale=0.8\n")),
+        ("in depth", clip("      set three_d=true z=0.3 rotate_y=25 rotate_x=-10\n")),
+        (
+            "in depth, far off and cropped",
+            clip("      set three_d=true z=5 crop_l=0.2 rotate_y=-15\n"),
+        ),
+        (
+            "in depth, solid and lit",
+            format!("{CLIP}      set three_d=true scale=0.5 depth=0.2 rotate_y=30\n  track V2 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 z=1\n"),
+        ),
+        (
+            "in depth, with a soft shadow",
+            format!("{CLIP}      set three_d=true z=0.2\n  track V2 video\n    clip c2 media=m src=4f at=0f dur=20f\n      set three_d=true scale=0.4 z=-0.3\n      mask k1 ellipse=0.5,0.5,0.4,0.4\n  track V3 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=0.2 z=1 shadow=1 size=6\n"),
+        ),
         ("moved", clip("      set x=0.1 y=-0.05 scale=0.7\n")),
         ("turned", clip("      set rotation=17 scale=0.8\n")),
         ("flipped", clip("      set scale_x=-1 scale=0.9\n")),

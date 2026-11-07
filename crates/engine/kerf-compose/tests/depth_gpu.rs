@@ -1,0 +1,227 @@
+//! Clips in depth on the GPU against the CPU, the reference: the same scene drawn both ways, within
+//! what the architecture says it comes to. Each has to be a scene the GPU really draws, so a fallback
+//! cannot pass for a match. On a machine without a GPU there is nothing to compare.
+
+use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
+use kerf_lang::parse_document;
+use kerf_model::{Catalog, Rate};
+
+/// The most a scene may differ from the CPU on average over the frame, in 255ths. What each scene
+/// comes to is printed with `--nocapture`, and `docs/architecture.md` says what these hold.
+const MEAN: f64 = 0.05;
+/// How far a pixel may be off, in 255ths, and what share of a frame may be off by more. Those are a
+/// solid's sides facing straight up or down, where a table of light has no one way round.
+const OFF_BY: u8 = 2;
+const SHARE_OFF: f64 = 0.0005;
+
+fn compositor(body: &str, accel: Accel) -> Compositor {
+    let text = if body.starts_with("sequence") {
+        format!("kerf 1\nproject name=\"t\"\n{body}")
+    } else {
+        format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=960x540 audio=48000\n{body}")
+    };
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            accel,
+            frame_folder: None,
+            keep_frames: false,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+}
+
+fn difference(a: &Frame, b: &Frame) -> (f64, f64, u8) {
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let (mut sum, mut off, mut most) = (0u64, 0u64, 0u8);
+    for (a, b) in a.rgba.chunks_exact(4).zip(b.rgba.chunks_exact(4)) {
+        let worst = (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0);
+        sum += u64::from(worst);
+        off += u64::from(worst > OFF_BY);
+        most = most.max(worst);
+    }
+    let pixels = u64::from(a.width) * u64::from(a.height);
+    (sum as f64 / pixels as f64, off as f64 / pixels as f64, most)
+}
+
+/// The scene drawn both ways, which has to draw something and to differ by no more than is stated.
+fn holds(name: &str, body: &str) {
+    let at = Rate::FPS_24.time_of(12);
+    if kerf_gpu::shared().is_none() {
+        eprintln!("{name}: no GPU here");
+        return;
+    }
+    let gpu = compositor(body, Accel::Always);
+    assert!(gpu.draws_on_gpu(at, 1.0), "{name} went to the CPU");
+    let cpu = compositor(body, Accel::Never);
+    let (drawn, reference) = (gpu.frame(at, 1.0), cpu.frame(at, 1.0));
+    assert!(
+        reference.rgba.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
+        "{name} draws nothing"
+    );
+    let (mean, off, most) = difference(&drawn, &reference);
+    println!(
+        "{name:<28} mean {mean:.3}, off by >{OFF_BY} {:.3}%, most {most}",
+        off * 100.0
+    );
+    assert!(
+        mean <= MEAN && off <= SHARE_OFF,
+        "{name}: mean {mean:.3}, {:.3}% off by more than {OFF_BY}, at most {most}",
+        off * 100.0
+    );
+}
+
+/// A white wall, a blue square before it, and a light.
+fn wall(light: &str, square: &str) -> String {
+    format!(
+        "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip s {square}\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+    )
+}
+
+const SQUARE: &str =
+    "gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3";
+const TITLE: &str =
+    "gen=title@1 at=0f dur=24f\n      set text=\"Soft\" size=0.4 three_d=true z=-0.2";
+
+#[test]
+fn flat_clips_hold_to_the_cpu() {
+    holds(
+        "apart",
+        "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.6 z=0.2 rotate_y=20\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.4 z=-0.3 rotate_y=-20\n",
+    );
+    holds(
+        "far smaller",
+        "  track V1 video\n    clip a gen=title@1 at=0f dur=24f\n      set text=\"Far off\" size=0.3 three_d=true z=4\n",
+    );
+    holds(
+        "camera moved",
+        "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffaa33 three_d=true rotate_x=25 scale=0.7\n  track V2 video\n    clip c gen=camera@1 at=0f dur=24f\n      set x=0.1 y=-0.1 z=-0.2 pan=10 tilt=-5 roll=8 fov=50\n",
+    );
+}
+
+#[test]
+fn crossing_clips_hold_to_the_cpu() {
+    holds(
+        "two crossing",
+        "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.6 z=0.1 rotate_y=45\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.6 rotate_y=-30\n",
+    );
+    holds(
+        "three crossing, one blended",
+        "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.6 rotate_y=45\n  track V2 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.6 rotate_y=-30 opacity=0.6\n  track V3 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.5 rotate_x=40 blend=screen\n",
+    );
+}
+
+#[test]
+fn hard_shadows_hold_to_the_cpu() {
+    holds("lit", &wall("kind=directional x=0.2 z=1", SQUARE));
+    holds(
+        "directional shadow",
+        &wall("kind=directional x=0.2 z=1 shadow=1", SQUARE),
+    );
+    holds(
+        "point shadow",
+        &wall("x=0.2 y=-0.1 z=-0.6 shadow=0.8", SQUARE),
+    );
+    holds(
+        "shadow of a title",
+        &wall("kind=directional x=0.2 z=1 shadow=1", TITLE),
+    );
+}
+
+#[test]
+fn soft_shadows_hold_to_the_cpu() {
+    holds(
+        "soft directional",
+        &wall("kind=directional x=0.2 z=1 shadow=1 size=5", SQUARE),
+    );
+    holds(
+        "soft point",
+        &wall("x=0.2 y=-0.1 z=-0.6 shadow=1 size=0.1", SQUARE),
+    );
+    holds(
+        "soft all over",
+        &wall(
+            "kind=directional z=1 shadow=1 size=30",
+            "gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true z=-0.3",
+        ),
+    );
+    holds(
+        "soft shadow of a title",
+        &wall("kind=directional x=0.2 z=1 shadow=1 size=10", TITLE),
+    );
+    holds(
+        "soft through two",
+        "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.3 x=-0.1\n  track V3 video\n    clip b gen=title@1 at=0f dur=24f\n      set text=\"Two\" size=0.3 three_d=true z=-0.5 opacity=0.7\n  track V4 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=0.1 z=1 shadow=0.9 size=8\n",
+    );
+}
+
+#[test]
+fn solids_hold_to_the_cpu() {
+    let light = "kind=directional x=-0.4 y=0.3 z=1";
+    holds(
+        "deep square",
+        &format!(
+            "  track V1 video\n    clip s gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.3 x=-0.2 depth=0.3\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+        ),
+    );
+    holds(
+        "deep title turned",
+        &format!(
+            "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 rotate_y=25\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set {light}\n"
+        ),
+    );
+    holds(
+        "deep title with a soft shadow",
+        "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#808080 three_d=true z=0.3\n  track V2 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 y=0.3 z=1 shadow=1 size=4\n",
+    );
+    holds(
+        "deep title, no light",
+        "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Depth\" size=0.3 three_d=true depth=0.1 rotate_y=-30 rotate_x=10\n",
+    );
+}
+
+#[test]
+fn a_light_all_around_holds_to_the_cpu() {
+    let around = "  track V9 video enabled=false\n    clip e gen=shape@1 at=0f dur=24f\n      set kind=ellipse width=0.6 height=0.9 fill=#ff8000\n";
+    holds(
+        "environment on flat clips",
+        &format!(
+            "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.5 rotate_y=35\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=environment image=V9 intensity=1.5\n{around}"
+        ),
+    );
+    holds(
+        "environment on a solid",
+        &format!(
+            "  track V1 video\n    clip t gen=title@1 at=0f dur=24f\n      set text=\"Lit\" size=0.4 three_d=true depth=0.1 rotate_y=30\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=environment image=V9\n{around}"
+        ),
+    );
+}
+
+#[test]
+fn what_goes_into_a_clip_in_depth_holds_to_the_cpu() {
+    holds(
+        "effect and mask on a clip in depth",
+        "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true scale=0.7 rotate_y=30\n      fx color.basic exposure=-0.5\n      mask m ellipse=0.5,0.5,0.3,0.4 feather=8\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set x=0.2 z=-0.5 shadow=1\n",
+    );
+    holds(
+        "a sequence drawn in depth, itself in depth",
+        "  track V1 video\n    clip n seq=inner src=0f at=0f dur=24f\n      set three_d=true rotate_y=25 scale=0.8\n  track V2 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=0.3 z=1 shadow=1\nsequence inner rate=24 size=960x540 audio=48000\n  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#40c040 three_d=true scale=0.5 rotate_x=30\n  track V2 video\n    clip b gen=title@1 at=0f dur=24f\n      set text=\"In\" size=0.3 three_d=true z=-0.2\n",
+    );
+}
+
+#[test]
+fn a_clip_in_depth_in_hdr_holds_to_the_cpu() {
+    for color in ["rec2100-pq", "rec2100-hlg"] {
+        holds(
+            color,
+            &format!(
+                "sequence s1 rate=24 size=960x540 audio=48000 color={color}\n  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n  track V2 video\n    clip s {SQUARE}\n  track V3 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=directional x=0.2 z=1 shadow=1 size=5 intensity=2\n"
+            ),
+        );
+    }
+}
