@@ -627,6 +627,16 @@ private slots:
         QCOMPARE(passing.colorOf(QStringLiteral("Pass")), tokens::color(tokens::ink3));
         QCOMPARE(passing.colorOf(QStringLiteral("−23.1 LUFS")), tokens::color(tokens::ink2));
 
+        // In the tray as a laptop has it, a row's name still reads: what it measured gives way
+        // to it, and starts with the measure.
+        QcRow clipped(QJsonObject{{"code", "text.clipped"}, {"name", "Clipped text"}, {"passed", false}, {"commentId", "c-1"}, {"value", "1 at 00:00:03:00"}});
+        clipped.resize(220, 28);
+        TextRecorder narrow;
+        clipped.render(&narrow);
+        QCOMPARE(narrow.colorOf(QStringLiteral("Clipped text")), tokens::color(tokens::ink));
+        QCOMPARE(narrow.colorOf(QStringLiteral("1 ")), tokens::color(tokens::neg));
+        QCOMPARE(ui::tipName(&clipped), QStringLiteral("Clipped text: 1 at 00:00:03:00"));
+
         // A new check over the result keeps the rows and shows its progress.
         bus.dispatch(QJsonObject{{"type", "check"}, {"status", "running"}, {"progress", 0.1}});
         QCOMPARE(view.rowCount(), 8);
@@ -677,6 +687,13 @@ private slots:
         bus.dispatch(mockupCheck());
         QCOMPARE(tray.paneMeta(QStringLiteral("qc")), QStringLiteral("6 of 8 pass"));
         QCOMPARE(tray.findChild<QLabel *>(QStringLiteral("finishQcStandards"))->text(), QStringLiteral("R128 · Rec.709 · captions"));
+        // In the pane a laptop gives it, that line stops at the card's edge rather than past it.
+        QWidget *qcPane = tray.pane(QStringLiteral("qc"));
+        const QSize wasPane = qcPane->size();
+        qcPane->resize(220, 200);
+        qcPane->layout()->activate();
+        QVERIFY(tray.findChild<QLabel *>(QStringLiteral("finishQcStandards"))->geometry().right() < qcPane->width());
+        qcPane->resize(wasPane);
 
         QCOMPARE(FinishTray::highlightMs, 1200);
         emit bus.highlightPane(QStringLiteral("scopes"));

@@ -3,7 +3,8 @@
 // The QC pane of the Finish tray and the Deliver tray's preflight
 // (mockup-spec 12, 13): one 28-point row per row of the bridge's `check`
 // summary (plan section 3) — a pass or fail dot, the check's name, what it
-// measured against what it allows (neg when failing), and "In thread" for a
+// measured against what it allows (neg when failing, and giving way to the
+// name in a narrow tray; the row's tip has both), and "In thread" for a
 // failing row mirrored to a comment (it opens that thread) or "Pass".
 //
 // Before any check it is an empty state with Run QC (the registry's qc.run,

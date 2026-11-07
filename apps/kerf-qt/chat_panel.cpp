@@ -1129,6 +1129,13 @@ void ChatPanel::scrollToThread(const QString &threadId) {
     m_list->verticalScrollBar()->setValue(std::max(0, top - kListTop));
 }
 
+void ChatPanel::setCoveredBelow(int pixels) {
+    if (pixels == m_coveredBelow) return;
+    const QMargins list = m_listLayout->contentsMargins();
+    m_listLayout->setContentsMargins(list.left(), list.top(), list.right(), list.bottom() - m_coveredBelow + pixels);
+    m_coveredBelow = pixels;
+}
+
 void ChatPanel::openThread(const QString &threadId, bool flash) {
     if (!m_model) return;
     const ReviewModel::Thread *thread = m_model->threadOf(threadId);

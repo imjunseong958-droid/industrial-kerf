@@ -284,7 +284,10 @@ sheet never covers the timeline, so a drag from Media or Effects reaches it.
 **Trays.** Finish (⌥⇧3: scopes, loudness and QC) and Deliver (⌥⇧4: masters,
 preflight, loudness and paperwork) are overlays 344 tall across the content beside
 the sidebar, at the bottom; the picture and the conversation stay where they are
-underneath. Esc returns to the base state (⌥⇧2). The colour wheels are in the
+underneath, with that much more for the conversation to scroll, so a thread
+opened from a QC row's In thread comes out from under. A QC row's name reads
+before what it measured, which gives way to it in a narrow tray; the row's tip
+has both. Esc returns to the base state (⌥⇧2). The colour wheels are in the
 Inspector sheet while Finish is open, and the Inspector's Deliver pane while
 Deliver is.
 

@@ -63,18 +63,20 @@ saves. `kerf_draw` stays the reference. Kernels are tested against it per value
 (`kerf-compose/tests/gpu.rs`). The kernels build on a background thread, and the
 CPU draws until they are ready. `KERF_GPU=0` turns all of this off.
 
-Measured on an Apple Silicon Mac with `examples/frame_bench.rs` in
-`kerf-compose`, on 4K H.264 test footage, decode included, median frame:
+Measured on an M1 with 8 GB with `examples/frame_bench.rs` in
+`kerf-compose`, on 4K H.264 test footage, decode included, median frame. The bench gives no number until
+a scene's footage has decoded and its frames differ. The machine warms over a long run, which reads up to
+15% slower on the CPU by its end, so a difference smaller than that says little:
 
 | Scene | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
 |---|---|---|---|---|
-| Placed, nothing else | 59 fps | 87 fps | 18 fps | 25 fps |
-| One Lumetri | 29 fps | 78 fps | 9 fps | 24 fps |
-| Gaussian blur, radius 40 | 33 fps | 42 fps | 8 fps | 15 fps |
-| Four layers | 31 fps | 53 fps | 9 fps | 15 fps |
-| One glow | 13 fps | 15 fps | 3 fps | 5 fps |
-| Ultra Key | 25 fps | 80 fps | 8 fps | 32 fps |
-| Radial Zoom Blur, amount 30 | 5 fps | 33 fps | 0.7 fps | 6 fps |
+| Placed, nothing else | 55 fps | 92 fps | 15 fps | 30 fps |
+| One Lumetri | 29 fps | 82 fps | 8 fps | 38 fps |
+| Gaussian blur, radius 40 | 35 fps | 49 fps | 9 fps | 17 fps |
+| Four layers | 28 fps | 53 fps | 8 fps | 14 fps |
+| One glow | 13 fps | 20 fps | 3 fps | 5 fps |
+| Ultra Key | 22 fps | 85 fps | 7 fps | 38 fps |
+| Radial Zoom Blur, amount 30 | 4 fps | 34 fps | 0.5 fps | 6 fps |
 
 A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title took
 3.3 s against 7.4 s, 46 dB from the CPU's after encoding.
@@ -91,7 +93,7 @@ transition is layers rather than a mix.
 effect (other lights, stylize, and the other kept EffectCraft ones); a Lumetri with an HSL Secondary's Denoise, a median at each pixel, or a LUT with a 1D shaper; Add Grain with a Softness, whose planes are blurred, or showing its matte; and in HDR, a Lumetri using a LUT, curves, sharpening, or an HSL Secondary, none of which any grade does. In HDR, so does an effect that
 needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
 each pixel under 1 (`catalog::headroom`) stay on the GPU. Glow gains least
-(13 to 15 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
+(13 to 20 fps at 1080p, 3 to 5 at 4K): its 18 blur passes are the work either way.
 
 Three limits remain, in this order:
 
@@ -102,53 +104,54 @@ Three limits remain, in this order:
 
    | Transition | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
    |---|---|---|---|---|
-   | Median of the 72 | 49 | 25 | 168 | 57 |
-   | Iris Round | 35 | 25 | 87 | 53 |
-   | Film Dissolve | 51 | 24 | 164 | 52 |
-   | Push | 116 | 32 | 444 | 80 |
-   | Glass | 66 | 25 | 414 | 53 |
-   | Whip | 232 | 34 | 1085 | 93 |
-   | Lens Blur | 279 | 33 | 1010 | 102 |
-   | Cross Zoom | 424 | 40 | 1786 | 117 |
-   | Radial Blur | 840 | 50 | 3589 | 213 |
-   | Blur Dissolve | 60 | 48 | 269 | 136 |
-   | Glow | 47 | 39 | 264 | 102 |
+   | Median of the 72 | 45 | 27 | 142 | 56 |
+   | Iris Round | 29 | 27 | 81 | 66 |
+   | Film Dissolve | 49 | 25 | 144 | 55 |
+   | Push | 110 | 34 | 408 | 85 |
+   | Glass | 55 | 28 | 184 | 56 |
+   | Whip | 226 | 34 | 877 | 90 |
+   | Lens Blur | 232 | 35 | 935 | 95 |
+   | Cross Zoom | 394 | 41 | 1613 | 119 |
+   | Radial Blur | 765 | 50 | 3396 | 207 |
+   | Blur Dissolve | 60 | 49 | 227 | 127 |
+   | Glow | 47 | 39 | 183 | 123 |
 
-   So at 1080p 69 of the 72 play past 24 fps, where 30 did, and at 4K all but Morph Cut are between 5 and 20 fps, where the blurs through a cut took up to 3.6 s a frame. Two take least from it, since what they do is blur: Blur Dissolve and Glow, whose box passes cost what they cost.
+   So at 1080p 69 of the 72 play past 24 fps, where 35 did, and at 4K all but Morph Cut are between 5 and 20 fps, where the blurs through a cut took up to 3.4 s a frame. Two take least from it, since what they do is blur: Blur Dissolve and Glow, whose box passes cost what they cost.
 
    Of the effects, what a look or a grade reaches came first, and then what a person grading reaches. Film was the only look left on the CPU; Zoom Through, which this list used to name with it, had been on the GPU since Radial Zoom Blur was carried. They are held to the CPU per value as the rest are (`vfx/gpu.rs`, `kept.rs`, within 2e-3) and per frame (`tests/gpu.rs`). With `examples/frame_bench.rs` on 4K H.264, median frame in ms, decode included; a Lumetri with its plain numbers alone is 12 and 25 on the GPU:
 
    | Effect | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
    |---|---|---|---|---|
-   | Film (look) | 134 | 26 | 511 | 81 |
-   | Add Grain | 57 | 14 | 206 | 34 |
-   | Light Leaks | 60 | 21 | 219 | 61 |
-   | Lumetri, luma curve | 47 | 13 | 175 | 29 |
-   | Lumetri, hue vs sat | 59 | 14 | 226 | 29 |
-   | Lumetri, LUT of 33 | 57 | 14 | 226 | 30 |
-   | Lumetri, sharpening | 51 | 16 | 203 | 49 |
-   | Lumetri, HSL Secondary | 66 | 15 | 255 | 35 |
-   | Lumetri, HSL Secondary with Blur | 74 | 23 | 289 | 66 |
-   | Ultra Key, Choke | 51 | 19 | 195 | 56 |
-   | Ultra Key, Soften | 52 | 18 | 202 | 65 |
+   | Film (look) | 140 | 27 | 579 | 84 |
+   | Add Grain | 59 | 14 | 233 | 36 |
+   | Light Leaks | 62 | 21 | 239 | 64 |
+   | Lumetri, luma curve | 54 | 14 | 192 | 31 |
+   | Lumetri, hue vs sat | 69 | 14 | 239 | 31 |
+   | Lumetri, LUT of 33 | 63 | 14 | 227 | 32 |
+   | Lumetri, sharpening | 55 | 17 | 228 | 55 |
+   | Lumetri, HSL Secondary | 75 | 15 | 273 | 37 |
+   | Lumetri, HSL Secondary with Blur | 87 | 24 | 309 | 71 |
+   | Ultra Key, Choke | 56 | 17 | 188 | 54 |
+   | Ultra Key, Soften | 59 | 17 | 222 | 69 |
 
    What was measured and left, on the CPU, in the same terms: no look or grade reaches any of it, and a frame reaching them is a person's choice of a stylized picture rather than a frame of a grade, so kernels for them would be written for few frames.
 
    | Effect | 1080p CPU | 4K CPU |
    |---|---|---|
-   | Brush Strokes | 151 | 784 |
-   | Echo Glow | 100 | 444 |
-   | Volumetric Rays | 96 | 178 |
-   | Edge Glow | 74 | 354 |
-   | Roughen Edges | 64 | 216 |
-   | Color Emboss | 39 | 118 |
-   | Emboss | 32 | 106 |
-   | Alpha Glow | 32 | 120 |
-   | Find Edges | 24 | 69 |
-   | Replicate | 21 | 58 |
-   | Lumetri, HSL Secondary with Denoise | 79 | 454 |
+   | Brush Strokes | 142 | 802 |
+   | Echo Glow | 99 | 572 |
+   | Volumetric Rays | 93 | 167 |
+   | Edge Glow | 75 | 353 |
+   | Roughen Edges | 66 | 305 |
+   | Color Emboss | 40 | 135 |
+   | Emboss | 31 | 105 |
+   | Alpha Glow | 33 | 127 |
+   | Find Edges | 23 | 69 |
+   | Replicate | 21 | 65 |
+   | Mosaic | 15 | 43 |
+   | Lumetri, HSL Secondary with Denoise | 89 | 502 |
 
-   Blur Bokeh (456 at 1080p) and Remove Grain (202) cost most of all, at their defaults, and no look or grade reaches those either.
+   Blur Bokeh (495 at 1080p, 6.7 s at 4K) and Remove Grain (203, 806) cost most of all, at their defaults, and no look or grade reaches those either.
 2. **Kept frames.** Playback, previews, and `look` keep frames by a hash of what they depend on
    (`Drawing::frame_key`), in memory (`frames.rs`) and on disk (`disk.rs`, after EffectCraft's
    `render/src/disk_cache.rs`), so a frame comes back from any compositor, an edit, which makes a new
@@ -175,12 +178,12 @@ Three limits remain, in this order:
 
    | Scene | 1080p SDR | PQ | HLG | 4K SDR | PQ | HLG |
    |---|---|---|---|---|---|---|
-   | Placed, nothing else | 17.7 | 18.3 | 18.3 | 55.6 | 51.3 | 51.9 |
-   | `color.basic`, each pixel held | 19.2 | 24.1 | 24.4 | 34.8 | 51.9 | 51.3 |
-   | `blur.unsharp`, Gamut held | 28.2 | 32.7 | 31.9 | 72.5 | 93.8 | 87.6 |
-   | `light.wonderglow`, Gamut held | 62.2 | 72.1 | 65.7 | 207.9 | 230.5 | 221.8 |
+   | Placed, nothing else | 18.5 | 19.7 | 19.8 | 46.2 | 51.3 | 51.7 |
+   | `color.basic`, each pixel held | 19.9 | 25.5 | 23.1 | 33.0 | 49.3 | 49.8 |
+   | `blur.unsharp`, Gamut held | 27.0 | 30.9 | 31.3 | 69.7 | 87.2 | 86.4 |
+   | `light.wonderglow`, Gamut held | 60.5 | 69.3 | 65.9 | 211.7 | 224.2 | 218.1 |
 
-   So an HDR frame costs nothing by being HDR, a held `color.basic` adds 5 ms at 1080p and 17 at 4K, and a Gamut effect 4 to 10 and 15 to 23. Handing VideoToolbox surfaces to the GPU without a copy was measured and left (`examples/upload_bench.rs`, an M1 with 8 GB). A 4K H.264 frame takes 4.5 ms to decode in software, 1.4 to convert, and 4.7 to upload, 10.6 in all, against 14.5 ms just to decode it on a surface; 1080p takes 3.0 against 5.3, and 4K HEVC 14.2 against 14.6. Only 10-bit ProRes gains, 24 to 27 against 14.8, and more than that gain was its 16-bit RGBA. A frame for the GPU at its full size now goes up in the planes it decoded to where that comes out right, and a kernel (`planes.wgsl`) makes it RGB. At 8 bits it goes by libswscale's own whole-number arithmetic and so to the same bytes, for 4:2:0 and 4:2:2 on 64-bit ARM at the sizes its fast path takes; deeper footage comes within 3 of 255. Other formats and sizes, alpha, other machines' 8-bit footage, and footage scaled on decode still go up as RGBA. With a grade on it, on an M1, 4K ProRes 10-bit goes from 46 ms a frame to 34, past 24 fps, 4K H.264 from 34 to 27, and 1080p from 9.1 to 7.4. So there is no crate with an exception to the workspace's `forbid`. Footage scaled on decode still converts on the CPU, and a GPU scale from its planes was built and measured and left out (`KERF_BENCH_SIZE` in `examples/upload_bench.rs`, 4K H.264 on an M1 with 8 GB, ms a frame, converting and upload and kernels and bytes back). To 1920x1080, 7.3 through libswscale (9.4 in the compositor, whose copy and threads add to its converting) against 12.4 from planes, in two passes of libswscale's bicubic with its own coefficients; to 1728x972, 7.5 against 11.2; to 3456x1944, a clip at 0.9 in a 4K sequence, 21 (24 in the compositor) against 19. So it loses in the 1080p sequence it was meant for, where such a frame takes 14 ms in all, 70 fps, and gains 2 to 5 of 39 ms only near full size. Nor is it the same picture: a mean of 1.66 of 255 from libswscale's, 1.7% of pixels off by more than 2, and 9 at worst, which `tests/gpu.rs` would refuse, so it could only be used while playing, under frame keys of its own. What it would save is CPU: libswscale spends 19 ms of core time a frame across its threads to take 3 to 5.
+   So a frame costs 1 ms at 1080p and 5 at 4K by being HDR, a held `color.basic` adds 3 to 6 ms at 1080p and 17 at 4K, and a Gamut effect 4 to 9 and 6 to 18. Handing VideoToolbox surfaces to the GPU without a copy was measured and left (`examples/upload_bench.rs`, an M1 with 8 GB). A 4K H.264 frame takes 4.5 ms to decode in software, 1.4 to convert, and 4.7 to upload, 10.6 in all, against 14.5 ms just to decode it on a surface; 1080p takes 3.0 against 5.3, and 4K HEVC 14.2 against 14.6. Only 10-bit ProRes gains, 24 to 27 against 14.8, and more than that gain was its 16-bit RGBA. A frame for the GPU at its full size now goes up in the planes it decoded to where that comes out right, and a kernel (`planes.wgsl`) makes it RGB. At 8 bits it goes by libswscale's own whole-number arithmetic and so to the same bytes, for 4:2:0 and 4:2:2 on 64-bit ARM at the sizes its fast path takes; deeper footage comes within 3 of 255. Other formats and sizes, alpha, other machines' 8-bit footage, and footage scaled on decode still go up as RGBA. With a grade on it, on an M1, 4K ProRes 10-bit goes from 46 ms a frame to 34, past 24 fps, 4K H.264 from 34 to 27, and 1080p from 9.1 to 7.4. So there is no crate with an exception to the workspace's `forbid`. Footage scaled on decode still converts on the CPU, and a GPU scale from its planes was built and measured and left out (`KERF_BENCH_SIZE` in `examples/upload_bench.rs`, 4K H.264 on an M1 with 8 GB, ms a frame, converting and upload and kernels and bytes back). To 1920x1080, 7.3 through libswscale (9.4 in the compositor, whose copy and threads add to its converting) against 12.4 from planes, in two passes of libswscale's bicubic with its own coefficients; to 1728x972, 7.5 against 11.2; to 3456x1944, a clip at 0.9 in a 4K sequence, 21 (24 in the compositor) against 19. So it loses in the 1080p sequence it was meant for, where such a frame takes 14 ms in all, 70 fps, and gains 2 to 5 of 39 ms only near full size. Nor is it the same picture: a mean of 1.66 of 255 from libswscale's, 1.7% of pixels off by more than 2, and 9 at worst, which `tests/gpu.rs` would refuse, so it could only be used while playing, under frame keys of its own. What it would save is CPU: libswscale spends 19 ms of core time a frame across its threads to take 3 to 5.
 
 ## The areas
 
@@ -231,7 +234,7 @@ as looks, each behind an `amount`, so 0 leaves the picture alone and `fx c1 flat
 hand tuning. Their tints became color wheels, since a number can scale and a color cannot; Cross
 Processed's crossed curves did too, and Legal Range is `color.levels`. Wheels and named looks draw in
 a second pass of Lumetri's GPU kernel, as the CPU's reference does them after the rest, so Sepia at 4K
-takes 39 ms a frame where the CPU took 236.
+takes 31 ms a frame where the CPU took 214.
 
 Grades stack as plain `fx` lines, with no new words. Each runs on what the line above drew, which is
 byte for byte what a grade gives on a clip of a sequence holding the other. `amount` animates because a
@@ -239,7 +242,7 @@ number a look's lines only scale stays a straight line through its keys, so the 
 each value it reaches (`Look::animates`); a number inside the look's own keyframes does not, and is refused.
 A Lumetri or Levels with all its numbers at rest does not run (`FxOp::leaves_alone`), on either the CPU or the
 GPU, since the way to display encoding and back can move a byte, so a grade at 0 is not there. Three grades
-take 19 ms a frame at 1080p and 56 ms at 4K (128 and 471 on the CPU). Three at 0 take 12 and 27 ms: the same
+take 18 ms a frame at 1080p and 50 ms at 4K (138 and 521 on the CPU). Three at 0 take 11 and 22 ms: the same
 bytes as a clip with none, which at 4K has a shortcut of its own (`plain_frame`, 6 ms), since `untouched`
 reads the document and not the frame.
 
@@ -253,7 +256,7 @@ perspective is true and lighting is per pixel, on the GPU where there is one (se
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
 reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: on the CPU at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
 carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.
-A clip with a `depth` is a solid with no mesh: each pixel's ray goes between the planes of its front and its back, half a picture's pixel at a time, reading the picture's alpha, and takes the color of whatever more of it it reaches, lit by the plane's normal at the front and by the slope of the alpha on a side. So a title's sides are its letters', its holes stay holes, and its edges are as soft as a pixel. What is empty of alpha is passed over by a summed table without being read. Lights fall only on the way a solid's surface faces, and its shadow is what five planes through it cast between them. On the CPU a 1080p title takes 25 ms for 16 flat, and 4K 108 for 70; with a soft shadow on a wall, 200 and 763. An environment light (`kind=environment image=V3`) is a track's picture wrapped around the scene as a panorama and reduced to how much light reaches each way a surface can face, a table of 32 by 16 made for each frame, which is all that a surface with no gloss shows of it, and such a frame is not kept, since it reads another track.
+A clip with a `depth` is a solid with no mesh: each pixel's ray goes between the planes of its front and its back, half a picture's pixel at a time, reading the picture's alpha, and takes the color of whatever more of it it reaches, lit by the plane's normal at the front and by the slope of the alpha on a side. So a title's sides are its letters', its holes stay holes, and its edges are as soft as a pixel. What is empty of alpha is passed over by a summed table without being read. Lights fall only on the way a solid's surface faces, and its shadow is what five planes through it cast between them. On the CPU a 1080p title takes 23 ms for 14 flat, and 4K 95 for 57; with a soft shadow on a wall, 176 and 698. An environment light (`kind=environment image=V3`) is a track's picture wrapped around the scene as a panorama and reduced to how much light reaches each way a surface can face, a table of 32 by 16 made for each frame, which is all that a surface with no gloss shows of it, and such a frame is not kept, since it reads another track.
 
 On the GPU all of that is one kernel (`kerf-gpu/src/depth.wgsl`), and the camera's blur a few more after it, doing the same arithmetic in 32 bits, with the compositor's 64-bit numbers measured from the eye so that nothing is lost by it. A kernel cannot take a varying number of textures, so what stands in a light's way goes into buffers first: its alpha for a hard shadow, its summed table for a soft one, neither for a solid color, and a track around the scene into its table of light. Clips that cross go down one below another in a tall texture and are put in order at each pixel (`by_depth.wgsl`). Held to the CPU by `tests/depth_gpu.rs` and `tests/gpu.rs`: on flat clips, crossings, hard and soft shadows, solids, and the environment light, 960x540, the mean is at most 0.001 of 255, and at most 0.013% of pixels are off by more than 2, those on a solid's sides facing straight up or down, where a table of light has no one way round; the test allows 0.05 and 0.05%. The camera's blur (`kerf-gpu/src/focus.wgsl`) comes after a clip is drawn, from the depth it writes at each pixel. Which radii it gathers at, and so what size of texture each takes, depends on what was drawn, so two kernels find the box and the radii around what has alpha and the frame stops to read those 32 bytes back, one wait to each clip. Those are `focus.rs`'s own levels, so scenes with a blur come to a mean of at most 0.001 of 255, with under 0.001% of pixels off by more than 2 and none by more than 3, on a beveled title with a soft shadow; making the kernel's radius 5% too wide fails the test at once. A level at full size is only gathered at the pixels that read it, each pixel reading the two around its radius. On an M1 with 8 GB, 1080p goes from 19 to 41 ms a frame to 11 to 23, and 4K from 72 to 154 to 43 to 75, of which drawing and reading back a frame with no blur takes 10 and 37; what it holds at its height is about 200 MB more than the CPU's, the row sums and levels being textures.
 
@@ -278,7 +281,7 @@ So depth plays past 24 fps at 1080p in every row here; at 4K a hard shadow is ab
 
 A title that stays the same from frame to frame is not made again. Glyphs on the CPU turned out to be the least of it: of 263 ms for a 4K beveled title with a soft shadow, 5 go to drawing them, 40 to sending the picture up as floats, 41 to the distance field, 16 to its outlines taken in and its summed table, and 129 to the rays. So the GPU keeps the picture (133 MB at 4K, 36 ms a frame) and the field (33 MB, 41 ms) in textures of their own (`Frame::image_kept`, `kerf-gpu/src/kept.rs`), by a key saying all that goes into them, which includes the numbers a title's axes and reveal come to at that moment. What was left out does not pay for its memory: outlines taken in hold 133 MB for 5 ms, and a summed table 10 ms is all it would save. On the CPU a field takes 476 ms at 4K and is kept, by a hash of the alpha it is made from that takes 3 (`bevel::kept_distance_field`), up to four at that size; a picture is not, since copying one out costs more than the 5 ms of drawing it. Only what is asked for twice is held, so a title whose numbers move holds nothing and takes what it did (41 ms at 4K with a reveal under way, 42 before). Nothing is held past 512 MB on the GPU, three such titles at 4K, or past ten seconds of frames without it. The peak footprint of the run in `examples/motion_bench.rs` goes from 1849 MB to 1922 and from 1350 MB to 1435 with a flat title, since each kept picture stands in for an upload the pool would have held. Drawing a frame from what was kept comes to the same bytes (`a_kept_title_draws_what_it_drew`), and no kernel writes a kept picture, since each makes a new one, whichever drawn from it.
 
-A solid's `bevel` cuts its edges back at each face at 45 degrees, with no mesh either: at each step a ray asks how far inside the picture's outline it is, against how far a bevel takes the outline in at that depth, from a distance field made by jump flooding (`draw/bevel.rs`, `distance.wgsl`, the same passes on both). So a title's bevel follows its letters and leaves its holes, and is lit as a surface facing out of the outline and toward its face. Lights fall on it as on any surface, and its shadow is the same five planes through the solid, those within a bevel of a face with their outline taken in, each its own alpha and table. On an M1, a 1080p title with a bevel takes 19 ms on the GPU and 61 on the CPU, and 4K 75 and 355; with a soft shadow on a wall, 41 and 208, and 151 and 909. Before its field was kept those were 38 and 150, 159 and 740, 63 and 375, and 236 and 1748. `bevel_profile=round` makes it a quarter of a circle in place of the 45-degree cut: how far in a ray is along the field says where on the circle it is, so the way the surface faces turns from the side at the outline to the face at the bevel's width, and it meets each without a corner. It costs what a flat one costs, a square root at each step, and flat is the same code as ever. A distance field goes by the world rather than by a picture's pixels, each pixel counted across and down at the size it is, so a clip scaled unevenly has a bevel as wide on each side. It used to go by the mean of its two scales, which, measured on a square at 2 to 0.5 where 18 pixels were asked, came to 30 pixels across and 9 down, a cut at nowhere near 45 degrees. A bevel holds to the CPU as the rest does (`tests/depth_gpu.rs`); the first measure of this turned up a difference between them along turned edges, at any scale whose size comes out so that a solid's depth is all but a whole number of pixels, since a ray's steps are a rounding up of it, which 32 and 64 bits took differently. The GPU now gets that count worked out in 64 bits.
+A solid's `bevel` cuts its edges back at each face at 45 degrees, with no mesh either: at each step a ray asks how far inside the picture's outline it is, against how far a bevel takes the outline in at that depth, from a distance field made by jump flooding (`draw/bevel.rs`, `distance.wgsl`, the same passes on both). So a title's bevel follows its letters and leaves its holes, and is lit as a surface facing out of the outline and toward its face. Lights fall on it as on any surface, and its shadow is the same five planes through the solid, those within a bevel of a face with their outline taken in, each its own alpha and table. On an M1, a 1080p title with a bevel takes 20 ms on the GPU and 61 on the CPU, and 4K 76 and 336; with a soft shadow on a wall, 41 and 191, and 151 and 873. Before its field was kept those were 38 and 150, 159 and 740, 63 and 375, and 236 and 1748. `bevel_profile=round` makes it a quarter of a circle in place of the 45-degree cut: how far in a ray is along the field says where on the circle it is, so the way the surface faces turns from the side at the outline to the face at the bevel's width, and it meets each without a corner. It costs what a flat one costs, a square root at each step, and flat is the same code as ever. A distance field goes by the world rather than by a picture's pixels, each pixel counted across and down at the size it is, so a clip scaled unevenly has a bevel as wide on each side. It used to go by the mean of its two scales, which, measured on a square at 2 to 0.5 where 18 pixels were asked, came to 30 pixels across and 9 down, a cut at nowhere near 45 degrees. A bevel holds to the CPU as the rest does (`tests/depth_gpu.rs`); the first measure of this turned up a difference between them along turned edges, at any scale whose size comes out so that a solid's depth is all but a whole number of pixels, since a ray's steps are a rounding up of it, which 32 and 64 bits took differently. The GPU now gets that count worked out in 64 bits.
 
 The rule: **a composition is a sequence.** Nesting already works, so there is no
 second document type, and an agent learns one model.

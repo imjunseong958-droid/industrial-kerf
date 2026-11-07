@@ -1164,7 +1164,7 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         return;
     }
     // So does it while a path can be dragged.
-    if (!m_pathClip.isEmpty()) {
+    if (!m_pathClip.isEmpty() || m_sampledEdit.solve) {
         updateCursor(position);
         return;
     }

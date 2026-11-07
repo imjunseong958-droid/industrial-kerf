@@ -596,6 +596,16 @@ private slots:
         const QJsonArray ops = takeOps(window);
         QVERIFY(!ops.isEmpty());
         QCOMPARE(ops.last().toObject().value("props").toObject().value("size").toDouble(), 8.0);
+
+        // A track to wrap around the scene is only an environment light's to choose.
+        const auto image = [inspector] { return inspector->findChild<QWidget *>(QStringLiteral("prop_image")); };
+        QVERIFY(image() && rowOf(image())->isHidden());
+        window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProperties()}, {"generators", QJsonObject{{"light", light}}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "sun"}, {"kind", "generator"}, {"fx", "light"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                            {"props", QJsonObject{{"kind", "environment"}}}}}}}}}}}});
+        QVERIFY(image() && !rowOf(image())->isHidden());
     }
 
     // A clip's rows in depth come from the catalog as the bridge hands it over: a switch to go into
@@ -683,9 +693,15 @@ private slots:
         QCOMPARE(committed("prop_depth", "108", "depth"), 0.1);
 
         // A solid has a bevel, and one that becomes solid as it goes has it too.
-        show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
+        show({{"three_d", true}, {"depth", 0.1}});
         QVERIFY(shown({"prop_depth", "prop_bevel"}));
-        // Its profile waits with it, flat until it is said, and goes to the document by name.
+        // A profile has nothing to shape with no bevel, as the real window showed.
+        QVERIFY(!profileShows());
+        show({{"three_d", true}, {"depth", 0.1}, {"bevel", QJsonArray{QJsonObject{{"at", 0.0}, {"value", 0.0}, {"interp", "linear"}},
+                                                                     QJsonObject{{"at", 1.0}, {"value", 0.02}, {"interp", "linear"}}}}});
+        QVERIFY(profileShows());
+        show({{"three_d", true}, {"depth", 0.1}, {"bevel", 0.025}});
+        // With one it shows, flat until it is said, and goes to the document by name.
         QVERIFY(profileShows());
         QCOMPARE(profile()->currentData().toString(), QStringLiteral("flat"));
         takeOps(window);

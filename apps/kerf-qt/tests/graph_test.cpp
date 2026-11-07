@@ -406,6 +406,13 @@ private slots:
         viewer.show();
         viewer.setSampledPath(edit.curve(start), std::nullopt);
         viewer.setSampledPathEdit(edit);
+        // It holds the picture still as any path does, or a hand on its way to a point skims off
+        // the frame being edited, and the picture stays there once it lets go, as the real window showed.
+        QSignalSpy scrubs(&viewer, &ViewerWidget::scrubbed);
+        const QPointF over = viewer.videoRect().center() + QPointF(30, 30);
+        QMouseEvent hover(QEvent::MouseMove, over, viewer.mapToGlobal(over), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&viewer, &hover);
+        QCOMPARE(scrubs.size(), 0);
         QSignalSpy edits(&viewer, &ViewerWidget::editRequested);
         const auto widgetOf = [&](const QPointF &share) {
             const QRectF picture = viewer.pictureRect();

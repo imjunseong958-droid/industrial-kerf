@@ -12,6 +12,8 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
+#include "finish_tray.h"
+#include "stage_shell.h"
 #include "command_registry.h"
 #include "comment_row.h"
 #include "components.h"
@@ -807,6 +809,29 @@ private slots:
         QTest::mousePress(reply, Qt::LeftButton, {}, QPoint(4, 4));
         QCOMPARE(selected.size(), 1);
         QCOMPARE(selected.last().first().toString(), QStringLiteral("c-2614-r1"));
+    }
+
+    void aThreadOpenedUnderATrayComesOutFromUnder() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        window.m_shell->setTray(StageShell::Tray::Finish);
+        seeded.settle();
+        ChatPanel *chat = window.m_chat;
+        const int trayTop = window.m_finishTray->mapTo(&window, QPoint()).y();
+        // The list's very end rises above the tray, or a last thread that fits the panel stays
+        // under it, as the fourth of four did in the real window.
+        QScrollBar *bar = chat->scroll()->verticalScrollBar();
+        bar->setValue(bar->maximum());
+        seeded.settle();
+        QVERIFY(chat->m_content->mapTo(&window, QPoint(0, chat->m_content->height() - chat->m_coveredBelow)).y() <= trayTop);
+        bar->setValue(0);
+        emit window.m_bus->openThread(QStringLiteral("c-2718"));
+        seeded.settle();
+        QVERIFY(chat->threadWidget("c-2718")->root()->mapTo(&window, QPoint()).y() < trayTop);
+        // With the tray gone the list has only its own length to scroll.
+        window.m_shell->setTray(StageShell::Tray::None);
+        seeded.settle();
+        QCOMPARE(chat->m_coveredBelow, 0);
     }
 
     void windowWiresTheReviewModel() {
