@@ -10,7 +10,10 @@
 //! `shadow` sends a ray from each pixel to itself, which every other clip in depth may block by as
 //! much as it is opaque there; with a `size`, a fixed spiral of rays across it, so that its edges are
 //! soft and hold still. A camera with an `aperture` blurs each clip by how far its plane is from what
-//! it focuses on at each pixel ([`super::focus`]).
+//! it focuses on at each pixel ([`super::focus`]). An environment light is a track's picture wrapped all
+//! around the scene, by how much of it each way a surface faces can see. A clip with a `depth` is a solid in the outline of
+//! its picture: each pixel's ray goes between the planes of its front and its back, reading its picture's
+//! alpha as it goes, so no mesh is made of it and the edge of what it reads is the edge of the solid.
 
 use super::*;
 
@@ -26,6 +29,12 @@ const SAME_DEPTH: f32 = 0.01;
 /// How many rays go to a light with a `size`. Each reads as much of what is in its way as its share of
 /// the light covers, so that they join up in a smooth edge and not one with this many steps.
 const RAYS: usize = 32;
+/// How many planes through a solid stand in a light's way, front and back among them.
+const SLICES: usize = 5;
+/// How many steps a ray takes through a solid at the very most, at two to a pixel of its picture.
+const MOST_STEPS: usize = 1024;
+/// How far across its picture's alpha is compared either way, in pixels, to find which way a side faces.
+const SIDE_REACH: f32 = 2.0;
 
 type Vector = [f64; 3];
 
@@ -96,6 +105,107 @@ enum Light {
     Point(Vector, [f32; 3], f32, f64),
     /// The way it shines, and the tangent of half the angle it fills.
     Directional(Vector, [f32; 3], f32, f64),
+    /// All around, from what shows on a track, once it is read: its color, the track, and what comes
+    /// of it from each way.
+    Environment([f32; 3], String, Option<Irradiance>),
+}
+
+/// How much light comes to a surface facing each way, from a picture wrapped all around it as a
+/// panorama, with its middle straight ahead of the camera and its top straight up. Flat clips have no
+/// shine, so this is all of a picture that they can show.
+struct Irradiance {
+    /// By rows from straight up to straight down, and by columns from straight behind the camera,
+    /// going round by its right.
+    values: Vec<[f32; 3]>,
+}
+
+impl Irradiance {
+    /// Cells of the table across and down. Light this spread out holds no detail to lose.
+    const ACROSS: usize = 32;
+    const DOWN: usize = 16;
+
+    /// The way the place `(column, row)` of the table lies, by its cell's middle.
+    fn way_of(column: usize, row: usize) -> Vector {
+        let around = ((column as f64 + 0.5) / Self::ACROSS as f64 - 0.5) * std::f64::consts::TAU;
+        let down = (row as f64 + 0.5) / Self::DOWN as f64 * std::f64::consts::PI;
+        let (ring, up) = down.sin_cos();
+        [ring * around.sin(), -up, ring * around.cos()]
+    }
+
+    fn of(picture: &Image) -> Self {
+        let (across, down) = (Self::ACROSS, Self::DOWN);
+        // A few reads of the picture to a cell, which is all that a cell's worth of light needs.
+        let radiance: Vec<[f32; 3]> = (0..across * down)
+            .into_par_iter()
+            .map(|cell| {
+                let (column, row) = (cell % across, cell / across);
+                let mut sum = [0.0f32; 3];
+                for step_y in 0..4 {
+                    for step_x in 0..4 {
+                        let u = (column as f32 + (step_x as f32 + 0.5) / 4.0) / across as f32;
+                        let v = (row as f32 + (step_y as f32 + 0.5) / 4.0) / down as f32;
+                        let pixel = picture
+                            .sample_bilinear_clamped(u * picture.w as f32, v * picture.h as f32);
+                        for (sum, value) in sum.iter_mut().zip(pixel) {
+                            *sum += value;
+                        }
+                    }
+                }
+                sum.map(|value| value / 16.0)
+            })
+            .collect();
+        let values = (0..across * down)
+            .into_par_iter()
+            .map(|cell| {
+                let facing = Self::way_of(cell % across, cell / across);
+                let mut sum = [0.0f64; 3];
+                for (source, light) in radiance.iter().enumerate() {
+                    let way = Self::way_of(source % across, source / across);
+                    let cosine = dot(facing, way);
+                    if cosine <= 0.0 {
+                        continue;
+                    }
+                    // Cells near the top and bottom of a panorama cover less of what is around.
+                    let row = (source / across) as f64;
+                    let solid_angle = (std::f64::consts::TAU / across as f64)
+                        * (std::f64::consts::PI / down as f64)
+                        * ((row + 0.5) / down as f64 * std::f64::consts::PI).sin();
+                    for (sum, value) in sum.iter_mut().zip(light) {
+                        *sum += f64::from(*value) * cosine * solid_angle;
+                    }
+                }
+                sum.map(|value| (value / std::f64::consts::PI) as f32)
+            })
+            .collect();
+        Self { values }
+    }
+
+    /// The light on a surface whose outside faces along `normal`, a unit long.
+    fn toward(&self, normal: Vector) -> [f32; 3] {
+        let (across, down) = (Self::ACROSS, Self::DOWN);
+        let around = normal[0].atan2(normal[2]) / std::f64::consts::TAU + 0.5;
+        let from_up = (-normal[1]).clamp(-1.0, 1.0).acos() / std::f64::consts::PI;
+        let (x, y) = (around * across as f64 - 0.5, from_up * down as f64 - 0.5);
+        let (left, top) = (x.floor(), y.floor());
+        let (right_part, lower_part) = ((x - left) as f32, (y - top) as f32);
+        let at = |column: f64, row: f64| {
+            let column = (column as i64).rem_euclid(across as i64) as usize;
+            let row = (row.max(0.0) as usize).min(down - 1);
+            self.values[row * across + column]
+        };
+        let mix = |a: [f32; 3], b: [f32; 3], by: f32| {
+            [
+                a[0] + (b[0] - a[0]) * by,
+                a[1] + (b[1] - a[1]) * by,
+                a[2] + (b[2] - a[2]) * by,
+            ]
+        };
+        mix(
+            mix(at(left, top), at(left + 1.0, top), right_part),
+            mix(at(left, top + 1.0), at(left + 1.0, top + 1.0), right_part),
+            lower_part,
+        )
+    }
 }
 
 /// How far across each ray's share of a light of radius 1 is: the side of a square of its area.
@@ -181,8 +291,16 @@ impl Scene {
                     let place = [own("x") * width, own("y") * height, own("z") * height];
                     let shadow = read("shadow").unwrap_or(0.0) as f32;
                     let size = read("size").unwrap_or(0.0);
+                    let image = match generated(def, clip, "image", at) {
+                        Some(Value::Text(track)) if !track.is_empty() => Some(track),
+                        _ => None,
+                    };
                     lights.push(match generated(def, clip, "kind", at) {
                         Some(Value::Enum(kind)) if kind == "ambient" => Light::Ambient(color),
+                        Some(Value::Enum(kind)) if kind == "environment" => match image {
+                            Some(track) => Light::Environment(color, track, None),
+                            None => Light::Ambient(color),
+                        },
                         Some(Value::Enum(kind)) if kind == "directional" => {
                             // Straight on unless it says otherwise.
                             let way = if dot(place, place) > 0.0 {
@@ -295,6 +413,31 @@ impl Scene {
         })
     }
 
+    /// The tracks whose pictures lights here are all around, as [`Self::light_from`] wants them.
+    pub fn environments(&self) -> Vec<String> {
+        self.lights
+            .iter()
+            .filter_map(|light| match light {
+                Light::Environment(_, track, _) => Some(track.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Have the lights wrapped around `track` take their light from `picture`.
+    pub fn light_from(&mut self, track: &str, picture: &Image) {
+        let light = Irradiance::of(picture);
+        let mut light = Some(light);
+        for each in &mut self.lights {
+            if let Light::Environment(_, wanted, table) = each {
+                if wanted == track && table.is_none() {
+                    *table = light.take();
+                    break;
+                }
+            }
+        }
+    }
+
     /// Whether a light here sends many rays, so that it pays to know what is opaque.
     fn is_wide(&self) -> bool {
         self.lights.iter().any(|light| {
@@ -388,14 +531,43 @@ impl Scene {
         )
     }
 
+    /// How much light `at` on a flat clip gets, whichever way it is turned to it.
     fn lit(&self, receiver: &Id, at: Vector, normal: Vector) -> Option<[f32; 3]> {
+        self.lit_by(receiver, at, normal, false)
+    }
+
+    /// How much light `at` on a solid's surface gets: only what falls on the way it faces.
+    fn lit_outside(&self, receiver: &Id, at: Vector, outward: Vector) -> Option<[f32; 3]> {
+        self.lit_by(receiver, at, outward, true)
+    }
+
+    fn lit_by(&self, receiver: &Id, at: Vector, normal: Vector, outside: bool) -> Option<[f32; 3]> {
         if self.lights.is_empty() {
             return None;
         }
+        let facing = |cosine: f64| {
+            if outside {
+                cosine.max(0.0)
+            } else {
+                cosine.abs()
+            }
+        };
         let mut sum = [0.0f32; 3];
         for light in &self.lights {
             let (color, facing, through) = match light {
                 Light::Ambient(color) => (color, 1.0, 1.0),
+                Light::Environment(color, _, table) => {
+                    let Some(table) = table else {
+                        continue;
+                    };
+                    // A flat clip faces whichever way it is seen from.
+                    let seen = outside || dot(minus(self.eye, at), normal) >= 0.0;
+                    let light = table.toward(if seen { normal } else { times(normal, -1.0) });
+                    for ((sum, light), color) in sum.iter_mut().zip(light).zip(color) {
+                        *sum += light * color;
+                    }
+                    continue;
+                }
                 Light::Point(place, color, shadow, radius) => {
                     let to = minus(*place, at);
                     let way = unit(to);
@@ -411,7 +583,7 @@ impl Scene {
                     } else {
                         self.gets_through(receiver, at, (way, reach), *shadow)
                     };
-                    (color, dot(way, normal).abs(), through)
+                    (color, facing(dot(way, normal)), through)
                 }
                 Light::Directional(way, color, shadow, spread) => {
                     let back = times(*way, -1.0);
@@ -422,7 +594,7 @@ impl Scene {
                     } else {
                         self.gets_through(receiver, at, (back, f64::INFINITY), *shadow)
                     };
-                    (color, dot(*way, normal).abs(), through)
+                    (color, facing(dot(back, normal)), through)
                 }
             };
             for (sum, channel) in sum.iter_mut().zip(color) {
@@ -435,6 +607,7 @@ impl Scene {
 
 /// A clip's plane in the world: where its picture's first pixel is, and how far each of its pixels
 /// goes across and down.
+#[derive(Clone, Copy)]
 pub(super) struct Plane {
     origin: Vector,
     across: Vector,
@@ -481,6 +654,15 @@ impl Plane {
             area: dot(perpendicular, perpendicular),
             normal: unit(perpendicular),
             middle,
+        }
+    }
+
+    /// The plane this far behind this one, its picture lying over the same pixels.
+    fn pushed(&self, by: f64) -> Self {
+        Self {
+            origin: add(self.origin, times(self.normal, by)),
+            middle: add(self.middle, times(self.normal, by)),
+            ..*self
         }
     }
 
@@ -574,6 +756,30 @@ impl Held {
         }
         Self::Summed(table)
     }
+
+    /// What the rectangle from the place `(left, top)` to `(right, bottom)` of a picture of `size` holds
+    /// in 255ths of a pixel, and what it could.
+    fn over(
+        &self,
+        (w, h): (usize, usize),
+        (left, top, right, bottom): (f64, f64, f64, f64),
+    ) -> (u32, u32) {
+        let place = |at: f64, most: usize| (at.max(0.0) as usize).min(most);
+        let (x0, x1) = (place(left, w), place(right, w));
+        let (y0, y1) = (place(top, h), place(bottom, h));
+        let whole = ((x1 - x0) * (y1 - y0)) as u32 * 255;
+        let held = match self {
+            Self::Solid => whole,
+            Self::Summed(table) => {
+                let at = |x: usize, y: usize| table[y * (w + 1) + x];
+                at(x1, y1)
+                    .wrapping_add(at(x0, y0))
+                    .wrapping_sub(at(x0, y1))
+                    .wrapping_sub(at(x1, y0))
+            }
+        };
+        (held, whole)
+    }
 }
 
 /// A clip in depth, as what may stand in a light's way.
@@ -584,7 +790,7 @@ pub(super) struct Caster {
     crop: Rect,
     opacity: f32,
     /// Only for a light with a size.
-    held: Held,
+    held: Arc<Held>,
     /// What goes from the world to `u` and to `v`: [`Plane::at`], worked out ahead for many rays.
     to_u: Vector,
     to_v: Vector,
@@ -596,7 +802,7 @@ pub(super) struct Caster {
 
 impl Caster {
     /// `picture`, as much of it as `crop` leaves, is where `to_output` puts it, on a clip at clip time
-    /// `time`.
+    /// `time`. With a depth, it is what [`Self::through_its_depth`] makes.
     pub fn new(
         scene: &Scene,
         plan: &ClipPlan,
@@ -610,11 +816,11 @@ impl Caster {
             plan.clip.id.clone(),
             Plane::of(scene, plan, (pw, ph), to_output, time),
             crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph)),
-            if scene.is_wide() {
+            Arc::new(if scene.is_wide() {
                 Held::of(&picture)
             } else {
                 Held::Solid
-            },
+            }),
             (picture, opacity),
         )
     }
@@ -623,7 +829,7 @@ impl Caster {
         clip: Id,
         plane: Plane,
         crop: Rect,
-        held: Held,
+        held: Arc<Held>,
         (picture, opacity): (Arc<Image>, f32),
     ) -> Self {
         let to_u = times(cross(plane.down, plane.perpendicular), 1.0 / plane.area);
@@ -642,6 +848,31 @@ impl Caster {
             across,
             down,
         }
+    }
+
+    /// This clip again as what stands in a light's way a little behind it, for a clip with a depth: a
+    /// solid's shadow is what the planes through it cast between them. One clip casts for each, so none
+    /// of them falls on the solid itself.
+    pub fn through_its_depth(self, depth: f64) -> Vec<Self> {
+        if depth <= 0.0 {
+            return vec![self];
+        }
+        let mut slices: Vec<Self> = (1..SLICES)
+            .map(|slice| {
+                let plane = self
+                    .plane
+                    .pushed(depth * slice as f64 / (SLICES - 1) as f64);
+                Self::on(
+                    self.clip.clone(),
+                    plane,
+                    self.crop,
+                    self.held.clone(),
+                    (self.picture.clone(), self.opacity),
+                )
+            })
+            .collect();
+        slices.push(self);
+        slices
     }
 
     /// What this clip does to the rays from `from` to a light that the rays `around` go around. Those
@@ -679,7 +910,7 @@ impl Caster {
             && right <= crop.right() - 1.0
             && top >= crop.y + 1.0
             && bottom <= crop.bottom() - 1.0;
-        if matches!(self.held, Held::Summed(_)) {
+        if matches!(*self.held, Held::Summed(_)) {
             let area = (
                 x0.floor() - 1.0,
                 y0.floor() - 1.0,
@@ -701,23 +932,8 @@ impl Caster {
 
     /// What the rectangle from the place `(left, top)` to `(right, bottom)` of its picture holds in
     /// 255ths of a pixel, as a picture opaque all over does too, and what it could.
-    fn holds(&self, (left, top, right, bottom): (f64, f64, f64, f64)) -> (u32, u32) {
-        let (w, h) = (self.picture.w, self.picture.h);
-        let place = |at: f64, most: usize| (at.max(0.0) as usize).min(most);
-        let (x0, x1) = (place(left, w), place(right, w));
-        let (y0, y1) = (place(top, h), place(bottom, h));
-        let whole = ((x1 - x0) * (y1 - y0)) as u32 * 255;
-        let held = match &self.held {
-            Held::Solid => whole,
-            Held::Summed(table) => {
-                let at = |x: usize, y: usize| table[y * (w + 1) + x];
-                at(x1, y1)
-                    .wrapping_add(at(x0, y0))
-                    .wrapping_sub(at(x0, y1))
-                    .wrapping_sub(at(x1, y0))
-            }
-        };
-        (held, whole)
+    fn holds(&self, area: (f64, f64, f64, f64)) -> (u32, u32) {
+        self.held.over((self.picture.w, self.picture.h), area)
     }
 
     /// How much of what leaves `from` along a way, a unit long, for a reach, gets past this clip, where
@@ -748,7 +964,7 @@ impl Caster {
         if left >= right || top >= bottom {
             return 1.0;
         }
-        let covered = if matches!(self.held, Held::Solid) {
+        let covered = if matches!(*self.held, Held::Solid) {
             (right - left) * (bottom - top) / (4.0 * half_u * half_v)
         } else {
             // On whole pixels of a picture, those of all of it as well as those left within the crop.
@@ -837,6 +1053,45 @@ fn projected(
     };
     let mut out = Image::new(w, h);
     let crop = crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+    let solid = depth_of(plan, time, scene.height);
+    if solid > 0.0 {
+        let held = Held::of(&source);
+        let solid = Solid {
+            front: plane,
+            back: plane.pushed(solid),
+            source: &source,
+            by,
+            crop,
+            held,
+        };
+        let row_size = w.max(1) * 4;
+        let mut depth = vec![
+            f32::INFINITY;
+            if with_depth || scene.aperture > 0.0 {
+                w * h
+            } else {
+                0
+            }
+        ];
+        if depth.is_empty() {
+            out.px
+                .par_chunks_mut(row_size)
+                .enumerate()
+                .for_each(|(y, row)| solid.draw_row(scene, &plan.clip.id, y, row, None));
+        } else {
+            out.px
+                .par_chunks_mut(row_size)
+                .zip(depth.par_chunks_mut(w.max(1)))
+                .enumerate()
+                .for_each(|(y, (row, depth))| {
+                    solid.draw_row(scene, &plan.clip.id, y, row, Some(depth));
+                });
+        }
+        if scene.aperture > 0.0 {
+            out = super::focus::blurred(&out, &scene.blur_radii(&depth));
+        }
+        return (out, depth);
+    }
     let draw_row = |y: usize, row: &mut [f32], mut depth: Option<&mut [f32]>| {
         for x in 0..w {
             let Some((hit, ahead)) = scene.meets(&plane, (x as f64 + 0.5, y as f64 + 0.5)) else {
@@ -887,6 +1142,149 @@ fn projected(
             .enumerate()
             .for_each(|(y, row)| draw_row(y, row, None));
         (out, Vec::new())
+    }
+}
+
+/// How deep a clip is at clip time `time`, in pixels of a frame `height` high.
+pub(super) fn depth_of(plan: &ClipPlan, time: Time, height: f64) -> f64 {
+    number(&param(&plan.clip, "depth").value_at(time)).max(0.0) * height
+}
+
+/// A clip with a depth: a solid between two planes, in the outline of its picture's alpha.
+struct Solid<'a> {
+    front: Plane,
+    back: Plane,
+    /// Its picture, read at `by` of its size, within `crop` of its pixels.
+    source: &'a Image,
+    by: f64,
+    crop: Rect,
+    /// For passing over the empty parts of its picture without reading them.
+    held: Held,
+}
+
+impl Solid<'_> {
+    /// Which way a solid's side faces where a ray meets it at `(u, v)` of the picture: down the slope of
+    /// its alpha, out of what it holds.
+    fn side_facing(&self, (u, v): (f64, f64)) -> Option<Vector> {
+        let (x, y) = ((u * self.by) as f32, (v * self.by) as f32);
+        let alpha = |x: f32, y: f32| self.source.sample_bilinear(x, y)[3];
+        let across = alpha(x + SIDE_REACH, y) - alpha(x - SIDE_REACH, y);
+        let down = alpha(x, y + SIDE_REACH) - alpha(x, y - SIDE_REACH);
+        if across == 0.0 && down == 0.0 {
+            return None;
+        }
+        Some(unit(add(
+            times(unit(self.front.across), -f64::from(across)),
+            times(unit(self.front.down), -f64::from(down)),
+        )))
+    }
+
+    /// A row of the output picture. Each pixel's ray goes through the solid half a picture's pixel at a time,
+    /// taking the color of whatever more of the picture's alpha it reaches, so that the edges where it
+    /// comes to the front, to a side, and to nothing behind are all as soft as a pixel.
+    fn draw_row(
+        &self,
+        scene: &Scene,
+        id: &Id,
+        y: usize,
+        row: &mut [f32],
+        mut depth: Option<&mut [f32]>,
+    ) {
+        let size = (self.source.w, self.source.h);
+        let w = row.len() / 4;
+        for x in 0..w {
+            let place = (x as f64 + 0.5, y as f64 + 0.5);
+            let (front, back) = (
+                scene.meets(&self.front, place),
+                scene.meets(&self.back, place),
+            );
+            // Behind the camera or edge on, what is left of it is the plane that can be seen.
+            let (near, far, near_plane, far_plane) = match (front, back) {
+                (Some(front), Some(back)) if front.1 <= back.1 => {
+                    (front, back, &self.front, &self.back)
+                }
+                (Some(front), Some(back)) => (back, front, &self.back, &self.front),
+                (Some(only), None) => (only, only, &self.front, &self.front),
+                (None, Some(only)) => (only, only, &self.back, &self.back),
+                (None, None) => continue,
+            };
+            if let Some(depth) = depth.as_deref_mut() {
+                depth[x] = near.1 as f32;
+            }
+            let (from, to) = (near_plane.at(near.0), far_plane.at(far.0));
+            let crop = self.crop;
+            let (left, right) = (
+                from.0.min(to.0).max(crop.x),
+                from.0.max(to.0).min(crop.right()),
+            );
+            let (top, bottom) = (
+                from.1.min(to.1).max(crop.y),
+                from.1.max(to.1).min(crop.bottom()),
+            );
+            if left - 1.0 > right || top - 1.0 > bottom {
+                continue;
+            }
+            let area = (
+                ((left - 1.0) * self.by).floor(),
+                ((top - 1.0) * self.by).floor(),
+                ((right + 1.0) * self.by).ceil() + 1.0,
+                ((bottom + 1.0) * self.by).ceil() + 1.0,
+            );
+            if self.held.over(size, area).0 == 0 {
+                continue;
+            }
+            let across = (to.0 - from.0).abs().max((to.1 - from.1).abs()) * self.by;
+            let steps = ((across * 2.0).ceil() as usize).clamp(1, MOST_STEPS);
+            // Out of the side it comes in by.
+            let flat = if near_plane.origin == self.front.origin {
+                times(self.front.normal, -1.0)
+            } else {
+                self.front.normal
+            };
+            let (mut sum, mut covered, mut first) = ([0.0f32; 3], 0.0f32, None);
+            for step in 0..=steps {
+                let along = step as f64 / steps as f64;
+                let (u, v) = (
+                    from.0 + (to.0 - from.0) * along,
+                    from.1 + (to.1 - from.1) * along,
+                );
+                if u < crop.x || v < crop.y || u > crop.right() || v > crop.bottom() {
+                    continue;
+                }
+                let pixel = self
+                    .source
+                    .sample_bilinear((u * self.by) as f32, (v * self.by) as f32);
+                if pixel[3] <= covered {
+                    continue;
+                }
+                let more = pixel[3] - covered;
+                let hit = add(near.0, times(minus(far.0, near.0), along));
+                let facing = if step == 0 {
+                    flat
+                } else {
+                    self.side_facing((u, v)).unwrap_or(flat)
+                };
+                let light = scene.lit_outside(id, hit, facing).unwrap_or([1.0; 3]);
+                for ((sum, color), light) in sum.iter_mut().zip(&pixel[..3]).zip(light) {
+                    *sum += color / pixel[3] * light * more;
+                }
+                covered = pixel[3];
+                if first.is_none() && covered >= 0.5 {
+                    first = Some(near.1 + (far.1 - near.1) * along);
+                }
+                if covered >= 0.995 {
+                    break;
+                }
+            }
+            if covered <= 0.0 {
+                continue;
+            }
+            row[x * 4..x * 4 + 3].copy_from_slice(&sum);
+            row[x * 4 + 3] = covered;
+            if let (Some(depth), Some(first)) = (depth.as_deref_mut(), first) {
+                depth[x] = first as f32;
+            }
+        }
     }
 }
 
@@ -1021,13 +1419,13 @@ mod tests {
                 Id::new("c").unwrap(),
                 plane([0.0, 0.0, -50.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
                 WHOLE,
-                Held::of(&picture),
+                Arc::new(Held::of(&picture)),
                 (Arc::new(picture), 1.0),
             )
         };
         let casters = [on(opaque), on(half)];
-        assert!(matches!(casters[0].held, Held::Solid));
-        assert!(matches!(casters[1].held, Held::Summed(_)));
+        assert!(matches!(*casters[0].held, Held::Solid));
+        assert!(matches!(*casters[1].held, Held::Summed(_)));
         // A rectangle holds what it holds: half of its columns are opaque.
         assert_eq!(
             casters[1].holds((40.0, 0.0, 60.0, 10.0)),
@@ -1117,13 +1515,62 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_all_around_lights_a_surface_by_what_it_can_see() {
+        // White all around is white whichever way it faces.
+        let mut white = Image::new(64, 32);
+        white.px.iter_mut().for_each(|value| *value = 1.0);
+        let all = Irradiance::of(&white);
+        for facing in [
+            [1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            unit([0.3, 0.5, -0.8]),
+        ] {
+            for value in all.toward(facing) {
+                assert!((value - 1.0).abs() < 0.03, "{facing:?}: {value}");
+            }
+        }
+        // The top half white: what faces up gets it all, what faces down none, and what faces sideways half.
+        let mut half = Image::new(64, 32);
+        for (at, pixel) in half.px.chunks_exact_mut(4).enumerate() {
+            let value = if at / 64 < 16 { 1.0 } else { 0.0 };
+            pixel.copy_from_slice(&[value, value, value, 1.0]);
+        }
+        let sky = Irradiance::of(&half);
+        assert!(
+            sky.toward([0.0, -1.0, 0.0])[0] > 0.97,
+            "{:?}",
+            sky.toward([0.0, -1.0, 0.0])
+        );
+        assert!(
+            sky.toward([0.0, 1.0, 0.0])[0] < 0.03,
+            "{:?}",
+            sky.toward([0.0, 1.0, 0.0])
+        );
+        for facing in [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, 1.0]] {
+            assert!((sky.toward(facing)[0] - 0.5).abs() < 0.03, "{facing:?}");
+        }
+        // Red straight ahead of the camera, as the middle of the picture: on what faces the camera's
+        // way back toward it, and hardly on what faces away.
+        let mut ahead = Image::new(64, 32);
+        for (at, pixel) in ahead.px.chunks_exact_mut(4).enumerate() {
+            let x = at % 64;
+            let value = if (24..40).contains(&x) { 1.0 } else { 0.0 };
+            pixel.copy_from_slice(&[value, 0.0, 0.0, 1.0]);
+        }
+        let ahead = Irradiance::of(&ahead);
+        assert!(ahead.toward([0.0, 0.0, 1.0])[0] > 0.3 * 2.0);
+        assert!(ahead.toward([0.0, 0.0, -1.0])[0] < 0.02);
+    }
+
+    #[test]
     fn what_a_ray_reads_of_a_clip_is_where_the_plane_says() {
         let tilted = plane([3.0, 4.0, 5.0], [0.9, 0.1, 0.2], [-0.2, 1.1, 0.3]);
         let caster = Caster::on(
             Id::new("c").unwrap(),
             tilted,
             WHOLE,
-            Held::Solid,
+            Arc::new(Held::Solid),
             (Arc::new(Image::new(100, 100)), 1.0),
         );
         let hit = caster.plane.point(31.0, 57.0);

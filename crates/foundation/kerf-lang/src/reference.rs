@@ -34,8 +34,8 @@ line, applied in order and atomically.
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
-  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels, over `feather`, evenly to the next corner.
-- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. `look` with `sync` lines cameras up by sound.
+  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels, over `feather`.
+- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross.
 
@@ -56,7 +56,7 @@ ripple-delete <clip> …                  remove and close the gap on every unlo
 lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
-    src= puts the edge on that source position, such as a word's time
+    src= puts the edge on that source position
 roll <clip> <amount>|to=<pos>           move the cut after the clip
 slip <clip> <amount>                    play different source frames in the same place
 slide <clip> <amount>|to=<pos>          move a clip between its neighbors

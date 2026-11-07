@@ -711,17 +711,32 @@ impl Drawing {
                 })
                 .filter_map(|shown| {
                     let ready = self.ready(plan, shown, at, scale, size)?;
-                    Some(three_d::Caster::new(
+                    let time = at - shown.plan.clip.start;
+                    let caster = three_d::Caster::new(
                         &scene,
                         &shown.plan,
                         ready.picture,
                         (&ready.to_output, ready.crop),
                         ready.opacity,
-                        at - shown.plan.clip.start,
-                    ))
+                        time,
+                    );
+                    let height = size.1 as f64;
+                    Some(caster.through_its_depth(three_d::depth_of(&shown.plan, time, height)))
                 })
+                .flatten()
                 .collect();
             scene.casters = casters;
+        }
+        for wanted in scene.environments() {
+            let picture = plan
+                .tracks
+                .iter()
+                .find(|track| track.id.as_str() == wanted)
+                .and_then(|track| track.shown.iter().find(|shown| shown.shows(at)))
+                .and_then(|shown| self.ready(plan, shown, at, scale, size));
+            if let Some(ready) = picture {
+                scene.light_from(&wanted, &ready.picture);
+            }
         }
         scene
     }
@@ -1359,6 +1374,13 @@ impl Drawing {
 /// A number for everything about `clip` that does not change over time, wherever it starts, and
 /// the file it shows. `None` when it draws on something the document does not hold.
 fn clip_digest(clip: &Clip, catalog: &Catalog, media: Option<&Media>) -> Option<u64> {
+    // A light wrapped from another track depends on what that track draws, hidden or not.
+    if let Content::Generator { fx, params, .. } = &clip.content {
+        let wraps = |param: &Param| !matches!(param, Param::Static(Value::Text(track)) if track.is_empty());
+        if fx.as_str() == "light" && params.get("image").is_some_and(wraps) {
+            return None;
+        }
+    }
     for effect in &clip.effects {
         let def = catalog.fx(effect.fx.as_str())?;
         let outside = def.params.iter().any(|param| {

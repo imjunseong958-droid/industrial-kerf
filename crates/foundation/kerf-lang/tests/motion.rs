@@ -190,7 +190,7 @@ project name="t"
 sequence s1 rate=24 size=1280x720 audio=48000
   track V1 video
     clip c1 gen=solid@1 at=0f dur=48f
-      set three_d=true z=0.5
+      set depth={0f:0 24f:0.25} three_d=true z=0.5
   track V2 video
     clip l1 gen=light@1 at=0f dur=48f
       set kind=directional shadow={0f:0 24f:0.8} size={0f:0 24f:5} x=0.2 z=1
@@ -216,6 +216,25 @@ fn a_lights_shadow_round_trips_and_a_bad_one_is_refused() {
     }
     for bad in ["shadow=2", "shadow=-0.1", "shadow={0f:0 24f:2}"] {
         refused(&DEPTH.replace("shadow=1", bad), "shadow");
+    }
+}
+
+#[test]
+fn a_clips_depth_round_trips_and_a_bad_one_is_refused() {
+    let once =
+        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    assert!(printed.contains("depth={0f:0 24f:0.25}"), "{printed}");
+    for bad in [
+        "depth=-1",
+        "depth=101",
+        "depth={0f:0 24f:101}",
+        "depth=thick",
+    ] {
+        refused(&DEPTH.replace("depth={0f:0 24f:0.25}", bad), "depth");
     }
 }
 

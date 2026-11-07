@@ -788,6 +788,10 @@ fn builtin_catalog() -> Catalog {
             .range(-1000.0, 1000.0)
             .unit("frame heights")
             .doc("With `three_d`, how far away the clip is; negative comes toward the viewer."),
+        P::number("depth", 0.0)
+            .range(0.0, 100.0)
+            .unit("frame heights")
+            .doc("With `three_d`, a solid that deep behind the clip, in its picture's outline."),
         P::number("rotate_x", 0.0)
             .range(-36000.0, 36000.0)
             .unit("degrees")
@@ -1272,7 +1276,8 @@ fn builtin_catalog() -> Catalog {
             "Lights `three_d` clips: `x`, `y`, and `z` are where a point light is, or which way a directional one shines. With none showing, they show as they are.",
         )
         .category("Utility")
-        .param(P::choice("kind", &["point", "ambient", "directional"]))
+        .param(P::choice("kind", &["point", "ambient", "directional", "environment"]))
+        .param(P::text("image", "").doc("With `kind=environment`, the track wrapped all around."))
         .param(P::color("color", Rgba::WHITE))
         .param(P::number("intensity", 1.0).range(0.0, 100.0))
         .param(
