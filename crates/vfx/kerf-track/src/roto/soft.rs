@@ -31,7 +31,7 @@ const DOUBTFUL: f64 = 0.25;
 /// would read as wider than it is.
 const LINES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 
-fn linear(code: f32) -> f32 {
+pub(super) fn linear(code: f32) -> f32 {
     if code <= 0.04045 {
         code / 12.92
     } else {

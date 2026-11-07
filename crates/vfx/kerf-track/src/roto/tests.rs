@@ -732,3 +732,448 @@ fn measure_fast_subjects() {
         }
     }
 }
+
+/// How a harder subject goes: a textured ellipse, twice as wide as it is tall at rest, that turns and
+/// changes size as it crosses the frame, and that a shutter may stay open on.
+#[derive(Clone, Copy, Debug)]
+struct Hard {
+    /// Its half width at rest.
+    radius: f64,
+    /// Pixels a frame.
+    speed: f64,
+    /// Degrees a frame.
+    turn: f64,
+    /// How far its size goes either way, a share of its size, over about ten frames.
+    grow: f64,
+    /// How much of a frame the shutter is open for, from 0 to 1.
+    shutter: f64,
+    alike: bool,
+}
+
+impl Hard {
+    fn center(&self, (w, h): (usize, usize), t: f64) -> [f64; 2] {
+        let reach = self.radius * (1.0 + self.grow);
+        let room = w as f64 - 2.0 * reach - 8.0;
+        let along = (self.speed * t).rem_euclid(2.0 * room);
+        let along = if along > room {
+            2.0 * room - along
+        } else {
+            along
+        };
+        [
+            reach + 4.0 + along,
+            h as f64 / 2.0 + (h as f64 / 2.0 - reach - 4.0) * 0.5 * (t * 0.4).sin(),
+        ]
+    }
+
+    /// Where a point of the frame falls on the subject at `t`, as a point of it at rest, and whether that
+    /// is on it.
+    fn on_it(&self, size: (usize, usize), t: f64, (px, py): (f64, f64)) -> ([f64; 2], bool) {
+        let c = self.center(size, t);
+        let (s, co) = (self.turn * t).to_radians().sin_cos();
+        let by = 1.0 + self.grow * (t * 0.6).sin();
+        let (dx, dy) = ((px - c[0]) / by, (py - c[1]) / by);
+        let (x, y) = (dx * co + dy * s, -dx * s + dy * co);
+        let (a, b) = (self.radius, self.radius / 2.0);
+        ([x, y], (x / a).powi(2) + (y / b).powi(2) < 1.0)
+    }
+
+    /// The frame as a shutter sees it, and how much of each pixel the subject covers.
+    fn scene(&self, (w, h): (usize, usize), frame: usize) -> (Vec<u8>, Vec<f32>) {
+        let moments: Vec<f64> = if self.shutter > 0.0 {
+            (0..8)
+                .map(|at| frame as f64 + self.shutter * at as f64 / 8.0)
+                .collect()
+        } else {
+            vec![frame as f64]
+        };
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        let mut covered = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                let (n, m) = (noise(px, py, 5), noise(px * 1.7, py * 1.7, 9));
+                let behind = if self.alike {
+                    [0.1 + 0.4 * m, 0.2 + 0.4 * n, 0.15 + 0.4 * m]
+                } else {
+                    [0.05 + 0.25 * m, 0.3 + 0.4 * n, 0.45 + 0.4 * m]
+                };
+                let (mut sum, mut hits) = ([0.0; 3], 0.0);
+                for t in &moments {
+                    let (at, on) = self.on_it((w, h), *t, (px, py));
+                    let color = if on {
+                        hits += 1.0;
+                        let n = noise(at[0] + 500.0, at[1] + 500.0, 11);
+                        if self.alike {
+                            [0.35 + 0.3 * n, 0.4 + 0.3 * n, 0.3 + 0.3 * n]
+                        } else {
+                            [0.75 + 0.25 * n, 0.35 + 0.3 * n, 0.1 + 0.15 * n]
+                        }
+                    } else {
+                        behind
+                    };
+                    // A shutter adds up light, not code values.
+                    for k in 0..3 {
+                        sum[k] += f64::from(super::soft::linear(color[k] as f32));
+                    }
+                }
+                let share = moments.len() as f64;
+                for value in sum {
+                    let light = value / share;
+                    let code = if light <= 0.0031308 {
+                        light * 12.92
+                    } else {
+                        1.055 * light.powf(1.0 / 2.4) - 0.055
+                    };
+                    rgba.push((code * 255.0) as u8);
+                }
+                rgba.push(255);
+                covered.push((hits / share) as f32);
+            }
+        }
+        (rgba, covered)
+    }
+
+    /// How well it is followed over `frames`: the mean and worst overlap with what is more than half
+    /// covered, and how many frames it got to.
+    fn overlap(&self, size: (usize, usize), frames: usize) -> (f64, f64, usize) {
+        let (w, h) = (size.0 as f64, size.1 as f64);
+        let start = self.center(size, self.shutter / 2.0);
+        let hints = Hints {
+            inside: vec![[start[0] / w, start[1] / h]],
+            ..Hints::default()
+        };
+        let followed = follow_object(frames, &hints, None, |frame| {
+            Some((size.0, size.1, self.scene(size, frame).0))
+        });
+        let (mut sum, mut worst) = (0.0, 1.0f64);
+        for (frame, outline) in followed.outlines.iter().enumerate() {
+            let polygon: Vec<[f64; 2]> = outline.iter().map(|at| [at[0] * w, at[1] * h]).collect();
+            let covered = self.scene(size, frame).1;
+            let (mut both, mut either) = (0usize, 0usize);
+            for y in 0..size.1 {
+                for x in 0..size.0 {
+                    let a = in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]);
+                    let b = covered[y * size.0 + x] >= 0.5;
+                    both += usize::from(a && b);
+                    either += usize::from(a || b);
+                }
+            }
+            let overlap = both as f64 / either.max(1) as f64;
+            sum += overlap;
+            worst = worst.min(overlap);
+        }
+        if followed.outlines.len() < frames {
+            worst = 0.0;
+        }
+        (sum / frames as f64, worst, followed.outlines.len())
+    }
+}
+
+#[test]
+#[ignore]
+fn measure_hard_subjects() {
+    let size = (640, 360);
+    let still = Hard {
+        radius: 80.0,
+        speed: 0.0,
+        turn: 0.0,
+        grow: 0.0,
+        shutter: 0.0,
+        alike: false,
+    };
+    let frames = 24;
+    for alike in [false, true] {
+        for (name, shape) in [
+            (
+                "rigid, slow",
+                Hard {
+                    speed: 8.0,
+                    ..still
+                },
+            ),
+            (
+                "rigid, fast",
+                Hard {
+                    speed: 64.0,
+                    ..still
+                },
+            ),
+            (
+                "turning 8, slow",
+                Hard {
+                    speed: 8.0,
+                    turn: 8.0,
+                    ..still
+                },
+            ),
+            (
+                "turning 8, fast",
+                Hard {
+                    speed: 64.0,
+                    turn: 8.0,
+                    ..still
+                },
+            ),
+            (
+                "turning 20, fast",
+                Hard {
+                    speed: 64.0,
+                    turn: 20.0,
+                    ..still
+                },
+            ),
+            (
+                "growing 20%, slow",
+                Hard {
+                    speed: 8.0,
+                    grow: 0.2,
+                    ..still
+                },
+            ),
+            (
+                "growing 20%, fast",
+                Hard {
+                    speed: 64.0,
+                    grow: 0.2,
+                    ..still
+                },
+            ),
+            (
+                "turning and growing, fast",
+                Hard {
+                    speed: 64.0,
+                    turn: 12.0,
+                    grow: 0.2,
+                    ..still
+                },
+            ),
+            (
+                "turning and growing, faster",
+                Hard {
+                    speed: 128.0,
+                    turn: 20.0,
+                    grow: 0.3,
+                    ..still
+                },
+            ),
+            (
+                "half shutter, slow",
+                Hard {
+                    speed: 8.0,
+                    shutter: 0.5,
+                    ..still
+                },
+            ),
+            (
+                "half shutter, fast",
+                Hard {
+                    speed: 64.0,
+                    shutter: 0.5,
+                    ..still
+                },
+            ),
+            (
+                "open shutter, fast",
+                Hard {
+                    speed: 64.0,
+                    shutter: 1.0,
+                    ..still
+                },
+            ),
+            (
+                "half shutter, faster",
+                Hard {
+                    speed: 128.0,
+                    shutter: 0.5,
+                    ..still
+                },
+            ),
+            (
+                "half shutter, turning, fast",
+                Hard {
+                    speed: 64.0,
+                    turn: 12.0,
+                    shutter: 0.5,
+                    ..still
+                },
+            ),
+        ] {
+            let shape = Hard { alike, ..shape };
+            let began = std::time::Instant::now();
+            let (mean, worst, found) = shape.overlap(size, frames);
+            eprintln!(
+                "{:<5} {name:<30} mean {mean:.3}, worst {worst:.3}, {found} of {frames} frames, {:.0} s",
+                if alike { "alike" } else { "apart" },
+                began.elapsed().as_secs_f64()
+            );
+        }
+    }
+}
+
+/// Moving the picture to where a subject went moves what stayed behind by as much, and blocks on the
+/// subject's edge went with that, dragging its matte out by more than a band could bring back: one frame
+/// of this came to 0.938 where the shifts were all right.
+#[test]
+fn a_subject_found_again_keeps_clear_of_where_it_was() {
+    for speed in [10.0, 20.0, 40.0] {
+        let (mean, worst, found) = fast_overlap((200, 150), 32.0, speed, 24, false);
+        assert_eq!(found, 24, "{speed}");
+        assert!(mean > 0.99 && worst > 0.98, "{speed}: {mean} {worst}");
+    }
+}
+
+fn hard() -> Hard {
+    Hard {
+        radius: 80.0,
+        speed: 0.0,
+        turn: 0.0,
+        grow: 0.0,
+        shutter: 0.0,
+        alike: false,
+    }
+}
+
+#[test]
+fn a_subject_that_turns_and_changes_size_at_speed_is_kept_up_with() {
+    let size = (640, 360);
+    for (shape, least) in [
+        (
+            Hard {
+                speed: 64.0,
+                turn: 12.0,
+                grow: 0.2,
+                ..hard()
+            },
+            0.98,
+        ),
+        (
+            Hard {
+                speed: 128.0,
+                turn: 20.0,
+                grow: 0.3,
+                ..hard()
+            },
+            0.97,
+        ),
+        (
+            Hard {
+                speed: 64.0,
+                turn: 12.0,
+                grow: 0.2,
+                alike: true,
+                ..hard()
+            },
+            0.94,
+        ),
+    ] {
+        let (mean, worst, found) = shape.overlap(size, 12);
+        assert_eq!(found, 12, "{shape:?}");
+        assert!(
+            mean > least && worst > least - 0.02,
+            "{shape:?}: {mean} {worst}"
+        );
+    }
+}
+
+/// Under an open shutter the outline sits inside what is more than half covered, by as much as the blur
+/// is long, since a cut keeps to what looks like the subject and a measure of the fall-off goes only so far
+/// around a turn. These say how far it goes, so that it cannot go further.
+#[test]
+fn a_subject_under_an_open_shutter_is_kept_up_with() {
+    let size = (640, 360);
+    for (shape, least) in [
+        (
+            Hard {
+                speed: 8.0,
+                shutter: 0.5,
+                ..hard()
+            },
+            0.96,
+        ),
+        (
+            Hard {
+                speed: 64.0,
+                shutter: 0.5,
+                ..hard()
+            },
+            0.93,
+        ),
+        (
+            Hard {
+                speed: 64.0,
+                shutter: 1.0,
+                ..hard()
+            },
+            0.84,
+        ),
+        (
+            Hard {
+                speed: 64.0,
+                shutter: 0.5,
+                alike: true,
+                ..hard()
+            },
+            0.92,
+        ),
+    ] {
+        let (mean, worst, found) = shape.overlap(size, 12);
+        assert_eq!(found, 12, "{shape:?}");
+        assert!(
+            mean > least && worst > least - 0.04,
+            "{shape:?}: {mean} {worst}"
+        );
+    }
+}
+
+/// The two pictures, the matte of the first, and its colors, for a frame of a disk going at `speed`.
+fn a_step(
+    size: (usize, usize),
+    radius: f64,
+    speed: f64,
+    alike: bool,
+) -> (Picture, Picture, Vec<u8>, Gmm, Gmm) {
+    let (w, h) = size;
+    let picture =
+        |frame: usize| Picture::of(w, h, &fast_scene(size, radius, speed, frame, alike).2);
+    let start = fast_center(size, radius, speed, 0);
+    let hints = Hints {
+        inside: vec![[start[0] / w as f64, start[1] / h as f64]],
+        ..Hints::default()
+    };
+    let first = picture(0);
+    let (matte, fg, bg) = first_matte(&first, &hints, None).expect("a matte");
+    (first, picture(1), matte, fg, bg)
+}
+
+#[test]
+fn the_search_for_a_subject_runs_only_where_the_flow_has_lost_it() {
+    let (size, band) = ((640, 360), 16.0);
+    for alike in [false, true] {
+        for by_band in [0.25, 0.5, 1.0, 1.9, 4.0, 8.0] {
+            let (first, next, matte, ..) = a_step(size, 60.0, band * by_band, alike);
+            let flow = block_flow(&next.image, &first.image, 8, 4);
+            assert_eq!(
+                flow_lost(&first, &matte, &next, &flow),
+                by_band > 2.0,
+                "{by_band} bands, {alike}"
+            );
+        }
+    }
+}
+
+/// Slow subjects are where they were: going by the flow alone, as now, comes to the same bytes as
+/// searching first, as every frame used to.
+#[test]
+fn a_slow_subject_is_cut_as_it_was_with_or_without_the_search() {
+    for alike in [false, true] {
+        for by_band in [0.25, 0.5, 1.0] {
+            let (first, next, matte, fg, bg) = a_step((640, 360), 60.0, 16.0 * by_band, alike);
+            let colors = (&fg, &bg);
+            let without = next_matte(&first, &matte, &next, colors, None, false);
+            let with = next_matte(&first, &matte, &next, colors, None, true);
+            assert_eq!(without.1, [0, 0], "{by_band} bands, {alike}");
+            assert_eq!(without, with, "{by_band} bands, {alike}");
+        }
+    }
+}
