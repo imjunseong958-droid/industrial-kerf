@@ -129,6 +129,13 @@ pub const FULL_ROWS: &[RowDef] = &[
         noun: "faint",
         limit: Some("3:1"),
     },
+    RowDef {
+        code: "text.clipped",
+        name: "Clipped text",
+        codes: &["text.clipped"],
+        noun: "cut off",
+        limit: None,
+    },
     MEDIA,
     RENDER,
     DOCUMENT,

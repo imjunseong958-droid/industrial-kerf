@@ -701,6 +701,15 @@ void ViewerWidget::setMotionPath(const QString &clip, const QString &text, const
     update();
 }
 
+void ViewerWidget::setSampledPath(const QList<std::optional<QPointF>> &places, const std::optional<QPointF> &now) {
+    const bool seen = std::any_of(places.cbegin(), places.cend(), [](const std::optional<QPointF> &place) { return place.has_value(); });
+    const QList<std::optional<QPointF>> shown = seen ? places : QList<std::optional<QPointF>>{};
+    if (shown == m_sampledPath && now == m_sampledNow) return;
+    m_sampledPath = shown;
+    m_sampledNow = now;
+    update();
+}
+
 QPointF ViewerWidget::pathToWidget(const QPointF &point) const {
     const QRectF canvas = pictureRect();
     const QPointF on = m_pathPlacement.map(point);
@@ -1248,6 +1257,28 @@ void ViewerWidget::paintMasks(QPainter &p) {
 }
 
 void ViewerWidget::paintMotionPath(QPainter &p) {
+    if (!m_sampledPath.isEmpty()) {
+        const QRectF canvas = pictureRect();
+        const auto toWidget = [&canvas](const QPointF &share) { return QPointF(canvas.left() + share.x() * canvas.width(), canvas.top() + share.y() * canvas.height()); };
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(Qt::NoBrush);
+        QPainterPath path;
+        bool going = false;
+        for (const std::optional<QPointF> &place : std::as_const(m_sampledPath)) {
+            if (place && going) path.lineTo(toWidget(*place));
+            else if (place) path.moveTo(toWidget(*place));
+            going = place.has_value();
+        }
+        strokeOverPicture(p, path, true, false);
+        if (m_sampledNow) {
+            const EditorTheme &theme = editorTheme();
+            p.setPen(QPen(theme.maskHandleFill, 1.0));
+            p.setBrush(theme.maskHandleBorder);
+            p.drawEllipse(toWidget(*m_sampledNow), kHandleSize / 2.0, kHandleSize / 2.0);
+        }
+        p.restore();
+    }
     if (m_pathClip.isEmpty()) return;
     p.save();
     p.setRenderHint(QPainter::Antialiasing);

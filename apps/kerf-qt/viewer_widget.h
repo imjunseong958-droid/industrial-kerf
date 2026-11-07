@@ -148,6 +148,11 @@ public:
     // Delete removes the one clicked, down to the two a path needs; each writes
     // `path=` as one edit.
     void setMotionPath(const QString &clip, const QString &text, const QTransform &placement, double along);
+    // A curve to show where no placement can: its places in shares of the canvas, none where it cannot
+    // be seen, and where the clip is now. It is drawn and not edited, since no one map takes a drag back
+    // to a point of `path=`. Empty shows none.
+    void setSampledPath(const QList<std::optional<QPointF>> &places, const std::optional<QPointF> &now);
+    bool showsSampledPath() const { return !m_sampledPath.isEmpty(); }
     bool showsMotionPath() const { return !m_pathClip.isEmpty(); }
     // Its points, the curve through them, and where the clip is on it, all in
     // widget points as drawn. In depth, what is not in sight (inSight) is not drawn
@@ -303,6 +308,8 @@ private:
     QString m_pathClip;
     QList<QPointF> m_pathPoints;
     QTransform m_pathPlacement;
+    QList<std::optional<QPointF>> m_sampledPath;
+    std::optional<QPointF> m_sampledNow;
     double m_pathAlong = 0.0;
     int m_pathSelected = -1;
     // The point in hand, what the path was before it, and from the pointer to

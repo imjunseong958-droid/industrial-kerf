@@ -1124,6 +1124,29 @@ QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fi
     return onCanvas * camera.sees(plane, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}) * toShares;
 }
 
+QList<std::optional<QPointF>> sampledPath(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                          const QTransform &parents, const QJsonObject &timeline, int count) {
+    QList<std::optional<QPointF>> places;
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    const Geometry g = geometryAt(clip, clipTime);
+    const QPointF anchor(g.cropL + (1.0 - g.cropL - g.cropR) * (0.5 + g.anchorX), g.cropT + (1.0 - g.cropT - g.cropB) * (0.5 + g.anchorY));
+    const double cw = std::max(1.0, canvas.width()), ch = std::max(1.0, canvas.height());
+    for (int step = 0; step <= count; ++step) {
+        QJsonObject there = props;
+        there.insert(QStringLiteral("along"), double(step) / double(std::max(1, count)));
+        QJsonObject moved = clip;
+        moved.insert(QStringLiteral("props"), there);
+        const QTransform placement = picturePlacement(moved, picture, fit, canvas, clipTime, parents, timeline);
+        if (!placement.isInvertible() || !inSight(placement, anchor)) {
+            places.append(std::nullopt);
+            continue;
+        }
+        const QPointF on = placement.map(anchor);
+        places.append(QPointF(on.x() / cw, on.y() / ch));
+    }
+    return places;
+}
+
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                             const QTransform &parents, const QJsonObject &timeline) {
     const QTransform flat = flatPlacement(clip, picture, fit, canvas, clipTime, parents);

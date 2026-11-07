@@ -1930,11 +1930,16 @@ impl KerfMcpRouter {
             |_| true,
             &mut findings,
         );
+        // The same frames say what the edge of the frame cuts off.
+        let (clipped, findings): (Vec<_>, Vec<_>) = findings
+            .into_iter()
+            .partition(|finding| finding.code == "text.clipped");
         Ok(json!({
             "sequence": sequence.id.to_string(),
             "revision": revision,
             "read": read,
             "of": of,
+            "clipped": clipped,
             "contrast": findings,
         }))
     }

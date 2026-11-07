@@ -560,6 +560,44 @@ private slots:
         QVERIFY(QSettings().value(QStringLiteral("editor/inspector/fx/test.seven/more")).toBool());
     }
 
+    // A light's parameters come from the catalog, as every generator's do: what softens its shadow
+    // among them, with what the catalog says of it.
+    void aSoftShadowsSizeIsInTheInspector() {
+        // The catalog itself, as the bridge hands it over.
+        char *all = kerf_fx_catalog_all();
+        QVERIFY(all);
+        const QJsonArray entries = QJsonDocument::fromJson(all).array();
+        kerf_bridge_string_free(all);
+        QJsonArray light;
+        for (const QJsonValue &entry : entries)
+            if (entry.toObject().value("id") == QLatin1String("light")) light = entry.toObject().value("params").toArray();
+        const auto defOf = [&light](const char *name) {
+            for (const QJsonValue &def : light)
+                if (def.toObject().value("name") == QLatin1String(name)) return def.toObject();
+            return QJsonObject{};
+        };
+        QCOMPARE(defOf("size").value("type").toString(), QStringLiteral("number"));
+        QVERIFY(defOf("size").value("doc").toString().contains(QStringLiteral("Softens shadows")));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"width", 1920}, {"height", 1080}, {"properties", catalogProperties()}, {"generators", QJsonObject{{"light", light}}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "sun"}, {"kind", "generator"}, {"fx", "light"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                            {"props", QJsonObject{{"kind", "directional"}, {"shadow", 1.0}, {"size", 5.0}}}}}}}}}}}});
+        window.selectClip(QStringLiteral("sun"));
+        InspectorPanel *inspector = window.m_inspector;
+        auto *size = inspector->findChild<ScrubField *>(QStringLiteral("prop_size"));
+        auto *shadow = inspector->findChild<ScrubField *>(QStringLiteral("prop_shadow"));
+        QVERIFY(size && shadow);
+        QCOMPARE(size->text(), QStringLiteral("5.0"));
+        // An edit of it goes to the document as any other does.
+        size->commitText(QStringLiteral("8"));
+        const QJsonArray ops = takeOps(window);
+        QVERIFY(!ops.isEmpty());
+        QCOMPARE(ops.last().toObject().value("props").toObject().value("size").toDouble(), 8.0);
+    }
+
     // Inspector rows for the catalog's properties of the clip's track type,
     // with units: position in px of the frame, scale and opacity in %, gain
     // in dB, pan L…R; a title's text, font, size and colour; an effect's

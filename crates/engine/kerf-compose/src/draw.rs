@@ -2948,7 +2948,7 @@ mod tests {
             Option<(f64, f64)>,
         );
         #[rustfmt::skip]
-        let table: [Row; 23] = [
+        let table: [Row; 25] = [
             ("", "", "three_d=true", (1920, 1080), false, (1920, 1080), (0.25, 0.75), Some((480.0, 810.0))),
             ("", "", "three_d=true z=1", (1920, 1080), false, (1920, 1080), (0.0, 0.0), Some((404.425304296, 227.489233666))),
             ("", "", "three_d=true z=-0.5 x=0.25 y=-0.25 scale=0.5", (1920, 1080), false, (1920, 1080), (1.0, 1.0), Some((2469.363321845, 540.0))),
@@ -2967,6 +2967,9 @@ mod tests {
             ("", "", "three_d=true z=0.5 rotate_y=40 anchor_x=0.25 path=\"0,0 0.2,0.3 0.5,-0.1\" along=1", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((2108.520888367, 446.575181565))),
             ("", "x=-0.1 scale=0.8", "three_d=true z=0.5 path=\"0,0 0.2,0.3\" along=1", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1044.45932111, 730.033472497))),
             ("", "", "three_d=true rotate_y=30 orient=true path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.5", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1448.468778868, 836.127664149))),
+            // A path it faces along, from an anchor off the middle of a turned clip: `sampledPath` in the editor.
+            ("", "", "three_d=true z=0.2 rotate_y=30 orient=true anchor_x=0.25 path=\"0,0 0.2,0.3 0.5,-0.1\" along=0.5", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((1869.824956407, 835.685078047))),
+            ("", "", "three_d=true z=0.2 rotate_y=30 orient=true anchor_x=0.25 path=\"0,0 0.2,0.3 0.5,-0.1\" along=1", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((2326.408450295, 433.723742822))),
             ("", "", "three_d=true z=-5", (1920, 1080), false, (1920, 1080), (0.5, 0.5), None),
             ("", "", "three_d=true rotate_y=90", (1920, 1080), false, (1920, 1080), (0.75, 0.5), None),
             ("", "", "three_d=true x=0.1 rotate_y=90", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((1243.825954944, 540.0))),
