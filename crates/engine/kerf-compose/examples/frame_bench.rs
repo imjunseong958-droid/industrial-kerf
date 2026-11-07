@@ -65,6 +65,10 @@ const SCENES: &[(&str, &str)] = &[
         "fill big",
         "      mask k1 rect=0.2,0.2,0.8,0.8 mode=none\n      fx image.fill@1 path=k1\n",
     ),
+    (
+        "fill middling",
+        "      mask k1 rect=0.35,0.35,0.65,0.65 mode=none\n      fx image.fill@1 path=k1\n",
+    ),
     // What a grade can reach past the 18 grades, which none of them do.
     (
         "lumetri sharpen",
@@ -117,6 +121,10 @@ const SCENES: &[(&str, &str)] = &[
     ("rough edges", "      fx stylize.roughenedges@2\n"),
     ("replicate", "      fx stylize.replicate@1 count=3\n"),
     ("bokeh", "      fx blur.bokeh@1\n"),
+    // The widest iris that is gathered at full size, and the first gathered at half.
+    ("bokeh 12", "      fx blur.bokeh@1 amount=12\n"),
+    ("bokeh 13", "      fx blur.bokeh@1 amount=13\n"),
+    ("bokeh 60", "      fx blur.bokeh@1 amount=60\n"),
     ("remove grain", "      fx noise.removegrain@1\n"),
 ];
 

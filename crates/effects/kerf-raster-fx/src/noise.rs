@@ -7,8 +7,8 @@ use kerf_raster::{Image, Px};
 use rayon::prelude::*;
 
 use crate::generate::value_noise;
-use crate::util::{Plane, gauss_plane, guided_filter, join, premul, smoothstep, split, unpremul};
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::util::{gauss_plane, guided_filter, join, premul, smoothstep, split, unpremul, Guide, Plane};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
 fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
     EffectSpec { id, name, category: "Noise & Grain", params, render, gpu: false, float: true }
@@ -248,27 +248,35 @@ pub(crate) fn sample_boxes(img: &Image, count: usize, size: usize) -> Vec<(usize
     }
     let low = Plane::luma(img);
     let step = (size / 2).max(1);
-    let mut cands: Vec<(f32, usize, usize)> = Vec::new();
-    for y in (0..=h - size).step_by(step) {
-        for x in (0..=w - size).step_by(step) {
-            // Variance of the picture inside the box (the flattest boxes hold the least detail).
-            let (mut s, mut sq, mut n, mut opaque) = (0.0f32, 0.0f32, 0.0f32, true);
-            for yy in y..y + size {
-                for xx in x..x + size {
-                    let v = low.data[yy * w + xx];
-                    s += v;
-                    sq += v * v;
-                    n += 1.0;
-                    opaque &= img.data[yy * w + xx][3] > 0.5;
+    let rows: Vec<usize> = (0..=h - size).step_by(step).collect();
+    let mut cands: Vec<(f32, usize, usize)> = rows
+        .par_iter()
+        .flat_map_iter(|&y| {
+            let (low, img) = (&low, &img);
+            (0..=w - size).step_by(step).filter_map(move |x| {
+                // Variance of the picture inside the box (the flattest boxes hold the least detail).
+                let (mut s, mut sq, mut n, mut opaque) = (0.0f32, 0.0f32, 0.0f32, true);
+                for yy in y..y + size {
+                    for xx in x..x + size {
+                        let v = low.data[yy * w + xx];
+                        s += v;
+                        sq += v * v;
+                        n += 1.0;
+                        opaque &= img.data[yy * w + xx][3] > 0.5;
+                    }
                 }
-            }
-            if opaque {
-                cands.push((sq / n - (s / n).powi(2), x, y));
-            }
-        }
+                opaque.then(|| (sq / n - (s / n).powi(2), x, y))
+            })
+        })
+        .collect();
+    let order = |a: &(f32, usize, usize), b: &(f32, usize, usize)| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1));
+    // The flattest `count`, in order, without sorting the half a million there may be at 4K.
+    if cands.len() > count {
+        cands.select_nth_unstable_by(count, order);
+        cands.truncate(count);
     }
-    cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
-    cands.into_iter().take(count).map(|(_, x, y)| (x, y, size)).collect()
+    cands.sort_unstable_by(order);
+    cands.into_iter().map(|(_, x, y)| (x, y, size)).collect()
 }
 
 /// Draw sample boxes' outlines (Noise Samples viewing mode).
@@ -450,20 +458,55 @@ pub(crate) fn sampling_boxes(ctx: &EffectCtx, img: &Image, scale: f64) -> Vec<(u
     sample_boxes(img, n, s)
 }
 
-/// The grain level (0.5..2) measured in the sample boxes of `img`.
+/// The grain level (0.5..2) measured in the sample boxes of `img`, from the pixels around them
+/// alone: the boxes are a thousandth of the picture.
 fn grain_level(img: &Image, boxes: &[(usize, usize, usize)]) -> f32 {
-    let mut m = vec![false; img.data.len()];
-    let w = img.width as usize;
+    if boxes.is_empty() {
+        return 1.0;
+    }
+    (grain_std_in(img, boxes) / 0.02).clamp(0.5, 2.0)
+}
+
+/// The grain's standard deviation over what `boxes` cover: each pixel opaque enough to count, off a
+/// Gaussian of its surroundings, over the three channels.
+fn grain_std_in(img: &Image, boxes: &[(usize, usize, usize)]) -> f32 {
+    /// As far as a Gaussian of 1.5 pixels reads: three boxes of no more than 3 pixels' radius.
+    const AROUND: usize = 9;
+    let (w, h) = (img.width as usize, img.height as usize);
+    let mut seen = vec![false; w * h];
+    let mut sums = [(0.0f64, 0.0f64, 0.0f64); 3];
     for &(x, y, s) in boxes {
-        for yy in y..y + s {
-            for xx in x..x + s {
-                m[yy * w + xx] = true;
+        let (x0, y0) = (x.saturating_sub(AROUND), y.saturating_sub(AROUND));
+        let (x1, y1) = ((x + s + AROUND).min(w), (y + s + AROUND).min(h));
+        let (cw, chh) = (x1 - x0, y1 - y0);
+        let straight: Vec<([f32; 3], f32)> = (y0..y1).flat_map(|yy| (x0..x1).map(move |xx| (xx, yy))).map(|(xx, yy)| unpremul(img.data[yy * w + xx])).collect();
+        for (k, sum) in sums.iter_mut().enumerate() {
+            let plane = Plane { w: cw, h: chh, data: straight.iter().map(|(c, _)| c[k]).collect() };
+            let low = gauss_plane(&plane, 1.5, 1.5);
+            for yy in y..y + s {
+                for xx in x..x + s {
+                    let local = (yy - y0) * cw + xx - x0;
+                    if !seen[yy * w + xx] && straight[local].1 > 0.5 {
+                        let v = f64::from(plane.data[local] - low.data[local]);
+                        sum.0 += v;
+                        sum.1 += v * v;
+                        sum.2 += 1.0;
+                    }
+                }
             }
         }
+        for yy in y..y + s {
+            seen[yy * w..yy * w + x + s][x..].fill(true);
+        }
     }
-    let st = crate::noise2::grain_stats_masked(img, Some(&m));
-    let s = (st.std[0] + st.std[1] + st.std[2]) / 3.0;
-    if boxes.is_empty() { 1.0 } else { (s / 0.02).clamp(0.5, 2.0) }
+    let mut total = 0.0f32;
+    for (sum, sq, n) in sums {
+        if n > 1.0 {
+            let mean = sum / n;
+            total += (sq / n - mean * mean).max(0.0).sqrt() as f32;
+        }
+    }
+    total / 3.0
 }
 
 fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
@@ -485,7 +528,8 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if amt <= 0.0 && um_amount <= 0.0 && !temporal {
         return b;
     }
-    let before = b.img.clone();
+    // What the Preview Region shows outside it, and nothing else reads it.
+    let before = (view == 0).then(|| b.img.clone());
     // Temporal Filtering: steady pixels average with the neighbouring frames (grain changes
     // every frame, the picture does not); Motion Sensitivity keeps moving areas out of it.
     if temporal {
@@ -517,8 +561,8 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
             });
         }
         if amt <= 0.0 && um_amount <= 0.0 {
-            if view == 0 {
-                preview_compose(ctx, &mut b, &before);
+            if let Some(before) = &before {
+                preview_compose(ctx, &mut b, before);
             }
             return b;
         }
@@ -530,8 +574,11 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let texture = (pr.f("fineTuning/texture") as f32).clamp(0.0, 1.0);
     let r = (2.0 * b.scale).round().max(1.0) as usize;
     let eps = (0.02 * amt * level).powi(2);
-    let orig = split(&b.img);
-    let mut ch = orig.clone();
+    let mut ch = split(&b.img);
+    // Only Texture reads the planes as they came. The picture is in them now, and a 4K picture is
+    // 133 MB that the filter below can use.
+    let orig = (amt > 0.0 && texture > 0.0).then(|| ch.clone());
+    b.img.data = Vec::new();
     if amt > 0.0 {
         // Multichannel: all channels are guided by the luminance (correlated noise model);
         // Single Channel: each channel guides itself.
@@ -540,15 +587,16 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
                 let (w, h) = (ch[0].w, ch[0].h);
                 Plane { w, h, data: (0..w * h).map(|i| luma709(ch[0].data[i], ch[1].data[i], ch[2].data[i])).collect() }
             });
+            let shared = guide.as_ref().map(|g| Guide::new(g, r));
             for c in ch.iter_mut().take(3) {
-                *c = match &guide {
-                    Some(g) => guided_filter(g, c, r, eps),
+                *c = match &shared {
+                    Some(g) => g.filter(c, eps),
                     None => guided_filter(c, c, r, eps),
                 };
             }
         }
         // Texture: let some of the removed fine detail back through.
-        if texture > 0.0 {
+        if let Some(orig) = &orig {
             for k in 0..3 {
                 ch[k] = ch[k].zip_map(&orig[k], |f, o| f + (o - f) * texture);
             }
@@ -563,17 +611,16 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
             *c = c.zip_map(&low, |v, l| if (v - l).abs() > thr { v + (v - l) * um_amount } else { v });
         }
     }
-    let alpha = orig[3].clone();
     let mut out = join(&ch);
-    out.data.par_iter_mut().zip(alpha.data.par_iter()).for_each(|(p, &a)| {
+    out.data.par_iter_mut().for_each(|p| {
+        let a = p[3];
         for c in 0..3 {
             p[c] = p[c].clamp(0.0, a.max(0.0));
         }
-        p[3] = a;
     });
     b.img = out;
-    if view == 0 {
-        preview_compose(ctx, &mut b, &before);
+    if let Some(before) = &before {
+        preview_compose(ctx, &mut b, before);
     }
     b
 }
@@ -642,8 +689,8 @@ pub fn specs() -> Vec<EffectSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Params;
     use crate::util::hash1;
+    use crate::Params;
 
     fn run(id: &str, vals: &[(&str, Value)], img: Image, time: f64) -> Buf {
         let s = crate::find(id).unwrap();
@@ -706,6 +753,123 @@ mod tests {
         let mean: f32 = out.img.data.iter().map(|p| p[0]).sum::<f32>() / out.img.data.len() as f32;
         assert!((mean - 0.5).abs() < 0.05, "{mean}");
         assert!(out.img.data.iter().any(|p| (p[0] - 0.5).abs() > 0.01));
+    }
+
+    /// The grain's standard deviation over `mask`, measured with a Gaussian of the whole picture.
+    fn grain_std_over_it_all(img: &Image, mask: &[bool]) -> f32 {
+        let (w, h) = (img.width as usize, img.height as usize);
+        let straight: Vec<([f32; 3], f32)> = img.data.iter().map(|&p| unpremul(p)).collect();
+        let mut total = 0.0f32;
+        for k in 0..3 {
+            let plane = Plane { w, h, data: straight.iter().map(|(c, _)| c[k]).collect() };
+            let low = gauss_plane(&plane, 1.5, 1.5);
+            let (mut sum, mut sq, mut n) = (0.0f64, 0.0f64, 0.0f64);
+            for i in 0..w * h {
+                if straight[i].1 > 0.5 && mask[i] {
+                    let v = f64::from(plane.data[i] - low.data[i]);
+                    sum += v;
+                    sq += v * v;
+                    n += 1.0;
+                }
+            }
+            if n > 1.0 {
+                let mean = sum / n;
+                total += (sq / n - mean * mean).max(0.0).sqrt() as f32;
+            }
+        }
+        total / 3.0
+    }
+
+    #[test]
+    fn grain_is_measured_around_its_boxes_as_over_the_whole_picture() {
+        // Grain on a picture with flat parts and busy ones, some of it transparent.
+        let (w, h) = (200, 150);
+        let mut img = Image::new(w, h);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            let n = hash1(i as u32, 0, 9) * 0.1 - 0.05;
+            let base = if x < 100 { 0.4 } else { 0.5 + 0.2 * (x as f32 / 7.0).sin() };
+            let a = if y < 10 { 0.0 } else { 1.0 };
+            *p = [(base + n) * a, (base - n) * a, (base + n * 0.5) * a, a];
+        }
+        for (count, size) in [(80, 9), (5, 18), (200, 5)] {
+            let boxes = sample_boxes(&img, count, size);
+            assert!(!boxes.is_empty());
+            let mut mask = vec![false; img.data.len()];
+            for &(x, y, s) in &boxes {
+                for yy in y..y + s {
+                    for xx in x..x + s {
+                        mask[yy * w as usize + xx] = true;
+                    }
+                }
+            }
+            let whole = grain_std_over_it_all(&img, &mask);
+            let near = grain_std_in(&img, &boxes);
+            assert!((near - whole).abs() < 1e-4, "{near} against {whole}");
+        }
+    }
+
+    #[test]
+    fn the_boxes_are_the_flattest_in_order() {
+        // Each box flatter than the last, as a full sort of every candidate gives.
+        let (w, h) = (320u32, 240u32);
+        let mut img = Image::new(w, h);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let v = hash1(i as u32 % w, i as u32 / w, 3);
+            *p = [v, v, v, 1.0];
+        }
+        let boxes = sample_boxes(&img, 40, 8);
+        let low = Plane::luma(&img);
+        let variance = |&(x, y, s): &(usize, usize, usize)| {
+            let (mut sum, mut sq, mut n) = (0.0f32, 0.0f32, 0.0f32);
+            for yy in y..y + s {
+                for xx in x..x + s {
+                    let v = low.data[yy * w as usize + xx];
+                    sum += v;
+                    sq += v * v;
+                    n += 1.0;
+                }
+            }
+            sq / n - (sum / n).powi(2)
+        };
+        assert_eq!(boxes.len(), 40);
+        assert!(boxes.windows(2).all(|pair| variance(&pair[0]) <= variance(&pair[1])));
+        // None flatter was left out.
+        let worst = boxes.last().map(variance).unwrap();
+        let step = 4;
+        let mut flatter = 0;
+        for y in (0..=h as usize - 8).step_by(step) {
+            for x in (0..=w as usize - 8).step_by(step) {
+                if variance(&(x, y, 8)) < worst {
+                    flatter += 1;
+                }
+            }
+        }
+        assert!(flatter < 40, "{flatter}");
+    }
+
+    #[test]
+    fn a_guide_shared_filters_as_one_made_for_each_plane() {
+        let (w, h) = (48, 32);
+        let plane = |seed: u32| Plane { w, h, data: (0..w * h).map(|i| hash1(i as u32, seed, 5)).collect() };
+        let (g, a, b) = (plane(1), plane(2), plane(3));
+        use crate::util::box_plane;
+        // The filter as He, Sun, and Tang wrote it, nothing shared.
+        let by_hand = |p: &Plane, eps: f32| {
+            let r = 2;
+            let (mean_g, mean_p) = (box_plane(&g, r, r), box_plane(p, r, r));
+            let corr_gp = box_plane(&g.zip_map(p, |a, b| a * b), r, r);
+            let corr_gg = box_plane(&g.map(|a| a * a), r, r);
+            let n = w * h;
+            let slope: Vec<f32> =
+                (0..n).map(|i| (corr_gp.data[i] - mean_g.data[i] * mean_p.data[i]) / (corr_gg.data[i] - mean_g.data[i] * mean_g.data[i] + eps)).collect();
+            let level: Vec<f32> = (0..n).map(|i| mean_p.data[i] - slope[i] * mean_g.data[i]).collect();
+            let (ma, mb) = (box_plane(&Plane { w, h, data: slope }, r, r), box_plane(&Plane { w, h, data: level }, r, r));
+            (0..n).map(|i| ma.data[i] * g.data[i] + mb.data[i]).collect::<Vec<f32>>()
+        };
+        let shared = Guide::new(&g, 2);
+        assert_eq!(shared.filter(&a, 1e-3).data, by_hand(&a, 1e-3));
+        assert_eq!(shared.filter(&b, 1e-3).data, by_hand(&b, 1e-3));
     }
 
     #[test]

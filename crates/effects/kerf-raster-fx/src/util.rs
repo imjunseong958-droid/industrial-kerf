@@ -181,25 +181,48 @@ pub fn morph_frac(p: &Plane, radius: f64, max: bool) -> Plane {
 
 /// He et al. guided filter: smooth `p` while following edges of guide `g` (radius `r`, regulariser `eps`).
 pub fn guided_filter(g: &Plane, p: &Plane, r: usize, eps: f32) -> Plane {
-    let mean_g = box_plane(g, r, r);
-    let mean_p = box_plane(p, r, r);
-    let gp = g.zip_map(p, |a, b| a * b);
-    let gg = g.map(|a| a * a);
-    let corr_gp = box_plane(&gp, r, r);
-    let corr_gg = box_plane(&gg, r, r);
-    let n = g.data.len();
-    let mut a = Plane::new(g.w, g.h);
-    let mut b = Plane::new(g.w, g.h);
-    a.data.par_iter_mut().zip(b.data.par_iter_mut()).enumerate().for_each(|(i, (av, bv))| {
-        let var = corr_gg.data[i] - mean_g.data[i] * mean_g.data[i];
-        let cov = corr_gp.data[i] - mean_g.data[i] * mean_p.data[i];
-        *av = cov / (var + eps);
-        *bv = mean_p.data[i] - *av * mean_g.data[i];
-    });
-    debug_assert_eq!(n, a.data.len());
-    let ma = box_plane(&a, r, r);
-    let mb = box_plane(&b, r, r);
-    Plane { w: g.w, h: g.h, data: (0..n).into_par_iter().map(|i| ma.data[i] * g.data[i] + mb.data[i]).collect() }
+    Guide::new(g, r).filter(p, eps)
+}
+
+/// What a guided filter needs of its guide, for filtering several planes by one.
+pub struct Guide<'a> {
+    plane: &'a Plane,
+    r: usize,
+    mean: Plane,
+    corr: Plane,
+}
+
+impl<'a> Guide<'a> {
+    pub fn new(plane: &'a Plane, r: usize) -> Guide<'a> {
+        let mean = box_plane(plane, r, r);
+        let corr = box_plane(&plane.map(|a| a * a), r, r);
+        Guide { plane, r, mean, corr }
+    }
+
+    /// `p` smoothed but for the edges of the guide.
+    pub fn filter(&self, p: &Plane, eps: f32) -> Plane {
+        let (g, r, mean_g, corr_gg) = (self.plane, self.r, &self.mean, &self.corr);
+        let mean_p = box_plane(p, r, r);
+        let gp = g.zip_map(p, |a, b| a * b);
+        let corr_gp = box_plane(&gp, r, r);
+        drop(gp);
+        let n = g.data.len();
+        let mut a = Plane::new(g.w, g.h);
+        let mut b = Plane::new(g.w, g.h);
+        a.data.par_iter_mut().zip(b.data.par_iter_mut()).enumerate().for_each(|(i, (av, bv))| {
+            let var = corr_gg.data[i] - mean_g.data[i] * mean_g.data[i];
+            let cov = corr_gp.data[i] - mean_g.data[i] * mean_p.data[i];
+            *av = cov / (var + eps);
+            *bv = mean_p.data[i] - *av * mean_g.data[i];
+        });
+        debug_assert_eq!(n, a.data.len());
+        drop((mean_p, corr_gp));
+        let ma = box_plane(&a, r, r);
+        drop(a);
+        let mb = box_plane(&b, r, r);
+        drop(b);
+        Plane { w: g.w, h: g.h, data: (0..n).into_par_iter().map(|i| ma.data[i] * g.data[i] + mb.data[i]).collect() }
+    }
 }
 
 /// Split an image into its four premultiplied channel planes.
@@ -221,7 +244,11 @@ pub fn join(ch: &[Plane; 4]) -> Image {
 #[inline]
 pub fn unpremul(p: Px) -> ([f32; 3], f32) {
     let a = p[3];
-    if a > 1e-6 { ([p[0] / a, p[1] / a, p[2] / a], a) } else { ([0.0; 3], a.max(0.0)) }
+    if a > 1e-6 {
+        ([p[0] / a, p[1] / a, p[2] / a], a)
+    } else {
+        ([0.0; 3], a.max(0.0))
+    }
 }
 
 #[inline]
@@ -292,7 +319,11 @@ pub fn set_alpha(img: &mut Image, new_a: &Plane) {
 /// transparent or clamped outside.
 #[inline]
 pub fn sample(img: &Image, x: f64, y: f64, clamp: bool) -> Px {
-    if clamp { img.sample_bilinear_clamped(x, y) } else { img.sample_bilinear(x, y) }
+    if clamp {
+        img.sample_bilinear_clamped(x, y)
+    } else {
+        img.sample_bilinear(x, y)
+    }
 }
 
 /// Inverse-mapped warp: each output pixel samples the source at `f(x, y)` (pixel centres +0.5).

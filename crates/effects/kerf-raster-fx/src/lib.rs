@@ -22,7 +22,6 @@ mod keying;
 mod keying2;
 mod matte;
 mod noise;
-mod noise2;
 mod stylize2;
 mod util;
 mod value;
