@@ -1548,6 +1548,8 @@ dependencies = [
 name = "kerf-track"
 version = "0.1.0"
 dependencies = [
+ "kerf-draw",
+ "kerf-model",
  "kerf-raster",
  "kerf-segment",
  "rayon",

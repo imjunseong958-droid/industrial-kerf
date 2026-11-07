@@ -156,7 +156,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   runs 0 to 1; all three animate. So does the outline, with keyframes of it:
   `rect={0f:0.1,0.1,0.5,0.5 24f:0.3,0.1,0.7,0.5:ease}`, `ellipse={…}`, or
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, with `;` between corners. Outlines of a
-  mask are one kind, with the same corners, which move one for one. A trim or a split keeps a
+  mask are one kind, with the same corners, which move one for one. A third number on a corner says how
+  soft the edge is there: `points="0.1,0.1,0 0.9,0.1,24 0.9,0.9,24 0.1,0.9,0"` is hard on its left and falls
+  off over 24 picture pixels on its right, going evenly along the edges between, on top of `feather`. It animates with the
+  outline (`points={0f:0,0,2;… 24f:0,0,12;…}`), and with none said an outline draws as it always has. `look` with `track` and
+  `inside` fills it in from what it measures across the edge. A trim or a split keeps a
   mask where it was on the picture. A crop still applies over the masks.
   Effects name a mask by its name (`fx generate.stroke path=k1`); names are
   unique within the clip.

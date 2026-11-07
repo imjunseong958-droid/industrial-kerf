@@ -2743,6 +2743,71 @@ mod tests {
     }
 
     #[test]
+    fn corners_dragged_in_the_viewer_stay_as_soft_as_they_were() {
+        let mut runtime = runtime();
+        edit(
+            &mut runtime,
+            "track add V1 video\n\
+             media add m1 path=\"a.mov\" rate=30 dur=60f video=320x180\n\
+             insert media=m1 dur=30f at=0f on=V1 as=c1\n\
+             mask c1 add k1 points=\"0,0,4 0.5,1,8 1,0,12\"",
+            0,
+        )
+        .unwrap();
+        let mut ops = |ops: Value| {
+            let revision = runtime.state.revision;
+            let ops: Vec<EditOp> = serde_json::from_value(ops).unwrap();
+            runtime.apply_ops_request("ui", &unique_id(), ops, revision)
+        };
+        let dragged = ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "points": [[0.1, 0], [0.5, 1], [1, 0]]}
+        ]))
+        .unwrap();
+        assert!(
+            dragged
+                .document
+                .contains("mask k1 points=\"0.1,0,4 0.5,1,8 1,0,12\"\n"),
+            "{}",
+            dragged.document
+        );
+        // The timeline says so, and what is said goes.
+        let masks = &dragged.timeline["tracks"][0]["clips"][0]["masks"];
+        assert_eq!(masks[0]["soft"], json!([4.0, 8.0, 12.0]));
+        let said = ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "points": [[0.1, 0], [0.5, 1], [1, 0]],
+             "soft": [1, 2, 3]}
+        ]))
+        .unwrap();
+        assert!(
+            said.document
+                .contains("mask k1 points=\"0.1,0,1 0.5,1,2 1,0,3\"\n"),
+            "{}",
+            said.document
+        );
+        // With another number of corners there is no telling.
+        let more = ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1",
+             "points": [[0, 0], [0.5, 1], [1, 0], [0.5, -0.5]]}
+        ]))
+        .unwrap();
+        assert!(
+            more.document
+                .contains("mask k1 points=\"0,0 0.5,1 1,0 0.5,-0.5\"\n"),
+            "{}",
+            more.document
+        );
+        assert!(ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "points": [[0, 0], [0.5, 1], [1, 0]],
+             "soft": [1, 2]}
+        ]))
+        .is_err());
+        assert!(ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "rect": [0, 0, 1, 1], "soft": [1, 2, 3, 4]}
+        ]))
+        .is_err());
+    }
+
+    #[test]
     fn typed_edits_add_set_and_remove_masks() {
         let mut runtime = runtime();
         edit(

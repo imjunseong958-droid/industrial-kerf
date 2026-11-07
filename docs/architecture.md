@@ -236,7 +236,12 @@ moves: each frame's hole comes from the outline at that moment.
 
 Given points on an object, `look` cuts it out and follows it (`kerf_track::roto`, a graph cut carried
 forward by optical flow, in the same `track`), and what it finds is a moving mask of 40 corners, not a
-matte kept beside the document. A trained model is optional and swappable (`kerf_segment::MaskModel`):
+matte kept beside the document. How soft its edge is at each corner is plain text on the same line, a third number on the corner, measured
+across the edge in light: what lies well inside and well outside are the two colours mixed, and the
+fall-off that draws what lies between says how wide it is and where its middle is (`roto/soft.rs`). A
+subject out of focus on one side, or moving under an open shutter, comes within 0.052 of the true alpha on
+average over its edge's pixels, where the best single `feather=` on the same outline is off by 0.08 to 0.09, in 14 ms a frame at 960x540. Hair comes out as a band that is soft on
+average, not as strands, which is all a soft edge along an outline can say. The cut itself still lags a subject moving much further in a frame than its band of a fortieth of the frame's width. A trained model is optional and swappable (`kerf_segment::MaskModel`):
 it only sharpens the cut's prior, and one that disagrees with the flow is left out for that frame.
 MobileSAM runs in plain Rust; its weights are never bundled, and `look` names the file to fetch. On a
 disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at
@@ -255,8 +260,7 @@ turn 0.15 degrees at worst, and the field of view 0.2 degrees, with 0.13 pixels 
 in 31 ms a frame after the frames are drawn (28 of it following points). A clip pinned under a 55
 degree lens for 36 frames at 480x270 stays within 0.72 pixels of its spot.
 
-To add: soft edges, which a polygon cannot hold (`feather=` approximates them); a lens that zooms
-during a camera solve, which now reads as moving along its line with more error. Optical flow is in
+To add: a lens that zooms during a camera solve, which now reads as moving along its line with more error. Optical flow is in
 `kerf-raster` now, which `image.fill` uses on a moving shot and `retime=flow` uses for slow motion.
 
 ### Image

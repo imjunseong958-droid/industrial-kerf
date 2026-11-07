@@ -1038,7 +1038,8 @@ impl RateSpec {
 /// A mask's outline, as the language writes it: at most one of `rect`
 /// (left, top, right, bottom), `ellipse` (center x and y, then the radius
 /// across and down), or `points` (corners in order, closed unless `closed`
-/// is false), in fractions of the clip's picture with 0, 0 at its top left.
+/// is false, and `soft`, how soft the edge is at each, in pixels), in fractions of the clip's picture
+/// with 0, 0 at its top left.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MaskOutline {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1049,6 +1050,8 @@ pub struct MaskOutline {
     pub points: Option<Vec<[f64; 2]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft: Option<Vec<f64>>,
 }
 
 impl MaskOutline {
@@ -1062,8 +1065,8 @@ impl MaskOutline {
         if given.into_iter().filter(|given| *given).count() > 1 {
             return Err(invalid("a mask has one outline: rect, ellipse, or points"));
         }
-        if self.closed.is_some() && self.points.is_none() {
-            return Err(invalid("`closed` goes with `points`"));
+        if (self.closed.is_some() || self.soft.is_some()) && self.points.is_none() {
+            return Err(invalid("`closed` and `soft` go with `points`"));
         }
         Ok(match (self.rect, self.ellipse, &self.points) {
             (Some(rect), _, _) => Some(MaskShape::Rect(rect)),
@@ -1071,9 +1074,45 @@ impl MaskOutline {
             (_, _, Some(points)) => Some(MaskShape::Polygon {
                 points: points.clone(),
                 closed: self.closed.unwrap_or(true),
+                soft: self.soft.clone().unwrap_or_default(),
             }),
             _ => None,
         })
+    }
+}
+
+/// `shape` for a mask being given new corners without a word of how soft they are, as dragging them
+/// does: as soft as they were, if there are as many as there were.
+fn kept_soft(
+    project: &Project,
+    clip: &str,
+    name: &str,
+    outline: &MaskOutline,
+    shape: MaskShape,
+) -> MaskShape {
+    let was = project
+        .sequences
+        .iter()
+        .flat_map(|sequence| &sequence.tracks)
+        .flat_map(|track| &track.clips)
+        .filter(|found| found.id.as_str() == clip)
+        .flat_map(|found| &found.masks)
+        .find(|mask| mask.name.as_str() == name);
+    match (shape, was.map(|mask| &mask.shape), &outline.soft) {
+        (
+            MaskShape::Polygon { points, closed, .. },
+            Some(MaskShape::Polygon {
+                points: before,
+                soft,
+                ..
+            }),
+            None,
+        ) if points.len() == before.len() => MaskShape::Polygon {
+            points,
+            closed,
+            soft: soft.clone(),
+        },
+        (shape, _, _) => shape,
     }
 }
 
@@ -1348,7 +1387,9 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         } => Op::MaskSet {
             clip: edit_id(clip)?,
             name: edit_id(name)?,
-            shape: outline.shape()?,
+            shape: outline
+                .shape()?
+                .map(|shape| kept_soft(project, clip, name, outline, shape)),
             mode: mask_mode(mode)?,
             inverted: *inverted,
             params: mask_params(params, rate_of(clip))?,

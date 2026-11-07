@@ -635,8 +635,13 @@ pub enum MaskShape {
     /// and down (of the height).
     Ellipse([f64; 4]),
     /// Corners in order. An open outline cuts nothing; effects still read
-    /// it as a path.
-    Polygon { points: Vec<[f64; 2]>, closed: bool },
+    /// it as a path. `soft` says how many picture pixels wide the edge's fall-off is at each corner,
+    /// over the mask's `feather`, going evenly from one to the next; empty is none.
+    Polygon {
+        points: Vec<[f64; 2]>,
+        closed: bool,
+        soft: Vec<f64>,
+    },
     /// An outline that changes over the clip: outlines of one kind, with the same corners, at times
     /// relative to the clip's start. Before the first and after the last the nearest one holds.
     Moving(Vec<OutlineKey>),
@@ -671,9 +676,21 @@ impl MaskShape {
                     (Self::Ellipse(a), Self::Ellipse(b)) => {
                         Self::Ellipse(std::array::from_fn(|i| mix(a[i], b[i])))
                     }
-                    (Self::Polygon { points: a, closed }, Self::Polygon { points: b, .. })
-                        if a.len() == b.len() =>
-                    {
+                    (
+                        Self::Polygon {
+                            points: a,
+                            closed,
+                            soft: from,
+                        },
+                        Self::Polygon {
+                            points: b,
+                            soft: to,
+                            ..
+                        },
+                    ) if a.len() == b.len() => {
+                        // A key that says nothing of it says 0.
+                        let soft_at =
+                            |soft: &[f64], corner: usize| soft.get(corner).copied().unwrap_or(0.0);
                         Self::Polygon {
                             points: a
                                 .iter()
@@ -681,6 +698,13 @@ impl MaskShape {
                                 .map(|(a, b)| [mix(a[0], b[0]), mix(a[1], b[1])])
                                 .collect(),
                             closed: *closed,
+                            soft: if from.is_empty() && to.is_empty() {
+                                Vec::new()
+                            } else {
+                                (0..a.len())
+                                    .map(|corner| mix(soft_at(from, corner), soft_at(to, corner)))
+                                    .collect()
+                            },
                         }
                     }
                     _ => left.shape.clone(),
@@ -709,10 +733,22 @@ impl MaskShape {
             Self::Ellipse(e) if !fine(e) || e[2] <= 0.0 || e[3] <= 0.0 => {
                 Some("an ellipse needs radii above 0")
             }
-            Self::Polygon { points, closed }
+            Self::Polygon { points, closed, .. }
                 if !fine(points.as_flattened()) || points.len() < if *closed { 3 } else { 2 } =>
             {
                 Some("an outline needs 3 corners, or 2 points when open")
+            }
+            Self::Polygon {
+                closed: false,
+                soft,
+                ..
+            } if !soft.is_empty() => Some("an open outline has no edge to soften"),
+            Self::Polygon { points, soft, .. }
+                if !soft.is_empty()
+                    && (soft.len() != points.len()
+                        || soft.iter().any(|soft| !(0.0..=10_000.0).contains(soft))) =>
+            {
+                Some("a corner's softness is 0 to 10000 pixels, on every corner")
             }
             Self::Moving(keys) => {
                 if keys.windows(2).any(|pair| pair[0].at >= pair[1].at) {
@@ -727,10 +763,12 @@ impl MaskShape {
                                 Self::Polygon {
                                     points: a,
                                     closed: x,
+                                    ..
                                 },
                                 Self::Polygon {
                                     points: b,
                                     closed: y,
+                                    ..
                                 },
                             ) => a.len() == b.len() && x == y,
                             _ => false,
@@ -1199,6 +1237,7 @@ mod tests {
         let polygon = |x: f64| MaskShape::Polygon {
             points: vec![[x, 0.0], [x + 0.1, 0.0], [x, 0.1]],
             closed: true,
+            soft: Vec::new(),
         };
         let shape = MaskShape::Moving(vec![
             OutlineKey {
@@ -1219,6 +1258,49 @@ mod tests {
     }
 
     #[test]
+    fn softness_moves_with_the_corners_and_a_key_without_it_says_none() {
+        let polygon = |soft: Vec<f64>| MaskShape::Polygon {
+            points: vec![[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]],
+            closed: true,
+            soft,
+        };
+        let key = |at: i64, shape: MaskShape| OutlineKey {
+            at: frames(at),
+            shape,
+            interp: Interp::Linear,
+        };
+        let soft_at = |shape: &MaskShape, at: i64| match shape.at(frames(at)).into_owned() {
+            MaskShape::Polygon { soft, .. } => soft,
+            other => panic!("{other:?}"),
+        };
+        let both = MaskShape::Moving(vec![
+            key(0, polygon(vec![0.0, 4.0, 8.0])),
+            key(10, polygon(vec![10.0, 4.0, 0.0])),
+        ]);
+        assert_eq!(soft_at(&both, 5), [5.0, 4.0, 4.0]);
+        let one = MaskShape::Moving(vec![
+            key(0, polygon(Vec::new())),
+            key(10, polygon(vec![10.0, 4.0, 0.0])),
+        ]);
+        assert_eq!(soft_at(&one, 5), [5.0, 2.0, 0.0]);
+        let none = MaskShape::Moving(vec![
+            key(0, polygon(Vec::new())),
+            key(10, polygon(Vec::new())),
+        ]);
+        assert!(soft_at(&none, 5).is_empty());
+        assert!(polygon(vec![1.0, 2.0, 3.0]).problem().is_none());
+        assert!(polygon(vec![1.0, 2.0]).problem().is_some());
+        assert!(polygon(vec![1.0, -2.0, 3.0]).problem().is_some());
+        assert!(polygon(vec![1.0, f64::NAN, 3.0]).problem().is_some());
+        let open = MaskShape::Polygon {
+            points: vec![[0.0, 0.0], [0.1, 0.0]],
+            closed: false,
+            soft: vec![1.0, 1.0],
+        };
+        assert!(open.problem().is_some());
+    }
+
+    #[test]
     fn outlines_that_cannot_move_into_each_other_are_refused() {
         let key = |at: i64, shape: MaskShape| OutlineKey {
             at: frames(at),
@@ -1232,6 +1314,7 @@ mod tests {
                 .chain(extra.then_some([0.0, 1.0]))
                 .collect(),
             closed: true,
+            soft: Vec::new(),
         };
         for bad in [
             vec![key(0, rect.clone()), key(0, rect.clone())],

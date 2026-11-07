@@ -936,16 +936,26 @@ pub(crate) fn take_mask_shape(
     };
     moving(arg, &|text| {
         // A quoted outline is spaced, and within keyframes corners are split by `;`.
-        let points = text
+        let corners = text
             .split(|c: char| c.is_whitespace() || c == ';')
             .filter(|point| !point.is_empty())
-            .map(|point| {
-                let values = numbers(arg, point)?;
-                <[f64; 2]>::try_from(values)
-                    .map_err(|_| fields.error(arg, format!("`{point}` is not x,y")))
+            .map(|point| match numbers(arg, point)?.as_slice() {
+                [x, y] => Ok(([*x, *y], None)),
+                [x, y, soft] => Ok(([*x, *y], Some(*soft))),
+                _ => Err(fields.error(arg, format!("`{point}` is not x,y or x,y,soft"))),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(MaskShape::Polygon { points, closed })
+        // A corner that says nothing of how soft the edge is there says 0.
+        let soft = if corners.iter().any(|(_, soft)| soft.is_some()) {
+            corners.iter().map(|(_, soft)| soft.unwrap_or(0.0)).collect()
+        } else {
+            Vec::new()
+        };
+        Ok(MaskShape::Polygon {
+            points: corners.into_iter().map(|(point, _)| point).collect(),
+            closed,
+            soft,
+        })
     })
     .map(Some)
 }
@@ -959,23 +969,30 @@ pub(crate) fn mask_shape_text(shape: &MaskShape, rate: Rate) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
+    let corners = |points: &[[f64; 2]], soft: &[f64]| -> Vec<String> {
+        let at = |corner: usize| soft.get(corner).into_iter().copied();
+        points
+            .iter()
+            .enumerate()
+            .map(|(corner, point)| list(&point.iter().copied().chain(at(corner)).collect::<Vec<_>>()))
+            .collect()
+    };
     match shape {
         MaskShape::Rect(rect) => format!(" rect={}", list(rect)),
         MaskShape::Ellipse(ellipse) => format!(" ellipse={}", list(ellipse)),
-        MaskShape::Polygon { points, closed } => {
-            let points: Vec<String> = points.iter().map(|point| list(point)).collect();
+        MaskShape::Polygon {
+            points,
+            closed,
+            soft,
+        } => {
             let open = if *closed { "" } else { " closed=false" };
-            format!(" points={}{open}", quote(&points.join(" ")))
+            format!(" points={}{open}", quote(&corners(points, soft).join(" ")))
         }
         MaskShape::Moving(keys) => {
             let key_text = |key: &OutlineKey| {
                 let shape = match &key.shape {
                     MaskShape::Rect(values) | MaskShape::Ellipse(values) => list(values),
-                    MaskShape::Polygon { points, .. } => points
-                        .iter()
-                        .map(|point| list(point))
-                        .collect::<Vec<_>>()
-                        .join(";"),
+                    MaskShape::Polygon { points, soft, .. } => corners(points, soft).join(";"),
                     MaskShape::Moving(_) => String::new(),
                 };
                 let mut text = format!("{}:{shape}", crate::text::print_offset(key.at, rate));

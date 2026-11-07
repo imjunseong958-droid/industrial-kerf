@@ -10,5 +10,9 @@ kerf-raster = { path = "../../render/kerf-raster" }
 kerf-segment = { path = "../kerf-segment" }
 rayon = { workspace = true }
 
+[dev-dependencies]
+kerf-draw = { path = "../../render/kerf-draw" }
+kerf-model = { path = "../../foundation/kerf-model" }
+
 [lints]
 workspace = true

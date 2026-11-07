@@ -531,6 +531,7 @@ pub fn read(text: &str, source: &str) -> Result<Look, LookError> {
                             shape = Some(MaskShape::Polygon {
                                 points: v.chunks(2).map(|p| [p[0], p[1]]).collect(),
                                 closed: true,
+                                soft: Vec::new(),
                             });
                         }
                         Some("mode") => {
