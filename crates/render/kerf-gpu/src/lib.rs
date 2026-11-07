@@ -1,6 +1,6 @@
 //! Kerf's drawing on the GPU.
 //!
-//! A [`Frame`] records one frame's work: footage goes up as the 8-bit bytes it decoded to, every
+//! A [`Frame`] records one frame's work: footage goes up in the planes it decoded to, every
 //! working [`Picture`] is premultiplied linear-light RGBA f32 in a texture, as `kerf_draw::Image`
 //! is on the CPU, and only the finished bytes come back. Going up and back once a frame is what
 //! makes this worth doing: moving a 4K float picture across for each effect costs as much as
@@ -63,6 +63,10 @@ pub struct Gpu {
     input_layout: wgpu::BindGroupLayout,
     input: wgpu::ComputePipeline,
     correct: wgpu::ComputePipeline,
+    planes_light_layout: wgpu::BindGroupLayout,
+    planes_light: wgpu::ComputePipeline,
+    planes_codes_layout: wgpu::BindGroupLayout,
+    planes_codes: wgpu::ComputePipeline,
     by_weight: wgpu::ComputePipeline,
     plus: wgpu::ComputePipeline,
     finish_layout: wgpu::BindGroupLayout,
@@ -77,6 +81,76 @@ pub struct Gpu {
     /// Held while kernels build: a device's error scopes nest, so two at once would cross.
     building: Mutex<()>,
     failed: Arc<AtomicBool>,
+}
+
+/// A frame as it decoded, in planes of Y'CbCr, for the GPU to make into RGB rather than have it made
+/// and uploaded at twice or more the bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Yuv<'a> {
+    pub planes: [&'a [u8]; 3],
+    /// The bytes a row of each plane takes.
+    pub strides: [u32; 3],
+    pub size: (u32, u32),
+    /// How far down in size chroma is across and down, as a power of 2.
+    pub chroma_shift: (u32, u32),
+    /// Bits a sample: 8 in a byte, and more in 2 bytes, little-endian.
+    pub bits: u32,
+    pub matrix: kerf_color::Matrix,
+    pub full_range: bool,
+    /// Chroma filtered going down, rather than repeated.
+    pub chroma_smooth: bool,
+}
+
+impl Yuv<'_> {
+    /// What takes its code values to R'G'B' from 0 to 1: where luma and chroma start and what spans
+    /// them, then how much of Cr goes to red, Cb and Cr from green, and Cb to blue.
+    fn rgb_numbers(&self) -> [f32; 8] {
+        let (kr, kb) = self.matrix.kr_kb();
+        let kg = 1.0 - kr - kb;
+        let step = 2f32.powi(self.bits as i32 - 8);
+        let top = 2f32.powi(self.bits as i32) - 1.0;
+        let (luma_from, luma_span, chroma_span) = if self.full_range {
+            (0.0, top, top)
+        } else {
+            (16.0 * step, 219.0 * step, 224.0 * step)
+        };
+        [
+            luma_from,
+            luma_span,
+            128.0 * step,
+            chroma_span,
+            2.0 * (1.0 - kr),
+            2.0 * (1.0 - kb) * kb / kg,
+            2.0 * (1.0 - kr) * kr / kg,
+            2.0 * (1.0 - kb),
+        ]
+    }
+
+    /// The same as whole numbers, as libswscale goes to 8-bit RGBA, so that a frame comes out to the
+    /// same bytes whichever made it: the luma offset and scale, then what of Cr goes to red, of Cb and
+    /// of Cr to green, and of Cb to blue. Its `ff_yuv2rgb_coeffs` and `ff_yuv2rgb_c_init_tables`.
+    fn whole_numbers(&self) -> [i32; 6] {
+        let [crv, cbu, cgu, cgv]: [i64; 4] = match self.matrix {
+            kerf_color::Matrix::Bt709 => [117_489, 138_438, 13_975, 34_925],
+            kerf_color::Matrix::Bt601 => [104_597, 132_201, 25_675, 53_279],
+            kerf_color::Matrix::Bt2020Ncl => [110_013, 140_363, 12_277, 42_626],
+        };
+        let (cy, oy, shrink): (i64, i64, fn(i64) -> i64) = if self.full_range {
+            (1 << 16, 0, |value| value * 224 / 255)
+        } else {
+            ((1 << 16) * 255 / 219, 16 << 16, |value| value)
+        };
+        let scaled = |value: i64, by: i64| ((value * by + (1 << 15)) >> 16) as i32;
+        [
+            // Its 1 << 9, which goes to the kernel by >> 6.
+            scaled(oy, 1 << 3),
+            scaled(cy, 1 << 13),
+            scaled(shrink(crv), 1 << 13),
+            scaled(-shrink(cgu), 1 << 13),
+            scaled(-shrink(cgv), 1 << 13),
+            scaled(shrink(cbu), 1 << 13),
+        ]
+    }
 }
 
 /// The one device every compositor shares. `None` when the CPU has to draw.
@@ -330,6 +404,59 @@ impl Gpu {
             compilation_options: Default::default(),
             cache: None,
         });
+        let planes_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("kerf-planes"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("planes.wgsl").into()),
+        });
+        let planes_kernel = |entry: &str, binding: u32, format: wgpu::TextureFormat| {
+            let plane = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            };
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(entry),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    plane(1),
+                    plane(2),
+                    plane(3),
+                    storage_entry(binding, format),
+                ],
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(entry),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pipeline_layout),
+                module: &planes_module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            (layout, pipeline)
+        };
+        let (planes_light_layout, planes_light) =
+            planes_kernel("planes_light", 4, wgpu::TextureFormat::Rgba32Float);
+        let (planes_codes_layout, planes_codes) =
+            planes_kernel("planes_codes", 5, wgpu::TextureFormat::Rgba16Uint);
         let output_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kerf-output"),
             source: wgpu::ShaderSource::Wgsl(include_str!("output.wgsl").into()),
@@ -403,6 +530,10 @@ impl Gpu {
             input_layout,
             input,
             correct,
+            planes_light_layout,
+            planes_light,
+            planes_codes_layout,
+            planes_codes,
             by_weight,
             plus,
             finish_layout,
@@ -818,10 +949,132 @@ impl<'a> Frame<'a> {
         alpha: bool,
         input: &InputTransform,
     ) -> Picture {
-        let gpu = self.gpu;
         let source = self
             .upload(wgpu::TextureFormat::Rgba16Uint, (w, h), rgba, stride)
             .create_view(&Default::default());
+        self.take_into_light(&source, (w, h), alpha, input)
+    }
+
+    /// A decoded frame as its planes, opaque and taken into linear light as sRGB-encoded, as
+    /// [`Self::rgba8`] takes the same frame made into RGBA.
+    pub fn yuv(&mut self, yuv: &Yuv<'_>) -> Picture {
+        let (w, h) = yuv.size;
+        let out = self.take(w, h);
+        self.draw_planes(yuv, &out.view, true);
+        out
+    }
+
+    /// A decoded frame as its planes, taken into linear light by `input`, as [`Self::rgba16`] takes
+    /// the same frame made into 16-bit RGBA.
+    pub fn yuv16(&mut self, yuv: &Yuv<'_>, input: &InputTransform) -> Picture {
+        let (w, h) = yuv.size;
+        let key = (
+            w,
+            h,
+            wgpu::TextureFormat::Rgba16Uint,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        );
+        let codes = self.gpu.texture(key);
+        self.used.push((key, codes.clone()));
+        let view = codes.create_view(&Default::default());
+        self.draw_planes(yuv, &view, false);
+        self.take_into_light(&view, (w, h), false, input)
+    }
+
+    /// Draw `yuv` into `out`: floats in linear light when `light`, or else 16-bit code values.
+    fn draw_planes(&mut self, yuv: &Yuv<'_>, out: &wgpu::TextureView, light: bool) {
+        let gpu = self.gpu;
+        let (w, h) = yuv.size;
+        let format = if yuv.bits > 8 {
+            wgpu::TextureFormat::R16Uint
+        } else {
+            wgpu::TextureFormat::R8Uint
+        };
+        let (across, down) = yuv.chroma_shift;
+        let chroma = (w.div_ceil(1 << across), h.div_ceil(1 << down));
+        let plane = |frame: &mut Self, at: usize, size: (u32, u32)| {
+            frame
+                .upload(format, size, yuv.planes[at], yuv.strides[at])
+                .create_view(&Default::default())
+        };
+        let views = [
+            plane(self, 0, (w, h)),
+            plane(self, 1, chroma),
+            plane(self, 2, chroma),
+        ];
+        let mut bytes = Vec::with_capacity(80);
+        // 8-bit into the working picture goes to the same bytes as libswscale makes.
+        let whole = u32::from(light && yuv.bits == 8);
+        for value in [across, down, u32::from(yuv.chroma_smooth), whole] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in yuv.rgb_numbers() {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let numbers = yuv.whole_numbers();
+        for value in [
+            numbers[0], numbers[1], 0, 0, numbers[2], numbers[3], numbers[4], numbers[5],
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("kerf-planes"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let (layout, pipeline, binding) = if light {
+            (&gpu.planes_light_layout, &gpu.planes_light, 4)
+        } else {
+            (&gpu.planes_codes_layout, &gpu.planes_codes, 5)
+        };
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kerf-planes"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(out),
+                },
+            ],
+        });
+        let mut pass = self
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("kerf-planes"),
+                timestamp_writes: None,
+            });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+    }
+
+    /// 16-bit code values in `source` into the working picture, by `input`.
+    fn take_into_light(
+        &mut self,
+        source: &wgpu::TextureView,
+        (w, h): (u32, u32),
+        alpha: bool,
+        input: &InputTransform,
+    ) -> Picture {
+        let gpu = self.gpu;
         let stages = input.stages();
         let table = |frame: &mut Self, values: &[f32]| {
             let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -883,7 +1136,7 @@ impl<'a> Frame<'a> {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&source),
+                    resource: wgpu::BindingResource::TextureView(source),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

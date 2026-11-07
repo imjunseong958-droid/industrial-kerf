@@ -586,9 +586,15 @@ impl Drawing {
                     return None;
                 }
                 let stride = rgba.stride(0) as u32;
-                match decoded.deep {
-                    Some(input) => frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input),
-                    None => frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha),
+                match (decoded.deep, crate::footage::yuv_of(rgba)) {
+                    (Some(input), Some(yuv)) => frame.yuv16(&yuv, input),
+                    (None, Some(yuv)) => frame.yuv(&yuv),
+                    (Some(input), None) => {
+                        frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input)
+                    }
+                    (None, None) => {
+                        frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha)
+                    }
                 }
             }
             Source::Nested {

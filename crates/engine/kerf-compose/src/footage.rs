@@ -9,7 +9,9 @@
 //! back or far ahead. A frame just after one being read waits for that
 //! decoder rather than opening another, so frames drawn on several threads
 //! still decode each file once. Frames are converted to RGBA by
-//! libavfilter, as the graph converts them, and kept in a bounded cache.
+//! libavfilter, as the graph converts them, and kept in a bounded cache;
+//! a frame for the GPU at its full size stays in its planes for the GPU to
+//! convert, at less than half the bytes ([`yuv_of`]).
 //! A clip never shown at its full size is converted at the size it is
 //! shown, as the graph scales it. [`Pictures`] gives them to the compositor
 //! in linear light.
@@ -205,6 +207,30 @@ impl DecoderPool {
         .ok()
     }
 
+    /// Frame `index` of `clip`'s file for the GPU at `size`: as it decoded if the GPU can take it so,
+    /// or else as [`Self::picture`] makes it.
+    fn for_gpu(&self, clip: &ClipSource, index: i64, size: (u32, u32)) -> Option<Arc<frame::Video>> {
+        let (loan, mut decoder) = match self.checkout(clip, index) {
+            Ok(checked_out) => checked_out,
+            Err(problem) => {
+                lock(&self.problems).insert(clip.path.clone(), problem);
+                return None;
+            }
+        };
+        let read = decoder.shown(index).cloned().and_then(|shown| {
+            if !clip.alpha && (shown.width(), shown.height()) == size && yuv_of(&shown).is_some() {
+                Ok(shown)
+            } else {
+                decoder.picture(index, size, clip.deep.is_some()).map(Arc::new)
+            }
+        });
+        self.give_back(loan, decoder);
+        read.inspect_err(|problem| {
+            lock(&self.problems).insert(clip.path.clone(), problem.clone());
+        })
+        .ok()
+    }
+
     /// A decoder for `clip`'s file, lent with a token to give it back by:
     /// the free one that reads on to `index` soonest; else, after it, one
     /// being read to just before `index`; else one that seeks, or a new
@@ -356,8 +382,9 @@ impl Pictures {
         Some(picture)
     }
 
-    /// The frame clip `index` shows at clip time `at`, decoded at `size`, as the straight RGBA it
-    /// decodes to, for the GPU to take into linear light.
+    /// The frame clip `index` shows at clip time `at`, decoded at `size`, in its planes if the GPU can
+    /// take it so ([`yuv_of`]) or else as the straight RGBA it decodes to, for the GPU to take into
+    /// linear light.
     pub fn decoded(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Decoded> {
         let clip = self.clips.get(index)?;
         let frame = clip.frame_at_time(at);
@@ -368,7 +395,7 @@ impl Pictures {
         let picture = match kept {
             Some(picture) => picture,
             None => {
-                let picture = Arc::new(self.pool.picture(clip, frame, size)?);
+                let picture = self.pool.for_gpu(clip, frame, size)?;
                 lock(&self.decoded).insert(key, picture.clone());
                 picture
             }
@@ -464,7 +491,66 @@ impl<T> FrameCache<T> {
 }
 
 fn decoded_bytes(decoded: &frame::Video) -> usize {
-    decoded.stride(0) * decoded.height() as usize
+    (0..decoded.planes())
+        .map(|plane| decoded.stride(plane) * decoded.plane_height(plane) as usize)
+        .sum()
+}
+
+/// `frame` as the GPU can take it in its planes, for a format and a color it knows how to make into
+/// what libavfilter would. `None` for any other, which goes up as RGBA.
+///
+/// At 8 bits that is what comes out to the same bytes: a frame on the GPU is the same as the frame
+/// with no effects that skips it, and a grade at 0 is not there. libswscale has a fast path for that
+/// only on 64-bit ARM, for 4:2:0 and 4:2:2, at widths of 16 and even heights. Elsewhere it has other
+/// ways, which the kernel does not go by. Deeper footage has no such frame to match, and comes within
+/// 3 of 255.
+pub(crate) fn yuv_of(frame: &frame::Video) -> Option<kerf_gpu::Yuv<'_>> {
+    use ffmpeg::color::{Range as Levels, Space};
+    use ffmpeg::format::Pixel;
+    let ((across, down), bits, jpeg) = match frame.format() {
+        Pixel::YUV420P => ((1, 1), 8, false),
+        Pixel::YUV422P => ((1, 0), 8, false),
+        Pixel::YUV444P => ((0, 0), 8, false),
+        Pixel::YUVJ420P => ((1, 1), 8, true),
+        Pixel::YUVJ422P => ((1, 0), 8, true),
+        Pixel::YUVJ444P => ((0, 0), 8, true),
+        Pixel::YUV420P10LE => ((1, 1), 10, false),
+        Pixel::YUV422P10LE => ((1, 0), 10, false),
+        Pixel::YUV444P10LE => ((0, 0), 10, false),
+        Pixel::YUV420P12LE => ((1, 1), 12, false),
+        Pixel::YUV422P12LE => ((1, 0), 12, false),
+        Pixel::YUV444P12LE => ((0, 0), 12, false),
+        _ => return None,
+    };
+    if bits == 8 {
+        let fast_path = cfg!(target_arch = "aarch64")
+            && across == 1
+            && frame.width().is_multiple_of(16)
+            && frame.height().is_multiple_of(1 << down);
+        if !fast_path {
+            return None;
+        }
+    }
+    // As libswscale goes by a frame's tags: with none it takes BT.601.
+    let matrix = match frame.color_space() {
+        Space::BT709 => kerf_color::Matrix::Bt709,
+        Space::BT2020NCL => kerf_color::Matrix::Bt2020Ncl,
+        Space::Unspecified | Space::SMPTE170M | Space::BT470BG => kerf_color::Matrix::Bt601,
+        _ => return None,
+    };
+    let stride = |plane: usize| u32::try_from(frame.stride(plane)).ok();
+    Some(kerf_gpu::Yuv {
+        planes: [frame.data(0), frame.data(1), frame.data(2)],
+        strides: [stride(0)?, stride(1)?, stride(2)?],
+        size: (frame.width(), frame.height()),
+        chroma_shift: (across, down),
+        bits,
+        matrix,
+        full_range: jpeg || frame.color_range() == Levels::JPEG,
+        // libswscale repeats 4:2:0's chroma going to 8-bit RGBA, and filters it down going to 16-bit.
+        // Across, it repeats it either way.
+        chroma_smooth: bits > 8 && down > 0,
+    })
 }
 
 fn picture_bytes(picture: &Picture) -> usize {
@@ -493,8 +579,8 @@ struct Decoder {
     rate: Rate,
     /// The last frame read and the one after it, read ahead to see where
     /// the last one ends.
-    current: Option<(i64, frame::Video)>,
-    ahead: Option<(i64, frame::Video)>,
+    current: Option<(i64, Arc<frame::Video>)>,
+    ahead: Option<(i64, Arc<frame::Video>)>,
     eof: bool,
     convert: Option<Convert>,
 }
@@ -578,6 +664,25 @@ impl Decoder {
         size: (u32, u32),
         deep: bool,
     ) -> Result<frame::Video, String> {
+        let shown = self.shown(index)?.clone();
+        let mut convert = match self.convert.take() {
+            Some(convert) if convert.fits(&shown, size, deep) => convert,
+            _ => Convert::new(&shown, size, deep)
+                .map_err(|error| format!("{}: {error}", self.path))?,
+        };
+        // The filter takes the frame it is given and leaves it empty, so it
+        // gets a copy: the frame read stays to be drawn again, at another
+        // size or for another layer.
+        let picture = convert
+            .run(&shown.as_ref().clone())
+            .map_err(|error| format!("{}: {error}", self.path));
+        self.convert = Some(convert);
+        picture
+    }
+
+    /// Frame `index` as it decoded: the last frame starting by its start, give or take half a frame
+    /// for timestamps that round.
+    fn shown(&mut self, index: i64) -> Result<&Arc<frame::Video>, String> {
         let target = self.pts_of(index);
         let limit = (target + self.pts_of(index + 1)) / 2;
         let ahead = i64::from(self.rate.num()) * READ_AHEAD_SECONDS / i64::from(self.rate.den());
@@ -599,25 +704,11 @@ impl Decoder {
             }
         }
         // Before the first frame, the first frame shows.
-        let shown = self
-            .current
+        self.current
             .as_ref()
             .or(self.ahead.as_ref())
             .map(|(_, frame)| frame)
-            .ok_or_else(|| format!("{}: frame {index} could not be read", self.path))?;
-        let mut convert = match self.convert.take() {
-            Some(convert) if convert.fits(shown, size, deep) => convert,
-            _ => Convert::new(shown, size, deep)
-                .map_err(|error| format!("{}: {error}", self.path))?,
-        };
-        // The filter takes the frame it is given and leaves it empty, so it
-        // gets a copy: the frame read stays to be drawn again, at another
-        // size or for another layer.
-        let picture = convert
-            .run(&shown.clone())
-            .map_err(|error| format!("{}: {error}", self.path));
-        self.convert = Some(convert);
-        picture
+            .ok_or_else(|| format!("{}: frame {index} could not be read", self.path))
     }
 
     fn seek(&mut self, pts: i64) -> Result<(), String> {
@@ -638,7 +729,7 @@ impl Decoder {
 
     /// The next frame in decode order with its timestamp, or `None` at the
     /// end.
-    fn next(&mut self) -> Result<Option<(i64, frame::Video)>, String> {
+    fn next(&mut self) -> Result<Option<(i64, Arc<frame::Video>)>, String> {
         loop {
             let mut decoded = frame::Video::empty();
             match self.decoder.receive_frame(&mut decoded) {
@@ -649,7 +740,7 @@ impl Decoder {
                             .or(self.current.as_ref())
                             .map_or(self.first, |(pts, _)| pts + self.pts_of(1) - self.first)
                     });
-                    return Ok(Some((pts, decoded)));
+                    return Ok(Some((pts, Arc::new(decoded))));
                 }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
                 Err(error) if is_again(&error) => {}
