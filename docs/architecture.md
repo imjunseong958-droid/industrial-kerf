@@ -177,7 +177,21 @@ Three limits remain, in this order:
    | Mosaic | 15 | 43 |
    | Lumetri, HSL Secondary with Denoise | 89 | 502 |
 
-   Blur Bokeh (495 at 1080p, 6.7 s at 4K) and Remove Grain (203, 806) cost most of all, at their defaults, and no look or grade reaches those either.
+   Three effects cost seconds a frame or close to it, at their defaults, and no look or grade reaches them. Each stayed on the CPU and got a better algorithm, as the numbers below decided. With the same bench, median frame in ms, and for the fills a box as wide as its share of the frame:
+
+   | Effect | 1080p before | 1080p | 4K before | 4K | Peak memory at 4K, before and after |
+   |---|---|---|---|---|---|
+   | Bokeh Blur, default amount 10 | 427 | 31 | 6251 | 127 | 1.10 GB, 1.03 GB |
+   | Bokeh Blur, amount 12 | | 32 | about 9000 | 148 | |
+   | Bokeh Blur, amount 13 | | 32 | about 900 | 79 | |
+   | Remove Grain | 184 | 138 | 667 | 435 | 1.95 GB, 1.53 GB |
+   | Fill, 10% | 393 | 374 | 1870 | 706 | |
+   | Fill, 30% | | 396 | | 770 | |
+   | Fill, 60% | 6440 | 1199 | 32633 | 1625 | 2.03 GB, 1.70 GB |
+
+   - **Bokeh.** It read one tap for each pixel of the iris, so its cost went with the square of the radius, and the radius is in the clip's pixels and so grows with the frame: 5 pixels at 1080p and 121 taps, 10 at 4K and 441. That is 3.6 times the taps on 4 times the pixels, the 14 to 16 times measured. It also fell off a cliff: amount 12 took 9 s at 4K, and amount 13, the first gathered on a half-size picture, took 0.9. A running total along each row reads a row's worth of the iris in two reads, so the cost now goes with the iris's height. On 4K footage it comes within 63 dB of the old kernel, and no channel is more than 5 of 255 away. A kernel gathering tap by tap would not have caught this: Radial Zoom's rate on the GPU, about 12 billion reads a second at 4K, puts 441 taps near 300 ms, over twice what the CPU now takes, though it would leave the frame on the GPU.
+   - **Fill.** At 4K, 24 of the 29 s went to one level, the finest, and nearly all of that to its 20 sweeps of searching, where a patch 7 pixels wide sees little but grain. A level with more than 64,000 patches and a shorter side over 540 now takes over the matches from the level above and copies through them, voting over one pixel around rather than a whole patch. On pictures with no way of knowing what was hidden it comes as close to the truth as the search did, within 0.1 dB, and where the truth can be found, a tiled texture, it finds it exactly. It keeps more grain than the search, since a vote over a patch averages it away: 81% of the fine detail of the picture around it, from 63%, at 4K on a grainy picture. Side by side at full size both show the same structure. A small fill is still searched all the way down and draws byte for byte as it did. Keeping more would not help footage that moves, since a frame has to fill the same whichever was asked for first, so one frame's matches cannot start the next; identical frames already share a fill. Random search per pixel, with what it has found shared along the row, is not something the kernels here can do.
+   - **Remove Grain.** A third of it was measuring the grain over the whole picture, for 80 boxes covering a thousandth of it, and finding those boxes on one core. It now reads only around them, shares what its guide gives across the three channels, and holds fewer copies. Its frames are byte for byte what they were at 8 bits. What is left is its guided filter, a little over 200 ms at 4K, and the CPU's own path. It stays on the CPU because the grain it measures sets how hard it filters, so a kernel would have to read pixels back for every frame.
 2. **Kept frames.** Playback, previews, and `look` keep frames by a hash of what they depend on
    (`Drawing::frame_key`), in memory (`frames.rs`) and on disk (`disk.rs`, after EffectCraft's
    `render/src/disk_cache.rs`), so a frame comes back from any compositor, an edit, which makes a new

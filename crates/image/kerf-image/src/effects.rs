@@ -256,9 +256,8 @@ fn fill_run(
 }
 
 /// What the fills made and may be asked for again, newest last. A still, or
-/// a stretch of identical frames, fills once rather than once a frame, which
-/// is the difference between a second and minutes: filling a large area takes
-/// seconds.
+/// a stretch of identical frames, fills once rather than once a frame: filling
+/// a large area takes over a second.
 static FILLS: Mutex<Vec<(u64, Arc<Vec<[f32; 4]>>)>> = Mutex::new(Vec::new());
 
 /// The most pixels [`FILLS`] keeps: 512 MB of them.

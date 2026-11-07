@@ -8,7 +8,9 @@
 //!   nearest-neighbour fields inside the completion EM loop of Wexler,
 //!   Shechtman and Irani (2007): every patch overlapping the hole is matched
 //!   to a fully known patch, hole pixels become the weighted vote of the
-//!   overlapping matches, and that repeats over a pyramid, coarse to fine.
+//!   overlapping matches, and that repeats over a pyramid, coarse to fine. A level with too many
+//!   patches to search takes over what the level above found, which is most of the cost of a big
+//!   hole gone and little of the result: see [`Effort`].
 //! - **Flow-guided propagation** (the propagation stage of flow-guided video inpainting, e.g. Xu et
 //!   al. 2019 and Huang et al. 2016): each missing pixel follows the optical flow, completed inside
 //!   the hole from the motion around it, to a frame where that point of the scene shows.
@@ -210,22 +212,17 @@ struct Pm<'a> {
     h: usize,
     r: usize,
     img: &'a [[f32; 4]],
-    sat: HoleSat,
+    /// For each pixel, whether the patch around it is whole and fully known.
+    valid: &'a [bool],
 }
 
 impl Pm<'_> {
     fn valid_source(&self, x: i64, y: i64) -> bool {
-        let r = self.r as i64;
-        x >= r
-            && y >= r
-            && x + r < self.w as i64
-            && y + r < self.h as i64
-            && self.sat.count(
-                (x - r) as usize,
-                (y - r) as usize,
-                (x + r + 1) as usize,
-                (y + r + 1) as usize,
-            ) == 0
+        x >= 0
+            && y >= 0
+            && x < self.w as i64
+            && y < self.h as i64
+            && self.valid[y as usize * self.w + x as usize]
     }
     /// SSD between the patch at target (tx, ty) (clipped to the image) and source (sx, sy).
     fn dist(&self, tx: i64, ty: i64, sx: i64, sy: i64, cap: f32) -> f32 {
@@ -258,13 +255,41 @@ impl Pm<'_> {
     }
 }
 
-/// One Wexler/PatchMatch level: refine `img` (hole pixels) with `em` EM rounds, starting from the
-/// nearest-neighbour field `nnf` (per pixel, source centre; `None` = random).
+/// How hard a level of the pyramid works.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Effort {
+    /// `rounds` of searching `sweeps` times for each patch's match and voting with all it overlaps.
+    Search { rounds: usize, sweeps: usize },
+    /// Take the matches of the level above and copy from them. Where they agree, as they do across
+    /// most of a fill, a search here finds what it was given; where they do not, a vote over a whole
+    /// patch only averages away the picture's grain, so this one reaches just one pixel around.
+    Copy,
+}
+
+/// The most patches a level searches, unless it is coarse enough to need to.
+const MOST_SEARCHED: usize = 64_000;
+
+/// Whatever the hole's size, a level whose shorter side is no more than this is searched: a patch
+/// must see a picture this coarse for its matches to hold the structure of the scene when copied.
+const COARSE_ENOUGH: usize = 540;
+
+/// What a level `w` × `h` with this many patches touching the hole does. `rounds` and `sweeps` are
+/// what it does when it searches.
+fn effort(patches: usize, w: usize, h: usize, rounds: usize, sweeps: usize) -> Effort {
+    if patches <= MOST_SEARCHED || w.min(h) <= COARSE_ENOUGH {
+        Effort::Search { rounds, sweeps }
+    } else {
+        Effort::Copy
+    }
+}
+
+/// One Wexler/PatchMatch level: refine `img` (hole pixels) with what `effort` says, given how many
+/// patches it has, starting from the nearest-neighbour field `nnf` (per pixel, source centre;
+/// `None` = random).
 fn pm_level(
     l: &mut Level,
     nnf: &mut Vec<Option<[i32; 2]>>,
-    em: usize,
-    pm_iters: usize,
+    effort: impl FnOnce(usize) -> Effort,
     patch: usize,
     seed: u32,
 ) {
@@ -276,37 +301,50 @@ fn pm_level(
     if targets.is_empty() {
         return;
     }
-    let sat = HoleSat::new(&l.hole, w, h);
-    // Sources: centres of fully known patches.
-    let sources: Vec<[i32; 2]> = {
-        let pm = Pm {
-            w,
-            h,
-            r,
-            img: &l.img,
-            sat: HoleSat::new(&l.hole, w, h),
-        };
+    let valid: Vec<bool> = {
+        let sat = HoleSat::new(&l.hole, w, h);
         (0..w * h)
-            .filter(|&i| pm.valid_source((i % w) as i64, (i / w) as i64))
-            .map(|i| [(i % w) as i32, (i / w) as i32])
+            .into_par_iter()
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                x >= r
+                    && y >= r
+                    && x + r < w
+                    && y + r < h
+                    && sat.count(x - r, y - r, x + r + 1, y + r + 1) == 0
+            })
             .collect()
     };
-    if sources.is_empty() {
-        return;
-    }
+    let effort = effort(targets.len());
+    let searching = matches!(effort, Effort::Search { .. });
+    // Sources: centres of fully known patches, which only a search picks among.
+    let sources: Vec<[i32; 2]> = if searching {
+        let sources: Vec<[i32; 2]> = (0..w * h)
+            .filter(|&i| valid[i])
+            .map(|i| [(i % w) as i32, (i / w) as i32])
+            .collect();
+        if sources.is_empty() {
+            return;
+        }
+        sources
+    } else {
+        Vec::new()
+    };
+    let (rounds, pm_iters, vote) = match effort {
+        Effort::Search { rounds, sweeps } => (rounds, sweeps, r as i64),
+        Effort::Copy => (1, 0, 1),
+    };
     nnf.resize(w * h, None);
-    for e in 0..em {
+    for e in 0..rounds {
         let pm = Pm {
             w,
             h,
             r,
             img: &l.img,
-            sat: HoleSat {
-                w: sat.w,
-                s: sat.s.clone(),
-            },
+            valid: &valid,
         };
-        // Initialise / validate.
+        // Initialise / validate. A copy with no match to take leaves the pixel as it came from the
+        // level above.
         let mut field: Vec<([i32; 2], f32)> = vec![([0, 0], f32::INFINITY); w * h];
         targets
             .par_iter()
@@ -314,13 +352,15 @@ fn pm_level(
                 let (x, y) = ((i % w) as i64, (i / w) as i64);
                 let s = nnf[i]
                     .filter(|s| pm.valid_source(s[0] as i64, s[1] as i64))
-                    .unwrap_or_else(|| {
-                        sources[rnd(seed ^ e as u32, i as u32, 0) as usize % sources.len()]
+                    .or_else(|| {
+                        searching.then(|| {
+                            sources[rnd(seed ^ e as u32, i as u32, 0) as usize % sources.len()]
+                        })
                     });
-                (
-                    i,
-                    (s, pm.dist(x, y, s[0] as i64, s[1] as i64, f32::INFINITY)),
-                )
+                let matched = s.map_or(([0, 0], f32::INFINITY), |s| {
+                    (s, pm.dist(x, y, s[0] as i64, s[1] as i64, f32::INFINITY))
+                });
+                (i, matched)
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -411,7 +451,6 @@ fn pm_level(
             .collect();
         ds.sort_by(f32::total_cmp);
         let sigma2 = ds.get(ds.len() * 3 / 4).copied().unwrap_or(1.0).max(1e-5);
-        let ri = r as i64;
         let new: Vec<(usize, [f32; 4])> = (0..w * h)
             .into_par_iter()
             .filter(|&i| l.hole[i])
@@ -419,8 +458,8 @@ fn pm_level(
                 let (x, y) = ((i % w) as i64, (i / w) as i64);
                 let mut acc = [0.0f32; 4];
                 let mut wsum = 0.0f32;
-                for dy in -ri..=ri {
-                    for dx in -ri..=ri {
+                for dy in -vote..=vote {
+                    for dx in -vote..=vote {
                         let (px, py) = (x + dx, y + dy);
                         if px < 0 || py < 0 || px >= w as i64 || py >= h as i64 {
                             continue;
@@ -486,7 +525,11 @@ pub fn patch_fill(
             }
         }
         let mut nnf = vec![];
-        pm_level(&mut l, &mut nnf, 2, 4, patch, seed);
+        let refine = |_| Effort::Search {
+            rounds: 2,
+            sweeps: 4,
+        };
+        pm_level(&mut l, &mut nnf, refine, patch, seed);
         return Image {
             width: img.width,
             height: img.height,
@@ -518,11 +561,10 @@ pub fn patch_fill(
     for k in (0..=top).rev() {
         if k < top {
             // Upsample the coarser result into this level's hole and the NNF (×2).
-            let (coarse_img, cw, ch, coarse_nnf) = {
-                let c = &levels[k + 1];
-                (c.img.clone(), c.w, c.h, nnf.clone())
-            };
-            let l = &mut levels[k];
+            let (fine, coarse) = levels.split_at_mut(k + 1);
+            let (l, c) = (&mut fine[k], &coarse[0]);
+            let (coarse_img, cw, ch) = (&c.img, c.w, c.h);
+            let coarse_nnf = std::mem::take(&mut nnf);
             for y in 0..l.h {
                 for x in 0..l.w {
                     let i = y * l.w + x;
@@ -556,12 +598,21 @@ pub fn patch_fill(
                 })
                 .collect();
         }
-        let em = if k == top { 8 } else { 4 };
+        let (lw, lh) = (levels[k].w, levels[k].h);
+        let plan = |patches| {
+            if k == top {
+                Effort::Search {
+                    rounds: 8,
+                    sweeps: 5,
+                }
+            } else {
+                effort(patches, lw, lh, 4, 5)
+            }
+        };
         pm_level(
             &mut levels[k],
             &mut nnf,
-            em,
-            5,
+            plan,
             patch,
             seed.wrapping_add(k as u32 * 101),
         );
@@ -860,6 +911,96 @@ mod tests {
                 assert_eq!(pm.data[i], gt.data[i]);
             }
         }
+    }
+
+    #[test]
+    fn a_level_searches_while_it_can_and_copies_after() {
+        let search = Effort::Search {
+            rounds: 4,
+            sweeps: 5,
+        };
+        // A box 60% wide at 4K: 3 million patches, 757,000, 192,000, 49,000. The first level at
+        // 960 x 540 is searched, for all it has, and the two after it copy.
+        assert_eq!(effort(3_007_620, 3840, 2160, 4, 5), Effort::Copy);
+        assert_eq!(effort(757_332, 1920, 1080, 4, 5), Effort::Copy);
+        assert_eq!(effort(192_060, 960, 540, 4, 5), search);
+        // At 1080p, the same.
+        assert_eq!(effort(83_000, 1920, 1080, 4, 5), Effort::Copy);
+        assert_eq!(effort(23_000, 960, 540, 4, 5), search);
+        // A small one is searched all the way down, and draws as it did.
+        assert_eq!(effort(23_000, 1920, 1080, 4, 5), search);
+        assert_eq!(effort(MOST_SEARCHED, 3840, 2160, 4, 5), search);
+        assert_eq!(effort(MOST_SEARCHED + 1, 3840, 2160, 4, 5), Effort::Copy);
+    }
+
+    /// `background` with film's grain on it, repeating every 40 pixels so that what the hole hides is
+    /// there to be found.
+    fn grainy(w: u32, h: u32) -> Image {
+        let mut img = background(w, h, 0.0);
+        for y in 0..h {
+            for x in 0..w {
+                let n = hash_noise(x % 40, y % 40, 11) * 0.08;
+                let mut p = img.get(i64::from(x), i64::from(y));
+                for v in &mut p[..3] {
+                    *v += n;
+                }
+                img.set(x, y, p);
+            }
+        }
+        img
+    }
+
+    /// The energy of each pixel off the mean of its neighbours: what a vote averages away.
+    fn fine_detail(img: &Image, region: impl Fn(usize) -> bool) -> f64 {
+        let (w, h) = (img.width as usize, img.height as usize);
+        let (mut sum, mut n) = (0.0, 0.0);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                if !region(y * w + x) {
+                    continue;
+                }
+                let around = (img.data[y * w + x - 1][1]
+                    + img.data[y * w + x + 1][1]
+                    + img.data[(y - 1) * w + x][1]
+                    + img.data[(y + 1) * w + x][1])
+                    / 4.0;
+                sum += f64::from(img.data[y * w + x][1] - around).powi(2);
+                n += 1.0;
+            }
+        }
+        sum / f64::max(n, 1.0)
+    }
+
+    #[test]
+    fn a_hole_too_big_to_search_finds_the_scene_and_keeps_its_grain() {
+        // Big enough that the finest level has too many patches to search, and copies.
+        let (w, h) = (1000u32, 560u32);
+        let hole = rect_hole(w, h, 350, 130, 300);
+        assert!(hole.iter().filter(|b| **b).count() > MOST_SEARCHED);
+        let gt = grainy(w, h);
+        let filled = patch_fill(&cut(&gt, &hole), &hole, None, 7, 1);
+        let db = psnr(&filled, &gt, Some(&hole));
+        assert!(db > 30.0, "{db:.1} dB");
+        // Known pixels are untouched.
+        for i in 0..hole.len() {
+            if !hole[i] {
+                assert_eq!(filled.data[i], gt.data[i]);
+            }
+        }
+        // Grain on a soft picture, with nothing to find it by: matches disagree, and a vote over a
+        // whole patch keeps 64% of what is around it, where this keeps 80%.
+        let mut gt = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let n = hash_noise(x, y, 11) * 0.08;
+                let v = 0.3 + 0.3 * (x as f32 / 170.0).sin() * (y as f32 / 90.0).cos() + n;
+                gt.set(x, y, [v, 0.8 - v, 0.5, 1.0]);
+            }
+        }
+        let filled = patch_fill(&cut(&gt, &hole), &hole, None, 7, 1);
+        let inside = fine_detail(&filled, |i| hole[i]);
+        let outside = fine_detail(&gt, |i| !hole[i]);
+        assert!(inside > outside * 0.72, "{inside} of {outside}");
     }
 
     #[test]

@@ -6,15 +6,143 @@ use rayon::prelude::*;
 use super::*;
 use crate::filmcraft::effects::gaussian;
 
-/// Radius of a regular `n`-gon (circumradius 1, rotated by `rot`) in direction `theta`;
-/// `n == 0` is a circle.
-fn poly_radius(n: u32, theta: f32, rot: f32) -> f32 {
+/// One row of pixels of what an iris covers around the pixel it lands on.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct IrisRow {
+    /// How far the row is from the pixel, in rows.
+    dy: isize,
+    /// Where it starts and ends, from the pixel, in pixels.
+    from: f64,
+    to: f64,
+    /// How much of the row's height the iris covers.
+    weight: f64,
+}
+
+/// How far an iris reaches to its left and right at height `y`. `n == 0` is a circle, and otherwise
+/// it has `n` straight sides with a corner at `rot`.
+fn iris_extent(y: f64, radius: f64, n: u32, rot: f32) -> Option<(f64, f64)> {
     if n == 0 {
-        return 1.0;
+        let half = (radius * radius - y * y).sqrt();
+        return half.is_finite().then_some((-half, half));
     }
-    let seg = std::f32::consts::TAU / n as f32;
-    let a = (theta - rot).rem_euclid(seg) - seg / 2.0;
-    (std::f32::consts::PI / n as f32).cos() / a.cos()
+    let corner = |k: u32| {
+        let angle = f64::from(rot) + std::f64::consts::TAU * f64::from(k) / f64::from(n);
+        (angle.cos() * radius, angle.sin() * radius)
+    };
+    let mut reach: Option<(f64, f64)> = None;
+    for k in 0..n {
+        let (a, b) = (corner(k), corner(k + 1));
+        if (a.1 - y) * (b.1 - y) > 0.0 || a.1 == b.1 {
+            continue;
+        }
+        let x = a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0);
+        reach = Some(reach.map_or((x, x), |(from, to)| (from.min(x), to.max(x))));
+    }
+    reach
+}
+
+/// The rows an iris covers, each measured at eight heights, so that its top and bottom edges are as
+/// soft as its sides.
+pub(super) fn iris_rows(radius: f64, n: u32, rot: f32) -> Vec<IrisRow> {
+    const HEIGHTS: usize = 8;
+    let reach = radius.ceil() as isize;
+    (-reach..=reach)
+        .filter_map(|dy| {
+            let (mut from, mut to, mut hits) = (0.0, 0.0, 0usize);
+            for height in 0..HEIGHTS {
+                let y = dy as f64 + (height as f64 + 0.5) / HEIGHTS as f64 - 0.5;
+                if let Some((left, right)) = iris_extent(y, radius, n, rot) {
+                    from += left;
+                    to += right;
+                    hits += 1;
+                }
+            }
+            (hits > 0).then(|| IrisRow {
+                dy,
+                from: from / hits as f64,
+                to: to / hits as f64,
+                weight: hits as f64 / HEIGHTS as f64,
+            })
+        })
+        .collect()
+}
+
+/// `src` averaged over an iris at each pixel, its edges held. A running total along each row gives
+/// a row's worth of pixels for two reads, so the cost goes with the iris's height and not its area.
+fn gather_iris(src: &Image, iris: &[IrisRow]) -> Image {
+    /// Rows drawn together, sharing the running totals of the rows they read.
+    const BAND: usize = 32;
+    let (w, h) = (src.w, src.h);
+    let mut out = Image::new(w, h);
+    let reach = iris
+        .iter()
+        .map(|row| row.dy.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    let widest = iris
+        .iter()
+        .map(|row| row.from.abs().max(row.to.abs()))
+        .fold(0.0, f64::max);
+    let pad = widest.ceil() as usize + 2;
+    let stride = (w + 2 * pad + 1) * 4;
+    let area: f64 = iris
+        .iter()
+        .map(|row| row.weight * (row.to - row.from))
+        .sum();
+    // Where a span's end falls among the totals, which lie between the pixels: the total before it,
+    // and how far to the next.
+    let place = |end: f64| {
+        let at = end + 0.5 + pad as f64;
+        (at.floor() as usize, at - at.floor())
+    };
+    out.px
+        .par_chunks_mut(w * 4 * BAND)
+        .enumerate()
+        .for_each(|(band, rows)| {
+            let first = band * BAND;
+            let last = first + rows.len() / (w * 4) - 1;
+            let lowest = first.saturating_sub(reach);
+            let highest = (last + reach).min(h - 1);
+            let mut totals = vec![0f64; stride * (highest - lowest + 1)];
+            for (line, y) in totals.chunks_exact_mut(stride).zip(lowest..) {
+                let pixels = &src.px[y * w * 4..(y + 1) * w * 4];
+                let mut total = [0f64; 4];
+                for (j, next) in line[4..].chunks_exact_mut(4).enumerate() {
+                    let x = j.saturating_sub(pad).min(w - 1);
+                    for k in 0..4 {
+                        // One bad pixel would otherwise take the rest of its row with it.
+                        let value = pixels[x * 4 + k];
+                        if value.is_finite() {
+                            total[k] += f64::from(value);
+                        }
+                        next[k] = total[k];
+                    }
+                }
+            }
+            let mut sum = vec![0f64; w * 4];
+            for (index, row) in rows.chunks_exact_mut(w * 4).enumerate() {
+                let y = (first + index) as isize;
+                sum.fill(0.0);
+                for span in iris {
+                    let read = (y + span.dy).clamp(0, h as isize - 1) as usize - lowest;
+                    let line = &totals[read * stride..][..stride];
+                    let ((a, fa), (b, fb)) = (place(span.from), place(span.to));
+                    let n = w * 4;
+                    let (a0, a1) = (&line[a * 4..][..n], &line[(a + 1) * 4..][..n]);
+                    let (b0, b1) = (&line[b * 4..][..n], &line[(b + 1) * 4..][..n]);
+                    let ends = a0.iter().zip(a1).zip(b0).zip(b1);
+                    for (value, (((a0, a1), b0), b1)) in sum.iter_mut().zip(ends) {
+                        let start = a0 + (a1 - a0) * fa;
+                        let end = b0 + (b1 - b0) * fb;
+                        *value += (end - start) * span.weight;
+                    }
+                }
+                for (out, value) in row.iter_mut().zip(&sum) {
+                    *out = (value / area) as f32;
+                }
+            }
+        });
+    out
 }
 
 /// Bokeh Blur: a lens-iris shaped gather blur with highlight boost (bright points bloom into
@@ -29,13 +157,18 @@ pub fn bokeh(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let boost = fv(e, "highlight", cx) / 100.0 * 6.0;
     let th = fv(e, "threshold", cx) / 100.0;
     let (fw, fh) = (img.w, img.h);
-    let mut work = img.clone();
+    let mut reduced: Option<Image> = None;
     let mut down = 1.0f32;
-    while r / down > 12.0 && work.w >= 8 && work.h >= 8 {
-        work = work.downsample2();
+    while r / down > 12.0 {
+        let picture = reduced.as_ref().unwrap_or(img);
+        if picture.w < 8 || picture.h < 8 {
+            break;
+        }
+        reduced = Some(picture.downsample2());
         down *= 2.0;
     }
     let rr = r / down;
+    let work = reduced.as_mut().unwrap_or(img);
     // boost highlights (energy, not weight: bright points stay bright after averaging)
     if boost > 0.0 {
         work.px.par_chunks_mut(4).for_each(|p| {
@@ -49,45 +182,19 @@ pub fn bokeh(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             }
         });
     }
-    let rings = (rr.ceil() as usize).clamp(1, 12);
-    let mut taps: Vec<(f32, f32)> = vec![(0.0, 0.0)];
-    for ring in 1..=rings {
-        let rad = rr * ring as f32 / rings as f32;
-        let n = (ring * 8).max(6);
-        for i in 0..n {
-            let th = std::f32::consts::TAU * (i as f32 + 0.5 * (ring % 2) as f32) / n as f32;
-            let pr = rad * poly_radius(sides, th, rot);
-            taps.push((th.cos() * pr, th.sin() * pr));
-        }
-    }
-    let inv = 1.0 / taps.len() as f32;
-    let src = work.clone();
-    let w = work.w;
-    work.px
-        .par_chunks_mut(w * 4)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..w {
-                let mut acc = [0f32; 4];
-                for &(dx, dy) in &taps {
-                    let p = src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
-                    for k in 0..4 {
-                        acc[k] += p[k];
-                    }
-                }
-                for k in 0..4 {
-                    row[x * 4 + k] = acc[k] * inv;
-                }
-            }
-        });
+    // An iris is as wide as its radius and half a pixel more, as it was when it was gathered ring by
+    // ring, with the last ring on the edge and each ring standing for what is around it.
+    let rings = rr.ceil().clamp(1.0, 12.0);
+    let reach = f64::from(rr * (rings + 0.5) / rings);
+    let blurred = gather_iris(work, &iris_rows(reach, sides, rot));
     *img = if down > 1.0 {
-        work.transformed(
+        blurred.transformed(
             fw,
             fh,
-            &Affine::scale(fw as f64 / work.w as f64, fh as f64 / work.h as f64),
+            &Affine::scale(fw as f64 / blurred.w as f64, fh as f64 / blurred.h as f64),
         )
     } else {
-        work
+        blurred
     };
 }
 

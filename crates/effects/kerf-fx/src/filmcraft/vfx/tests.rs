@@ -1050,6 +1050,127 @@ fn vr_rotate_sphere_pans_exactly() {
     assert_eq!((o.w, o.h), (64, 32));
 }
 
+/// Radius of a regular `n`-gon (circumradius 1, rotated by `rot`) in direction `theta`;
+/// `n == 0` is a circle.
+fn poly_radius(n: u32, theta: f32, rot: f32) -> f32 {
+    if n == 0 {
+        return 1.0;
+    }
+    let seg = std::f32::consts::TAU / n as f32;
+    let a = (theta - rot).rem_euclid(seg) - seg / 2.0;
+    (std::f32::consts::PI / n as f32).cos() / a.cos()
+}
+
+/// Bokeh Blur gathered as it first was, a tap for each pixel of the iris: what the faster way has to
+/// look like.
+fn bokeh_by_taps(src: &Image, radius: f32, sides: u32, rot: f32) -> Image {
+    let rings = (radius.ceil() as usize).clamp(1, 12);
+    let mut taps = vec![(0.0f32, 0.0f32)];
+    for ring in 1..=rings {
+        let rad = radius * ring as f32 / rings as f32;
+        let n = (ring * 8).max(6);
+        for i in 0..n {
+            let th = std::f32::consts::TAU * (i as f32 + 0.5 * (ring % 2) as f32) / n as f32;
+            let pr = rad * poly_radius(sides, th, rot);
+            taps.push((th.cos() * pr, th.sin() * pr));
+        }
+    }
+    let mut out = Image::new(src.w, src.h);
+    for y in 0..src.h {
+        for x in 0..src.w {
+            let mut acc = [0f32; 4];
+            for &(dx, dy) in &taps {
+                let p = src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
+                for (acc, value) in acc.iter_mut().zip(p) {
+                    *acc += value;
+                }
+            }
+            let place = (y * src.w + x) * 4;
+            for (out, acc) in out.px[place..place + 4].iter_mut().zip(acc) {
+                *out = acc / taps.len() as f32;
+            }
+        }
+    }
+    out
+}
+
+/// A picture with what a lens blur meets: soft shapes, fine detail, and points far brighter than the
+/// rest.
+fn bokeh_picture(w: usize, h: usize) -> Image {
+    let mut img = Image::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let soft = 0.4 + 0.3 * (fx / 19.0).sin() * (fy / 13.0).cos();
+            let fine = if (x / 3 + y / 3) % 2 == 0 { 0.1 } else { 0.0 };
+            let light = if x % 37 == 11 && y % 29 == 7 {
+                4.0
+            } else {
+                0.0
+            };
+            let v = [
+                soft + fine + light,
+                soft * 0.7 + light,
+                0.5 - soft * 0.4 + fine,
+                1.0,
+            ];
+            img.px[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&v);
+        }
+    }
+    img
+}
+
+#[test]
+fn bokeh_looks_as_it_did_when_gathered_tap_by_tap() {
+    let src = bokeh_picture(96, 72);
+    for (amount, shape, sides) in [
+        (2.0, 0, 0),
+        (5.0, 4, 6),
+        (10.0, 4, 6),
+        (10.0, 0, 0),
+        (12.0, 1, 3),
+        (12.0, 5, 8),
+    ] {
+        let mut e = inst("bokeh_blur");
+        setf(&mut e, "amount", amount);
+        set(&mut e, "shape", ParamValue::Choice(shape));
+        setf(&mut e, "highlight", 0.0);
+        let now = run("bokeh", &e, &src, &cx());
+        let was = bokeh_by_taps(&src, amount as f32, sides, 0.0);
+        let error: f64 = now
+            .px
+            .iter()
+            .zip(&was.px)
+            .map(|(a, b)| f64::from(a - b).powi(2))
+            .sum::<f64>()
+            / now.px.len() as f64;
+        let db = 10.0 * (1.0 / error.max(1e-12)).log10();
+        assert!(db > 40.0, "amount {amount} shape {shape}: {db:.1} dB");
+    }
+}
+
+#[test]
+fn a_bad_pixel_stays_where_it_is_in_a_bokeh() {
+    let mut src = solid(64, 16, [0.25, 0.25, 0.25]);
+    src.px[(8 * 64 + 8) * 4] = f32::NAN;
+    let mut e = inst("bokeh_blur");
+    setf(&mut e, "amount", 4.0);
+    setf(&mut e, "highlight", 0.0);
+    let o = run("bokeh", &e, &src, &cx());
+    // Far along the row from it, as near it, nothing is lost.
+    assert!(o.px.iter().all(|v| v.is_finite()));
+    let far = src.get(50, 8)[0];
+    assert!(close(o.get(50, 8)[0], far, 1e-3), "{:?}", o.get(50, 8));
+}
+
+#[test]
+fn a_bokeh_costs_its_height_and_not_its_area() {
+    // Twice the radius is twice the rows, where a tap for each pixel was four times.
+    let (small, big) = (blur::iris_rows(5.5, 6, 0.0), blur::iris_rows(10.5, 6, 0.0));
+    assert!(small.len() <= 13, "{}", small.len());
+    assert!(big.len() <= 23, "{}", big.len());
+}
+
 #[test]
 fn bokeh_and_focus_blur() {
     let mut img = solid(48, 48, [0.0, 0.0, 0.0]);
@@ -1633,17 +1754,26 @@ fn an_echo_screens_up_to_white_and_adds_what_is_past_it_in_hdr() {
     assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], false)[0], 1.0));
     assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], true)[0], 3.0));
     // What is past white in two layers adds, weighed as they are.
-    assert!(close(of(&[(3.0, 1.0), (4.0, 0.5)], true)[0], 1.0 + 2.0 + 1.0));
+    assert!(close(
+        of(&[(3.0, 1.0), (4.0, 0.5)], true)[0],
+        1.0 + 2.0 + 1.0
+    ));
     // It leaves no step at white: just past it and just under it are about as bright.
     let (under, past) = (of(&[(0.999, 1.0)], true)[0], of(&[(1.001, 1.0)], true)[0]);
     assert!(past > under && past - under < 0.01, "{under} {past}");
     // What is below 0, a color past BT.709, adds too, where multiplying sent it further.
     assert!(close(of(&[(-0.5, 1.0), (-0.5, 0.5)], true)[0], -0.75));
-    assert!(close(of(&[(-0.5, 1.0), (-0.5, 0.5)], false)[0], 1.0 - 1.5 * 1.25));
+    assert!(close(
+        of(&[(-0.5, 1.0), (-0.5, 0.5)], false)[0],
+        1.0 - 1.5 * 1.25
+    ));
     // It goes up with what goes in.
     let values: Vec<f32> = [0.5, 1.0, 1.5, 2.0, 4.0]
         .iter()
         .map(|value| of(&[(*value, 1.0), (0.4, 0.5)], true)[0])
         .collect();
-    assert!(values.windows(2).all(|pair| pair[1] > pair[0]), "{values:?}");
+    assert!(
+        values.windows(2).all(|pair| pair[1] > pair[0]),
+        "{values:?}"
+    );
 }
