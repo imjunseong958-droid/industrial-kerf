@@ -822,6 +822,110 @@ fn grainy(mut picture: Vec<u8>, frame: usize, amount: f64) -> Vec<u8> {
 
 /// Accuracy and time at the size `look` reads, with what filming the pictures takes left out:
 /// `cargo test --release -p kerf-track measure_ -- --ignored --nocapture --test-threads=1`.
+/// A lens that breathes as it focuses: going out by `amount` of its focal length and back, as a pull of
+/// focus there and back does, while the camera goes on moving.
+fn breathing(mut shots: Vec<Shot>, amount: f64) -> Vec<Shot> {
+    let last = (shots.len() - 1) as f64;
+    for (frame, shot) in shots.iter_mut().enumerate() {
+        let t = frame as f64 / last;
+        let out = (std::f64::consts::PI * t).sin();
+        shot.focal *= 1.0 + amount * out * out;
+    }
+    shots
+}
+
+/// A lens that goes out by 1% and back as it focuses, which one lens fitted by leaving its field of view
+/// 4 degrees off, its way 1.4% off, and its turn 1.5 degrees off.
+#[test]
+fn a_lens_that_breathes_is_found_and_the_way_with_it() {
+    let points = scattered(400, 7, [0.0, 0.0, 10.0], [16.0, 9.0, 8.0]);
+    for amount in [0.01, 0.03] {
+        let shots = breathing(moving(60, 1000.0), amount);
+        let followed = paths_of(&points, &shots, 0.1, 8);
+        let one = reconstruct::solve_one_lens(&followed).expect("one lens fits somehow");
+        let shot = solve_followed(&followed, None).expect("solves");
+        assert!(shot.zooms && !shot.zoom_or_push, "{amount}");
+        assert!(shot.error < one.error, "{} of {}", shot.error, one.error);
+        let off = lens_off(&shot, &shots);
+        assert!(off < 0.6, "{amount}: {off} degrees");
+        assert!(
+            off < lens_off(&one_as_shot(&followed, &one), &shots),
+            "{amount}"
+        );
+        let (way, turned) = way_off(&shot, &shots);
+        assert!(way < 0.01 && turned < 0.5, "{amount}: {way} {turned}");
+    }
+}
+
+/// [`reconstruct::solve_one_lens`] as a shot says it.
+fn one_as_shot(followed: &Followed, one: &reconstruct::Solved) -> SolvedShot {
+    written(followed, one).expect("written")
+}
+
+/// `cargo test --release -p kerf-track measure_lenses_that_breathe -- --ignored --nocapture --test-threads=1`.
+#[test]
+#[ignore]
+fn measure_lenses_that_breathe() {
+    let room = scene::room();
+    let (width, height) = (960usize, 540usize);
+    for amount in [0.0, 0.0025, 0.005, 0.0075, 0.01, 0.02, 0.05, 0.12] {
+        let shots = breathing(wandering(120, 760.0), amount);
+        let followed = follow::follow(shots.len(), |frame| {
+            Some((
+                width,
+                height,
+                scene::picture(&room, &shots[frame], width, height),
+            ))
+        });
+        let lens_of = |shot: &SolvedShot| {
+            shot.cameras
+                .iter()
+                .map(|camera| (camera.fov - fov_of(shots[camera.frame].focal, height as f64)).abs())
+                .fold(0.0, f64::max)
+        };
+        let started = std::time::Instant::now();
+        let shot = solve_followed(&followed, None);
+        let took = started.elapsed().as_secs_f64();
+        let one = reconstruct::solve_one_lens(&followed)
+            .ok()
+            .and_then(|one| written(&followed, &one));
+        let fov_swing = {
+            let fovs: Vec<f64> = shots
+                .iter()
+                .map(|shot| fov_of(shot.focal, height as f64))
+                .collect();
+            fovs.iter().copied().fold(f64::MIN, f64::max)
+                - fovs.iter().copied().fold(f64::MAX, f64::min)
+        };
+        match shot {
+            Ok(shot) => {
+                let (way, turned) = way_off(&shot, &shots);
+                eprintln!(
+                    "breathing {:>4.1}% ({fov_swing:.2} deg): zooms {}, push {}, error {:.3} px, way {:.3}%, turn {:.3} deg, fov off {:.3} deg, {took:.2} s",
+                    amount * 100.0,
+                    shot.zooms,
+                    shot.zoom_or_push,
+                    shot.error,
+                    way * 100.0,
+                    turned,
+                    lens_of(&shot),
+                );
+            }
+            Err(why) => eprintln!("breathing {:>4.1}%: {why:?}", amount * 100.0),
+        }
+        if let Some(one) = one {
+            let (way, turned) = way_off(&one, &shots);
+            eprintln!(
+                "   one lens: error {:.3} px, way {:.3}%, turn {:.3} deg, fov off {:.3} deg",
+                one.error,
+                way * 100.0,
+                turned,
+                lens_of(&one)
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore]
 fn measure_shots_of_a_room() {

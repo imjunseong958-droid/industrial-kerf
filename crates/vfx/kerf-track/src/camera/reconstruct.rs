@@ -948,13 +948,15 @@ fn most_motion(seen: &Seen, keys: &[usize]) -> f64 {
 
 /// How much the picture must grow or shrink over a shot, at the most apart, to be asked whether a lens
 /// did it.
-const LEAST_ZOOM: f64 = 0.03;
+const LEAST_ZOOM: f64 = 0.004;
 /// As much as a picture growing is worth asking about: past this, what was read of it is not a lens.
 const MOST_ZOOM: f64 = 20.0;
 /// How much a focal length must change for a lens to be said to zoom.
-const LEAST_FOCAL_CHANGE: f64 = 0.02;
+const LEAST_FOCAL_CHANGE: f64 = 0.003;
+/// How much it must change for one that does no better than one lens to be said not to be told from it.
+const ZOOM_NOT_TOLD_FROM: f64 = 0.02;
 /// How much of one lens's error a lens that zooms may leave, to stand for it.
-const ZOOM_BETTER_BY: f64 = 0.75;
+const ZOOM_BETTER_BY: f64 = 0.8;
 /// How much more than one lens's error it may leave and still be as good an account of the shot.
 const AS_GOOD_BY: f64 = 1.1;
 
@@ -1045,7 +1047,9 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
                 Ok(one)
             } else if zoom.error < ZOOM_BETTER_BY * one.error {
                 Ok(zoom)
-            } else if zoom.error <= AS_GOOD_BY * one.error {
+            } else if zoom.error <= AS_GOOD_BY * one.error
+                && spread(zoom.cameras.values().map(|camera| camera.focal)) >= ZOOM_NOT_TOLD_FROM
+            {
                 Ok(says_so(one))
             } else {
                 Ok(one)

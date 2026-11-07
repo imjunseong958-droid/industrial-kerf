@@ -5,8 +5,9 @@
 //! gets a data cost from the colour models and neighbours a contrast-sensitive smoothness cost, and
 //! the minimum s-t cut ([`maxflow`]) is the segmentation. Each next frame warps the matte by optical
 //! flow and cuts again in a band around its edge (in the spirit of Video SnapCut, Bai et al. 2009). A
-//! subject that went further than that band is first found again by its own pixels ([`moved_by`]), and
-//! the flow then only says what changed of it, with the band wider the further it went.
+//! subject that went further than that band is first found again by its own pixels ([`moved_by`]), where
+//! the flow has lost it ([`flow_lost`]), and the flow then only says what changed of it, with the band
+//! wider the further it went.
 //! A trained model ([`kerf_segment::MaskModel`]) is optional and swappable: its foreground
 //! probability becomes a strong prior for the same cut, so hints stay hard and edges still snap to
 //! colour, and one that disagrees with the flow is ignored for that frame.
@@ -21,7 +22,7 @@ pub mod maxflow;
 mod soft;
 
 use gmm::Gmm;
-use kerf_raster::flow::block_flow;
+use kerf_raster::flow::{block_flow, Flow};
 use kerf_raster::Image;
 use kerf_segment::{MaskModel, Prompt};
 use maxflow::{Graph, Segment};
@@ -581,9 +582,40 @@ fn shifted_image(image: &Image, by: [i64; 2]) -> Image {
     }
 }
 
+/// How unlike what the flow says it came from a frame's pixels may be, on average under the matte, the
+/// three channels added up, before the subject is looked for elsewhere. A subject the flow keeps up with
+/// comes to 0.01 to 0.05 on textured footage, turning or growing fast or under a shutter to 0.14, and one
+/// it has lost to 0.09 to 0.7, since what its matte sits on then came from where the subject was.
+const FLOW_LOST: f64 = 0.08;
+
+/// How many pixels are read for that: a few thousand say it as well as all of them.
+const FLOW_READ: usize = 2500;
+
+/// Whether the flow has lost the subject in `matte`, going by how unlike what it says each pixel under
+/// the matte came from that pixel is. It takes what a flow already found and less than a millisecond.
+fn flow_lost(previous: &Picture, matte: &[u8], next: &Picture, flow: &Flow) -> bool {
+    let (w, h) = (next.width, next.height);
+    let stride = (((w * h) as f64 / (FLOW_READ * 4) as f64).sqrt() as usize).max(1);
+    let (mut sum, mut count) = (0.0f64, 0usize);
+    for y in (0..h).step_by(stride) {
+        for x in (0..w).step_by(stride) {
+            let v = flow.at(x as f64 + 0.5, y as f64 + 0.5);
+            let from_x = (x as f64 + 0.5 + f64::from(v[0])).clamp(0.0, w as f64 - 1.0) as usize;
+            let from_y = (y as f64 + 0.5 + f64::from(v[1])).clamp(0.0, h as f64 - 1.0) as usize;
+            let from = from_y * w + from_x;
+            if matte[from] == 0 {
+                continue;
+            }
+            let (a, b) = (next.rgb[y * w + x], previous.rgb[from]);
+            sum += f64::from((a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs());
+            count += 1;
+        }
+    }
+    count > 0 && sum / count as f64 > FLOW_LOST
+}
+
 /// The matte warped from the frame before, whose subject went `moved`.
 fn warped(previous: &Picture, matte: &[u8], next: &Picture, moved: [i64; 2]) -> Vec<f32> {
-    let (w, h) = (next.width, next.height);
     let shifted;
     let from = if moved == [0, 0] {
         &previous.image
@@ -592,19 +624,29 @@ fn warped(previous: &Picture, matte: &[u8], next: &Picture, moved: [i64; 2]) -> 
         &shifted
     };
     let flow = block_flow(&next.image, from, 8, 4);
+    warped_by(&flow, matte, (next.width, next.height), moved)
+}
+
+/// [`warped`], with its flow already found.
+fn warped_by(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2]) -> Vec<f32> {
     let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
+    // With the picture moved to where the subject went, what stayed behind has moved by that much, and
+    // a block on the subject's edge may go with that rather than with the subject. Going by such a block
+    // reads the matte from where the subject was, which drags it further than a cut in a band can bring
+    // it back, so what is nearer to that than to the subject says nothing.
+    let (went_x, went_y) = (moved[0] as f64, moved[1] as f64);
     (0..w * h)
         .into_par_iter()
         .map(|i| {
             let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
             let v = flow.at(x, y);
-            matting::sample(
-                &source,
-                w,
-                h,
-                x + f64::from(v[0]) - moved[0] as f64,
-                y + f64::from(v[1]) - moved[1] as f64,
-            )
+            let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
+            let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) {
+                (0.0, 0.0)
+            } else {
+                (vx, vy)
+            };
+            matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64)
         })
         .collect()
 }
@@ -671,23 +713,42 @@ fn prompt_from(soft: &[f32], w: usize, h: usize) -> Option<Prompt> {
 }
 
 /// The next frame's matte from the one before, and how far its subject went, where that is further than
-/// a band: the flow keeps up with less, as it has done, and is left to.
+/// a band: the flow keeps up with less, as it has done, and is left to. The search for it (8 of 48 ms a
+/// frame at 640x360) only runs where the subject was going fast last frame or the flow has lost it.
 fn next_matte(
     previous: &Picture,
     matte: &[u8],
     next: &Picture,
     (fg, bg): (&Gmm, &Gmm),
     model: Option<&dyn MaskModel>,
+    was_fast: bool,
 ) -> (Vec<u8>, [i64; 2]) {
     let (w, h) = (next.width, next.height);
     let base = (w.max(h) as f64 / 40.0).max(4.0);
-    let went = moved_by(previous, matte, next);
-    let moved = if (went[0] as f64).hypot(went[1] as f64) > base * FLOW_KEEPS_UP {
-        went
-    } else {
-        [0, 0]
+    let search = || {
+        let went = moved_by(previous, matte, next);
+        if (went[0] as f64).hypot(went[1] as f64) > base * FLOW_KEEPS_UP {
+            went
+        } else {
+            [0, 0]
+        }
     };
-    let soft = warped(previous, matte, next, moved);
+    let (moved, soft) = if was_fast {
+        let moved = search();
+        (moved, warped(previous, matte, next, moved))
+    } else {
+        let flow = block_flow(&next.image, &previous.image, 8, 4);
+        let moved = if flow_lost(previous, matte, next, &flow) {
+            search()
+        } else {
+            [0, 0]
+        };
+        if moved == [0, 0] {
+            (moved, warped_by(&flow, matte, (w, h), moved))
+        } else {
+            (moved, warped(previous, matte, next, moved))
+        }
+    };
     let reach = band_of((w, h), moved);
     // A warped matte is uncertain by about the band it is searched in.
     let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
@@ -904,6 +965,7 @@ pub fn follow_object(
     let mut across = vec![soft::measured(&picture, &matte, &corners)];
     followed.areas.push(area);
     let mut lost_at = None;
+    let mut was_fast = false;
     for index in 1..count {
         let Some((frame_w, frame_h, rgba)) = frame(index) else {
             lost_at = Some(index);
@@ -914,7 +976,8 @@ pub fn follow_object(
             break;
         }
         let next = Picture::of(width, height, &rgba);
-        let (labels, went) = next_matte(&picture, &matte, &next, (&fg, &bg), model);
+        let (labels, went) = next_matte(&picture, &matte, &next, (&fg, &bg), model, was_fast);
+        was_fast = went != [0, 0];
         let now = area_of(&labels);
         // Its corners go with it, and are matched where it went.
         let before: Vec<[f64; 2]> = corners

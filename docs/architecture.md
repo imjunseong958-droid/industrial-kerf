@@ -323,7 +323,22 @@ across the edge in light: what lies well inside and well outside are the two col
 fall-off that draws what lies between says how wide it is and where its middle is (`roto/soft.rs`). A
 subject out of focus on one side, or moving under an open shutter, comes within 0.052 of the true alpha on
 average over its edge's pixels, where the best single `feather=` on the same outline is off by 0.08 to 0.09, in 14 ms a frame at 960x540. Hair comes out as a band that is soft on
-average, not as strands, which is all a soft edge along an outline can say. A subject going further in a frame than two of its bands (a band being a fortieth of the frame's width) is found again first, by matching its own pixels across the frame at a few sizes (`moved_by`), and the flow then says only what changed of it, in a band up to three times as wide the further it went; below that the flow keeps up alone and nothing changes. At 640x360, a disk 120 across going back and forth over 24 frames at 64 pixels a frame overlapped the truth by 0.17 on average, lost after 5 frames, and now by 0.996, 0.995 at worst; at 128, 0.04 and 0.996; colors closer to the background's, 0.16 and 0.04 and now 0.98. At 2 bands and below it holds what it had, and the worst single frame at 4 bands of 200x150 is 0.938 where it was 0.979, on a mean of 0.993. Looking costs 8 of 48 ms a frame at 640x360 on every frame. A trained model is optional and swappable (`kerf_segment::MaskModel`):
+average, not as strands, which is all a soft edge along an outline can say. A subject going further in a frame than two of its bands (a band being a fortieth of the frame's width) is found again first, by matching its own pixels across the frame at a few sizes (`moved_by`), and the flow then says only what changed of it, in a band up to three times as wide the further it went; below that the flow keeps up alone and nothing changes. At 640x360, a disk 120 across going back and forth over 24 frames at 64 pixels a frame overlapped the truth by 0.17 on average, lost after 5 frames, and now by 0.996, 0.995 at worst; at 128, 0.04 and 0.996; colors closer to the background's, 0.16 and 0.04 and now 0.98. At 2 bands and below it holds what it had. Moving a picture to where its subject went moves what stayed behind by as much, and a block on the subject's edge may go with that: going by such a block read the matte from where the subject had been, and dragged it out by up to 15 pixels with a band of 5, further than a cut in the band could bring back, though the shifts found were right. That was the one frame at 4 bands of 200x150 at 0.938. A block nearer to what stayed behind than to the subject now says nothing, and that frame comes to 0.992 on a mean of 0.996. The search takes 8 of 48 ms a frame at 640x360, and now runs only where the subject went fast on the frame before or the flow has lost it: how unlike what the flow says each pixel under the matte came from that pixel is, read at 2500 of them, comes to 0.01 to 0.05 where the flow keeps up, up to 0.14 turning or growing fast or under a shutter, and 0.09 to 0.7 where it has lost the subject, which is told from 0.08 up. So a slow subject takes 39 ms a frame, its bytes as they were with the search, and a fast one 53. Beyond rigid disks, on an ellipse twice as wide as tall over 24 frames at 640x360, by the overlap with what the subject covers more than half of, colors plain and then close to the background's:
+
+| Shot | Plain | Close |
+|---|---|---|
+| Rigid, 64 px a frame | 0.994 | 0.961 |
+| Turning 20 degrees a frame, 64 px | 0.995 | 0.967 |
+| Growing and shrinking by 20% over ten frames, 64 px | 0.995 | 0.967 |
+| Turning 12 and growing 20%, 64 px | 0.995 | 0.967 |
+| Turning 20 and growing 30%, 128 px | 0.994 | 0.968 |
+| Shutter open half the frame, 8 px | 0.978 | 0.948 |
+| Shutter open half the frame, 64 px | 0.949 | 0.939 |
+| Shutter open half the frame, 128 px | 0.881 | 0.911 |
+| Shutter open half the frame, turning 12, 64 px | 0.937 | 0.923 |
+| Shutter open all the frame, 64 px | 0.863 | 0.895 |
+
+So turning and changing size cost it nothing a band cannot follow, and blur is what is left: the outline sits inside what is half covered by about half of how long the blur is at its ends, since the cut keeps to what looks like the subject and a measure of the fall-off goes only so far around a turn. A mask's soft edge makes up some of that where it is drawn. A trained model is optional and swappable (`kerf_segment::MaskModel`):
 it only sharpens the cut's prior, and one that disagrees with the flow is left out for that frame.
 MobileSAM runs in plain Rust; its weights are never bundled, and `look` names the file to fetch. On a
 disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at
@@ -342,7 +357,7 @@ turn 0.15 degrees at worst, and the field of view 0.2 degrees, with 0.13 pixels 
 in 31 ms a frame after the frames are drawn (28 of it following points). A clip pinned under a 55
 degree lens for 36 frames at 480x270 stays within 0.72 pixels of its spot.
 
-A lens that changes during a shot is solved too, and goes in as `fov` keyframes on `gen=camera@1`. How much the picture grew from frame to frame, read from how far apart what it shows is, starts each frame's lens, and each key frame's focal length then goes wherever fits, against what lies at other depths: a zoom grows all of a picture alike, and a move along its line grows what is near more. It stands only where it leaves under three quarters of one lens's error, so a shot one lens explains comes out as it did. A camera that holds its lens, in a room filmed over 120 frames at 960x540, has the same 0.099 pixels, way off by 0.097%, turned off by 0.136 degrees, and a field of view off by 0.26; asking costs a second solve wherever the picture grows or shrinks by 3%, which on that shot takes 2.2 s where one lens took 0.83. Over the same way:
+A lens that changes during a shot is solved too, and goes in as `fov` keyframes on `gen=camera@1`. How much the picture grew from frame to frame, read from how far apart what it shows is, starts each frame's lens, and each key frame's focal length then goes wherever fits, against what lies at other depths: a zoom grows all of a picture alike, and a move along its line grows what is near more. It stands only where it leaves under four fifths of one lens's error, so a shot one lens explains comes out as it did. A camera that holds its lens, in a room filmed over 120 frames at 960x540, has the same 0.099 pixels, way off by 0.097%, turned off by 0.136 degrees, and a field of view off by 0.26; asking costs a second solve wherever the picture grows or shrinks by 0.4%, which on that shot takes 2.1 s where one lens took 0.8. Over the same way:
 
 | Lens | Solve | Reprojection error | Way | Turn at worst | Field of view at worst |
 |---|---|---|---|---|---|
@@ -350,6 +365,22 @@ A lens that changes during a shot is solved too, and goes in as `fov` keyframes 
 | 1.2x | Zooming | 0.14 px | 0.54% | 0.17 deg | 0.46 deg |
 | 2x | One lens | 0.45 px | 68.1% | 17.8 deg | 42.1 deg |
 | 2x | Zooming | 0.17 px | 0.43% | 0.24 deg | 1.25 deg |
+
+A lens that breathes as it focuses is a small zoom, out and back, and small is where one lens does worst for what it can see: it was asked about only from 3% of growth, and over the same way one lens took 1% of breathing up in a field of view 4 degrees off with only 0.19 pixels to show for it. Asked from 0.4%, with a focal length that changes by 0.3% enough to stand:
+
+| Breathing | Solve | Reprojection error | Way | Turn at worst | Field of view at worst |
+|---|---|---|---|---|---|
+| 0.25% | One lens, as it finds nothing better | 0.12 px | 0.41% | 0.23 deg | 0.75 deg |
+| 0.5% | One lens | 0.14 px | 0.79% | 0.61 deg | 1.76 deg |
+| 0.5% | Lens that changes | 0.11 px | 0.17% | 0.17 deg | 0.35 deg |
+| 1% | One lens | 0.19 px | 1.42% | 1.50 deg | 4.02 deg |
+| 1% | Lens that changes | 0.11 px | 0.25% | 0.14 deg | 0.32 deg |
+| 2% | One lens | 0.25 px | 2.60% | 3.23 deg | 8.01 deg |
+| 2% | Lens that changes | 0.10 px | 0.34% | 0.05 deg | 0.06 deg |
+| 5% | One lens | 0.35 px | 6.06% | 6.50 deg | 13.70 deg |
+| 5% | Lens that changes | 0.12 px | 0.34% | 0.08 deg | 0.12 deg |
+
+A held lens, a zoom of 1.2x and of 2x, and a push in come out as they did. All of this is on rendered rooms: a lens's distortion, which a real one has and no solve here models, might also be taken up by a focal length that changes.
 
 A zoom at a flat wall square to the camera and a push in at one are the same picture, and so is a tripod turning under a zoom if a move can also be made to fit it. There `look` says so (`zoomOrPush`) and writes the move with one lens; and a camera that plainly only turns under a zoom is refused, as one that only turns is. A clip pinned under a zoom of 1.6x for 36 frames at 480x270 stays within 1.2 pixels of its spot.
 
