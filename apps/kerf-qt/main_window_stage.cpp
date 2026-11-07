@@ -112,6 +112,7 @@ void MainWindow::updateViewerMasks() {
         for (QAction *action : m_maskTools) action->setEnabled(false);
         m_viewer->setMasks(QString(), QJsonArray{}, QTransform{});
         m_viewer->setMotionPath(QString(), QString(), QTransform{}, 0.0);
+        m_viewer->setSampledPath({}, std::nullopt);
         return;
     }
     const QJsonObject clip = selectedClipObject();
@@ -126,6 +127,17 @@ void MainWindow::updateViewerMasks() {
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
     m_viewer->setMotionPath(m_selectedClip, props.value(QStringLiteral("path")).toString(),
                             pathPlacement(clip, picture, fit, canvas, clipTime, parents, m_project), propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
+    // A path facing along itself from an anchor off the middle of a turned clip: no one map shows it.
+    const QTransform onPath = pathPlacement(clip, picture, fit, canvas, clipTime, parents, m_project);
+    const bool sampled = props.value(QStringLiteral("three_d")).toBool() && !onPath.isInvertible() && props.value(QStringLiteral("orient")).toBool() && !props.value(QStringLiteral("path")).toString().isEmpty();
+    if (!sampled) {
+        m_viewer->setSampledPath({}, std::nullopt);
+        return;
+    }
+    constexpr int kSampledPathSteps = 96;
+    const auto places = sampledPath(clip, picture, fit, canvas, clipTime, parents, m_project, kSampledPathSteps);
+    const double along = propertyAt(props, QStringLiteral("along"), clipTime, 0.0);
+    m_viewer->setSampledPath(places, places.value(int(std::lround(std::clamp(along, 0.0, 1.0) * kSampledPathSteps))));
 }
 
 QTransform MainWindow::parentsMotion(const QJsonObject &clip, const QSizeF &canvas, double at) const {

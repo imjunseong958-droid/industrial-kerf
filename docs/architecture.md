@@ -240,13 +240,12 @@ On a clip in depth the curve and the masks are drawn through what the camera doe
 map says exactly, so `picturePlacement` and `pathPlacement` return it and the viewer paints through it and inverts it to drag
 (`a_clip_in_depth_lands_where_the_table_says` holds it to `Scene::at` and `Plane::of`). A mask lies on the clip's plane; a path lies square to the world at the
 clip's `z`, as a clip turns about its middle. What is keyed goes by the moment on the picture, so the rest of the curve says where
-the clip would be if those stayed. A plane edge on or wholly behind the camera shows nothing, and in a drag what goes past a plane's horizon, or further than `path=` can say, stays where it last was.
+the clip would be if those stayed. A plane edge on or wholly behind the camera shows nothing, and in a drag what goes past a plane's horizon, or further than `path=` can say, stays where it last was. A path it faces along (`orient`) from an anchor off the middle of a turned clip leaves the plane by a different amount at each point, which no one map says, so its curve is drawn place by place from where the clip's own placement puts its anchor (`sampledPath`), and is shown and not edited.
 
 To add:
 
 - A camera's `aperture` on the GPU: its frames are the last in depth on the CPU.
-- A path on a clip in depth with `orient` and an anchor off its middle, turned: its anchor leaves the plane by a different amount at each
-  point, which no one map shows, so it shows no curve rather than a wrong one.
+- `three_d`, `z`, `rotate_x`, `rotate_y`, `depth`, and `bevel` in the Inspector, whose Transform rows are a fixed list: they are in the catalog and the language, and a generator's own parameters (a light's `shadow` and `size` among them) are all that it takes from the catalog as they come.
 - EffectCraft's `render/three_d/adv` at `5c54866` is a triangle rasterizer with materials, and the rest of it does not fit rays on planes: models need meshes, a depth buffer, and a texture for each surface, and an environment's reflections need gloss, which no clip has.
 
 Expressions stay out. They exist so that a person need not write hundreds of
@@ -331,7 +330,7 @@ measurements, tracks as data, and check findings for what a viewer would notice.
 of three moments it has come in by: as drawn, without it, and its glyphs alone, white on nothing, so that a
 title the colour of its background is seen not to show. Each patch about half a line across goes by the
 strongest of its ink, so a caption's outline counts and a title half over a highlight is caught, and
-it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of the fast check; the full QC has it as a row, Text contrast, after the eight of the Finish tray's mockup, in the last tenth of its progress, and it adds 0.36 s a clip at 1080p, for at most 40 clips spread over the sequence.
+it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of the fast check; the full QC has it as a row, Text contrast, after the eight of the Finish tray's mockup, in the last tenth of its progress, and it adds 0.36 s a clip at 1080p, for at most 40 clips spread over the sequence. The same frames say what the frame cuts off: Clipped text, the row after it, is a text whose box goes past an edge with its glyphs reaching that edge, so a box wider than its ink says nothing and text moved wholly off the frame has nothing left to cut; `look` gives those as `clipped`. A crop or a mask is taken as meant.
 
 `look` with `media` and `facts` gives a fact sheet beside the index: what the camera does in each shot, from the one move, turn, and zoom that
 most of the picture agrees on between small frames four times a second (`kerf_track::shot`, so a subject crossing the frame is left out), and R128 loudness.
@@ -356,5 +355,4 @@ leaves out, since silence would read as a finding: faces and the subject, which 
   license, FSL-1.1-ALv2, forbids a competing commercial product, and Kerf Cloud is a
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. These ideas are worth doing our own way: one kernel source
-  run on the CPU and compiled to WGSL, which would end writing every effect twice;
-  and a check for clipped text. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`.
+  run on the CPU and compiled to WGSL, which would end writing every effect twice. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`.

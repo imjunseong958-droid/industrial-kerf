@@ -302,6 +302,12 @@ QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool f
 // clip's middle swings out of that plane by a fixed amount as the clip turns, so
 // the path moves with it; under `orient` that amount differs at each point, which
 // no one map shows, so that clip's placement is not invertible either.
+// Where a clip's anchor goes along its `path=` when no one map can say, as with `orient` and an anchor
+// off the middle of a turned clip in depth: `count` + 1 places in shares of the canvas, each from what
+// the clip's own placement is that far along, and none where that cannot be seen.
+QList<std::optional<QPointF>> sampledPath(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
+                                          const QTransform &parents, const QJsonObject &timeline, int count);
+
 QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                          const QTransform &parents, const QJsonObject &timeline = QJsonObject{});
 

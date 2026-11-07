@@ -567,9 +567,30 @@ fn contrast_frames(sequence: &Sequence, (from, to): (Time, Time)) -> usize {
     (of * 3 * CONTRAST_MOMENTS).min(MOST_CONTRAST_FRAMES)
 }
 
+/// Whether the frame cuts a text off: its box goes past an edge, in pixels of the frame `glyphs` is,
+/// and its glyphs reach that edge. A box goes past an edge for what a line could hold with no glyph
+/// there, which title safe says something of and this does not.
+fn cut_by_frame(glyphs: &Drawn, bounds: [f64; 4], scale: f64) -> bool {
+    let (w, h) = (glyphs.0 as usize, glyphs.1 as usize);
+    let ink = |x: usize, y: usize| {
+        let at = (y * w + x) * 4;
+        f64::from(glyphs.2[at]) / 255.0 >= GLYPH
+    };
+    let past = [
+        bounds[0] * scale < 0.0,
+        bounds[1] * scale < 0.0,
+        bounds[2] * scale > w as f64,
+        bounds[3] * scale > h as f64,
+    ];
+    (past[0] && (0..h).any(|y| ink(0, y)))
+        || (past[1] && (0..w).any(|x| ink(x, 0)))
+        || (past[2] && (0..h).any(|y| ink(w - 1, y)))
+        || (past[3] && (0..w).any(|x| ink(x, h - 1)))
+}
+
 /// Titles and captions of `sequence` in `project`, whose media paths are resolved, within a range,
-/// too faint against what is behind them, read from the picture: `draw` gives the frame of a project
-/// at a moment, or `None` if it cannot be drawn. It draws at most `most` frames, spread over what
+/// too faint against what is behind them or cut off by the frame, read from the picture: `draw` gives
+/// the frame of a project at a moment, or `None` if it cannot be drawn. It draws at most `most` frames, spread over what
 /// there is, and returns how many clips it read and how many there were. Frames take time, so this
 /// is for `look` to be asked for, and for the full check, and is not part of the fast one.
 pub(crate) fn contrast(
@@ -599,6 +620,7 @@ pub(crate) fn contrast(
             only_glyphs(project, id, &item.clip.id),
         );
         let mut worst: Option<(Reading, Time)> = None;
+        let mut cut: Option<Time> = None;
         for moment in steady_moments(item.clip) {
             let frames = draw(project, moment)
                 .and_then(|with| Some((with, draw(&behind, moment)?, draw(&alone, moment)?)));
@@ -613,6 +635,9 @@ pub(crate) fn contrast(
                 continue;
             };
             let scale = f64::from(with.1) / f64::from(sequence.height.max(1));
+            if cut.is_none() && cut_by_frame(&glyphs, bounds, scale) {
+                cut = Some(moment);
+            }
             let margin = CONTRAST_MARGIN * f64::from(sequence.height);
             let place = |value: f64, most: u32| {
                 ((value * scale).round().max(0.0) as usize).min(most as usize)
@@ -635,6 +660,20 @@ pub(crate) fn contrast(
             {
                 worst = Some((read, moment));
             }
+        }
+        if let Some(when) = cut {
+            let place = clock.print_position(when);
+            findings.push(
+                Finding::warning(
+                    "text.clipped",
+                    item.clip.id.as_str(),
+                    format!(
+                        "{} is cut off by the edge of the frame at {place}",
+                        item.describe()
+                    ),
+                )
+                .during(sequence, item.clip.start, item.clip.end()),
+            );
         }
         let Some((read, when)) = worst else {
             continue;

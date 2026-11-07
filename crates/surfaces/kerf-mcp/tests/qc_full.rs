@@ -157,7 +157,7 @@ fn a_clean_spot_passes_the_measured_rows_with_their_readings() {
             "picture.flash_black",
         ]
     );
-    assert_eq!(report.summary.total, 17);
+    assert_eq!(report.summary.total, 18);
     for code in &codes[..8] {
         assert!(row(&report, code).passed, "{:#?}", row(&report, code));
     }
@@ -381,6 +381,10 @@ fn a_project_target_and_an_unmeasurable_program_are_reported() {
 
 /// A spot of plain mid gray with a title over it, in `color`, made in `directory`.
 fn spot_with_title(directory: &Path, color: &str) -> Project {
+    spot_with_title_set(directory, color, "")
+}
+
+fn spot_with_title_set(directory: &Path, color: &str, set: &str) -> Project {
     tone(directory, "sound.wav", 4.0, 0.05, None);
     picture(directory, "picture.mp4", 4.0, false);
     let document = format!(
@@ -395,7 +399,7 @@ sequence s1 rate=30 size=320x180
     clip c2 media=m2 at=00:00:00:00 dur=00:00:04:00
   track T1 video
     clip words gen=title@1 at=00:00:01:00 dur=00:00:01:00
-      set text=\"Plain words\" color={color} size=0.12
+      set text=\"Plain words\" color={color} size=0.12 {set}
 "
     );
     let mut project = kerf_lang::parse_document(&document, Catalog::builtin())
@@ -432,6 +436,9 @@ fn a_full_check_says_which_text_is_too_faint() {
     assert_eq!(row.limit.as_deref(), Some("3:1"));
     assert_eq!(report.summary.rows[7].code, "picture.flash_black");
     assert_eq!(report.summary.rows[8].code, "text.contrast");
+    assert_eq!(report.summary.rows[9].code, "text.clipped");
+    assert_eq!(report.summary.rows[9].name, "Clipped text");
+    assert!(report.summary.rows[9].passed);
     // A gray a little lighter than that, at 1.5:1, does not, and it goes to the end, only forward.
     let faint = spot_with_title(dir, "#a0a0a0");
     let mut fractions = Vec::new();
@@ -486,4 +493,32 @@ fn cancelling_stops_reading_text() {
         "{:?}",
         result.err()
     );
+}
+
+#[test]
+fn a_full_check_says_which_text_the_frame_cuts_off() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().expect("a folder");
+    let dir = directory.path();
+    let words = |set: &str| spot_with_title_set(dir, "#ffffff", set);
+    let clipped = |project: &Project| {
+        let report = check_full(project, dir, &CancellationToken::new()).expect("check_full");
+        (
+            with(&report, "text.clipped").len(),
+            report
+                .summary
+                .rows
+                .iter()
+                .find(|row| row.code == "text.clipped")
+                .expect("the row")
+                .passed,
+        )
+    };
+    // Well inside the frame, nothing; off its right edge, one, and the row fails.
+    assert_eq!(clipped(&words("x=0")), (0, true));
+    assert_eq!(clipped(&words("x=0.45")), (1, false));
+    // Moved wholly off it, there are no glyphs left to cut.
+    assert_eq!(clipped(&words("x=3")), (0, true));
 }

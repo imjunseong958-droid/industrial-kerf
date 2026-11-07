@@ -574,6 +574,18 @@ private slots:
         QCOMPARE(view.statusText(), QStringLiteral("Running QC… 42%"));
         QVERIFY(view.runButton()->isHidden());
 
+        // What the full check adds to the mockup's rows shows like the rest.
+        QJsonObject longer = mockupCheck();
+        QJsonObject summary = longer.value("summary").toObject();
+        QJsonArray longerRows = summary.value("rows").toArray();
+        longerRows.append(QJsonObject{{"code", "text.clipped"}, {"name", "Clipped text"}, {"passed", false}, {"value", "1 at 00:00:03:00"}});
+        summary.insert("rows", longerRows);
+        longer.insert("summary", summary);
+        bus.dispatch(longer);
+        QCOMPARE(view.rowCount(), 9);
+        QCOMPARE(view.rowName(8), QStringLiteral("Clipped text"));
+        QVERIFY(!view.rowPassed(8));
+
         QSignalSpy threads(&bus, &EditorBus::openThread);
         bus.dispatch(mockupCheck());
         QVERIFY(!view.running());

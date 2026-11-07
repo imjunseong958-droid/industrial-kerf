@@ -312,6 +312,40 @@ private slots:
         }
     }
 
+    // No one map says where an anchor off the middle of a turned clip goes along a path it faces along,
+    // so its curve is drawn place by place. Each is where the compositor puts it (`three_d.rs`, in
+    // `draw.rs`'s table of places).
+    void aPathFacingAlongItselfIsDrawnPlaceByPlace() {
+        const QSizeF canvas(1920, 1080);
+        const QJsonObject props{{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"z", 0.2}, {"path", "0,0 0.2,0.3 0.5,-0.1"}};
+        const QJsonObject clip{{"id", "c1"}, {"props", props}};
+        const QTransform parents;
+        QVERIFY(!pathPlacement(clip, canvas, false, canvas, 0.0, parents).isInvertible());
+        const auto places = sampledPath(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, 8);
+        QCOMPARE(places.size(), 9);
+        for (const auto &place : places) QVERIFY(place.has_value());
+        const auto landed = [&](int step) { return QPointF(places.at(step)->x() * canvas.width(), places.at(step)->y() * canvas.height()); };
+        QVERIFY(QLineF(landed(4), QPointF(1869.824956407, 835.685078047)).length() < 1e-6);
+        QVERIFY(QLineF(landed(8), QPointF(2326.408450295, 433.723742822)).length() < 1e-6);
+
+        // Behind the camera it breaks, and all of it behind shows none.
+        QJsonObject behind = props;
+        behind.insert("z", -5.0);
+        const auto gone = sampledPath(QJsonObject{{"id", "c1"}, {"props", behind}}, canvas, false, canvas, 0.0, parents, QJsonObject{}, 8);
+        QVERIFY(std::none_of(gone.cbegin(), gone.cend(), [](const auto &place) { return place.has_value(); }));
+
+        // Shown and not edited, since no one map takes a drag back to a point of it.
+        ViewerWidget viewer;
+        viewer.resize(640, 360);
+        viewer.setSampledPath(places, places.at(4));
+        QVERIFY(viewer.showsSampledPath());
+        QVERIFY(!viewer.showsMotionPath());
+        const QImage with = viewer.grab().toImage();
+        viewer.setSampledPath(gone, std::nullopt);
+        QVERIFY(!viewer.showsSampledPath());
+        QVERIFY(with != viewer.grab().toImage());
+    }
+
     void aPlaneThatCannotBeSeenPlacesNothing() {
         const QSizeF canvas(1920, 1080);
         const auto placementOf = [&](const QJsonObject &props) { return picturePlacement(QJsonObject{{"props", props}}, canvas, false, canvas, 0.0); };
@@ -330,7 +364,7 @@ private slots:
         QVERIFY(flat.isAffine());
         QVERIFY(inSight(flat, QPointF(-100.0, 100.0)));
         // An anchor off the middle leaves the plane by a different amount at each point
-        // of a path it faces along: no one map says that.
+        // of a path it faces along: no one map says that, and it is drawn place by place.
         const auto pathOf = [&](const QJsonObject &props) { return pathPlacement(QJsonObject{{"props", props}}, canvas, false, canvas, 0.0, QTransform{}); };
         QVERIFY(!pathOf({{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"rotate_y", 30.0}, {"path", "0,0 0.5,0"}}).isInvertible());
         QVERIFY(pathOf({{"three_d", true}, {"orient", true}, {"anchor_x", 0.25}, {"path", "0,0 0.5,0"}}).isInvertible());
