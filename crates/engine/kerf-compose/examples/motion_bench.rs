@@ -2,7 +2,10 @@
 //!
 //! ```text
 //! cargo run --release -p kerf-compose --example motion_bench [word]
+//! KERF_BENCH_GPU=1 cargo run --release -p kerf-compose --example motion_bench [word]
 //! ```
+//!
+//! On the CPU unless told otherwise, whatever a machine has.
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};
 use kerf_lang::parse_document;
@@ -151,6 +154,11 @@ fn masked(corner: impl Fn(f64) -> String, rest: &str) -> String {
 fn main() {
     // A word on the command line picks the scenes with it in their names.
     let wanted = std::env::args().nth(1).unwrap_or_default();
+    let accel = if std::env::var_os("KERF_BENCH_GPU").is_some() {
+        Accel::Always
+    } else {
+        Accel::Never
+    };
     println!("{:<18}{:>12}{:>12}", "scene", "1080p ms", "4K ms");
     let masks = [
         ("mask 40 hard", masked(|_| String::new(), "")),
@@ -174,12 +182,20 @@ fn main() {
                 .unwrap_or_else(|errors| panic!("{errors:?}"))
                 .project;
             let options = ComposeOptions {
-                accel: Accel::Never,
+                accel,
                 frame_folder: None,
+                keep_frames: false,
                 ..ComposeOptions::default()
             };
             let compositor =
                 Compositor::new(&project, Catalog::builtin(), &options).expect("composes");
+            let on_gpu = compositor.draws_on_gpu(Rate::FPS_24.time_of(40), 1.0);
+            if accel == Accel::Always && !on_gpu {
+                line += "         cpu";
+                continue;
+            }
+            // Its first frame on the GPU builds what later ones keep.
+            compositor.frame(Rate::FPS_24.time_of(39), 1.0);
             let mut times: Vec<f64> = (0..9)
                 .map(|step| {
                     let begun = Instant::now();

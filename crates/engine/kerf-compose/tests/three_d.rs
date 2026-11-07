@@ -211,7 +211,7 @@ fn lights_fall_off_by_which_way_a_clip_faces_and_only_a_light_darkens() {
 }
 
 #[test]
-fn a_frame_in_depth_goes_to_the_cpu_and_its_key_knows_the_camera() {
+fn a_frame_keys_by_the_camera_and_one_blurring_goes_to_the_cpu() {
     let project = |camera: &str| {
         parse_document(
             &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set {camera}\n", square("three_d=true")),
@@ -232,7 +232,7 @@ fn a_frame_in_depth_goes_to_the_cpu_and_its_key_knows_the_camera() {
         .expect("composes")
     };
     let at = Rate::FPS_24.time_of(3);
-    assert!(!compositor("x=0").draws_on_gpu(at, 1.0));
+    assert!(!compositor("aperture=0.03").draws_on_gpu(at, 1.0));
     assert_ne!(
         compositor("x=0").frame_key(at, 1.0),
         compositor("x=0.1").frame_key(at, 1.0)
