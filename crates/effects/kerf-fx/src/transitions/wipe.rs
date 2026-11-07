@@ -57,7 +57,7 @@ pub(crate) fn wipe_px(st: &WipeStyle, a: [f32; 4], b: [f32; 4], d: f32) -> [f32;
 }
 
 /// Min/max of `field` over a coarse grid covering the frame (edges included).
-fn field_range(w: f32, h: f32, field: &(impl Fn(f32, f32) -> f32 + Sync)) -> (f32, f32) {
+pub(super) fn field_range(w: f32, h: f32, field: &(impl Fn(f32, f32) -> f32 + Sync)) -> (f32, f32) {
     let n = 48;
     let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
     for j in 0..=n {
@@ -76,11 +76,16 @@ fn field_range(w: f32, h: f32, field: &(impl Fn(f32, f32) -> f32 + Sync)) -> (f3
     }
 }
 
+/// Where a wipe's sweep has got to: its `T(p)`.
+pub(super) fn threshold(t: &Tx, st: &WipeStyle, field: &(impl Fn(f32, f32) -> f32 + Sync)) -> f32 {
+    let (lo, hi) = field_range(t.wf, t.hf, field);
+    let m = st.margin() + (hi - lo) * 0.01;
+    lo - m + t.p * (hi - lo + 2.0 * m)
+}
+
 /// The sweeping wipe: B where `field < T(p)` (field in pixels).
 pub(crate) fn field_wipe(t: &Tx, st: WipeStyle, field: impl Fn(f32, f32) -> f32 + Sync) -> Image {
-    let (lo, hi) = field_range(t.wf, t.hf, &field);
-    let m = st.margin() + (hi - lo) * 0.01;
-    let thr = lo - m + t.p * (hi - lo + 2.0 * m);
+    let thr = threshold(t, &st, &field);
     paint(t.w, t.h, |x, y| {
         wipe_px(&st, t.pa(x, y), t.pb(x, y), field(x, y) - thr)
     })

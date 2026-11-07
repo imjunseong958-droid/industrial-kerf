@@ -184,7 +184,7 @@ fn no_nan_on_degenerate_inputs() {
 }
 
 /// A non-default value for a parameter (to check every parameter is wired).
-fn changed(def: &ParamDef) -> Option<Param> {
+pub(super) fn changed(def: &ParamDef) -> Option<Param> {
     Some(match (&def.ty, &def.default) {
         (ParamType::Number, Value::Number(v)) => {
             let (min, max) = (def.min.unwrap_or(0.0), def.max.unwrap_or(v * 2.0 + 10.0));

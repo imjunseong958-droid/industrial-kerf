@@ -81,13 +81,13 @@ A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title to
 
 **What the GPU draws:** media, nested sequences, solids, titles, captions; clips in depth with their
 lights, shadows, and solids; masks,
-crops, letterboxing, placing, opacity, wipes and dissolves, dips, all 27 blend modes,
+crops, letterboxing, placing, opacity, wipes and dissolves, dips, 71 of the 72 transitions carried from FilmCraft (`kerf-fx/src/transitions/kernels.wgsl`), all 27 blend modes,
 adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
 `FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, and
 Noise, Color, Luma, and Ultra Keys, Logo Cutout, Extract, and Radial Zoom Blur. So 13 of the 15 playful looks and all
 18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut), since a look
 transition is layers rather than a mix.
-**What sends a frame to the CPU:** the transitions carried from FilmCraft, every other
+**What sends a frame to the CPU:** Morph Cut, whose optical flow would need both clips read back, every other
 effect (other lights, stylize, Ultra Key's Choke and Soften, and the kept EffectCraft ones, which is
 what Film and Zoom Through need), and a Lumetri using a LUT, curves, sharpening, or an HSL secondary, which none of the 18 grades does. In HDR, so does an effect that
 needs the whole picture brought under 1, which goes by a peak only the CPU reads; effects that bring
@@ -97,9 +97,25 @@ each pixel under 1 (`catalog::headroom`) stay on the GPU. Glow gains least
 Three limits remain, in this order:
 
 1. **More of the frame on the GPU.** Each effect without a kernel costs its whole
-   frame the GPU. The 72 carried transitions are procedural maths with no kernels (FilmCraft
-   has one, Push, in `crates/gpu/src/transition.wgsl`), and they last only as long as a
-   cut. EffectCraft's WGSL (`effectcraft/crates/gpu` at `5c54866`) has kernels for many of them.
+   frame the GPU. The transitions have theirs now: each mirrors its arm of `kerf_fx::transitions`, which stays the reference, and is held to it per value (`transitions/gpu_tests.rs`, at most 5e-4 on values from 0 to about 1.5, for each parameter of each one) and per frame (`tests/gpu.rs`; a one-off over all 71 between two 4K clips comes to a mean of at most 0.006 of 255 at 1080p and 0.055 at 4K, with no pixel off by more than 2). A test names which have kernels and which do not, so the list cannot drift. Only Morph Cut stays on the CPU. EffectCraft's WGSL (`effectcraft/crates/gpu` at `5c54866`) turned out not to help: its `fx_transition.wgsl` draws Block Dissolve and the CC transitions, which `retired.tsv` maps onto these by resemblance, and none has this arithmetic. A transition mixes what its clips draw, with no regard for HDR on the CPU, and so on the GPU. Building the kernels takes 1.6 s the first time a new build runs on an M1, on the background thread, and 6 ms after that, since Metal keeps what it compiled.
+
+   With `examples/frame_bench.rs`, `transition` as its scene, on an M1 with 8 GB, between two 4K H.264 files, median frame of the middle half of the cut, in ms, decoding both included. The 1080p floor is about 24 and the 4K floor about 50, decoding and putting up the two clips:
+
+   | Transition | 1080p CPU | 1080p GPU | 4K CPU | 4K GPU |
+   |---|---|---|---|---|
+   | Median of the 72 | 49 | 25 | 168 | 57 |
+   | Iris Round | 35 | 25 | 87 | 53 |
+   | Film Dissolve | 51 | 24 | 164 | 52 |
+   | Push | 116 | 32 | 444 | 80 |
+   | Glass | 66 | 25 | 414 | 53 |
+   | Whip | 232 | 34 | 1085 | 93 |
+   | Lens Blur | 279 | 33 | 1010 | 102 |
+   | Cross Zoom | 424 | 40 | 1786 | 117 |
+   | Radial Blur | 840 | 50 | 3589 | 213 |
+   | Blur Dissolve | 60 | 48 | 269 | 136 |
+   | Glow | 47 | 39 | 264 | 102 |
+
+   So at 1080p 69 of the 72 play past 24 fps, where 30 did, and at 4K all but Morph Cut are between 5 and 20 fps, where the blurs through a cut took up to 3.6 s a frame. Two take least from it, since what they do is blur: Blur Dissolve and Glow, whose box passes cost what they cost.
 2. **Kept frames.** Playback, previews, and `look` keep frames by a hash of what they depend on
    (`Drawing::frame_key`), in memory (`frames.rs`) and on disk (`disk.rs`, after EffectCraft's
    `render/src/disk_cache.rs`), so a frame comes back from any compositor, an edit, which makes a new

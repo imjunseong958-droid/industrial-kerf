@@ -1,12 +1,13 @@
 //! A frame drawn on the GPU: the same walk as the CPU's, through the sequence's tracks and each
 //! clip's picture, masks, effects, and placing, with the numbers worked out by the same functions.
 //! [`Drawing::gpu_can_draw`] decides for a whole frame before anything is decoded, and whatever it
-//! refuses (transitions, adjustment layers, effects without a kernel) the CPU draws.
+//! refuses (Morph Cut, effects without a kernel) the CPU draws.
 
 use super::*;
 use kerf_fx::filmcraft::catalog::Headroom;
 use kerf_fx::filmcraft::gpufx::FxOp;
 use kerf_fx::filmcraft::instance::GpuEffect;
+use kerf_fx::transitions::gpu::Kernel as TransitionKernel;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
@@ -17,7 +18,11 @@ const SMALLEST_PIXELS: usize = 640 * 360;
 
 /// The device, once it and every kernel are built.
 fn ready_gpu() -> Option<&'static Gpu> {
-    kerf_gpu::shared().filter(|gpu| filmcraft::gpu::available(gpu) && gpu.depth_kernels().is_some())
+    kerf_gpu::shared().filter(|gpu| {
+        filmcraft::gpu::available(gpu)
+            && kerf_fx::transitions::gpu::available(gpu)
+            && gpu.depth_kernels().is_some()
+    })
 }
 
 /// A clip's picture with all done to it that is done to the picture itself, as [`Ready`] on the CPU.
@@ -232,15 +237,15 @@ impl Drawing {
         at: Time,
         scale: f64,
     ) -> bool {
+        let size = output_size(sequence.width, sequence.height, scale);
         track.shown.iter().enumerate().all(|(index, shown)| {
             if !shown.shows(at) {
                 return true;
             }
-            // A transition mixes two clips with its own arithmetic, on the CPU.
-            let mixed = track.pairs.iter().any(|pair| {
-                pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
-            });
-            !mixed && self.gpu_can_draw_clip(gpu, sequence, shown, at, scale)
+            track
+                .pair_at(index, at)
+                .is_none_or(|pair| transition_kernel(pair, at, size, scale).is_some())
+                && self.gpu_can_draw_clip(gpu, sequence, shown, at, scale)
         })
     }
 
@@ -476,8 +481,23 @@ impl Drawing {
             }
             let track = tracks[next];
             next += 1;
-            for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
-                canvas = self.gpu_layer(frame, canvas, plan, shown, depth.as_mut(), (at, scale))?;
+            for (index, shown) in track.shown.iter().enumerate() {
+                if !shown.shows(at) {
+                    continue;
+                }
+                canvas = match track.pair_at(index, at) {
+                    // Drawn once, at the first of its clips that shows.
+                    Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
+                        let on = (plan, track);
+                        self.gpu_pair(frame, canvas, on, pair, depth.as_mut(), (at, scale))?
+                    }
+                    Some(_) => canvas,
+                    None => {
+                        let (on, moment) = ((plan, shown), (at, scale));
+                        let blend = shown.plan.blend;
+                        self.gpu_layer(frame, canvas, on, depth.as_mut(), moment, blend)?
+                    }
+                };
             }
             for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
                 let opacity = f64::from(dip.color.a) / 255.0
@@ -521,15 +541,67 @@ impl Drawing {
         Some(canvas)
     }
 
-    /// A clip over `canvas` at sequence time `at`, as [`Drawing::layer`] draws it.
+    /// Two clips mixed by a transition at sequence time `at`, over `canvas`, as [`Drawing::pair`]
+    /// draws them.
+    fn gpu_pair(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        canvas: GpuPicture,
+        (sequence, track): (&SequencePlan, &TrackPlan),
+        pair: &Pair,
+        mut depth: Option<&mut Depth>,
+        (at, scale): (Time, f64),
+    ) -> Option<GpuPicture> {
+        let (w, h) = (canvas.w, canvas.h);
+        let kernel = transition_kernel(pair, at, (w as usize, h as usize), scale)?;
+        let (from, to) = (&track.shown[pair.from], &track.shown[pair.to]);
+        let mut side = |frame: &mut GpuFrame<'static>, shown: Option<&Shown>| {
+            let empty = frame.clear(w, h);
+            match shown.filter(|shown| shown.shows(at)) {
+                Some(shown) => self.gpu_layer(
+                    frame,
+                    empty,
+                    (sequence, shown),
+                    depth.as_deref_mut(),
+                    (at, scale),
+                    Blend::Normal,
+                ),
+                None => Some(empty),
+            }
+        };
+        // One clip alone: it enters from nothing, or leaves into it.
+        let (outgoing, incoming) = match (pair.from == pair.to, pair.from_nothing) {
+            (false, _) => (Some(from), Some(to)),
+            (true, true) => (None, Some(to)),
+            (true, false) => (Some(from), None),
+        };
+        let a = side(frame, outgoing)?;
+        let b = side(frame, incoming)?;
+        let mixed = kernel.run(frame, &a, &b)?;
+        frame.release(a);
+        frame.release(b);
+        // A fade from or to nothing keeps the one clip's blend mode; between two they mix normally.
+        let blend = match (from.shows(at), to.shows(at)) {
+            (true, false) => from.plan.blend,
+            (false, true) => to.plan.blend,
+            _ if pair.from == pair.to => from.plan.blend,
+            _ => Blend::Normal,
+        };
+        let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+        let out = frame.composite(canvas, &mixed, &Affine::IDENTITY, whole, 1.0, blend);
+        frame.release(mixed);
+        Some(out)
+    }
+
+    /// A clip over `canvas` at sequence time `at` with `blend`, as [`Drawing::layer`] draws it.
     fn gpu_layer(
         &self,
         frame: &mut GpuFrame<'static>,
         canvas: GpuPicture,
-        sequence: &SequencePlan,
-        shown: &Shown,
+        (sequence, shown): (&SequencePlan, &Shown),
         depth: Option<&mut Depth>,
         (at, scale): (Time, f64),
+        blend: Blend,
     ) -> Option<GpuPicture> {
         let plan = &shown.plan;
         let clip = &plan.clip;
@@ -560,7 +632,7 @@ impl Drawing {
                 &Affine::IDENTITY,
                 whole,
                 ready.opacity,
-                plan.blend,
+                blend,
             );
             frame.release(drawn);
             frame.release(ready.picture);
@@ -581,7 +653,7 @@ impl Drawing {
             &ready.to_output,
             ready.crop.unwrap_or(whole),
             ready.opacity,
-            plan.blend,
+            blend,
         );
         frame.release(ready.picture);
         Some(canvas)
@@ -1044,6 +1116,19 @@ impl Drawing {
             Source::Adjustment | Source::Nothing => return None,
         }))
     }
+}
+
+/// The kernel of a transition at sequence time `at`, on pictures of `size`, or `None` when it stays
+/// on the CPU.
+fn transition_kernel(
+    pair: &Pair,
+    at: Time,
+    size: (usize, usize),
+    scale: f64,
+) -> Option<TransitionKernel> {
+    let fx = Fx::new(&pair.def, &pair.params)?;
+    let p = progress(at, pair.start, pair.end) as f32;
+    TransitionKernel::of(&fx, size, p, scale as f32)
 }
 
 /// A rectangle by its edges: left, top, right, bottom.

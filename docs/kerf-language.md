@@ -15,7 +15,8 @@ irises, page peels, and more, drawn from both clips across the cut
 (`transition add from=c1 to=c2 fx=push@1 dur=12f direction=from-east`). A
 `direction` names the side the incoming clip enters from; a center is
 `center_x` and `center_y` in fractions of the frame; pixel sizes are canvas
-pixels. Kerf's own renderer draws them.
+pixels. Kerf's own renderer draws them, on the GPU where there is one, except
+Morph Cut, which goes to the CPU for the frames it lasts.
 
 A video editor's effects, carried from FilmCraft, are listed there by
 category too: Lumetri grades, blurs, keys and track mattes, glows, light

@@ -2,8 +2,11 @@
 //!
 //! ```text
 //! ffmpeg -f lavfi -i testsrc2=s=3840x2160:r=24:d=4 -pix_fmt yuv420p clip.mp4
-//! cargo run --release -p kerf-compose --example frame_bench -- clip.mp4 [scene]
+//! cargo run --release -p kerf-compose --example frame_bench -- clip.mp4 [scene] [second.mp4]
 //! ```
+//!
+//! `transition` as the scene draws each transition in the catalog between the two clips, and
+//! `transition push,iris-round` just those.
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};
 use kerf_lang::parse_document;
@@ -64,6 +67,24 @@ const SCENES: &[(&str, &str)] = &[
 ];
 
 fn time(document: &str, frames: i64) -> (f64, f64) {
+    time_from(document, 0, frames)
+}
+
+/// The middle of the cut in [`transition`], its first frame, and how many frames it lasts.
+const CUT: (i64, i64) = (36, 24);
+
+/// How long a frame takes in the middle half of `fx` between two clips, as named in the catalog, each
+/// with footage of its own, since one file read at two places seeks for every frame.
+fn transition(head: &str, fx: &str) -> f64 {
+    let document = format!(
+        "{head}  track V1 video\n    clip c1 media=m1 src=0f at=0f dur=48f\n    clip c2 media=m2 src=24f at=48f dur=48f\n    transition t1 from=c1 to=c2 fx={fx}@1 dur={}f\n",
+        CUT.1
+    );
+    let (_, median) = time_from(&document, CUT.0 + CUT.1 / 4, CUT.1 / 2);
+    median
+}
+
+fn time_from(document: &str, from: i64, frames: i64) -> (f64, f64) {
     let project = parse_document(document, Catalog::builtin())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
@@ -77,11 +98,11 @@ fn time(document: &str, frames: i64) -> (f64, f64) {
     let compositor = Compositor::new(&project, Catalog::builtin(), &options).expect("draws");
     // With frames kept, what is timed is drawing them again.
     if std::env::var_os("KERF_BENCH_KEEP").is_some() {
-        for index in 0..frames {
+        for index in from..from + frames {
             compositor.frame(Rate::FPS_24.time_of(index), 1.0);
         }
     }
-    let mut times: Vec<f64> = (0..frames)
+    let mut times: Vec<f64> = (from..from + frames)
         .map(|index| {
             let began = Instant::now();
             let frame = compositor.frame(Rate::FPS_24.time_of(index), 1.0);
@@ -100,8 +121,11 @@ fn main() {
     let only = std::env::args().nth(2).unwrap_or_default();
     // What the document says about the footage beyond its size, such as ` bits=10`.
     let fields = std::env::var("KERF_BENCH_MEDIA").unwrap_or_default();
-    let media =
-        format!("media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160{fields}\n");
+    // The incoming clip of a transition: the third argument, or the same file again.
+    let second = std::env::args().nth(3).unwrap_or_else(|| clip.clone());
+    let media = format!(
+        "media m1 path=\"{clip}\" rate=24 dur=00:00:04:00 video=3840x2160{fields}\nmedia m2 path=\"{second}\" rate=24 dur=00:00:04:00 video=3840x2160{fields}\n"
+    );
     // What the sequence says of itself, such as ` color=rec2100-pq`.
     let sequence = std::env::var("KERF_BENCH_SEQUENCE").unwrap_or_default();
     println!(
@@ -112,6 +136,28 @@ fn main() {
         let head = format!(
             "kerf 1\nproject name=\"bench\"\n{media}sequence s1 rate=24 size={width}x{height} audio=48000{sequence}\n"
         );
+        // `transition iris-round,push`, or `transition` for every one the catalog has.
+        if let Some(wanted) = only.strip_prefix("transition") {
+            let wanted = wanted.trim();
+            let named: Vec<&str> = if wanted.is_empty() {
+                Catalog::builtin()
+                    .all()
+                    .filter(|def| kerf_fx::transitions::filmcraft_id(def.id.as_str()).is_some())
+                    .map(|def| def.id.as_str())
+                    .collect()
+            } else {
+                wanted.split(',').collect()
+            };
+            for fx in named {
+                let median = transition(&head, fx);
+                println!(
+                    "{fx:<18} {:>9} {median:>11.1} {:>8.1}",
+                    format!("{width}x{height}"),
+                    1000.0 / median
+                );
+            }
+            continue;
+        }
         let clip_line = "    clip c1 media=m1 src=0f at=0f dur=48f\n";
         for (name, body) in SCENES.iter().filter(|(name, _)| name.contains(&only)) {
             let document = format!("{head}  track V1 video\n{clip_line}{body}");

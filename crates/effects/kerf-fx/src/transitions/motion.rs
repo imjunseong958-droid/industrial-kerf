@@ -110,7 +110,7 @@ fn scene<'a>(
     t: &Tx<'a>,
     focal: f32,
     blur: (f32, usize),
-    build: impl Fn(f32) -> Vec<Layer<'a>> + Sync,
+    build: impl Fn(f32) -> Vec<Layer<'a>>,
 ) -> Image {
     let (sh, n) = blur;
     let qs: Vec<f32> = if n <= 1 || sh <= 0.0 {
@@ -155,7 +155,28 @@ fn spring(x: f32, bounce: f32) -> f32 {
     f(x) + x * (1.0 - f(1.0))
 }
 
-pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
+/// What a scene of cards takes: how far off the eye is, the motion blur over it, and the cards at each
+/// moment.
+pub(crate) struct CardScene<'a, 'b> {
+    pub focal: f32,
+    pub blur: (f32, usize),
+    pub build: Box<dyn Fn(f32) -> Vec<Layer<'a>> + 'b>,
+}
+
+fn boxed<'a, 'b>(
+    focal: f32,
+    blur: (f32, usize),
+    build: impl Fn(f32) -> Vec<Layer<'a>> + 'b,
+) -> CardScene<'a, 'b> {
+    CardScene {
+        focal,
+        blur,
+        build: Box::new(build),
+    }
+}
+
+/// The cards of a transition that is a scene of them, which the CPU paints and the GPU's kernel reads.
+pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a, 'b>> {
     let c = center3(t);
     let (w, h) = (t.wf, t.hf);
     let (dx, dy) = t.dir();
@@ -163,8 +184,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
     let travel = t.travel();
     let far = focal_for(w, h, 0.0);
     Some(match id {
-        // ---------------- Slide ----------------
-        "push" => scene(t, far, shutter(t, 0.12), |q| {
+        "push" => boxed(far, shutter(t, 0.12), move |q| {
             let e = ease_in_out(q);
             vec![
                 Layer::new(
@@ -177,7 +197,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                 ),
             ]
         }),
-        "slide" => scene(t, far, shutter(t, 0.12), |q| {
+        "slide" => boxed(far, shutter(t, 0.12), move |q| {
             let e = ease_in_out(q);
             vec![
                 Layer::new(Card::flat(), t.a),
@@ -189,7 +209,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
         }),
         "split" => {
             let vertical_cut = t.choice("orientation") == 0;
-            scene(t, far, shutter(t, 0.12), move |q| {
+            boxed(far, shutter(t, 0.12), move |q| {
                 let e = ease_in_out(q);
                 let (half_l, half_r) = if vertical_cut {
                     ([0.0, 0.0, w / 2.0, h], [w / 2.0, 0.0, w, h])
@@ -208,39 +228,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                 ]
             })
         }
-        "whip" => {
-            let e = {
-                let p = t.p;
-                // fast in the middle: a steep sigmoid normalised to 0..1
-                let s = |u: f32| 1.0 / (1.0 + (-(u - 0.5) * 14.0).exp());
-                (s(p) - s(0.0)) / (s(1.0) - s(0.0))
-            };
-            let pushed = scene(t, far, (0.0, 1), |_| {
-                vec![
-                    Layer::new(
-                        Card::flat().translate([dx * travel * e, dy * travel * e, 0.0]),
-                        t.a,
-                    ),
-                    Layer::new(
-                        Card::flat().translate([
-                            dx * travel * (e - 1.0),
-                            dy * travel * (e - 1.0),
-                            0.0,
-                        ]),
-                        t.b,
-                    ),
-                ]
-            });
-            let len = t.frac("blur") * bell(t.p) * travel * 0.18;
-            if len < 0.75 {
-                pushed
-            } else {
-                let n = super::taps(len * 2.0);
-                paint(t.w, t.h, |x, y| {
-                    line_blur(&pushed, x, y, dx * len, dy * len, n)
-                })
-            }
-        }
         "roll" => {
             // A and B ride a big wheel whose hub sits below (or beside) the frame.
             let r = if horiz { h * 2.0 } else { w * 2.0 };
@@ -251,7 +238,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             };
             let gap = (if horiz { w } else { h }) * 1.15 / r;
             let sign = if horiz { dx.signum() } else { dy.signum() };
-            scene(t, far, shutter(t, 0.1), move |q| {
+            boxed(far, shutter(t, 0.1), move |q| {
                 let a = ease_in_out(q) * gap * sign;
                 vec![
                     Layer::new(Card::flat().rot_z(hub, a), t.a),
@@ -265,7 +252,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             let cc: V3 = [w / 2.0, h / 2.0, side / 2.0];
             let focal = focal_for(w, h, t.frac("perspective"));
             let sign = if horiz { dx.signum() } else { -dy.signum() };
-            scene(t, focal, (0.0, 1), move |q| {
+            boxed(focal, (0.0, 1), move |q| {
                 let a = ease_in_out(q) * FRAC_PI_2 * sign;
                 let back = side * 0.45 * bell(q);
                 let rot = |k: Card, ang: f32| {
@@ -284,6 +271,253 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                     .shaded(),
                 ]
             })
+        }
+        "flip_motion" | "spin_3d" => {
+            let focal = focal_for(w, h, t.frac("perspective"));
+            let flip = id == "flip_motion";
+            let sign = if horiz { dx.signum() } else { -dy.signum() };
+            let blur = if flip { shutter(t, 0.06) } else { (0.0, 1) };
+            boxed(focal, blur, move |q| {
+                let (e, back) = if flip {
+                    // ease in, then settle with a small overshoot
+                    (
+                        if q < 0.5 {
+                            ease_in(q * 2.0) * 0.5
+                        } else {
+                            0.5 + back_out(q * 2.0 - 1.0, 1.2) * 0.5
+                        },
+                        0.25 * bell(q),
+                    )
+                } else {
+                    (ease_in_out(q), 0.8 * bell(q))
+                };
+                let a = e * PI * sign;
+                let card = if horiz {
+                    Card::flat().rot_y(c, a)
+                } else {
+                    Card::flat().rot_x(c, a)
+                };
+                let card = card.translate([0.0, 0.0, back * w.max(h)]);
+                vec![Layer::new(card, t.a).with_back(t.b, !horiz).shaded()]
+            })
+        }
+        "spinback_3d" => {
+            let depth = t.frac("depth");
+            let focal = focal_for(w, h, 0.6);
+            let sign = if horiz { dx.signum() } else { -dy.signum() };
+            boxed(focal, (0.0, 1), move |q| {
+                let z = depth * w.max(h) * 1.5 * bell(q);
+                if q < 0.5 {
+                    let a = ease_in(q * 2.0) * FRAC_PI_2 * sign;
+                    let k = if horiz {
+                        Card::flat().rot_x(c, a)
+                    } else {
+                        Card::flat().rot_y(c, a)
+                    };
+                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.a).shaded()]
+                } else {
+                    let a = -(1.0 - ease_out((q - 0.5) * 2.0)) * FRAC_PI_2 * sign;
+                    let k = if horiz {
+                        Card::flat().rot_x(c, a)
+                    } else {
+                        Card::flat().rot_y(c, a)
+                    };
+                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.b).shaded()]
+                }
+            })
+        }
+        "fold_motion" => {
+            // The entry half folds over onto the exit half (showing its back), then the folded
+            // stack swings towards the viewer about the exit edge, revealing B.
+            let focal = focal_for(w, h, t.frac("perspective"));
+            let sg = if dx > 0.0 || dy > 0.0 { 1.0 } else { -1.0 };
+            let (entry, mid_axis, exit_axis): ([f32; 4], V3, V3) = match (horiz, sg > 0.0) {
+                (true, true) => ([0.0, 0.0, w / 2.0, h], [w / 2.0, 0.0, 0.0], [w, 0.0, 0.0]),
+                (true, false) => ([w / 2.0, 0.0, w, h], [w / 2.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+                (false, true) => ([0.0, 0.0, w, h / 2.0], [0.0, h / 2.0, 0.0], [0.0, h, 0.0]),
+                (false, false) => ([0.0, h / 2.0, w, h], [0.0, h / 2.0, 0.0], [0.0, 0.0, 0.0]),
+            };
+            let exit = match (horiz, sg > 0.0) {
+                (true, true) => [w / 2.0, 0.0, w, h],
+                (true, false) => [0.0, 0.0, w / 2.0, h],
+                (false, true) => [0.0, h / 2.0, w, h],
+                (false, false) => [0.0, 0.0, w, h / 2.0],
+            };
+            boxed(focal, (0.0, 1), move |q| {
+                let phi = PI * ease_in_out((q * 2.0).min(1.0)) * sg;
+                let psi = FRAC_PI_2 * ease_in(((q - 0.5) * 2.0).clamp(0.0, 1.0)) * sg;
+                let rot = |k: Card, axis: V3, a: f32| {
+                    if horiz {
+                        k.rot_y(axis, a)
+                    } else {
+                        k.rot_x(axis, -a)
+                    }
+                };
+                let flap = rot(
+                    rot(Card::flat().translate([0.0, 0.0, -0.5]), mid_axis, phi),
+                    exit_axis,
+                    psi,
+                );
+                let base = rot(Card::flat(), exit_axis, psi);
+                vec![
+                    Layer::new(Card::flat().translate([0.0, 0.0, 1.0]), t.b),
+                    Layer::new(base, t.a).clipped(exit).shaded(),
+                    Layer::new(flap, t.a)
+                        .with_back(t.a, !horiz)
+                        .clipped(entry)
+                        .shaded(),
+                ]
+            })
+        }
+        "pop_motion" => {
+            let s = t.frac("overshoot") * 4.0;
+            boxed(far, shutter(t, 0.05), move |q| {
+                let sa = 1.0 - 0.3 * ease_in((q / 0.6).min(1.0));
+                let qb = ((q - 0.15) / 0.85).clamp(0.0, 1.0);
+                let sb = back_out(qb, s).max(0.0);
+                let mut la = Layer::new(Card::flat().scale_about(c, sa), t.a);
+                la.opacity = 1.0 - smoothstep(0.35, 0.8, q);
+                let mut lb = Layer::new(
+                    Card::flat()
+                        .scale_about(c, sb.max(1e-3))
+                        .translate([0.0, 0.0, -0.01]),
+                    t.b,
+                );
+                lb.opacity = smoothstep(0.1, 0.3, q);
+                vec![la, lb]
+            })
+        }
+        "pull_motion" => boxed(far, shutter(t, 0.1), move |q| {
+            let e = ease_in_out(q);
+            let s = 1.0 - 0.25 * bell(q);
+            vec![
+                Layer::new(
+                    Card::flat().scale_about(c, s).translate([
+                        dx * travel * e,
+                        dy * travel * e,
+                        0.0,
+                    ]),
+                    t.a,
+                ),
+                Layer::new(
+                    Card::flat().scale_about(c, s).translate([
+                        dx * travel * (e - 1.0),
+                        dy * travel * (e - 1.0),
+                        0.0,
+                    ]),
+                    t.b,
+                ),
+            ]
+        }),
+        "spin_motion" => {
+            let turn =
+                t.num("rotation").to_radians() * if t.choice("spin") == 1 { -1.0 } else { 1.0 };
+            boxed(far, shutter(t, 0.06), move |q| {
+                if q < 0.5 {
+                    let k = ease_in(q * 2.0);
+                    vec![Layer::new(
+                        Card::flat()
+                            .rot_z(c, turn * 0.5 * k)
+                            .scale_about(c, (1.0 - k).max(1e-3)),
+                        t.a,
+                    )]
+                } else {
+                    let k = ease_out((q - 0.5) * 2.0);
+                    vec![Layer::new(
+                        Card::flat()
+                            .rot_z(c, -turn * 0.5 * (1.0 - k))
+                            .scale_about(c, k.max(1e-3)),
+                        t.b,
+                    )]
+                }
+            })
+        }
+        "spring_motion" => {
+            let bounce = t.frac("bounce");
+            boxed(far, shutter(t, 0.08), move |q| {
+                let e = spring(q, bounce);
+                vec![
+                    Layer::new(
+                        Card::flat().translate([dx * travel * e, dy * travel * e, 0.0]),
+                        t.a,
+                    ),
+                    Layer::new(
+                        Card::flat().translate([
+                            dx * travel * (e - 1.0),
+                            dy * travel * (e - 1.0),
+                            0.0,
+                        ]),
+                        t.b,
+                    ),
+                ]
+            })
+        }
+        "travel_motion" => {
+            let zoom = t.frac("zoom");
+            let step = travel * 1.08;
+            boxed(far, shutter(t, 0.08), move |q| {
+                let s = 1.0 - zoom * bell(q);
+                let pan = step * ease_in_out(q);
+                vec![
+                    Layer::new(
+                        Card::flat()
+                            .translate([dx * pan, dy * pan, 0.0])
+                            .scale_about(c, s),
+                        t.a,
+                    ),
+                    Layer::new(
+                        Card::flat()
+                            .translate([dx * (pan - step), dy * (pan - step), 0.0])
+                            .scale_about(c, s),
+                        t.b,
+                    ),
+                ]
+            })
+        }
+        _ => return None,
+    })
+}
+
+/// The two clips where Whip has pushed them, fast in the middle: a steep sigmoid normalised to 0..1.
+pub(crate) fn whip_layers<'a>(t: &Tx<'a>) -> Vec<Layer<'a>> {
+    let (dx, dy) = t.dir();
+    let travel = t.travel();
+    let p = t.p;
+    let s = |u: f32| 1.0 / (1.0 + (-(u - 0.5) * 14.0).exp());
+    let e = (s(p) - s(0.0)) / (s(1.0) - s(0.0));
+    vec![
+        Layer::new(
+            Card::flat().translate([dx * travel * e, dy * travel * e, 0.0]),
+            t.a,
+        ),
+        Layer::new(
+            Card::flat().translate([dx * travel * (e - 1.0), dy * travel * (e - 1.0), 0.0]),
+            t.b,
+        ),
+    ]
+}
+
+pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
+    if let Some(found) = card_scene(id, t) {
+        return Some(scene(t, found.focal, found.blur, found.build));
+    }
+    let (w, h) = (t.wf, t.hf);
+    let (dx, dy) = t.dir();
+    let horiz = dx != 0.0;
+    let travel = t.travel();
+    let far = focal_for(w, h, 0.0);
+    Some(match id {
+        "whip" => {
+            let pushed = scene(t, far, (0.0, 1), |_| whip_layers(t));
+            let len = t.frac("blur") * bell(t.p) * travel * 0.18;
+            if len < 0.75 {
+                pushed
+            } else {
+                let n = super::taps(len * 2.0);
+                paint(t.w, t.h, |x, y| {
+                    line_blur(&pushed, x, y, dx * len, dy * len, n)
+                })
+            }
         }
         "film_roll" => {
             let gap = t.px("gap");
@@ -397,208 +631,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                         got_b
                     }
                 })
-            })
-        }
-        "flip_motion" | "spin_3d" => {
-            let focal = focal_for(w, h, t.frac("perspective"));
-            let flip = id == "flip_motion";
-            let sign = if horiz { dx.signum() } else { -dy.signum() };
-            let blur = if flip { shutter(t, 0.06) } else { (0.0, 1) };
-            scene(t, focal, blur, move |q| {
-                let (e, back) = if flip {
-                    // ease in, then settle with a small overshoot
-                    (
-                        if q < 0.5 {
-                            ease_in(q * 2.0) * 0.5
-                        } else {
-                            0.5 + back_out(q * 2.0 - 1.0, 1.2) * 0.5
-                        },
-                        0.25 * bell(q),
-                    )
-                } else {
-                    (ease_in_out(q), 0.8 * bell(q))
-                };
-                let a = e * PI * sign;
-                let card = if horiz {
-                    Card::flat().rot_y(c, a)
-                } else {
-                    Card::flat().rot_x(c, a)
-                };
-                let card = card.translate([0.0, 0.0, back * w.max(h)]);
-                vec![Layer::new(card, t.a).with_back(t.b, !horiz).shaded()]
-            })
-        }
-        "spinback_3d" => {
-            let depth = t.frac("depth");
-            let focal = focal_for(w, h, 0.6);
-            let sign = if horiz { dx.signum() } else { -dy.signum() };
-            scene(t, focal, (0.0, 1), move |q| {
-                let z = depth * w.max(h) * 1.5 * bell(q);
-                if q < 0.5 {
-                    let a = ease_in(q * 2.0) * FRAC_PI_2 * sign;
-                    let k = if horiz {
-                        Card::flat().rot_x(c, a)
-                    } else {
-                        Card::flat().rot_y(c, a)
-                    };
-                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.a).shaded()]
-                } else {
-                    let a = -(1.0 - ease_out((q - 0.5) * 2.0)) * FRAC_PI_2 * sign;
-                    let k = if horiz {
-                        Card::flat().rot_x(c, a)
-                    } else {
-                        Card::flat().rot_y(c, a)
-                    };
-                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.b).shaded()]
-                }
-            })
-        }
-        "fold_motion" => {
-            // The entry half folds over onto the exit half (showing its back), then the folded
-            // stack swings towards the viewer about the exit edge, revealing B.
-            let focal = focal_for(w, h, t.frac("perspective"));
-            let sg = if dx > 0.0 || dy > 0.0 { 1.0 } else { -1.0 };
-            let (entry, mid_axis, exit_axis): ([f32; 4], V3, V3) = match (horiz, sg > 0.0) {
-                (true, true) => ([0.0, 0.0, w / 2.0, h], [w / 2.0, 0.0, 0.0], [w, 0.0, 0.0]),
-                (true, false) => ([w / 2.0, 0.0, w, h], [w / 2.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-                (false, true) => ([0.0, 0.0, w, h / 2.0], [0.0, h / 2.0, 0.0], [0.0, h, 0.0]),
-                (false, false) => ([0.0, h / 2.0, w, h], [0.0, h / 2.0, 0.0], [0.0, 0.0, 0.0]),
-            };
-            let exit = match (horiz, sg > 0.0) {
-                (true, true) => [w / 2.0, 0.0, w, h],
-                (true, false) => [0.0, 0.0, w / 2.0, h],
-                (false, true) => [0.0, h / 2.0, w, h],
-                (false, false) => [0.0, 0.0, w, h / 2.0],
-            };
-            scene(t, focal, (0.0, 1), move |q| {
-                let phi = PI * ease_in_out((q * 2.0).min(1.0)) * sg;
-                let psi = FRAC_PI_2 * ease_in(((q - 0.5) * 2.0).clamp(0.0, 1.0)) * sg;
-                let rot = |k: Card, axis: V3, a: f32| {
-                    if horiz {
-                        k.rot_y(axis, a)
-                    } else {
-                        k.rot_x(axis, -a)
-                    }
-                };
-                let flap = rot(
-                    rot(Card::flat().translate([0.0, 0.0, -0.5]), mid_axis, phi),
-                    exit_axis,
-                    psi,
-                );
-                let base = rot(Card::flat(), exit_axis, psi);
-                vec![
-                    Layer::new(Card::flat().translate([0.0, 0.0, 1.0]), t.b),
-                    Layer::new(base, t.a).clipped(exit).shaded(),
-                    Layer::new(flap, t.a)
-                        .with_back(t.a, !horiz)
-                        .clipped(entry)
-                        .shaded(),
-                ]
-            })
-        }
-        "pop_motion" => {
-            let s = t.frac("overshoot") * 4.0;
-            scene(t, far, shutter(t, 0.05), move |q| {
-                let sa = 1.0 - 0.3 * ease_in((q / 0.6).min(1.0));
-                let qb = ((q - 0.15) / 0.85).clamp(0.0, 1.0);
-                let sb = back_out(qb, s).max(0.0);
-                let mut la = Layer::new(Card::flat().scale_about(c, sa), t.a);
-                la.opacity = 1.0 - smoothstep(0.35, 0.8, q);
-                let mut lb = Layer::new(
-                    Card::flat()
-                        .scale_about(c, sb.max(1e-3))
-                        .translate([0.0, 0.0, -0.01]),
-                    t.b,
-                );
-                lb.opacity = smoothstep(0.1, 0.3, q);
-                vec![la, lb]
-            })
-        }
-        "pull_motion" => scene(t, far, shutter(t, 0.1), move |q| {
-            let e = ease_in_out(q);
-            let s = 1.0 - 0.25 * bell(q);
-            vec![
-                Layer::new(
-                    Card::flat().scale_about(c, s).translate([
-                        dx * travel * e,
-                        dy * travel * e,
-                        0.0,
-                    ]),
-                    t.a,
-                ),
-                Layer::new(
-                    Card::flat().scale_about(c, s).translate([
-                        dx * travel * (e - 1.0),
-                        dy * travel * (e - 1.0),
-                        0.0,
-                    ]),
-                    t.b,
-                ),
-            ]
-        }),
-        "spin_motion" => {
-            let turn =
-                t.num("rotation").to_radians() * if t.choice("spin") == 1 { -1.0 } else { 1.0 };
-            scene(t, far, shutter(t, 0.06), move |q| {
-                if q < 0.5 {
-                    let k = ease_in(q * 2.0);
-                    vec![Layer::new(
-                        Card::flat()
-                            .rot_z(c, turn * 0.5 * k)
-                            .scale_about(c, (1.0 - k).max(1e-3)),
-                        t.a,
-                    )]
-                } else {
-                    let k = ease_out((q - 0.5) * 2.0);
-                    vec![Layer::new(
-                        Card::flat()
-                            .rot_z(c, -turn * 0.5 * (1.0 - k))
-                            .scale_about(c, k.max(1e-3)),
-                        t.b,
-                    )]
-                }
-            })
-        }
-        "spring_motion" => {
-            let bounce = t.frac("bounce");
-            scene(t, far, shutter(t, 0.08), move |q| {
-                let e = spring(q, bounce);
-                vec![
-                    Layer::new(
-                        Card::flat().translate([dx * travel * e, dy * travel * e, 0.0]),
-                        t.a,
-                    ),
-                    Layer::new(
-                        Card::flat().translate([
-                            dx * travel * (e - 1.0),
-                            dy * travel * (e - 1.0),
-                            0.0,
-                        ]),
-                        t.b,
-                    ),
-                ]
-            })
-        }
-        "travel_motion" => {
-            let zoom = t.frac("zoom");
-            let step = travel * 1.08;
-            scene(t, far, shutter(t, 0.08), move |q| {
-                let s = 1.0 - zoom * bell(q);
-                let pan = step * ease_in_out(q);
-                vec![
-                    Layer::new(
-                        Card::flat()
-                            .translate([dx * pan, dy * pan, 0.0])
-                            .scale_about(c, s),
-                        t.a,
-                    ),
-                    Layer::new(
-                        Card::flat()
-                            .translate([dx * (pan - step), dy * (pan - step), 0.0])
-                            .scale_about(c, s),
-                        t.b,
-                    ),
-                ]
             })
         }
         // ---------------- Transformers ----------------
