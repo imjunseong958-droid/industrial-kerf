@@ -1343,7 +1343,7 @@ pub static COMMANDS: &[Command] = &[
         command("help.crashReports", "Show Crash Reports", always),
         Menu::Help,
         1,
-    )),
+    )),    frontend(menu(command("help.about", "About Kerf", always), Menu::Help, 2)),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.
@@ -2515,6 +2515,7 @@ mod tests {
         assert_eq!(menu_of("window.presets"), "Window");
         assert_eq!(menu_of("help.guide"), "Help");
         assert_eq!(menu_of("help.crashReports"), "Help");
+        assert_eq!(menu_of("help.about"), "Help");
         assert_eq!(menu_of("media.replace"), Value::Null);
         // Ctrl+O stays Import Media; opening a project takes its own key.
         assert_eq!(find("file.import").unwrap().keys, ["Ctrl+O"]);

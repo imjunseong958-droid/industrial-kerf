@@ -340,6 +340,9 @@ char *kerf_fx_catalog_all(void);
 // {video: [def], audio: [def]}, as a timeline's properties carries them. Free
 // with kerf_bridge_string_free.
 char *kerf_clip_properties(void);
+// {name, version, license, repository}: what Help > About Kerf shows. Free
+// with kerf_bridge_string_free.
+char *kerf_about(void);
 // Report every panic in the editor's process to the crash folder, as kerfd
 // and the CLI do. Call once, before any other thread starts.
 void kerf_crash_install(void);

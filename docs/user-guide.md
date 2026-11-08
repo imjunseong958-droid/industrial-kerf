@@ -7,6 +7,14 @@ Kerf is a video editor you can talk to. You ask for an edit in words, Kerf
 proposes it on the timeline, and nothing changes until you accept it. Everything
 you do by hand is an ordinary edit too, and both are undone the same way.
 
+## Get Kerf
+
+Download the latest release from
+[GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases): for
+Windows, unpack the zip anywhere and run `kerf-qt.exe`. Releases are not signed
+yet, so Windows asks before the first run (More info ▸ Run anyway). Help ▸ About
+Kerf says which version you have.
+
 ## Start a project
 
 A project is a folder: `project.kerf` (the edit, as text), `media/`, and

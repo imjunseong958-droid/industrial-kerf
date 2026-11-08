@@ -2517,6 +2517,26 @@ pub unsafe extern "C" fn kerf_bridge_string_free(value: *mut c_char) {
     }
 }
 
+// ---- about ---------------------------------------------------------------------
+
+/// Where Kerf's source and releases are.
+pub const REPOSITORY: &str = "https://github.com/imjunseong958-droid/industrial-kerf";
+
+/// `{name, version, license, repository}`: what Help > About Kerf shows.
+#[no_mangle]
+pub extern "C" fn kerf_about() -> *mut c_char {
+    owned_json(about())
+}
+
+fn about() -> Value {
+    json!({
+        "name": "Industrial Kerf",
+        "version": env!("CARGO_PKG_VERSION"),
+        "license": env!("CARGO_PKG_LICENSE"),
+        "repository": REPOSITORY,
+    })
+}
+
 // ---- crash reports ---------------------------------------------------------------
 
 /// Report every panic in the editor's process to the crash folder, as kerfd and the CLI do.
@@ -2829,6 +2849,22 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn the_editor_has_the_workspaces_version() {
+        let cmake = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../apps/kerf-qt/CMakeLists.txt"),
+        )
+        .expect("the editor's CMakeLists.txt");
+        let declared = cmake
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("project(kerf_qt VERSION "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("project(kerf_qt VERSION ...)");
+        assert_eq!(declared, env!("CARGO_PKG_VERSION"));
+        assert_eq!(super::about()["version"], json!(env!("CARGO_PKG_VERSION")));
+        assert_eq!(super::about()["license"], json!("MIT"));
+    }
 
     #[test]
     fn crash_reports_reach_the_editor_newest_first() {

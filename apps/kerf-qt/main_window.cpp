@@ -1092,6 +1092,7 @@ void MainWindow::setupActions() {
             QDir().mkpath(folder);
             QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
         }},
+        {QStringLiteral("help.about"), [this] { showAbout(); }},
         {QStringLiteral("timeline.addTrack"), [this] { addTrack(); }},
         {QStringLiteral("ai.ask"), [this] { askAi(); }},
         {QStringLiteral("source.markIn"), [this] { m_sourceMonitor->markIn(); }},
@@ -1207,6 +1208,8 @@ void MainWindow::setupActions() {
                                  m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
+    // macOS puts About in the application menu, as every Mac app has it.
+    if (QAction *about = m_commands->action(QStringLiteral("help.about"))) about->setMenuRole(QAction::AboutRole);
     if (QMenu *file = menus.value(QStringLiteral("File"))) {
         m_recentMenu = new QMenu(QStringLiteral("Open Recent"), file);
         m_recentMenu->setObjectName(QStringLiteral("openRecentMenu"));
@@ -2161,6 +2164,21 @@ void MainWindow::syncPanelCommands() {
             const QSignalBlocker blocker(action);
             action->setChecked(checked);
         }
+}
+
+void MainWindow::showAbout() {
+    QJsonObject about;
+    if (char *raw = kerf_about()) {
+        about = QJsonDocument::fromJson(QByteArray(raw)).object();
+        kerf_bridge_string_free(raw);
+    }
+    const QString repository = about.value(QStringLiteral("repository")).toString();
+    QMessageBox::about(this, QStringLiteral("About Industrial Kerf"),
+                       QStringLiteral("<b>%1</b> %2<br><br>A video editor you can talk to.<br>%3 License · "
+                                      "<a href=\"%4\">%4</a><br><br>Releases and what changed in each: "
+                                      "<a href=\"%4/releases\">%4/releases</a>")
+                           .arg(about.value(QStringLiteral("name")).toString(), about.value(QStringLiteral("version")).toString(),
+                                about.value(QStringLiteral("license")).toString(), repository));
 }
 
 } // namespace kerf
