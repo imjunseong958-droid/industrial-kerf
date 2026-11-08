@@ -130,7 +130,7 @@ fn the_gpu_and_the_cpu_finish_an_hdr_frame_alike() {
         let at = Rate::FPS_24.time_of(1);
         let (g, c) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
         assert_eq!(g.rgba.len(), c.rgba.len());
-        for (g, c) in g.rgba.chunks_exact(2).zip(c.rgba.chunks_exact(2)) {
+        for (g, c) in g.rgba.as_chunks::<2>().0.iter().zip(c.rgba.as_chunks::<2>().0.iter()) {
             let g = u16::from_le_bytes([g[0], g[1]]);
             let c = u16::from_le_bytes([c[0], c[1]]);
             assert!(g.abs_diff(c) <= 64, "{g} against {c} in{color}");

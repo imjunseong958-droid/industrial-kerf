@@ -44,7 +44,7 @@ pub struct Followed {
 
 fn pyramid(width: usize, height: usize, rgba: &[u8]) -> GrayPyramid {
     let mut plane = Plane::new(width, height, 1);
-    for (value, pixel) in plane.data.iter_mut().zip(rgba.chunks_exact(4)) {
+    for (value, pixel) in plane.data.iter_mut().zip(rgba.as_chunks::<4>().0.iter()) {
         *value = (0.2126 * f32::from(pixel[0])
             + 0.7152 * f32::from(pixel[1])
             + 0.0722 * f32::from(pixel[2]))

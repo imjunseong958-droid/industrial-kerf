@@ -633,7 +633,7 @@ fn crop_cuts(whole: &Drawn, cropped: &Drawn) -> bool {
     let ink = |drawn: &Drawn| {
         drawn
             .2
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|pixel| f64::from(pixel[0]) / 255.0 >= GLYPH)
             .count() as f64
     };

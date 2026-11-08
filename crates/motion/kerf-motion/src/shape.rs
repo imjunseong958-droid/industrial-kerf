@@ -303,7 +303,7 @@ fn fill_row(contours: &[Contour], y: f32, row: &mut [f32]) {
             }
         }
         crossings.sort_by(f32::total_cmp);
-        for span in crossings.chunks_exact(2) {
+        for span in crossings.as_chunks::<2>().0 {
             let (from, to) = (span[0].max(0.0), span[1].min(row.len() as f32));
             if to <= from {
                 continue;
@@ -525,7 +525,7 @@ impl Shape {
                 .for_each(|(y, row)| {
                     let mut covered = vec![0.0f32; w];
                     fill_row(&placed, y as f32, &mut covered);
-                    for (pixel, covered) in row.chunks_exact_mut(4).zip(&covered) {
+                    for (pixel, covered) in row.as_chunks_mut::<4>().0.iter_mut().zip(&covered) {
                         if *covered > 0.0 {
                             over(pixel, self.fill, covered.min(1.0));
                         }
@@ -550,7 +550,7 @@ impl Shape {
                     .take(bottom - top)
                     .for_each(|(y, row)| {
                         let line = &covered[(y - top) * wide..(y - top + 1) * wide];
-                        let pixels = row[left * 4..right * 4].chunks_exact_mut(4);
+                        let pixels = row[left * 4..right * 4].as_chunks_mut::<4>().0.iter_mut();
                         for (pixel, covered) in pixels.zip(line) {
                             if *covered > 0.0 {
                                 over(pixel, self.stroke, *covered);
@@ -602,7 +602,7 @@ mod tests {
     }
 
     fn area(image: &Image) -> f32 {
-        image.px.chunks_exact(4).map(|pixel| pixel[3]).sum()
+        image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum()
     }
 
     #[test]

@@ -296,7 +296,7 @@ struct Picture {
 impl Picture {
     fn of(width: usize, height: usize, rgba: &[u8]) -> Self {
         let rgb: Vec<[f32; 3]> = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|p| [p[0], p[1], p[2]].map(|v| f32::from(v) / 255.0))
             .collect();
         let image = Image {

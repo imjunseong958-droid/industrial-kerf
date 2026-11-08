@@ -213,7 +213,7 @@ fn assert_footage_drew(drawn: &[Vec<u8>], document: &str) {
     assert_eq!(drawn.len(), 2, "two frames to compare");
     assert!(
         drawn[0]
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .any(|pixel| pixel[..3] != [0, 0, 0]),
         "only black came of its footage:\n{document}"
     );

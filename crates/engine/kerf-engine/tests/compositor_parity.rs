@@ -129,7 +129,7 @@ fn composed(project: &Project, frame: i64) -> Vec<u8> {
     );
     picture
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect()
 }
@@ -150,8 +150,8 @@ fn difference(a: &[u8], b: &[u8]) -> Difference {
     let luma =
         |p: &[u8]| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]);
     let lumas: Vec<f64> = a
-        .chunks_exact(3)
-        .zip(b.chunks_exact(3))
+        .as_chunks::<3>().0.iter()
+        .zip(b.as_chunks::<3>().0.iter())
         .map(|(x, y)| (luma(x) - luma(y)).abs())
         .collect();
     let color: u64 = a

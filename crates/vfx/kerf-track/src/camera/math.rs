@@ -345,9 +345,8 @@ pub fn symmetric_eigen(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
 /// Dot product in four lanes, which the compiler can vectorise.
 fn lanes_dot(a: &[f64], b: &[f64]) -> f64 {
     let mut lanes = [0.0f64; 4];
-    let (a4, b4) = (a.chunks_exact(4), b.chunks_exact(4));
-    let (rest_a, rest_b) = (a4.remainder(), b4.remainder());
-    for (x, y) in a4.zip(b4) {
+    let ((a4, rest_a), (b4, rest_b)) = (a.as_chunks::<4>(), b.as_chunks::<4>());
+    for (x, y) in a4.iter().zip(b4) {
         for k in 0..4 {
             lanes[k] += x[k] * y[k];
         }
