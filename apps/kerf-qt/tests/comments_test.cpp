@@ -464,6 +464,19 @@ private slots:
         const QJsonObject openaiPayload = window.agentSettingsPayload();
         QCOMPARE(openaiPayload.value(QStringLiteral("provider")).toString(), QStringLiteral("openai"));
         QCOMPARE(openaiPayload.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-test-model"));
+        // Claude Code sends no key: it runs on the account it is signed in to.
+        auto *claudeCode = window.findChild<QRadioButton *>(QStringLiteral("agentConnectionClaudeCode"));
+        QVERIFY(claudeCode);
+        {
+            const QSignalBlocker claudeBlock(claudeCode);
+            claudeCode->setChecked(true);
+        }
+        window.updateAgentModelChoices();
+        QCOMPARE(window.aiAccess(), QStringLiteral("ready"));
+        const QJsonObject claudePayload = window.agentSettingsPayload();
+        QCOMPARE(claudePayload.value(QStringLiteral("provider")).toString(), QStringLiteral("claude-code"));
+        QVERIFY(!claudePayload.contains(QStringLiteral("apiKey")));
+        QCOMPARE(claudePayload.value(QStringLiteral("model")).toString(), QStringLiteral("default"));
     }
 
     // ---- the seed as the panel shows it ----------------------------------------
