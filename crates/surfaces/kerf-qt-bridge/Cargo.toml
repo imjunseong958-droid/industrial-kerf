@@ -9,6 +9,9 @@ description = "Nonblocking C ABI for the Qt editor and Rust workers"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# API keys in the OS's own store: macOS Keychain, Windows Credential Manager,
+# and the Secret Service on Linux, reached over D-Bus in Rust (no libdbus).
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }

@@ -190,6 +190,9 @@ int main(int argc, char *argv[]) {
 
     // Tests read where things end up; a test of motion turns it on for itself.
     qputenv("KERF_REDUCE_MOTION", "1");
+    // No test reads or writes the developer's real keychain; a test of it
+    // gives secrets::call() a store of its own.
+    qputenv("KERF_SECRETS", "off");
     // As QTEST_MAIN sets a widget test up.
     QApplication app(argc, argv);
     app.setAttribute(Qt::AA_Use96Dpi, true);
