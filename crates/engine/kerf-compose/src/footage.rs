@@ -71,7 +71,7 @@ fn raster(picture: &Picture) -> kerf_raster::Image {
         height: picture.h as u32,
         data: picture
             .px
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
             .collect(),
     }
@@ -384,7 +384,7 @@ impl Pictures {
             _ => kerf_raster::flow::mix(&from, &to, along),
         };
         let mut picture = Picture::new(made.width as usize, made.height as usize);
-        for (pixel, value) in picture.px.chunks_exact_mut(4).zip(&made.data) {
+        for (pixel, value) in picture.px.as_chunks_mut::<4>().0.iter_mut().zip(&made.data) {
             pixel.copy_from_slice(value);
         }
         let picture = Arc::new(picture);
@@ -931,7 +931,7 @@ fn packed(rgba: &frame::Video) -> Vec<u8> {
     for y in 0..height {
         out.extend_from_slice(&data[y * stride..y * stride + width * 4]);
     }
-    for pixel in out.chunks_exact_mut(4) {
+    for pixel in out.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
     }
     out

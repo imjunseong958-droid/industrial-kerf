@@ -1570,7 +1570,7 @@ impl<'a> Frame<'a> {
             for line in data.chunks_exact(row as usize) {
                 out.extend(
                     line[..w * 16]
-                        .chunks_exact(4)
+                        .as_chunks::<4>().0.iter()
                         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
                 );
             }
@@ -1965,7 +1965,7 @@ mod tests {
         let picture = frame.image(&source);
         let bytes = frame.finish16(&picture).expect("finished");
         assert_eq!(bytes.len(), cpu.len());
-        for (g, c) in bytes.chunks_exact(2).zip(cpu.chunks_exact(2)) {
+        for (g, c) in bytes.as_chunks::<2>().0.iter().zip(cpu.as_chunks::<2>().0.iter()) {
             let (g, c) = (
                 u16::from_le_bytes([g[0], g[1]]),
                 u16::from_le_bytes([c[0], c[1]]),
@@ -2071,8 +2071,8 @@ mod tests {
         let mut frame = gpu.frame();
         let picture = frame.filled(5, 3, [0.1, 0.2, 0.3, 0.4]);
         let floats = frame.read_floats(&picture).expect("read back");
-        for pixel in floats.chunks_exact(4) {
-            assert_eq!(pixel, [0.1, 0.2, 0.3, 0.4]);
+        for pixel in floats.as_chunks::<4>().0.iter() {
+            assert_eq!(*pixel, [0.1, 0.2, 0.3, 0.4]);
         }
     }
 
@@ -2101,7 +2101,7 @@ mod tests {
                 let picture = frame.image(&image);
                 let out = frame.hdr_output(&picture, &output, signal);
                 let floats = frame.read_floats(&out).expect("read back");
-                for (g, c) in floats.chunks_exact(4).zip(image.px.chunks_exact(4)) {
+                for (g, c) in floats.as_chunks::<4>().0.iter().zip(image.px.as_chunks::<4>().0.iter()) {
                     let rgb = [c[0], c[1], c[2]];
                     let want = if signal {
                         output.signal(rgb)

@@ -122,7 +122,7 @@ pub(crate) fn packed_f32(frame: &ffmpeg::frame::Audio) -> Result<Vec<f32>, Playb
         )));
     }
     let mut out = Vec::with_capacity(count);
-    for chunk in data.chunks_exact(4).take(count) {
+    for chunk in data.as_chunks::<4>().0.iter().take(count) {
         out.push(f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
     Ok(out)

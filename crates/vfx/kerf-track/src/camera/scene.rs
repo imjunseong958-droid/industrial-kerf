@@ -220,7 +220,7 @@ pub fn picture(surfaces: &[Surface], shot: &Shot, width: usize, height: usize) -
             scope.spawn(move || {
                 for (row, pixels) in rows.chunks_exact_mut(width * 4).enumerate() {
                     let y = part * rows_each + row;
-                    for (x, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+                    for (x, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                         let way = shot.ray(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
                         let value = first_hit(surfaces, shot.place, way)
                             .map_or(0.0, |(index, _, at)| {

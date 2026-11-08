@@ -1357,14 +1357,14 @@ impl Drawing {
         let opacity = number(&param(&plan.clip, "opacity").value_at(time)) as f32;
         let weight: Vec<f32> = frame
             .px
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|pixel| pixel[3] * opacity)
             .collect();
         if plan.blend == Blend::Normal {
             for ((pixel, adjusted), weight) in canvas
                 .px
-                .chunks_exact_mut(4)
-                .zip(adjusted.px.chunks_exact(4))
+                .as_chunks_mut::<4>().0.iter_mut()
+                .zip(adjusted.px.as_chunks::<4>().0.iter())
                 .zip(&weight)
             {
                 for k in 0..4 {
@@ -1841,7 +1841,7 @@ impl kerf_fx::kept::Host for ClipEnv<'_> {
             };
             let length = sound.len() / 2;
             let (from, duration) = (clip.start.seconds(), clip.duration.seconds());
-            for (index, out) in mixed.chunks_exact_mut(2).enumerate() {
+            for (index, out) in mixed.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let offset = start + index as f64 / f64::from(rate.max(1)) - from;
                 if !(0.0..duration).contains(&offset) {
                     continue;

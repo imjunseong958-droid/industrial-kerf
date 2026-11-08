@@ -1100,7 +1100,7 @@ fn decode_waveform_buckets(
         }
         leftover.extend_from_slice(&buf[..read]);
         let usable = leftover.len() / 4 * 4;
-        for chunk in leftover[..usable].chunks_exact(4) {
+        for chunk in leftover[..usable].as_chunks::<4>().0 {
             let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64;
             if sample.is_finite() {
                 let bucket = index

@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive -MaximumRetryCount 5 -RetryIntervalSec 10
           if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg archive does not match its checksum" }
           7z x $archive "-o$env:RUNNER_TEMP" | Out-Null
           "FFMPEG_DIR=$(Join-Path $env:RUNNER_TEMP $env:FFMPEG_NAME)" >> $env:GITHUB_ENV

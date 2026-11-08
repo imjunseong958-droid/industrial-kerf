@@ -39,7 +39,7 @@ fn compositor(body: &str, accel: Accel) -> Compositor {
 fn difference(a: &Frame, b: &Frame) -> (f64, f64, u8) {
     assert_eq!((a.width, a.height), (b.width, b.height));
     let (mut sum, mut off, mut most) = (0u64, 0u64, 0u8);
-    for (a, b) in a.rgba.chunks_exact(4).zip(b.rgba.chunks_exact(4)) {
+    for (a, b) in a.rgba.as_chunks::<4>().0.iter().zip(b.rgba.as_chunks::<4>().0.iter()) {
         let worst = (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0);
         sum += u64::from(worst);
         off += u64::from(worst > OFF_BY);
@@ -67,7 +67,7 @@ fn holds(name: &str, body: &str) {
     // And so does a kernel the device refuses.
     assert!(kerf_gpu::shared().is_some(), "{name} failed the device");
     assert!(
-        reference.rgba.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
+        reference.rgba.as_chunks::<4>().0.iter().any(|p| p[..3] != [0, 0, 0]),
         "{name} draws nothing"
     );
     let (mean, off, most) = difference(&drawn, &reference);

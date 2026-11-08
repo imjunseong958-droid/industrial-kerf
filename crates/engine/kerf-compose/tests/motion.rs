@@ -44,7 +44,7 @@ fn pixel(frame: &Frame, x: u32, y: u32) -> [u8; 3] {
 fn lit(frame: &Frame) -> usize {
     frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|pixel| pixel[0] > 128)
         .count()
 }
@@ -109,7 +109,7 @@ fn shape_with(set: &str, outlines: &str) -> String {
 fn covered(frame: &Frame) -> f64 {
     frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|pixel| kerf_color_share(pixel[0]))
         .sum()
 }

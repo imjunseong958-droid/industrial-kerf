@@ -107,7 +107,7 @@ fn gather_iris(src: &Image, iris: &[IrisRow]) -> Image {
             for (line, y) in totals.chunks_exact_mut(stride).zip(lowest..) {
                 let pixels = &src.px[y * w * 4..(y + 1) * w * 4];
                 let mut total = [0f64; 4];
-                for (j, next) in line[4..].chunks_exact_mut(4).enumerate() {
+                for (j, next) in line[4..].as_chunks_mut::<4>().0.iter_mut().enumerate() {
                     let x = j.saturating_sub(pad).min(w - 1);
                     for k in 0..4 {
                         // One bad pixel would otherwise take the rest of its row with it.

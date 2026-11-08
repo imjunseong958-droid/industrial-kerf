@@ -327,7 +327,7 @@ fn filled(corners: &[[f64; 2]], w: usize, h: usize) -> Vec<u8> {
             }
         }
         crossings.sort_by(f64::total_cmp);
-        for pair in crossings.chunks_exact(2) {
+        for pair in crossings.as_chunks::<2>().0 {
             let from = (pair[0] - 0.5).ceil().max(0.0) as usize;
             let to = ((pair[1] - 0.5).floor() as i64 + 1).clamp(0, w as i64) as usize;
             if from < to {
