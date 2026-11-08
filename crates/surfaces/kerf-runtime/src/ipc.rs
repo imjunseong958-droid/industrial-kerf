@@ -1330,7 +1330,13 @@ fn read_bounded_line<R: Read>(reader: &mut R) -> Result<Vec<u8>, RuntimeError> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
-        let count = reader.read(&mut chunk).map_err(ipc_error)?;
+        // A signal can cut a read short when the socket has a timeout, whatever
+        // SA_RESTART says; that is no answer from kerfd, so read again.
+        let count = match reader.read(&mut chunk) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(ipc_error(error)),
+        };
         if count == 0 {
             break;
         }
@@ -2554,6 +2560,34 @@ mod tests {
         assert_eq!(
             hold_id(br#"{"protocolVersion":1,"id":"r1","operation":"get_state"}"#),
             None
+        );
+    }
+
+    /// What reads like a socket that a signal interrupts once before kerfd's answer.
+    struct InterruptedOnce {
+        interrupted: bool,
+        answer: std::io::Cursor<Vec<u8>>,
+    }
+
+    impl std::io::Read for InterruptedOnce {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.answer.read(buffer)
+        }
+    }
+
+    #[test]
+    fn a_signal_during_a_read_is_not_an_answer() {
+        let mut reader = InterruptedOnce {
+            interrupted: false,
+            answer: std::io::Cursor::new(b"{\"ok\":true}\n".to_vec()),
+        };
+        assert_eq!(
+            super::read_bounded_line(&mut reader).expect("read again after the signal"),
+            b"{\"ok\":true}"
         );
     }
 }
