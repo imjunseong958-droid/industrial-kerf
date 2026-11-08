@@ -1650,6 +1650,8 @@ fn real_footage_roto_under_a_shutter() {
     let took = begun.elapsed().as_secs_f64() / n as f64;
     let why = shutter::fit_or_why(&traced.raw, &traced.across, traced.shortest_blur());
     let found = why.as_ref().ok().copied();
+    // What it would draw let in: fit with no least blur, so the slope's shutter is taken.
+    let let_in = shutter::fit_or_why(&traced.raw, &traced.across, 0.0);
     let of = |followed: &FollowedObject| {
         let (mut sum, mut worst, mut area) = (0.0, 1.0f64, 0.0);
         for (outline, truth) in followed.outlines.iter().zip(truths) {
@@ -1673,10 +1675,12 @@ fn real_footage_roto_under_a_shutter() {
         (sum / k, worst, area / k, followed.outlines.len())
     };
     let plain = of(&traced.by_the_measure());
-    let with = found.map(|found| of(&trace(n, &hints, None, rgba).under_a_shutter(found)));
+    let with = found
+        .or(let_in.as_ref().ok().copied())
+        .map(|shutter| (shutter.open, of(&trace(n, &hints, None, rgba).under_a_shutter(shutter))));
     println!(
         "roto on a real shutter, {w}x{h}, from frame {first}: the box's front goes {speed:.1} px a frame, its blur says the shutter was open {open:.2} of a frame ({} edges); \
-         {took:.3} s a frame; by the measure overlap {:.3}, worst {:.3}, area {:.2} of the truth's over {} frames; shutter found {:?}; with it {:?}",
+         {took:.3} s a frame; by the measure overlap {:.3}, worst {:.3}, area {:.2} of the truth's over {} frames; shutter found {:?}; let in, open and drawn {:?}",
         edges.len(),
         plain.0,
         plain.1,
@@ -1685,6 +1689,10 @@ fn real_footage_roto_under_a_shutter() {
         why,
         with,
     );
+    // Let in, it draws no better than the measure.
+    if let Some((_, drawn)) = with {
+        assert!(drawn.0 <= plain.0 + 0.01, "{drawn:?} against {plain:?}");
+    }
     // The measure keeps up with the truck; a shutter does not come in, as it would draw no better.
     assert!(plain.0 > 0.85 && plain.1 > 0.7 && plain.3 == n, "{plain:?}");
     assert!(found.is_none(), "{found:?}");
