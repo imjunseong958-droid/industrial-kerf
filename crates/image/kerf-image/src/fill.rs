@@ -1030,7 +1030,7 @@ mod tests {
         let header = std::fs::read(&path).expect("the frame");
         let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
         let mut img = Image::new(size(16), size(20));
-        for (px, rgb) in img.data.iter_mut().zip(decoded.stdout.chunks_exact(6)) {
+        for (px, rgb) in img.data.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
             let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
             *px = [channel(0), channel(2), channel(4), 1.0];
         }

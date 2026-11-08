@@ -1533,7 +1533,7 @@ fn footage(names: impl Iterator<Item = String>, width: usize) -> Option<(usize, 
         assert!(decoded.status.success(), "{}", path.display());
         let frame: Vec<[f32; 3]> = decoded
             .stdout
-            .chunks_exact(6)
+            .as_chunks::<6>().0.iter()
             .map(|c| [0, 2, 4].map(|i| f32::from(u16::from_le_bytes([c[i], c[i + 1]])) / 65535.0))
             .collect();
         size.1 = frame.len() / width;

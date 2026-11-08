@@ -1163,7 +1163,7 @@ fn footage(name: &str) -> Option<Image> {
     let header = std::fs::read(&path).expect("the frame");
     let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]) as usize;
     let mut img = Image::new(size(16), size(20));
-    for (px, rgb) in img.px.chunks_exact_mut(4).zip(decoded.stdout.chunks_exact(6)) {
+    for (px, rgb) in img.px.as_chunks_mut::<4>().0.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
         let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
         let linear = dec([channel(0), channel(2), channel(4)]);
         px.copy_from_slice(&[linear[0], linear[1], linear[2], 1.0]);
@@ -1192,7 +1192,7 @@ fn real_footage_bokeh() {
             let took = start.elapsed().as_secs_f64();
             let was = bokeh_by_taps(&src, radius as f32, sides, 0.0);
             let (mut se, mut worst) = (0.0f64, 0.0f32);
-            for (a, b) in now.px.chunks_exact(4).zip(was.px.chunks_exact(4)) {
+            for (a, b) in now.px.as_chunks::<4>().0.iter().zip(was.px.as_chunks::<4>().0.iter()) {
                 let (a, b) = (enc([a[0], a[1], a[2]]), enc([b[0], b[1], b[2]]));
                 for c in 0..3 {
                     se += f64::from(a[c] - b[c]).powi(2);
