@@ -1,6 +1,7 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in kerfd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
 mod analysis;
+mod claude_code;
 mod collab;
 mod looks;
 mod media;
@@ -40,7 +41,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 struct AgentSettings {
     #[serde(default)]
-    provider: Option<ProviderName>,
+    provider: Option<ChatProvider>,
     #[serde(rename = "apiMode", default)]
     api_mode: Option<OpenAiApiMode>,
     #[serde(rename = "apiKey", default)]
@@ -56,6 +57,51 @@ struct AgentSettings {
     /// Use Kerf Cloud, the hosted model, instead of a key of one's own.
     #[serde(default)]
     cloud: bool,
+}
+
+/// Who answers in Kerf chat: a model API with a key, or the person's own
+/// Claude Code, signed in to their Claude account.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ChatProvider {
+    Anthropic,
+    Openai,
+    ClaudeCode,
+}
+
+impl ChatProvider {
+    fn api(self) -> Option<ProviderName> {
+        match self {
+            Self::Anthropic => Some(ProviderName::Anthropic),
+            Self::Openai => Some(ProviderName::Openai),
+            Self::ClaudeCode => None,
+        }
+    }
+}
+
+/// The agent behind a chat: Kerf's own loop on a model API, or Claude Code.
+enum Agent {
+    Native(Box<AgentSession>),
+    ClaudeCode(claude_code::ClaudeCodeSession),
+}
+
+impl Agent {
+    fn abort_handle(&self) -> Arc<AtomicBool> {
+        match self {
+            Self::Native(session) => session.abort_handle(),
+            Self::ClaudeCode(session) => session.abort_handle(),
+        }
+    }
+
+    fn run_with_events(&mut self, text: &str, emit: impl FnMut(AgentEvent)) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session
+                .run_with_events(text, emit)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            Self::ClaudeCode(session) => session.run_with_events(text, emit),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1541,6 +1587,19 @@ fn new_agent(
     binary: &std::path::Path,
     settings: &AgentSettings,
     tx: &SyncSender<Value>,
+) -> Result<Agent, String> {
+    if !settings.cloud && settings.provider == Some(ChatProvider::ClaudeCode) {
+        return claude_code::ClaudeCodeSession::new(directory, binary, settings.model.clone())
+            .map(Agent::ClaudeCode);
+    }
+    native_agent(directory, binary, settings, tx).map(|session| Agent::Native(Box::new(session)))
+}
+
+fn native_agent(
+    directory: &std::path::Path,
+    binary: &std::path::Path,
+    settings: &AgentSettings,
+    tx: &SyncSender<Value>,
 ) -> Result<AgentSession, String> {
     // Kerf Cloud speaks the Anthropic Messages protocol with the account token.
     let cloud = if settings.cloud {
@@ -1553,7 +1612,7 @@ fn new_agent(
     };
     let provider = if cloud.is_some() {
         ProviderName::Anthropic
-    } else if let Some(provider) = settings.provider {
+    } else if let Some(provider) = settings.provider.and_then(ChatProvider::api) {
         provider
     } else {
         match std::env::var("KERF_PROVIDER").ok().as_deref() {
@@ -1828,7 +1887,9 @@ fn run_versions(
     thread::scope(|scope| {
         for index in 0..count {
             scope.spawn(move || {
-                run_version(directory, binary, request, index, count, tx, commands, shared)
+                run_version(
+                    directory, binary, request, index, count, tx, commands, shared,
+                )
             });
         }
     });
@@ -1895,41 +1956,40 @@ fn run_version(
         if let Ok(mut aborts) = shared.version_aborts.lock() {
             aborts.push(session.abort_handle());
         }
-        session
-            .run_with_events(&version_prompt(&request.text, index, count), |event| {
-                match event {
-                    AgentEvent::ToolCallStarted { name, .. } => emit(
-                        tx,
-                        json!({"type":"agent_version","key":key,"state":"running","status":name}),
-                    ),
-                    AgentEvent::ToolCallFinished {
-                        name, ok, summary, ..
-                    } => {
-                        turn.step(&format!(
-                            "{name} · {}{}",
-                            if ok { "done" } else { "failed" },
-                            summary
-                                .status
-                                .as_ref()
-                                .map(|status| format!(" · {status}"))
-                                .unwrap_or_default(),
-                        ));
-                        if staged_proposal(&summary) {
-                            if let Some(id) = &summary.proposal {
-                                proposal = Some(id.clone());
-                            }
-                            let _ = commands.try_send(Command::Refresh);
+        session.run_with_events(
+            &version_prompt(&request.text, index, count),
+            |event| match event {
+                AgentEvent::ToolCallStarted { name, .. } => emit(
+                    tx,
+                    json!({"type":"agent_version","key":key,"state":"running","status":name}),
+                ),
+                AgentEvent::ToolCallFinished {
+                    name, ok, summary, ..
+                } => {
+                    turn.step(&format!(
+                        "{name} · {}{}",
+                        if ok { "done" } else { "failed" },
+                        summary
+                            .status
+                            .as_ref()
+                            .map(|status| format!(" · {status}"))
+                            .unwrap_or_default(),
+                    ));
+                    if staged_proposal(&summary) {
+                        if let Some(id) = &summary.proposal {
+                            proposal = Some(id.clone());
                         }
+                        let _ = commands.try_send(Command::Refresh);
                     }
-                    AgentEvent::Done { text } => turn.done(&text),
-                    AgentEvent::Aborted => {
-                        stopped = true;
-                        turn.stopped();
-                    }
-                    AgentEvent::TextDelta(_) | AgentEvent::TurnStarted { .. } => {}
                 }
-            })
-            .map_err(|error| error.to_string())?;
+                AgentEvent::Done { text } => turn.done(&text),
+                AgentEvent::Aborted => {
+                    stopped = true;
+                    turn.stopped();
+                }
+                AgentEvent::TextDelta(_) | AgentEvent::TurnStarted { .. } => {}
+            },
+        )?;
         Ok::<_, String>(())
     })();
     let outcome = match &result {
@@ -1958,7 +2018,7 @@ fn agent_worker(
     shared: Arc<Shared>,
 ) {
     // Keep one session for follow-up feedback, rather than forgetting every turn.
-    let mut session: Option<(AgentSettings, AgentSession)> = None;
+    let mut session: Option<(AgentSettings, Agent)> = None;
     while let Ok(request) = rx.recv() {
         if shared.closed.load(Ordering::Relaxed) {
             break;
@@ -2016,66 +2076,64 @@ fn agent_worker(
             if let Ok(mut abort) = shared.abort.lock() {
                 *abort = Some(current.abort_handle());
             }
-            current
-                .run_with_events(&request.text, |event| {
-                    if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
-                        if let Some(focus) = focus_event(name, targets) {
-                            emit(&tx, focus);
-                        }
+            current.run_with_events(&request.text, |event| {
+                if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
+                    if let Some(focus) = focus_event(name, targets) {
+                        emit(&tx, focus);
                     }
-                    if let AgentEvent::ToolCallFinished { summary, .. } = &event {
-                        if summary.status.as_deref() == Some("awaiting_review") {
-                            emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
-                        }
-                        // The proposal shows on the timeline as it grows.
-                        if staged_proposal(summary) {
-                            let _ = commands.try_send(Command::Refresh);
-                        }
+                }
+                if let AgentEvent::ToolCallFinished { summary, .. } = &event {
+                    if summary.status.as_deref() == Some("awaiting_review") {
+                        emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
                     }
-                    // The reply keeps finished tool calls and statuses as
-                    // its steps, not the planning line every turn opens.
-                    let step = matches!(
-                        event,
-                        AgentEvent::ToolCallFinished { .. } | AgentEvent::Aborted
-                    );
-                    let (kind, text) = match event {
-                        AgentEvent::TextDelta(text) => ("delta", text),
-                        AgentEvent::ToolCallStarted { name, targets, .. } => {
-                            ("tool", format!("{name} · {}", targets.clips.join(", ")))
-                        }
-                        AgentEvent::ToolCallFinished {
-                            name, ok, summary, ..
-                        } => (
-                            "tool",
-                            format!(
-                                "{name} · {}{}",
-                                if ok { "done" } else { "failed" },
-                                summary
-                                    .status
-                                    .map(|status| format!(" · {status}"))
-                                    .unwrap_or_default(),
-                            ),
+                    // The proposal shows on the timeline as it grows.
+                    if staged_proposal(summary) {
+                        let _ = commands.try_send(Command::Refresh);
+                    }
+                }
+                // The reply keeps finished tool calls and statuses as
+                // its steps, not the planning line every turn opens.
+                let step = matches!(
+                    event,
+                    AgentEvent::ToolCallFinished { .. } | AgentEvent::Aborted
+                );
+                let (kind, text) = match event {
+                    AgentEvent::TextDelta(text) => ("delta", text),
+                    AgentEvent::ToolCallStarted { name, targets, .. } => {
+                        ("tool", format!("{name} · {}", targets.clips.join(", ")))
+                    }
+                    AgentEvent::ToolCallFinished {
+                        name, ok, summary, ..
+                    } => (
+                        "tool",
+                        format!(
+                            "{name} · {}{}",
+                            if ok { "done" } else { "failed" },
+                            summary
+                                .status
+                                .map(|status| format!(" · {status}"))
+                                .unwrap_or_default(),
                         ),
-                        AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
-                        AgentEvent::Done { text } => ("done", text),
-                        AgentEvent::Aborted => {
-                            emit(&tx, json!({"type":"agent_state","state":"aborted"}));
-                            ("status", "Stopped".into())
-                        }
-                    };
-                    if let Some((_, turn, _)) = kept.as_mut() {
-                        if step {
-                            turn.step(&text);
-                        }
-                        match kind {
-                            "done" => turn.done(&text),
-                            "status" if text == "Stopped" => turn.stopped(),
-                            _ => {}
-                        }
+                    ),
+                    AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
+                    AgentEvent::Done { text } => ("done", text),
+                    AgentEvent::Aborted => {
+                        emit(&tx, json!({"type":"agent_state","state":"aborted"}));
+                        ("status", "Stopped".into())
                     }
-                    emit(&tx, json!({"type":"agent","kind":kind,"text":text}));
-                })
-                .map_err(|error| error.to_string())?;
+                };
+                if let Some((_, turn, _)) = kept.as_mut() {
+                    if step {
+                        turn.step(&text);
+                    }
+                    match kind {
+                        "done" => turn.done(&text),
+                        "status" if text == "Stopped" => turn.stopped(),
+                        _ => {}
+                    }
+                }
+                emit(&tx, json!({"type":"agent","kind":kind,"text":text}));
+            })?;
             emit(&tx, json!({"type":"agent_state","state":"completed"}));
             Ok::<_, String>(())
         })();
@@ -3017,7 +3075,7 @@ mod tests {
         assert_eq!(
             settings,
             AgentSettings {
-                provider: Some(kerf_agent::ProviderName::Openai),
+                provider: Some(crate::ChatProvider::Openai),
                 api_mode: Some(kerf_agent::OpenAiApiMode::Responses),
                 api_key: Some("test-key".into()),
                 base_url: Some("http://localhost:9000/v1".into()),

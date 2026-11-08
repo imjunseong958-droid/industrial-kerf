@@ -44,7 +44,7 @@ enum TargetKind {
     Job,
 }
 
-pub(crate) fn summarize_targets(value: &Value) -> AgentTargetSummary {
+pub fn summarize_targets(value: &Value) -> AgentTargetSummary {
     let mut summary = AgentTargetSummary::default();
     let mut nodes = 0;
     collect_targets(value, None, &mut summary, &mut nodes);
@@ -156,7 +156,7 @@ fn add_target(targets: &mut Vec<String>, value: Option<&str>, limit: usize) {
     targets.push(value);
 }
 
-pub(crate) fn summarize_tool_result(value: &Value) -> ToolResultSummary {
+pub fn summarize_tool_result(value: &Value) -> ToolResultSummary {
     let mut summary = ToolResultSummary {
         targets: summarize_targets(value),
         ..ToolResultSummary::default()
@@ -283,7 +283,8 @@ mod where_it_works_tests {
 
     #[test]
     fn a_result_names_its_proposal() {
-        let summary = summarize_tool_result(&json!({"status": "awaiting_review", "proposal": "p1"}));
+        let summary =
+            summarize_tool_result(&json!({"status": "awaiting_review", "proposal": "p1"}));
         assert_eq!(summary.proposal.as_deref(), Some("p1"));
     }
 }

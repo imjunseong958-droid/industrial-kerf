@@ -10,7 +10,9 @@ void kerf_bridge_free(void *bridge);
 // JSON commands: refresh, reconnect, import {path}, edit {ops,revision},
 // undo/redo {revision}, accept/reject {proposalId,revision}, agent {text,
 // focus?: {scope: clip|range|sequence, clip?, fromFrame, toFrame} (what the
-// request is about, in sequence frames), provider,apiMode,apiKey,baseUrl,
+// request is about, in sequence frames), provider (anthropic|openai|
+// claude-code: the installed Claude Code, signed in on its own, with this
+// project's kerf-mcp as its only tools; no key),apiMode,apiKey,baseUrl,
 // model,mcpEnabled,mcpConfigVersion,cloud? (use Kerf Cloud's hosted model),
 // comment?: {at?, duration?, parent?, drawing?} (keep the turn in the
 // review log, below)}, abort, play, pause, seek {position,scrub},

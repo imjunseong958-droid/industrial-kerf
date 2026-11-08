@@ -28,10 +28,12 @@ pub use provider::{
     OpenAiResponsesProvider, ProviderChunk, ProviderError, ProviderRequest, UreqHttpClient,
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_RESPONSES_MODEL,
 };
-pub use summary::{AgentTargetSummary, ToolResultSummary};
+pub use summary::{
+    summarize_targets, summarize_tool_result, AgentTargetSummary, ToolResultSummary,
+};
 
 use provider::{is_tool_use, text_from_blocks};
-use summary::{summarize_targets, summarize_tool_result, MAX_AGENT_SUMMARY_TEXT_BYTES};
+use summary::MAX_AGENT_SUMMARY_TEXT_BYTES;
 
 const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Kerf. \
 Edits you make are proposals: do not claim one is applied until the user accepts it.";

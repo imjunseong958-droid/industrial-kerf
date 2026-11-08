@@ -195,6 +195,7 @@ private slots:
     void showNextSteps(const QJsonArray &steps);
     // Kerf Cloud, the hosted model, or a key of one's own (Advanced).
     bool usesCloud() const;
+    bool usesClaudeCode() const;
     bool sendCloud(const QJsonObject &command);
     // What the registry needs to know about the agent's connection.
     QString aiAccess() const;
@@ -537,6 +538,7 @@ private:
     bool m_proposalBlocked = false;
     QRadioButton *m_cloudRadio = nullptr;
     QRadioButton *m_ownKeyRadio = nullptr;
+    QRadioButton *m_claudeCodeRadio = nullptr;
     QLabel *m_cloudStatus = nullptr;
     QLineEdit *m_cloudToken = nullptr;
     QPushButton *m_cloudSignIn = nullptr;

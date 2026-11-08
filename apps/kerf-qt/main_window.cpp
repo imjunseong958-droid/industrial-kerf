@@ -383,6 +383,10 @@ bool MainWindow::usesCloud() const {
     return m_cloudRadio && m_cloudRadio->isChecked();
 }
 
+bool MainWindow::usesClaudeCode() const {
+    return m_claudeCodeRadio && m_claudeCodeRadio->isChecked();
+}
+
 bool MainWindow::sendCloud(const QJsonObject &command) {
     if (!m_bridge) {
         m_lastCommand = command;
@@ -394,6 +398,8 @@ bool MainWindow::sendCloud(const QJsonObject &command) {
 
 QString MainWindow::aiAccess() const {
     if (usesCloud()) return m_cloudAccess.isEmpty() ? QStringLiteral("unavailable") : m_cloudAccess;
+    // Claude Code signs in on its own; a turn says so if it is not.
+    if (usesClaudeCode()) return QStringLiteral("ready");
     const bool openai = activeProviderId() == QStringLiteral("openai");
     const QString key = (openai ? m_openaiKey : m_anthropicKey)->text().trimmed();
     const bool environment = !qEnvironmentVariable(openai ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY").isEmpty();
@@ -402,6 +408,15 @@ QString MainWindow::aiAccess() const {
 
 void MainWindow::updateCloudStatus() {
     if (!m_cloudStatus) return;
+    if (usesClaudeCode()) {
+        // Nothing of Kerf Cloud's applies: Claude Code keeps its own sign-in.
+        m_cloudStatus->setText(QStringLiteral("Chat runs your installed Claude Code with only this project's Kerf tools, on the Claude plan it is signed in to. Sign in once by running claude in a terminal."));
+        m_cloudToken->hide();
+        m_cloudSignIn->hide();
+        m_cloudSignOut->hide();
+        updateCommandStates();
+        return;
+    }
     const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
     const bool signedIn = !email.isEmpty() && m_cloudAccess != QStringLiteral("signedOut");
     QString text;
@@ -435,6 +450,13 @@ QJsonObject MainWindow::agentSettingsPayload() const {
     if (usesCloud()) {
         // The service picks the model; MCP tools still run locally.
         return QJsonObject{{QStringLiteral("cloud"), true},
+                           {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
+                           {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
+    }
+    if (usesClaudeCode()) {
+        // No key: Claude Code runs on the account it is signed in to.
+        return QJsonObject{{QStringLiteral("provider"), QStringLiteral("claude-code")},
+                           {QStringLiteral("model"), m_agentModel.trimmed()},
                            {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
                            {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
     }
@@ -499,6 +521,13 @@ void MainWindow::updateAgentModelChoices() {
         if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, false);
         return;
     }
+    if (usesClaudeCode()) {
+        // Claude Code's own aliases; "default" leaves the choice to it.
+        m_agentModels = {QStringLiteral("default"), QStringLiteral("opus"), QStringLiteral("sonnet"), QStringLiteral("haiku")};
+        if (!m_agentModels.contains(m_agentModel)) m_agentModel = m_agentModels.constFirst();
+        if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, true);
+        return;
+    }
     // The active connection's model, else the one chosen, else its first.
     const bool openai = activeProviderId() == QStringLiteral("openai");
     const QString current = m_agentModel == cloudModel ? QString() : m_agentModel;
@@ -531,9 +560,10 @@ void MainWindow::loadAgentSettings() {
     // Kerf Cloud unless a key of one's own is already set up, so existing
     // setups keep working; an explicit choice wins.
     const bool hasOwnKey = !m_anthropicKey->text().trimmed().isEmpty() || !m_openaiKey->text().trimmed().isEmpty();
-    const bool cloud = settings.value(QStringLiteral("agent/connection"), hasOwnKey ? QStringLiteral("own") : QStringLiteral("cloud"))
-                           .toString() != QStringLiteral("own");
-    (cloud ? m_cloudRadio : m_ownKeyRadio)->setChecked(true);
+    const QString connection = settings.value(QStringLiteral("agent/connection"), hasOwnKey ? QStringLiteral("own") : QStringLiteral("cloud")).toString();
+    (connection == QStringLiteral("claude-code") ? m_claudeCodeRadio
+     : connection == QStringLiteral("own")       ? m_ownKeyRadio
+                                                 : m_cloudRadio)->setChecked(true);
     updateCloudStatus();
     const QString mode = settings.value(QStringLiteral("agent/openai/apiMode"), qEnvironmentVariable("OPENAI_API_MODE", QStringLiteral("chat"))).toString().toLower();
     const int modeIndex = m_openaiMode->findData(mode == QStringLiteral("responses") ? QStringLiteral("responses") : QStringLiteral("chat"));
@@ -707,11 +737,16 @@ void MainWindow::buildPreferences() {
     m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
     m_ownKeyRadio = new QRadioButton(QStringLiteral("My own API key (set up under Advanced)"));
     m_ownKeyRadio->setObjectName(QStringLiteral("agentConnectionOwnKey"));
+    m_claudeCodeRadio = new QRadioButton(QStringLiteral("Claude Code (signed in to your Claude account)"));
+    m_claudeCodeRadio->setObjectName(QStringLiteral("agentConnectionClaudeCode"));
+    m_claudeCodeRadio->setToolTip(QStringLiteral("Runs your installed Claude Code with only this project's Kerf tools. It uses your Claude plan; Kerf never sees its sign-in. Sign in once by running claude in a terminal."));
     auto *connectionChoice = new QButtonGroup(connectionGroup);
     connectionChoice->addButton(m_cloudRadio);
     connectionChoice->addButton(m_ownKeyRadio);
+    connectionChoice->addButton(m_claudeCodeRadio);
     cloudLayout->addWidget(m_cloudRadio);
     cloudLayout->addWidget(m_ownKeyRadio);
+    cloudLayout->addWidget(m_claudeCodeRadio);
     m_cloudStatus = new QLabel;
     m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
     m_cloudStatus->setWordWrap(true);
@@ -746,12 +781,15 @@ void MainWindow::buildPreferences() {
     settingsLayout->addWidget(connectionGroup);
     const auto onConnectionChanged = [this](bool checked) {
         if (!checked) return;
-        QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked() ? QStringLiteral("cloud") : QStringLiteral("own"));
+        QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked()        ? QStringLiteral("cloud")
+                                                                 : m_claudeCodeRadio->isChecked() ? QStringLiteral("claude-code")
+                                                                                                  : QStringLiteral("own"));
         updateAgentModelChoices();
         updateCloudStatus();
     };
     connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
     connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
+    connect(m_claudeCodeRadio, &QRadioButton::toggled, this, onConnectionChanged);
 
     // A borderless disclosure, as the launcher's Details row.
     auto *advancedToggle = new QToolButton;
