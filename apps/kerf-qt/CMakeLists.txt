@@ -80,6 +80,8 @@ set(KERF_QT_SOURCES
     project_launcher.h
     project_panel.cpp
     project_panel.h
+    settings_migration.cpp
+    settings_migration.h
     source_monitor_panel.cpp
     source_monitor_panel.h
     test_friends.h
