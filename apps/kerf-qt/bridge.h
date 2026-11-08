@@ -347,6 +347,10 @@ void kerf_crash_install(void);
 // them), reports: [{path, component (editor|kerfd|kerf), atMs, message}]},
 // newest first. Free with kerf_bridge_string_free.
 char *kerf_crash_reports(void);
+// The system keychain: {op: get|set|delete, name, value?} -> {ok: true,
+// value? (null when get finds none)} or {error} when it cannot be used
+// (KERF_SECRETS=off turns it off). Free with kerf_bridge_string_free.
+char *kerf_secret(const char *json);
 // The project launcher, before any bridge exists. Synchronous and local.
 // {path} -> {path, exists, project (has project.kerf), name, repository,
 // branch, remote, modified (ISO 8601 of project.kerf), presets: count}.

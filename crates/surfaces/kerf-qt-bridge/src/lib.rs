@@ -10,6 +10,7 @@ mod paperwork;
 mod presets;
 mod previews;
 mod qc;
+mod secrets;
 mod queue;
 mod review;
 mod tasks;
@@ -2548,6 +2549,16 @@ fn crash_reports_json(folder: Option<PathBuf>) -> Value {
         })
         .collect();
     json!({"folder": folder, "reports": reports})
+}
+
+/// The system keychain: `{op: get|set|delete, name, value?}` -> `{ok: true, value?}` or `{error}`.
+/// # Safety
+/// `request` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_secret(request: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's contract.
+    let request = unsafe { json_argument(request) };
+    owned_json(secrets::request(&request))
 }
 
 // ---- command registry ----------------------------------------------------------

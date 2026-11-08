@@ -1,6 +1,8 @@
 #include "main_window.h"
+
 #include "comment_row.h"
 #include "review_link.h"
+#include "secret_store.h"
 #include "stage_motion.h"
 #include "ask_prompt.h"
 #include "bridge.h"
@@ -540,13 +542,14 @@ void MainWindow::updateAgentModelChoices() {
 }
 
 void MainWindow::loadAgentSettings() {
-    const QSettings settings;
+    QSettings settings;
     const QString envAnthropicKey = qEnvironmentVariable("ANTHROPIC_API_KEY");
     const QString envOpenaiKey = qEnvironmentVariable("OPENAI_API_KEY");
-    m_anthropicKey->setText(settings.value(QStringLiteral("agent/anthropic/apiKey"), envAnthropicKey).toString());
+    // Keys come from the system keychain, moved there from plain settings.
+    m_anthropicKey->setText(secrets::loadKey(settings, QStringLiteral("agent/anthropic/apiKey"), envAnthropicKey));
     m_anthropicBaseUrl->setText(settings.value(QStringLiteral("agent/anthropic/baseUrl"), QStringLiteral("https://api.anthropic.com/v1")).toString());
     m_anthropicModel->setText(settings.value(QStringLiteral("agent/anthropic/model"), QStringLiteral("claude-opus-5-5")).toString());
-    m_openaiKey->setText(settings.value(QStringLiteral("agent/openai/apiKey"), envOpenaiKey).toString());
+    m_openaiKey->setText(secrets::loadKey(settings, QStringLiteral("agent/openai/apiKey"), envOpenaiKey));
     m_openaiBaseUrl->setText(settings.value(QStringLiteral("agent/openai/baseUrl"), QStringLiteral("https://api.openai.com/v1")).toString());
     m_openaiModel->setText(settings.value(QStringLiteral("agent/openai/model"), QStringLiteral("gpt-5.6-luna")).toString());
     const QString provider = settings.value(QStringLiteral("agent/activeProvider"),
@@ -574,10 +577,10 @@ void MainWindow::loadAgentSettings() {
 void MainWindow::saveAgentSettings() {
     if (!m_anthropicKey || !m_openaiKey) return;
     QSettings settings;
-    settings.setValue(QStringLiteral("agent/anthropic/apiKey"), m_anthropicKey->text());
+    secrets::saveKey(settings, QStringLiteral("agent/anthropic/apiKey"), m_anthropicKey->text());
     settings.setValue(QStringLiteral("agent/anthropic/baseUrl"), m_anthropicBaseUrl->text().trimmed());
     settings.setValue(QStringLiteral("agent/anthropic/model"), m_anthropicModel->text().trimmed());
-    settings.setValue(QStringLiteral("agent/openai/apiKey"), m_openaiKey->text());
+    secrets::saveKey(settings, QStringLiteral("agent/openai/apiKey"), m_openaiKey->text());
     settings.setValue(QStringLiteral("agent/openai/baseUrl"), m_openaiBaseUrl->text().trimmed());
     settings.setValue(QStringLiteral("agent/openai/model"), m_openaiModel->text().trimmed());
     settings.setValue(QStringLiteral("agent/openai/apiMode"), m_openaiMode->currentData().toString());
