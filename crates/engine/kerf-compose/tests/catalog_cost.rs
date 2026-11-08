@@ -52,6 +52,9 @@ fn what_the_catalog_sends_to_the_cpu() {
     );
     let probe = why(&media, &format!("{CLIP}      fx color.basic exposure=0.3\n")).expect("a frame");
     if probe.iter().any(|line| line == "no GPU on this machine") {
+        // Asked for llvmpipe, as CI is, a missing driver is a failure, not a pass.
+        let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
+        assert!(!software, "KERF_GPU=software, but no GPU or software driver was found");
         eprintln!("no GPU on this machine");
         return;
     }
