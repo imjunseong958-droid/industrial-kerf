@@ -506,7 +506,7 @@ Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
 **Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU, and quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain measured only on synthetic pictures (VFX). Text has no OpenType features beyond kerning and ligatures, variable axes, colour glyphs or hyphenation (`kerf-text/README.md`).
 
-**Delivery.** Broken: the toolbar's Export renders a master while a blocking note stands, which Deliver refuses (`ui/deliver_tray.cpp`, `updateBlocking`).
+**Delivery.** Done: a blocking note holds every delivery back, Deliver, the toolbar's Export and an agent's `render` alike, since kerfd refuses a `full` or `master` render while one is open (`review::delivery_held`; `a_blocking_note_holds_a_delivery_back_and_not_a_draft`, `exportWaitsForBlockingNotesAsDeliverDoes`). A QC error that no comment mirrors, past the bridge's cap of new QC comments, holds back only Deliver.
 
 **Kerf Cloud.** The service is not deployed; the editor follows its contract (`docs/cloud.md`).
 

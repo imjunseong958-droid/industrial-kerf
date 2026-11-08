@@ -515,6 +515,33 @@ fn render_runs_a_range_to_a_file() {
 }
 
 #[test]
+fn a_blocking_note_holds_a_full_render_back_and_not_a_draft() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let note = ok(
+        &router,
+        "note",
+        json!({"body": "The flare hides the logo", "at": "1s", "blocking": true}),
+    );
+    let id = note["comment"]["id"].as_str().unwrap();
+    let refused = error(&router, "render", json!({"quality": "full"}));
+    assert_eq!(refused["code"], "BLOCKING_NOTES", "{refused}");
+    let said = message(&refused);
+    assert!(
+        said.contains("\"The flare hides the logo\"")
+            && said.contains(" at 00:00:01:00")
+            && said.contains(id)
+            && said.contains("resolve it in the review"),
+        "{said}"
+    );
+    // A draft is a check, not a delivery.
+    let draft = ok(&router, "render", json!({"quality": "draft"}));
+    let finished = finish(&router, draft["job"].as_str().unwrap());
+    assert_eq!(finished["status"], "completed", "{finished}");
+}
+
+#[test]
 fn renders_are_waited_for_or_cancelled_before_the_process_exits() {
     let Some((directory, router)) = router() else {
         return;

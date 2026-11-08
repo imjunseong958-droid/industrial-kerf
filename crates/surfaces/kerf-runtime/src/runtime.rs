@@ -1211,6 +1211,16 @@ impl Runtime {
         } = options;
         let (proposal, sequence) = (proposal.as_deref(), sequence.as_deref());
         let encoding = Encoding::new(&quality, codec.as_deref())?;
+        // A delivery waits for the blocking notes, as Deliver does; a draft
+        // or a review copy does not.
+        if matches!(encoding.quality, "full" | "master") {
+            if let Some(refusal) = review::delivery_held(
+                self.review.comments(),
+                self.state.project.sequences.first(),
+            ) {
+                return Err(refusal);
+            }
+        }
         let name = render_name(name.as_deref())?;
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
         let project = proposed.as_ref().unwrap_or(&self.state.project);

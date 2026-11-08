@@ -99,10 +99,11 @@ impl fmt::Display for McpError {
 
 impl From<RuntimeError> for McpError {
     fn from(error: RuntimeError) -> Self {
-        let code = if error.code == "REVISION_CONFLICT" {
-            "REVISION_CONFLICT"
-        } else {
-            "RUNTIME_ERROR"
+        // The refusals an agent acts on keep their own code.
+        let code = match error.code.as_str() {
+            "REVISION_CONFLICT" => "REVISION_CONFLICT",
+            "BLOCKING_NOTES" => "BLOCKING_NOTES",
+            _ => "RUNTIME_ERROR",
         };
         Self::new(code, error.message).with_details(json!({
             "runtimeCode": error.code,

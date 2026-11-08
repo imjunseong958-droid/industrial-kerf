@@ -1753,6 +1753,9 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
         if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
             replaceSavedPreset(message.chopped(presetExists.size()));
+        } else if (event.value(QStringLiteral("code")).toString() == QStringLiteral("BLOCKING_NOTES")) {
+            // kerfd held a delivery back: its words, and the notes to resolve.
+            m_toolbarWiring->holdForNotes(message);
         } else {
             showError(message);
             // A refused mask edit puts the outline back.
