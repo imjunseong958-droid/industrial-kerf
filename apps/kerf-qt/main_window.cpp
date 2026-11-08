@@ -533,7 +533,7 @@ void MainWindow::updateAgentModelChoices() {
     const QString current = m_agentModel == cloudModel ? QString() : m_agentModel;
     const QString configured = openai ? m_openaiModel->text().trimmed() : m_anthropicModel->text().trimmed();
     m_agentModels = openai ? QStringList{QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-4o"), QStringLiteral("gpt-4o-mini")}
-                           : QStringList{QStringLiteral("claude-sonnet-4-20250514"), QStringLiteral("claude-3-5-sonnet-latest")};
+                           : QStringList{QStringLiteral("claude-opus-5-5"), QStringLiteral("claude-sonnet-5-5"), QStringLiteral("claude-haiku-5-5")};
     const QString model = configured.isEmpty() ? current : configured;
     m_agentModel = model.isEmpty() ? m_agentModels.constFirst() : model;
     if (m_chat) m_chat->setModels(m_agentModels, m_agentModel, true);
@@ -545,7 +545,7 @@ void MainWindow::loadAgentSettings() {
     const QString envOpenaiKey = qEnvironmentVariable("OPENAI_API_KEY");
     m_anthropicKey->setText(settings.value(QStringLiteral("agent/anthropic/apiKey"), envAnthropicKey).toString());
     m_anthropicBaseUrl->setText(settings.value(QStringLiteral("agent/anthropic/baseUrl"), QStringLiteral("https://api.anthropic.com/v1")).toString());
-    m_anthropicModel->setText(settings.value(QStringLiteral("agent/anthropic/model"), QStringLiteral("claude-sonnet-4-20250514")).toString());
+    m_anthropicModel->setText(settings.value(QStringLiteral("agent/anthropic/model"), QStringLiteral("claude-opus-5-5")).toString());
     m_openaiKey->setText(settings.value(QStringLiteral("agent/openai/apiKey"), envOpenaiKey).toString());
     m_openaiBaseUrl->setText(settings.value(QStringLiteral("agent/openai/baseUrl"), QStringLiteral("https://api.openai.com/v1")).toString());
     m_openaiModel->setText(settings.value(QStringLiteral("agent/openai/model"), QStringLiteral("gpt-5.6-luna")).toString());
@@ -842,7 +842,7 @@ void MainWindow::buildPreferences() {
     m_anthropicKey->setClearButtonEnabled(true);
     m_anthropicBaseUrl = new QLineEdit(QStringLiteral("https://api.anthropic.com/v1"));
     m_anthropicBaseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
-    m_anthropicModel = new QLineEdit(QStringLiteral("claude-sonnet-4-20250514"));
+    m_anthropicModel = new QLineEdit(QStringLiteral("claude-opus-5-5"));
     anthropicForm->addRow(QStringLiteral("API key"), m_anthropicKey);
     anthropicForm->addRow(QStringLiteral("Base URL"), m_anthropicBaseUrl);
     anthropicForm->addRow(QStringLiteral("Model"), m_anthropicModel);

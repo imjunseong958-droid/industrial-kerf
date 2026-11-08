@@ -74,13 +74,15 @@ jobs:
       # shared build with libx264; BtbN keeps its month-end builds for about
       # two years. Tests, kerfd, and the bridge load its libraries through
       # LD_LIBRARY_PATH.
+      # GitHub release downloads sometimes answer 504 for a minute; retry
+      # rather than fail the job (main failed this way on 2026-11-08).
       - name: Install FFmpeg
         run: |
           build=autobuild-2026-09-30-13-08
           name=ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
           sha256=01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
           archive="$RUNNER_TEMP/ffmpeg.tar.xz"
-          curl -fsSL -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
           echo "$sha256  $archive" | sha256sum -c -
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           root="$RUNNER_TEMP/$name"
@@ -101,6 +103,9 @@ jobs:
         run: |
           mkdir -p "$KERF_PARITY_DUMP"
           cargo test --workspace
+      # The rest of the gate README.md's Verification names.
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
       # The frames the compositor parity tests compared, drawn both ways,
       # to look at when one fails.
       - name: Upload compositor parity frames
@@ -132,6 +137,8 @@ jobs:
       # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
       # a pinned shared build; its DLLs go on PATH for the tests. The build the
       # Windows package carries (windows-package.yml), so that is what is tested.
+      # GitHub release downloads sometimes answer 504 for a minute; retry
+      # rather than fail the job (main failed this way on 2026-11-08).
       - name: Install FFmpeg
         shell: pwsh
         run: |
@@ -140,7 +147,7 @@ jobs:
           $sha256 = '3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696'
           $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive -MaximumRetryCount 5 -RetryIntervalSec 10
           if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $name archive does not match its checksum" }
           7z x $archive "-o$target" | Out-Null
           $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName

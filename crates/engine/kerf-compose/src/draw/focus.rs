@@ -120,7 +120,7 @@ fn running_sums(picture: &Image, room: usize) -> Vec<[f32; 4]> {
                 sums[index] = sum;
             }
             sum = [0.0; 4];
-            for (x, pixel) in row.chunks_exact(4).enumerate() {
+            for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
                 for (sum, value) in sum.iter_mut().zip(pixel) {
                     *sum += value;
                 }
@@ -182,7 +182,7 @@ fn gathered(
                 };
                 let (high, high_part) = end(0.5 + half);
                 let (low, low_part) = end(0.5 - half);
-                for (x, out) in row.chunks_exact_mut(4).enumerate() {
+                for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                     let (a, b) = (&sums[high + x], &sums[high + x + 1]);
                     let (c, d) = (&sums[low + x], &sums[low + x + 1]);
                     for k in 0..4 {
@@ -309,7 +309,7 @@ mod tests {
         assert!(lit(&out, middle + 8, middle + 8));
         assert!(!lit(&out, middle + 14, middle + 14));
         // It keeps what it had, spread over the disc.
-        let total: f32 = out.px.chunks_exact(4).map(|pixel| pixel[3]).sum();
+        let total: f32 = out.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum();
         assert!((total - 1.0).abs() < 0.05, "{total}");
     }
 
@@ -321,7 +321,7 @@ mod tests {
         assert!(lit(&out, middle + 26, middle) && !lit(&out, middle + 48, middle));
         assert!(lit(&out, middle + 20, middle + 20));
         assert!(!lit(&out, middle + 34, middle + 34));
-        let total: f32 = out.px.chunks_exact(4).map(|pixel| pixel[3]).sum();
+        let total: f32 = out.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum();
         assert!((total - 1.0).abs() < 0.05, "{total}");
     }
 

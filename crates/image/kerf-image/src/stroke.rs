@@ -346,8 +346,8 @@ mod tests {
         assert_eq!(picture.get(20, 30), white);
         let changed = picture
             .px
-            .chunks_exact(4)
-            .zip(before.px.chunks_exact(4))
+            .as_chunks::<4>().0.iter()
+            .zip(before.px.as_chunks::<4>().0.iter())
             .filter(|(a, b)| a != b)
             .count();
         let area = std::f32::consts::PI * 64.0;

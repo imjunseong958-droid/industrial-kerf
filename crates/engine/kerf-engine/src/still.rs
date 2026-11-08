@@ -91,7 +91,7 @@ mod tests {
     fn lit(frame: &Frame) -> usize {
         frame
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 32))
             .count()
     }

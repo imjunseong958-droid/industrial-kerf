@@ -48,7 +48,7 @@ fn field_key(picture: &Image, crop: Rect, width: f64, stretch: f64) -> String {
         .px
         .par_chunks(picture.w.max(1) * 4)
         .map(|row| {
-            row.chunks_exact(4)
+            row.as_chunks::<4>().0.iter()
                 .fold(0xcbf2_9ce4_8422_2325u64, |hash, pixel| {
                     (hash ^ u64::from(pixel[3].to_bits())).wrapping_mul(0x0000_0100_0000_01b3)
                 })
@@ -293,7 +293,7 @@ mod kept_tests {
         let mut colored = one.clone();
         colored
             .px
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>().0.iter_mut()
             .for_each(|pixel| pixel[0] = 0.5);
         assert_eq!(*kept_distance_field(&colored, whole, 6.0, 1.0), wanted);
     }

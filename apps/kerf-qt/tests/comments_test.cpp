@@ -433,6 +433,10 @@ private slots:
             window.m_ownKeyRadio->setChecked(true);
         }
         anthropicRadio->setChecked(true);
+        // With no model saved, the one kerf-agent defaults to
+        // (DEFAULT_ANTHROPIC_MODEL), not a retired one.
+        if (!QSettings().contains(QStringLiteral("agent/anthropic/model")))
+            QCOMPARE(window.m_anthropicModel->text(), QStringLiteral("claude-opus-5-5"));
         window.m_anthropicKey->setText(QStringLiteral("sk-ant-test"));
         window.m_anthropicBaseUrl->setText(QStringLiteral("https://anthropic.example/v1"));
         window.m_anthropicModel->setText(QStringLiteral("claude-test-model"));
@@ -453,9 +457,9 @@ private slots:
         for (QAction *action : more->actions())
             if (action->menu() && action->text() == QStringLiteral("Model")) models = action->menu();
         QVERIFY(models);
-        actionNamed(models, QStringLiteral("claude-3-5-sonnet-latest"))->trigger();
-        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("model")).toString(), QStringLiteral("claude-3-5-sonnet-latest"));
-        QCOMPARE(window.m_chat->model(), QStringLiteral("claude-3-5-sonnet-latest"));
+        actionNamed(models, QStringLiteral("claude-sonnet-5-5"))->trigger();
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("model")).toString(), QStringLiteral("claude-sonnet-5-5"));
+        QCOMPARE(window.m_chat->model(), QStringLiteral("claude-sonnet-5-5"));
         delete more;
         openaiRadio->setChecked(true);
         window.m_openaiKey->setText(QStringLiteral("sk-openai-test"));

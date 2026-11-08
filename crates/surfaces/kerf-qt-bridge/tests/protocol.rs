@@ -703,12 +703,12 @@ fn titles_go_in_as_generators_on_a_sequence_whose_rate_was_set_while_empty() {
     let (red, width, height) = editor.frame_at(0.5);
     assert_eq!((width, height), (640, 360));
     assert!(red
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .step_by(97)
         .all(|pixel| pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40));
     let (text, _, _) = editor.frame_at(2.0);
     let lit = text
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|pixel| pixel[..3].iter().all(|value| *value > 200))
         .count();
     assert!(lit > 0 && lit < text.len() / 16, "{lit}");

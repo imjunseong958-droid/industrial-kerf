@@ -313,7 +313,7 @@ impl LightMeter {
     /// `rgba` is 16-bit little-endian RGBA, holding the PQ signal.
     fn add(&mut self, rgba: &[u8]) {
         let (mut brightest, mut sum, mut count) = (0.0f32, 0.0f64, 0u64);
-        for pixel in rgba.chunks_exact(8) {
+        for pixel in rgba.as_chunks::<8>().0 {
             let channel = |at: usize| u16::from_le_bytes([pixel[at], pixel[at + 1]]) as usize;
             let code = channel(0).max(channel(2)).max(channel(4));
             let nits = self.nits[code];

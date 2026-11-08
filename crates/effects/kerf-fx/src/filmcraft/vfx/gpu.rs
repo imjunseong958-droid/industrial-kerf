@@ -1688,13 +1688,13 @@ mod tests {
             return;
         };
         let mut image = picture(96, 54);
-        for pixel in image.px.chunks_exact_mut(4).step_by(3) {
+        for pixel in image.px.as_chunks_mut::<4>().0.iter_mut().step_by(3) {
             for value in &mut pixel[..3] {
                 *value *= 8.0;
             }
         }
         // And a color past BT.709 at every fifth.
-        for pixel in image.px.chunks_exact_mut(4).step_by(5) {
+        for pixel in image.px.as_chunks_mut::<4>().0.iter_mut().step_by(5) {
             pixel[0] = -0.3 * pixel[3];
         }
         // What the compositor's CPU path does, with Gamma as what runs in between.
