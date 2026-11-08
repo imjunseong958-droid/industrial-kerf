@@ -68,7 +68,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libclang-dev libasound2-dev \
             qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
-            libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core
+            libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
+            mesa-vulkan-drivers
       # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
       # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
       # shared build with libx264; BtbN keeps its month-end builds for about
@@ -103,6 +104,13 @@ jobs:
         run: |
           mkdir -p "$KERF_PARITY_DUMP"
           cargo test --workspace
+      # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
+      # of a GPU: looks, grades and transitions stay on the GPU. Only this
+      # runs on llvmpipe; its pow and exp are a byte off color.basic's.
+      - name: Test what the catalog sends to the CPU
+        env:
+          KERF_GPU: software
+        run: cargo test -p kerf-compose --test catalog_cost -- --nocapture
       # The rest of the gate README.md's Verification names.
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
