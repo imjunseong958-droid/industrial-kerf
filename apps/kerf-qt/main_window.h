@@ -209,6 +209,8 @@ private slots:
     void updateAgentModelChoices();
     void loadAgentSettings();
     void saveAgentSettings();
+    // Help > About Kerf: the version, license and where the source and releases are.
+    void showAbout();
     // A timeline with its clips named after their media, where they have no name.
     static QJsonObject withClipNames(QJsonObject timeline, const QJsonArray &sources);
 

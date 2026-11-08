@@ -31,7 +31,8 @@ installer, so Windows does not open `kerf://` links with it.
 Its FFmpeg build makes the package GPL version 3, so publish it only together with
 its complete source, from `scripts/collect-kerf-windows-sources.sh`, and keep that
 available for as long as the package is. The **Windows package** workflow makes both,
-from one commit, as artifacts, and publishes neither. It takes that FFmpeg from
+from one commit, as artifacts, and publishes neither; a `v<version>` tag publishes
+both as a GitHub release, with that version's section of `CHANGELOG.md` as its notes. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and

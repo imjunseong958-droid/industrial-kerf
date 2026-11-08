@@ -4,7 +4,8 @@ name: Windows package
 # the complete source of it (scripts/collect-kerf-windows-sources.sh), kept as this
 # run's artifacts. The zip is GPL because of its FFmpeg: publish the two together.
 # By hand (Actions > Windows package > Run workflow), and when what makes the package
-# changes. It publishes nothing.
+# changes, it publishes nothing. A v<version> tag publishes both as a GitHub release,
+# with that version's section of CHANGELOG.md as its notes; they are not signed.
 on:
   workflow_dispatch:
   pull_request:
@@ -15,6 +16,7 @@ on:
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/windows-package.yml"
   push:
+    tags: ["v*"]
     branches: [main]
     paths:
       - "scripts/package-kerf-windows.ps1"
@@ -97,3 +99,40 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
+
+  # A v<version> tag: the package and its source as a release anyone can download.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package, sources]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag is the workspace's version, and has notes
+        run: |
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "The tag $GITHUB_REF_NAME is not v$version, the version in Cargo.toml" >&2
+            exit 1
+          fi
+          awk -v heading="## $version" '$0 == heading {found = 1; next} /^## / && found {exit} found' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no section \"## $version\"" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          # 0.x is a pre-release: GitHub does not offer it as the latest stable one.
+          prerelease=""
+          case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
