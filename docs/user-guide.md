@@ -13,7 +13,8 @@ Download the latest release from
 [GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases): for
 Windows, unpack the zip anywhere and run `kerf-qt.exe`. Releases are not signed
 yet, so Windows asks before the first run (More info ▸ Run anyway). Help ▸ About
-Kerf says which version you have.
+Kerf says which version you have. Once a day Kerf asks GitHub whether a newer one
+is out and offers its page; Edit ▸ Settings… ▸ Updates turns that off.
 
 ## Start a project
 

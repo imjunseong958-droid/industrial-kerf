@@ -788,6 +788,17 @@ void MainWindow::buildPreferences() {
     cloudButtons->addWidget(plans);
     cloudLayout->addLayout(cloudButtons);
     settingsLayout->addWidget(connectionGroup);
+    // Whether Kerf asks GitHub once a day for a newer release (update_notice.h).
+    auto *updatesGroup = new QGroupBox(QStringLiteral("Updates"));
+    auto *updatesLayout = new QVBoxLayout(updatesGroup);
+    updatesLayout->setContentsMargins(10, 10, 10, 10);
+    auto *checkForUpdates = new QCheckBox(QStringLiteral("Tell me when a newer Kerf is released"));
+    checkForUpdates->setObjectName(QStringLiteral("checkForUpdates"));
+    checkForUpdates->setToolTip(QStringLiteral("Once a day, Kerf asks GitHub for its releases. It never downloads or installs anything itself."));
+    checkForUpdates->setChecked(QSettings().value(QStringLiteral("updates/check"), true).toBool());
+    connect(checkForUpdates, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue(QStringLiteral("updates/check"), on); });
+    updatesLayout->addWidget(checkForUpdates);
+    settingsLayout->addWidget(updatesGroup);
     const auto onConnectionChanged = [this](bool checked) {
         if (!checked) return;
         QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked()        ? QStringLiteral("cloud")

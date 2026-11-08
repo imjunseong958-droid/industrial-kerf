@@ -91,6 +91,8 @@ set(KERF_QT_SOURCES
     test_friends.h
     timeline_widget.cpp
     timeline_widget.h
+    update_notice.cpp
+    update_notice.h
     viewer_widget.cpp
     viewer_widget.h)
 # Shared UI parts live under ui/ and join the build without a list here.

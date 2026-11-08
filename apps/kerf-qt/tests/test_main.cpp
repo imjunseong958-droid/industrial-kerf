@@ -193,6 +193,8 @@ int main(int argc, char *argv[]) {
     // No test reads or writes the developer's real keychain; a test of it
     // gives secrets::call() a store of its own.
     qputenv("KERF_SECRETS", "off");
+    // Nor asks GitHub for releases.
+    qputenv("KERF_UPDATE_CHECK", "off");
     // As QTEST_MAIN sets a widget test up.
     QApplication app(argc, argv);
     app.setAttribute(Qt::AA_Use96Dpi, true);
