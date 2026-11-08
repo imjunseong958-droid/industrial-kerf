@@ -344,7 +344,7 @@ impl RasterStack {
             kerf_draw::mask::coverage(&flat, width as usize, height as usize)
         };
         let mut image = Image::new(width, height);
-        for (index, (pixel, bytes)) in image.data.iter_mut().zip(rgba.chunks_exact(4)).enumerate() {
+        for (index, (pixel, bytes)) in image.data.iter_mut().zip(rgba.as_chunks::<4>().0.iter()).enumerate() {
             let cover = covered.as_ref().map_or(1.0, |covered| covered[index]);
             let alpha = f32::from(bytes[3]) / 255.0 * cover;
             let channel = |value: u8| f32::from(value) / 255.0 * alpha;
@@ -401,7 +401,7 @@ fn kerf_cut(
         return;
     };
     let decode = kerf_draw::color::decode_table();
-    for (pixel, covered) in rgba.chunks_exact_mut(4).zip(coverage) {
+    for (pixel, covered) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(coverage) {
         for channel in &mut pixel[..3] {
             *channel = kerf_draw::color::encode(decode[usize::from(*channel)] * covered);
         }
@@ -481,7 +481,7 @@ fn convert(value: Value, param: &ParamSpec) -> Option<FxValue> {
 /// Straight 8-bit RGBA over black, opaque, mixed in linear light.
 fn over_black(rgba: &mut [u8]) {
     let decode = kerf_draw::color::decode_table();
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = f32::from(pixel[3]) / 255.0;
         for channel in &mut pixel[..3] {
             *channel = kerf_draw::color::encode(decode[usize::from(*channel)] * alpha);

@@ -164,7 +164,7 @@ impl PictureEffect for Fill {
         });
         let holes = picture
             .px
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>().0.iter_mut()
             .zip(&hole)
             .filter(|(_, hole)| **hole);
         for ((pixel, _), value) in holes.zip(pixels.iter()) {
@@ -335,7 +335,7 @@ fn hole(picture: &Image, effect: &Effect, run: &EffectRun, at: Time) -> Option<V
 fn encoded(picture: &Image) -> Raster {
     let data = picture
         .px
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|pixel| {
             let a = pixel[3];
             if a <= 1e-6 {

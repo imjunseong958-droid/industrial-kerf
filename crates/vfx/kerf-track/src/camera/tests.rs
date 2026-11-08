@@ -813,7 +813,7 @@ fn wandering(frames: usize, focal: f64) -> Vec<Shot> {
 /// `picture` with a little of the grain a camera adds to each frame.
 fn grainy(mut picture: Vec<u8>, frame: usize, amount: f64) -> Vec<u8> {
     let mut draws = Draws::new(frame as u64 * 7919 + 13);
-    for pixel in picture.chunks_exact_mut(4) {
+    for pixel in picture.as_chunks_mut::<4>().0 {
         let value = f64::from(pixel[0]) + (draws.part() + draws.part()) * amount;
         pixel[..3].fill(value.clamp(0.0, 255.0) as u8);
     }

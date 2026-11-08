@@ -163,7 +163,7 @@ fn stretch_of(sound: &[f32], first: i64, low: Time, high: Time) -> Vec<f32> {
 
 fn reverse_frames(samples: &mut [f32]) {
     samples.reverse();
-    for frame in samples.chunks_exact_mut(2) {
+    for frame in samples.as_chunks_mut::<2>().0 {
         frame.swap(0, 1);
     }
 }
@@ -172,7 +172,7 @@ fn reverse_frames(samples: &mut [f32]) {
 /// plays at each frame of the output.
 pub(crate) fn stretch(input: &[f32], frames: usize, position: impl Fn(usize) -> f64) -> Vec<f32> {
     let mono: Vec<f32> = input
-        .chunks_exact(2)
+        .as_chunks::<2>().0.iter()
         .map(|frame| (frame[0] + frame[1]) / 2.0)
         .collect();
     let window: Vec<f32> = (0..WINDOW)
@@ -330,7 +330,7 @@ mod tests {
     /// Bursts of tone a tenth of a second long, every half second of the input.
     fn bursts(frames: usize) -> Vec<f32> {
         let tone = sine(frames, 1000.0);
-        tone.chunks_exact(2)
+        tone.as_chunks::<2>().0.iter()
             .enumerate()
             .flat_map(|(at, frame)| {
                 let on = (at as f64 / R) % 0.5 < 0.1;

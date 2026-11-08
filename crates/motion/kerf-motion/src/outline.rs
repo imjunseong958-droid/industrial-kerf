@@ -208,7 +208,7 @@ fn deep_point(contour: &[[f32; 2]]) -> Option<Point> {
             }
         }
         crossings.sort_by(f64::total_cmp);
-        for span in crossings.chunks_exact(2) {
+        for span in crossings.as_chunks::<2>().0 {
             let wide = span[1] - span[0];
             if best.is_none_or(|(most, _)| wide > most) {
                 best = Some((wide, Point::new((span[0] + span[1]) / 2.0, y)));

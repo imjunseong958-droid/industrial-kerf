@@ -1727,7 +1727,7 @@ mod tests {
         opaque.px.iter_mut().for_each(|channel| *channel = 1.0);
         let mut half = opaque.clone();
         half.px
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>().0.iter_mut()
             .enumerate()
             .filter(|(at, _)| at % 100 >= 50)
             .for_each(|(_, pixel)| pixel.fill(0.0));
@@ -1894,7 +1894,7 @@ mod tests {
         }
         // The top half white: what faces up gets it all, what faces down none, and what faces sideways half.
         let mut half = Image::new(64, 32);
-        for (at, pixel) in half.px.chunks_exact_mut(4).enumerate() {
+        for (at, pixel) in half.px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let value = if at / 64 < 16 { 1.0 } else { 0.0 };
             pixel.copy_from_slice(&[value, value, value, 1.0]);
         }
@@ -1915,7 +1915,7 @@ mod tests {
         // Red straight ahead of the camera, as the middle of the picture: on what faces the camera's
         // way back toward it, and hardly on what faces away.
         let mut ahead = Image::new(64, 32);
-        for (at, pixel) in ahead.px.chunks_exact_mut(4).enumerate() {
+        for (at, pixel) in ahead.px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let x = at % 64;
             let value = if (24..40).contains(&x) { 1.0 } else { 0.0 };
             pixel.copy_from_slice(&[value, 0.0, 0.0, 1.0]);

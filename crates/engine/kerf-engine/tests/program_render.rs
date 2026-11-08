@@ -101,7 +101,7 @@ fn loudness(path: &Path, from: f64, to: f64) -> f64 {
         .args(["-ss", &from.to_string(), "-t", &(to - from).to_string()])
         .args(["-map", "0:a", "-c:a", "pcm_f32le", "-f", "f32le", "-"]));
     let samples: Vec<f64> = raw
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|bytes| f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])))
         .collect();
     (samples.iter().map(|sample| sample * sample).sum::<f64>() / samples.len().max(1) as f64).sqrt()

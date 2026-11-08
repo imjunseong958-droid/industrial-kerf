@@ -352,7 +352,7 @@ fn a_title_inserted_from_the_editor_is_kept_in_project_kerf_and_renders() {
     let frame = kerf_engine::still::draw_frame(&project, None, rate.time_of(30), 0.25).unwrap();
     let lit = frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 32))
         .count();
     assert!(lit > 0, "the title draws on the frame");

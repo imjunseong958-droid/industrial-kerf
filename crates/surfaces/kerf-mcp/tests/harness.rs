@@ -1973,7 +1973,7 @@ fn marker_at(project: &kerf_model::Project, at: i64) -> Option<[f64; 2]> {
     )
     .unwrap();
     let (mut x, mut y, mut count) = (0.0, 0.0, 0.0);
-    for (index, pixel) in frame.rgba.chunks_exact(4).enumerate() {
+    for (index, pixel) in frame.rgba.as_chunks::<4>().0.iter().enumerate() {
         if pixel[0] > 200 && pixel[1] < 90 && pixel[2] > 200 {
             x += (index % frame.width as usize) as f64 + 0.5;
             y += (index / frame.width as usize) as f64 + 0.5;

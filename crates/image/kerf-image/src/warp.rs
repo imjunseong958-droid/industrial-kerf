@@ -345,7 +345,7 @@ mod tests {
             50.0,
             1.0,
         );
-        assert!(picture.px.chunks_exact(4).all(|pixel| pixel[3] == 1.0));
+        assert!(picture.px.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 1.0));
     }
 
     #[test]

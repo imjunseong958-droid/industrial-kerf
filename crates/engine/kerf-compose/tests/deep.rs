@@ -235,7 +235,7 @@ fn the_gpu_draws_deep_footage_as_the_cpu_does() {
         let cpu = compositor(&document, Accel::Never);
         let (a, b) = (gpu.frame(at(6), 1.0), cpu.frame(at(6), 1.0));
         let (mut sum, mut off) = (0u64, 0u64);
-        for (a, b) in a.rgba.chunks_exact(4).zip(b.rgba.chunks_exact(4)) {
+        for (a, b) in a.rgba.as_chunks::<4>().0.iter().zip(b.rgba.as_chunks::<4>().0.iter()) {
             let worst = (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0);
             sum += u64::from(worst);
             off += u64::from(worst > 2);

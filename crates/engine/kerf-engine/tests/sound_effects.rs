@@ -68,7 +68,7 @@ fn mixed(dir: &Path, media: &[(&str, &str)], body: &str) -> Vec<f32> {
     ffmpeg(&args);
     std::fs::read(&out)
         .expect("the mix")
-        .chunks_exact(8)
+        .as_chunks::<8>().0.iter()
         .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
         .collect()
 }

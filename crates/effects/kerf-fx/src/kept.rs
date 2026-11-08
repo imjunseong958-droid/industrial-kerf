@@ -260,7 +260,7 @@ fn text(param: Option<&Param>) -> Option<String> {
 /// Kerf's picture as EffectCraft's: premultiplied, sRGB-encoded.
 fn encoded(picture: &kerf_draw::Image) -> Image {
     let mut image = Image::new(picture.w as u32, picture.h as u32);
-    for (pixel, linear) in image.data.iter_mut().zip(picture.px.chunks_exact(4)) {
+    for (pixel, linear) in image.data.iter_mut().zip(picture.px.as_chunks::<4>().0.iter()) {
         let alpha = linear[3];
         *pixel = if alpha <= 1e-6 {
             [0.0; 4]
@@ -283,7 +283,7 @@ fn decode_into(buf: &Buf, picture: &mut kerf_draw::Image, per_source: f64) {
     let ratio = buf.scale / per_source;
     let (bw, bh) = (i64::from(buf.img.width), i64::from(buf.img.height));
     let width = picture.w;
-    for (index, out) in picture.px.chunks_exact_mut(4).enumerate() {
+    for (index, out) in picture.px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = ((index % width) as f64, (index / width) as f64);
         let column = (x * ratio + buf.offset[0]).round() as i64;
         let row = (y * ratio + buf.offset[1]).round() as i64;

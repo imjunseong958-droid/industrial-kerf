@@ -55,7 +55,7 @@ fn compositor(dir: &Path, tracks: &str) -> Compositor {
 fn mean(frame: &Frame) -> [f64; 3] {
     let count = (frame.width * frame.height) as f64;
     let mut sum = [0.0; 3];
-    for pixel in frame.rgba.chunks_exact(4) {
+    for pixel in frame.rgba.as_chunks::<4>().0 {
         for (total, value) in sum.iter_mut().zip(pixel) {
             *total += f64::from(*value);
         }
