@@ -2516,6 +2516,40 @@ pub unsafe extern "C" fn kerf_bridge_string_free(value: *mut c_char) {
     }
 }
 
+// ---- crash reports ---------------------------------------------------------------
+
+/// Report every panic in the editor's process to the crash folder, as kerfd and the CLI do.
+#[no_mangle]
+pub extern "C" fn kerf_crash_install() {
+    kerf_runtime::crash::install("editor");
+}
+
+/// `{folder, reports: [{path, component, atMs, message}]}`, newest first; `folder` is null when
+/// there is nowhere to keep them.
+#[no_mangle]
+pub extern "C" fn kerf_crash_reports() -> *mut c_char {
+    owned_json(crash_reports_json(kerf_runtime::crash::folder()))
+}
+
+fn crash_reports_json(folder: Option<PathBuf>) -> Value {
+    let reports: Vec<Value> = folder
+        .as_deref()
+        .map(kerf_runtime::crash::reports)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|report| {
+            json!({
+                "path": report.path,
+                "component": report.component,
+                // Milliseconds fit an f64 exactly until the year 287,396.
+                "atMs": report.at_ms as f64,
+                "message": report.message,
+            })
+        })
+        .collect();
+    json!({"folder": folder, "reports": reports})
+}
+
 // ---- command registry ----------------------------------------------------------
 
 // ---- project launcher ------------------------------------------------------------
@@ -2784,6 +2818,29 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn crash_reports_reach_the_editor_newest_first() {
+        let dir = tempfile::tempdir().expect("a folder");
+        for (at, message) in [(5u128, "older"), (9, "newer")] {
+            let text = kerf_runtime::crash::report_text("kerfd", at, "main", message, "here", "");
+            std::fs::write(dir.path().join(format!("kerfd-{at}-1.txt")), text).expect("written");
+        }
+        let listed = super::crash_reports_json(Some(dir.path().to_owned()));
+        assert_eq!(listed["folder"], json!(dir.path()));
+        let messages: Vec<&str> = listed["reports"]
+            .as_array()
+            .expect("reports")
+            .iter()
+            .map(|report| report["message"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(messages, ["newer", "older"]);
+        assert_eq!(listed["reports"][0]["atMs"], json!(9.0));
+        assert_eq!(
+            super::crash_reports_json(None),
+            json!({"folder": null, "reports": []})
+        );
+    }
 
     fn shared() -> Shared {
         crate::tests_support::shared(&std::env::temp_dir())

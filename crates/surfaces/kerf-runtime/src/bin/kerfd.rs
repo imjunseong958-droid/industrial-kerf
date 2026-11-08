@@ -6,6 +6,7 @@ use std::io;
 use std::path::PathBuf;
 
 fn main() {
+    kerf_runtime::crash::install("kerfd");
     let args: Vec<String> = env::args().collect();
     if args.get(1).map(String::as_str) == Some("merge-driver") {
         // Git merges project.kerf through this: `kerfd merge-driver %O %A %B %P`.

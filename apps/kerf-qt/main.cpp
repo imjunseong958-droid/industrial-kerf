@@ -1,3 +1,5 @@
+#include "bridge.h"
+#include "crash_notice.h"
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -51,6 +53,8 @@ int main(int argc, char **argv) {
             QSettings::setDefaultFormat(QSettings::IniFormat);
             QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
         }
+    // A panic in the editor's own Rust leaves a report, as kerfd's and the CLI's do.
+    kerf_crash_install();
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     // Windows and Linux add it after the project's name in window titles;
@@ -114,6 +118,12 @@ int main(int argc, char **argv) {
     if (kerfd.isEmpty()) kerfd = QStandardPaths::findExecutable(QStringLiteral("kerfd"), {QCoreApplication::applicationDirPath()});
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
+    // Since it was last open, did anything of Kerf crash? Not in a run that
+    // captures or quits on its own, which nobody is there to answer.
+    if (!smoke && !renderPreview) {
+        QSettings settings;
+        kerf::showCrashNotice(nullptr, settings);
+    }
 
     // kerf:// review links raise (or open) their project's editor and seek.
     QPointer<QDialog> choosing;

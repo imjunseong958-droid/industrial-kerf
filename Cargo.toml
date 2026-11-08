@@ -77,8 +77,12 @@ type_complexity = "allow"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
-strip = "symbols"
+# Unwind, not abort: a panic in one editor task or one media file's index is
+# caught (kerf-qt-bridge tasks.rs, kerf-runtime kernel.rs) and becomes an
+# error, where abort would take the editor or kerfd down with it.
+# Keep symbol names, dropping only debug info, so a crash report's backtrace
+# (kerf-runtime crash.rs) says which function it was in.
+strip = "debuginfo"
 
 # The editor links against the bridge, so leave its symbols in: a stripped
 # dylib's string table can land off an 8-byte boundary, which Apple's linker
