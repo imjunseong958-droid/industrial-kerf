@@ -488,6 +488,32 @@ most of the picture agrees on between small frames four times a second (`kerf_tr
 60 seconds of 1080p takes 7 s the first time, and it is kept with the media's other derivatives. It reads a push in as a zoom and a move sideways as a pan, and only `track` with `camera` tells those apart. It says in `notMeasured` what it
 leaves out, since silence would read as a finding: faces and the subject, which take a trained model, and on-screen text, which without one cannot be found reliably.
 
+## Before shipping
+
+Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
+
+**Packaging.** Done: a Windows zip that runs on its own, checked by running it with nothing else on PATH, and its GPL source (`scripts/package-kerf-windows.ps1`, `.github/workflows/windows-package.yml`). Missing: a Windows installer, so `kerf://` links do not open the editor there (`apps/kerf-qt/README.md`, Build); a macOS bundle anyone else can run, since `scripts/install-kerf-local.sh` copies in only the bridge and `kerfd` and leaves Qt and FFmpeg linked from Homebrew (no `macdeployqt` anywhere); a Linux package of any kind (the same script, with `patchelf`).
+
+**Signing.** Missing on both. macOS gets an ad-hoc signature (`codesign --sign -` in `install-kerf-local.sh`), with no Developer ID, hardened runtime, entitlements or notarization, so Gatekeeper refuses a downloaded copy; nothing signs the Windows zip (no `signtool`).
+
+**Versions and updates.** Missing. Everything is 0.1 (`apps/kerf-qt/CMakeLists.txt`, the workspace `Cargo.toml`), with no tag, release workflow, changelog, or About box, and nothing checks for or installs an update.
+
+**CI.** Done: Linux runs the workspace, the Qt UI tests and the bridge workflow; Windows the kernel, runtime, sidecars and Qt UI; macOS builds and runs the Qt UI and the bridge workflow (`rust-runtime.yml`). Missing: macOS runs no `cargo test`, and no runner has a GPU (Linux sets `WGPU_BACKEND=vulkan` so they skip), so the GPU parity tests run only on a developer's Mac. Broken, or unexplained: the Windows job runs the bridge's connection test five times because "a crash once came and went", and nobody has found why.
+
+**Crashes.** Missing: nothing collects a crash. Broken: the release profile aborts on panic (`panic = "abort"` in `Cargo.toml`), so the `catch_unwind` that turns a failed task into an error (`kerf-qt-bridge/src/tasks.rs`) does nothing in a release build, and a panic there takes the editor down; `kerfd` and the CLI ship with their symbols stripped (`strip = "symbols"`), so a report would not say where. `kerfd`'s own stderr does survive, in a temporary file (`kerf-runtime/src/ipc.rs`, `spawn_daemon`).
+
+**Settings and projects.** Missing: QSettings carry no version and nothing migrates them; `stage_shell_test.cpp` shows only that some retired keys are ignored. API keys are kept in plain QSettings (`MainWindow::saveAgentSettings`) while the Kerf Cloud token gets a 0600 file (`docs/cloud.md`); neither uses the keychain. A project is `kerf 1` and any other number is refused (`kerf-lang/src/doc.rs`), which is right until the first change to the format, and that change needs a reader of the old one. Fixed here: the editor offered retired Anthropic models and wrote one into new settings, so it overrode kerf-agent's `claude-opus-5-5` (`comments_test.cpp`).
+
+**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU, and quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain measured only on synthetic pictures (VFX). Text has no OpenType features beyond kerning and ligatures, variable axes, colour glyphs or hyphenation (`kerf-text/README.md`).
+
+**Delivery.** Broken: the toolbar's Export renders a master while a blocking note stands, which Deliver refuses (`ui/deliver_tray.cpp`, `updateBlocking`).
+
+**Kerf Cloud.** The service is not deployed; the editor follows its contract (`docs/cloud.md`).
+
+**User docs.** Missing: the READMEs are for people building Kerf. There is no guide for someone editing with it, and no Help menu. Fixed here: `apps/kerf-qt/README.md` described a Window ▸ Inspector Follows Selection command and a saved layout version that the editor no longer has.
+
+The roadmap after this covers Export against Deliver, real footage for the quality numbers, and kernels for the CPU's most-used effects. It does not cover packaging, signing, updates, crash reporting, settings migration and keychain storage, GPU and macOS tests in CI, the Windows crash, or a user guide.
+
 ## What others do, and what to take
 
 - **Resolve 21** added a Photo page, and Fusion effects in the Edit page's

@@ -415,12 +415,10 @@ you have Effects or Presets in front, a click on another clip leaves the
 browser there (it follows the selection), so a look can be applied clip by
 clip; only the Inspector's own Add effect brings Effects up for the next
 click to replace, and after an effect is added there a deselect still goes
-back to the tab from before the Inspector came up (Project). Window ▸
-Inspector Follows Selection (⌥⌘4) turns this off. Raising never moves
-keyboard focus. These are preferences of this Mac (QSettings
-`editor/inspectorFollowsSelection`, `editor/inspector/…`); layouts saved with
-Effect Controls (layout version 6) restore with the Inspector in its place, and
-`window.effectControls` still names the command.
+back to the tab from before the Inspector came up (Project). Raising never
+moves keyboard focus. What the Inspector keeps open is a preference of this Mac
+(QSettings `editor/inspector/…`). The command's old name,
+`window.effectControls`, still names it.
 
 Its header says what the clip is: a thumbnail, its name (double-click to
 rename it, `set {name}`), its kind in the clip's timeline colour (Video,
