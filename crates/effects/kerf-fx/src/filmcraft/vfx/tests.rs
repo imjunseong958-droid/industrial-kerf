@@ -1149,6 +1149,66 @@ fn bokeh_looks_as_it_did_when_gathered_tap_by_tap() {
     }
 }
 
+/// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values read as the
+/// sequence's, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+fn footage(name: &str) -> Option<Image> {
+    let path = std::path::Path::new(&std::env::var_os("KERF_REAL_FOOTAGE")?).join(name);
+    let decoded = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&path)
+        .args(["-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
+        .output()
+        .expect("ffmpeg");
+    assert!(decoded.status.success(), "{}", path.display());
+    let header = std::fs::read(&path).expect("the frame");
+    let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]) as usize;
+    let mut img = Image::new(size(16), size(20));
+    for (px, rgb) in img.px.chunks_exact_mut(4).zip(decoded.stdout.chunks_exact(6)) {
+        let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
+        let linear = dec([channel(0), channel(2), channel(4)]);
+        px.copy_from_slice(&[linear[0], linear[1], linear[2], 1.0]);
+    }
+    Some(img)
+}
+
+/// Bokeh Blur on real footage against the tap-by-tap gather it replaced: water catching the sun, at
+/// the radius each size gets by default. `KERF_REAL_FOOTAGE=… cargo test --release -p kerf-fx
+/// real_footage_bokeh -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs scripts/fetch-real-footage.sh"]
+fn real_footage_bokeh() {
+    for (size, radius) in [("1080", 5.0), ("4k", 10.0)] {
+        let Some(src) = footage(&format!("fountain/{size}/3836.png")) else {
+            eprintln!("KERF_REAL_FOOTAGE is not set");
+            return;
+        };
+        for (shape, sides) in [(0, 0), (4, 6)] {
+            let mut e = inst("bokeh_blur");
+            setf(&mut e, "amount", radius);
+            set(&mut e, "shape", ParamValue::Choice(shape));
+            setf(&mut e, "highlight", 0.0);
+            let start = std::time::Instant::now();
+            let now = run("bokeh", &e, &src, &cx());
+            let took = start.elapsed().as_secs_f64();
+            let was = bokeh_by_taps(&src, radius as f32, sides, 0.0);
+            let (mut se, mut worst) = (0.0f64, 0.0f32);
+            for (a, b) in now.px.chunks_exact(4).zip(was.px.chunks_exact(4)) {
+                let (a, b) = (enc([a[0], a[1], a[2]]), enc([b[0], b[1], b[2]]));
+                for c in 0..3 {
+                    se += f64::from(a[c] - b[c]).powi(2);
+                    worst = worst.max((a[c] - b[c]).abs());
+                }
+            }
+            let db = 10.0 * (1.0 / (se / (src.w * src.h * 3) as f64).max(1e-12)).log10();
+            println!(
+                "bokeh {size} radius {radius} sides {sides}: {db:.1} dB of the gather tap by tap, worst channel {:.1} of 255 ({took:.2} s)",
+                worst * 255.0
+            );
+            assert!(db > 63.0 && worst * 255.0 < 5.0, "{size} {sides}: {db:.1} dB, {:.1}", worst * 255.0);
+        }
+    }
+}
+
 #[test]
 fn a_bad_pixel_stays_where_it_is_in_a_bokeh() {
     let mut src = solid(64, 16, [0.25, 0.25, 0.25]);
