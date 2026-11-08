@@ -23,7 +23,8 @@ fn a_caught_panic_leaves_a_report_with_where_and_a_backtrace() {
     assert_eq!(report.message, "boom in file 3");
     let text = std::fs::read_to_string(&report.path).expect("the report");
     assert!(text.contains("thread: media index"), "{text}");
-    assert!(text.contains("tests/crash.rs:"), "{text}");
+    // Windows names the file with backslashes.
+    assert!(text.replace('\\', "/").contains("location: crates/surfaces/kerf-runtime/tests/crash.rs:"), "{text}");
     assert!(
         text.contains("a_caught_panic_leaves_a_report_with_where_and_a_backtrace"),
         "the backtrace names the function: {text}"
