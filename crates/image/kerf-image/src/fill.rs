@@ -506,6 +506,19 @@ pub fn patch_fill(
     patch: usize,
     seed: u32,
 ) -> Image {
+    patch_fill_by(img, hole, init, patch, seed, effort)
+}
+
+/// [`patch_fill`] with what each level does given by `plan`, which [`effort`] is; the tests search
+/// every level with it, to see what copying from the level above costs.
+fn patch_fill_by(
+    img: &Image,
+    hole: &[bool],
+    init: Option<&Image>,
+    patch: usize,
+    seed: u32,
+    plan: fn(usize, usize, usize, usize, usize) -> Effort,
+) -> Image {
     let (w, h) = (img.width as usize, img.height as usize);
     if !hole.iter().any(|b| *b) || w == 0 || h == 0 {
         return img.clone();
@@ -599,20 +612,20 @@ pub fn patch_fill(
                 .collect();
         }
         let (lw, lh) = (levels[k].w, levels[k].h);
-        let plan = |patches| {
+        let level = |patches| {
             if k == top {
                 Effort::Search {
                     rounds: 8,
                     sweeps: 5,
                 }
             } else {
-                effort(patches, lw, lh, 4, 5)
+                plan(patches, lw, lh, 4, 5)
             }
         };
         pm_level(
             &mut levels[k],
             &mut nnf,
-            plan,
+            level,
             patch,
             seed.wrapping_add(k as u32 * 101),
         );
@@ -1001,6 +1014,82 @@ mod tests {
         let inside = fine_detail(&filled, |i| hole[i]);
         let outside = fine_detail(&gt, |i| !hole[i]);
         assert!(inside > outside * 0.72, "{inside} of {outside}");
+    }
+
+    /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values 0 to 1, or
+    /// `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+    fn footage(name: &str) -> Option<Image> {
+        let path = std::path::Path::new(&std::env::var_os("KERF_REAL_FOOTAGE")?).join(name);
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args(["-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
+            .output()
+            .expect("ffmpeg");
+        assert!(decoded.status.success(), "{}", path.display());
+        let header = std::fs::read(&path).expect("the frame");
+        let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
+        let mut img = Image::new(size(16), size(20));
+        for (px, rgb) in img.data.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
+            let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
+            *px = [channel(0), channel(2), channel(4), 1.0];
+        }
+        Some(img)
+    }
+
+    /// Fill on real footage, where what the hole hid is known: a locked-off frame of a freeway, a box
+    /// over the stack of tires, the skyline, and the wall, as Kerf fills it and with every level
+    /// searched. `KERF_REAL_FOOTAGE=… cargo test --release -p kerf-image real_footage -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "needs scripts/fetch-real-footage.sh"]
+    fn real_footage_fill() {
+        let search_everywhere = |_: usize, _: usize, _: usize, rounds: usize, sweeps: usize| Effort::Search { rounds, sweeps };
+        for size in ["1080", "4k"] {
+            let Some(truth) = footage(&format!("traffic/{size}/2874.png")) else {
+                eprintln!("KERF_REAL_FOOTAGE is not set");
+                return;
+            };
+            let (w, h) = (truth.width as usize, truth.height as usize);
+            for (name, [x0, y0, x1, y1]) in [
+                ("tires", [0.70, 0.70, 0.80, 0.88]),
+                ("skyline", [0.40, 0.30, 0.50, 0.45]),
+                ("wall", [0.30, 0.91, 0.45, 0.99]),
+                ("tires and road, 30%", [0.45, 0.45, 0.90, 0.95]),
+            ] {
+                let hole: Vec<bool> = (0..w * h)
+                    .map(|i| {
+                        let (x, y) = ((i % w) as f64 / w as f64, (i / w) as f64 / h as f64);
+                        (x0..x1).contains(&x) && (y0..y1).contains(&y)
+                    })
+                    .collect();
+                // The picture around it, a box half as wide again, for its detail.
+                let (mx, my) = ((x1 - x0) / 4.0, (y1 - y0) / 4.0);
+                let around = |i: usize| {
+                    let (x, y) = ((i % w) as f64 / w as f64, (i / w) as f64 / h as f64);
+                    !hole[i] && (x0 - mx..x1 + mx).contains(&x) && (y0 - my..y1 + my).contains(&y)
+                };
+                let cut_out = cut(&truth, &hole);
+                let start = std::time::Instant::now();
+                let kerf = patch_fill(&cut_out, &hole, None, 7, 1);
+                let took = start.elapsed().as_secs_f64();
+                let searched = patch_fill_by(&cut_out, &hole, None, 7, 1, search_everywhere);
+                let detail = |img: &Image| fine_detail(img, |i| hole[i]) / fine_detail(&truth, around);
+                println!(
+                    "fill {size} {name}: {:.2} dB ({took:.1} s), searched {:.2} dB; detail {:.0}% of around, \
+                     searched {:.0}%, truth {:.0}%; {}",
+                    psnr(&kerf, &truth, Some(&hole)),
+                    psnr(&searched, &truth, Some(&hole)),
+                    detail(&kerf) * 100.0,
+                    detail(&searched) * 100.0,
+                    detail(&truth) * 100.0,
+                    if kerf.data == searched.data { "the same bytes" } else { "copied below the search" },
+                );
+                // As close as the search, and keeping at least what it keeps.
+                assert!(psnr(&kerf, &truth, Some(&hole)) > psnr(&searched, &truth, Some(&hole)) - 0.1, "{size} {name}");
+                assert!(detail(&kerf) >= detail(&searched) * 0.95, "{size} {name}");
+            }
+        }
     }
 
     #[test]

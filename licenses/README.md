@@ -49,3 +49,17 @@ embeds them with `include_bytes!`.
 | `Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`, `Inter-Bold.ttf`, `Inter-Italic.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`OFL-Inter.txt`) |
 | `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 (`OFL-NotoSerif.txt`) |
 | `JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`OFL-JetBrainsMono.txt`) |
+
+## Footage the measurements run on
+
+`scripts/fetch-real-footage.sh` fetches it into `target/real-footage`, outside
+Git; none of it is in the repository or in what Kerf ships. It is used only by
+the ignored tests named `real_footage_*`.
+
+| Footage | Author | Source | License |
+|---|---|---|---|
+| *Chimera* (2014), frames 2874–2897 (3_TRAFFIC) and 3836–3837 (4_TODDLER_FOUNTAIN), DCI 4K TIFF | Netflix, Inc. | Netflix Open Content, `s3://download.opencontent.netflix.com/Chimera/tif_DCI4k2398p/` | CC BY 4.0; the script saves the license text beside the frames (`LICENSE-Chimera.txt`) |
+
+The frames are scaled to 2048 × 1080 beside their 4K originals and otherwise
+unchanged. Attribution: *Chimera*, © Netflix, Inc., licensed under the
+Creative Commons Attribution 4.0 International License.

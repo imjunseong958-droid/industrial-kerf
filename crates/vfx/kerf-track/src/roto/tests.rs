@@ -1515,3 +1515,186 @@ fn a_slow_subject_is_cut_as_it_was_with_or_without_the_search() {
         }
     }
 }
+
+/// The frames of the real footage `scripts/fetch-real-footage.sh` fetches, `width` across, as 0 to 1
+/// RGB, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+fn footage(names: impl Iterator<Item = String>, width: usize) -> Option<(usize, usize, Vec<Vec<[f32; 3]>>)> {
+    let folder = std::path::PathBuf::from(std::env::var_os("KERF_REAL_FOOTAGE")?);
+    let mut size = (width, 0);
+    let mut frames = Vec::new();
+    for name in names {
+        let path = folder.join(name);
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args(["-vf", &format!("scale={width}:-2:flags=area"), "-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
+            .output()
+            .expect("ffmpeg");
+        assert!(decoded.status.success(), "{}", path.display());
+        let frame: Vec<[f32; 3]> = decoded
+            .stdout
+            .as_chunks::<6>().0.iter()
+            .map(|c| [0, 2, 4].map(|i| f32::from(u16::from_le_bytes([c[i], c[i + 1]])) / 65535.0))
+            .collect();
+        size.1 = frame.len() / width;
+        frames.push(frame);
+    }
+    Some((size.0, size.1, frames))
+}
+
+/// Roto on a real shutter: a white box truck crossing a locked-off freeway at about 50 pixels a
+/// frame at 1024 x 540. The shot gives its own truth: the median of its frames at each pixel is what
+/// lies behind the truck, so how far a pixel has gone from it towards the truck's white is how much
+/// of the exposure the truck covered there; and how long the box's front edge is blurred, against how
+/// far it goes in a frame, is how long the camera's shutter was open. `KERF_REAL_FOOTAGE=… cargo test
+/// --release -p kerf-track real_footage -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs scripts/fetch-real-footage.sh"]
+fn real_footage_roto_under_a_shutter() {
+    let Some((w, h, frames)) = footage((2874..=2897).map(|f| format!("traffic/1080/{f}.png")), 1024) else {
+        eprintln!("KERF_REAL_FOOTAGE is not set");
+        return;
+    };
+    let n = frames.len();
+    let mut plate = vec![[0.0f32; 3]; w * h];
+    for (i, p) in plate.iter_mut().enumerate() {
+        for c in 0..3 {
+            let mut values: Vec<f32> = frames.iter().map(|f| f[i][c]).collect();
+            values.sort_by(f32::total_cmp);
+            p[c] = values[n / 2];
+        }
+    }
+    let luma = |p: [f32; 3]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+    // The truck's white: the brightest of what differs most from the plate, mid-shot.
+    let mid = &frames[n / 2];
+    let mut lit: Vec<[f32; 3]> = (0..w * h)
+        .filter(|&i| (luma(mid[i]) - luma(plate[i])).abs() > 0.12)
+        .map(|i| mid[i])
+        .collect();
+    lit.sort_by(|a, b| luma(*b).total_cmp(&luma(*a)));
+    let take = (lit.len() / 10).max(1);
+    let white = lit[..take].iter().fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]).map(|v| v / take as f32);
+    // Coverage: how far from the plate towards the white, along the line between them.
+    let coverage = |frame: &[[f32; 3]], i: usize| -> f64 {
+        let (b, d) = (plate[i], [white[0] - plate[i][0], white[1] - plate[i][1], white[2] - plate[i][2]]);
+        let len = d.iter().map(|v| v * v).sum::<f32>();
+        if len < 0.02 * 0.02 {
+            return 0.0;
+        }
+        let along = (0..3).map(|c| (frame[i][c] - b[c]) * d[c]).sum::<f32>() / len;
+        f64::from(along.clamp(0.0, 1.0))
+    };
+    // The truck in each frame: the largest piece of what is more than half covered, its box.
+    let mut truths = Vec::new();
+    for frame in &frames {
+        let half: Vec<bool> = (0..w * h).map(|i| coverage(frame, i) > 0.5).collect();
+        let mut piece = vec![0u32; w * h];
+        let (mut largest, mut largest_size, mut next) = (0u32, 0usize, 0u32);
+        for start in 0..w * h {
+            if !half[start] || piece[start] != 0 {
+                continue;
+            }
+            next += 1;
+            let (mut size, mut stack) = (0usize, vec![start]);
+            piece[start] = next;
+            while let Some(i) = stack.pop() {
+                size += 1;
+                let (x, y) = (i % w, i / w);
+                let around = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
+                for j in around.into_iter().flatten() {
+                    if half[j] && piece[j] == 0 {
+                        piece[j] = next;
+                        stack.push(j);
+                    }
+                }
+            }
+            if size > largest_size {
+                (largest, largest_size) = (next, size);
+            }
+        }
+        truths.push(piece.iter().map(|p| *p == largest && largest > 0).collect::<Vec<bool>>());
+    }
+    // From the first frame the box is in, a twentieth of the frame or more.
+    let first = truths.iter().position(|t| t.iter().filter(|v| **v).count() > w * h / 20).expect("the box");
+    let (frames, truths) = (&frames[first..], &truths[first..]);
+    let n = frames.len();
+    // The camera's shutter, from the box's front edge against the sky: a row a fifth of the way down
+    // the box, read where coverage passes 0.1, 0.5 and 0.9.
+    let mut edges = Vec::new();
+    for (frame, truth) in frames.iter().zip(truths) {
+        let top = (0..h).find(|&y| (0..w).any(|x| truth[y * w + x])).unwrap_or(0);
+        let bottom = (0..h).rev().find(|&y| (0..w).any(|x| truth[y * w + x])).unwrap_or(0);
+        let y = top + (bottom - top) / 5;
+        let Some(front) = (0..w).rev().find(|&x| truth[y * w + x]) else { continue };
+        let crossing = |level: f64| (front.saturating_sub(40)..(front + 40).min(w)).rev().find(|&x| coverage(frame, y * w + x) >= level);
+        if let (Some(a), Some(b), Some(c)) = (crossing(0.9), crossing(0.5), crossing(0.1)) {
+            if front + 40 < w {
+                edges.push((b as f64, (c - a) as f64 / 0.8));
+            }
+        }
+    }
+    let speeds: Vec<f64> = edges.windows(2).map(|pair| pair[1].0 - pair[0].0).filter(|v| *v > 0.0).collect();
+    let mut opens: Vec<f64> = edges.iter().skip(1).zip(&speeds).map(|((_, blur), speed)| blur / speed).collect();
+    opens.sort_by(f64::total_cmp);
+    let speed = speeds.iter().sum::<f64>() / speeds.len().max(1) as f64;
+    let open = opens.get(opens.len() / 2).copied().unwrap_or(f64::NAN);
+
+    let start = truths[0].iter().enumerate().filter(|(_, t)| **t).fold((0.0, 0.0, 0.0), |(x, y, k), (i, _)| (x + (i % w) as f64, y + (i / w) as f64, k + 1.0));
+    let hints = Hints { inside: vec![[start.0 / start.2 / w as f64, start.1 / start.2 / h as f64]], ..Hints::default() };
+    let rgba = |frame: usize| -> Option<(usize, usize, Vec<u8>)> {
+        let f = frames.get(frame)?;
+        Some((w, h, f.iter().flat_map(|p| [p[0], p[1], p[2], 1.0].map(|v| (v * 255.0).round() as u8)).collect()))
+    };
+    let begun = std::time::Instant::now();
+    let traced = trace(n, &hints, None, rgba);
+    let took = begun.elapsed().as_secs_f64() / n as f64;
+    let why = shutter::fit_or_why(&traced.raw, &traced.across, traced.shortest_blur());
+    let found = why.as_ref().ok().copied();
+    // What it would draw let in: fit with no least blur, so the slope's shutter is taken.
+    let let_in = shutter::fit_or_why(&traced.raw, &traced.across, 0.0);
+    let of = |followed: &FollowedObject| {
+        let (mut sum, mut worst, mut area) = (0.0, 1.0f64, 0.0);
+        for (outline, truth) in followed.outlines.iter().zip(truths) {
+            let polygon: Vec<[f64; 2]> = outline.iter().map(|at| [at[0] * w as f64, at[1] * h as f64]).collect();
+            let (mut both, mut either, mut mine, mut theirs) = (0usize, 0usize, 0usize, 0usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let (a, b) = (in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]), truth[y * w + x]);
+                    both += usize::from(a && b);
+                    either += usize::from(a || b);
+                    mine += usize::from(a);
+                    theirs += usize::from(b);
+                }
+            }
+            let overlap = both as f64 / either.max(1) as f64;
+            sum += overlap;
+            worst = worst.min(overlap);
+            area += mine as f64 / theirs.max(1) as f64;
+        }
+        let k = followed.outlines.len().max(1) as f64;
+        (sum / k, worst, area / k, followed.outlines.len())
+    };
+    let plain = of(&traced.by_the_measure());
+    let with = found
+        .or(let_in.as_ref().ok().copied())
+        .map(|shutter| (shutter.open, of(&trace(n, &hints, None, rgba).under_a_shutter(shutter))));
+    println!(
+        "roto on a real shutter, {w}x{h}, from frame {first}: the box's front goes {speed:.1} px a frame, its blur says the shutter was open {open:.2} of a frame ({} edges); \
+         {took:.3} s a frame; by the measure overlap {:.3}, worst {:.3}, area {:.2} of the truth's over {} frames; shutter found {:?}; let in, open and drawn {:?}",
+        edges.len(),
+        plain.0,
+        plain.1,
+        plain.2,
+        plain.3,
+        why,
+        with,
+    );
+    // Let in, it draws no better than the measure.
+    if let Some((_, drawn)) = with {
+        assert!(drawn.0 <= plain.0 + 0.01, "{drawn:?} against {plain:?}");
+    }
+    // The measure keeps up with the truck; a shutter does not come in, as it would draw no better.
+    assert!(plain.0 > 0.85 && plain.1 > 0.7 && plain.3 == n, "{plain:?}");
+    assert!(found.is_none(), "{found:?}");
+    assert!((0.5..1.0).contains(&open), "{open}");
+}

@@ -872,6 +872,112 @@ mod tests {
         assert_eq!(shared.filter(&b, 1e-3).data, by_hand(&b, 1e-3));
     }
 
+    /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values 0 to 1, or
+    /// `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+    fn footage(name: &str) -> Option<Image> {
+        let path = std::path::Path::new(&std::env::var_os("KERF_REAL_FOOTAGE")?).join(name);
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args(["-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
+            .output()
+            .expect("ffmpeg");
+        assert!(decoded.status.success(), "{}", path.display());
+        let header = std::fs::read(&path).expect("the frame");
+        let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
+        let mut img = gray(size(16), size(20), 0.0);
+        for (px, rgb) in img.data.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
+            let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
+            *px = [channel(0), channel(2), channel(4), 1.0];
+        }
+        Some(img)
+    }
+
+    /// Remove Grain on a real camera's noise, with the truth made from the shot: 24 frames of a
+    /// locked-off freeway, whose median at each pixel that nothing crosses is the picture without
+    /// the noise. `KERF_REAL_FOOTAGE=… cargo test --release -p kerf-raster-fx real_footage --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs scripts/fetch-real-footage.sh"]
+    fn real_footage_remove_grain() {
+        let frames: Vec<Image> = (2874..=2897).filter_map(|f| footage(&format!("traffic/1080/{f}.png"))).collect();
+        if frames.is_empty() {
+            eprintln!("KERF_REAL_FOOTAGE is not set");
+            return;
+        }
+        let (w, h) = (frames[0].width as usize, frames[0].height as usize);
+        let mut truth = gray(w as u32, h as u32, 0.0);
+        // What nothing crosses: no frame further from the median than noise goes, in the sky and
+        // skyline, the tires and the wall.
+        let mut still = vec![false; w * h];
+        for i in 0..w * h {
+            let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+            let mut spread = 0.0f32;
+            for c in 0..3 {
+                let mut values: Vec<f32> = frames.iter().map(|f| f.data[i][c]).collect();
+                values.sort_by(f32::total_cmp);
+                let median = (values[11] + values[12]) / 2.0;
+                truth.data[i][c] = median;
+                spread = spread.max(values.iter().map(|v| (v - median).abs()).fold(0.0, f32::max));
+            }
+            still[i] = spread < 0.04 && (y < 0.47 || (x > 0.58 && (0.68..0.9).contains(&y)) || y > 0.91);
+        }
+        let error = |img: &Image, region: &dyn Fn(usize) -> bool| {
+            let (mut se, mut n) = (0.0f64, 0.0f64);
+            for i in (0..w * h).filter(|&i| still[i] && region(i)) {
+                for c in 0..3 {
+                    se += f64::from(img.data[i][c] - truth.data[i][c]).powi(2);
+                }
+                n += 3.0;
+            }
+            ((se / n.max(1.0)).sqrt(), n / 3.0)
+        };
+        // The fine detail of the green: what noise adds and a filter takes away.
+        let detail = |img: &Image, region: &dyn Fn(usize) -> bool| {
+            let (mut sum, mut n) = (0.0f64, 0.0f64);
+            for y in 1..h - 1 {
+                for x in 1..w - 1 {
+                    let i = y * w + x;
+                    if !still[i] || !region(i) {
+                        continue;
+                    }
+                    let around = (img.data[i - 1][1] + img.data[i + 1][1] + img.data[i - w][1] + img.data[i + w][1]) / 4.0;
+                    sum += f64::from(img.data[i][1] - around).powi(2);
+                    n += 1.0;
+                }
+            }
+            sum / n.max(1.0)
+        };
+        let sky = |i: usize| (i / w) as f32 / (h as f32) < 0.15;
+        let skyline = |i: usize| (0.2..0.47).contains(&((i / w) as f32 / h as f32));
+        let all = |_: usize| true;
+        let db = |rms: f64| 20.0 * (1.0 / rms).log10();
+        for amount in [1.0, 3.0, 5.0] {
+            let frame = frames[12].clone();
+            let start = std::time::Instant::now();
+            let out = run("ec.noise.removegrain", &[("noiseReductionSettings/noiseReduction", num(amount))], frame.clone(), 0.0).img;
+            let took = start.elapsed().as_secs_f64();
+            let (before, pixels) = error(&frame, &all);
+            let (after, _) = error(&out, &all);
+            println!(
+                "remove grain {amount}: {:.2} dB before, {:.2} after over {pixels} still pixels ({took:.2} s); \
+                 noise in the sky {:.4} to {:.4} (truth's own {:.4}); skyline detail {:.0}% of the truth's, before {:.0}%",
+                db(before),
+                db(after),
+                error(&frame, &sky).0,
+                error(&out, &sky).0,
+                detail(&truth, &sky).sqrt(),
+                detail(&out, &skyline) / detail(&truth, &skyline) * 100.0,
+                detail(&frame, &skyline) / detail(&truth, &skyline) * 100.0,
+            );
+            // Its default brings the frame nearer the truth and takes noise out of the sky.
+            if amount == 1.0 {
+                assert!(db(after) > db(before) + 0.5, "{} against {}", db(after), db(before));
+                assert!(error(&out, &sky).0 < error(&frame, &sky).0 * 0.7);
+            }
+        }
+    }
+
     #[test]
     fn remove_grain_smooths_noise() {
         let mut img = gray(32, 32, 0.5);

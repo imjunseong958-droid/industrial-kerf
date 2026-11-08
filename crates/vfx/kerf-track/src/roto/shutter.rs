@@ -141,8 +141,17 @@ pub(super) fn fit(
     measures: &[Vec<Across>],
     shortest: f64,
 ) -> Option<Shutter> {
+    fit_or_why(frames, measures, shortest).ok()
+}
+
+/// [`fit`], or which of its tests the shot did not pass.
+pub(super) fn fit_or_why(
+    frames: &[Vec<[f64; 2]>],
+    measures: &[Vec<Across>],
+    shortest: f64,
+) -> Result<Shutter, String> {
     if frames.len() < 2 {
-        return None;
+        return Err("fewer than two frames".into());
     }
     let goes = going(frames);
     let mut seen = Vec::new();
@@ -170,7 +179,9 @@ pub(super) fn fit(
     }
     lengths.sort_by(f64::total_cmp);
     let typical = lengths.get(lengths.len() / 2).copied().unwrap_or(0.0);
-    let open = slope(seen.iter(), |one| one.wide)?.clamp(0.0, 1.0);
+    let open = slope(seen.iter(), |one| one.wide)
+        .ok_or("no edge goes anywhere")?
+        .clamp(0.0, 1.0);
     // How long the blur is where an edge faces the way it goes, which on a slow subject is no more than
     // the noise that a slope through so little can make a long shutter of.
     let facing = || seen.iter().filter(|one| one.along >= FACING * typical);
@@ -179,7 +190,10 @@ pub(super) fn fit(
     // And no blur is longer than what went across it in a frame: a soft edge on a subject that barely
     // moves is some other softness.
     if longest < shortest || open * typical < shortest {
-        return None;
+        return Err(format!(
+            "too short a blur: {longest:.1} px where it faces its way, {:.1} by the slope, under {shortest:.1}",
+            open * typical
+        ));
     }
     // An edge as wide whichever way it faces is not a shutter's, however fast it goes.
     let weights: f64 = seen.iter().map(|one| one.weight).sum();
@@ -193,18 +207,25 @@ pub(super) fn fit(
         .map(|one| one.weight * (one.wide - open * one.along).powi(2))
         .sum();
     if left > MOST_LEFT * same_width {
-        return None;
+        return Err(format!(
+            "not a shutter's: off the model by {:.1} times one width for all of it",
+            left / same_width.max(1e-12)
+        ));
     }
     // Only where the edge was read past its blur is its middle where it reads: short of the plain side, it
     // reads as nearer the cut than it is.
     let sound = seen
         .iter()
         .filter(|one| one.room >= ROOM * open * one.along);
-    let middle = slope(sound, |one| one.out)?.clamp(-open / 2.0, open / 2.0);
+    let middle = slope(sound, |one| one.out)
+        .ok_or("no edge read past its blur")?
+        .clamp(-open / 2.0, open / 2.0);
     if middle.abs() < LEAST_MIDDLE {
-        return None;
+        return Err(format!(
+            "the cut is where the middle is: {middle:.3} for each pixel, under {LEAST_MIDDLE} (open {open:.2})"
+        ));
     }
-    Some(Shutter { open, middle })
+    Ok(Shutter { open, middle })
 }
 
 /// What an edge says, for [`fit`].
