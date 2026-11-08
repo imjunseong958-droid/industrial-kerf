@@ -22,6 +22,7 @@
 #include "wiring/toolbar_wiring.h"
 #include "ui/stage_shell.h"
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -653,6 +654,60 @@ private slots:
         wiring->buildExportMenu();
         QCOMPARE(findAction(menu, QStringLiteral("preflightFailed"))->text(), QStringLiteral("The last check failed: The check was cancelled"));
         QVERIFY(findAction(menu, QStringLiteral("preflight.loudness.true_peak")));
+    }
+
+    // Export follows Deliver: its master waits while a blocking note is
+    // open, says which and where, and brings up the blocking notes to
+    // resolve; a draft still goes. kerfd's own refusal is shown the same way.
+    void exportWaitsForBlockingNotesAsDeliverDoes() {
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.setConnection(QStringLiteral("ready"));
+        ExportButton *button = window.m_exportButton;
+        QAbstractButton *main = nullptr;
+        for (QAbstractButton *child : button->findChildren<QAbstractButton *>())
+            if (child->accessibleName() == QStringLiteral("Export")) main = child;
+        QVERIFY(main);
+        QCOMPARE(button->exportQuality(), QStringLiteral("master"));
+        window.handleEvent(QJsonObject{{"type", "comments"}, {"reviewRevision", 3},
+                                       {"items", QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, false, false)}}});
+        ReviewModel review;
+        review.setComments(QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, false, false)});
+        window.m_bus->setReview(&review);
+
+        window.m_lastCommand = {};
+        window.m_errorBanner->hide();
+        main->click();
+        QVERIFY(window.m_lastCommand.isEmpty());
+        QVERIFY(!window.m_errorBanner->isHidden());
+        QCOMPARE(window.m_errorMessage->text(),
+                 QStringLiteral("A blocking note holds the master back: \u201cCaption sits on the lower third\u201d by Mina Park at "
+                                "00:00:17:08. Resolve it in Review, or export a Draft meanwhile."));
+        QCOMPARE(review.tag(), QString::fromLatin1(ReviewModel::kBlockingTag));
+
+        // A draft is a review copy, not a delivery.
+        button->setQuality(QStringLiteral("review"));
+        main->click();
+        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("review"));
+
+        // kerfd refuses a master too (an agent's, or one sent before the notes
+        // came); the editor says so in its words and shows the notes.
+        review.setTag(QString());
+        window.m_errorBanner->hide();
+        const QString refusal = QStringLiteral("a blocking note holds delivery back: \"Mix is hot\" by Mina (comment c-1)");
+        window.handleEvent(QJsonObject{{"type", "error"}, {"code", "BLOCKING_NOTES"}, {"command", "export"}, {"message", refusal}});
+        QCOMPARE(window.m_errorMessage->text(), refusal);
+        QCOMPARE(review.tag(), QString::fromLatin1(ReviewModel::kBlockingTag));
+
+        // Resolved, the master goes.
+        review.setComments(QJsonArray{comment("c-1708", nullptr, true, true)});
+        button->setQuality(QStringLiteral("master"));
+        window.m_lastCommand = {};
+        main->click();
+        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
+        window.m_bus->setReview(nullptr);
     }
 
     // Render master waits while blocking notes are open; the warn row counts

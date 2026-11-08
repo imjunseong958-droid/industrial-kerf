@@ -37,7 +37,8 @@
 //                       openThread(commentId) + askPrefill(text, commentId);
 //                       Run QC is qc.run
 //   blocking notes      ReviewModel::counts().blocking (else the comments
-//                       event's open blocking threads); Render master waits
+//                       event's open blocking threads); Render master and
+//                       Export's master wait (kerfd refuses them too)
 //   EDL locators        deliver::option/setOption (deliver/<project>/edlLocators)
 
 #include "test_friends.h"
@@ -133,13 +134,21 @@ public:
     static int preflightHidden(const QJsonObject &summary, int most = 6);
     // "@Kerf bring true peak to ≤ −1 dBTP (now −0.4 dBTP)" for a failed row.
     static QString askText(const QJsonObject &row);
-    // Open threads with an open blocking comment, from a comments event.
-    static int blockingThreads(const QJsonArray &comments);
+    // Open threads with an open blocking comment, from a comments event:
+    // their roots, in the order they were made (kerfd's rule, review.rs
+    // blocking_threads).
+    static QJsonArray blockingRoots(const QJsonArray &comments);
+    static int blockingThreads(const QJsonArray &comments) { return int(blockingRoots(comments).size()); }
     // The blocking notes open now (the review model's count when there is
     // one, else the last comments event's).
     int blockingCount() const;
-    // Sends export {quality, codec} for "master" or "review".
+    // Sends export {quality, codec} for "master" or "review". A master waits
+    // while a blocking note is open, as Deliver's Render master does: it is
+    // not sent, and holdForNotes says why.
     bool sendExport(const QString &quality);
+    // Says which note holds a master back and where, and shows the blocking
+    // notes in Review to resolve; `refusal` is kerfd's, when it refused.
+    void holdForNotes(const QString &refusal = QString());
     // The Export menu, built each time it opens.
     void buildExportMenu();
     // The QSettings key of the EDL-locators choice for this project: the

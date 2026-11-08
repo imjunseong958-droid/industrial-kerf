@@ -583,24 +583,24 @@ QString ToolbarWiring::askText(const QJsonObject &row) {
     return value.isEmpty() ? QStringLiteral("@Kerf fix the %1").arg(name) : QStringLiteral("@Kerf fix the %1 (%2)").arg(name, value);
 }
 
-int ToolbarWiring::blockingThreads(const QJsonArray &comments) {
-    QHash<QString, bool> rootOpen;
-    QHash<QString, bool> blocking;
+QJsonArray ToolbarWiring::blockingRoots(const QJsonArray &comments) {
+    QSet<QString> held;
     for (const QJsonValue &value : comments) {
         const QJsonObject comment = value.toObject();
-        const QString id = comment.value(QStringLiteral("id")).toString();
         const QString parent = comment.value(QStringLiteral("parent")).toString();
-        const QString root = parent.isEmpty() ? id : parent;
-        const bool resolved = comment.value(QStringLiteral("resolved")).toBool();
-        if (parent.isEmpty()) rootOpen.insert(root, !resolved);
         const bool marked = comment.value(QStringLiteral("blocking")).toBool() ||
                             comment.value(QStringLiteral("tags")).toArray().contains(QStringLiteral("blocking"));
-        if (marked && !resolved) blocking.insert(root, true);
+        if (marked && !comment.value(QStringLiteral("resolved")).toBool())
+            held.insert(parent.isEmpty() ? comment.value(QStringLiteral("id")).toString() : parent);
     }
-    int count = 0;
-    for (auto it = blocking.cbegin(); it != blocking.cend(); ++it)
-        if (rootOpen.value(it.key(), false)) ++count;
-    return count;
+    QJsonArray roots;
+    for (const QJsonValue &value : comments) {
+        const QJsonObject comment = value.toObject();
+        if (comment.value(QStringLiteral("parent")).toString().isEmpty() && !comment.value(QStringLiteral("resolved")).toBool() &&
+            held.contains(comment.value(QStringLiteral("id")).toString()))
+            roots.append(comment);
+    }
+    return roots;
 }
 
 int ToolbarWiring::blockingCount() const {
@@ -610,6 +610,10 @@ int ToolbarWiring::blockingCount() const {
 
 bool ToolbarWiring::sendExport(const QString &quality) {
     const bool master = quality == QStringLiteral("master");
+    if (master && blockingCount() > 0) {
+        holdForNotes();
+        return false;
+    }
     // The master renders as the Deliver tray's Master row does (its folder
     // and file name, kept for the project); the draft is a review copy.
     const QJsonObject command = master
@@ -621,6 +625,30 @@ bool ToolbarWiring::sendExport(const QString &quality) {
     m_sentQuality = command.value(QStringLiteral("quality")).toString();
     m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(master ? QStringLiteral("Master") : QStringLiteral("Draft")));
     return true;
+}
+
+void ToolbarWiring::holdForNotes(const QString &refusal) {
+    QString message = refusal;
+    if (message.isEmpty()) {
+        const QJsonArray roots = blockingRoots(m_bus->lastEvent(QStringLiteral("comments")).value(QStringLiteral("items")).toArray());
+        const int count = std::max(blockingCount(), int(roots.size()));
+        message = count == 1 ? QStringLiteral("A blocking note holds the master back")
+                             : QStringLiteral("%1 blocking notes hold the master back").arg(count);
+        if (!roots.isEmpty()) {
+            const QJsonObject first = roots.first().toObject();
+            QString body = first.value(QStringLiteral("body")).toString().simplified();
+            if (body.size() > 80) body = body.left(79).trimmed() + QChar(0x2026);
+            message += QStringLiteral(": \u201c%1\u201d by %2").arg(body, first.value(QStringLiteral("author")).toObject().value(QStringLiteral("name")).toString());
+            if (const QJsonValue at = first.value(QStringLiteral("at")); at.isDouble())
+                message += QStringLiteral(" at %1").arg(timelineTimecode(at.toDouble(), m_bus->timeline().value(QStringLiteral("fps")).toDouble(25.0)));
+            if (count > 1) message += QStringLiteral(" and %1 more").arg(count - 1);
+        }
+        message += QStringLiteral(". Resolve it in Review, or export a Draft meanwhile.");
+    }
+    m_window->showError(message);
+    // The way to resolve it: the blocking notes, in Review.
+    if (ReviewModel *review = m_bus->review()) review->setTag(QString::fromLatin1(ReviewModel::kBlockingTag));
+    m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export held for blocking notes"));
 }
 
 QString ToolbarWiring::edlLocatorsKey() const { return deliver::settingsKey(m_window->m_projectDirectory, QStringLiteral("edlLocators")); }

@@ -2,7 +2,7 @@
 //! lock) and the render queue's options and listing.
 
 use super::*;
-use crate::parse_document;
+use crate::{parse_document, Comment, NewComment};
 use serde_json::{json, Value};
 
 /// A project folder with a 24 fps sequence: V1 holds c1 (0–2 s) and c2
@@ -992,4 +992,85 @@ fn a_job_that_finishes_keeps_the_finished_history_bounded() {
     assert!(runtime.render_job("render-1800000000000000-0").is_err());
     drop(runtime);
     let _ = fs::remove_dir_all(directory);
+}
+
+/// Add `comment` as a person would, returning it as kept.
+fn note(runtime: &mut Runtime, comment: NewComment) -> Comment {
+    let RuntimeResponse::Comments {
+        comment: Some(comment),
+        ..
+    } = runtime
+        .execute(RuntimeRequest::AddComment {
+            actor: "ui".into(),
+            comment,
+        })
+        .unwrap()
+    else {
+        panic!("the comment");
+    };
+    comment
+}
+
+#[test]
+fn a_blocking_note_holds_a_delivery_back_and_not_a_draft() {
+    let (mut runtime, _directory) = project("render-blocked");
+    let person = || crate::Author::new("person", "Mina");
+    // A note that does not block holds nothing back.
+    note(&mut runtime, NewComment::new(person(), "Nice pacing"));
+    let (job, _, _) = render(&mut runtime, json!({"quality": "master"})).unwrap();
+    runtime.cancel_render(&job.job_id).unwrap();
+
+    let mut blocking = NewComment::new(person(), "The flare hides the logo");
+    blocking.at = Some(1.5);
+    blocking.blocking = true;
+    let root = note(&mut runtime, blocking);
+    for quality in ["master", "full"] {
+        let refusal = render(&mut runtime, json!({"quality": quality})).unwrap_err();
+        assert_eq!(refusal.code, "BLOCKING_NOTES", "{quality}");
+        // Which note, where, and how to clear it.
+        assert!(
+            refusal
+                .message
+                .contains("\"The flare hides the logo\" by Mina at 00:00:01:12")
+                && refusal.message.contains(&root.id)
+                && refusal.message.contains("resolve it in the review")
+                && refusal.message.contains("a draft or a review copy"),
+            "{}",
+            refusal.message
+        );
+    }
+    // A draft and a review copy still render.
+    render(&mut runtime, json!({"quality": "preview"})).unwrap();
+    render(&mut runtime, json!({"quality": "review"})).unwrap();
+
+    // Resolving the thread lets the master through.
+    runtime
+        .execute(RuntimeRequest::SetComment {
+            actor: "ui".into(),
+            id: root.id.clone(),
+            patch: crate::CommentPatch {
+                resolved: Some(true),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    render(&mut runtime, json!({"quality": "master", "name": "After"})).unwrap();
+
+    // A blocking reply in an open thread holds it back too, and says how
+    // many more there are.
+    let open = note(&mut runtime, NewComment::new(person(), "Captions"));
+    let mut reply = NewComment::new(person(), "Line 3 is late");
+    reply.parent = Some(open.id.clone());
+    reply.blocking = true;
+    note(&mut runtime, reply);
+    let mut other = NewComment::new(person(), "Mix is hot");
+    other.tags = vec!["blocking".into()];
+    note(&mut runtime, other);
+    let refusal = render(&mut runtime, json!({"quality": "master"})).unwrap_err();
+    assert!(
+        refusal.message.contains("\"Captions\" by Mina (comment")
+            && refusal.message.contains("and 1 more"),
+        "{}",
+        refusal.message
+    );
 }

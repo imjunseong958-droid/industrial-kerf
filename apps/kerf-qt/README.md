@@ -323,7 +323,11 @@ a pending proposal stale and never enters undo. Threads come from people,
 from Kerf (your turn and Kerf's reply are both kept as comments), from agents
 connected over MCP (their `note` tool and their proposals, with versions)
 and from QC (blocking findings of a check, resolved when a later check no
-longer finds them). Filters (All / Open / Proposals, From, tags, search),
+longer finds them). A blocking note holds a delivery back wherever it is asked
+for: Deliver's Render master, the toolbar's Export with Master chosen, and a
+`full` or `master` render from an agent or the CLI, which kerfd refuses. Export
+then says which note and where, and shows the blocking notes in Review; a Draft
+still exports. Filters (All / Open / Proposals, From, tags, search),
 sort, resolve, drawings on the frame, @mentions and timecodes work as in the
 design; the pinned proposal card previews, accepts or rejects the version it
 shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link;

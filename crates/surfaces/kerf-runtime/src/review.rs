@@ -449,6 +449,65 @@ pub fn to_csv(comments: &[Comment], include_resolved: bool, sequence: &Sequence)
     text
 }
 
+/// The threads that hold delivery back, by their roots in the order they
+/// were made: an open thread with a comment in it marked blocking (or
+/// tagged `blocking`) and not resolved. The editor's Deliver tray and
+/// toolbar count by the same rule.
+pub fn blocking_threads(comments: &[Comment]) -> Vec<&Comment> {
+    let held: HashSet<&str> = comments
+        .iter()
+        .filter(|comment| {
+            !comment.resolved
+                && (comment.blocking || comment.tags.iter().any(|tag| tag == "blocking"))
+        })
+        .map(|comment| comment.parent.as_deref().unwrap_or(&comment.id))
+        .collect();
+    comments
+        .iter()
+        .filter(|comment| {
+            comment.parent.is_none() && !comment.resolved && held.contains(comment.id.as_str())
+        })
+        .collect()
+}
+
+/// The refusal of a delivery (a `full` or `master` render) while
+/// `comments` hold it back: the first note, where it is on `sequence` (the
+/// program), and how to clear it. `None` when nothing does.
+pub fn delivery_held(comments: &[Comment], sequence: Option<&Sequence>) -> Option<RuntimeError> {
+    let threads = blocking_threads(comments);
+    let first = *threads.first()?;
+    let at = first
+        .at
+        .and_then(Time::from_seconds)
+        .zip(sequence)
+        .map(|(time, sequence)| {
+            format!(
+                " at {}",
+                format_timecode(sequence.start + time, sequence.rate, sequence.drop_frame)
+            )
+        })
+        .unwrap_or_default();
+    let body: String = first.body.chars().take(80).collect();
+    let body = if body.len() < first.body.len() {
+        format!("{}…", body.trim_end())
+    } else {
+        body
+    };
+    let more = match threads.len() {
+        1 => String::new(),
+        2 => " and 1 more".to_owned(),
+        n => format!(" and {} more", n - 1),
+    };
+    Some(RuntimeError::new(
+        "BLOCKING_NOTES",
+        format!(
+            "a blocking note holds delivery back: \"{body}\" by {}{at} (comment {}){more}; \
+             resolve it in the review once it is dealt with, or render a draft or a review copy meanwhile",
+            first.author.name, first.id
+        ),
+    ))
+}
+
 /// One CSV cell, quoted when it must be, and kept from reading as a
 /// formula in a spreadsheet.
 fn csv_cell(text: &str) -> String {
@@ -641,6 +700,10 @@ impl Review {
             items: self.comments.clone(),
             review_revision: self.revision,
         }
+    }
+
+    pub(crate) fn comments(&self) -> &[Comment] {
+        &self.comments
     }
 
     pub(crate) fn comment(&self, id: &str) -> Option<&Comment> {

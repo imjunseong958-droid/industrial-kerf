@@ -331,7 +331,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             json!({
                 "type": "object",
                 "properties": {
-                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate."},
+                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery, refused while a blocking note is open (a person resolves it in the review)."},
                     "from": {"type": "string", "description": format!("Sequence position. {time}")},
                     "to": {"type": "string", "description": "Sequence position."},
                     "sequence": {"type": "string", "description": sequence},
