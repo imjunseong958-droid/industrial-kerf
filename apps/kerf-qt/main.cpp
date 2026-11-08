@@ -8,6 +8,7 @@
 #include "project_launcher.h"
 #include "review_link.h"
 #include "settings_migration.h"
+#include "update_notice.h"
 
 #include <QApplication>
 #include <QDir>
@@ -131,6 +132,8 @@ int main(int argc, char **argv) {
         QSettings settings;
         kerf::showCrashNotice(nullptr, settings);
     }
+    // A newer Kerf on GitHub, asked off the GUI thread at most once a day.
+    if (!smoke && !renderPreview) kerf::startUpdateCheck(nullptr);
 
     // kerf:// review links raise (or open) their project's editor and seek.
     QPointer<QDialog> choosing;

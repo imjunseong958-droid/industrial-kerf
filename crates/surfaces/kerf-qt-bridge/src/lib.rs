@@ -11,6 +11,7 @@ mod presets;
 mod previews;
 mod qc;
 mod secrets;
+mod updates;
 mod queue;
 mod review;
 mod tasks;
@@ -2535,6 +2536,13 @@ fn about() -> Value {
         "license": env!("CARGO_PKG_LICENSE"),
         "repository": REPOSITORY,
     })
+}
+
+/// Whether a newer Kerf is released on GitHub: `{current, latest?, newer, url?}` or `{error}`. It
+/// asks the network and may take seconds, so call it off the GUI thread.
+#[no_mangle]
+pub extern "C" fn kerf_update_check() -> *mut c_char {
+    owned_json(updates::check())
 }
 
 // ---- crash reports ---------------------------------------------------------------

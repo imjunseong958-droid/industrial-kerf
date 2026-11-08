@@ -22,3 +22,5 @@ Windows SmartScreen asks before it first runs (More info ▸ Run anyway).
 - Crash reports kept on your computer, settings that carry over from one version
   to the next, and API keys in the system keychain.
 - Help ▸ Kerf User Guide, and Help ▸ About Kerf.
+- Kerf tells you when a newer release is out, once a day; Settings ▸ Updates
+  turns it off.
