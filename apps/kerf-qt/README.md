@@ -30,9 +30,19 @@ installer, so Windows does not open `kerf://` links with it.
 
 Its FFmpeg build makes the package GPL version 3, so publish it only together with
 its complete source, from `scripts/collect-kerf-windows-sources.sh`, and keep that
-available for as long as the package is. The **Windows package** workflow makes both,
+available for as long as the package is. The **Package** workflow makes both,
 from one commit, as artifacts, and publishes neither; a `v<version>` tag publishes
-both as a GitHub release, with that version's section of `CHANGELOG.md` as its notes. It takes that FFmpeg from
+both as a GitHub release, with that version's section of `CHANGELOG.md` as its notes.
+
+On macOS, `scripts/package-kerf-macos.sh` makes `Industrial Kerf.app` the same way: the
+editor, `kerfd`, `kerf`, `kerf-mcp`, `ffmpeg` and `ffprobe`, with Qt and every Homebrew
+library they load copied in by `macdeployqt`. It fails if anything still loads from
+Homebrew, runs the tools and the editor with nothing of Homebrew's on `PATH`, and signs
+the app ad hoc. Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
+collects the source of each Homebrew formula the app has files of; the Package workflow
+publishes the two together on a `v<version>` tag. Where pushing a tag is not possible, Actions ▸ Package ▸ Run
+workflow on `main` with **release** checked publishes the same release and makes its
+tag. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and

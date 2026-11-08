@@ -5,7 +5,7 @@
 # FFmpeg and each library built into it, the scripts that built those, and Qt.
 #
 # Runs on Linux with git, cargo, curl and docker. What to collect is pinned in
-# .github/workflows/windows-package.yml, with the build the package is made from.
+# .github/workflows/package.yml, with the build the package is made from.
 set -euo pipefail
 
 : "${FFMPEG_BUILDS_TAG:?the FFmpeg-Builds release the package uses}"
