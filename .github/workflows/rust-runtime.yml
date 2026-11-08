@@ -215,7 +215,7 @@ jobs:
 
   macos-editor:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -248,3 +248,9 @@ jobs:
         run: ctest --test-dir target/qt --output-on-failure
       - name: Test real media and cross-client workflow
         run: python3 scripts/test-kerf-qt-bridge.py
+      # The whole workspace on macOS, after the editor's own steps: its paths,
+      # sockets, and VideoToolbox, and the runner's Metal GPU, so the GPU
+      # parity tests run somewhere other than a developer's Mac. "kerf-gpu: no
+      # usable GPU" in this step's log means they skipped.
+      - name: Test workspace
+        run: cargo test --workspace
