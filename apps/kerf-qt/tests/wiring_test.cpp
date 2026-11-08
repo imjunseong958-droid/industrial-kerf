@@ -157,7 +157,7 @@ private slots:
         MainWindow window{QString(), QString()};
         QStringList menus;
         for (const QAction *menu : window.menuBar()->actions()) menus.append(menu->text());
-        QCOMPARE(menus, (QStringList{"File", "Edit", "Clip", "Sequence", "Markers", "Playback", "View", "Collaborate", "Window"}));
+        QCOMPARE(menus, (QStringList{"File", "Edit", "Clip", "Sequence", "Markers", "Playback", "View", "Collaborate", "Window", "Help"}));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("keymap.premiere")));
         // Projects open from File; Import Media keeps Ctrl+O.
         QVERIFY(window.findChild<QMenu *>(QStringLiteral("openRecentMenu")));
