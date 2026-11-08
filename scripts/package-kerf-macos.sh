@@ -73,14 +73,36 @@ done
 # executables or the bridge loads, copied in with their references rewritten.
 executables=()
 for tool in "${tools[@]}" ffmpeg ffprobe; do executables+=("-executable=$macos/$tool"); done
-"$qt_prefix/bin/macdeployqt" "$app" -always-overwrite -no-strip \
+# Homebrew splits Qt into a formula per module (qtbase, qtsvg, qtdeclarative, ...),
+# each with its own lib; all of them are linked into $brew_prefix/lib, where
+# macdeployqt finds what a plugin of one module needs from another.
+"$qt_prefix/bin/macdeployqt" "$app" -always-overwrite -no-strip "-libpath=$brew_prefix/lib" \
     "-executable=$frameworks/libkerf_qt_bridge.dylib" "${executables[@]}"
+
+# A copied library keeps the install name it had in the Cellar as its own id. That id
+# is only what a later link would record, but name it as found inside the app, so
+# nothing in the app names Homebrew.
+while IFS= read -r -d '' file; do
+    file -b "$file" | grep -q 'Mach-O.*shared library' || continue
+    id="$(otool -D "$file" | tail -n +2)"
+    case "$id" in
+        "$brew_prefix"/*|/usr/local/*|/opt/homebrew/*)
+            case "$id" in
+                *.framework/*) install_name_tool -id "@rpath/${id#*/lib/}" "$file" ;;
+                *) install_name_tool -id "@rpath/$(basename "$id")" "$file" ;;
+            esac
+            ;;
+    esac
+done < <(find "$app/Contents/Frameworks" "$app/Contents/PlugIns" -type f -print0)
 
 # What still points outside the bundle would fail on a Mac without Homebrew.
 outside=""
 while IFS= read -r -d '' file; do
     if file -b "$file" | grep -q 'Mach-O'; then
-        refs="$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -E "^($brew_prefix|/usr/local|/opt/homebrew)/" || true)"
+        # A library's own id (otool -D) is not a reference to load.
+        own="$(otool -D "$file" 2>/dev/null | tail -n +2)"
+        refs="$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -vxF "${own:-//}" |
+            grep -E "^($brew_prefix|/usr/local|/opt/homebrew)/" || true)"
         [ -n "$refs" ] && outside+="$file:"$'\n'"$refs"$'\n'
     fi
 done < <(find "$app" -type f -print0)
@@ -119,8 +141,12 @@ while [ "${#queue[@]}" -gt 0 ]; do
         case "$ref" in
             @rpath/*)
                 # Homebrew's Qt frameworks, the only @rpath references outside the build.
-                candidate="$qt_prefix/lib/${ref#@rpath/}"
-                [ -e "$candidate" ] && queue+=("$candidate")
+                for dir in "$qt_prefix/lib" "$brew_prefix/lib"; do
+                    if [ -e "$dir/${ref#@rpath/}" ]; then
+                        queue+=("$dir/${ref#@rpath/}")
+                        break
+                    fi
+                done
                 ;;
             "$brew_prefix"/*|/opt/homebrew/*|/usr/local/*) queue+=("$ref") ;;
         esac
