@@ -9,7 +9,8 @@
 //! `kerf_draw` stays the reference. Every kernel here does its arithmetic, and the compositor falls
 //! back to it for a frame holding anything these kernels cannot draw. [`shared`] is `None` without
 //! a real GPU, with `KERF_GPU=0` in the environment, or after the device fails, and the CPU then
-//! draws everything.
+//! draws everything. A driver on the CPU, such as Mesa's llvmpipe, counts only with
+//! `KERF_GPU=software`, for checking kernels on a machine with no GPU; it is slower than the reference.
 
 use kerf_color::{HdrOutput, InputTransform};
 use kerf_draw::correct::Correction;
@@ -263,8 +264,9 @@ impl Gpu {
             ..Default::default()
         }))
         .ok()?;
-        // A driver on the CPU is slower than the reference.
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        // A driver on the CPU is slower than the reference, so it is only for checking kernels.
+        let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software {
             return None;
         }
         let (device, queue) = now(adapter.request_device(&wgpu::DeviceDescriptor {
