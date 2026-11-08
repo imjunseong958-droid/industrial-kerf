@@ -50,6 +50,7 @@ pub enum Menu {
     View,
     Collaborate,
     Window,
+    Help,
 }
 
 pub const MENUS: &[Menu] = &[
@@ -62,6 +63,7 @@ pub const MENUS: &[Menu] = &[
     Menu::View,
     Menu::Collaborate,
     Menu::Window,
+    Menu::Help,
 ];
 
 /// The state of the editor a command reads: what the frontend shows.
@@ -1334,7 +1336,14 @@ pub static COMMANDS: &[Command] = &[
             1,
         )),
         &["Ctrl+Shift+J"],
-    ),
+    ),    // The guide for someone editing (docs/user-guide.md), and the folder a
+    // crash leaves its report in.
+    frontend(menu(command("help.guide", "Kerf User Guide", always), Menu::Help, 0)),
+    frontend(menu(
+        command("help.crashReports", "Show Crash Reports", always),
+        Menu::Help,
+        1,
+    )),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.
@@ -2486,7 +2495,10 @@ mod tests {
 
     #[test]
     fn collaborate_comes_before_window_with_the_project_commands_in_file() {
-        assert_eq!(&MENUS[MENUS.len() - 2..], [Menu::Collaborate, Menu::Window]);
+        assert_eq!(
+            &MENUS[MENUS.len() - 3..],
+            [Menu::Collaborate, Menu::Window, Menu::Help]
+        );
         let catalog = catalog("kerf");
         let menu_of = |id: &str| {
             catalog["commands"]
@@ -2501,6 +2513,8 @@ mod tests {
         assert_eq!(menu_of("collab.consolidate"), "Collaborate");
         assert_eq!(menu_of("file.openProject"), "File");
         assert_eq!(menu_of("window.presets"), "Window");
+        assert_eq!(menu_of("help.guide"), "Help");
+        assert_eq!(menu_of("help.crashReports"), "Help");
         assert_eq!(menu_of("media.replace"), Value::Null);
         // Ctrl+O stays Import Media; opening a project takes its own key.
         assert_eq!(find("file.import").unwrap().keys, ["Ctrl+O"]);
