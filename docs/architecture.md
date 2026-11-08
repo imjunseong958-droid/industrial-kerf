@@ -514,9 +514,9 @@ Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
 **Kerf Cloud.** The service is not deployed; the editor follows its contract (`docs/cloud.md`).
 
-**User docs.** Missing: the READMEs are for people building Kerf. There is no guide for someone editing with it, and no Help menu. Fixed here: `apps/kerf-qt/README.md` described a Window ▸ Inspector Follows Selection command and a saved layout version that the editor no longer has.
+**User docs.** Done: `docs/user-guide.md` is for someone editing with Kerf, from a first project to delivery and what to do when something goes wrong, and a Help menu opens it (Kerf User Guide) and the crash folder (Show Crash Reports; `kerf-commands`, `everyEditorCommandIsWired`). Missing: the guide lives on GitHub, so Help needs a connection and a public repository, and nothing ships it beside the app until there is a package to put it in. Fixed here: `apps/kerf-qt/README.md` described a Window ▸ Inspector Follows Selection command and a saved layout version that the editor no longer has.
 
-The roadmap after this covers Export against Deliver, real footage for the quality numbers, and kernels for the CPU's most-used effects. It does not cover packaging, signing, updates, GPU and macOS tests in CI, the Windows crash, or a user guide.
+Since the survey: Export follows Deliver, the quality numbers are checked on real footage, the catalog's use of the CPU is listed, and crash reports, settings versions, the keychain, macOS tests in CI and the user guide are in. What is left needs accounts and keys this repository does not hold: packaging a macOS bundle and a Windows installer, signing and notarizing them, and releases with updates.
 
 ## What others do, and what to take
 

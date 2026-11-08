@@ -8,6 +8,9 @@ External Claude, Cursor, and Codex-like clients connect through `kerf-mcp`
 using their own agent configuration; they do not need a provider API key
 configured in Kerf.
 
+To edit with Kerf, read the [user guide](docs/user-guide.md); the rest of this README
+is for building and extending it.
+
 ## Architecture
 
 `kerfd` is the only owner of project state, revisions, history, idempotency

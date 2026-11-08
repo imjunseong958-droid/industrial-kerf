@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include "comment_row.h"
+#include "crash_notice.h"
 #include "review_link.h"
 #include "secret_store.h"
 #include "stage_motion.h"
@@ -102,6 +103,11 @@
 #include <numeric>
 #include <limits>
 #include <utility>
+
+namespace {
+// Where Help ▸ Kerf User Guide goes: docs/user-guide.md on the main branch.
+constexpr const char *kUserGuideUrl = "https://github.com/imjunseong958-droid/industrial-kerf/blob/main/docs/user-guide.md";
+} // namespace
 
 namespace kerf {
 
@@ -1077,6 +1083,14 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.assistant"), [this] {
             uncoverComposer();
             m_chat->focusComposer();
+        }},
+        // Help: the guide for someone editing, and the folder crash reports go to.
+        {QStringLiteral("help.guide"), [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kUserGuideUrl))); }},
+        {QStringLiteral("help.crashReports"), [] {
+            const QString folder = crashFolder(listCrashReports());
+            if (folder.isEmpty()) return;
+            QDir().mkpath(folder);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
         }},
         {QStringLiteral("timeline.addTrack"), [this] { addTrack(); }},
         {QStringLiteral("ai.ask"), [this] { askAi(); }},
