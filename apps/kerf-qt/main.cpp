@@ -7,6 +7,7 @@
 #include "main_window.h"
 #include "project_launcher.h"
 #include "review_link.h"
+#include "settings_migration.h"
 
 #include <QApplication>
 #include <QDir>
@@ -61,6 +62,12 @@ int main(int argc, char **argv) {
     // macOS titles a window with its document alone.
     QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
+    // Before anything reads them: settings from an older Kerf come up to
+    // this one's version.
+    {
+        QSettings settings;
+        kerf::migrateSettings(settings);
+    }
     // The design's faces: Inter for the interface and JetBrains Mono for
     // figures, compiled into the app.
     kerf::loadBundledFonts();
