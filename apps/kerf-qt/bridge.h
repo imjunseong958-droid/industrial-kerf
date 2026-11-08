@@ -340,6 +340,13 @@ char *kerf_fx_catalog_all(void);
 // {video: [def], audio: [def]}, as a timeline's properties carries them. Free
 // with kerf_bridge_string_free.
 char *kerf_clip_properties(void);
+// Report every panic in the editor's process to the crash folder, as kerfd
+// and the CLI do. Call once, before any other thread starts.
+void kerf_crash_install(void);
+// The crash folder's reports: {folder (null when there is nowhere to keep
+// them), reports: [{path, component (editor|kerfd|kerf), atMs, message}]},
+// newest first. Free with kerf_bridge_string_free.
+char *kerf_crash_reports(void);
 // The project launcher, before any bridge exists. Synchronous and local.
 // {path} -> {path, exists, project (has project.kerf), name, repository,
 // branch, remote, modified (ISO 8601 of project.kerf), presets: count}.

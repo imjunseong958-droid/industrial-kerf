@@ -13,6 +13,7 @@
 //! and the document diff. Renders and proposal previews hand renderers the
 //! document with media paths resolved.
 
+pub mod crash;
 mod ipc;
 mod kernel;
 #[cfg(windows)]

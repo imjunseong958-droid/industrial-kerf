@@ -49,6 +49,8 @@ set(KERF_QT_SOURCES
     chat_panel.h
     command_registry.cpp
     command_registry.h
+    crash_notice.cpp
+    crash_notice.h
     design_tokens.h
     editor_common.cpp
     editor_common.h
