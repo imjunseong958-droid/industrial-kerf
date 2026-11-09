@@ -1,0 +1,64 @@
+# What the Linux package takes from the system rather than carrying: the libraries every
+# desktop Linux has, and that may not be carried, since each must match the system's own
+# (the C library and loader, the C++ runtime, X11 and libxcb, OpenGL and Vulkan drivers,
+# fontconfig and freetype, D-Bus, GLib, ALSA, Kerberos). Everything else it loads, it
+# carries in lib/. scripts/package-kerf-linux.sh does not walk into these, and
+# scripts/check-kerf-linux.sh fails the package if it loads anything else from outside.
+#
+# One soname a line.
+
+# glibc
+ld-linux-x86-64.so.2
+libc.so.6
+libm.so.6
+libmvec.so.1
+libdl.so.2
+libpthread.so.0
+librt.so.1
+libresolv.so.2
+libutil.so.1
+libanl.so.1
+# The compiler's runtime, which the system's OpenGL driver loads too
+libstdc++.so.6
+libgcc_s.so.1
+# OpenGL, EGL and Vulkan: the system's driver
+libGL.so.1
+libEGL.so.1
+libGLX.so.0
+libOpenGL.so.0
+libGLdispatch.so.0
+libvulkan.so.1
+libdrm.so.2
+libgbm.so.1
+# X11 and libxcb itself
+libX11.so.6
+libX11-xcb.so.1
+libxcb.so.1
+libXext.so.6
+libXau.so.6
+libXdmcp.so.6
+libSM.so.6
+libICE.so.6
+# Fonts
+libfontconfig.so.1
+libfreetype.so.6
+libexpat.so.1
+libz.so.1
+# D-Bus and GLib, the desktop's own
+libdbus-1.so.3
+libglib-2.0.so.0
+libgobject-2.0.so.0
+libgthread-2.0.so.0
+libgio-2.0.so.0
+libgmodule-2.0.so.0
+# Sound
+libasound.so.2
+# Kerberos, for Qt's network authentication
+libgssapi_krb5.so.2
+libkrb5.so.3
+libk5crypto.so.3
+libcom_err.so.2
+# OpenSSL, which Qt's TLS plugin loads when it is first used, to keep up with the
+# system's security fixes
+libssl.so.3
+libcrypto.so.3

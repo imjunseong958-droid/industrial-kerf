@@ -50,9 +50,21 @@ tag. A file of 2 GiB or more, which GitHub refuses (the Windows source is over 3
 goes up in parts, and the release notes say how to join them. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
-Both packages carry the user guide as `user-guide.html` (beside `kerf-qt.exe`, and in
+On Linux, `scripts/package-kerf-linux.sh` makes a folder that runs on its own, packed as a
+`.tar.xz`: the same programs in `bin/`, and in `lib/` every library they load that is not
+in `packaging/linux/system-libraries.txt` (Qt and its ICU, FFmpeg, the xcb utilities,
+xkbcommon), found through an RPATH of `$ORIGIN/../lib` that `patchelf` sets; `bin/qt.conf`
+points Qt to `plugins/`. It carries the xcb platform only, so a Wayland desktop runs it
+through XWayland. `scripts/check-kerf-linux.sh` runs it with nothing on `PATH` and no
+library path on a virtual X server, and fails if a binary names a library that is neither
+carried nor on that list, or if Qt, its plugins or FFmpeg load from outside the folder.
+`scripts/collect-kerf-linux-sources.sh` collects its source, the Ubuntu packages it carries
+libraries of included. Built on Ubuntu 24.04, it needs a glibc and libstdc++ that new.
+
+All the packages carry the user guide as `user-guide.html` (beside `kerf-qt.exe`, and in
 the app's `Resources`), rendered from `docs/user-guide.md` by `tools/kerf-guide`; Help ▸
-Kerf User Guide opens it, or the guide on GitHub in a build that has none.
+Kerf User Guide opens it, or the guide on GitHub in a build that has none. On Linux it is
+`share/doc/industrial-kerf/user-guide.html`.
 
 Both packaging scripts end by running what they made, with `scripts/check-kerf-windows.ps1`
 and `scripts/check-kerf-macos.sh`, which also fail if the editor loads a library from

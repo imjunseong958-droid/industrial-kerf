@@ -1,10 +1,11 @@
 name: Verify release
 
-# A published release as someone downloads it: its Windows zip and its macOS app,
-# fetched from the release onto fresh runners with no FFmpeg and no Qt (on macOS,
-# Homebrew moved out of reach), unpacked and run by check-kerf-windows.ps1 and
-# check-kerf-macos.sh, the checks the Package workflow runs on what it packs. Also
-# that each package has its sha256 and its complete source beside it.
+# A published release as someone downloads it: its Windows zip and installer, its macOS
+# app and its Linux tar.xz, fetched from the release onto fresh runners with no FFmpeg and
+# no Qt (on macOS, Homebrew moved out of reach), unpacked and run by check-kerf-windows.ps1,
+# check-kerf-macos.sh and check-kerf-linux.sh, the checks the Package workflow runs on what
+# it packs; the Linux one in a Debian container too. Also that each package has its sha256
+# and its complete source beside it.
 #
 # package.yml runs it on the release it has just published. By hand (Actions >
 # Verify release > Run workflow) it checks the tag given, or the newest release; a
@@ -27,6 +28,7 @@ on:
       - "scripts/check-kerf-windows.ps1"
       - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
+      - "scripts/check-kerf-linux.sh"
 
 permissions:
   contents: read
@@ -70,6 +72,14 @@ jobs:
               grep -qxF "$name" assets.txt || missing+="$name"$'\n'
             done
             # Over 2 GiB, the source goes up in parts.
+            grep -qxF "$source" assets.txt || grep -qxF "$source.part-00" assets.txt || missing+="$source"$'\n'
+          done
+          # The Linux package, from 0.1.1.
+          for package in $(grep -E -- '-linux-x64\.tar\.xz$' assets.txt || true); do
+            source="${package%.tar.xz}-source.tar"
+            for name in "$package.sha256" "$source.sha256"; do
+              grep -qxF "$name" assets.txt || missing+="$name"$'\n'
+            done
             grep -qxF "$source" assets.txt || grep -qxF "$source.part-00" assets.txt || missing+="$source"$'\n'
           done
           # The installer, from 0.1.1, holds what the zip does, whose source is beside it.
@@ -216,3 +226,65 @@ jobs:
           for hidden in /opt/homebrew.hidden-by-kerf /usr/local/*.hidden-by-kerf; do
             if [ -e "$hidden" ]; then sudo mv "$hidden" "${hidden%.hidden-by-kerf}"; fi
           done
+
+  linux:
+    needs: assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ needs.assets.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the Linux package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -q -- '-linux-x64\.tar\.xz$'; then
+            echo "$TAG has no Linux package"
+            exit 0
+          fi
+          folder="$RUNNER_TEMP/release"
+          mkdir -p "$folder"
+          # GitHub's release downloads have answered 504 for an hour at a time.
+          for try in $(seq 1 10); do
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir "$folder" --clobber \
+              --pattern '*-linux-x64.tar.xz' --pattern '*-linux-x64.tar.xz.sha256' && break
+            [ "$try" -lt 10 ] || { echo "Could not download the release $TAG" >&2; exit 1; }
+            sleep 30
+          done
+          (cd "$folder" && sha256sum -c ./*-linux-x64.tar.xz.sha256)
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -xJf "$folder"/*-linux-x64.tar.xz -C "$RUNNER_TEMP/unpacked"
+          package="$(find "$RUNNER_TEMP/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          echo "PACKAGE=$package" >> "$GITHUB_ENV"
+      - name: Run the package
+        if: env.PACKAGE != ''
+        run: |
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth; }
+          if command -v ffmpeg || command -v qmake6; then
+            echo "On this runner's PATH, and not on the check's: $(command -v ffmpeg qmake6 | tr '\n' ' ')"
+          fi
+          scripts/check-kerf-linux.sh "$PACKAGE"
+      # On another distribution, with only what system-libraries.txt asks of the system.
+      - name: Run the package on Debian
+        if: env.PACKAGE != ''
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" -v "$PACKAGE:/package:ro" debian:trixie bash -c '
+            set -e
+            apt-get update -q > /dev/null
+            apt-get install -y -q --no-install-recommends xvfb xauth binutils \
+              libgl1 libegl1 libopengl0 libx11-6 libx11-xcb1 libxcb1 libxext6 libsm6 libice6 \
+              libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 libasound2t64 \
+              libgssapi-krb5-2 libstdc++6 > /dev/null
+            /scripts/check-kerf-linux.sh /package'
+      - name: The check fails a package missing a library
+        if: env.PACKAGE != ''
+        run: |
+          broken="$RUNNER_TEMP/broken"
+          cp -a "$PACKAGE" "$broken"
+          rm "$broken"/lib/libavutil.so.*
+          if scripts/check-kerf-linux.sh "$broken"; then
+            echo "The check passed a package without libavutil" >&2
+            exit 1
+          fi
+          echo "Failed, as it should"
