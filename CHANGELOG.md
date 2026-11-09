@@ -2,13 +2,15 @@
 
 What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
-(`.github/workflows/windows-package.yml`), so write it for someone using Kerf.
+(`.github/workflows/package.yml`), so write it for someone using Kerf.
 
 ## 0.1.0
 
-The first release, for Windows: a zip that runs on its own, and the complete
-source of it, since its FFmpeg makes it GPL version 3. It is not signed, so
-Windows SmartScreen asks before it first runs (More info ▸ Run anyway).
+The first release, for Windows and for Macs with Apple silicon: a zip that runs on
+its own for each, and the complete source of each, since their FFmpeg makes them GPL
+version 3. Neither is signed: Windows SmartScreen asks before the first run (More
+info ▸ Run anyway), and so does macOS (right-click the app ▸ Open, or System
+Settings ▸ Privacy & Security ▸ Open Anyway).
 
 - Edit by asking: Kerf proposes each edit on the timeline, and nothing changes
   until you accept it.

@@ -144,7 +144,7 @@ jobs:
       # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
       # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
       # a pinned shared build; its DLLs go on PATH for the tests. The build the
-      # Windows package carries (windows-package.yml), so that is what is tested.
+      # Windows package carries (package.yml), so that is what is tested.
       # GitHub release downloads sometimes answer 504 for a minute; retry
       # rather than fail the job (main failed this way on 2026-11-08).
       - name: Install FFmpeg

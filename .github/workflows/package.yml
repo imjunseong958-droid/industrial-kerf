@@ -1,29 +1,40 @@
-name: Windows package
+name: Package
 
-# The Qt editor as a zip that runs on its own (scripts/package-kerf-windows.ps1) and
-# the complete source of it (scripts/collect-kerf-windows-sources.sh), kept as this
-# run's artifacts. The zip is GPL because of its FFmpeg: publish the two together.
-# By hand (Actions > Windows package > Run workflow), and when what makes the package
-# changes, it publishes nothing. A v<version> tag publishes both as a GitHub release,
-# with that version's section of CHANGELOG.md as its notes; they are not signed.
+# Kerf for Windows and macOS, each as something that runs on its own, and the complete
+# source of each, kept as this run's artifacts: the Windows zip
+# (scripts/package-kerf-windows.ps1) and its source (collect-kerf-windows-sources.sh),
+# and the macOS app (package-kerf-macos.sh) and its source
+# (collect-kerf-macos-sources.sh). Both carry a GPL build of FFmpeg: publish each with
+# its source. By hand (Actions > Package > Run workflow), and when what makes them
+# changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
+# release, with that version's section of CHANGELOG.md as its notes; none is signed.
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a release of main as v<version> (the tag is made for it)"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "scripts/package-kerf-windows.ps1"
+      - "scripts/package-kerf-macos.sh"
+      - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "apps/kerf-qt/packaging/**"
       - "apps/kerf-qt/CMakeLists.txt"
-      - ".github/workflows/windows-package.yml"
+      - ".github/workflows/package.yml"
   push:
     tags: ["v*"]
     branches: [main]
     paths:
       - "scripts/package-kerf-windows.ps1"
+      - "scripts/package-kerf-macos.sh"
+      - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "apps/kerf-qt/packaging/**"
       - "apps/kerf-qt/CMakeLists.txt"
-      - ".github/workflows/windows-package.yml"
+      - ".github/workflows/package.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -100,10 +111,54 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # A v<version> tag: the package and its source as a release anyone can download.
+  # The app and its source on one Mac, since the source is that of the Homebrew
+  # formulae this app was built from.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Qt, FFmpeg and the build tools
+        run: |
+          brew install ffmpeg qt pkg-config cmake
+          ffmpeg_prefix="$(brew --prefix ffmpeg)"
+          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build, bundle and run the app
+        run: scripts/package-kerf-macos.sh
+      - name: Collect the source of the app
+        run: scripts/collect-kerf-macos-sources.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: industrial-kerf-macos
+          path: |
+            target/package-macos/*.zip
+            target/package-macos/*.zip.sha256
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: industrial-kerf-macos-source
+          path: |
+            target/package-macos-source/*.tar
+            target/package-macos-source/*.tar.sha256
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+
+  # A v<version> tag: both packages and their source as a release anyone can download.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package, sources]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main')
+    needs: [package, sources, macos]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -113,10 +168,14 @@ jobs:
       - name: Check the tag is the workspace's version, and has notes
         run: |
           version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "The tag $GITHUB_REF_NAME is not v$version, the version in Cargo.toml" >&2
+          # Run by hand on main, the release makes the tag v<version> at this commit.
+          tag="$GITHUB_REF_NAME"
+          [ "$GITHUB_REF_TYPE" = tag ] || tag="v$version"
+          if [ "$tag" != "v$version" ]; then
+            echo "The tag $tag is not v$version, the version in Cargo.toml" >&2
             exit 1
           fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
           awk -v heading="## $version" '$0 == heading {found = 1; next} /^## / && found {exit} found' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
             echo "CHANGELOG.md has no section \"## $version\"" >&2
@@ -135,4 +194,4 @@ jobs:
           # 0.x is a pre-release: GitHub does not offer it as the latest stable one.
           prerelease=""
           case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
