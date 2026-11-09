@@ -115,8 +115,13 @@ jobs:
         run: |
           $stage = (Get-ChildItem target/package -Directory | Select-Object -First 1).FullName
           $out = Join-Path $env:RUNNER_TEMP 'without-links'
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks /DUncompressed apps/kerf-qt/packaging/windows/kerf.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          # Compiled as the real one is, but for the links; with /DUncompressed (Compression=none)
+          # the installer it made on #214 carried no files at all.
+          $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-qt/packaging/windows/kerf.iss
+          if ($LASTEXITCODE -ne 0) { $compiled | Write-Host; throw "ISCC failed with exit code $LASTEXITCODE" }
+          $files = @($compiled | Where-Object { $_ -match 'Compressing' }).Count
+          if ($files -eq 0) { $compiled | Write-Host; throw "ISCC put no files from $stage in the installer" }
+          Write-Host "ISCC compressed $files files from $stage"
           # It has to fail where the links are checked, not before.
           $failure = $null
           try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failure = "$_" }

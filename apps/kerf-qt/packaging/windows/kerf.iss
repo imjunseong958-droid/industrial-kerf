@@ -8,8 +8,8 @@
 ;   ISCC /DSource=<packed folder> /DVersion=<version> /DOutputDir=<folder> /DOutputName=<name> kerf.iss
 ;
 ; scripts/check-kerf-windows-installer.ps1 installs it, checks each of these, and
-; uninstalls it. /DWithoutLinks /DUncompressed make one that registers no kerf://, quickly,
-; which that check has to fail (package.yml).
+; uninstalls it. /DWithoutLinks makes one that registers no kerf://, which that check has
+; to fail (package.yml).
 
 #ifndef Source
   #error Pass /DSource=<the packed folder>
@@ -50,12 +50,8 @@ ChangesAssociations=yes
 CloseApplications=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputName}
-#ifdef Uncompressed
-Compression=none
-#else
 Compression=lzma2/max
 SolidCompression=yes
-#endif
 WizardStyle=modern
 
 [Files]
