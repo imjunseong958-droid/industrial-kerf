@@ -35,7 +35,12 @@ while read -r formula formula_version; do
     brew fetch --build-from-source --force --quiet "$formula"
     cached="$(brew --cache --build-from-source "$formula")"
     mkdir -p "$stage/homebrew/$formula-$formula_version"
-    cp "$cached" "$stage/homebrew/$formula-$formula_version/"
+    if [ -d "$cached" ]; then
+        # A formula built from a Git checkout (x264) is cached as that checkout.
+        tar -C "$(dirname "$cached")" -cf "$stage/homebrew/$formula-$formula_version/$(basename "$cached").tar" "$(basename "$cached")"
+    else
+        cp "$cached" "$stage/homebrew/$formula-$formula_version/"
+    fi
     rb="$stage/homebrew/$formula-$formula_version/$formula.rb"
     brew cat "$formula" > "$rb" 2>/dev/null ||
         curl -fsSL --retry 5 -o "$rb" "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/${formula:0:1}/$formula.rb"
