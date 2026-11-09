@@ -25,6 +25,7 @@ on:
     paths:
       - ".github/workflows/verify-release.yml"
       - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
 
 permissions:
@@ -71,6 +72,10 @@ jobs:
             # Over 2 GiB, the source goes up in parts.
             grep -qxF "$source" assets.txt || grep -qxF "$source.part-00" assets.txt || missing+="$source"$'\n'
           done
+          # The installer, from 0.1.1, holds what the zip does, whose source is beside it.
+          for setup in $(grep -E -- '-setup\.exe$' assets.txt || true); do
+            grep -qxF "$setup.sha256" assets.txt || missing+="$setup.sha256"$'\n'
+          done
           if [ -n "$missing" ]; then
             printf '%s has no:\n%s' "$TAG" "$missing" >&2
             exit 1
@@ -92,7 +97,7 @@ jobs:
           $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'release')
           # GitHub's release downloads have answered 504 for an hour at a time.
           for ($try = 1; ; $try++) {
-            gh release download $env:TAG -R $env:GITHUB_REPOSITORY --dir $folder --clobber --pattern '*-windows-x64.zip' --pattern '*-windows-x64.zip.sha256'
+            gh release download $env:TAG -R $env:GITHUB_REPOSITORY --dir $folder --clobber --pattern '*-windows-x64.zip' --pattern '*-windows-x64.zip.sha256' --pattern '*-windows-x64-setup.exe' --pattern '*-windows-x64-setup.exe.sha256'
             if ($LASTEXITCODE -eq 0) { break }
             if ($try -ge 10) { throw "Could not download the release $env:TAG" }
             Start-Sleep -Seconds 30
@@ -105,6 +110,13 @@ jobs:
           Expand-Archive $zip.FullName -DestinationPath $unpacked
           $package = (Get-ChildItem $unpacked -Directory | Select-Object -First 1).FullName
           "PACKAGE=$package" >> $env:GITHUB_ENV
+          $setup = Get-ChildItem $folder -Filter '*-windows-x64-setup.exe' | Select-Object -First 1
+          if ($setup) {
+            $expected = (Get-Content "$($setup.FullName).sha256").Split(' ')[0]
+            $actual = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "$($setup.Name) is $actual, and its .sha256 says $expected" }
+            "SETUP=$($setup.FullName)" >> $env:GITHUB_ENV
+          }
           Write-Host "Unpacked $($zip.Name) to $package"
       - name: Nothing of FFmpeg or Qt on the machine
         shell: pwsh
@@ -125,6 +137,12 @@ jobs:
       - name: Run the package
         shell: pwsh
         run: scripts/check-kerf-windows.ps1 -Package $env:PACKAGE
+      # Installed for this user, a Start menu entry, kerf:// links followed, and uninstalled.
+      - name: Install, follow a link and uninstall
+        shell: pwsh
+        run: |
+          if (-not $env:SETUP) { Write-Host "$env:TAG has no installer"; exit 0 }
+          scripts/check-kerf-windows-installer.ps1 -Installer $env:SETUP
       # The check fails a package that leans on this machine: without its own copy of
       # a C++ runtime library, the editor still starts here, on System32's.
       - name: The check fails a package missing a library

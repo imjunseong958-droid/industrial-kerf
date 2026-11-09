@@ -8,6 +8,9 @@ on `main`; its section here becomes the release's notes on GitHub
 
 What the next release will have; it becomes that version's section.
 
+- A Windows installer: Kerf installs for you alone, with no administrator, adds
+  itself to the Start menu, opens `kerf://` review links, and uninstalls from
+  Settings ▸ Apps. The zip is still there for those who want a folder.
 - Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
   no connection.
 - The Kerf Cloud sign-in is kept in the system keychain, as API keys are; one

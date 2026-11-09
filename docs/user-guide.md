@@ -11,9 +11,12 @@ you do by hand is an ordinary edit too, and both are undone the same way.
 ## Get Kerf
 
 Download the latest release from
-[GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases): for
-Windows, unpack the zip anywhere and run `kerf-qt.exe`; for a Mac with Apple
-silicon, unpack it and move Industrial Kerf to Applications. Releases are not
+[GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases). For
+Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for you
+alone, with no administrator, adds it to the Start menu, and opens `kerf://`
+review links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
+run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
+the zip and move Industrial Kerf to Applications. Releases are not
 signed yet, so the first run asks: on Windows, More info ▸ Run anyway; on a Mac,
 right-click the app ▸ Open. Help ▸ About
 Kerf says which version you have. Once a day Kerf asks GitHub whether a newer one

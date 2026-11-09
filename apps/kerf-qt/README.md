@@ -25,8 +25,12 @@ On macOS the build is an application bundle, `target/qt/kerf-qt.app`
 
 On Windows, `scripts/package-kerf-windows.ps1` makes a zip that runs on its own:
 the editor, `kerfd`, `kerf`, `kerf-mcp`, and the Qt, FFmpeg and C++ runtime libraries
-beside them. The script's help says what it needs. The package is a folder, with no
-installer, so Windows does not open `kerf://` links with it.
+beside them. The script's help says what it needs. It makes the same folder an
+installer too, with Inno Setup (`packaging/windows/kerf.iss`): for the current user
+alone, with no administrator, a Start menu entry, `kerf://` registered so review links
+open the editor, and an uninstaller. Neither is signed. `scripts/check-kerf-windows-installer.ps1`
+installs it, runs the installed copy, follows a `kerf://` link as Explorer would, and
+uninstalls it; the zip alone does not open links.
 
 Its FFmpeg build makes the package GPL version 3, so publish it only together with
 its complete source, from `scripts/collect-kerf-windows-sources.sh`, and keep that

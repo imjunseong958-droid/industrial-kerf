@@ -1,8 +1,8 @@
 name: Package
 
 # Kerf for Windows and macOS, each as something that runs on its own, and the complete
-# source of each, kept as this run's artifacts: the Windows zip
-# (scripts/package-kerf-windows.ps1) and its source (collect-kerf-windows-sources.sh),
+# source of each, kept as this run's artifacts: the Windows zip and installer
+# (scripts/package-kerf-windows.ps1) and their source (collect-kerf-windows-sources.sh),
 # and the macOS app (package-kerf-macos.sh) and its source
 # (collect-kerf-macos-sources.sh). Both carry a GPL build of FFmpeg: publish each with
 # its source. By hand (Actions > Package > Run workflow), and when what makes them
@@ -23,6 +23,7 @@ on:
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -37,6 +38,7 @@ on:
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -94,18 +96,38 @@ jobs:
           version: ${{ env.QT_VERSION }}
           arch: win64_msvc2022_64
           cache: true
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          # 6.3 or newer, for x64compatible: installed if missing, brought up to date if older.
+          choco upgrade innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup" }
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package
+      - name: Build, pack and run the package, and install and uninstall the installer
         shell: pwsh
         run: scripts/package-kerf-windows.ps1
+      # The installer check is not satisfied by any installer: one that registers no
+      # kerf:// links fails it.
+      - name: The installer check fails an installer without links
+        shell: pwsh
+        run: |
+          $stage = (Get-ChildItem target/package -Directory | Select-Object -First 1).FullName
+          $out = Join-Path $env:RUNNER_TEMP 'without-links'
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks /DUncompressed apps/kerf-qt/packaging/windows/kerf.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $failed = $false
+          try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failed = $true; Write-Host "Failed, as it should: $_" }
+          if (-not $failed) { throw 'The installer check passed an installer that registers no kerf:// links' }
       - uses: actions/upload-artifact@v4
         with:
           name: industrial-kerf-windows-x64
           path: |
             target/package/*.zip
             target/package/*.zip.sha256
+            target/package/*-setup.exe
+            target/package/*-setup.exe.sha256
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
