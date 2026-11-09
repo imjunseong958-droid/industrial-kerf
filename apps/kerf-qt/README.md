@@ -46,6 +46,10 @@ tag. A file of 2 GiB or more, which GitHub refuses (the Windows source is over 3
 goes up in parts, and the release notes say how to join them. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
+Both packages carry the user guide as `user-guide.html` (beside `kerf-qt.exe`, and in
+the app's `Resources`), rendered from `docs/user-guide.md` by `tools/kerf-guide`; Help ▸
+Kerf User Guide opens it, or the guide on GitHub in a build that has none.
+
 Both packaging scripts end by running what they made, with `scripts/check-kerf-windows.ps1`
 and `scripts/check-kerf-macos.sh`, which also fail if the editor loads a library from
 outside the package. After publishing a release, the Package workflow runs **Verify

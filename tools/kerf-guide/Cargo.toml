@@ -1,0 +1,17 @@
+[package]
+name = "kerf-guide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Renders docs/user-guide.md as the HTML page the packages carry"
+publish = false
+
+[[bin]]
+name = "kerf-guide"
+path = "src/main.rs"
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[lints]
+workspace = true

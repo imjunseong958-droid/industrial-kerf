@@ -97,6 +97,7 @@ try {
         Invoke-Tool cargo build --release -p kerf-runtime --bin kerfd
         Invoke-Tool cargo build --release -p kerf-mcp --bin kerf-mcp
         Invoke-Tool cargo build --release -p kerf-qt-bridge
+        Invoke-Tool cargo build --release -p kerf-guide
         $bridge = (Join-Path $release 'kerf_qt_bridge.dll.lib').Replace('\', '/')
         Invoke-Tool cmake -S apps/kerf-qt -B $build "-DKERF_BRIDGE_LIBRARY=$bridge"
         Invoke-Tool cmake --build $build --config Release --target kerf-qt --parallel
@@ -129,6 +130,10 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'fonts') | Out-Null
     Copy-Item apps/kerf-qt/resources/fonts/*-LICENSE.txt (Join-Path $stage 'fonts')
     Copy-Item $gplText (Join-Path $stage 'COPYING-GPLv3.txt')
+    # The user guide beside the editor, where Help > Kerf User Guide opens it with no
+    # connection (user_guide.cpp); its links to the rest of the repository go to this commit.
+    Invoke-Tool (Join-Path $release 'kerf-guide.exe') docs/user-guide.md (Join-Path $stage 'user-guide.html') `
+        --version $version --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
     $ffmpegBuild | Set-Content -Path (Join-Path $stage 'FFmpeg-BUILD.txt') -Encoding utf8
     $qtVersion = (Get-Item (Join-Path $stage 'Qt6Core.dll')).VersionInfo.ProductVersion
     @"

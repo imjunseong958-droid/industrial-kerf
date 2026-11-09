@@ -1,7 +1,8 @@
 # Editing with Kerf
 
 This guide is for someone making a video with Kerf. The READMEs are for people
-building Kerf itself. Help ▸ Kerf User Guide opens this page.
+building Kerf itself. Help ▸ Kerf User Guide opens the copy of this guide that
+comes with Kerf, so it needs no connection.
 
 Kerf is a video editor you can talk to. You ask for an edit in words, Kerf
 proposes it on the timeline, and nothing changes until you accept it. Everything

@@ -11,6 +11,9 @@ media came in at a made-up size, rate and length, and what needs FFmpeg to read 
 write a file did not work. Kerf now uses the FFmpeg it comes with, on Windows as
 before and on macOS too. Windows was not affected.
 
+- Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
+  no connection.
+
 ## 0.1.0
 
 The first release, for Windows and for Macs with Apple silicon: a zip that runs on

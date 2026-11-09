@@ -38,6 +38,7 @@ mkdir -p "$out"
 cargo build --release -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
+cargo build --release -p kerf-guide
 bridge="$root/target/release/libkerf_qt_bridge.dylib"
 cmake -S apps/kerf-qt -B target/qt-release -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_PREFIX_PATH="$qt_prefix" -DKERF_BRIDGE_LIBRARY="$bridge"
@@ -217,6 +218,10 @@ cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 cp -R licenses "$app/Contents/Resources/licenses"
 mkdir -p "$app/Contents/Resources/fonts"
 cp apps/kerf-qt/resources/fonts/*-LICENSE.txt "$app/Contents/Resources/fonts/"
+# The user guide in Resources, where Help > Kerf User Guide opens it with no connection
+# (user_guide.cpp); its links to the rest of the repository go to this commit.
+target/release/kerf-guide docs/user-guide.md "$app/Contents/Resources/user-guide.html" \
+    --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
 gpl="$(brew --prefix ffmpeg)/share/doc/ffmpeg/COPYING.GPLv3"
 [ -f "$gpl" ] || gpl="$(find "$(brew --cellar ffmpeg)" -name 'COPYING.GPLv3' | head -n 1)"
 if [ -f "$gpl" ]; then
