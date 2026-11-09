@@ -283,7 +283,7 @@ pub(crate) fn read_frame(input: &mut impl Read, frame: &mut [u8]) -> Result<bool
 
 /// Read `child`'s stderr to its end on a thread of its own, keeping the
 /// last of it for [`finish`] to report.
-fn drain_stderr(child: &mut Child) -> thread::JoinHandle<String> {
+pub(crate) fn drain_stderr(child: &mut Child) -> thread::JoinHandle<String> {
     let pipe = child.stderr.take();
     thread::spawn(move || {
         let mut tail = String::new();
