@@ -1,9 +1,10 @@
-//! API keys kept in the operating system's own store, the macOS Keychain, Windows Credential Manager,
-//! or the Secret Service on Linux, rather than in the editor's plain settings.
+//! API keys and the Kerf Cloud token kept in the operating system's own store, the macOS Keychain,
+//! Windows Credential Manager, or the Secret Service on Linux, rather than in the editor's plain
+//! settings or a file (`cloud_session.rs`).
 //!
 //! `KERF_SECRETS=off` turns the store off, so a test never reads or writes a developer's real
-//! keychain; the editor then keeps keys in its settings, as it does wherever the store cannot be
-//! reached.
+//! keychain; the editor then keeps keys in its settings, and the token in its file, as it does
+//! wherever the store cannot be reached.
 
 use serde_json::{json, Value};
 
@@ -43,6 +44,47 @@ fn delete(name: &str, enabled: bool) -> Result<(), String> {
     match entry(name, enabled)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+/// A store of named secrets: the system's keychain, or, in a test, one in memory.
+pub(crate) trait Keychain {
+    /// The secret kept as `name`, `None` when there is none; an error when the store cannot be
+    /// reached.
+    fn get(&self, name: &str) -> Result<Option<String>, String>;
+    fn set(&self, name: &str, value: &str) -> Result<(), String>;
+    /// Forgetting what is not there succeeds.
+    fn delete(&self, name: &str) -> Result<(), String>;
+}
+
+/// The operating system's keychain, unless `KERF_SECRETS=off`.
+pub(crate) struct SystemKeychain {
+    enabled: bool,
+}
+
+impl SystemKeychain {
+    pub(crate) fn new() -> Self {
+        Self { enabled: !off() }
+    }
+
+    /// The keychain as `KERF_SECRETS=off` leaves it: refusing everything.
+    #[cfg(test)]
+    pub(crate) fn turned_off() -> Self {
+        Self { enabled: false }
+    }
+}
+
+impl Keychain for SystemKeychain {
+    fn get(&self, name: &str) -> Result<Option<String>, String> {
+        get(name, self.enabled)
+    }
+
+    fn set(&self, name: &str, value: &str) -> Result<(), String> {
+        set(name, value, self.enabled)
+    }
+
+    fn delete(&self, name: &str) -> Result<(), String> {
+        delete(name, self.enabled)
     }
 }
 
