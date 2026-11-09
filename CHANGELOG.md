@@ -11,6 +11,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - On Linux, `./install-desktop-entry.sh` in the unpacked folder adds Kerf to your
   applications and has `kerf://` review links open in it, for you alone;
   `--remove` takes it away.
+- Kerf for Mac needs macOS 26 or later, and on an older macOS it now says so
+  instead of failing to open.
 
 ## 0.1.1
 

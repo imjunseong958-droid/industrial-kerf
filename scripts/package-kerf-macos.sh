@@ -252,6 +252,14 @@ Homebrew builds them.
 Which licence covers which part is in THIRD-PARTY.txt.
 EOF
 
+# The oldest macOS the app runs on, by decision (docs/architecture.md, Packaging), so an
+# older one says so rather than the app failing to start. Only the package says it: an
+# editor built on a developer's older Mac still opens there. The runner's Homebrew bottles
+# its libraries for the runner's own macOS, so a newer runner needs a newer macOS, and
+# check-kerf-macos.sh then fails rather than let the app need more than it says.
+minimum_macos="26.0"
+plutil -replace LSMinimumSystemVersion -string "$minimum_macos" "$app/Contents/Info.plist"
+
 # Signed again inside out, ad hoc: macOS refuses code whose signature no longer
 # matches what install_name_tool changed.
 codesign --force --deep --sign - "$app"

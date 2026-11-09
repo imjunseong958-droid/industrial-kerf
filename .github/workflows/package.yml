@@ -197,6 +197,20 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build, bundle and run the app
         run: scripts/package-kerf-macos.sh
+      # The check holds the app to the macOS its Info.plist names: a copy that says macOS
+      # 11, older than its Qt and Homebrew libraries need, has to fail it, and for that.
+      - name: The check fails an app that needs a newer macOS than it says
+        run: |
+          older="$RUNNER_TEMP/older/Industrial Kerf.app"
+          mkdir -p "$(dirname "$older")"
+          cp -R "target/package-macos/Industrial Kerf.app" "$older"
+          plutil -replace LSMinimumSystemVersion -string 11.0 "$older/Contents/Info.plist"
+          if scripts/check-kerf-macos.sh "$older" 2> "$RUNNER_TEMP/older.log"; then
+            echo "The check passed an app that says macOS 11 with libraries that need more" >&2
+            exit 1
+          fi
+          grep -q 'need a newer one' "$RUNNER_TEMP/older.log" || { cat "$RUNNER_TEMP/older.log" >&2; exit 1; }
+          echo "Failed, as it should"
       - name: Collect the source of the app
         run: scripts/collect-kerf-macos-sources.sh
       - uses: actions/upload-artifact@v4

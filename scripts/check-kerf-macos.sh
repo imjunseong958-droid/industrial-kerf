@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run Industrial Kerf.app as someone who unzipped it would, and fail if it needs
-# anything it does not carry.
+# anything it does not carry, or a newer macOS than its Info.plist says it runs on.
 #
 # With nothing of Homebrew's on PATH, runs ffmpeg -version, ffprobe -version,
 # kerf --version and kerfd --endpoint from the app, and opens the editor's start
@@ -51,6 +51,32 @@ run() {
         return 1
     fi
 }
+
+# Nothing in the app may need a newer macOS than its Info.plist says it runs on
+# (LSMinimumSystemVersion, which package-kerf-macos.sh sets): dyld refuses such a library
+# on the older macOS, and the app fails to start without saying why. Read from each
+# Mach-O file's LC_BUILD_VERSION, before anything runs. An app from before 0.1.2 names
+# no minimum.
+version_number() { awk -F. '{printf "%d\n", $1 * 10000 + $2 * 100 + $3}' <<< "$1"; }
+minimum="$(plutil -extract LSMinimumSystemVersion raw -o - "$app/Contents/Info.plist" 2> /dev/null || true)"
+if [ -n "$minimum" ]; then
+    newer=""
+    while IFS= read -r -d '' file; do
+        [[ "$(file -b "$file")" == *Mach-O* ]] || continue
+        # awk reads to the end: one that stopped at the first minos would break otool's
+        # pipe, and with pipefail the check.
+        needs="$(otool -l "$file" | awk '/LC_BUILD_VERSION/ {seen = 1} seen && $1 == "minos" && !found {print $2; found = 1}')"
+        [ -n "$needs" ] || continue
+        if [ "$(version_number "$needs")" -gt "$(version_number "$minimum")" ]; then
+            newer+="${file#"$app"/}: macOS $needs"$'\n'
+        fi
+    done < <(find "$app/Contents" -type f -print0)
+    if [ -n "$newer" ]; then
+        printf 'The app says it runs on macOS %s, but these need a newer one:\n%s' "$minimum" "$newer" >&2
+        exit 1
+    fi
+    echo "Nothing in the app needs a newer macOS than the $minimum its Info.plist names."
+fi
 
 run "$macos/ffmpeg" -version > /dev/null
 run "$macos/ffprobe" -version > /dev/null
