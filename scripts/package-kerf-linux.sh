@@ -58,8 +58,10 @@ cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 cargo build --release -p kerf-guide
 bridge="$root/target/release/libkerf_qt_bridge.so"
+# The bridge links FFmpeg, which the linker has to find to link the editor to it.
 cmake -S apps/kerf-qt -B target/qt-linux -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$qt" -DKERF_BRIDGE_LIBRARY="$bridge"
+    -DCMAKE_PREFIX_PATH="$qt" -DKERF_BRIDGE_LIBRARY="$bridge" \
+    -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$ffmpeg/lib"
 cmake --build target/qt-linux --target kerf-qt --parallel
 
 # The editor looks beside itself for kerfd and kerf-mcp, and each of them for ffmpeg and
