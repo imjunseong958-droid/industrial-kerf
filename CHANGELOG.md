@@ -11,6 +11,8 @@ media came in at a made-up size, rate and length, and what needs FFmpeg to read 
 write a file did not work. Kerf now uses the FFmpeg it comes with, on Windows as
 before and on macOS too. Windows was not affected.
 
+- Kerf for Linux (x86-64): a folder that runs on its own, from Ubuntu 24.04 on,
+  with its complete source beside it.
 - A Windows installer: Kerf installs for you alone, with no administrator, adds
   itself to the Start menu, opens `kerf://` review links, and uninstalls from
   Settings ▸ Apps. The zip is still there for those who want a folder.

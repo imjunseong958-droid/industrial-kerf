@@ -16,7 +16,9 @@ Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for y
 alone, with no administrator, adds it to the Start menu, and opens `kerf://`
 review links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
 run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
-the zip and move Industrial Kerf to Applications. Releases are not
+the zip and move Industrial Kerf to Applications. For Linux (x86-64, as new as Ubuntu
+24.04), unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
+beyond what every desktop has, which `system-libraries.txt` beside it lists. Releases are not
 signed yet, so the first run asks: on Windows, More info ▸ Run anyway; on a Mac,
 right-click the app ▸ Open. Help ▸ About
 Kerf says which version you have. Once a day Kerf asks GitHub whether a newer one

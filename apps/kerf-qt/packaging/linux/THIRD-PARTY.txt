@@ -1,0 +1,26 @@
+What this package carries, and on what terms. SOURCE.txt says where the source of
+all of it is.
+
+Industrial Kerf's own code
+  MIT (LICENSE.txt). The package as a whole is under the GNU GPL version 3, as it
+  joins that code with the GPL build of FFmpeg below (COPYING-GPLv3.txt).
+
+FFmpeg (bin/ffmpeg, bin/ffprobe, and the libav*, libsw* and libpostproc libraries)
+  This build is GPL version 3, with libx264 and the other libraries built into it.
+  FFmpeg-BUILD.txt lists how it was configured.
+
+Qt 6 (the libQt6* libraries, Qt's ICU libraries, and plugins/)
+  LGPL version 3, dynamically linked. You may replace these files with your own
+  build of the same Qt version; bin/qt.conf says where Qt looks for its plugins.
+
+Inter and JetBrains Mono (compiled into bin/kerf-qt)
+  SIL OFL 1.1. See fonts/.
+
+Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine
+  See licenses/NOTICE.
+
+Libraries from Ubuntu (the rest of lib/: the xcb utilities, xkbcommon, and what they need)
+  Each under the terms in licenses/ubuntu/<package>/copyright, listed below.
+
+What the package takes from the system instead of carrying it is in
+system-libraries.txt.

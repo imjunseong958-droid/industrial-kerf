@@ -6,6 +6,9 @@
 #
 # Runs on Linux with git, cargo, curl and docker. What to collect is pinned in
 # .github/workflows/package.yml, with the build the package is made from.
+#
+# collect-kerf-linux-sources.sh runs it for the Linux package, with KERF_SOURCE_PLATFORM
+# linux-x64 and, in KERF_EXTRA_SOURCES, a folder of what else that package's source holds.
 set -euo pipefail
 
 : "${FFMPEG_BUILDS_TAG:?the FFmpeg-Builds release the package uses}"
@@ -15,8 +18,13 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
-name="Industrial-Kerf-$version-windows-x64-source"
-out="$root/target/package-source"
+platform="${KERF_SOURCE_PLATFORM:-windows-x64}"
+case "$platform" in
+    windows-x64) system=Windows; variant=win64; packer=package-kerf-windows.ps1; out="$root/target/package-source" ;;
+    linux-x64) system=Linux; variant=linux64; packer=package-kerf-linux.sh; out="$root/target/package-linux-source" ;;
+    *) echo "KERF_SOURCE_PLATFORM is windows-x64 or linux-x64, not $platform" >&2; exit 1 ;;
+esac
+name="Industrial-Kerf-$version-$platform-source"
 stage="$out/$name"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
@@ -50,19 +58,28 @@ for module in qtbase qtsvg; do
         "https://download.qt.io/archive/qt/${QT_VERSION%.*}/$QT_VERSION/submodules/$module-everywhere-src-$QT_VERSION.tar.xz"
 done
 
+# What else this package's source holds, such as the Ubuntu packages the Linux one carries.
+extra=""
+if [ -n "${KERF_EXTRA_SOURCES:-}" ]; then
+    cp -R "$KERF_EXTRA_SOURCES"/. "$stage/"
+    extra="$(cd "$KERF_EXTRA_SOURCES" && for item in *; do
+        printf '%-20sThe source of each Ubuntu package with a library in the package, as\n%-20sapt-get source gives it; bundled-packages.txt names them.\n' "$item/" ""; done)"
+fi
+
 cat > "$stage/README.txt" <<TEXT
-The complete source of Industrial Kerf $version for Windows.
+The complete source of Industrial Kerf $version for $system.
 
 kerf/               Kerf at commit $(git -C "$root" rev-parse HEAD), with the crates of
                     its Cargo.lock in vendor/. To build from them, add the contents of
                     cargo-vendor-config.toml to .cargo/config.toml.
-                    scripts/package-kerf-windows.ps1 builds the package.
+                    scripts/$packer builds the package.
 ffmpeg-$FFMPEG_COMMIT.tar.gz
                     FFmpeg, as built into the package.
 FFmpeg-Builds/      The scripts that built it ($FFMPEG_BUILDS_TAG of
-                    https://github.com/BtbN/FFmpeg-Builds), for win64-gpl-shared-9.0.
+                    https://github.com/BtbN/FFmpeg-Builds), for $variant-gpl-shared-9.0.
 ffmpeg-libraries/   Each library those scripts build, at the commit they pin.
 qt/                 Qt $QT_VERSION's modules.
+$extra
 TEXT
 
 tar -C "$out" -cf "$out/$name.tar" "$name"
