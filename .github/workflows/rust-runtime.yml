@@ -69,7 +69,7 @@ jobs:
             libclang-dev libasound2-dev \
             qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
             libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers gnome-keyring dbus-daemon
       # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
       # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
       # shared build with libx264; BtbN keeps its month-end builds for about
@@ -110,6 +110,13 @@ jobs:
         run: |
           mkdir -p "$KERF_PARITY_DUMP"
           cargo test --workspace
+      # The real store API keys and the Kerf Cloud token go to, which every
+      # other test replaces with one in memory: here the Secret Service,
+      # gnome-keyring on a session bus of its own, its login keyring unlocked
+      # with a throwaway password. Locked, it refuses every write.
+      - name: Test the system keychain
+        run: |
+          dbus-run-session -- sh -c 'printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored'
       # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
       # of a GPU: looks, grades and transitions stay on the GPU. Only this
       # runs on llvmpipe; its pow and exp are a byte off color.basic's.
@@ -202,6 +209,12 @@ jobs:
       - name: Build native bridge and daemon
         if: ${{ !cancelled() }}
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+      # The real store API keys and the Kerf Cloud token go to, which every
+      # other test replaces with one in memory: here Credential Manager, which
+      # also refuses a value over 1280 UTF-16 units.
+      - name: Test the system keychain
+        if: ${{ !cancelled() }}
+        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored
       # The editor's C ABI starts kerfd and edits through the pipe beside
       # another client. On Windows it also fails on any access violation,
       # handled or not; it runs a few times, since a crash once came and
@@ -267,3 +280,7 @@ jobs:
       # usable GPU" in this step's log means they skipped.
       - name: Test workspace
         run: cargo test --workspace
+      # The real store API keys and the Kerf Cloud token go to, which every
+      # other test replaces with one in memory: here the login keychain.
+      - name: Test the system keychain
+        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored

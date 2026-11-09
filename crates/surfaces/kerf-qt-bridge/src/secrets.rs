@@ -128,22 +128,38 @@ mod tests {
         assert!(request_with(&json!({"op": "get", "name": ""}), true)["error"].is_string());
     }
 
-    /// The real store: a key kept, read back, and forgotten. It writes to this machine's keychain, so
-    /// it is run by hand: `cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored`.
+    /// The real store: a key kept, read back, changed, and forgotten, under a name shaped as the
+    /// editor's are. It writes to this machine's keychain, so it is left out of a plain
+    /// `cargo test`; CI runs it on each system's runner (`rust-runtime.yml`), and by hand:
+    /// `cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored`.
     #[test]
     #[ignore = "writes to this machine's keychain"]
     fn a_key_round_trips_through_the_real_keychain() {
-        let name = format!("kerf-test-{}", std::process::id());
-        let kept = request_with(&json!({"op": "set", "name": name, "value": "sk-test"}), true);
-        assert_eq!(kept, json!({"ok": true}));
-        assert_eq!(
-            request_with(&json!({"op": "get", "name": name}), true),
-            json!({"ok": true, "value": "sk-test"})
-        );
+        let name = format!("kerf-test/{}/apiKey", std::process::id());
+        let get = || request_with(&json!({"op": "get", "name": name}), true);
+        let set = |value: &str| request_with(&json!({"op": "set", "name": name, "value": value}), true);
+        assert_eq!(set("sk-test"), json!({"ok": true}));
+        assert_eq!(get(), json!({"ok": true, "value": "sk-test"}));
+        // A key changed in Settings replaces the one kept.
+        assert_eq!(set("sk-test-2"), json!({"ok": true}));
+        assert_eq!(get(), json!({"ok": true, "value": "sk-test-2"}));
+
+        // Credential Manager holds at most 2560 bytes, 1280 UTF-16 units, so Windows refuses a
+        // longer value, and the editor keeps it where it would without a keychain. No store may
+        // keep it cut short.
+        let long = "k".repeat(3000);
+        let kept = set(&long);
+        if cfg!(windows) {
+            assert!(kept["error"].is_string(), "{kept}");
+            assert_eq!(get(), json!({"ok": true, "value": "sk-test-2"}));
+        } else {
+            assert_eq!(kept, json!({"ok": true}));
+            assert_eq!(get(), json!({"ok": true, "value": long}));
+        }
+
         assert_eq!(request_with(&json!({"op": "delete", "name": name}), true), json!({"ok": true}));
-        assert_eq!(
-            request_with(&json!({"op": "get", "name": name}), true),
-            json!({"ok": true, "value": null})
-        );
+        assert_eq!(get(), json!({"ok": true, "value": null}));
+        // Forgetting what is not there succeeds, as a sign-out twice does.
+        assert_eq!(request_with(&json!({"op": "delete", "name": name}), true), json!({"ok": true}));
     }
 }
