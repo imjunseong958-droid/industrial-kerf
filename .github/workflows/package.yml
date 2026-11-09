@@ -61,11 +61,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # GitHub's release downloads have answered 504 for an hour at a time, so the
+      # pinned archive is kept in the Actions cache and fetched, with retries over
+      # several minutes, only when it is not there.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg-archive
+          key: ${{ env.FFMPEG_NAME }}
       - name: Install FFmpeg
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive -MaximumRetryCount 5 -RetryIntervalSec 10
+          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'ffmpeg-archive')
+          $archive = Join-Path $folder "$env:FFMPEG_NAME.zip"
+          if (-not (Test-Path $archive)) {
+            Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive -MaximumRetryCount 8 -RetryIntervalSec 30
+          }
           if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg archive does not match its checksum" }
           7z x $archive "-o$env:RUNNER_TEMP" | Out-Null
           "FFMPEG_DIR=$(Join-Path $env:RUNNER_TEMP $env:FFMPEG_NAME)" >> $env:GITHUB_ENV

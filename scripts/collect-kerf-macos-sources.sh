@@ -32,7 +32,14 @@ while read -r formula formula_version; do
         echo "$formula is installed at $installed, but the app carries $formula_version" >&2
         exit 1
     fi
-    brew fetch --build-from-source --force --quiet "$formula"
+    # Most sources come from GitHub's release downloads, which have answered 504 for an
+    # hour at a time: try for several minutes before giving up.
+    for attempt in 1 2 3 4 5; do
+        brew fetch --build-from-source --force --quiet "$formula" && break
+        [ "$attempt" = 5 ] && exit 1
+        echo "fetching $formula failed; trying again in a minute" >&2
+        sleep 60
+    done
     cached="$(brew --cache --build-from-source "$formula")"
     mkdir -p "$stage/homebrew/$formula-$formula_version"
     if [ -d "$cached" ]; then

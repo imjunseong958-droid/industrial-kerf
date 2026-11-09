@@ -75,15 +75,21 @@ jobs:
       # shared build with libx264; BtbN keeps its month-end builds for about
       # two years. Tests, kerfd, and the bridge load its libraries through
       # LD_LIBRARY_PATH.
-      # GitHub release downloads sometimes answer 504 for a minute; retry
-      # rather than fail the job (main failed this way on 2026-11-08).
+      # GitHub's release downloads have answered 504 for an hour at a time
+      # (2026-11-09), so the pinned archive is kept in the Actions cache and
+      # fetched only when it is not there, with retries over several minutes.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg-archive
+          key: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
       - name: Install FFmpeg
         run: |
           build=autobuild-2026-09-30-13-08
           name=ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
           sha256=01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
-          archive="$RUNNER_TEMP/ffmpeg.tar.xz"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
+          mkdir -p "$RUNNER_TEMP/ffmpeg-archive"
+          archive="$RUNNER_TEMP/ffmpeg-archive/$name.tar.xz"
+          [ -s "$archive" ] || curl -fsSL --retry 8 --retry-all-errors --retry-delay 30 -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
           echo "$sha256  $archive" | sha256sum -c -
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           root="$RUNNER_TEMP/$name"
@@ -145,17 +151,24 @@ jobs:
       # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
       # a pinned shared build; its DLLs go on PATH for the tests. The build the
       # Windows package carries (package.yml), so that is what is tested.
-      # GitHub release downloads sometimes answer 504 for a minute; retry
-      # rather than fail the job (main failed this way on 2026-11-08).
+      # Kept in the Actions cache, as on Linux, and fetched with retries over
+      # several minutes only when it is not there.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg-archive
+          key: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
       - name: Install FFmpeg
         shell: pwsh
         run: |
           $build = 'autobuild-2026-09-30-13-08'
           $name = 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0'
           $sha256 = '3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696'
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'ffmpeg-archive')
+          $archive = Join-Path $folder "$name.zip"
           $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive -MaximumRetryCount 5 -RetryIntervalSec 10
+          if (-not (Test-Path $archive)) {
+            Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive -MaximumRetryCount 8 -RetryIntervalSec 30
+          }
           if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $name archive does not match its checksum" }
           7z x $archive "-o$target" | Out-Null
           $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
