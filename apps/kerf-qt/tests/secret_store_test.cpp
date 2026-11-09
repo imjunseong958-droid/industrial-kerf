@@ -65,6 +65,22 @@ private slots:
         QVERIFY(m_kept.isEmpty());
     }
 
+    // A key changed while the keychain refused it (locked, a denied prompt, or on
+    // Windows one longer than Credential Manager holds) is the newest, though the
+    // keychain still has the one before it.
+    void aKeyTheKeychainRefusedWinsOverTheOneKeptBefore() {
+        QSettings settings;
+        secrets::saveKey(settings, kKey, QStringLiteral("sk-ant-old"));
+        m_reachable = false;
+        secrets::saveKey(settings, kKey, QStringLiteral("sk-ant-new"));
+        QCOMPARE(m_kept.value(kKey), QStringLiteral("sk-ant-old"));
+        m_reachable = true;
+        QCOMPARE(secrets::loadKey(settings, kKey), QStringLiteral("sk-ant-new"));
+        QCOMPARE(m_kept.value(kKey), QStringLiteral("sk-ant-new"));
+        QVERIFY(!settings.contains(kKey));
+        QCOMPARE(secrets::loadKey(settings, kKey), QStringLiteral("sk-ant-new"));
+    }
+
     void anEmptyKeyIsForgottenAndTheFallbackReads() {
         QSettings settings;
         secrets::saveKey(settings, kKey, QStringLiteral("sk-ant-gone"));

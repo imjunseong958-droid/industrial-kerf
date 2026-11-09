@@ -47,18 +47,21 @@ Call &call() {
 }
 
 QString loadKey(QSettings &settings, const QString &key, const QString &fallback) {
+    // A key is only written to the settings when the keychain could not take it, or was by a
+    // Kerf from before the keychain, so it is the newest, even with an older one still in the
+    // keychain: the keychain takes it, and the settings let it go. As cloud_session.rs does.
+    const QString inSettings = settings.value(key).toString();
+    if (!inSettings.isEmpty()) {
+        if (write(key, inSettings)) settings.remove(key);
+        return inSettings;
+    }
     const Found kept = read(key);
     if (kept.found) {
-        // A copy left in plain settings has no business there any more.
+        // An empty copy left in plain settings has no business there any more.
         settings.remove(key);
         return kept.value;
     }
-    if (settings.contains(key)) {
-        const QString value = settings.value(key).toString();
-        if (kept.reachable && !value.isEmpty() && write(key, value)) settings.remove(key);
-        return value;
-    }
-    return fallback;
+    return settings.contains(key) ? inSettings : fallback;
 }
 
 void saveKey(QSettings &settings, const QString &key, const QString &value) {

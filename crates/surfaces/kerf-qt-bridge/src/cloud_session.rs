@@ -211,7 +211,17 @@ mod tests {
         keep_token(&path, &keychain, Some("tok-real")).unwrap();
         assert_eq!(on_disk(&path), None);
         assert_eq!(load(&path, &keychain).token(), Some("tok-real"));
+
+        // Windows' Credential Manager refuses a token longer than 1280 UTF-16 units, so that one
+        // stays whole in the file, and is the one read, not the shorter one still in the keychain.
+        let long = "t".repeat(3000);
+        keep_token(&path, &keychain, Some(&long)).unwrap();
+        let in_file = on_disk(&path).and_then(|file| file["token"].as_str().map(str::to_owned));
+        assert_eq!(in_file.as_deref(), cfg!(windows).then_some(long.as_str()));
+        assert_eq!(load(&path, &keychain).token(), Some(long.as_str()));
+
         keep_token(&path, &keychain, None).unwrap();
+        assert_eq!(on_disk(&path).and_then(|file| file.get("token").cloned()), None);
         assert_eq!(load(&path, &keychain).token(), None);
     }
 }
