@@ -191,6 +191,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
+          # GitHub takes no release file of 2 GiB or more, and the Windows source is
+          # over 3: such a file goes up in parts, with the whole one's sha256 and how
+          # to join them in the notes.
+          for file in dist/*; do
+            [ "$(stat -c %s "$file")" -ge 2000000000 ] || continue
+            name="$(basename "$file")"
+            split -b 1900m -d -a 2 "$file" "$file.part-"
+            rm "$file"
+            {
+              echo
+              echo "$name is in parts. Join them, then check it against $name.sha256:"
+              echo
+              echo '```sh'
+              echo "cat $name.part-* > $name && shasum -a 256 -c $name.sha256"
+              echo '```'
+            } >> notes.md
+          done
+          ls -l dist
+          # A run that failed partway can leave a draft behind; a published release
+          # is never replaced.
+          if [ "$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
+            gh release delete "$TAG" --yes
+          fi
           # 0.x is a pre-release: GitHub does not offer it as the latest stable one.
           prerelease=""
           case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac

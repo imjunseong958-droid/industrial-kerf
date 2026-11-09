@@ -42,7 +42,8 @@ the app ad hoc. Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources
 collects the source of each Homebrew formula the app has files of; the Package workflow
 publishes the two together on a `v<version>` tag. Where pushing a tag is not possible, Actions ▸ Package ▸ Run
 workflow on `main` with **release** checked publishes the same release and makes its
-tag. It takes that FFmpeg from
+tag. A file of 2 GiB or more, which GitHub refuses (the Windows source is over 3),
+goes up in parts, and the release notes say how to join them. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
