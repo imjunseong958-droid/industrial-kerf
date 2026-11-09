@@ -10,6 +10,15 @@ you do by hand is an ordinary edit too, and both are undone the same way.
 
 ## Get Kerf
 
+Kerf runs on:
+
+- a **Mac with Apple silicon** (M1 or later), with macOS 26 or later for now. Intel
+  Macs are not supported.
+- **Windows 10 or 11, x64.** Windows 11 on Arm can run it through Windows' own
+  emulation of x64 programs; that has not been tried.
+- **Linux, x86-64**, with X11 or XWayland and a system as new as Ubuntu 24.04
+  (Ubuntu 24.04 or later, Debian 13 or later).
+
 Download the latest release from
 [GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases). For
 Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for you

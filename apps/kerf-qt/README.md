@@ -42,7 +42,9 @@ On macOS, `scripts/package-kerf-macos.sh` makes `Industrial Kerf.app` the same w
 editor, `kerfd`, `kerf`, `kerf-mcp`, `ffmpeg` and `ffprobe`, with Qt and every Homebrew
 library they load copied in by `macdeployqt`. It fails if anything still loads from
 Homebrew, runs the tools and the editor with nothing of Homebrew's on `PATH`, and signs
-the app ad hoc. Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
+the app ad hoc. It is for Apple silicon only: Intel Macs are not supported, by
+decision. Built on the runner's macOS 26, with the Homebrew libraries bottled for it,
+it needs macOS 26 (`docs/architecture.md`, Packaging). Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
 collects the source of each Homebrew formula the app has files of; the Package workflow
 publishes the two together on a `v<version>` tag. Where pushing a tag is not possible, Actions ▸ Package ▸ Run
 workflow on `main` with **release** checked publishes the same release and makes its
