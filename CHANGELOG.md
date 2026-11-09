@@ -11,6 +11,9 @@ media came in at a made-up size, rate and length, and what needs FFmpeg to read 
 write a file did not work. Kerf now uses the FFmpeg it comes with, on Windows as
 before and on macOS too. Windows was not affected.
 
+- A Windows installer: Kerf installs for you alone, with no administrator, adds
+  itself to the Start menu, opens `kerf://` review links, and uninstalls from
+  Settings ▸ Apps. The zip is still there for those who want a folder.
 - Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
   no connection.
 - The Kerf Cloud sign-in is kept in the system keychain, as API keys are; one

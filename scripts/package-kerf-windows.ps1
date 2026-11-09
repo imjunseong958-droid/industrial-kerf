@@ -1,12 +1,15 @@
 <#
 .SYNOPSIS
     Build the Qt editor and its tools for Windows and pack them into a folder that
-    runs on its own, as a zip: unpack it anywhere and run kerf-qt.exe.
+    runs on its own, as a zip: unpack it anywhere and run kerf-qt.exe. The same folder
+    also becomes an installer, for the current user alone, with a Start menu entry,
+    kerf:// links and an uninstaller (apps/kerf-qt/packaging/windows/kerf.iss).
 
 .DESCRIPTION
     Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools,
     CMake, Qt for MSVC with its bin folder on PATH (for windeployqt), a shared GPL
-    build of FFmpeg in FFMPEG_DIR, and LIBCLANG_PATH for its bindings.
+    build of FFmpeg in FFMPEG_DIR, LIBCLANG_PATH for its bindings, and Inno Setup 6
+    for the installer (choco install innosetup).
 
     The FFmpeg build makes the package GPL, so it may only be given to anyone with
     its source: scripts/collect-kerf-windows-sources.sh makes that, of this commit.
@@ -22,7 +25,11 @@
     Pack what was last built.
 
 .PARAMETER SkipRun
-    Do not run the package. For a machine with no desktop to run it on.
+    Do not run the package, nor install and uninstall the installer. For a machine with
+    no desktop to run it on.
+
+.PARAMETER SkipInstaller
+    Make the zip alone.
 
 .EXAMPLE
     pwsh scripts/package-kerf-windows.ps1
@@ -32,7 +39,8 @@ param(
     [string]$OutDir = 'target/package',
     [string]$FfmpegDir = $env:FFMPEG_DIR,
     [switch]$SkipBuild,
-    [switch]$SkipRun
+    [switch]$SkipRun,
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +68,18 @@ function Find-CppRuntime {
         Select-Object -First 1
     if (-not $redist) { throw "No C++ runtime to redistribute under $studio" }
     return $redist.FullName
+}
+
+# Inno Setup's compiler, wherever its installer put it.
+function Find-InnoSetup {
+    $found = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+    if ($found) { return $found }
+    foreach ($folder in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+        if (-not $folder) { continue }
+        $candidate = Join-Path $folder 'Inno Setup 6\ISCC.exe'
+        if (Test-Path $candidate) { return $candidate }
+    }
+    throw 'Inno Setup 6 was not found: install it (choco install innosetup), or pass -SkipInstaller'
 }
 
 if (-not $FfmpegDir -or -not (Test-Path (Join-Path $FfmpegDir 'bin\ffmpeg.exe'))) {
@@ -161,6 +181,24 @@ Which licence covers which part is in THIRD-PARTY.txt.
     "$hash  $name.zip" | Set-Content -Path "$zip.sha256" -Encoding ascii
     $megabytes = [math]::Round((Get-Item $zip).Length / 1MB)
     Write-Host "Packed $zip ($megabytes MB), sha256 $hash"
+
+    if (-not $SkipInstaller) {
+        # The same folder as an installer: for this user, with no administrator, a Start menu
+        # entry, kerf:// links opening the editor, and an uninstaller.
+        $iscc = Find-InnoSetup
+        $source = $stage.Replace('/', '\')
+        $output = $OutDir.Replace('/', '\')
+        Invoke-Tool $iscc /Qp "/DSource=$source" "/DVersion=$version" "/DOutputDir=$output" "/DOutputName=$name-setup" `
+            (Join-Path $root 'apps/kerf-qt/packaging/windows/kerf.iss')
+        $setup = Join-Path $OutDir "$name-setup.exe"
+        if (-not (Test-Path $setup)) { throw "Inno Setup made no $setup" }
+        $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $name-setup.exe" | Set-Content -Path "$setup.sha256" -Encoding ascii
+        $megabytes = [math]::Round((Get-Item $setup).Length / 1MB)
+        Write-Host "Made $setup ($megabytes MB), sha256 $hash"
+        # Installed, followed by a kerf:// link, and uninstalled, for this user.
+        if (-not $SkipRun) { & (Join-Path $PSScriptRoot 'check-kerf-windows-installer.ps1') -Installer $setup }
+    }
 } finally {
     Pop-Location
 }

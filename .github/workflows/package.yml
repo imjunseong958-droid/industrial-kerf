@@ -1,8 +1,8 @@
 name: Package
 
 # Kerf for Windows and macOS, each as something that runs on its own, and the complete
-# source of each, kept as this run's artifacts: the Windows zip
-# (scripts/package-kerf-windows.ps1) and its source (collect-kerf-windows-sources.sh),
+# source of each, kept as this run's artifacts: the Windows zip and installer
+# (scripts/package-kerf-windows.ps1) and their source (collect-kerf-windows-sources.sh),
 # and the macOS app (package-kerf-macos.sh) and its source
 # (collect-kerf-macos-sources.sh). Both carry a GPL build of FFmpeg: publish each with
 # its source. By hand (Actions > Package > Run workflow), and when what makes them
@@ -23,6 +23,7 @@ on:
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -37,6 +38,7 @@ on:
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-windows-installer.ps1"
       - "scripts/check-kerf-macos.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -94,18 +96,48 @@ jobs:
           version: ${{ env.QT_VERSION }}
           arch: win64_msvc2022_64
           cache: true
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          # 6.3 or newer, for x64compatible: installed if missing, brought up to date if older.
+          choco upgrade innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup" }
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package
+      - name: Build, pack and run the package, and install and uninstall the installer
         shell: pwsh
         run: scripts/package-kerf-windows.ps1
+      # The installer check is not satisfied by any installer: one that registers no
+      # kerf:// links fails it.
+      - name: The installer check fails an installer without links
+        shell: pwsh
+        run: |
+          # This version's folder: the build cache can bring back an older one beside it, as it
+          # brought 0.1.0's, with its folders and none of its files, on #214.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $stage = (Resolve-Path "target/package/Industrial-Kerf-$version-windows-x64").Path
+          $out = Join-Path $env:RUNNER_TEMP 'without-links'
+          # Compiled as the real one is, but for the links.
+          $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-qt/packaging/windows/kerf.iss
+          if ($LASTEXITCODE -ne 0) { $compiled | Write-Host; throw "ISCC failed with exit code $LASTEXITCODE" }
+          $files = @($compiled | Where-Object { $_ -match 'Compressing' }).Count
+          if ($files -eq 0) { $compiled | Write-Host; throw "ISCC put no files from $stage in the installer" }
+          Write-Host "ISCC compressed $files files from $stage"
+          # It has to fail where the links are checked, not before.
+          $failure = $null
+          try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failure = "$_" }
+          if (-not $failure) { throw 'The installer check passed an installer that registers no kerf:// links' }
+          if ($failure -notmatch 'kerf:// opens with') { throw "The installer check failed before it reached the links: $failure" }
+          Write-Host "Failed, as it should: $failure"
       - uses: actions/upload-artifact@v4
         with:
           name: industrial-kerf-windows-x64
           path: |
             target/package/*.zip
             target/package/*.zip.sha256
+            target/package/*-setup.exe
+            target/package/*-setup.exe.sha256
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
