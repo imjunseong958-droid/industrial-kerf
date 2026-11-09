@@ -66,12 +66,12 @@ try {
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
         "/DIR=`"$target`"", "/LOG=`"$log`"")
     $installed = $true
-    if ($setup.ExitCode -ne 0) {
-        Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 30 | Write-Host
-        throw "The installer failed with exit code $($setup.ExitCode)"
-    }
     $editor = Join-Path $target 'kerf-qt.exe'
-    if (-not (Test-Path $editor)) { throw "The installer put no kerf-qt.exe in $target" }
+    if ($setup.ExitCode -ne 0 -or -not (Test-Path $editor)) {
+        Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 40 | Write-Host
+        if ($setup.ExitCode -ne 0) { throw "The installer failed with exit code $($setup.ExitCode)" }
+        throw "The installer put no kerf-qt.exe in $target"
+    }
     if (-not (Test-Path $uninstallKey)) { throw 'The installer left no uninstall entry' }
 
     # The installed copy runs on its own, as the zip does.

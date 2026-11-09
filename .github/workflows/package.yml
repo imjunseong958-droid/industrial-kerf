@@ -117,9 +117,12 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'without-links'
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks /DUncompressed apps/kerf-qt/packaging/windows/kerf.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
-          $failed = $false
-          try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failed = $true; Write-Host "Failed, as it should: $_" }
-          if (-not $failed) { throw 'The installer check passed an installer that registers no kerf:// links' }
+          # It has to fail where the links are checked, not before.
+          $failure = $null
+          try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failure = "$_" }
+          if (-not $failure) { throw 'The installer check passed an installer that registers no kerf:// links' }
+          if ($failure -notmatch 'kerf:// opens with') { throw "The installer check failed before it reached the links: $failure" }
+          Write-Host "Failed, as it should: $failure"
       - uses: actions/upload-artifact@v4
         with:
           name: industrial-kerf-windows-x64
