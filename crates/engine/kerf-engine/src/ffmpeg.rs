@@ -48,40 +48,55 @@ fn bin_exists(candidate: &str) -> bool {
 pub fn resolve_ffmpeg_bin() -> &'static str {
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Ok(value) = std::env::var("KERF_FFMPEG") {
-            if !value.is_empty() {
-                candidates.push(value);
-            }
-        }
-        candidates.push("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".into());
-        candidates.push("ffmpeg".into());
-        for candidate in candidates {
-            if bin_exists(&candidate) {
-                return candidate;
-            }
-        }
-        "ffmpeg".into()
+        let program = std::env::current_exe().ok();
+        let beside = program.as_deref().and_then(Path::parent);
+        ffmpeg_candidates(std::env::var("KERF_FFMPEG").ok(), beside)
+            .into_iter()
+            .find(|candidate| bin_exists(candidate))
+            .unwrap_or_else(|| "ffmpeg".into())
     })
     .as_str()
+}
+
+/// Where to look for ffmpeg, in order: `KERF_FFMPEG`; beside the program that is running, as
+/// each package carries it (kerfd, kerf and the editor sit beside it); Homebrew's
+/// `ffmpeg-full`; and then `PATH`. Windows looks beside the program by itself, but macOS and
+/// Linux would not, and a Mac without Homebrew has no ffmpeg on `PATH`: there kerfd imported
+/// media with no probe, at a made-up size, rate and length.
+fn ffmpeg_candidates(configured: Option<String>, beside: Option<&Path>) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    candidates.extend(configured.filter(|value| !value.is_empty()));
+    if let Some(folder) = beside {
+        let bundled = folder.join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX));
+        candidates.push(bundled.to_string_lossy().into_owned());
+    }
+    candidates.push("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".into());
+    candidates.push("ffmpeg".into());
+    candidates
 }
 
 pub fn resolve_ffprobe_bin() -> &'static str {
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| {
-        let ffmpeg = resolve_ffmpeg_bin();
-        let path = Path::new(ffmpeg);
-        if let Some(parent) = path.parent() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("ffmpeg") {
-                let sibling = parent.join("ffprobe");
-                if bin_exists(&sibling.to_string_lossy()) {
-                    return sibling.to_string_lossy().into_owned();
-                }
-            }
+        let sibling = ffprobe_beside(resolve_ffmpeg_bin());
+        match sibling {
+            Some(sibling) if bin_exists(&sibling) => sibling,
+            _ => "ffprobe".into(),
         }
-        "ffprobe".into()
     })
     .as_str()
+}
+
+/// The ffprobe that comes with the ffmpeg at `ffmpeg`, when that is a path.
+fn ffprobe_beside(ffmpeg: &str) -> Option<String> {
+    let path = Path::new(ffmpeg);
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty())?;
+    (path.file_stem()? == "ffmpeg").then(|| {
+        parent
+            .join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX))
+            .to_string_lossy()
+            .into_owned()
+    })
 }
 
 /// Cached `-hwaccel <name>` pair for video decode, or empty when none exist.
@@ -232,7 +247,44 @@ fn decode_prefix_with_threads(threads: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_time_seconds, tail};
+    use super::{ffmpeg_candidates, ffprobe_beside, parse_time_seconds, tail};
+    use std::path::Path;
+
+    // A package keeps ffmpeg beside kerfd, kerf and the editor; it is found there before
+    // Homebrew's or PATH's, and after one KERF_FFMPEG names.
+    #[test]
+    fn ffmpeg_is_looked_for_beside_the_program_before_path() {
+        let folder = Path::new("/Applications/Industrial Kerf.app/Contents/MacOS");
+        let bundled = folder
+            .join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX))
+            .to_string_lossy()
+            .into_owned();
+        let homebrew = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".to_owned();
+        assert_eq!(
+            ffmpeg_candidates(None, Some(folder)),
+            [bundled.clone(), homebrew.clone(), "ffmpeg".into()]
+        );
+        assert_eq!(
+            ffmpeg_candidates(Some("/opt/ffmpeg/bin/ffmpeg".into()), Some(folder)),
+            ["/opt/ffmpeg/bin/ffmpeg".into(), bundled, homebrew.clone(), "ffmpeg".into()]
+        );
+        assert_eq!(
+            ffmpeg_candidates(Some(String::new()), None),
+            [homebrew, "ffmpeg".to_owned()]
+        );
+    }
+
+    #[test]
+    fn ffprobe_is_the_one_beside_ffmpeg() {
+        let exe = std::env::consts::EXE_SUFFIX;
+        let probe = Path::new("/pkg/bin").join(format!("ffprobe{exe}"));
+        assert_eq!(
+            ffprobe_beside(&format!("/pkg/bin/ffmpeg{exe}")),
+            Some(probe.to_string_lossy().into_owned())
+        );
+        assert_eq!(ffprobe_beside("ffmpeg"), None);
+        assert_eq!(ffprobe_beside("/usr/bin/avconv"), None);
+    }
 
     #[test]
     fn parses_hms_and_raw_seconds() {

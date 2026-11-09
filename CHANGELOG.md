@@ -4,9 +4,12 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
-## Unreleased
+## 0.1.1
 
-What the next release will have; it becomes that version's section.
+On a Mac without Homebrew's FFmpeg, 0.1.0 did not find the FFmpeg inside the app:
+media came in at a made-up size, rate and length, and what needs FFmpeg to read or
+write a file did not work. Kerf now uses the FFmpeg it comes with, on Windows as
+before and on macOS too. Windows was not affected.
 
 - Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
   no connection.
