@@ -31,13 +31,15 @@ clean_path="/usr/bin:/bin:/usr/sbin:/sbin"
 loaded="$scratch/loaded.txt"
 : > "$loaded"
 
-# Runs a program from the app with a clean PATH and no dyld settings of the caller's,
+# Runs a program from the app with a clean PATH and no dyld or Qt plugin settings of the
+# caller's (a build machine's Qt may name its own plugins),
 # keeping what dyld says it loaded and passing the program's own output through.
 run() {
     local log="$scratch/dyld.log"
     local status=0
     env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH \
         -u DYLD_FALLBACK_FRAMEWORK_PATH -u DYLD_INSERT_LIBRARIES \
+        -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
         PATH="$clean_path" DYLD_PRINT_LIBRARIES=1 "$@" 2> "$log" || status=$?
     # dyld's lines are "dyld[pid]: <uuid> /path"; the rest is the program's.
     grep '^dyld\[' "$log" | grep -o '/.*' >> "$loaded" || true
