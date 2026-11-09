@@ -377,7 +377,14 @@ whatever the document calls itself, so a link finds a project that is not
 open; a name outside ASCII travels in its punycode form and is read back. On macOS the app registers the `kerf` URL scheme, so a clicked link
 opens (or raises) the project's editor and seeks to the timecode; `kerf-qt
 kerf://atlas/rev22@00:00:17:08` does the same from a shell. A project this
-Mac has not opened is refused with a message, never guessed.
+Mac has not opened is refused with a message, never guessed. Windows and
+Linux start an editor for each link followed, so one started for links alone
+hands them to the editor already open and ends, and the link raises that
+editor as on macOS; with none open, or none answering within two seconds, it
+opens them itself (`link_inbox.cpp`). The inbox is a local socket that only
+the user's own processes can reach, named by an id the user's settings keep
+(`links/inbox`), in the user's runtime folder on Linux. A run that captures
+or quits on its own neither hands links over nor takes them.
 
 The bridge also gives the editor (see `bridge.h`): the program meter
 (`meter`, L/R peak and RMS with BS.1770 momentary and short-term loudness)

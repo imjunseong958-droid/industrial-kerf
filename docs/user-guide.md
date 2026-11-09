@@ -118,8 +118,9 @@ edit.
 - **Blocking notes** hold delivery back: Deliver, the toolbar's Export with
   Master, and an agent's full render all refuse while one is open, and say which
   note and where. A Draft still exports.
-- **Copy link** gives a `kerf://` link to a version and a timecode. On macOS a
-  clicked link opens the project there.
+- **Copy link** gives a `kerf://` link to a version and a timecode. On macOS,
+  and on Windows with the installer, a clicked link opens the project there, in
+  the Kerf you already have open if there is one.
 
 ## Share through Git
 

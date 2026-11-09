@@ -4,6 +4,11 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
+## 0.1.2
+
+- On Windows, a `kerf://` review link opens in the Kerf you already have open,
+  and brings it to the front, instead of starting another. Linux does the same.
+
 ## 0.1.1
 
 On a Mac without Homebrew's FFmpeg, 0.1.0 did not find the FFmpeg inside the app:
