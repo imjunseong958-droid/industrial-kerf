@@ -8,6 +8,9 @@ on `main`; its section here becomes the release's notes on GitHub
 
 - On Windows, a `kerf://` review link opens in the Kerf you already have open,
   and brings it to the front, instead of starting another. Linux does the same.
+- On Linux, `./install-desktop-entry.sh` in the unpacked folder adds Kerf to your
+  applications and has `kerf://` review links open in it, for you alone;
+  `--remove` takes it away.
 
 ## 0.1.1
 
