@@ -4,7 +4,8 @@
     fail if it needs anything it does not carry.
 
 .DESCRIPTION
-    With nothing on PATH but Windows' own folders, runs ffmpeg -version,
+    With nothing on PATH but Windows' own folders, and no Qt plugin path from the
+    environment, runs ffmpeg -version,
     ffprobe -version, kerf --version and kerfd --endpoint from the package, and opens
     the editor's start window and takes a picture of it.
 
@@ -69,6 +70,14 @@ function Find-OutsideModules([string[]]$modules) {
 
 $path = $env:Path
 $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+# Nor where a Qt is: a build machine names its Qt's plugins (install-qt-action sets
+# QT_PLUGIN_PATH), and the editor would load them in place of the package's own.
+$qtVariables = 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'
+$qtSettings = @{}
+foreach ($name in $qtVariables) {
+    $qtSettings[$name] = [Environment]::GetEnvironmentVariable($name)
+    [Environment]::SetEnvironmentVariable($name, $null)
+}
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "kerf-check-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $scratch | Out-Null
 try {
@@ -114,5 +123,6 @@ try {
     Write-Host "The package ran on its own; the editor loaded $($modules.Count) libraries, each from the package or Windows."
 } finally {
     $env:Path = $path
+    foreach ($name in $qtVariables) { [Environment]::SetEnvironmentVariable($name, $qtSettings[$name]) }
     Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
