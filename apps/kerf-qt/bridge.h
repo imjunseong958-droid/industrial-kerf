@@ -349,8 +349,14 @@ char *kerf_about(void);
 // kerf_bridge_string_free.
 char *kerf_update_check(void);
 // Report every panic in the editor's process to the crash folder, as kerfd
-// and the CLI do. Call once, before any other thread starts.
+// and the CLI do, and every crash of its native code too: a bad memory
+// access, or an abort (signals on macOS and Linux; an unhandled-exception
+// filter and SIGABRT on Windows). Call once, before any other thread starts.
 void kerf_crash_install(void);
+// Report `message` now as what ends the editor, as Qt's fatal messages do
+// before Qt aborts; the abort then adds no second report. Nothing is written
+// before kerf_crash_install.
+void kerf_crash_fatal(const char *message);
 // The crash folder's reports: {folder (null when there is nowhere to keep
 // them), reports: [{path, component (editor|kerfd|kerf), atMs, message}]},
 // newest first. Free with kerf_bridge_string_free.

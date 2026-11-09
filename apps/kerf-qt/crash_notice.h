@@ -38,4 +38,10 @@ QString crashNoticeText(const QList<CrashReport> &reports);
 // remembers them. Returns whether it told of any.
 bool showCrashNotice(QWidget *parent, QSettings &settings);
 
+// Reports each of Qt's fatal messages (qFatal, and Qt's own, such as a
+// platform plugin that would not load) before Qt aborts, with the message:
+// on Windows that abort is a fail-fast no handler in the process sees. Call
+// after kerf_crash_install and before the application is made.
+void reportFatalMessages();
+
 } // namespace kerf

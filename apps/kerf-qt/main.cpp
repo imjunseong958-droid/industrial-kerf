@@ -55,8 +55,11 @@ int main(int argc, char **argv) {
             QSettings::setDefaultFormat(QSettings::IniFormat);
             QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
         }
-    // A panic in the editor's own Rust leaves a report, as kerfd's and the CLI's do.
+    // A panic in the editor's own Rust leaves a report, as kerfd's and the CLI's
+    // do, and so does a crash in its C++ or Qt, and a fatal message from Qt
+    // such as a platform plugin that would not load.
     kerf_crash_install();
+    kerf::reportFatalMessages();
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     // Windows and Linux add it after the project's name in window titles;

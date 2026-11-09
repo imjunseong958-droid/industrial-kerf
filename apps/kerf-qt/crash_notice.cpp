@@ -9,11 +9,21 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QUrl>
+#include <QtGlobal>
 
 namespace kerf {
 
 namespace {
 const QString kSeenKey = QStringLiteral("crashes/seenMs");
+
+// Whatever handled Qt's messages before reportFatalMessages: Qt's own, which
+// writes them to stderr (or the debugger), unless something else came first.
+QtMessageHandler earlierMessageHandler = nullptr;
+
+void reportFatalMessage(QtMsgType type, const QMessageLogContext &context, const QString &message) {
+    if (type == QtFatalMsg) kerf_crash_fatal(message.toUtf8().constData());
+    if (earlierMessageHandler) earlierMessageHandler(type, context, message);
+}
 
 QString componentName(const QString &component) {
     if (component == QStringLiteral("kerfd")) return QStringLiteral("Kerf's project service (kerfd)");
@@ -71,6 +81,8 @@ QString crashNoticeText(const QList<CrashReport> &reports) {
                            "report shows where it happened.");
     return text;
 }
+
+void reportFatalMessages() { earlierMessageHandler = qInstallMessageHandler(reportFatalMessage); }
 
 bool showCrashNotice(QWidget *parent, QSettings &settings) {
     const QJsonObject listed = listCrashReports();

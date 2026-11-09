@@ -2554,6 +2554,19 @@ pub extern "C" fn kerf_crash_install() {
     kerf_runtime::crash::install("editor");
 }
 
+/// Report `message` now as what ends the editor: Qt's fatal message, before Qt aborts
+/// (`crash_notice.cpp`). Nothing is written before `kerf_crash_install`.
+/// # Safety
+/// `message` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_crash_fatal(message: *const c_char) {
+    if message.is_null() {
+        return;
+    }
+    let message = CStr::from_ptr(message).to_string_lossy();
+    let _ = kerf_runtime::crash::fatal(&message);
+}
+
 /// `{folder, reports: [{path, component, atMs, message}]}`, newest first; `folder` is null when
 /// there is nowhere to keep them.
 #[no_mangle]
