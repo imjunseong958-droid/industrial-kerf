@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     With nothing on PATH but Windows' own folders, and no Qt plugin path from the
-    environment, runs ffmpeg -version,
+    environment, has kerfd import a clip the package's ffmpeg made, and runs ffmpeg -version,
     ffprobe -version, kerf --version and kerfd --endpoint from the package, and opens
     the editor's start window and takes a picture of it.
 
@@ -88,6 +88,19 @@ try {
     # kerfd only has to say where clients reach it.
     $endpoint = & (Join-Path $Package 'kerfd.exe') --dir $scratch --endpoint
     if ($LASTEXITCODE -ne 0 -or -not $endpoint) { throw "kerfd.exe did not run from the package (exit code $LASTEXITCODE)" }
+    # kerfd finds the package's ffmpeg and ffprobe: without them it still imports, at a
+    # made-up size, rate and length.
+    $clip = Join-Path $scratch 'clip.mp4'
+    & (Join-Path $Package 'ffmpeg.exe') -v error -f lavfi -i 'testsrc=duration=2:size=320x240:rate=25' -c:v mpeg4 $clip
+    if ($LASTEXITCODE -ne 0) { throw "ffmpeg.exe made no clip (exit code $LASTEXITCODE)" }
+    $requests = @(
+        (@{ protocolVersion = 1; id = 'import'; operation = 'import'; actor = 'ui'; idempotencyKey = 'check-import'; baseRevision = 0; path = $clip } | ConvertTo-Json -Compress),
+        (@{ protocolVersion = 1; id = 'state'; operation = 'get_state' } | ConvertTo-Json -Compress)
+    )
+    $answers = $requests | & (Join-Path $Package 'kerfd.exe') --stdio --dir (Join-Path $scratch 'project')
+    if (-not ($answers -match 'rate=25 dur=00:00:02:00 video=320x240')) {
+        throw "kerfd.exe did not probe the clip with the package's ffprobe (it is 320x240, 25 fps, 2 s): $answers"
+    }
 
     # The editor, opening its start window and taking a picture of it.
     $shot = Join-Path $scratch 'start.png'
