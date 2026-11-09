@@ -191,10 +191,21 @@ pub fn media_index(
 pub fn small_grey_frames(
     src: &Path,
     rate: u32,
+    size: (u32, u32),
+    each: impl FnMut(f64, &[u8]),
+) -> Result<()> {
+    grey_frames_with(resolve_ffmpeg_bin(), src, rate, size, each)
+}
+
+/// [`small_grey_frames`] with the FFmpeg at `ffmpeg`.
+fn grey_frames_with(
+    ffmpeg: &str,
+    src: &Path,
+    rate: u32,
     (width, height): (u32, u32),
     mut each: impl FnMut(f64, &[u8]),
 ) -> Result<()> {
-    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+    let mut child = crate::ffmpeg::hidden_command(ffmpeg)
         .args(video_decode_prefix())
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(src)
@@ -204,6 +215,10 @@ pub fn small_grey_frames(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
+    // Read as it writes: an FFmpeg that says more than a pipe holds (a decoder failing on every
+    // frame, as VideoToolbox does on 4:4:4) would otherwise wait on its stderr while this waits on
+    // its stdout, and neither would end.
+    let errors = crate::raster::drain_stderr(&mut child);
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut grey = vec![0u8; (width * height) as usize];
     let mut frame = 0u64;
@@ -211,11 +226,13 @@ pub fn small_grey_frames(
         each(frame as f64 / f64::from(rate), &grey);
         frame += 1;
     }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
+    drop(stdout);
+    let status = child.wait()?;
+    let errors = errors.join().unwrap_or_default();
+    if !status.success() {
         return Err(EngineError::msg(format!(
             "the picture could not be read: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            errors.trim()
         )));
     }
     Ok(())
@@ -374,6 +391,32 @@ fn tempo(levels: &[f64], onsets: usize) -> Option<Tempo> {
 
 #[cfg(test)]
 mod tests {
+
+    /// An FFmpeg that fills its stderr before the frames it is read for: it must still be read to
+    /// its end, where it once left both waiting for ever.
+    #[cfg(unix)]
+    #[test]
+    fn frames_are_read_from_an_ffmpeg_that_fills_its_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a folder");
+        let fake = dir.path().join("ffmpeg");
+        // 4000 lines of errors, far more than a pipe holds, then two 4x2 grey frames.
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ni=0\nwhile [ $i -lt 4000 ]; do echo \"hardware accelerator failed to decode picture $i\" >&2; i=$((i+1)); done\nprintf '0123456789abcdef'\n",
+        )
+        .expect("the fake");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        let (send, receive) = std::sync::mpsc::channel();
+        let ffmpeg = fake.to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            let mut frames = 0;
+            let result = grey_frames_with(&ffmpeg, Path::new("in.mp4"), 2, (4, 2), |_, _| frames += 1);
+            let _ = send.send((result.is_ok(), frames));
+        });
+        let finished = receive.recv_timeout(std::time::Duration::from_secs(20));
+        assert_eq!(finished, Ok((true, 2)), "the read never finished, or lost frames");
+    }
     use super::*;
 
     /// An envelope of clicks every `period` seconds over quiet.

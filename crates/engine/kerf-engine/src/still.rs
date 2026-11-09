@@ -21,17 +21,20 @@ pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
+    // Read as it writes, so a full stderr cannot stop it taking the frame.
+    let errors = crate::raster::drain_stderr(&mut child);
     child
         .stdin
         .take()
         .expect("stdin is piped")
         .write_all(&frame.rgba)?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
+    let status = child.wait()?;
+    let errors = errors.join().unwrap_or_default();
+    if !status.success() {
         return Err(EngineError::msg(format!(
             "ffmpeg could not write {}: {}",
             path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            errors.trim()
         )));
     }
     Ok(())
