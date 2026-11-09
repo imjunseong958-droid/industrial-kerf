@@ -23,6 +23,7 @@
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
+#include "user_guide.h"
 #include "viewer_widget.h"
 #include "browser_panel.h"
 #include "deliver_tray.h"
@@ -103,11 +104,6 @@
 #include <numeric>
 #include <limits>
 #include <utility>
-
-namespace {
-// Where Help ▸ Kerf User Guide goes: docs/user-guide.md on the main branch.
-constexpr const char *kUserGuideUrl = "https://github.com/imjunseong958-droid/industrial-kerf/blob/main/docs/user-guide.md";
-} // namespace
 
 namespace kerf {
 
@@ -1096,7 +1092,8 @@ void MainWindow::setupActions() {
             m_chat->focusComposer();
         }},
         // Help: the guide for someone editing, and the folder crash reports go to.
-        {QStringLiteral("help.guide"), [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kUserGuideUrl))); }},
+        // The copy a package carries, else the one on GitHub.
+        {QStringLiteral("help.guide"), [] { QDesktopServices::openUrl(userGuideUrl(QCoreApplication::applicationDirPath())); }},
         {QStringLiteral("help.crashReports"), [] {
             const QString folder = crashFolder(listCrashReports());
             if (folder.isEmpty()) return;

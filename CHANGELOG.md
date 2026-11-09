@@ -4,6 +4,13 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
+## Unreleased
+
+What the next release will have; it becomes that version's section.
+
+- Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
+  no connection.
+
 ## 0.1.0
 
 The first release, for Windows and for Macs with Apple silicon: a zip that runs on
