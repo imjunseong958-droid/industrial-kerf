@@ -42,7 +42,12 @@ On macOS, `scripts/package-kerf-macos.sh` makes `Industrial Kerf.app` the same w
 editor, `kerfd`, `kerf`, `kerf-mcp`, `ffmpeg` and `ffprobe`, with Qt and every Homebrew
 library they load copied in by `macdeployqt`. It fails if anything still loads from
 Homebrew, runs the tools and the editor with nothing of Homebrew's on `PATH`, and signs
-the app ad hoc. Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
+the app ad hoc. It is for Apple silicon and macOS 26 or later, by decision: Intel Macs
+are not supported, and the Homebrew libraries it carries are bottled for the runner's
+macOS 26. The script writes that minimum into the app's `Info.plist`
+(`LSMinimumSystemVersion`, so an older macOS says so), and `check-kerf-macos.sh` fails
+if any file in the app needs a newer macOS than it names, as one built on a newer
+runner would (`docs/architecture.md`, Packaging). Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
 collects the source of each Homebrew formula the app has files of; the Package workflow
 publishes the two together on a `v<version>` tag. Where pushing a tag is not possible, Actions ▸ Package ▸ Run
 workflow on `main` with **release** checked publishes the same release and makes its
@@ -58,6 +63,15 @@ points Qt to `plugins/`. It carries the xcb platform only, so a Wayland desktop 
 through XWayland. `scripts/check-kerf-linux.sh` runs it with nothing on `PATH` and no
 library path on a virtual X server, and fails if a binary names a library that is neither
 carried nor on that list, or if Qt, its plugins or FFmpeg load from outside the folder.
+A folder registers nothing of itself, so it carries `install-desktop-entry.sh`
+(`packaging/linux/`): for the user alone, it writes
+`~/.local/share/applications/industrial-kerf.desktop`, which runs the folder's
+`bin/kerf-qt` with the link (`%u`), and makes it the default for
+`x-scheme-handler/kerf` in `~/.config/mimeapps.list`, as `xdg-mime` would, keeping
+the file's other lines; `--remove` takes both away. The check runs it for a user in a
+scratch home, validates the entry, has GLib's `gio` name Kerf for `kerf://`, follows
+a link through `gio open` and finds the editor started with it, then removes it. The
+entry has no icon of Kerf's own yet (`applications-multimedia`).
 `scripts/collect-kerf-linux-sources.sh` collects its source, the Ubuntu packages it carries
 libraries of included. Built on Ubuntu 24.04, it needs a glibc and libstdc++ that new.
 

@@ -208,7 +208,13 @@ Industrial Kerf $version for Linux.
 Run bin/kerf-qt. The folder can go anywhere; it needs no installing. It uses what every
 desktop Linux has of its own (system-libraries.txt): glibc and libstdc++ as new as Ubuntu
 24.04's, X11 (or XWayland), OpenGL, fontconfig, D-Bus, GLib and ALSA.
+
+To have Kerf among your applications, and kerf:// review links open in it, run
+./install-desktop-entry.sh once: it is for you alone and needs no administrator. Run it
+again after moving the folder; ./install-desktop-entry.sh --remove takes it away.
 EOF
+# The desktop entry and kerf:// links, which a folder cannot register of itself.
+install -m 755 apps/kerf-qt/packaging/linux/install-desktop-entry.sh "$stage/install-desktop-entry.sh"
 cp "$system_list" "$stage/system-libraries.txt"
 
 # With nothing on PATH and no library path, it has to find all it needs inside itself, and

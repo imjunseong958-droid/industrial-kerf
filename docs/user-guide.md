@@ -10,6 +10,15 @@ you do by hand is an ordinary edit too, and both are undone the same way.
 
 ## Get Kerf
 
+Kerf runs on:
+
+- a **Mac with Apple silicon** (M1 or later), with macOS 26 or later. Intel Macs are
+  not supported.
+- **Windows 10 or 11, x64.** Windows 11 on Arm can run it through Windows' own
+  emulation of x64 programs; that has not been tried.
+- **Linux, x86-64**, with X11 or XWayland and a system as new as Ubuntu 24.04
+  (Ubuntu 24.04 or later, Debian 13 or later).
+
 Download the latest release from
 [GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases). For
 Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for you
@@ -18,7 +27,10 @@ review links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere 
 run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
 the zip and move Industrial Kerf to Applications. For Linux (x86-64, as new as Ubuntu
 24.04), unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
-beyond what every desktop has, which `system-libraries.txt` beside it lists. Releases are not
+beyond what every desktop has, which `system-libraries.txt` beside it lists. Run
+`./install-desktop-entry.sh` in the folder once to have Kerf among your applications and
+open `kerf://` review links in it, for you alone; run it again after moving the folder,
+and `--remove` takes it away. Releases are not
 signed yet, so the first run asks: on Windows, More info ▸ Run anyway; on a Mac,
 right-click the app ▸ Open. Help ▸ About
 Kerf says which version you have. Once a day Kerf asks GitHub whether a newer one
@@ -119,8 +131,9 @@ edit.
   Master, and an agent's full render all refuse while one is open, and say which
   note and where. A Draft still exports.
 - **Copy link** gives a `kerf://` link to a version and a timecode. On macOS,
-  and on Windows with the installer, a clicked link opens the project there, in
-  the Kerf you already have open if there is one.
+  on Windows with the installer, and on Linux once `install-desktop-entry.sh` has
+  run, a clicked link opens the project there, in the Kerf you already have open
+  if there is one.
 
 ## Share through Git
 

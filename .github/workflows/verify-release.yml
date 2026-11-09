@@ -257,10 +257,18 @@ jobs:
           tar -xJf "$folder"/*-linux-x64.tar.xz -C "$RUNNER_TEMP/unpacked"
           package="$(find "$RUNNER_TEMP/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
           echo "PACKAGE=$package" >> "$GITHUB_ENV"
+      # What every desktop has and system-libraries.txt asks of the system, as the Debian
+      # run below installs it: the runner image leaves out OpenGL's and EGL's dispatch
+      # libraries (libOpenGL.so.0, libEGL.so.1), which failed v0.1.1's first check. Xvfb to
+      # run the editor, and GLib's gio and desktop-file-validate for its desktop entry.
       - name: Run the package
         if: env.PACKAGE != ''
         run: |
-          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth; }
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth libglib2.0-bin desktop-file-utils \
+            libgl1 libegl1 libopengl0 libx11-6 libx11-xcb1 libxcb1 libxext6 libsm6 libice6 \
+            libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 libasound2t64 \
+            libgssapi-krb5-2 libstdc++6
           if command -v ffmpeg || command -v qmake6; then
             echo "On this runner's PATH, and not on the check's: $(command -v ffmpeg qmake6 | tr '\n' ' ')"
           fi
