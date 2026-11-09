@@ -113,10 +113,12 @@ jobs:
       - name: The installer check fails an installer without links
         shell: pwsh
         run: |
-          $stage = (Get-ChildItem target/package -Directory | Select-Object -First 1).FullName
+          # This version's folder: the build cache can bring back an older one beside it, as it
+          # brought 0.1.0's, with its folders and none of its files, on #214.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $stage = (Resolve-Path "target/package/Industrial-Kerf-$version-windows-x64").Path
           $out = Join-Path $env:RUNNER_TEMP 'without-links'
-          # Compiled as the real one is, but for the links; with /DUncompressed (Compression=none)
-          # the installer it made on #214 carried no files at all.
+          # Compiled as the real one is, but for the links.
           $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-qt/packaging/windows/kerf.iss
           if ($LASTEXITCODE -ne 0) { $compiled | Write-Host; throw "ISCC failed with exit code $LASTEXITCODE" }
           $files = @($compiled | Where-Object { $_ -match 'Compressing' }).Count
