@@ -75,7 +75,7 @@ accepted: ask Kerf to stage it again.
 Edit ▸ Settings… (⌘, ; on macOS in the Kerf menu) ▸ AI chooses how Kerf thinks:
 
 - **Kerf Cloud**, the hosted model: sign in, and the account, plan and requests
-  left show there.
+  left show there. The sign-in is kept in your system's keychain, as keys are.
 - **My own API key**: an Anthropic or OpenAI-compatible key, base URL, and model.
   Keys are kept in your system's keychain (macOS Keychain, Windows Credential
   Manager, or the Secret Service on Linux), or in Kerf's settings where there is

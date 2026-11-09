@@ -2,6 +2,7 @@
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
 mod analysis;
 mod claude_code;
+mod cloud_session;
 mod collab;
 mod looks;
 mod media;
@@ -1606,7 +1607,7 @@ fn native_agent(
     // Kerf Cloud speaks the Anthropic Messages protocol with the account token.
     let cloud = if settings.cloud {
         let store = kerf_cloud::Store::default_path()
-            .map(|path| kerf_cloud::Store::load(&path))
+            .map(|path| cloud_session::load(&path, &secrets::SystemKeychain::new()))
             .unwrap_or_default();
         Some(kerf_cloud::model_credentials(&store).map_err(|error| error.to_string())?)
     } else {
@@ -1823,19 +1824,20 @@ fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
         emit(tx, json!({"type":"cloud","access":"unavailable"}));
         return;
     };
-    let mut store = kerf_cloud::Store::load(&path);
+    // The token in the system's keychain, else in the file (cloud_session.rs).
+    let keychain = secrets::SystemKeychain::new();
     let mut message = None;
-    match command {
-        Some(Command::CloudSignIn { token }) => store.token = Some(token.trim().to_string()),
-        Some(Command::CloudSignOut) => store.token = None,
-        _ => {}
-    }
-    let changed = store != kerf_cloud::Store::load(&path);
-    if changed {
-        if let Err(error) = store.save(&path) {
-            message = Some(error.to_string());
+    let kept = match command {
+        Some(Command::CloudSignIn { token }) => {
+            cloud_session::keep_token(&path, &keychain, Some(token.trim()))
         }
+        Some(Command::CloudSignOut) => cloud_session::keep_token(&path, &keychain, None),
+        _ => Ok(()),
+    };
+    if let Err(error) = kept {
+        message = Some(error.to_string());
     }
+    let store = cloud_session::load(&path, &keychain);
     let event = match (store.service_url(), store.token()) {
         (None, _) => json!({"type":"cloud","access":"unavailable"}),
         (Some(_), None) => json!({"type":"cloud","access":"signedOut"}),
@@ -1846,8 +1848,7 @@ fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
                 "account": account,
             }),
             Err(kerf_cloud::CloudError::Unauthorized) => {
-                store.token = None;
-                let _ = store.save(&path);
+                let _ = cloud_session::keep_token(&path, &keychain, None);
                 message = Some(kerf_cloud::CloudError::Unauthorized.to_string());
                 json!({"type":"cloud","access":"signedOut"})
             }

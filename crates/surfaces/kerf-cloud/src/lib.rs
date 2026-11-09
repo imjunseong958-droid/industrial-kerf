@@ -10,6 +10,7 @@
 //! API key (Settings → Advanced).
 
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,9 @@ use std::time::Duration;
 /// Overrides the service URL, for development and staging.
 pub const URL_ENV: &str = "KERF_CLOUD_URL";
 
-/// The service URL and session, in `~/.kerf/cloud.json`, outside projects.
+/// The service URL and session, in `~/.kerf/cloud.json`, outside projects. The editor keeps
+/// the token in the system's keychain instead, and here only where it has none
+/// (kerf-qt-bridge's `cloud_session.rs`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Store {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,7 +33,8 @@ pub struct Store {
 
 impl Store {
     pub fn default_path() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".kerf/cloud.json"))
+        home(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+            .map(|home| home.join(".kerf/cloud.json"))
     }
 
     /// The store at `path`; a missing or unreadable file is an empty store.
@@ -67,6 +71,13 @@ impl Store {
             .as_deref()
             .filter(|token| !token.trim().is_empty())
     }
+}
+
+/// The home folder: `HOME`, else, on Windows, which does not set it, `USERPROFILE`.
+fn home(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
+    home.or(if cfg!(windows) { user_profile } else { None })
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(unix)]
@@ -268,6 +279,20 @@ mod tests {
             .reason()
             .unwrap()
             .contains("Settings → Advanced"));
+    }
+
+    #[test]
+    fn the_session_is_kept_in_the_home_folder_on_windows_too() {
+        let home_dir = || Some(OsString::from("/home/lim"));
+        let profile = || Some(OsString::from(r"C:\Users\lim"));
+        assert_eq!(home(home_dir(), profile()), Some(PathBuf::from("/home/lim")));
+        let without_home = home(None, profile());
+        if cfg!(windows) {
+            assert_eq!(without_home, Some(PathBuf::from(r"C:\Users\lim")));
+        } else {
+            assert_eq!(without_home, None);
+        }
+        assert_eq!(home(Some(OsString::new()), None), None);
     }
 
     #[test]

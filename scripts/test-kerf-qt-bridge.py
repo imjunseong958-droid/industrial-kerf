@@ -112,6 +112,8 @@ server =http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 os.environ.update(KERF_PROVIDER='openai', OPENAI_API_MODE='chat', OPENAI_API_KEY='local-test-only', OPENAI_BASE_URL=f'http://127.0.0.1:{server.server_port}', KERF_MODEL='local-fixture')
 os.environ.pop('OPENAI_REASONING_EFFORT', None)
+# Never the machine's own keychain: the Kerf Cloud token then stays in its file.
+os.environ['KERF_SECRETS'] = 'off'
 lib = C.CDLL(str(ROOT / 'target/debug' / ('libkerf_qt_bridge.dylib' if sys.platform == 'darwin' else 'libkerf_qt_bridge.so')))
 lib.kerf_bridge_new.argtypes = [C.c_char_p, C.c_char_p]
 lib.kerf_bridge_new.restype = C.c_void_p
@@ -419,6 +421,10 @@ def first_pass():
             send({'type': 'cloud_sign_in', 'token': 'tok-cloud'})
             signed_in = wait(lambda event: event['type'] == 'cloud' and event.get('account'))
             assert signed_in['access'] == 'ready' and signed_in['account']['plan'] == 'Pro', signed_in
+            # With no keychain to keep it, the token is in the file, for its owner alone.
+            cloud_file = HOME / 'editing/.kerf/cloud.json'
+            assert json.loads(cloud_file.read_text()).get('token') == 'tok-cloud'
+            assert cloud_file.stat().st_mode & 0o777 == 0o600, oct(cloud_file.stat().st_mode)
             send({'type': 'agent', 'text': 'Hello from the cloud.', 'cloud': True})
             wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
             assert cloud_requests and cloud_requests[-1][0] == 'tok-cloud', cloud_requests

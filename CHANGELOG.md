@@ -13,6 +13,8 @@ before and on macOS too. Windows was not affected.
 
 - Help ▸ Kerf User Guide opens the guide that comes with Kerf, so it works with
   no connection.
+- The Kerf Cloud sign-in is kept in the system keychain, as API keys are; one
+  kept in a file by 0.1.0 moves there by itself.
 
 ## 0.1.0
 

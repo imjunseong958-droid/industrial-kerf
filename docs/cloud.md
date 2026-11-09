@@ -8,13 +8,22 @@ so the service can be built to it.
 ## Where the service is
 
 The editor reads the service URL from `KERF_CLOUD_URL`, else from `url` in
-`~/.kerf/cloud.json`. Without either, Kerf Cloud reports itself unavailable and
-the editor points people to their own API key (Settings → Advanced). The same
-file keeps the account token (`token`); it is written atomically with mode
-0600 and never stored in a project.
+`~/.kerf/cloud.json` (on Windows, `%USERPROFILE%\.kerf\cloud.json`). Without
+either, Kerf Cloud reports itself unavailable and the editor points people to
+their own API key (Settings → Advanced).
+
+The account token is kept in the system's keychain, as API keys are: the macOS
+Keychain, Windows Credential Manager, or the Secret Service on Linux, under the
+service `Industrial Kerf` and the name `cloud/token`. Where no keychain can be
+reached (a Linux without a Secret Service, or `KERF_SECRETS=off`, which tests
+set), the same file keeps it as `token`, written atomically with mode 0600. A
+token in the file while a keychain can be reached, as older versions kept every
+token, moves into the keychain the first time the editor reads it, and the file
+keeps the rest. It is never stored in a project
+(`kerf-qt-bridge/src/cloud_session.rs`).
 
 ```json
-{ "url": "https://cloud.example.com", "token": "…" }
+{ "url": "https://cloud.example.com" }
 ```
 
 ## Signing in
