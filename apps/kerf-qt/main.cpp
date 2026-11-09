@@ -4,6 +4,7 @@
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "home_window.h"
+#include "link_inbox.h"
 #include "main_window.h"
 #include "project_launcher.h"
 #include "review_link.h"
@@ -129,6 +130,20 @@ int main(int argc, char **argv) {
     if (kerfd.isEmpty()) kerfd = QStandardPaths::findExecutable(QStringLiteral("kerfd"), {QCoreApplication::applicationDirPath()});
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
+#ifndef Q_OS_MACOS
+    // Windows and Linux start an editor for each link a person follows: an
+    // editor already open takes the links, as macOS's does, and this one,
+    // started for them alone, ends before it shows anything. A run that
+    // captures, quits on its own or previews neither hands links over nor
+    // takes them.
+    const bool takesLinks = !smoke && !renderPreview;
+    QString inboxName;
+    if (takesLinks) {
+        QSettings settings;
+        inboxName = kerf::links::inboxName(settings);
+    }
+    if (takesLinks && !links.isEmpty() && positional.isEmpty() && kerf::links::handOff(inboxName, links)) return 0;
+#endif
     // Since it was last open, did anything of Kerf crash? Not in a run that
     // captures or quits on its own, which nobody is there to answer.
     if (!smoke && !renderPreview) {
@@ -153,6 +168,15 @@ int main(int argc, char **argv) {
             return windows;
         });
     app.installEventFilter(&router);
+#ifndef Q_OS_MACOS
+    // Links the editors started for them hand over, while this one is open.
+    kerf::links::Inbox inbox;
+    if (takesLinks) {
+        QObject::connect(&inbox, &kerf::links::Inbox::linkReceived, &router,
+                         [&router](const QString &link) { router.follow(link); });
+        inbox.listen(inboxName);
+    }
+#endif
     const auto anyEditor = [] {
         for (QWidget *widget : QApplication::topLevelWidgets())
             if (qobject_cast<kerf::MainWindow *>(widget) && !widget->isHidden()) return true;

@@ -106,6 +106,13 @@ if(APPLE)
     enable_language(OBJCXX)
     list(APPEND KERF_QT_SOURCES macos_window.h macos_window.mm)
     set(KERF_QT_PLATFORM_LIBRARIES "-framework AppKit")
+else()
+    # Windows and Linux start an editor for each kerf:// link followed, and
+    # it hands the link to the editor already open through a local socket;
+    # macOS gives a link to the running app itself.
+    find_package(Qt6 REQUIRED COMPONENTS Network)
+    list(APPEND KERF_QT_SOURCES link_inbox.cpp link_inbox.h)
+    set(KERF_QT_PLATFORM_LIBRARIES Qt6::Network)
 endif()
 
 # The sources the editor and its tests share, compiled once for both. The
@@ -157,6 +164,9 @@ if(KERF_QT_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     # One test class per region under tests/, run together by tests/test_main.cpp.
     file(GLOB KERF_QT_TEST_SOURCES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" tests/*.cpp tests/*.h)
+    if(APPLE)
+        list(REMOVE_ITEM KERF_QT_TEST_SOURCES tests/link_inbox_test.cpp)
+    endif()
     add_executable(kerf-qt-tests ${KERF_QT_TEST_SOURCES} test_footage.cpp test_footage.h ${KERF_QT_VARIANT_SOURCES})
     target_include_directories(kerf-qt-tests PRIVATE ${CMAKE_CURRENT_LIST_DIR}/tests)
     target_compile_definitions(kerf-qt-tests PRIVATE KERF_QT_TESTING KERF_QT_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}")
