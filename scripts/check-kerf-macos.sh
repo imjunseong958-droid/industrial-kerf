@@ -4,7 +4,9 @@
 #
 # With nothing of Homebrew's on PATH, runs ffmpeg -version, ffprobe -version,
 # kerf --version and kerfd --endpoint from the app, and opens the editor's start
-# window and takes a picture of it. Each runs with DYLD_PRINT_LIBRARIES, so dyld
+# window and takes a picture of it. kerfd imports a clip the app's ffmpeg made, which it
+# probes right only with the app's ffprobe: a Mac without Homebrew has none on PATH.
+# Each runs with DYLD_PRINT_LIBRARIES, so dyld
 # names every library it loads: each has to be inside the app or macOS's own
 # (/System, /usr/lib, /Library/Apple), wherever Homebrew is. A Mac that builds Kerf
 # has Homebrew, where an @rpath or a fallback path can find what the app left out;
@@ -55,6 +57,19 @@ run "$macos/ffprobe" -version > /dev/null
 run "$macos/kerf" --version > /dev/null
 run "$macos/kerfd" --dir "$scratch/kerfd" --endpoint > "$scratch/endpoint"
 [ -s "$scratch/endpoint" ] || { echo "kerfd said no endpoint" >&2; exit 1; }
+# kerfd looks for ffmpeg and ffprobe beside itself: without them it still imports, at a
+# made-up size, rate and length.
+run "$macos/ffmpeg" -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=25 -c:v mpeg4 "$scratch/clip.mp4"
+printf '%s\n' \
+    '{"protocolVersion":1,"id":"import","operation":"import","actor":"ui","idempotencyKey":"check-import","baseRevision":0,"path":"'"$scratch/clip.mp4"'"}' \
+    '{"protocolVersion":1,"id":"state","operation":"get_state"}' |
+    run "$macos/kerfd" --stdio --dir "$scratch/project" > "$scratch/import.json"
+if ! grep -q 'rate=25 dur=00:00:02:00 video=320x240' "$scratch/import.json"; then
+    echo "kerfd did not probe the clip with the app's ffprobe (it is 320x240, 25 fps, 2 s):" >&2
+    grep -o 'rate=[^ ]* dur=[^ ]* video=[0-9x]*' "$scratch/import.json" >&2 ||
+        grep '"id":"import"' "$scratch/import.json" >&2
+    exit 1
+fi
 # On the Mac's own window system, as someone opening the app gets: the app carries
 # only that platform plugin.
 run "$macos/kerf-qt" --settings-dir "$scratch/settings" \
