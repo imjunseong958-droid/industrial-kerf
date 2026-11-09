@@ -240,7 +240,8 @@ jobs:
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           echo "FFMPEG_DIR=$RUNNER_TEMP/$LINUX_FFMPEG_NAME" >> "$GITHUB_ENV"
       # The build's tools; what Qt's xcb plugin loads, which the package carries; Xvfb
-      # to run it; and apt's source lines, for the source of what it carries.
+      # to run it; GLib's gio and desktop-file-validate, to check its desktop entry and
+      # follow a kerf:// link; and apt's source lines, for the source of what it carries.
       - name: Install the build tools and Qt's X11 libraries
         run: |
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
@@ -251,7 +252,7 @@ jobs:
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-xinput0 \
             libxcb-sync1 libxcb-xfixes0 libxcb-shm0 libxcb-render0 libxcb-glx0 libxcb-util1 \
-            libfontconfig1 libdbus-1-3 fonts-dejavu-core
+            libfontconfig1 libdbus-1-3 fonts-dejavu-core libglib2.0-bin desktop-file-utils
       - uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}

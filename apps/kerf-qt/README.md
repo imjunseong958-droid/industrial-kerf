@@ -58,6 +58,15 @@ points Qt to `plugins/`. It carries the xcb platform only, so a Wayland desktop 
 through XWayland. `scripts/check-kerf-linux.sh` runs it with nothing on `PATH` and no
 library path on a virtual X server, and fails if a binary names a library that is neither
 carried nor on that list, or if Qt, its plugins or FFmpeg load from outside the folder.
+A folder registers nothing of itself, so it carries `install-desktop-entry.sh`
+(`packaging/linux/`): for the user alone, it writes
+`~/.local/share/applications/industrial-kerf.desktop`, which runs the folder's
+`bin/kerf-qt` with the link (`%u`), and makes it the default for
+`x-scheme-handler/kerf` in `~/.config/mimeapps.list`, as `xdg-mime` would, keeping
+the file's other lines; `--remove` takes both away. The check runs it for a user in a
+scratch home, validates the entry, has GLib's `gio` name Kerf for `kerf://`, follows
+a link through `gio open` and finds the editor started with it, then removes it. The
+entry has no icon of Kerf's own yet (`applications-multimedia`).
 `scripts/collect-kerf-linux-sources.sh` collects its source, the Ubuntu packages it carries
 libraries of included. Built on Ubuntu 24.04, it needs a glibc and libstdc++ that new.
 

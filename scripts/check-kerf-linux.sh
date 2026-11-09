@@ -11,7 +11,9 @@
 # virtual X server and takes a picture of it. Each runs with LD_DEBUG=libs, so the loader
 # names every library it loads: none of what the package carries, Qt's plugins, Qt, ICU or
 # FFmpeg may come from anywhere else. What the system's own libraries load in turn (Mesa's
-# driver, GLib's PCRE) is the system's affair.
+# driver, GLib's PCRE) is the system's affair. Last, its install-desktop-entry.sh, for a
+# user in a scratch home: the entry runs this folder's editor, takes kerf:// links, and, where
+# GLib's gio is there, a link followed through it starts the editor with the link.
 #
 # package-kerf-linux.sh runs this on the folder it makes, and
 # .github/workflows/verify-release.yml on a published release, unpacked on a fresh runner.
@@ -111,5 +113,57 @@ done)"
 if [ -n "$outside" ]; then
     printf 'The package loaded from outside it what it carries or should:\n%s\n' "$outside" >&2
     exit 1
+fi
+
+# The desktop entry and kerf:// links, for a user whose home is in the scratch folder:
+# install-desktop-entry.sh writes an entry that runs this folder's editor with the link and
+# makes it the default for x-scheme-handler/kerf; GLib, through which GNOME and most
+# desktops open a link, finds it so and follows a link through it; and --remove takes both
+# away. A package from before 0.1.2 has no such script.
+if [ -e "$package/install-desktop-entry.sh" ]; then
+    home="$scratch/home"
+    entry="$home/.local/share/applications/industrial-kerf.desktop"
+    mimeapps="$home/.config/mimeapps.list"
+    as_user() {
+        env -u LD_LIBRARY_PATH -u LD_PRELOAD -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH \
+            -u QML2_IMPORT_PATH -u QML_IMPORT_PATH -u QT_QPA_PLATFORM -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+            HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
+    }
+    as_user "$package/install-desktop-entry.sh" > /dev/null
+    grep -qxF "Exec=\"$bin/kerf-qt\" %u" "$entry" ||
+        { echo "The desktop entry does not run $bin/kerf-qt with the link:" >&2; cat "$entry" >&2; exit 1; }
+    grep -qxF 'MimeType=x-scheme-handler/kerf;' "$entry" || { echo "The desktop entry takes no kerf:// links" >&2; exit 1; }
+    grep -qxF 'x-scheme-handler/kerf=industrial-kerf.desktop' "$mimeapps" ||
+        { echo "mimeapps.list does not send kerf:// links to Kerf" >&2; exit 1; }
+    if command -v desktop-file-validate > /dev/null; then desktop-file-validate "$entry"; fi
+    if command -v gio > /dev/null; then
+        # Read whole first: grep -q stops at its match, and with pipefail gio's broken pipe
+        # would fail the check.
+        handlers="$(as_user gio mime x-scheme-handler/kerf)"
+        grep -q '^Default application .*: industrial-kerf\.desktop$' <<< "$handlers" ||
+            { printf 'GLib does not take Kerf for kerf:// links:\n%s\n' "$handlers" >&2; exit 1; }
+        link='kerf://kerf-linux-check/rev1@00:00:01:00'
+        # As a click on a link: gio starts the entry's command and returns, and the editor
+        # has to be running with the link.
+        follow='
+            gio open "$1"
+            for _ in $(seq 1 40); do
+                for pid in $(pgrep -f -- "$1"); do
+                    if [ "$(readlink -f "/proc/$pid/exe")" = "$2" ]; then kill "$pid"; exit 0; fi
+                done
+                sleep 0.5
+            done
+            exit 1'
+        as_user xvfb-run -a -s "-screen 0 1280x800x24" bash -c "$follow" follow "$link" "$bin/kerf-qt" ||
+            { echo "Following $link through GLib started no $bin/kerf-qt with it" >&2; exit 1; }
+    fi
+    as_user "$package/install-desktop-entry.sh" --remove > /dev/null
+    [ ! -e "$entry" ] || { echo "--remove left $entry" >&2; exit 1; }
+    if grep -q 'industrial-kerf' "$mimeapps"; then
+        echo "--remove left Kerf in mimeapps.list:" >&2
+        cat "$mimeapps" >&2
+        exit 1
+    fi
+    echo "The desktop entry runs this folder's editor, takes kerf:// links, and comes away cleanly."
 fi
 echo "The package ran on its own; it loaded $(grep -cF "$package/" <<< "$loaded") libraries of its own, the rest the system's."
