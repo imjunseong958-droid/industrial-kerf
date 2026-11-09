@@ -11,9 +11,9 @@
     The FFmpeg build makes the package GPL, so it may only be given to anyone with
     its source: scripts/collect-kerf-windows-sources.sh makes that, of this commit.
 
-    The package finds everything beside kerf-qt.exe. It is run once with nothing else
-    on PATH, so a library that was left out stops the package here and not on someone
-    else's machine.
+    The package finds everything beside kerf-qt.exe. check-kerf-windows.ps1 runs it
+    once with nothing else on PATH and lists what the editor loaded, so a library that
+    was left out stops the package here and not on someone else's machine.
 
 .PARAMETER OutDir
     Where the folder and the zip go, under the repository unless absolute.
@@ -144,38 +144,9 @@ Which licence covers which part is in THIRD-PARTY.txt.
 "@ | Set-Content -Path (Join-Path $stage 'SOURCE.txt') -Encoding utf8
 
     if (-not $SkipRun) {
-        # With nothing else on PATH, it has to find all it needs beside itself.
-        $path = $env:Path
-        $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
-        $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "kerf-package-$([guid]::NewGuid())"
-        New-Item -ItemType Directory -Path $scratch | Out-Null
-        try {
-            foreach ($check in @(@('ffmpeg.exe', '-version'), @('ffprobe.exe', '-version'), @('kerf.exe', '--version'))) {
-                & (Join-Path $stage $check[0]) $check[1] | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "$($check[0]) did not run from the package (exit code $LASTEXITCODE)" }
-            }
-            # kerfd only has to say where clients reach it; it links to all the libraries.
-            $endpoint = & (Join-Path $stage 'kerfd.exe') --dir $scratch --endpoint
-            if ($LASTEXITCODE -ne 0 -or -not $endpoint) { throw "kerfd.exe did not run from the package (exit code $LASTEXITCODE)" }
-
-            # The editor, opening its start window and taking a picture of it.
-            $shot = Join-Path $scratch 'start.png'
-            $editor = Start-Process -FilePath (Join-Path $stage 'kerf-qt.exe') -PassThru -ArgumentList @(
-                '--settings-dir', "`"$(Join-Path $scratch 'settings')`"",
-                '--screenshot', "`"$shot`"",
-                '--quit-after-ms', '3000')
-            # Taken now: Start-Process leaves no exit code otherwise.
-            $null = $editor.Handle
-            if (-not $editor.WaitForExit(60000)) {
-                $editor.Kill()
-                throw 'kerf-qt.exe did not finish on its own'
-            }
-            if ($editor.ExitCode -ne 0) { throw "kerf-qt.exe failed with exit code $($editor.ExitCode)" }
-            if (-not (Test-Path $shot)) { throw 'kerf-qt.exe ran and made no screenshot' }
-        } finally {
-            $env:Path = $path
-            Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        # With nothing else on PATH, it has to find all it needs beside itself, and the
+        # editor may load nothing the package carries from anywhere else.
+        & (Join-Path $PSScriptRoot 'check-kerf-windows.ps1') -Package $stage
     }
 
     $zip = Join-Path $OutDir "$name.zip"

@@ -46,6 +46,13 @@ tag. A file of 2 GiB or more, which GitHub refuses (the Windows source is over 3
 goes up in parts, and the release notes say how to join them. It takes that FFmpeg from
 BtbN's builds because they pin the commit of each library in them.
 
+Both packaging scripts end by running what they made, with `scripts/check-kerf-windows.ps1`
+and `scripts/check-kerf-macos.sh`, which also fail if the editor loads a library from
+outside the package. After publishing a release, the Package workflow runs **Verify
+release**, which downloads the release onto fresh Windows and macOS runners with no FFmpeg
+or Qt (Homebrew moved out of reach) and runs the same checks; Actions ▸ Verify release ▸
+Run workflow checks any tag by hand.
+
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
 installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead

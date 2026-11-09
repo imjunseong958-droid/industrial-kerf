@@ -125,6 +125,28 @@ while IFS= read -r -d '' file; do
     esac
 done < <(find "$app/Contents/Frameworks" "$app/Contents/PlugIns" -type f -print0)
 
+# Homebrew's libraries keep rpaths into the Cellar, the editor keeps one into
+# Homebrew's Qt from its link, and Qt's plugins one to a lib folder beside the app.
+# For an @rpath reference dyld tries the rpaths of the library and of whatever loaded
+# it, so each of these could find a library outside the app before the app's own,
+# on a Mac that has one there. Only rpaths that lead inside the app stay.
+while IFS= read -r -d '' file; do
+    file -b "$file" | grep -q 'Mach-O' || continue
+    dir="$(dirname "$file")"
+    otool -l "$file" | awk '/cmd LC_RPATH/ {getline; getline; print $2}' | while IFS= read -r rpath; do
+        case "$rpath" in
+            @loader_path*) leads_to="$dir${rpath#@loader_path}" ;;
+            @executable_path*) leads_to="$macos${rpath#@executable_path}" ;;
+            *) leads_to="$rpath" ;;
+        esac
+        leads_to="$(python3 -c 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$leads_to")"
+        case "$leads_to/" in
+            "$app"/*) ;;
+            *) install_name_tool -delete_rpath "$rpath" "$file" ;;
+        esac
+    done
+done < <(find "$app" -type f -print0)
+
 # What still points outside the bundle would fail on a Mac without Homebrew.
 outside=""
 while IFS= read -r -d '' file; do
@@ -230,23 +252,9 @@ EOF
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
 
-if ! $skip_run; then
-    scratch="$(mktemp -d)"
-    trap 'rm -rf -- "$scratch"' EXIT
-    # With nothing of Homebrew's on PATH, it has to find all it needs inside itself.
-    clean_path="/usr/bin:/bin:/usr/sbin:/sbin"
-    for check in "ffmpeg -version" "ffprobe -version" "kerf --version"; do
-        set -- $check
-        PATH="$clean_path" "$macos/$1" "$2" > /dev/null
-    done
-    endpoint="$(PATH="$clean_path" "$macos/kerfd" --dir "$scratch" --endpoint)"
-    [ -n "$endpoint" ] || { echo "kerfd did not run from the app" >&2; exit 1; }
-    # On the Mac's own window system, as someone opening the app gets: the app carries
-    # only that platform plugin.
-    PATH="$clean_path" "$editor" --settings-dir "$scratch/settings" \
-        --screenshot "$scratch/start.png" --quit-after-ms 3000
-    [ -s "$scratch/start.png" ] || { echo "kerf-qt ran and made no screenshot" >&2; exit 1; }
-fi
+# With nothing of Homebrew's on PATH it has to find all it needs inside itself, and
+# load nothing from outside, which dyld says.
+$skip_run || scripts/check-kerf-macos.sh "$app"
 
 (cd "$out" && ditto -c -k --sequesterRsrc --keepParent "Industrial Kerf.app" "$name.zip")
 (cd "$out" && shasum -a 256 "$name.zip" > "$name.zip.sha256")

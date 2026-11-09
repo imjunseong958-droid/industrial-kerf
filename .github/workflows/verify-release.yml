@@ -1,0 +1,200 @@
+name: Verify release
+
+# A published release as someone downloads it: its Windows zip and its macOS app,
+# fetched from the release onto fresh runners with no FFmpeg and no Qt (on macOS,
+# Homebrew moved out of reach), unpacked and run by check-kerf-windows.ps1 and
+# check-kerf-macos.sh, the checks the Package workflow runs on what it packs. Also
+# that each package has its sha256 and its complete source beside it.
+#
+# package.yml runs it on the release it has just published. By hand (Actions >
+# Verify release > Run workflow) it checks the tag given, or the newest release; a
+# pull request that changes it checks the newest release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release to check, as v<version>; empty for the newest"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/verify-release.yml"
+      - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-macos.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  # Which release, and that it has what a GPL package needs beside it.
+  assets:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Which release
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')"
+          fi
+          [ -n "$TAG" ] || { echo "No release to check" >&2; exit 1; }
+          echo "Checking $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Each package has its sha256 and its source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort > assets.txt
+          cat assets.txt
+          missing=""
+          for platform in windows-x64 macos-arm64; do
+            package="$(grep -E "^Industrial-Kerf-.*-$platform\.zip$" assets.txt || true)"
+            if [ -z "$package" ]; then
+              missing+="no $platform zip"$'\n'
+              continue
+            fi
+            source="${package%.zip}-source.tar"
+            for name in "$package.sha256" "$source.sha256"; do
+              grep -qxF "$name" assets.txt || missing+="$name"$'\n'
+            done
+            # Over 2 GiB, the source goes up in parts.
+            grep -qxF "$source" assets.txt || grep -qxF "$source.part-00" assets.txt || missing+="$source"$'\n'
+          done
+          if [ -n "$missing" ]; then
+            printf '%s has no:\n%s' "$TAG" "$missing" >&2
+            exit 1
+          fi
+
+  windows:
+    needs: assets
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ needs.assets.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the Windows zip
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'release')
+          # GitHub's release downloads have answered 504 for an hour at a time.
+          for ($try = 1; ; $try++) {
+            gh release download $env:TAG -R $env:GITHUB_REPOSITORY --dir $folder --clobber --pattern '*-windows-x64.zip' --pattern '*-windows-x64.zip.sha256'
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($try -ge 10) { throw "Could not download the release $env:TAG" }
+            Start-Sleep -Seconds 30
+          }
+          $zip = Get-ChildItem $folder -Filter '*-windows-x64.zip' | Select-Object -First 1
+          $expected = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          $actual = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "$($zip.Name) is $actual, and its .sha256 says $expected" }
+          $unpacked = Join-Path $env:RUNNER_TEMP 'unpacked'
+          Expand-Archive $zip.FullName -DestinationPath $unpacked
+          $package = (Get-ChildItem $unpacked -Directory | Select-Object -First 1).FullName
+          "PACKAGE=$package" >> $env:GITHUB_ENV
+          Write-Host "Unpacked $($zip.Name) to $package"
+      - name: Nothing of FFmpeg or Qt on the machine
+        shell: pwsh
+        run: |
+          # The check runs with only Windows' folders on PATH; these are what it would
+          # find there, or on this runner's own PATH, if anything.
+          $found = @()
+          foreach ($folder in @("$env:SystemRoot\System32", $env:SystemRoot)) {
+            $found += Get-ChildItem $folder -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like 'Qt6*.dll' -or $_.Name -like 'av*-*.dll' -or $_.Name -like 'sw*-*.dll' -or $_.Name -like 'ffmpeg*.exe' } |
+              ForEach-Object { $_.FullName }
+          }
+          if ($found) { throw "Windows' own folders have FFmpeg or Qt in them:`n$($found -join "`n")" }
+          foreach ($tool in 'ffmpeg', 'ffprobe', 'qmake', 'windeployqt') {
+            $command = Get-Command $tool -ErrorAction SilentlyContinue
+            if ($command) { Write-Host "On this runner's PATH, and not on the check's: $($command.Source)" }
+          }
+      - name: Run the package
+        shell: pwsh
+        run: scripts/check-kerf-windows.ps1 -Package $env:PACKAGE
+      # The check fails a package that leans on this machine: without its own copy of
+      # a C++ runtime library, the editor still starts here, on System32's.
+      - name: The check fails a package missing a library
+        shell: pwsh
+        run: |
+          $broken = Join-Path $env:RUNNER_TEMP 'broken'
+          Copy-Item $env:PACKAGE $broken -Recurse
+          Remove-Item (Join-Path $broken 'vcruntime140_1.dll')
+          $failed = $false
+          try { & ./scripts/check-kerf-windows.ps1 -Package $broken } catch { $failed = $true; Write-Host "Failed, as it should: $_" }
+          if (-not $failed) { throw 'The check passed a package without vcruntime140_1.dll' }
+
+  macos:
+    needs: assets
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ needs.assets.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the macOS app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          folder="$RUNNER_TEMP/release"
+          mkdir -p "$folder"
+          # GitHub's release downloads have answered 504 for an hour at a time.
+          for try in $(seq 1 10); do
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir "$folder" --clobber \
+              --pattern '*-macos-arm64.zip' --pattern '*-macos-arm64.zip.sha256' && break
+            [ "$try" -lt 10 ] || { echo "Could not download the release $TAG" >&2; exit 1; }
+            sleep 30
+          done
+          (cd "$folder" && shasum -a 256 -c ./*-macos-arm64.zip.sha256)
+          # As Finder's Archive Utility unpacks it.
+          ditto -x -k "$folder"/*-macos-arm64.zip "$RUNNER_TEMP/unpacked"
+          app="$RUNNER_TEMP/unpacked/Industrial Kerf.app"
+          codesign --verify --deep --strict "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+      - name: Move Homebrew out of reach
+        run: |
+          brew list --versions ffmpeg qt qtbase || true
+          # Homebrew, and what an Intel Mac's /usr/local would hold; restored at the end.
+          for dir in /opt/homebrew /usr/local/Homebrew /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/Frameworks; do
+            if [ -e "$dir" ]; then
+              sudo mv "$dir" "$dir.hidden-by-kerf"
+              echo "Moved $dir away"
+            fi
+          done
+          if command -v ffmpeg || command -v qmake; then
+            echo "FFmpeg or Qt is still on PATH" >&2
+            exit 1
+          fi
+      - name: Run the app
+        run: scripts/check-kerf-macos.sh "$APP"
+      # The check fails an app that is missing a library it loads.
+      - name: The check fails an app missing a library
+        run: |
+          broken="$RUNNER_TEMP/broken/Industrial Kerf.app"
+          mkdir -p "$(dirname "$broken")"
+          ditto "$APP" "$broken"
+          rm "$broken"/Contents/Frameworks/libavutil.*.dylib
+          if scripts/check-kerf-macos.sh "$broken"; then
+            echo "The check passed an app without libavutil" >&2
+            exit 1
+          fi
+          echo "Failed, as it should"
+      - name: Put Homebrew back
+        if: always()
+        run: |
+          for hidden in /opt/homebrew.hidden-by-kerf /usr/local/*.hidden-by-kerf; do
+            if [ -e "$hidden" ]; then sudo mv "$hidden" "${hidden%.hidden-by-kerf}"; fi
+          done

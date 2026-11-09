@@ -8,6 +8,7 @@ name: Package
 # its source. By hand (Actions > Package > Run workflow), and when what makes them
 # changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
 # release, with that version's section of CHANGELOG.md as its notes; none is signed.
+# Then verify-release.yml downloads the release onto fresh runners and runs it.
 on:
   workflow_dispatch:
     inputs:
@@ -21,6 +22,8 @@ on:
       - "scripts/package-kerf-macos.sh"
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
+      - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-macos.sh"
       - "apps/kerf-qt/packaging/**"
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/package.yml"
@@ -32,6 +35,8 @@ on:
       - "scripts/package-kerf-macos.sh"
       - "scripts/collect-kerf-macos-sources.sh"
       - "scripts/collect-kerf-windows-sources.sh"
+      - "scripts/check-kerf-windows.ps1"
+      - "scripts/check-kerf-macos.sh"
       - "apps/kerf-qt/packaging/**"
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/package.yml"
@@ -173,9 +178,12 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the tag is the workspace's version, and has notes
+        id: version
         run: |
           version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
           # Run by hand on main, the release makes the tag v<version> at this commit.
@@ -186,6 +194,7 @@ jobs:
             exit 1
           fi
           echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           awk -v heading="## $version" '$0 == heading {found = 1; next} /^## / && found {exit} found' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
             echo "CHANGELOG.md has no section \"## $version\"" >&2
@@ -228,3 +237,11 @@ jobs:
           prerelease=""
           case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
           gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
+
+  # The release as someone gets it: downloaded onto fresh runners, with no FFmpeg or
+  # Qt there, unpacked and run.
+  verify:
+    needs: release
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
