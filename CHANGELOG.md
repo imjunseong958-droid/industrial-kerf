@@ -15,6 +15,8 @@ before and on macOS too. Windows was not affected.
   no connection.
 - The Kerf Cloud sign-in is kept in the system keychain, as API keys are; one
   kept in a file by 0.1.0 moves there by itself.
+- A crash in the editor's own code, in Qt or in FFmpeg now leaves a crash report
+  too, not only one in Kerf's Rust, and Kerf tells of it the next time it opens.
 
 ## 0.1.0
 

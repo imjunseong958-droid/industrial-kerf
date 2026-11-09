@@ -145,8 +145,8 @@ When `project.kerf` changes outside Kerf, a banner offers **Load from Disk** or
 ## When something goes wrong
 
 - **Kerf stopped unexpectedly.** Each crash of Kerf's project service (kerfd),
-  the editor, or the `kerf` command leaves a report on this computer; nothing is
-  sent anywhere. The next time Kerf opens it says so, and Help ▸ Show Crash
+  the editor, or the `kerf` command leaves a report on this computer, whether it
+  was in Kerf's own code, in Qt, or in FFmpeg; nothing is sent anywhere. The next time Kerf opens it says so, and Help ▸ Show Crash
   Reports opens the folder. Attaching a report to a bug report shows where it
   happened.
 - **Reconnect.** If the connection to the project drops, the banner offers

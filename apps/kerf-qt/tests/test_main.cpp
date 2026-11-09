@@ -184,9 +184,17 @@ bool registerTestClass(const QMetaObject *meta, TestFactory make) {
 
 } // namespace kerf::test
 
+namespace kerf::test {
+// A child a crash test starts crashes here instead of testing
+// (crash_notice_test.cpp).
+int crashOnPurpose();
+} // namespace kerf::test
+
 int main(int argc, char *argv[]) {
     using namespace kerf;
     using namespace kerf::test;
+
+    if (qEnvironmentVariableIsSet("KERF_QT_CRASH_ON_PURPOSE")) return crashOnPurpose();
 
     // Tests read where things end up; a test of motion turns it on for itself.
     qputenv("KERF_REDUCE_MOTION", "1");

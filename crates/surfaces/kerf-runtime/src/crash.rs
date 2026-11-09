@@ -4,8 +4,12 @@
 //!
 //! [`install`] chains a panic hook in front of the one already set, so stderr still gets the usual
 //! message. A panic that `catch_unwind` turns into an error, such as a failed editor task or one
-//! media file's index in kerfd, is reported too: it is still a bug. Reports stay on this machine;
-//! nothing sends them anywhere. The folder keeps the newest [`KEPT`].
+//! media file's index in kerfd, is reported too: it is still a bug. It also installs a handler for
+//! what is not a panic, a bad memory access or an abort in C or C++ code such as the editor's,
+//! Qt's or FFmpeg's, which writes the same kind of report (`native.rs`). Reports stay on this
+//! machine; nothing sends them anywhere. The folder keeps the newest [`KEPT`].
+
+mod native;
 
 use std::backtrace::Backtrace;
 use std::fs;
@@ -48,8 +52,8 @@ pub fn folder() -> Option<PathBuf> {
     }
 }
 
-/// Report every panic in this process from now on as `component`, in [`folder`]. Only the first
-/// call in a process takes effect.
+/// Report every panic and native crash in this process from now on as `component`, in
+/// [`folder`]. Only the first call in a process takes effect.
 pub fn install(component: &'static str) {
     if let Some(folder) = folder() {
         install_in(component, folder);
@@ -61,12 +65,27 @@ pub fn install_in(component: &'static str, folder: PathBuf) {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
         let earlier = std::panic::take_hook();
+        let hook_folder = folder.clone();
         std::panic::set_hook(Box::new(move |info| {
             // A report that cannot be written must not hide the panic itself.
-            let _ = write_report(&folder, component, info);
+            if write_report(&hook_folder, component, info).is_ok() {
+                native::panic_reported();
+            }
             earlier(info);
         }));
+        native::install(component, &folder);
+        // The native handler writes no more than one report and cannot prune; the next start
+        // does.
+        prune(&folder);
     });
+}
+
+/// Report `message` now as what ends the process, as Qt's `qFatal` does before it aborts; the
+/// crash that follows writes no second report. On Windows Qt's abort is a fail-fast that no
+/// handler in the process sees, so this is its only report. Returns where it went; nothing is
+/// written before [`install`], or after another report of a native crash.
+pub fn fatal(message: &str) -> Option<PathBuf> {
+    native::fatal(message)
 }
 
 /// The reports in `folder`, newest first.
