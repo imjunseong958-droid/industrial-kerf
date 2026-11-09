@@ -52,9 +52,13 @@ on:
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/package.yml"
 
+# A newer push supersedes the builds still running for the one before it, on a
+# pull request and on main alike. A release, from a v<version> tag or run by
+# hand with release checked, has a group of its own and is never cancelled: one
+# cut short could leave a draft release behind.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (startsWith(github.ref, 'refs/tags/') || inputs.release) && 'release' || 'build' }}
+  cancel-in-progress: ${{ !(startsWith(github.ref, 'refs/tags/') || inputs.release) }}
 
 permissions:
   contents: read
