@@ -79,6 +79,36 @@ for tool in "${tools[@]}" ffmpeg ffprobe; do executables+=("-executable=$macos/$
 "$qt_prefix/bin/macdeployqt" "$app" -always-overwrite -no-strip "-libpath=$brew_prefix/lib" \
     "-executable=$frameworks/libkerf_qt_bridge.dylib" "${executables[@]}"
 
+# The editor draws its icons in code and uses no SVG, PDF, QML or on-screen keyboard
+# (ui/icons.h), but macdeployqt deploys every input-context and image plugin, and
+# what they load. Drop those plugins, then any framework or library in the app that
+# nothing left in it loads, until none is left over.
+rm -rf "$app/Contents/PlugIns/platforminputcontexts" "$app/Contents/PlugIns/virtualkeyboard" \
+    "$app/Contents/PlugIns/qmltooling" "$app/Contents/PlugIns/iconengines"
+rm -f "$app/Contents/PlugIns/imageformats/"libqpdf.dylib "$app/Contents/PlugIns/imageformats/"libqsvg.dylib
+while :; do
+    # Every Mach-O, executable bit or not: Homebrew installs libraries read-only.
+    loaded="$(find "$app" -type f -print0 | xargs -0 file | grep 'Mach-O' | cut -d: -f1 |
+        while IFS= read -r binary; do
+            own="$(otool -D "$binary" 2>/dev/null | tail -n +2)"
+            otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -vxF "${own:-//}"
+        done | sed 's#.*/##' | sort -u)"
+    removed=false
+    for item in "$frameworks"/*.framework "$frameworks"/*.dylib; do
+        [ -e "$item" ] || continue
+        base="$(basename "$item")"
+        case "$base" in
+            *.framework) needle="${base%.framework}" ;;
+            *) needle="$base" ;;
+        esac
+        if ! grep -qxF "$needle" <<< "$loaded"; then
+            rm -rf "$item"
+            removed=true
+        fi
+    done
+    $removed || break
+done
+
 # A copied library keeps the install name it had in the Cellar as its own id. That id
 # is only what a later link would record, but name it as found inside the app, so
 # nothing in the app names Homebrew.
@@ -211,7 +241,9 @@ if ! $skip_run; then
     done
     endpoint="$(PATH="$clean_path" "$macos/kerfd" --dir "$scratch" --endpoint)"
     [ -n "$endpoint" ] || { echo "kerfd did not run from the app" >&2; exit 1; }
-    PATH="$clean_path" QT_QPA_PLATFORM=offscreen "$editor" --settings-dir "$scratch/settings" \
+    # On the Mac's own window system, as someone opening the app gets: the app carries
+    # only that platform plugin.
+    PATH="$clean_path" "$editor" --settings-dir "$scratch/settings" \
         --screenshot "$scratch/start.png" --quit-after-ms 3000
     [ -s "$scratch/start.png" ] || { echo "kerf-qt ran and made no screenshot" >&2; exit 1; }
 fi
