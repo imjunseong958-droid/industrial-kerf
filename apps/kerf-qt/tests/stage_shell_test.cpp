@@ -413,7 +413,9 @@ private slots:
             }
         }
         commands->setKeymap(original);
-        if (CommandRegistry::isMac()) QVERIFY(moved >= 3);
+        // One is left to move since the Inspector's and the trays' went: Final
+        // Cut Pro's Render Preview.
+        if (CommandRegistry::isMac()) QVERIFY(moved >= 1);
     }
 
     // Ask Kerf and ⇧⌘J: what lies over the composer goes, so the text lands
