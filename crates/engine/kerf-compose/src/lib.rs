@@ -4,6 +4,7 @@
 //! effects Kerf keeps (`kerf-fx`), and media decoded by libav. `draw` says
 //! how each part of a sequence is drawn.
 
+mod alone;
 mod disk;
 mod domains;
 mod draw;
@@ -61,6 +62,7 @@ pub struct ComposeOptions {
     pub frame_folder: Option<std::path::PathBuf>,
 }
 
+pub use alone::{draws_effect, effects_on_picture, Alone};
 pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
 
 /// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
