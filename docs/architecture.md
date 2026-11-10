@@ -76,9 +76,13 @@ new engine needs no code here: a recipe that runs it. What it made is kept as
 the media's file, not as a cache, since a model does not give the same shot
 twice.
 
-Still to come: making from the editor and by an agent, each of which has to
-ask a person before a project's command is run; and saying when a recipe has
-changed since its file was made.
+The editor makes one from the bin's menu, and shows the command and asks
+first: the bridge answers a plain `media_make` with the plan and runs nothing,
+and runs only one sent confirmed, which a person's yes to that plan sends.
+
+Still to come: an agent asking for a media to be made, which has to go through
+that same question to a person; and saying when a recipe has changed since its
+file was made.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the

@@ -362,6 +362,16 @@ private:
     void replaceMedia(const QString &mediaId, const QString &path = QString());
     void revealMedia(const QString &mediaId);
     QString mediaPath(const QString &mediaId) const;
+    // The recipe `mediaId` names (recipe= on its media line), or empty.
+    QString mediaRecipe(const QString &mediaId) const;
+    // Ask the bridge what making `mediaId` from its recipe would run; it
+    // answers media_make_plan and runs nothing.
+    void makeMedia(const QString &mediaId);
+    // What a person is asked before a recipe's command is run, from a
+    // media_make_plan event.
+    static QString makeQuestion(const QJsonObject &plan);
+    // Run the recipe of `mediaId`: only after a person's yes to its plan.
+    void runMake(const QString &mediaId);
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
 

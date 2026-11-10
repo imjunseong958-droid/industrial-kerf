@@ -1789,6 +1789,13 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             // A refused mask edit puts the outline back.
             updateViewerMasks();
         }
+    } else if (type == QStringLiteral("media_make_plan")) {
+        // Nothing has run: the recipe's command runs only on a yes here.
+        if (QMessageBox::question(this, QStringLiteral("Make from Recipe"), makeQuestion(event), QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No) == QMessageBox::Yes)
+            runMake(event.value(QStringLiteral("media")).toString());
+    } else if (type == QStringLiteral("media_made")) {
+        showStatus(QStringLiteral("Made %1 from its recipe").arg(event.value(QStringLiteral("media")).toString()), 6000);
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
         const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();

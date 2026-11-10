@@ -54,6 +54,58 @@ pub(crate) fn copy_then(
     });
 }
 
+/// Make media `id`'s file from its recipe. Unconfirmed, say what would run
+/// (`media_make_plan`) and run nothing. Confirmed, run it on its own thread
+/// and then hand the runtime worker the replace that has the document take
+/// the new file's length and streams. What goes wrong is an `error`, with
+/// the media's file left as it was.
+pub(crate) fn make(
+    client: &kerf_runtime::RuntimeClient,
+    directory: &Path,
+    id: &str,
+    confirmed: bool,
+    commands: &SyncSender<Command>,
+    tx: &SyncSender<Value>,
+) {
+    let plan = client
+        .get_document(false)
+        .and_then(|(_, text)| kerf_runtime::parse_document(&text))
+        .map_err(|error| error.message)
+        .and_then(|project| {
+            kerf_engine::recipe::plan(&project, directory, id).map_err(|error| error.to_string())
+        });
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(error) => return crate::error(tx, format!("cannot make {id}: {error}")),
+    };
+    if !confirmed {
+        return crate::emit(
+            tx,
+            json!({
+                "type": "media_make_plan",
+                "media": id,
+                "recipe": plan.recipe.to_string_lossy(),
+                "command": plan.command,
+                "file": plan.file.to_string_lossy(),
+            }),
+        );
+    }
+    let (commands, tx, id) = (commands.clone(), tx.clone(), id.to_owned());
+    thread::spawn(move || {
+        let cancellation = kerf_engine::CancellationToken::new();
+        match kerf_engine::recipe::make(&plan.recipe, &plan.file, &cancellation, |_| {}) {
+            Ok(()) => {
+                crate::emit(&tx, json!({"type": "media_made", "media": id}));
+                let _ = commands.send(Command::MediaReplace {
+                    media: id,
+                    path: plan.stored,
+                });
+            }
+            Err(error) => crate::error(&tx, format!("cannot make {id}: {error}")),
+        }
+    });
+}
+
 /// Whether `file` reads as media, as an import reads it.
 pub(crate) fn probe(file: &Path) -> Result<(), String> {
     crate::tasks::probe(file).map(drop)
@@ -273,6 +325,20 @@ mod tests {
         };
         assert_eq!((media.as_str(), path.as_str()), ("m2", "/takes/b.mov"));
         assert!(read(json!({"type": "media_replace", "media": "m2"})).is_err());
+        // A recipe runs only when the command says a person agreed to it.
+        let Command::MediaMake { media, confirmed } =
+            read(json!({"type": "media_make", "media": "m2"})).unwrap()
+        else {
+            panic!("expected media_make");
+        };
+        assert_eq!((media.as_str(), confirmed), ("m2", false));
+        assert!(matches!(
+            read(json!({"type": "media_make", "media": "m2", "confirmed": true})).unwrap(),
+            Command::MediaMake {
+                confirmed: true,
+                ..
+            }
+        ));
         assert!(matches!(
             read(json!({"type": "projection_import"})).unwrap(),
             Command::ProjectionImport
