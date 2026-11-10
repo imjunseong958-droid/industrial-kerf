@@ -55,7 +55,7 @@ on `main`; its section here becomes the release's notes on GitHub
   timeline. Gone so far: Customise Keyboard, the Graph Editor, the Finish and
   Deliver trays (scopes, the loudness meter, the QC pane, the render queue and
   the paperwork), the Inspector with its Source Monitor, the Effects, Titles and
-  Presets browser, and Sequence Settings.
+  Presets browser, Sequence Settings, and "Try 3 versions at once".
   - Edit ▸ Keyboard Shortcuts still chooses between the Kerf, Premiere Pro and
     Final Cut Pro layouts; keys of your own no longer apply.
   - Keyframes and their curves are still the project's, for Kerf and `kerf` to

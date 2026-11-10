@@ -838,12 +838,8 @@ void ChatPanel::rebuild() {
     }
     for (const ReviewModel::Thread &thread : threads) {
         if (thread.origin == ReviewModel::Origin::Welcome) continue;
-        // Held, as the picture or the versions' cards are showing them. A version's
-        // own thread names it first.
-        const bool version = QRegularExpression(QStringLiteral("^Version [A-Z]: ")).match(thread.root.body).hasMatch();
-        if (m_holdingProposals && (thread.origin == ReviewModel::Origin::Proposal || version)) continue;
-        // Decided, the note says how it came out.
-        if (version && m_versionsNote && thread.openProposal.isEmpty()) continue;
+        // Held, as the picture is showing them.
+        if (m_holdingProposals && thread.origin == ReviewModel::Origin::Proposal) continue;
         auto *widget = new ThreadWidget(thread.id, first);
         widget->setFlat(m_conversationLook);
         CommentRow *root = buildRow(thread.root, thread, true);
@@ -877,8 +873,7 @@ void ChatPanel::rebuild() {
     }
     placeLocalRows(first);
     // What is said later comes after the note, and the footage stays last.
-    if (m_versionsNote) m_listLayout->insertWidget(std::min(m_versionsNoteAt, int(m_threads.size())), m_versionsNote);
-    if (m_footage) m_listLayout->insertWidget(int(m_threads.size()) + (m_versionsNote ? 1 : 0), m_footage);
+    if (m_footage) m_listLayout->insertWidget(int(m_threads.size()), m_footage);
     updateCounts();
     updateHeader();
     // The people and notes the composer offers follow the review.
@@ -1004,32 +999,6 @@ void ChatPanel::setConversationLook(bool on) {
     scheduleRebuild();
 }
 
-void ChatPanel::setVersionsNote(const QString &request, const QString &answer) {
-    if (m_versionsNote) {
-        m_listLayout->removeWidget(m_versionsNote);
-        m_versionsNote->hide();
-        m_versionsNote->deleteLater();
-        m_versionsNote = nullptr;
-    }
-    if (!request.isEmpty()) {
-        auto *note = new ThreadWidget(QStringLiteral("versions"), m_threads.isEmpty(), m_content);
-        note->setFlat(true);
-        auto *asked = new CommentRow(CommentRow::Kind::User, request, QDateTime::currentDateTime());
-        asked->setLook(CommentRow::Look::Request);
-        note->setRoot(asked);
-        auto *line = new CommentRow(CommentRow::Kind::Kerf, answer.isEmpty() ? QStringLiteral("Making three versions at once. Pick the one you like.") : answer, QDateTime::currentDateTime());
-        line->setLook(CommentRow::Look::Answer);
-        note->addReply(line);
-        note->setRepliesShown(true);
-        m_versionsNoteAt = int(m_threads.size());
-        m_listLayout->insertWidget(m_versionsNoteAt, note);
-        note->show();
-        m_versionsNote = note;
-        moves::fadeIn(note);
-    }
-    syncContent();
-}
-
 void ChatPanel::setHoldingProposals(bool holding) {
     if (holding == m_holdingProposals) return;
     m_holdingProposals = holding;
@@ -1044,7 +1013,7 @@ void ChatPanel::setFootage(const QList<FootageTile> &tiles) {
     }
     if (!m_footage) {
         m_footage = new FootageSheet(m_content);
-        m_listLayout->insertWidget(int(m_threads.size()) + (m_versionsNote ? 1 : 0), m_footage);
+        m_listLayout->insertWidget(int(m_threads.size()), m_footage);
     }
     m_footage->setTiles(tiles);
     m_footage->show();

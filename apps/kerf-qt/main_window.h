@@ -1,6 +1,5 @@
 #pragma once
 
-#include "compare_view.h"
 #include "editor_common.h"
 #include "review_model.h"
 #include "test_friends.h"
@@ -374,22 +373,12 @@ private:
     bool m_holdFlights = false;
     class WorkChip *m_workChip = nullptr;
     QList<ReviewModel::ClipChange> m_pendingFlights;
-    CompareView *m_compare = nullptr;
     ui::IconButton *m_followButton = nullptr;
     bool m_followKerf = true;
     // How far a seek may go past the program: what a proposal makes can be longer.
     double m_seekLimit = 0.0;
     QSet<QString> m_liveChanges;
     bool m_returnAfterPreview = false;
-    struct VersionRun {
-        QString key;
-        QString proposal = {};
-        QString thread = {};
-        QString status = {};
-        CompareView::State state = CompareView::State::Running;
-    };
-    QList<VersionRun> m_versionRuns;
-    bool m_versionsRunning = false;
     ui::IconButton *m_sidebarButton = nullptr;
     ui::IconButton *m_pictureButton = nullptr;
     ui::IconButton *m_timelineButton = nullptr;
@@ -431,19 +420,13 @@ private:
     void endAgentFollow();
     QList<ReviewModel::ClipChange> namedChanges(QList<ReviewModel::ClipChange> changes) const;
     void watchChanges(const QString &proposalId);
-    bool sendVersions(const QString &text);
-    void followVersion(const QJsonObject &event);
-    void refreshCompare();
-    void useVersion(const QString &proposalId);
     void showSheet();
     void showProposedCut();
     void goHome();
     bool m_turnRendered = false;
-    void showCompare(bool shown);
     void followReelCompare();
     QString m_reelCompareAt;
     bool m_reelWasActive = false;
-    QString m_lastVersionsRequest;
     void quietenCutPreview();
     void flyChange(const ReviewModel::ClipChange &change, int index);
     void flushFlights();

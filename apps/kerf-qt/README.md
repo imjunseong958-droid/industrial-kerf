@@ -290,8 +290,7 @@ gives way, the timeline comes in out of the room, and each tile flies to its lan
 while the picture becomes that clip. While a first cut is only a proposal the timeline
 shows it, read-only, the picture takes its format, and its preview follows. Watching what changed, what the picture
 was wipes to and fro over what it now is, with the changed clips lifted off their
-lanes; versions are posters a little askew, fanned out from the picture over the
-timeline; and when Kerf has rendered what was asked, the picture goes back into the
+lanes; and when Kerf has rendered what was asked, the picture goes back into the
 project's folder and the conversation has the room again. Under Reduce Motion
 everything is simply there. [`MOTION_UI.md`](MOTION_UI.md) lists each scene and what to
 reuse; start there when adding one.
@@ -314,12 +313,6 @@ plays only the stretches its changes touch, two seconds either side, one after
 another, with a strip over the picture: where you are, previous and next, Before
 and After, and Exit. After plays the proposal's rendered preview, and Before the
 program as it is.
-
-**Versions** (`ui/compare_view.h`). With the composer's branch button on, Send has
-three agents make their own version of the request at once. Each stages its own
-proposal in a thread of its own, and the versions lie over the timeline side by
-side, leaving the picture free: Watch plays what one changes, and Use this accepts
-it and rejects the others.
 
 **The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) lists the recent
 project folders that still exist, the current one unfolded to New conversation and

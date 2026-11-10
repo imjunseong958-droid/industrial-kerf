@@ -243,9 +243,6 @@ public:
     // What one asks as a bubble and what Kerf says as plain text; the cards small,
     // their changes folded.
     void setConversationLook(bool on);
-    // What was asked for as versions, with a line for the cards that are making
-    // them; empty takes it away.
-    void setVersionsNote(const QString &request, const QString &answer = QString());
     FootageSheet *footage() const { return m_footage; }
     // The registry's proposal.accept: every card's Accept tip names its key.
     void setAcceptAction(QAction *action);
@@ -405,8 +402,6 @@ private:
     FootageSheet *m_footage = nullptr;
     bool m_holdingProposals = false;
     bool m_conversationLook = false;
-    ThreadWidget *m_versionsNote = nullptr;
-    int m_versionsNoteAt = 0;
     QWidget *m_stash = nullptr;
     CommentRow *m_welcomeRow = nullptr;
     ReplyBar *m_replyBar = nullptr;

@@ -1,6 +1,5 @@
 // MainWindow's view of Kerf at work: following where it is on the timeline and
-// picture, watching only what a proposal changes, and comparing versions of a
-// request that several agents make at once.
+// picture, and watching only what a proposal changes.
 
 #include "main_window.h"
 
@@ -16,7 +15,6 @@
 #include "toolbar_widgets.h"
 #include "ui/agent_hud.h"
 #include "ui/change_reel.h"
-#include "ui/compare_view.h"
 #include "ui/stage_motion.h"
 #include "viewer_widget.h"
 #include "media_artwork.h"
@@ -82,14 +80,6 @@ void MainWindow::buildAgentViews() {
         if (m_changeReel->isActive()) m_reelBar->update(seconds);
     });
     connect(m_chat, &ChatPanel::changedPartsRequested, this, &MainWindow::watchChanges);
-
-    m_compare = new CompareView;
-    m_shell->setCompare(m_compare);
-    connect(m_compare, &CompareView::watchRequested, this, &MainWindow::watchChanges);
-    connect(m_compare, &CompareView::useRequested, this, &MainWindow::useVersion);
-    connect(m_compare, &CompareView::closeRequested, this, [this] { showCompare(false); });
-    if (ReviewModel *review = m_reviewWiring->model()) connect(review, &ReviewModel::changed, this, &MainWindow::refreshCompare);
-    connect(m_artwork, &MediaArtwork::changed, this, &MainWindow::refreshCompare);
 
     m_followKerf = QSettings().value(QStringLiteral("layout/followKerf"), true).toBool();
 
@@ -224,7 +214,7 @@ void MainWindow::flushFlights() {
 // choose from gathers in the conversation.
 void MainWindow::showSheet() {
     m_sheetWanted = false;
-    if (m_versionsRunning || m_shell->panes().panelOpen() || !m_panesFollowContent || ui::reducedMotion()) return;
+    if (m_shell->panes().panelOpen() || !m_panesFollowContent || ui::reducedMotion()) return;
     for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray())
         if (!track.toObject().value(QStringLiteral("clips")).toArray().isEmpty()) return;
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
@@ -346,8 +336,8 @@ void MainWindow::quietenCutPreview() {
     m_stageWiring->previewChip()->setSuppressed(quiet || m_changeReel->isActive());
     // The reel's strip already says it is getting the picture.
     m_stageWiring->hud()->setQuiet(quiet || m_cutRendering || m_changeReel->isActive());
-    m_chat->setHoldingProposals(quiet || m_shell->compareShown());
-    if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_versionsRunning && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
+    m_chat->setHoldingProposals(quiet);
+    if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
 }
 
 void MainWindow::setFollowKerf(bool follow) {
@@ -359,7 +349,6 @@ void MainWindow::setFollowKerf(bool follow) {
 
 void MainWindow::showAgentAt(double seconds) {
     if (seconds < 0.0) return;
-    if (m_versionsRunning) return;
     m_timeline->setAgentCursor(seconds);
     if (!m_followKerf || m_playing || m_changeReel->isActive() || std::max(m_duration, m_proposedDuration) <= 0.0) return;
     queueSeek(seconds);
@@ -380,8 +369,7 @@ void MainWindow::followAgentFocus(const QJsonObject &event) {
 
 void MainWindow::followLiveProposal() {
     ReviewModel *review = m_reviewWiring->model();
-    // Versions grow on their own cards, with no one place to follow.
-    if (!m_agentBusy || !review || m_versionsRunning) return;
+    if (!m_agentBusy || !review) return;
     const ReviewModel::Proposal *proposal = m_proposalId.isEmpty() ? nullptr : review->proposal(m_proposalId);
     if (!proposal) return;
     const QSet<QString> before = m_liveChanges;
@@ -416,13 +404,6 @@ void MainWindow::endAgentFollow() {
     if (!m_cutRendering && !m_cutPreview.isActive()) m_motion->releaseStaying();
     m_chat->setFootage({});
     m_sheetWanted = false;
-    bool ran = false;
-    for (VersionRun &run : m_versionRuns)
-        if (run.state == CompareView::State::Running) {
-            run.state = CompareView::State::Stopped;
-            ran = true;
-        }
-    if (ran) refreshCompare();
     refreshSidebar();
 }
 
@@ -483,129 +464,6 @@ void MainWindow::watchChanges(const QString &proposalId) {
     for (const ReviewModel::ClipChange &change : proposal->changes) touched.insert(change.clip);
     m_timeline->setFocusClips(touched);
     m_changeReel->start(proposalId, segments);
-}
-
-bool MainWindow::sendVersions(const QString &text) {
-    QJsonObject command = agentSettingsPayload();
-    command.insert(QStringLiteral("type"), QStringLiteral("agent_versions"));
-    command.insert(QStringLiteral("text"), text);
-    if (!m_bus->send(command)) return false;
-    m_lastVersionsRequest = text;
-    m_versionRuns.clear();
-    m_versionsRunning = true;
-    m_agentBusy = true;
-    m_abortButton->setEnabled(true);
-    updateChatControls();
-    updateCommandStates();
-    revealPanel(true, true);
-    m_panesFollowContent = false;
-    // The cards fan out from the picture.
-    const stage::Rects rects = m_shell->rects();
-    m_compare->setOrigin(rects.picture.translated(-rects.slot.topLeft()));
-    showCompare(true);
-    refreshCompare();
-    return true;
-}
-
-void MainWindow::followVersion(const QJsonObject &event) {
-    const QString key = event.value(QStringLiteral("key")).toString();
-    if (key.isEmpty()) return;
-    auto run = std::find_if(m_versionRuns.begin(), m_versionRuns.end(), [&key](const VersionRun &entry) { return entry.key == key; });
-    if (run == m_versionRuns.end()) {
-        m_versionRuns.append(VersionRun{key});
-        std::sort(m_versionRuns.begin(), m_versionRuns.end(), [](const VersionRun &a, const VersionRun &b) { return a.key < b.key; });
-        run = std::find_if(m_versionRuns.begin(), m_versionRuns.end(), [&key](const VersionRun &entry) { return entry.key == key; });
-    }
-    const QString state = event.value(QStringLiteral("state")).toString();
-    const QString thread = event.value(QStringLiteral("thread")).toString();
-    if (!thread.isEmpty()) run->thread = thread;
-    const QString proposal = event.value(QStringLiteral("proposalId")).toString();
-    if (!proposal.isEmpty()) run->proposal = proposal;
-    if (state == QStringLiteral("running")) {
-        run->state = CompareView::State::Running;
-        const QString status = event.value(QStringLiteral("status")).toString();
-        if (!status.isEmpty()) run->status = QStringLiteral("Working · %1").arg(status);
-    } else {
-        run->state = state == QStringLiteral("done")      ? CompareView::State::Ready
-                     : state == QStringLiteral("stopped") ? CompareView::State::Stopped
-                                                          : CompareView::State::Failed;
-        run->status = event.value(QStringLiteral("message")).toString();
-    }
-    refreshCompare();
-    refreshSidebar();
-}
-
-// The picture gives way to the cards, and the timeline falls back under them.
-void MainWindow::showCompare(bool shown) {
-    m_shell->setCompareShown(shown);
-    moves::dim(m_viewer, shown ? 0.0 : 1.0, tokens::motion::appear);
-    m_shell->veilTimeline(shown ? tokens::motion::timelineBehind : 0.0);
-    // The cards say what the conversation would.
-    m_chat->setVersionsNote(shown && !m_lastVersionsRequest.isEmpty() ? m_lastVersionsRequest : QString());
-    quietenCutPreview();
-}
-
-void MainWindow::refreshCompare() {
-    if (!m_compare) return;
-    ReviewModel *review = m_reviewWiring->model();
-    m_compare->setUpright(!stage::isWide(m_viewer->pictureAspect()));
-    QList<CompareView::Version> versions;
-    for (const VersionRun &run : std::as_const(m_versionRuns)) {
-        CompareView::Version version;
-        version.key = run.key;
-        version.proposalId = run.proposal;
-        version.state = run.state;
-        version.status = run.status;
-        if (const ReviewModel::Proposal *proposal = review && !run.proposal.isEmpty() ? review->proposal(run.proposal) : nullptr) {
-            // A revise gives the proposal a new id.
-            version.proposalId = proposal->id;
-            for (const ReviewModel::ClipChange &change : namedChanges(proposal->changes)) version.changes << reel::changeTitle(change);
-            // The first clip it touches shows what it looks like.
-            const QJsonObject timeline = proposalTimelineFor(m_snapshot, proposal->id);
-            QString wanted = proposal->changes.isEmpty() ? QString() : proposal->changes.constFirst().clip;
-            for (const QJsonValue &track : timeline.value(QStringLiteral("tracks")).toArray())
-                for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
-                    const QJsonObject clip = value.toObject();
-                    if (version.poster.isNull() && (wanted.isEmpty() || clip.value(QStringLiteral("id")).toString() == wanted))
-                        version.poster = m_artwork->frames.value(clip.value(QStringLiteral("sourceId")).toString());
-                }
-        }
-        // Until it has its own it is the picture it fanned out from.
-        if (version.poster.isNull()) version.poster = m_viewer->frame();
-        // What Kerf said makes it different.
-        if (const ReviewModel::Thread *thread = review && !run.thread.isEmpty() ? review->thread(run.thread) : nullptr;
-            thread && !thread->replies.isEmpty() && version.status.isEmpty())
-            version.status = thread->replies.constLast().body.section(QLatin1Char('\n'), 0, 0).trimmed();
-        versions << version;
-    }
-    m_compare->setVersions(versions);
-}
-
-void MainWindow::useVersion(const QString &proposalId) {
-    ReviewModel *review = m_reviewWiring->model();
-    if (m_changeReel->isActive()) m_changeReel->stop();
-    // The others are made from the same revision: accepting one leaves them stale.
-    for (const VersionRun &run : std::as_const(m_versionRuns)) {
-        if (run.proposal.isEmpty()) continue;
-        const ReviewModel::Proposal *proposal = review ? review->proposal(run.proposal) : nullptr;
-        const QString id = proposal ? proposal->id : run.proposal;
-        if (id != proposalId && (!proposal || proposal->isOpen())) m_reviewWiring->reject(id);
-    }
-    m_reviewWiring->accept(proposalId);
-    // The one chosen flies back to where the picture is.
-    const stage::Rects rects = m_shell->rects();
-    moves::dim(m_viewer, 1.0, tokens::motion::stage);
-    m_shell->veilTimeline(0.0, 0, tokens::motion::stage);
-    QString chosen;
-    for (const VersionRun &run : std::as_const(m_versionRuns))
-        if (run.proposal == proposalId || (review && review->proposal(run.proposal) && review->proposal(run.proposal)->id == proposalId)) chosen = run.key;
-    m_compare->playPick(proposalId, rects.picture.translated(-rects.slot.topLeft()), [this, chosen] {
-        m_versionRuns.clear();
-        showCompare(false);
-        m_chat->setVersionsNote(m_lastVersionsRequest, QStringLiteral("Using version %1.").arg(chosen));
-        refreshCompare();
-        refreshSidebar();
-    });
 }
 
 } // namespace kerf

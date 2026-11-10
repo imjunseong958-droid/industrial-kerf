@@ -246,18 +246,6 @@ void StageShell::setReelBar(QWidget *bar) {
     place();
 }
 
-void StageShell::setCompare(QWidget *compare) {
-    m_compare = compare;
-    if (compare) compare->setParent(this);
-    place();
-}
-
-void StageShell::setCompareShown(bool shown) {
-    if (shown == m_compareShown) return;
-    m_compareShown = shown;
-    place();
-    update();
-}
 
 void StageShell::setTransport(QWidget *transport) {
     m_transport = transport;
@@ -487,9 +475,6 @@ void StageShell::place() {
         if (region) region->raise();
     if (m_timeline) m_veil->setGeometry(m_timeline->geometry());
     m_veil->raise();
-    if (m_compare && m_compareShown) m_compare->raise();
-    // The cards take the picture's place, with the timeline still under them.
-    placeRegion(m_compare, m_compareShown ? r.slot : QRect());
     // One hairline between the regions, drawn inside the edge of what lies
     // right of or under it.
     const auto placeSeam = [](QWidget *seam, const QRect &rect) {
@@ -558,7 +543,7 @@ void StageShell::veilTimeline(qreal level, int delay, int duration) {
 qreal StageShell::timelineVeil() const { return static_cast<Veil *>(m_veil)->level(); }
 
 QRect StageShell::shadowed() const {
-    if (!m_picture || m_picture->isHidden() || m_compareShown) return {};
+    if (!m_picture || m_picture->isHidden()) return {};
     const QRect picture = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
     return picture.isEmpty() ? QRect() : picture.adjusted(-kShadowReach, -kShadowReach + kShadowDrop, kShadowReach, kShadowReach + kShadowDrop);
 }

@@ -14,7 +14,6 @@
 #include "ui/components.h"
 #include "ui/editor_bus.h"
 #include "ui/change_reel.h"
-#include "ui/compare_view.h"
 #include "ui/stage_motion.h"
 #include "ui/composer.h"
 #include "ui/wiring/review_wiring.h"
@@ -907,30 +906,6 @@ private slots:
         QVERIFY(r.slot.contains(r.reel));
     }
 
-    void versionCardsTakeThePicturesShape() {
-        CompareView view;
-        view.resize(820, 560);
-        QVERIFY(view.cardRect(0, 3).height() < view.cardRect(0, 3).width() * 1.5);
-        view.setUpright(true);
-        const QRect upright = view.cardRect(0, 3);
-        QVERIFY(upright.height() > upright.width() * 1.7);
-        QVERIFY(view.rect().contains(view.cardRect(2, 3)));
-    }
-
-    void anUnusedCardKeepsItsPosterWhenTheStateChanges() {
-        CompareView view;
-        view.resize(820, 560);
-        QImage poster(16, 9, QImage::Format_RGB32);
-        poster.fill(Qt::red);
-        CompareView::Version version;
-        version.key = QStringLiteral("A");
-        version.poster = poster;
-        view.setVersions({version});
-        version.poster = QImage();
-        view.setVersions({version});
-        QVERIFY(view.findChild<ComparePoster *>()->hasImage());
-    }
-
     void aProposedCutBringsItsOwnFormat() {
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
@@ -1026,50 +1001,6 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
         QVERIFY(std::isnan(window.m_timeline->agentCursor()));
         QSettings().remove(QStringLiteral("layout"));
-        window.close();
-    }
-
-    void versionsRunSideBySideAndOneIsUsed() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        QList<QJsonObject> sent;
-        window.m_bus->setSender([&sent](const QJsonObject &command) {
-            sent << command;
-            return true;
-        });
-        Composer *composer = window.m_chat->composerWidget();
-        composer->versionsButton()->click();
-        QVERIFY(composer->versionsOn());
-        composer->fill(QStringLiteral("Open stronger"));
-        QVERIFY(window.m_reviewWiring->post());
-        QCOMPARE(sent.last().value("type").toString(), QStringLiteral("agent_versions"));
-        QCOMPARE(sent.last().value("text").toString(), QStringLiteral("Open stronger"));
-        QVERIFY(!composer->versionsOn());
-        QVERIFY(window.m_shell->compareShown());
-        QVERIFY(window.m_compare->isVisible());
-        QCOMPARE(inWindow(window.m_compare, &window), window.m_shell->rects().slot.translated(window.m_shell->pos()));
-        for (const char *key : {"A", "B", "C"})
-            window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", key}, {"state", "running"}});
-        QCOMPARE(window.m_compare->keys(), QStringList({"A", "B", "C"}));
-        QCOMPARE(window.m_compare->statusText("B"), QStringLiteral("Working"));
-        QVERIFY(!window.m_compare->useButton("A")->isEnabled());
-        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "A"}, {"state", "done"}, {"proposalId", "pa"}});
-        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "B"}, {"state", "done"}, {"proposalId", "pb"}});
-        window.handleEvent(QJsonObject{{"type", "agent_version"}, {"key", "C"}, {"state", "failed"}, {"message", "No key"}});
-        QVERIFY(window.m_compare->useButton("A")->isEnabled());
-        QVERIFY(!window.m_compare->useButton("C")->isEnabled());
-        QCOMPARE(window.m_compare->statusText("C"), QStringLiteral("No key"));
-        // Used: it is accepted, and the versions are done with.
-        window.m_compare->useButton("A")->click();
-        QVERIFY(!window.m_shell->compareShown());
-        QVERIFY(std::any_of(sent.cbegin(), sent.cend(), [](const QJsonObject &command) {
-            return command.value("proposalId").toString() == QStringLiteral("pb") && command.value("type").toString().contains(QStringLiteral("reject"));
-        }));
-        QCOMPARE(sent.last().value("proposalId").toString(), QStringLiteral("pa"));
         window.close();
     }
 };

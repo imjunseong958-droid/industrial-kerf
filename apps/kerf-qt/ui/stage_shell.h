@@ -98,10 +98,6 @@ public:
     void setSidebar(QWidget *sidebar);
     // The strip over the picture while watching a proposal's changes.
     void setReelBar(QWidget *bar);
-    // The versions of a request, over the timeline while they show.
-    void setCompare(QWidget *compare);
-    void setCompareShown(bool shown);
-    bool compareShown() const { return m_compareShown; }
     // The block under the picture; hidden while the timeline's strip carries
     // the transport.
     void setTransport(QWidget *transport);
@@ -182,8 +178,6 @@ private:
     QRect m_shadowed;
     QWidget *m_veil = nullptr;
     QVariantAnimation *m_moves = nullptr;
-    QWidget *m_compare = nullptr;
-    bool m_compareShown = false;
     QWidget *m_picture = nullptr;
     QWidget *m_conversation = nullptr;
     QWidget *m_timeline = nullptr;
