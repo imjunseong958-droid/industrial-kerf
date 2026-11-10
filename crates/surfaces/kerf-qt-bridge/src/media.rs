@@ -325,6 +325,20 @@ mod tests {
         };
         assert_eq!((media.as_str(), path.as_str()), ("m2", "/takes/b.mov"));
         assert!(read(json!({"type": "media_replace", "media": "m2"})).is_err());
+        // A recipe runs only when the command says a person agreed to it.
+        let Command::MediaMake { media, confirmed } =
+            read(json!({"type": "media_make", "media": "m2"})).unwrap()
+        else {
+            panic!("expected media_make");
+        };
+        assert_eq!((media.as_str(), confirmed), ("m2", false));
+        assert!(matches!(
+            read(json!({"type": "media_make", "media": "m2", "confirmed": true})).unwrap(),
+            Command::MediaMake {
+                confirmed: true,
+                ..
+            }
+        ));
         assert!(matches!(
             read(json!({"type": "projection_import"})).unwrap(),
             Command::ProjectionImport

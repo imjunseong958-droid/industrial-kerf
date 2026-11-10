@@ -31,7 +31,9 @@ on `main`; its section here becomes the release's notes on GitHub
 - A media line can say what its file was made from: `recipe="shots/open.json"`
   names a recipe, a text file with the command that makes it, and
   `kerf make <media>` runs it and puts the new file in the media's place. A
-  3D render or a video model's shot can be made again from the project.
+  3D render or a video model's shot can be made again from the project. In
+  the editor, such a media has Make from Recipe… in the bin's menu, which
+  shows the command and asks before it runs.
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.
