@@ -1926,6 +1926,7 @@ name = "kerf-motion"
 version = "0.1.2"
 dependencies = [
  "kerf-draw",
+ "kerf-model",
  "kurbo",
  "linesweeper",
  "rayon",

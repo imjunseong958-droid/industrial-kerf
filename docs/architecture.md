@@ -51,6 +51,21 @@ The compositor, the parser, the language reference, and `look` need no change. A
 test fails if the catalog and the code disagree. `image.fill` is the worked
 example.
 
+### Adding a generator
+
+1. Implement `kerf_draw::source::PictureSource` in the area's crate and list it
+   in the crate's `SOURCES`; `Reading` gives its parameters at the moment drawn.
+2. Describe it in the catalog, as a generator.
+3. For a new area crate, add its `SOURCES` to `kerf-compose/src/domains.rs`.
+
+A document then says `clip g1 gen=<id>@1`, and the clip takes masks, effects,
+placing, and depth as any other does. `shape` and `particles` are the worked
+examples (`kerf-motion/src/sources.rs`). A solid and a title are still the
+compositor's own, since it fills a solid on the GPU and plans a title's text
+when it reads the document, and an adjustment layer, a null, a camera, and a
+light draw nothing of their own. A test fails if the catalog has a generator
+with no code.
+
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
 color correction and Gaussian blur every Kerf has had, the EffectCraft effects

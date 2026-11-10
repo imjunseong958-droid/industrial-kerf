@@ -403,7 +403,7 @@ impl Drawing {
                 let size = output_size(inner.width, inner.height, scale);
                 (size, size.0 as f64 / f64::from(inner.width))
             }
-            Source::Solid(_) | Source::Title(_) | Source::Motion(_) => (canvas, scale),
+            Source::Solid(_) | Source::Title(_) | Source::Drawn(_) => (canvas, scale),
             // It works on the canvas beneath it, unplaced.
             Source::Adjustment | Source::Nothing => {
                 return Shape {
@@ -1251,7 +1251,13 @@ impl Drawing {
                 let key = title_key(title, (cw, ch), time);
                 frame.image_kept(&key, || title_on(title, (cw, ch), time))
             }
-            Source::Motion(motion) => frame.image(&motion_on(*motion, &plan.clip, (cw, ch), time)),
+            Source::Drawn(source) => {
+                let run = SourceRun {
+                    at: time,
+                    size: (cw, ch),
+                };
+                frame.image(&source.draw(&plan.clip, &run))
+            }
             Source::Adjustment | Source::Nothing => return None,
         }))
     }
