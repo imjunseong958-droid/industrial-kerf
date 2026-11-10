@@ -104,7 +104,7 @@ private slots:
             {"0,0,1,1", 0.3, 0.3},
         };
         for (const auto &row : table)
-            QVERIFY2(std::abs(path::curve(QString::fromLatin1(row.interp), row.t) - row.wanted) < 1e-5, row.interp);
+            QVERIFY2(std::abs(motionpath::curve(QString::fromLatin1(row.interp), row.t) - row.wanted) < 1e-5, row.interp);
     }
 
     // The same table holds the compositor to these, in kerf_model's path.rs.
@@ -133,9 +133,9 @@ private slots:
             {"0.3,0.3 0.3,0.3", 1.0, 0.5, 0.3, 0.3, 0.0},
         };
         for (const auto &row : table) {
-            const auto points = path::parsePath(QString::fromLatin1(row.path));
+            const auto points = motionpath::parsePath(QString::fromLatin1(row.path));
             QVERIFY2(points, row.path);
-            const auto at = path::MotionPath(*points, row.aspect).at(row.along);
+            const auto at = motionpath::MotionPath(*points, row.aspect).at(row.along);
             const QString where = QStringLiteral("%1 at %2: %3,%4 heading %5").arg(QString::fromLatin1(row.path)).arg(row.along).arg(at.x).arg(at.y).arg(at.heading);
             QVERIFY2(std::abs(at.x - row.x) < 1e-6, qPrintable(where));
             QVERIFY2(std::abs(at.y - row.y) < 1e-6, qPrintable(where));
@@ -144,12 +144,12 @@ private slots:
     }
 
     void aPathReadsAndWritesAsTheDocumentDoes() {
-        const auto points = path::parsePath(QStringLiteral("0,0 0.5,-0.25"));
+        const auto points = motionpath::parsePath(QStringLiteral("0,0 0.5,-0.25"));
         QVERIFY(points);
         QCOMPARE(*points, (QList<QPointF>{{0.0, 0.0}, {0.5, -0.25}}));
         for (const char *refused : {"", "0,0", "0 0", "0,0 x,1", "0,0 11,0", "0,0 nan,0", "0,0 1,2,3"})
-            QVERIFY2(!path::parsePath(QString::fromLatin1(refused)), refused);
-        QCOMPARE(path::pathText({{0.123456, -0.5}, {0.0, 12.0}, {-0.00001, 1.0}}), QStringLiteral("0.1235,-0.5 0,10 0,1"));
+            QVERIFY2(!motionpath::parsePath(QString::fromLatin1(refused)), refused);
+        QCOMPARE(motionpath::pathText({{0.123456, -0.5}, {0.0, 12.0}, {-0.00001, 1.0}}), QStringLiteral("0.1235,-0.5 0,10 0,1"));
     }
 
     void aPlacementFollowsTheClipsPath() {
@@ -256,9 +256,9 @@ private slots:
             QVERIFY2(back && QLineF(*back, row.from).length() < 1e-6, qPrintable(where));
             if (!row.props.contains("path")) continue;
             // A clip's anchor is where its path says, wherever along it the clip is now.
-            const auto points = path::parsePath(row.props.value("path").toString());
+            const auto points = motionpath::parsePath(row.props.value("path").toString());
             QVERIFY(points);
-            const auto on = path::MotionPath(*points, row.canvas.width() / row.canvas.height()).at(row.props.value("along").toDouble());
+            const auto on = motionpath::MotionPath(*points, row.canvas.width() / row.canvas.height()).at(row.props.value("along").toDouble());
             for (const double along : {0.0, 0.3, 1.0}) {
                 if (row.props.value("orient").toBool() && along != row.props.value("along").toDouble()) continue;
                 QJsonObject elsewhere = row.props;
@@ -329,7 +329,7 @@ private slots:
                     const auto exact = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, moved).at(index);
                     QVERIFY(exact && QLineF(*exact, wanted).length() < 1e-6);
                     // Through what the document says of it, as it will be drawn from then on.
-                    const auto written = path::parsePath(path::pathText(moved));
+                    const auto written = motionpath::parsePath(motionpath::pathText(moved));
                     QVERIFY(written.has_value());
                     const auto landed = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, *written).at(index);
                     QVERIFY(landed.has_value());
@@ -392,7 +392,7 @@ private slots:
         QCOMPARE(edits.count(), 1);
         const QJsonObject op = edits.takeFirst().at(0).toJsonArray().at(0).toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
-        const auto written = path::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written.has_value() && written->size() == 3);
         QCOMPARE(written->at(0), start.at(0));
         QCOMPARE(written->at(2), start.at(2));
@@ -456,9 +456,9 @@ private slots:
     void aPointAddedLiesOnTheCurveAndLeavesItsShape() {
         const QList<QPointF> points{{0.0, 0.0}, {0.2, 0.3}, {0.5, -0.1}, {0.8, 0.2}};
         const double aspect = 16.0 / 9.0;
-        const path::MotionPath before(points, aspect);
+        const motionpath::MotionPath before(points, aspect);
         for (const double u : {0.1, 0.5, 1.25, 1.5, 2.9}) {
-            const QList<QPointF> added = path::withPointOn(points, aspect, u);
+            const QList<QPointF> added = motionpath::withPointOn(points, aspect, u);
             QCOMPARE(added.size(), points.size() + 1);
             const qsizetype place = qsizetype(u) + 1;
             QVERIFY(QLineF(added.at(place), before.curve(u)).length() < 1e-9);
@@ -468,7 +468,7 @@ private slots:
             QCOMPARE(rest, points);
             // A curve through points has no handles to hold: how far it strays is the
             // price of that, and it is at most a sliver of the canvas.
-            const QList<QPointF> line = path::MotionPath(added, aspect).samples();
+            const QList<QPointF> line = motionpath::MotionPath(added, aspect).samples();
             for (const QPointF &sample : before.samples()) {
                 double nearest = 1e9;
                 for (const QPointF &along : line) nearest = std::min(nearest, std::hypot((along.x() - sample.x()) * aspect, along.y() - sample.y()));
@@ -495,7 +495,7 @@ private slots:
         QVERIFY(QLineF(points.at(0), canvas.center()).length() < 0.01);
         QVERIFY(QLineF(points.at(1), canvas.center() + QPointF(canvas.width() * 0.25, -canvas.height() * 0.25)).length() < 0.01);
         // The curve is the compositor's, on the same canvas, and goes through every point.
-        const path::MotionPath path({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0);
+        const motionpath::MotionPath path({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0);
         const QList<QPointF> curve = s.viewer.motionPathCurve();
         const QList<QPointF> samples = path.samples();
         QCOMPARE(curve.size(), samples.size());
@@ -549,7 +549,7 @@ private slots:
         const QJsonObject op = ops.first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
         QCOMPARE(op.value("clip").toString(), QStringLiteral("c1"));
-        const auto written = path::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written);
         QCOMPARE(written->size(), 3);
         QCOMPARE(written->at(0), QPointF(0.0, 0.0));
@@ -579,7 +579,7 @@ private slots:
         QSignalSpy plays(&s.viewer, &ViewerWidget::playRequested);
         const QList<QPointF> curve = s.viewer.motionPathCurve();
         // A quarter of the way along the first span, a little to one side of it.
-        const QPointF on = curve.at(path::MotionPath::kSamplesPerSpan / 4);
+        const QPointF on = curve.at(motionpath::MotionPath::kSamplesPerSpan / 4);
         const QPointF at = on + QPointF(2, 2);
         QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, at.toPoint());
         QCOMPARE(s.edits.size(), 0);
@@ -589,7 +589,7 @@ private slots:
         QCOMPARE(plays.size(), 0);
         const QJsonObject op = s.edits.last().at(0).toJsonArray().first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
-        const auto written = path::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written);
         QCOMPARE(written->size(), 4);
         QCOMPARE(written->at(0), QPointF(0.0, 0.0));
@@ -701,7 +701,7 @@ private slots:
         const QPointF to = points.at(1) + QPointF(0, canvas.height() * 0.1);
         s.drag(points.at(1), to);
         QCOMPARE(s.edits.size(), 1);
-        const auto written = path::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         QVERIFY(std::abs(written->at(1).x() - 0.5) < 0.005);
         QVERIFY(std::abs(written->at(1).y() - 0.2) < 0.005);
@@ -876,7 +876,7 @@ private slots:
         };
         QVERIFY(QLineF(s.viewer.motionPathPoints().at(1), widget({0.25, -0.25})).length() < 0.01);
         // The curve's samples and the marker go through the same map.
-        const QList<QPointF> samples = path::MotionPath({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0).samples();
+        const QList<QPointF> samples = motionpath::MotionPath({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0).samples();
         QVERIFY(QLineF(s.viewer.motionPathCurve().at(7), widget(samples.at(7))).length() < 0.01);
         QVERIFY(QLineF(s.viewer.motionPathMarker(), widget({0.0, 0.0})).length() < 0.01);
         // A drag writes the share that lands under the pointer, to the four places a path is kept to.
@@ -884,7 +884,7 @@ private slots:
         const QPointF to = from + QPointF(70, 45);
         s.drag(from, to);
         QCOMPARE(s.edits.size(), 1);
-        const auto written = path::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         QVERIFY2(QLineF(widget(written->at(1)), to).length() < 1.5, qPrintable(QStringLiteral("%1,%2").arg(widget(written->at(1)).x()).arg(widget(written->at(1)).y())));
         // The other points stay.
@@ -896,7 +896,7 @@ private slots:
         const QPointF onCurve = s.viewer.motionPathCurve().at(16);
         QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, onCurve.toPoint());
         QCOMPARE(s.edits.size(), 1);
-        const auto added = path::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto added = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(added);
         QCOMPARE(added->size(), 4);
         QVERIFY(QLineF(widget(added->at(1)), onCurve).length() < 2.0);
@@ -906,7 +906,7 @@ private slots:
         s.viewer.setFocus();
         QTest::keyClick(&s.viewer, Qt::Key_Delete);
         QCOMPARE(s.edits.size(), 1);
-        QCOMPARE(path::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString())->size(), 3);
+        QCOMPARE(motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString())->size(), 3);
     }
 
     void aDragPastAPlanesHorizonStaysWhereItWas() {
@@ -926,7 +926,7 @@ private slots:
         QVERIFY(!pointInSight(placement, QPointF(0.5, past)));
         const QPointF good = *pointInSight(placement, QPointF(0.5, horizon - 0.4));
         const QPointF other = *pointInSight(placement, QPointF(0.7, horizon - 0.4));
-        s.viewer.setMotionPath(QStringLiteral("c1"), path::pathText({good, other}), placement, 0.0);
+        s.viewer.setMotionPath(QStringLiteral("c1"), motionpath::pathText({good, other}), placement, 0.0);
         QVERIFY(s.viewer.showsMotionPath());
         const QRectF picture = s.viewer.pictureRect();
         const QPointF from = s.viewer.motionPathPoints().at(0);
@@ -940,7 +940,7 @@ private slots:
         // would land elsewhere: it stays, as it does beyond.
         const double nearly = horizon - 0.002;
         const auto tooFar = pointInSight(placement, QPointF(0.5, nearly));
-        QVERIFY(tooFar && !path::pathHolds(*tooFar));
+        QVERIFY(tooFar && !motionpath::pathHolds(*tooFar));
         const QPointF close(picture.center().x(), picture.top() + picture.height() * nearly);
         QMouseEvent almost(QEvent::MouseMove, close, s.viewer.mapToGlobal(close), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&s.viewer, &almost);
@@ -952,7 +952,7 @@ private slots:
         QTest::mouseRelease(&s.viewer, Qt::LeftButton, Qt::NoModifier, beyond.toPoint());
         // What is written is where it stayed.
         QCOMPARE(s.edits.size(), 1);
-        const auto written = path::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         const QPointF shares = placement.map(written->at(0));
         QVERIFY(QLineF(QPointF(picture.left() + shares.x() * picture.width(), picture.top() + shares.y() * picture.height()), lastGood).length() < 1.5);
