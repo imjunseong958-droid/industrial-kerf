@@ -136,10 +136,25 @@ file(GLOB KERF_QT_FONTS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" r
 qt_add_resources(kerf-qt-shared fonts PREFIX /fonts BASE resources/fonts FILES ${KERF_QT_FONTS})
 file(GLOB KERF_QT_FONT_LICENSES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_LIST_DIR}" resources/fonts/*-LICENSE.txt)
 
+# Kerf's icon, drawn once in resources/icon/industrial-kerf.svg. tools/kerf-icon
+# renders the files beside it, which are in the repository so that a build
+# needs no renderer, and its test fails when they stop matching the SVG. The
+# sizes a window or a taskbar asks for are compiled in at :/icon/<file>
+# (ui/app_icon.cpp).
+set(KERF_QT_ICON_PNGS)
+foreach(side 16 24 32 48 64 128 256)
+    list(APPEND KERF_QT_ICON_PNGS resources/icon/industrial-kerf-${side}.png)
+endforeach()
+qt_add_resources(kerf-qt-shared icon PREFIX /icon BASE resources/icon FILES ${KERF_QT_ICON_PNGS})
+
 add_executable(kerf-qt main.cpp ${KERF_QT_VARIANT_SOURCES})
 if(APPLE)
     target_sources(kerf-qt PRIVATE ${KERF_QT_FONT_LICENSES})
     set_source_files_properties(${KERF_QT_FONT_LICENSES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources/fonts)
+    # The icon Finder and the Dock show: in Resources, and named by
+    # CFBundleIconFile in Info.plist.
+    target_sources(kerf-qt PRIVATE resources/icon/industrial-kerf.icns)
+    set_source_files_properties(resources/icon/industrial-kerf.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     # A macOS application bundle (target/qt/kerf-qt.app), so the system
     # treats the editor as an app of its own: its name in the menu bar and
     # the Dock, and an identifier other apps and tools can address it by.
@@ -148,12 +163,20 @@ if(APPLE)
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.industrial-kerf.editor"
         MACOSX_BUNDLE_BUNDLE_NAME "Industrial Kerf"
+        MACOSX_BUNDLE_ICON_FILE "industrial-kerf"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
 endif()
 if(WIN32)
     # A window of its own, with no console behind it.
     set_target_properties(kerf-qt PROPERTIES WIN32_EXECUTABLE TRUE)
+    # The icon is a resource of the program: Explorer, the taskbar, the Start
+    # menu entry and kerf:// links (the installer's DefaultIcon, kerf-qt.exe,0)
+    # all read it from there.
+    enable_language(RC)
+    target_sources(kerf-qt PRIVATE resources/icon/kerf-qt.rc)
+    set_source_files_properties(resources/icon/kerf-qt.rc PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/resources/icon/industrial-kerf.ico")
 endif()
 target_link_libraries(kerf-qt PRIVATE kerf-qt-shared)
 kerf_copy_runtime_dlls(kerf-qt)

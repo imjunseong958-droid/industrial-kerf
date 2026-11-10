@@ -9,6 +9,9 @@
     (AssocQueryString), and follows a kerf:// link as a click would, which has to start the
     installed editor with the link; then uninstalls it and finds each of those gone.
 
+    Where the editor has Kerf's icon (from 0.1.2), kerf:// links have to take theirs from
+    the installed editor, and the installer's own icon has to be the editor's.
+
     It installs for the user running it, so it refuses to run where Industrial Kerf is
     installed already: its uninstall at the end would take that copy away.
 
@@ -28,6 +31,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Installer = (Resolve-Path $Installer).Path
+. (Join-Path $PSScriptRoot 'kerf-windows-icon.ps1')
 
 # The installer's AppId (apps/kerf-qt/packaging/windows/kerf.iss), as Inno Setup names its
 # uninstall entry.
@@ -52,6 +56,16 @@ function Get-KerfLinkCommand {
     $result = [KerfCheck.Shell]::AssocQueryString(0, 1, 'kerf', 'open', $command, [ref]$length)
     if ($result -ne 0) { return '' }
     return $command.ToString()
+}
+
+# Where Explorer takes the icon of a kerf:// link from, as "file,index"; empty when none.
+function Get-KerfLinkIcon {
+    $length = 1024
+    $icon = New-Object System.Text.StringBuilder $length
+    # ASSOCSTR_DEFAULTICON.
+    $result = [KerfCheck.Shell]::AssocQueryString(0, 15, 'kerf', $null, $icon, [ref]$length)
+    if ($result -ne 0) { return '' }
+    return $icon.ToString()
 }
 
 # Under LOCALAPPDATA, which Windows gives in full: TEMP may be in 8.3 form (RUNNER~1), which
@@ -86,6 +100,23 @@ try {
     $expected = "`"$editor`" `"%1`""
     $command = Get-KerfLinkCommand
     if ($command -ne $expected) { throw "kerf:// opens with '$command', not '$expected'" }
+
+    # Kerf's icon: links take the installed editor's, and the installer wears the same
+    # one (SetupIconFile), compared by its largest picture. An editor from before 0.1.2
+    # has none, which check-kerf-windows.ps1 has said above.
+    $editorIcon = Get-KerfProgramIcon $editor
+    if ($editorIcon.Count -gt 0) {
+        $linkIcon = (Get-KerfLinkIcon).Replace('"', '')
+        if ($linkIcon -ne "$editor,0") { throw "kerf:// links take their icon from '$linkIcon', not '$editor,0'" }
+        $setupIcon = Assert-KerfProgramIcon $Installer
+        $ours = ($editorIcon | Where-Object { $_.Side -eq 256 } | Select-Object -First 1).Data
+        $theirs = ($setupIcon | Where-Object { $_.Side -eq 256 } | Select-Object -First 1).Data
+        if (-not [System.Linq.Enumerable]::SequenceEqual([byte[]]$ours, [byte[]]$theirs)) {
+            throw "The installer's icon is not the editor's: Inno Setup's own, with no SetupIconFile?"
+        }
+        Write-Host "The installer and kerf:// links have the editor's icon."
+    }
+
     $review = 'kerf://kerf-installer-check/rev1@00:00:01:00'
     Start-Process $review
     $deadline = (Get-Date).AddSeconds(60)

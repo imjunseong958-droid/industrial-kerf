@@ -1,0 +1,18 @@
+[package]
+name = "kerf-icon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Renders Kerf's icon from its SVG to the PNG, .ico and .icns files the editor and its packages carry"
+publish = false
+
+[[bin]]
+name = "kerf-icon"
+path = "src/main.rs"
+
+[dependencies]
+# The SVG renderer alone: the icon has no text, and its photographs are JPEG.
+resvg = { version = "0.49", default-features = false, features = ["raster-images"] }
+
+[lints]
+workspace = true

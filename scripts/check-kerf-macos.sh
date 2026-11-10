@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run Industrial Kerf.app as someone who unzipped it would, and fail if it needs
-# anything it does not carry, or a newer macOS than its Info.plist says it runs on.
+# anything it does not carry, or a newer macOS than its Info.plist says it runs on, or
+# has no icon of its own.
 #
 # With nothing of Homebrew's on PATH, runs ffmpeg -version, ffprobe -version,
 # kerf --version and kerfd --endpoint from the app, and opens the editor's start
@@ -76,6 +77,38 @@ if [ -n "$minimum" ]; then
         exit 1
     fi
     echo "Nothing in the app needs a newer macOS than the $minimum its Info.plist names."
+fi
+
+# The app's icon, as Finder and the Dock find it: Info.plist names a file in Resources
+# (CFBundleIconFile, with or without .icns), and that file holds a picture for each size
+# they ask for, which iconutil unpacks. An app from before 0.1.2 has no icon.
+plist="$app/Contents/Info.plist"
+icon_name="$(plutil -extract CFBundleIconFile raw -o - "$plist" 2> /dev/null || true)"
+app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$plist" 2> /dev/null || true)"
+if [ -z "$icon_name" ]; then
+    if [ "$(version_number "${app_version:-0.0.0}")" -ge "$(version_number 0.1.2)" ]; then
+        echo "The app's Info.plist names no icon (CFBundleIconFile)" >&2
+        exit 1
+    fi
+    echo "Industrial Kerf $app_version is from before the app had an icon: not checked."
+else
+    case "$icon_name" in *.icns) ;; *) icon_name="$icon_name.icns" ;; esac
+    icon="$app/Contents/Resources/$icon_name"
+    [ -s "$icon" ] || { echo "Info.plist names the icon $icon_name, and Contents/Resources has none" >&2; exit 1; }
+    iconutil --convert iconset --output "$scratch/icon.iconset" "$icon" ||
+        { echo "$icon_name is not an icon iconutil can read" >&2; exit 1; }
+    for points in 16 32 128 256 512; do
+        for scale in 1 2; do
+            name="icon_${points}x${points}.png"
+            [ "$scale" = 1 ] || name="icon_${points}x${points}@2x.png"
+            picture="$scratch/icon.iconset/$name"
+            [ -s "$picture" ] || { echo "$icon_name has no $name" >&2; exit 1; }
+            width="$(sips -g pixelWidth "$picture" | awk '/pixelWidth/ {print $2}')"
+            [ "$width" = "$((points * scale))" ] ||
+                { echo "$icon_name's $name is $width pixels wide, not $((points * scale))" >&2; exit 1; }
+        done
+    done
+    echo "The app's icon, $icon_name, is in its Resources with a picture for each size."
 fi
 
 run "$macos/ffmpeg" -version > /dev/null

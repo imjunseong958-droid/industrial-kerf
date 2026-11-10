@@ -25,12 +25,15 @@ on:
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
       - "scripts/check-kerf-windows-installer.ps1"
+      - "scripts/kerf-windows-icon.ps1"
       - "scripts/check-kerf-macos.sh"
       - "scripts/package-kerf-linux.sh"
       - "scripts/check-kerf-linux.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/resources/icon/**"
+      - "apps/kerf-qt/Info.plist.in"
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/package.yml"
   push:
@@ -43,12 +46,15 @@ on:
       - "scripts/collect-kerf-windows-sources.sh"
       - "scripts/check-kerf-windows.ps1"
       - "scripts/check-kerf-windows-installer.ps1"
+      - "scripts/kerf-windows-icon.ps1"
       - "scripts/check-kerf-macos.sh"
       - "scripts/package-kerf-linux.sh"
       - "scripts/check-kerf-linux.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
+      - "apps/kerf-qt/resources/icon/**"
+      - "apps/kerf-qt/Info.plist.in"
       - "apps/kerf-qt/CMakeLists.txt"
       - ".github/workflows/package.yml"
 
@@ -210,6 +216,20 @@ jobs:
             exit 1
           fi
           grep -q 'need a newer one' "$RUNNER_TEMP/older.log" || { cat "$RUNNER_TEMP/older.log" >&2; exit 1; }
+          echo "Failed, as it should"
+      # Nor is the check satisfied by an app without its icon: Info.plist names one, and
+      # Resources has to hold it.
+      - name: The check fails an app without its icon
+        run: |
+          bare="$RUNNER_TEMP/bare/Industrial Kerf.app"
+          mkdir -p "$(dirname "$bare")"
+          cp -R "target/package-macos/Industrial Kerf.app" "$bare"
+          rm "$bare/Contents/Resources/industrial-kerf.icns"
+          if scripts/check-kerf-macos.sh "$bare" 2> "$RUNNER_TEMP/bare.log"; then
+            echo "The check passed an app with no icon in its Resources" >&2
+            exit 1
+          fi
+          grep -q 'Contents/Resources has none' "$RUNNER_TEMP/bare.log" || { cat "$RUNNER_TEMP/bare.log" >&2; exit 1; }
           echo "Failed, as it should"
       - name: Collect the source of the app
         run: scripts/collect-kerf-macos-sources.sh

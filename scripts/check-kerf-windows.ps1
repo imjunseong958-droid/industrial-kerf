@@ -16,6 +16,10 @@
     runtime) from anywhere else. The editor loads all that kerf, kerfd and the bridge
     link to, as it links the bridge, and the bridge FFmpeg.
 
+    kerf-qt.exe has to carry Kerf's icon as a resource, which is where Explorer, the
+    taskbar, the Start menu entry and kerf:// links take it from (kerf-windows-icon.ps1).
+    A package from before 0.1.2 has none, and is not held to it.
+
     package-kerf-windows.ps1 runs this on what it packs, and
     .github/workflows/verify-release.yml on a published release, unpacked on a fresh
     runner.
@@ -34,6 +38,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Package = (Resolve-Path $Package).Path.TrimEnd('\')
 if (-not (Test-Path (Join-Path $Package 'kerf-qt.exe'))) { throw "No kerf-qt.exe in $Package" }
+. (Join-Path $PSScriptRoot 'kerf-windows-icon.ps1')
 
 # Names of what the package has to bring itself. Windows has none of them, so one
 # of these loaded from anywhere but the package was missing from it. (Its icuuc.dll
@@ -85,6 +90,21 @@ try {
         & (Join-Path $Package $check[0]) $check[1] | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "$($check[0]) did not run from the package (exit code $LASTEXITCODE)" }
     }
+    # The editor's icon, among its resources. kerf.exe says which version this is
+    # ("kerf 0.1.2"): the editor had no icon before 0.1.2.
+    $said = "$(& (Join-Path $Package 'kerf.exe') --version)".Trim()
+    $packageVersion = $null
+    if ($said -notmatch '(\d+\.\d+\.\d+)' -or -not [version]::TryParse($Matches[1], [ref]$packageVersion)) {
+        throw "kerf.exe --version said '$said', with no version in it"
+    }
+    $editorExe = Join-Path $Package 'kerf-qt.exe'
+    if ($packageVersion -lt [version]'0.1.2' -and (Get-KerfProgramIcon $editorExe).Count -eq 0) {
+        Write-Host "Industrial Kerf $packageVersion is from before the editor had an icon: not checked."
+    } else {
+        $pictures = Assert-KerfProgramIcon $editorExe
+        Write-Host "kerf-qt.exe carries its icon at $(($pictures.Side | Sort-Object) -join ', ') pixels."
+    }
+
     # kerfd only has to say where clients reach it.
     $endpoint = & (Join-Path $Package 'kerfd.exe') --dir $scratch --endpoint
     if ($LASTEXITCODE -ne 0 -or -not $endpoint) { throw "kerfd.exe did not run from the package (exit code $LASTEXITCODE)" }

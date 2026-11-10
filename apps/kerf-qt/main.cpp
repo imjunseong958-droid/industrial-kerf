@@ -1,3 +1,4 @@
+#include "app_icon.h"
 #include "bridge.h"
 #include "crash_notice.h"
 #include "design_tokens.h"
@@ -67,6 +68,12 @@ int main(int argc, char **argv) {
     // macOS titles a window with its document alone.
     QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
+#ifndef Q_OS_MACOS
+    // Kerf's icon on every window and in the taskbar. On macOS the Dock shows
+    // the app's own (CFBundleIconFile), drawn to the Dock's grid, and setting
+    // one here would put this tile, drawn without that margin, in its place.
+    QApplication::setWindowIcon(kerf::appIcon());
+#endif
     // Before anything reads them: settings from an older Kerf come up to
     // this one's version.
     {
