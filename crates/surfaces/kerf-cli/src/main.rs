@@ -662,7 +662,10 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
     kerf_engine::recipe::make(&recipe, &file, &cancellation, |line| eprintln!("{line}"))
         .map_err(|error| anyhow!(error))?;
     // The document takes the new file's length and streams; clips keep their timing.
-    let stored = project.media(id).map(|media| media.path.clone()).unwrap_or_default();
+    let stored = project
+        .media(id)
+        .map(|media| media.path.clone())
+        .unwrap_or_default();
     let state = runtime
         .replace_media_request("ui", &operation_key("make"), id, &stored, state.revision)
         .map_err(runtime_error)?;
@@ -1329,13 +1332,16 @@ mod tests {
     #[test]
     fn make_names_a_media_and_asks_unless_told_not_to() {
         let Some(Command::Make { media, yes }) =
-            Args::try_parse_from(["kerf", "make", "m3", "--dir", "p"]).unwrap().command
+            Args::try_parse_from(["kerf", "make", "m3", "--dir", "p"])
+                .unwrap()
+                .command
         else {
             panic!("make command");
         };
         assert_eq!((media.as_str(), yes), ("m3", false));
-        let Some(Command::Make { yes, .. }) =
-            Args::try_parse_from(["kerf", "make", "m3", "--yes"]).unwrap().command
+        let Some(Command::Make { yes, .. }) = Args::try_parse_from(["kerf", "make", "m3", "--yes"])
+            .unwrap()
+            .command
         else {
             panic!("make command");
         };
@@ -1368,7 +1374,9 @@ mod tests {
         assert!(wrong(&made, "m9").contains("no media `m9`"));
         assert!(wrong(&made, "m2").contains("names no recipe"));
         let outside = project(&line("shots/open.mp4", "../elsewhere/run.kerfrecipe"));
-        assert!(wrong(&outside, "m1").contains("recipe `../elsewhere/run.kerfrecipe` is not inside"));
+        assert!(
+            wrong(&outside, "m1").contains("recipe `../elsewhere/run.kerfrecipe` is not inside")
+        );
         let absolute = project(&line("/tmp/open.mp4", "open.kerfrecipe"));
         assert!(wrong(&absolute, "m1").contains("media file `/tmp/open.mp4` is not inside"));
     }
