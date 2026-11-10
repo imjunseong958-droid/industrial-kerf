@@ -85,9 +85,7 @@
 #include "wiring/timeline_wiring.h"
 #include "components.h"
 #include "browser_panel.h"
-#include "deliver_tray.h"
 #include "editor_bus.h"
-#include "finish_tray.h"
 #include "inspector_column.h"
 
 namespace kerf {

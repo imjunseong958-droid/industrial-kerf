@@ -85,12 +85,6 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     } else if (panes.timeline) {
         out.timeline = QRect(stageLeft, toolbar, stageWidth, h);
     }
-    const int trayHeight = std::min(h, band);
-    const int trayTop = toolbar + h - trayHeight;
-    // An upright picture a tray would reach into moves into what the tray leaves. A wide one has the
-    // timeline under it, and goes under nothing.
-    if (panes.tray && !out.slot.isEmpty() && out.slot.bottom() >= trayTop && trayTop > toolbar)
-        out.slot.setBottom(trayTop - 1);
     out.picture = out.slot.isEmpty() ? out.slot : fitted(paddedSlot(out.slot), shape);
     // The strip floats over the picture's top: at its corner, or centred on an
     // upright one narrower than it.
@@ -106,14 +100,11 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     // reaches the timeline.
     const auto sheet = [&](int width) {
         const int shown = std::min(width, out.conversation.width());
-        // It leaves a tray's panes in sight: the wheels are read against the scopes.
-        const int height = panes.tray && trayTop > out.conversation.top() ? trayTop - out.conversation.top() : out.conversation.height();
-        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, height);
+        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, out.conversation.height());
     };
     out.media = sheet(bin);
     out.browser = sheet(browser);
     out.inspector = sheet(inspector);
-    out.tray = QRect(side, trayTop, room, trayHeight);
     return out;
 }
 
@@ -232,9 +223,7 @@ StageShell::StageShell(QWidget *parent) : QWidget(parent) {
     m_seamAcross = seam(this, "stageSeamAcross");
     m_seamColumn = seam(this, "stageSeamColumn");
     m_seamSheet = seam(this, "stageSeamSheet");
-    m_seamTray = seam(this, "stageSeamTray");
     m_seamSheet->hide();
-    m_seamTray->hide();
     m_veil = new Veil(this);
 }
 
@@ -290,17 +279,6 @@ void StageShell::setSheets(QWidget *media, QWidget *browser, QWidget *inspector)
     place();
 }
 
-void StageShell::setTrays(QWidget *finish, QWidget *deliver) {
-    m_trays[0] = finish;
-    m_trays[1] = deliver;
-    for (QWidget *tray : m_trays)
-        if (tray) {
-            tray->setParent(this);
-            tray->hide();
-        }
-    place();
-}
-
 void StageShell::setBanners(const QList<QWidget *> &banners) {
     m_banners = banners;
     for (QWidget *banner : banners) {
@@ -313,7 +291,6 @@ void StageShell::setBanners(const QList<QWidget *> &banners) {
 
 QWidget *StageShell::widgetOf(Sheet sheet) const { return sheet == Sheet::None ? nullptr : m_sheets[int(sheet) - 1]; }
 
-QWidget *StageShell::widgetOf(Tray tray) const { return tray == Tray::None ? nullptr : m_trays[int(tray) - 1]; }
 
 QString StageShell::sheetId(Sheet sheet) {
     switch (sheet) {
@@ -442,10 +419,8 @@ void StageShell::transition(const QRect &pictureOrigin) {
 
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
-    stage::Panes panes = m_panes;
-    panes.tray = m_tray != Tray::None;
-    stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, panes);
-    for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector, &out.tray})
+    stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
+    for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
 }
@@ -460,29 +435,16 @@ void StageShell::setSheet(Sheet sheet) {
 
 void StageShell::toggleSheet(Sheet sheet) { setSheet(m_sheet == sheet ? Sheet::None : sheet); }
 
-void StageShell::setTray(Tray tray) {
-    if (tray == m_tray) return;
-    m_tray = tray;
-    // What moves out of its way moves, as regions do.
-    transition();
-    followEscape();
-    emit trayChanged(tray);
-}
-
 bool StageShell::dismiss() {
     if (m_sheet != Sheet::None) {
         setSheet(Sheet::None);
-        return true;
-    }
-    if (m_tray != Tray::None) {
-        setTray(Tray::None);
         return true;
     }
     return false;
 }
 
 void StageShell::followEscape() {
-    const bool want = m_sheet != Sheet::None || m_tray != Tray::None;
+    const bool want = m_sheet != Sheet::None;
     if (want == m_filtering || !qApp) return;
     m_filtering = want;
     if (want) qApp->installEventFilter(this);
@@ -509,9 +471,8 @@ bool StageShell::takesEscape(QObject *watched, QEvent *event) {
 }
 
 bool StageShell::holdsOpen(const QWidget *widget) const {
-    for (const QWidget *open : {widgetOf(m_sheet), widgetOf(m_tray)})
-        if (open && (open == widget || open->isAncestorOf(widget))) return true;
-    return false;
+    const QWidget *open = widgetOf(m_sheet);
+    return open && (open == widget || open->isAncestorOf(widget));
 }
 
 void StageShell::place() {
@@ -551,22 +512,7 @@ void StageShell::place() {
     placeSeam(m_seamAcross, across);
     placeSeam(m_seamColumn, QRect());
 
-    // The tray, over the regions; a sheet over the tray.
-    for (int index = 0; index < 2; ++index) {
-        QWidget *tray = m_trays[index];
-        if (!tray) continue;
-        const bool shown = int(m_tray) == index + 1;
-        if (shown) {
-            tray->setGeometry(r.tray);
-            tray->raise();
-        }
-        tray->setVisible(shown);
-    }
-    m_seamTray->setVisible(m_tray != Tray::None);
-    if (m_tray != Tray::None) {
-        m_seamTray->setGeometry(r.tray.left(), r.tray.top(), r.tray.width(), kSeam);
-        m_seamTray->raise();
-    }
+    // A sheet, over the regions.
     const QRect sheetRects[3] = {r.media, r.browser, r.inspector};
     for (int index = 0; index < 3; ++index) {
         QWidget *sheet = m_sheets[index];

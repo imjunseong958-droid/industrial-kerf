@@ -6,7 +6,6 @@
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "components.h"
-#include "deliver_pane.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
 #include "inspector_column.h"
@@ -2263,10 +2262,8 @@ private slots:
         QVERIFY(hint->isHidden());
     }
 
-    // The column's kinds are its panes, Audio and Info included; in the
-    // Deliver workspace the Video kind shows the Deliver pane; a workspace
-    // switch goes back to the Inspector page; Finish shows the wheels.
-    void inspectorColumnShowsEachKindAndTheDeliverPane() {
+    // The column's kinds are its panes, Audio and Info included.
+    void inspectorColumnShowsEachKind() {
         QSettings().remove(QStringLiteral("workspace"));
         QSettings().remove(QStringLiteral("editor/inspector"));
         const auto restore = qScopeGuard([] {
@@ -2299,24 +2296,6 @@ private slots:
         QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
         QCOMPARE(inspector->pane(), InspectorPanel::Pane::Video);
         QVERIFY(!inspector->footer()->isHidden());
-        // Deliver: the Deliver pane stands in for the Video kind.
-        window.m_shell->setTray(StageShell::Tray::Deliver);
-        QCoreApplication::processEvents();
-        QVERIFY(column->deliverShown());
-        QCOMPARE(column->currentPage(), column->deliverPane());
-        column->setKind(InspectorColumn::Kind::Info);
-        QCOMPARE(column->currentPage(), inspector);
-        column->setKind(InspectorColumn::Kind::Video);
-        QCOMPARE(column->currentPage(), column->deliverPane());
-        // Finish: the wheels over the Video pane.
-        column->setPage(InspectorColumn::Page::Source);
-        window.m_shell->setTray(StageShell::Tray::Finish);
-        QCoreApplication::processEvents();
-        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
-        QVERIFY(inspector->finish());
-        QVERIFY(inspector->wheels());
-        window.m_shell->setTray(StageShell::Tray::None);
-        QCoreApplication::processEvents();
         QVERIFY(!inspector->finish());
     }
 
@@ -2448,10 +2427,6 @@ private slots:
             QCOMPARE(shot.pixelColor(QPoint(column->width() / 2, 2) * shot.devicePixelRatio()).rgb(), tokens::color(tokens::chrome).rgb());
             if (!shots.isEmpty()) QVERIFY(shot.save(QDir(shots).filePath(QStringLiteral("inspector-%1.png").arg(InspectorColumn::kindId(kind)))));
         }
-        window.m_shell->setTray(StageShell::Tray::Finish);
-        column->setKind(InspectorColumn::Kind::Video);
-        QCoreApplication::processEvents();
-        if (!shots.isEmpty()) QVERIFY(column->grab().toImage().save(QDir(shots).filePath(QStringLiteral("inspector-finish.png"))));
     }
 
     // What a clip's rows say at the width they have, and which of them do anything. Particles'

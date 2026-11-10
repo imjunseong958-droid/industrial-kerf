@@ -2,7 +2,7 @@
 
 // The review: comment threads from kerfd's review log, the proposals of the
 // state snapshot, and who is looking at them. A pure model with no widgets;
-// the Comments panel, the ruler and the Deliver gate all read the same instance (EditorBus::review()).
+// the Comments panel, the ruler and the Export gate all read the same instance (EditorBus::review()).
 //
 // Inputs, all bridge data (plan §3):
 //   comments {items}        → setComments(items)

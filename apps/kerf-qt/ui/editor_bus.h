@@ -1,12 +1,12 @@
 #pragma once
 
 // The editor's bus: how the regions of the window (stage, comments,
-// inspector, timeline, bin, source, toolbar, trays) hear the engine and each
+// inspector, timeline, bin, source, toolbar) hear the engine and each
 // other without including each other's headers.
 //
 // MainWindow owns it. Every bridge event reaches `event(type, json)` after
 // the window has handled it; the state the window keeps (snapshot, playhead,
-// selection, workspace, program frame) is mirrored here with a signal for
+// selection, program frame) is mirrored here with a signal for
 // each change. Requests go back through send() (MainWindow::sendSimple, so a
 // test still reads m_lastCommand) and run() (MainWindow::execute: a command
 // of the registry, resolved in the window's context).
@@ -62,8 +62,6 @@ public:
     bool playing() const { return m_playing; }
     // The selected clips, the primary one last.
     QStringList selection() const { return m_selection; }
-    // The workspace in use: Review, Edit, Finish, Deliver or one of one's own.
-    QString workspace() const { return m_workspace; }
     // The program's latest frame, as the viewer shows it.
     QImage programFrame() const { return m_programFrame; }
     // The latest event of `type` the bridge sent, empty before the first.
@@ -87,14 +85,7 @@ public:
     void setDuration(double seconds);
     void setPlaying(bool playing);
     void setSelection(const QStringList &clips);
-    // The base state or the tray open ("Review", "Finish", "Deliver").
-    // workspaceChanged is sent when the name changes,
-    // and with `reapplied` also when it does not: a workspace chosen, saved
-    // as or reset has its stage applied again, so the regions re-apply
-    // theirs (dim, the Inspector's page and kind).
-    void setWorkspace(const QString &name, bool reapplied = false);
     void setProgramFrame(const QImage &frame);
-    void setProgramSignal(const QImage &frame, int curve);
 
 signals:
     // Every bridge event. (The name hides QObject::event(QEvent *) for
@@ -105,12 +96,7 @@ signals:
     void playheadChanged(double seconds);
     void playingChanged(bool playing);
     void selectionChanged(const QStringList &clips);
-    // The workspace in use changed, or its stage was applied again (Reset
-    // Workspace): a region applies the workspace's stage when it hears it.
-    void workspaceChanged(const QString &name);
     void programFrameChanged(const QImage &frame);
-    // An HDR sequence's frame as its signal, for the scopes: 1 for PQ, 2 for HLG.
-    void programSignalChanged(const QImage &frame, int curve);
     void reviewChanged();
     void identityChanged(const QJsonObject &identity);
     void viewAsChanged(const QString &person);
@@ -118,9 +104,6 @@ signals:
     // Cross-region requests.
     // Show the thread `id` in the comments panel (opening it).
     void openThread(const QString &id);
-    // Bring a tray's or the Inspector's pane forward and flash it:
-    // `loudness`, `qc`, `scopes`, `queue`, `paperwork`, `deliver`.
-    void highlightPane(const QString &id);
     // The composer's Draw: the stage takes the pointer for a drawing on the
     // frame, then finishes (the strokes, normalised to the picture) or is
     // cancelled.
@@ -148,7 +131,6 @@ private:
     double m_duration = 0.0;
     bool m_playing = false;
     QStringList m_selection;
-    QString m_workspace;
     QImage m_programFrame;
     QHash<QString, QJsonObject> m_lastEvents;
     // Not owned; the window keeps it as long as the bus (a forward

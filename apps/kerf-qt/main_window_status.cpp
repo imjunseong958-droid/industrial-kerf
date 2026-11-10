@@ -82,9 +82,7 @@
 #include <utility>
 #include "wiring/main_window_shared.h"
 #include "browser_panel.h"
-#include "deliver_tray.h"
 #include "editor_bus.h"
-#include "finish_tray.h"
 #include "inspector_column.h"
 #include "wiring/toolbar_wiring.h"
 

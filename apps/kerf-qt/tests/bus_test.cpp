@@ -122,7 +122,6 @@ private slots:
         QSignalSpy playheads(bus, &EditorBus::playheadChanged);
         QSignalSpy playing(bus, &EditorBus::playingChanged);
         QSignalSpy selections(bus, &EditorBus::selectionChanged);
-        QSignalSpy workspaces(bus, &EditorBus::workspaceChanged);
         QSignalSpy frames(bus, &EditorBus::programFrameChanged);
         const QJsonObject snapshot = showcaseSnapshot(7, QStringLiteral("clean"));
         window.applySnapshot(snapshot);
@@ -153,11 +152,6 @@ private slots:
         window.selectClip(QString());
         QVERIFY(bus->selection().isEmpty());
         QCOMPARE(selections.size(), 3);
-        // The workspace.
-        QCOMPARE(bus->workspace(), QStringLiteral("Review"));
-        window.m_commands->action(QStringLiteral("workspace.finish"))->trigger();
-        QCOMPARE(bus->workspace(), QStringLiteral("Finish"));
-        QCOMPARE(workspaces.size(), 1);
         // The program frame is the one the viewer gets, through the path
         // pollBridge takes (offline, none is shown).
         QImage frame(16, 9, QImage::Format_RGBA8888);

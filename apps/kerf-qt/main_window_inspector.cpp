@@ -1,5 +1,5 @@
 // MainWindow's Inspector column: the Inspector (its Video, Audio and Info
-// panes), its mask tools, the Source page and the Deliver pane. The region's
+// panes), its mask tools and the Source page. The region's
 // own state and bus traffic are in ui/wiring/inspector_wiring.
 
 #include "main_window.h"
@@ -83,9 +83,7 @@
 #include <utility>
 #include "wiring/main_window_shared.h"
 #include "browser_panel.h"
-#include "deliver_tray.h"
 #include "editor_bus.h"
-#include "finish_tray.h"
 #include "inspector_column.h"
 #include "wiring/inspector_wiring.h"
 
@@ -200,7 +198,7 @@ void MainWindow::buildInspector() {
     connect(m_viewer, &ViewerWidget::editRequested, this, &MainWindow::sendEdit);
     connect(m_viewer, &ViewerWidget::maskSelected, m_inspector, &InspectorPanel::selectMask);
     connect(m_inspector, &InspectorPanel::maskSelected, m_viewer, &ViewerWidget::selectMask);
-    // The column: Inspector | Source over the kinds, the Deliver pane in Deliver.
+    // The column: Inspector | Source over the kinds.
     m_inspectorColumn = new InspectorColumn(nullptr, m_bus);
     m_inspectorColumn->setInspector(m_inspector);
     m_inspectorColumn->setSourceMonitor(m_sourceMonitor);

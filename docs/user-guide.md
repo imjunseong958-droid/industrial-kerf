@@ -65,8 +65,6 @@ Import media with File ▸ Import Media… (⌘O).
   ⌥⌘P and ⌥⌘T open and close them.
 - **Sheets** open over the conversation from the Window menu: Media (⌘1),
   Source Monitor, Inspector (⌘4), Effects and titles (⌘5), and Presets.
-- **Trays** under the toolbar: **Finish** (checks and fixes before delivery) and
-  **Deliver** (masters and paperwork).
 - The toolbar's format picker switches the sequence between 16:9 and 9:16.
 
 ## Ask Kerf
@@ -132,8 +130,8 @@ edit.
 
 - Add a note at the playhead, draw on the frame, @mention someone, and resolve a
   thread when it is done. Filter by open threads, proposals, author or tag.
-- **Blocking notes** hold delivery back: Deliver, the toolbar's Export with
-  Master, and an agent's full render all refuse while one is open, and say which
+- **Blocking notes** hold delivery back: the toolbar's Export with
+  Master and an agent's full render both refuse while one is open, and say which
   note and where. A Draft still exports.
 - **Copy link** gives a `kerf://` link to a version and a timecode. On macOS,
   on Windows with the installer, and on Linux with the `.deb` or once
@@ -155,14 +153,15 @@ The Collaborate menu works on a project shared through Git and GitHub:
 When `project.kerf` changes outside Kerf, a banner offers **Load from Disk** or
 **Keep Editor Version**.
 
-## Finish and deliver
+## Check and export
 
-- **Finish** runs the checks a delivery needs: loudness, true peak, gamut, title
-  safe, caption overlap and timing, flash, and black. A blocking finding becomes a
-  note, resolved once a later check no longer finds it.
-- **Deliver** renders a master (ProRes 422 HQ with 24-bit sound) and its
-  paperwork: a comments CSV, markers, a CMX3600 EDL, and SRT or VTT captions. It
-  keeps its folders and choices per project.
+- **Sequence ▸ Run QC** runs the checks a delivery needs: loudness, true peak,
+  gamut, title safe, caption overlap and timing, flash, and black. What it finds
+  is listed under Preflight in the toolbar's Export menu, where Ask Kerf on a
+  failed row asks Kerf to fix it. A blocking finding becomes a note in the
+  conversation, resolved once a later check no longer finds it.
+- **Export** in the toolbar renders a Draft (H.264) or a Master (ProRes 422 HQ
+  with 24-bit sound; ⌘E). A master goes to `deliveries/` in the project.
 - **Presets.** File ▸ Save Current as Preset… keeps the program as a preset
   others can fill with their own media (Window ▸ Presets).
 

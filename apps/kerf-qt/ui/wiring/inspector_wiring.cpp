@@ -34,10 +34,6 @@ QString InspectorWiring::unsupportedReason() {
 void InspectorWiring::attach() {
     InspectorPanel *inspector = m_window->m_inspector;
     if (!inspector || !m_bus) return;
-    // Finish shows the colour wheels over the Video pane.
-    const auto finish = [this, inspector] { inspector->setFinish(m_bus->workspace() == QLatin1String("Finish")); };
-    connect(m_bus, &EditorBus::workspaceChanged, inspector, finish);
-    finish();
     connect(m_bus, &EditorBus::event, this, &InspectorWiring::hear);
     if (const QJsonObject info = m_bus->lastEvent(QStringLiteral("media_info")); !info.isEmpty())
         inspector->setMediaInfo(info.value(QStringLiteral("media")).toObject());

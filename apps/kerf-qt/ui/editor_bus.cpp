@@ -71,19 +71,10 @@ void EditorBus::setSelection(const QStringList &clips) {
     emit selectionChanged(clips);
 }
 
-void EditorBus::setWorkspace(const QString &name, bool reapplied) {
-    if (name == m_workspace && !reapplied) return;
-    m_workspace = name;
-    emit workspaceChanged(name);
-}
-
 void EditorBus::setProgramFrame(const QImage &frame) {
     m_programFrame = frame;
     emit programFrameChanged(frame);
 }
 
-void EditorBus::setProgramSignal(const QImage &frame, int curve) {
-    emit programSignalChanged(frame, curve);
-}
 
 } // namespace kerf

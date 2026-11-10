@@ -57,7 +57,7 @@ private slots:
     void cleanup() { ProjectLauncher::clearRecentProjects(); }
 
     // kerf://<project>/rev<N>[@TC][?branch&head&remote], as the comments
-    // panel's Copy link and Deliver's review link write them.
+    // panel's Copy link writes them.
     void linksReadAsTheEditorWritesThem() {
         using links::parse;
         QVERIFY(links::isReviewLink(QStringLiteral("kerf://atlas/rev22")));

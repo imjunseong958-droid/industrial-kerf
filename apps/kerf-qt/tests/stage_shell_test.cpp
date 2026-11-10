@@ -1,6 +1,6 @@
 // Tests for the window's content: the geometry of the three regions (a pure
 // function of the window's size and the picture's aspect), the sheets over the
-// conversation, the trays over the bottom, and Esc.
+// conversation, and Esc.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -14,9 +14,7 @@
 #include "timeline_widget.h"
 #include "ui/browser_panel.h"
 #include "ui/components.h"
-#include "ui/deliver_tray.h"
 #include "ui/editor_bus.h"
-#include "ui/finish_tray.h"
 #include "ui/change_reel.h"
 #include "ui/compare_view.h"
 #include "ui/stage_motion.h"
@@ -195,14 +193,13 @@ private slots:
             }
     }
 
-    void sheetsAndTheTrayStandOverTheRegions() {
+    void sheetsStandOverTheRegions() {
         for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             const int side = r.conversation.right() + 1;
             QCOMPARE(r.media, QRect(side - 272, 40, 272, r.conversation.height()));
             QCOMPARE(r.browser, QRect(side - 304, 40, 304, r.conversation.height()));
             QCOMPARE(r.inspector, QRect(side - 304, 40, 304, r.conversation.height()));
-            QCOMPARE(r.tray, QRect(240, 656, 1360, 344));
             // A sheet leaves the timeline free: a drag can reach it.
             QVERIFY(!r.media.intersects(r.timeline));
             QVERIFY(!r.browser.intersects(r.timeline));
@@ -324,9 +321,7 @@ private slots:
             window.resize(1600, 1000);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-            QCOMPARE(window.m_bus->workspace(), QStringLiteral("Review"));
             QVERIFY(window.m_chat->isVisible());
             QCOMPARE(inWindow(window.m_chat, &window), QRect(240, 40, 400, 960));
             window.close();
@@ -502,8 +497,7 @@ private slots:
     }
 
     // Ask Kerf and ⇧⌘J: what lies over the composer goes, so the text lands
-    // where it can be seen. At the bottom of the full-height conversation, a tray
-    // reaches it in every format.
+    // where it can be seen.
     void askingUncoversTheComposer() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -512,21 +506,12 @@ private slots:
                                          {"timeline", QJsonObject{{"width", 1920}, {"height", 1080}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.triggerCommand(QStringLiteral("workspace.finish"));
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
         emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@Kerf fix it"));
         window.triggerCommand(QStringLiteral("window.inspector"));
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Inspector);
         window.triggerCommand(QStringLiteral("window.assistant"));
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-        window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 30},
-                                         {"timeline", QJsonObject{{"width", 1080}, {"height", 1920}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
-        window.triggerCommand(QStringLiteral("workspace.finish"));
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
-        emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
         window.close();
     }
 
@@ -551,70 +536,6 @@ private slots:
         window.triggerCommand(QStringLiteral("window.source"));
         emit window.m_timeline->clipSelected(clip);
         QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Source);
-        window.close();
-    }
-
-    void traysLieOverTheBottomAndEscGoesBack() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.activateWindow();
-        StageShell *shell = window.m_shell;
-        const QRect picture = inWindow(window.m_viewer, &window);
-        const QRect conversation = inWindow(window.m_chat, &window);
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
-        window.triggerCommand(QStringLiteral("workspace.finish"));
-        QCOMPARE(shell->tray(), StageShell::Tray::Finish);
-        QCOMPARE(window.m_bus->workspace(), QStringLiteral("Finish"));
-        QVERIFY(window.m_finishTray->isVisible());
-        QCOMPARE(inWindow(window.m_finishTray, &window), QRect(240, 656, 1360, 344));
-        // Picture and conversation stay where they are underneath.
-        QCOMPARE(inWindow(window.m_viewer, &window), picture);
-        QCOMPARE(inWindow(window.m_chat, &window), conversation);
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.finish"))->isChecked());
-        QVERIFY(!window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
-        // Colour wheels stay in the Inspector sheet while Finish is open.
-        QVERIFY(window.m_inspector->finish());
-        const QJsonArray firstClips = window.m_project.value(QStringLiteral("tracks")).toArray().at(0).toObject().value(QStringLiteral("clips")).toArray();
-        window.selectClip(firstClips.at(0).toObject().value(QStringLiteral("id")).toString());
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Inspector);
-        QCOMPARE(shell->tray(), StageShell::Tray::Finish);
-        QVERIFY(window.m_inspector->wheels());
-        // Over the tray.
-        const QWidgetList order = shell->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
-        QVERIFY(order.indexOf(window.m_inspectorColumn) > order.indexOf(window.m_finishTray));
-        // Esc closes the sheet, then the tray.
-        window.m_timeline->setFocus();
-        QTest::keyClick(window.m_timeline, Qt::Key_Escape);
-        QCOMPARE(shell->sheet(), StageShell::Sheet::None);
-        QCOMPARE(shell->tray(), StageShell::Tray::Finish);
-        QTest::keyClick(window.m_timeline, Qt::Key_Escape);
-        QCOMPARE(shell->tray(), StageShell::Tray::None);
-        QCOMPARE(window.m_bus->workspace(), QStringLiteral("Review"));
-        QVERIFY(!window.m_finishTray->isVisible());
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
-        // Deliver, the same; choosing it again goes back.
-        window.triggerCommand(QStringLiteral("workspace.deliver"));
-        QCOMPARE(shell->tray(), StageShell::Tray::Deliver);
-        QCOMPARE(inWindow(window.m_deliverTray, &window), QRect(240, 656, 1360, 344));
-        window.triggerCommand(QStringLiteral("workspace.deliver"));
-        QCOMPARE(shell->tray(), StageShell::Tray::None);
-        // One tray takes over from the other.
-        window.triggerCommand(QStringLiteral("workspace.finish"));
-        window.triggerCommand(QStringLiteral("workspace.deliver"));
-        QCOMPARE(shell->tray(), StageShell::Tray::Deliver);
-        QVERIFY(!window.m_finishTray->isVisible());
-        window.triggerCommand(QStringLiteral("workspace.review"));
-        QCOMPARE(shell->tray(), StageShell::Tray::None);
-        // The launch flag.
-        window.openTray(QStringLiteral("Finish"));
-        QCOMPARE(shell->tray(), StageShell::Tray::Finish);
-        window.openTray(QStringLiteral("Review"));
-        QCOMPARE(shell->tray(), StageShell::Tray::None);
         window.close();
     }
 
@@ -1234,55 +1155,6 @@ private slots:
         }));
         QCOMPARE(sent.last().value("proposalId").toString(), QStringLiteral("pa"));
         window.close();
-    }
-
-    // At a laptop's size a tray came up over the lower part of an upright picture, and a sheet over
-    // the scopes it is read beside. The picture now moves into what the tray leaves, and a sheet
-    // ends where the tray begins, over it as ever where they would meet. At the design's size the
-    // upright picture was clear of the tray already, and stays where it is.
-    void aTrayLeavesThePictureAndASheetLeavesTheTray() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(snapshotOf(QSize(1080, 1920)));
-        window.resize(1389, 868);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.activateWindow();
-        const QRect whole = window.m_shell->rects().picture;
-        for (const char *command : {"workspace.finish", "workspace.deliver"}) {
-            window.triggerCommand(QString::fromLatin1(command));
-            const QRect tray = inWindow(window.m_shell->tray() == StageShell::Tray::Finish ? static_cast<QWidget *>(window.m_finishTray) : static_cast<QWidget *>(window.m_deliverTray), &window);
-            QCOMPARE(tray.height(), 344);
-            const QRect picture = window.m_shell->rects().picture;
-            QVERIFY2(picture.bottom() + 40 < tray.top(), qPrintable(QStringLiteral("picture to %1, tray from %2").arg(picture.bottom() + 40).arg(tray.top())));
-            QVERIFY(picture.height() < whole.height());
-            QCOMPARE(picture.center().x(), whole.center().x());
-        }
-        const QJsonArray firstClips = window.m_project.value(QStringLiteral("tracks")).toArray().at(0).toObject().value(QStringLiteral("clips")).toArray();
-        window.selectClip(firstClips.at(0).toObject().value(QStringLiteral("id")).toString());
-        window.triggerCommand(QStringLiteral("workspace.finish"));
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        const QRect tray = inWindow(window.m_finishTray, &window);
-        const QRect sheet = inWindow(window.m_inspectorColumn, &window);
-        QVERIFY2(sheet.bottom() < tray.top(), qPrintable(QStringLiteral("sheet to %1, tray from %2").arg(sheet.bottom()).arg(tray.top())));
-        QVERIFY(sheet.height() > 300);
-        // Closed, the picture has its room again.
-        window.triggerCommand(QStringLiteral("workspace.review"));
-        QCOMPARE(window.m_shell->rects().picture, whole);
-        QVERIFY(inWindow(window.m_inspectorColumn, &window).height() > sheet.height());
-        window.close();
-
-        // The design's size: nothing moves.
-        MainWindow large{QString(), QString()};
-        large.setConnection(QStringLiteral("ready"));
-        large.applySnapshot(snapshotOf(QSize(1080, 1920)));
-        large.resize(1600, 1000);
-        large.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&large));
-        const QRect there = large.m_shell->rects().picture;
-        large.triggerCommand(QStringLiteral("workspace.finish"));
-        QCOMPARE(large.m_shell->rects().picture, there);
-        large.close();
     }
 };
 

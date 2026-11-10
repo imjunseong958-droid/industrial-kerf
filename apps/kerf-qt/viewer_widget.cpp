@@ -987,7 +987,7 @@ void ViewerWidget::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Escape:
         if (m_drawing || !m_penPoints.isEmpty()) cancelDrawing();
         else if (m_maskTool != MaskTool::None) setMaskTool(MaskTool::None);
-        // Nothing of its own to cancel: on to the window (a sheet, a tray).
+        // Nothing of its own to cancel: on to the window (a sheet).
         else event->ignore();
         return;
     case Qt::Key_Return:

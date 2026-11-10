@@ -47,9 +47,7 @@ namespace kerf {
 class AskPrompt;
 class BrowserPanel;
 class ChatPanel;
-class DeliverTray;
 class EditorBus;
-class FinishTray;
 class InspectorColumn;
 // The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
 // its region's own state.
@@ -114,8 +112,6 @@ public:
     // the playhead), and say so when the link names another revision.
     void followLink(qint64 revision, const QString &timecode);
     bool linkPending() const { return m_linkPending; }
-    // The tray to open in ("Finish", "Deliver"; anything else is the base state).
-    void openTray(const QString &name);
     // What to do once the project is connected: bring the folder's media in
     // (a folder that was no project yet), then send Kerf the request.
     void startWith(const QString &request, bool importFolder);
@@ -235,7 +231,7 @@ private:
     void buildBin();
     // Settings (main_window.cpp).
     void buildPreferences();
-    // The shell: the regions, the sheets, the trays and the bars, once the
+    // The shell: the regions, the sheets and the bars, once the
     // regions are built.
     void buildShell();
     // The timeline's gestures, once every region exists (main_window_timeline.cpp).
@@ -244,9 +240,7 @@ private:
     void setupToolbar(const QHash<QString, QMenu *> &menus);
     // The picture's commands, once the registry's actions exist.
     void setupPictureCommands();
-    // A tray opened or closed: the bus, its commands, the keys.
-    void applyTray();
-    // The sheets' and the trays' commands checked as they show.
+    // The sheets' commands checked as they show.
     void syncPanelCommands();
     // A registry command by id for the bus: a frontend command runs its
     // handler, an engine command goes through execute().
@@ -383,7 +377,7 @@ private:
     std::unique_ptr<BinWiring> m_binWiring;
     std::unique_ptr<SourceWiring> m_sourceWiring;
     // The regions' containers: the shell, the timeline's panel, the Inspector
-    // column, the browser, the Finish and Deliver trays.
+    // column, the browser.
     StageShell *m_shell = nullptr;
     ProjectSidebar *m_sidebar = nullptr;
     ChangeReel *m_changeReel = nullptr;
@@ -419,8 +413,6 @@ private:
     QWidget *m_timelinePanel = nullptr;
     InspectorColumn *m_inspectorColumn = nullptr;
     BrowserPanel *m_browserPanel = nullptr;
-    FinishTray *m_finishTray = nullptr;
-    DeliverTray *m_deliverTray = nullptr;
     MediaArtwork *m_artwork = nullptr;
     QToolBar *m_toolbar = nullptr;
     // The room at the toolbar's leading end for the window buttons (macOS).
@@ -434,7 +426,7 @@ private:
     QString m_linkTimecode;
     void applyPendingLink();
     // The keys to the timeline when Qt handed them to a button as if Tab had
-    // been pressed: after a tray or sheet closes, and as the window first
+    // been pressed: after a sheet closes, and as the window first
     // shows and first becomes active (m_focusSettled).
     void settleFocus();
     // The sidebar and the panel beside the conversation.
@@ -478,7 +470,7 @@ private:
     QImage posterForClip(const QString &clip) const;
     void flyExportHome();
     void runStart();
-    // Closes a sheet or tray that lies over the composer.
+    // Closes a sheet that lies over the composer.
     void uncoverComposer();
     bool m_focusSettled = false;
     QString m_projectDirectory;

@@ -9,7 +9,7 @@
 #include "editor_common.h"
 #include "main_window.h"
 #include "main_window_shared.h"
-#include "render_queue_view.h"
+#include "master_output.h"
 #include "review_model.h"
 #include "toolbar_widgets.h"
 #include "stage_shell.h"
@@ -110,11 +110,11 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     row->addSpacing(8);
 #endif
     // The one way to everything else: Media, Effects and titles, Inspector,
-    // the trays, Import, Sequence settings, Settings, and View.
+    // Import, Sequence settings, Settings, and View.
     m_appButton = new ui::IconButton(QStringLiteral("g-menu"), ui::IconButton::Size::S28);
     m_appButton->setObjectName(QStringLiteral("appMenu"));
     m_appButton->setAccessibleName(QStringLiteral("Menu"));
-    m_appButton->setTip(QStringLiteral("Media, effects, inspector, finish, deliver"));
+    m_appButton->setTip(QStringLiteral("Media, effects, inspector"));
     m_appButton->setFocusPolicy(Qt::TabFocus);
     m_appMenu = new QMenu(m_content);
     m_appMenu->setObjectName(QStringLiteral("appMenuPopup"));
@@ -353,9 +353,6 @@ void ToolbarWiring::buildAppMenu() {
     addCommandItem(menu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
     addCommandItem(menu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
     menu->addSeparator();
-    addCommandItem(menu, QStringLiteral("workspace.finish"), QStringLiteral("Scopes, loudness, QC"), "appMenu.finish");
-    addCommandItem(menu, QStringLiteral("workspace.deliver"), QStringLiteral("Deliver"), "appMenu.deliver");
-    menu->addSeparator();
     addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
     addCommandItem(menu, QStringLiteral("sequence.settings"), QStringLiteral("Sequence settings…"), "appMenu.sequenceSettings");
     addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings");
@@ -592,10 +589,10 @@ bool ToolbarWiring::sendExport(const QString &quality) {
         holdForNotes();
         return false;
     }
-    // The master renders as the Deliver tray's Master row does (its folder
-    // and file name, kept for the project); the draft is a review copy.
+    // The master renders to the project's master output (its folder and
+    // file name, kept for the project); the draft is a review copy.
     const QJsonObject command = master
-        ? deliver::exportCommand(deliver::output(m_window->m_projectDirectory, QStringLiteral("master")))
+        ? deliver::masterCommand(m_window->m_projectDirectory)
         : QJsonObject{{QStringLiteral("type"), QStringLiteral("export")},
                       {QStringLiteral("quality"), QStringLiteral("review")},
                       {QStringLiteral("codec"), QStringLiteral("h264")}};
@@ -629,8 +626,6 @@ void ToolbarWiring::holdForNotes(const QString &refusal) {
     m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export held for blocking notes"));
 }
 
-QString ToolbarWiring::edlLocatorsKey() const { return deliver::settingsKey(m_window->m_projectDirectory, QStringLiteral("edlLocators")); }
-
 void ToolbarWiring::buildExportMenu() {
     MainWindow *w = m_window;
     ExportButton *button = w->m_exportButton;
@@ -648,10 +643,6 @@ void ToolbarWiring::buildExportMenu() {
     // Preflight: the last check's rows.
     QAction *preflight = ui::addMenuHeader(menu, QStringLiteral("Preflight"));
     preflight->setObjectName(QStringLiteral("preflightHeader"));
-    const auto openQc = [this] {
-        m_window->openTray(QStringLiteral("Finish"));
-        emit m_bus->highlightPane(QStringLiteral("qc"));
-    };
     if (m_checkStatus == QStringLiteral("running")) {
         QAction *running = menu->addAction(QStringLiteral("Checking… %1%").arg(int(std::floor(m_checkProgress * 100.0))));
         running->setObjectName(QStringLiteral("preflightRunning"));
@@ -681,8 +672,6 @@ void ToolbarWiring::buildExportMenu() {
         ui::setMenuDot(item, tokens::color(row.passed ? tokens::pos : tokens::neg));
         if (row.passed) {
             if (!row.key.isEmpty()) ui::setMenuKey(item, row.key, true);
-            item->setToolTip(QStringLiteral("Show the QC pane"));
-            connect(item, &QAction::triggered, this, openQc);
         } else {
             ui::setMenuAccent(item, QStringLiteral("Ask Kerf"));
             item->setToolTip(row.ask);
@@ -698,8 +687,6 @@ void ToolbarWiring::buildExportMenu() {
         QAction *more = menu->addAction(plural(hidden, QStringLiteral("1 more check failed"), QStringLiteral("%1 more checks failed")));
         more->setObjectName(QStringLiteral("preflightMore"));
         ui::setMenuDot(more, tokens::color(tokens::neg));
-        ui::setMenuAccent(more, QStringLiteral("Open QC"));
-        connect(more, &QAction::triggered, this, openQc);
     }
     // The blocking notes, which hold Render master back.
     const int blocking = blockingCount();
@@ -722,21 +709,6 @@ void ToolbarWiring::buildExportMenu() {
                        : blocking > 0 ? QStringLiteral("Resolve blocking notes first")
                                       : QStringLiteral("Render master · ProRes 422 HQ"));
     connect(render, &QAction::triggered, this, [this] { sendExport(QStringLiteral("master")); });
-    QAction *locators = menu->addAction(QStringLiteral("Include comments as EDL locators"));
-    locators->setObjectName(QStringLiteral("exportEdlLocators"));
-    locators->setCheckable(true);
-    // The Deliver paperwork's own option, so the EDL it writes follows this
-    // row and the row shows what Deliver will do. Without a project there is
-    // nothing to keep it for.
-    const QString directory = w->m_projectDirectory;
-    const bool kept = !edlLocatorsKey().isEmpty();
-    locators->setEnabled(kept);
-    locators->setChecked(deliver::option(directory, QStringLiteral("edlLocators")));
-    if (!kept) locators->setToolTip(QStringLiteral("Open a project to keep this choice"));
-    connect(locators, &QAction::toggled, this, [directory](bool on) { deliver::setOption(directory, QStringLiteral("edlLocators"), on); });
-    QAction *deliver = menu->addAction(QStringLiteral("Open Deliver"));
-    deliver->setObjectName(QStringLiteral("exportOpenDeliver"));
-    connect(deliver, &QAction::triggered, this, [this] { m_window->openTray(QStringLiteral("Deliver")); });
 }
 
 // ================================================================ the guest's view

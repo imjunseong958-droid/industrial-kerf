@@ -136,7 +136,7 @@ from the checkout, it tries the checkout's build before the app.
 same way.
 
 The editor is dark only (one graphite ramp and one blue accent) and fills the
-screen edge to edge. It has four workspaces (Review, Edit, Finish, Deliver),
+screen edge to edge. It
 shows a 16:9 picture in an exact MacBook Pro 14" frame and 9:16, 1:1 and 4:5 in
 an exact iPhone 16 Pro frame, and keeps the review as comment threads (from
 people, Kerf, agents over MCP and QC) in the project's review log. On macOS it

@@ -4,7 +4,6 @@
 #include "components.h"
 #include "design_tokens.h"
 #include "icons.h"
-#include "scope_math.h"
 #include "test_registry.h"
 
 #include <QAction>
@@ -81,19 +80,6 @@ QImage solid(QSize size, QRgb rgb) {
     QImage image(size, QImage::Format_RGBA8888);
     image.fill(QColor::fromRgb(rgb));
     return image;
-}
-
-// The cell of `d` with the most hits.
-QPoint peakOf(const scope::Density &d) {
-    QPoint best(-1, -1);
-    quint32 most = 0;
-    for (int y = 0; y < d.height; ++y)
-        for (int x = 0; x < d.width; ++x)
-            if (d.at(x, y) > most) {
-                most = d.at(x, y);
-                best = QPoint(x, y);
-            }
-    return best;
 }
 
 } // namespace
@@ -967,120 +953,6 @@ private slots:
         const QColor top = image.pixelColor(QPoint(150, 0) * dpr);
         QVERIFY2(std::abs(top.red() - color(card).red()) <= 12, qPrintable(top.name()));
         QVERIFY(image.pixelColor(QPoint(150, 40) * dpr) != top);
-    }
-
-    // ------------------------------------------------------------- scopes
-
-    // A grey ramp (column x at grey x) draws the waveform's diagonal: each
-    // column's hits sit on the row of its 10-bit code.
-    void kitScopeGreyRampDrawsADiagonalWaveform() {
-        QImage ramp(256, 8, QImage::Format_RGBA8888);
-        for (int y = 0; y < ramp.height(); ++y)
-            for (int x = 0; x < 256; ++x) ramp.setPixelColor(x, y, QColor(x, x, x));
-        scope::Options exact;
-        exact.codeJitter = 0;
-        const scope::Density d = scope::waveformLuma(ramp, 256, 1024, exact);
-        QCOMPARE(d.total, quint64(256 * 8 * 2));
-        for (int x = 0; x < 256; ++x) {
-            const int row = 1023 - scope::code10(x / 255.0);
-            QCOMPARE(d.at(x, row), quint32(16));
-            QCOMPARE(row, 1023 - int(std::lround(x * 1023.0 / 255.0)));
-        }
-        // With the design's jitter the trace stays on the diagonal.
-        const scope::Density soft = scope::waveformLuma(ramp, 128, 256);
-        for (int x = 0; x < 128; x += 8) {
-            int best = 0;
-            for (int y = 1; y < soft.height; ++y)
-                if (soft.at(x, y) > soft.at(x, best)) best = y;
-            const int expected = scope::codeRow(scope::code10((2 * x + 0.5) / 255.0), 256);
-            QVERIFY2(std::abs(best - expected) <= 4, qPrintable(QStringLiteral("column %1: row %2, expected %3")
-                                                                     .arg(x).arg(best).arg(expected)));
-        }
-        // The same seed gives the same trace on any thread.
-        scope::Density other;
-        std::thread worker([&] { other = scope::waveformLuma(ramp, 128, 256); });
-        worker.join();
-        QVERIFY(other.counts == soft.counts);
-    }
-
-    // The parade puts each channel in its own cell, and render() adds the
-    // trace colour per hit.
-    void kitScopeParadeSplitsTheChannels() {
-        const QImage red = solid(QSize(10, 10), qRgb(255, 0, 0));
-        scope::Options exact;
-        exact.codeJitter = 0;
-        const auto cells = scope::parade(red, 10, 64, exact);
-        QCOMPARE(cells[0].at(4, 0), quint32(20));
-        QCOMPARE(cells[1].at(4, 63), quint32(20));
-        QCOMPARE(cells[2].at(4, 63), quint32(20));
-        const QImage trace = scope::render(cells[0], qRgba(208, 208, 208, tokens::alpha(0.09)));
-        QCOMPARE(trace.format(), QImage::Format_ARGB32_Premultiplied);
-        // 20 hits x 9% of 208 add past full scale, so the cell saturates.
-        QCOMPARE(qRed(trace.pixel(4, 0)), 255);
-        QCOMPARE(qAlpha(trace.pixel(4, 1)), 0);
-        scope::Density one;
-        one.width = one.height = 1;
-        one.counts = {1};
-        one.peak = 1;
-        one.total = 1;
-        QCOMPARE(qRed(scope::render(one, qRgba(208, 208, 208, 23)).pixel(0, 0)), int(std::round(208 * 23 / 255.0)));
-        // Geometry: the parade's cells split x0..x1 with 6 between them.
-        const scope::WaveformGeometry g = scope::waveformGeometry(QSizeF(344, 268));
-        QCOMPARE(g.x0, 34.0);
-        QCOMPARE(g.x1, 338.0);
-        QCOMPARE(g.y(1023), 8.0);
-        QCOMPARE(g.y(0), 258.0);
-        QCOMPARE(g.cell(2).right(), 338.0);
-        QCOMPARE(g.cell(1).left() - g.cell(0).right(), 6.0);
-    }
-
-    // Rec.709 Cb/Cr place a 75% red frame on the R target, pure red further
-    // out on the same line, and greys at the centre.
-    void kitScopePureRedLandsOnTheRedTarget() {
-        const QSizeF plot(232, 268);
-        const scope::VectorscopeGeometry g = scope::vectorscopeGeometry(plot);
-        QCOMPARE(g.radius, 232 / 2.0 - 14);
-        QCOMPARE(g.centre, QPointF(116, 134));
-        const auto marks = scope::targets(plot);
-        const char *labels[] = {"R", "Mg", "B", "Cy", "G", "Yl"};
-        for (int i = 0; i < 6; ++i) QCOMPARE(QString::fromLatin1(marks[size_t(i)].label), QString::fromLatin1(labels[i]));
-        const scope::TargetMark &r = marks[0];
-        QCOMPARE(r.box.size(), QSizeF(8, 8));
-        // Red is up and a little left of the centre (Cr up, Cb slightly negative).
-        QVERIFY(r.centre.y() < g.centre.y() && r.centre.x() < g.centre.x());
-        QVERIFY(std::abs((r.labelCentre - r.centre).manhattanLength()) > 11);
-
-        scope::Options exact;
-        exact.chromaJitter = 0;
-        const scope::Density bars = scope::vectorscope(solid(QSize(16, 9), qRgb(191, 0, 0)), plot.toSize(), 1, exact);
-        const QPoint peak = peakOf(bars);
-        QVERIFY2(r.box.contains(QPointF(peak) + QPointF(0.5, 0.5)),
-                 qPrintable(QStringLiteral("peak (%1, %2)").arg(peak.x()).arg(peak.y())));
-        // Pure red at 0.75 gain lands on the same target.
-        const scope::Density pure = scope::vectorscope(solid(QSize(16, 9), qRgb(255, 0, 0)), plot.toSize(), 0.75, exact);
-        QVERIFY(r.box.contains(QPointF(peakOf(pure)) + QPointF(0.5, 0.5)));
-        // At gain 1 pure red is on the R line, 1/0.75 as far out.
-        const QPointF full = g.point(scope::chroma(255, 0, 0));
-        const QPointF a = full - g.centre, b = r.centre - g.centre;
-        QVERIFY(std::abs(std::atan2(a.y(), a.x()) - std::atan2(b.y(), b.x())) < 1e-3);
-        QVERIFY(std::abs(std::hypot(a.x(), a.y()) / std::hypot(b.x(), b.y()) - 1 / 0.75) < 1e-3);
-        QCOMPARE(scope::targetPosition(scope::Target::R, plot), r.centre);
-        // Grey has no chroma.
-        const scope::Density grey = scope::vectorscope(solid(QSize(8, 8), qRgb(128, 128, 128)), plot.toSize(), 2.2, exact);
-        QCOMPARE(peakOf(grey), QPoint(116, 134));
-        // The proposal chip bins with its own graticule: r 32 about (36, 36).
-        scope::VectorscopeGeometry chip;
-        chip.centre = QPointF(36, 36);
-        chip.radius = 32;
-        chip.scale = 64;
-        const scope::Density chipBars =
-            scope::vectorscope(solid(QSize(4, 4), qRgb(191, 0, 0)), QSize(72, 72), chip, 1, exact);
-        const QPointF chipR = chip.point(scope::chroma(191, 0, 0));
-        QVERIFY((QPointF(peakOf(chipBars)) + QPointF(0.5, 0.5) - chipR).manhattanLength() <= 1.5);
-        // The program frame is brought down to the scope's size in RGBA.
-        const QImage big = scope::scopeSource(QImage(1920, 1080, QImage::Format_ARGB32));
-        QCOMPARE(big.size(), QSize(320, 180));
-        QCOMPARE(big.format(), QImage::Format_RGBA8888);
     }
 
 private:

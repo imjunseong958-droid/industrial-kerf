@@ -4,8 +4,8 @@ This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Work starts as a conversation: the folders
 at the left and Kerf beside them. The picture and the timeline open in a panel at
-the right once there is something to show; Media, Effects and titles, the
-Inspector, Finish and Deliver open on demand. All of them are backed by the
+the right once there is something to show; Media, Effects and titles and the
+Inspector open on demand. All of them are backed by the
 bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
@@ -118,8 +118,7 @@ The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
-it captures the start window. `--window-size 1600x1000` sizes the window,
-`--workspace Finish` opens it with that tray open (Finish, Deliver), and `--settings-dir DIR`
+it captures the start window. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher are dark only, and fill the screen edge to edge
@@ -148,11 +147,11 @@ its members are split by region into `main_window_<region>.cpp` (stage,
 review, inspector, timeline, bin, source, toolbar, status), and each region
 keeps its state in a wiring class under `ui/wiring/` that talks to the others
 only through `ui/editor_bus.h` (the bridge's events, the snapshot, the
-playhead, the tray open and cross-region requests). `ui/` holds the shared
-parts: the kit (`components`, `icons`, `scope_math`), `stage_shell` (the
+playhead and cross-region requests). `ui/` holds the shared
+parts: the kit (`components`, `icons`), `stage_shell` (the
 window's content and its geometry), the review model and the comments panel's
-rows and proposal cards, the agent HUD, the Inspector column, the Finish and
-Deliver trays, and `review_link` (kerf:// links). `viewer_widget` is the
+rows and proposal cards, the agent HUD, the Inspector column, and
+`review_link` (kerf:// links). `viewer_widget` is the
 picture, `editor_theme`/`editor_style.h` the colour roles and the
 style sheet generated from them, and `project_launcher` the Choose a Project
 window. `main.cpp` holds only `main()`; the tests under `tests/` (one class
@@ -337,7 +336,7 @@ does.
 The toolbar holds the traffic lights' room, one ≡ button, the sidebar's button,
 the centred title and subtitle, the panes' two buttons, the two format icons and
 the Export split. ≡ opens Media (⌘1), Effects and titles (⌘5), Inspector (⌘4), the
-three panes, Scopes, loudness, QC, Deliver, Import…,
+three panes, Import…,
 Sequence settings…, Settings… and View: the mask tools, annotations, safe zones
 (off by default), viewer zoom, the keyboard's choice and the sync's rows. Every
 row is a registry command. The undo, redo, split, delete and import commands have
@@ -357,22 +356,8 @@ the content while they show.
 conversation, at its panel side, its top and of its height, with a left hairline
 and a close button at the end of their strip. One shows at a time; the
 same command toggles and Esc closes; asking Kerf (⇧⌘J, Ask Kerf on a row) closes
-one or a tray that lies over the composer. Selecting a clip opens nothing by itself. A
+one that lies over the composer. Selecting a clip opens nothing by itself. A
 sheet never covers the timeline, so a drag from Media or Effects reaches it.
-
-**Trays.** Finish (⌥⇧3: scopes, loudness and QC) and Deliver (⌥⇧4: masters,
-preflight, loudness and paperwork) are overlays 344 tall across the content beside
-the sidebar, at the bottom; the picture and the conversation stay where they are
-underneath, with that much more for the conversation to scroll, so a thread
-opened from a QC row's In thread comes out from under. An upright picture a tray
-would reach into, as one does at a laptop's size, moves into what the tray leaves,
-and a sheet ends where a tray begins, so the wheels are read against the scopes. A
-QC row's name reads before what it measured, which gives way to it a step at a
-time in a narrow tray and never in the middle of a word or a number: all of it, the
-measure before its limit, the measure's number, nothing; the row's tip has both.
-Below its design's width the tray gives QC its room before a scope's last pixels. Esc returns to the base state (⌥⇧2). The colour wheels are in the
-Inspector sheet while Finish is open, and the Inspector's Deliver pane while
-Deliver is.
 
 **The picture.** Masks, annotations, captions and overlays lie on the frame at
 its size. While a proposal is being previewed, a chip 12 points inside the
@@ -403,15 +388,14 @@ from Kerf (your turn and Kerf's reply are both kept as comments), from agents
 connected over MCP (their `note` tool and their proposals, with versions)
 and from QC (blocking findings of a check, resolved when a later check no
 longer finds them). A blocking note holds a delivery back wherever it is asked
-for: Deliver's Render master, the toolbar's Export with Master chosen, and a
+for: the toolbar's Export with Master chosen, and a
 `full` or `master` render from an agent or the CLI, which kerfd refuses. Export
 then says which note and where, and shows the blocking notes in Review; a Draft
 still exports. Filters (All / Open / Proposals, From, tags, search),
 sort, resolve, drawings on the frame, @mentions and timecodes work as in the
 design; the pinned proposal card previews, accepts or rejects the version it
-shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link;
-Deliver's paperwork gives `kerf://<project>/rev<N>` with the branch, head and
-remote. `<project>` is the slug of the project's folder name (lower case, each
+shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link.
+`<project>` is the slug of the project's folder name (lower case, each
 run of anything but letters and digits one `-`: "Atlas Cut" is `atlas-cut`),
 whatever the document calls itself, so a link finds a project that is not
 open; a name outside ASCII travels in its punycode form and is read back. On macOS the app registers the `kerf` URL scheme, so a clicked link
@@ -434,8 +418,10 @@ luma, title safe, caption overlap and timing, flash and black), programme
 R128 `loudness`, a render queue with ProRes 422 HQ masters, paperwork
 (comments CSV, markers, CMX3600 EDL with locators, SRT/VTT), media
 information and the media index, and looks saved and applied as
-`.kerflook` files. Deliver keeps its output folders and paperwork choices per
-project, keyed by the project's absolute path.
+`.kerflook` files. The editor itself asks for the checks (Sequence ▸ Run QC,
+listed under Preflight in the Export menu) and for renders; no screen of it
+shows the meter or the queue, or writes the paperwork. A project's master
+output (folder, name, codec) is kept per project, keyed by its absolute path.
 
 ## Projects
 
@@ -679,12 +665,12 @@ ctest --test-dir target/qt --output-on-failure
 
 The tests cover every region (one class per region: the picture, the stage shell
 and its geometry, comments and the review model, Inspector, timeline, bin and
-browser, Source, toolbar, status, Finish, Deliver, the kit, theme, launcher,
+browser, Source, toolbar, status, the kit, theme, launcher,
 wiring guards, kerf:// links), each fed bridge events shaped as kerfd sends them,
 and `MockupParityTest` checks the whole editor against the design at 1600 × 1000
-in 16:9 and 9:16, with each sheet and tray and a preview.
+in 16:9 and 9:16, with each sheet and a preview.
 With `KERF_SCREENSHOT_DIR` set, it saves each state under the mockup's query state
-(`169.png`, `916-inspector.png`, `169-finish.png`, `916-preview.png`, …), and the
+(`169.png`, `916-inspector.png`, `916-preview.png`, …), and the
 region galleries save theirs (`editor-<format>-dark.png`,
 `inspector-<pane>.png`, the launcher's pages, the comments panel's states).
 The pictures in them are the tests' procedural footage (`test_footage.h`:

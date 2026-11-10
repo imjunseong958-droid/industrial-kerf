@@ -76,7 +76,7 @@ QJsonObject findClip(const QJsonObject &timeline, const QString &clipId) {
     return {};
 }
 
-// A colour effect: what the vectorscope chip can show.
+// A colour effect: what a proposal card says in a line of its own.
 bool isColourEffect(const QString &fx) {
     const QString id = fx.toLower();
     return id.startsWith(QLatin1String("color.")) || id.startsWith(QLatin1String("colour.")) || id.contains(QLatin1String("hue")) ||
@@ -390,12 +390,6 @@ void ChatPanel::setSnapshot(const QJsonObject &snapshot) {
     if (timeline == m_timeline && timelines == m_proposalTimelines) return;
     m_timeline = timeline;
     m_proposalTimelines = timelines;
-    // A colour card whose frames never came (a newer preview request stops an
-    // older one) asks again when the rebuild finds it open.
-    for (auto it = m_colourRequested.begin(); it != m_colourRequested.end();) {
-        if (m_effectFrames.contains(QStringLiteral("after:") + *it)) ++it;
-        else it = m_colourRequested.erase(it);
-    }
     scheduleRebuild();
 }
 
@@ -451,46 +445,10 @@ void ChatPanel::setPreviewProposal(const QString &proposalId) {
     }
 }
 
-bool ChatPanel::setEffectPreview(const QString &key, const QImage &frame) {
-    if (!key.startsWith(QLatin1String("before:")) && !key.startsWith(QLatin1String("after:"))) return false;
-    m_effectFrames.insert(key, frame);
-    const QString version = key.section(QLatin1Char(':'), 1);
-    for (ProposalCard *card : cards())
-        if (card->shownId() == version)
-            card->setColourFrames(m_effectFrames.value(QStringLiteral("before:") + version),
-                                  m_effectFrames.value(QStringLiteral("after:") + version));
-    return true;
-}
-
 void ChatPanel::markSettledHere(const QString &proposalId, bool accepted) {
     m_settledHere.insert(proposalId, accepted);
     m_settledAt.insert(proposalId, QDateTime::currentDateTime());
     scheduleRebuild();
-}
-
-QJsonObject ChatPanel::colourPreviewRequest(const QString &versionId) const {
-    if (!m_model) return {};
-    const ReviewModel::Proposal *proposal = m_model->proposal(versionId);
-    if (!proposal) return {};
-    const ColourChange change = colourChange(*proposal, versionId);
-    if (change.clip.isEmpty()) return {};
-    const QJsonObject clip = findClip(m_timeline, change.clip);
-    // At the playhead when it is over the clip, else the clip's middle.
-    const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-    const double end = start + clip.value(QStringLiteral("duration")).toDouble();
-    const double at = m_playhead >= start && m_playhead < end ? m_playhead : (start + end) / 2.0;
-    QJsonObject before{{QStringLiteral("fx"), change.fx}, {QStringLiteral("key"), QStringLiteral("before:") + versionId}};
-    // A new effect's "before" is the effect at its defaults: the clip as it is.
-    if (change.hadBefore) before.insert(QStringLiteral("params"), change.before);
-    const QJsonObject after{{QStringLiteral("fx"), change.fx},
-                            {QStringLiteral("params"), change.after},
-                            {QStringLiteral("key"), QStringLiteral("after:") + versionId}};
-    return QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
-                       {QStringLiteral("clip"), change.clip},
-                       {QStringLiteral("at"), at},
-                       {QStringLiteral("effects"), QJsonArray{before, after}},
-                       {QStringLiteral("width"), 160},
-                       {QStringLiteral("key"), QStringLiteral("proposal:") + versionId}};
 }
 
 ChatPanel::ColourChange ChatPanel::colourChange(const ReviewModel::Proposal &proposal, const QString &versionId) const {
@@ -523,9 +481,6 @@ ChatPanel::ColourChange ChatPanel::colourChange(const ReviewModel::Proposal &pro
         if (!isColourEffect(fx)) return out;
         out.clip = change.clip;
         out.fx = fx;
-        out.hadBefore = had;
-        out.before = oldParams;
-        out.after = newParams;
         out.title = QStringLiteral("%1 · %2").arg(change.name.isEmpty() ? clipName(change.clip) : change.name, effectLabel(fx));
         QStringList parts;
         for (auto it = newParams.begin(); it != newParams.end(); ++it) {
@@ -772,13 +727,9 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     }
     card->setVersions(versions, versionId);
 
-    // The colour chip, for a colour change on one clip.
+    // A colour change on one clip has a line of its own.
     const ColourChange colour = colourChange(proposal, versionId);
-    if (!colour.clip.isEmpty()) {
-        card->setColour(ProposalCard::Colour{colour.clip, colour.fx, colour.title, colour.params});
-        card->setColourFrames(m_effectFrames.value(QStringLiteral("before:") + versionId),
-                              m_effectFrames.value(QStringLiteral("after:") + versionId));
-    }
+    if (!colour.clip.isEmpty()) card->setColour(ProposalCard::Colour{colour.clip, colour.fx, colour.title, colour.params});
 
     // The diff: the document's changed lines, else the script.
     QString diff = proposal.documentDiff;
@@ -826,10 +777,6 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     const QString id = proposal.id;
     connect(card, &ProposalCard::openToggled, this, [this, id, card](bool openNow) {
         m_cardState[id].open = openNow;
-        if (openNow && card->hasColour() && !m_colourRequested.contains(card->shownId())) {
-            m_colourRequested.insert(card->shownId());
-            emit colourPreviewWanted(card->shownId());
-        }
         QTimer::singleShot(0, this, &ChatPanel::updatePinBar);
     });
     connect(card, &ProposalCard::scriptToggled, this, [this, id](bool shownNow) { m_cardState[id].script = shownNow; });
@@ -844,10 +791,6 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     connect(card, &ProposalCard::acceptRequested, this, &ChatPanel::acceptRequested);
     connect(card, &ProposalCard::watchRequested, this, [this, card] { emit changedPartsRequested(card->shownId()); });
     connect(card, &ProposalCard::rejectRequested, this, &ChatPanel::rejectRequested);
-    if (state.open && card->hasColour() && !m_colourRequested.contains(versionId)) {
-        m_colourRequested.insert(versionId);
-        QTimer::singleShot(0, this, [this, versionId] { emit colourPreviewWanted(versionId); });
-    }
     return card;
 }
 
@@ -1129,13 +1072,6 @@ void ChatPanel::scrollToThread(const QString &threadId) {
     m_list->verticalScrollBar()->setValue(std::max(0, top - kListTop));
 }
 
-void ChatPanel::setCoveredBelow(int pixels) {
-    if (pixels == m_coveredBelow) return;
-    const QMargins list = m_listLayout->contentsMargins();
-    m_listLayout->setContentsMargins(list.left(), list.top(), list.right(), list.bottom() - m_coveredBelow + pixels);
-    m_coveredBelow = pixels;
-}
-
 void ChatPanel::openThread(const QString &threadId, bool flash) {
     if (!m_model) return;
     const ReviewModel::Thread *thread = m_model->threadOf(threadId);
@@ -1177,8 +1113,7 @@ void ChatPanel::placeFirst() {
     m_placed = true;
     m_model->setCurrentThread(current);
     scrollToThread(current);
-    if (!m_reviewWorkspace) return;
-    // In Review, the pinned proposal's Accept row clears the bottom fade by 30.
+    // The pinned proposal's Accept row clears the bottom fade by 30.
     const QList<ReviewModel::Proposal> open = m_model->openProposals();
     if (open.isEmpty()) return;
     ProposalCard *pinned = card(open.constFirst().id);
