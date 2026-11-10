@@ -23,6 +23,8 @@
 set -euo pipefail
 
 [ $# -eq 1 ] || { echo "usage: $0 path/to/the/unpacked/package" >&2; exit 2; }
+# What is asked of a desktop entry, here and of the .deb's (check-kerf-linux-deb.sh).
+. "$(dirname "$0")/kerf-linux-desktop.sh"
 package="$(cd "$1" && pwd -P)"
 bin="$package/bin"
 [ -x "$bin/kerf-qt" ] || { echo "No bin/kerf-qt in $package" >&2; exit 1; }
@@ -132,56 +134,13 @@ if [ -e "$package/install-desktop-entry.sh" ]; then
             HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
     }
     as_user "$package/install-desktop-entry.sh" > /dev/null
-    grep -qxF "Exec=\"$bin/kerf-qt\" %u" "$entry" ||
-        { echo "The desktop entry does not run $bin/kerf-qt with the link:" >&2; cat "$entry" >&2; exit 1; }
-    grep -qxF 'MimeType=x-scheme-handler/kerf;' "$entry" || { echo "The desktop entry takes no kerf:// links" >&2; exit 1; }
+    kerf_check_entry "$entry" "$bin/kerf-qt"
     grep -qxF 'x-scheme-handler/kerf=industrial-kerf.desktop' "$mimeapps" ||
         { echo "mimeapps.list does not send kerf:// links to Kerf" >&2; exit 1; }
-    if command -v desktop-file-validate > /dev/null; then desktop-file-validate "$entry"; fi
-    # The entry's icon, looked up as a desktop does: by name, in the user's part of the
-    # hicolor theme, at the size asked for. Each has to be a PNG of that size, and a size
-    # the system's theme does not list would never be looked in.
-    icon="$(sed -n 's/^Icon=//p' "$entry")"
-    [ "$icon" = industrial-kerf ] || { echo "The desktop entry's icon is '$icon', not Kerf's own" >&2; exit 1; }
-    hicolor="$home/.local/share/icons/hicolor"
-    for size in 16 24 32 48 64 128 256 512; do
-        installed="$hicolor/${size}x${size}/apps/$icon.png"
-        [ -s "$installed" ] || { echo "No $size pixel icon for the desktop entry at $installed" >&2; exit 1; }
-        [ "$(head -c 8 "$installed" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] ||
-            { echo "$installed is not a PNG" >&2; exit 1; }
-        # A PNG's width and height: eight bytes, big-endian, from the sixteenth.
-        read -r w1 w2 w3 w4 h1 h2 h3 h4 < <(od -An -tu1 -j16 -N8 "$installed")
-        width=$((w1 * 16777216 + w2 * 65536 + w3 * 256 + w4))
-        height=$((h1 * 16777216 + h2 * 65536 + h3 * 256 + h4))
-        [ "$width" = "$size" ] && [ "$height" = "$size" ] ||
-            { echo "$installed is ${width}x$height, not ${size}x$size" >&2; exit 1; }
-        cmp -s "$installed" "$package/icons/$icon-$size.png" ||
-            { echo "$installed is not the package's icons/$icon-$size.png" >&2; exit 1; }
-        if [ -f /usr/share/icons/hicolor/index.theme ]; then
-            grep -qE "^Directories=(.*,)?${size}x${size}/apps(,|\$)" /usr/share/icons/hicolor/index.theme ||
-                { echo "The hicolor theme has no ${size}x${size}/apps for the icon to be found in" >&2; exit 1; }
-        fi
-    done
+    kerf_check_icons "$home/.local/share/icons/hicolor" "$package/icons"
     if command -v gio > /dev/null; then
-        # Read whole first: grep -q stops at its match, and with pipefail gio's broken pipe
-        # would fail the check.
-        handlers="$(as_user gio mime x-scheme-handler/kerf)"
-        grep -q '^Default application .*: industrial-kerf\.desktop$' <<< "$handlers" ||
-            { printf 'GLib does not take Kerf for kerf:// links:\n%s\n' "$handlers" >&2; exit 1; }
-        link='kerf://kerf-linux-check/rev1@00:00:01:00'
-        # As a click on a link: gio starts the entry's command and returns, and the editor
-        # has to be running with the link.
-        follow='
-            gio open "$1"
-            for _ in $(seq 1 40); do
-                for pid in $(pgrep -f -- "$1"); do
-                    if [ "$(readlink -f "/proc/$pid/exe")" = "$2" ]; then kill "$pid"; exit 0; fi
-                done
-                sleep 0.5
-            done
-            exit 1'
-        as_user xvfb-run -a -s "-screen 0 1280x800x24" bash -c "$follow" follow "$link" "$bin/kerf-qt" ||
-            { echo "Following $link through GLib started no $bin/kerf-qt with it" >&2; exit 1; }
+        kerf_takes_links as_user
+        kerf_follow_link "$bin/kerf-qt" as_user
     fi
     as_user "$package/install-desktop-entry.sh" --remove > /dev/null
     [ ! -e "$entry" ] || { echo "--remove left $entry" >&2; exit 1; }

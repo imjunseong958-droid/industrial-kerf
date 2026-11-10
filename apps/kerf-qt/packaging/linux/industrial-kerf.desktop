@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Industrial Kerf
+GenericName=Video Editor
+Comment=Edit video, with an agent editing beside you
+Exec="/opt/industrial-kerf/bin/kerf-qt" %u
+TryExec=/opt/industrial-kerf/bin/kerf-qt
+Icon=industrial-kerf
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=x-scheme-handler/kerf;
+StartupWMClass=kerf-qt
