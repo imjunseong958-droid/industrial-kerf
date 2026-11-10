@@ -90,16 +90,19 @@ jobs:
       # other test replaces with one in memory: here the Secret Service,
       # gnome-keyring on a session bus of its own, its login keyring unlocked
       # with a throwaway password. Locked, it refuses every write.
+      # Asked of the whole workspace, here and in the step after, so the tests
+      # built above are the ones run: asked of one package, cargo builds its
+      # dependencies again with that package's features alone.
       - name: Test the system keychain
         run: |
-          dbus-run-session -- sh -c 'printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored'
+          dbus-run-session -- sh -c 'printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test --workspace --lib real_keychain -- --ignored'
       # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
       # of a GPU: looks, grades and transitions stay on the GPU. Only this
       # runs on llvmpipe; its pow and exp are a byte off color.basic's.
       - name: Test what the catalog sends to the CPU
         env:
           KERF_GPU: software
-        run: cargo test -p kerf-compose --test catalog_cost -- --nocapture
+        run: cargo test --workspace --test catalog_cost -- --nocapture
       # The frames the compositor parity tests compared, drawn both ways,
       # to look at when one fails.
       - name: Upload compositor parity frames
@@ -316,5 +319,7 @@ jobs:
         run: cargo test --workspace
       # The real store API keys and the Kerf Cloud token go to, which every
       # other test replaces with one in memory: here the login keychain.
+      # Asked of the whole workspace, so the tests built above are the ones
+      # run and nothing is built again.
       - name: Test the system keychain
-        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored
+        run: cargo test --workspace --lib real_keychain -- --ignored
