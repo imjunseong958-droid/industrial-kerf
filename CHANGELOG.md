@@ -32,6 +32,10 @@ on `main`; its section here becomes the release's notes on GitHub
   `rotation=(t*90)`, `x=(sin(t*pi)*0.1)`, `opacity=(0.5+0.5*noise(t*3))`. The
   Inspector shows what it gives at the clip's first frame; setting the value
   there replaces it.
+- `KERF_GRAPH_RENDER=1` and `kerf-engine render --graph`, which had FFmpeg draw
+  the picture as renders did before Kerf's own renderer, are gone. Renders,
+  playback, and previews already drew with that renderer; nothing about them
+  changes.
 - A media line can say what its file was made from: `recipe="shots/open.json"`
   names a recipe, a text file with the command that makes it, and
   `kerf make <media>` runs it and puts the new file in the media's place. A
@@ -41,6 +45,10 @@ on `main`; its section here becomes the release's notes on GitHub
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.
+- Moving the playhead just as an edit lands no longer leaves the viewer on the
+  frame it showed before: the picture follows the playhead to where it was put.
+- A shape whose offset shrinks it past its middle is gone at once, where the
+  editor had stopped for several seconds to find that nothing was left.
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 

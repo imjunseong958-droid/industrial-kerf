@@ -1515,6 +1515,10 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             let handle = session.handle();
             let seek = shared.seek.lock().ok().and_then(|mut slot| slot.take());
             if let Some(seek) = seek {
+                // Where the viewer was asked to be, before the session says
+                // so itself: an edit that replaces this session first opens
+                // the next one here, not where the last frame was.
+                position = seek.position;
                 // Keep the picture that is already on screen. The UI drops a
                 // frame only when a newer one is closer to the pointer, so
                 // clearing this slot just freezes the viewer during a scrub.
@@ -2874,7 +2878,7 @@ mod tests {
     use super::{
         cancel_preview, discard_preview, discard_previews, media_worker, preview_frame_size,
         publish, publish_force, queue, rendered_preview, sweep_previews, AgentSettings, Command,
-        MediaProject, Shared,
+        MediaProject, PendingSeek, Shared,
     };
     use kerf_runtime::{EditOp, PendingProposal, ProposalEntry, ProposalFreshness, StateSnapshot};
     use serde_json::json;
@@ -3397,6 +3401,65 @@ mod tests {
         shared.closed.store(true, Ordering::SeqCst);
         worker.join().unwrap();
         assert!(!second.exists(), "closing removes the preview it played");
+    }
+
+    /// A program the compositor draws with no file to read: a solid, two
+    /// seconds long.
+    fn solid(color: &str) -> MediaProject {
+        MediaProject::Native(
+            kerf_runtime::parse_document(&format!(
+                "kerf 1\nproject name=\"Bridge\"\n\
+                 sequence s1 rate=24 size=160x90 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip g1 gen=solid@1 at=0f dur=48f\n\
+                 \x20     set color={color}\n"
+            ))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_seek_is_kept_when_an_edit_replaces_the_session_it_went_to() {
+        use crate::tests_support::wait;
+        let directory = tempfile::tempdir().unwrap();
+        let shared = Arc::new(crate::tests_support::shared(directory.path()));
+        *shared.project.lock().unwrap() = Some(solid("#336699"));
+        let (_commands, rx) = mpsc::sync_channel(4);
+        let (tx, events) = mpsc::sync_channel(4);
+        drop(events);
+        let worker = {
+            let shared = shared.clone();
+            std::thread::spawn(move || media_worker(rx, tx, shared))
+        };
+        // The frame showing, when it is of `time` and as red as `red` says.
+        let shown = |time: f64, red: std::ops::Range<u8>| {
+            let frame = shared.frame.lock().unwrap();
+            frame
+                .as_ref()
+                .filter(|frame| (frame.timeline_time - time).abs() < 0.02)
+                .filter(|frame| red.contains(&frame.pixels[0]))
+                .map(|_| ())
+        };
+        assert!(wait(Duration::from_secs(20), || shown(0.0, 0..100)).is_some());
+
+        // The worker stops here to take the seek, past where it takes a
+        // project, so the edit lands after the seek went to the session the
+        // edit replaces.
+        let mut seek = shared.seek.lock().unwrap();
+        *seek = Some(PendingSeek {
+            position: 1.0,
+            exact: true,
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        *shared.project.lock().unwrap() = Some(solid("#996633"));
+        drop(seek);
+        assert!(
+            wait(Duration::from_secs(20), || shown(1.0, 100..255)).is_some(),
+            "the edited program opens where the viewer was asked to be"
+        );
+
+        shared.closed.store(true, Ordering::SeqCst);
+        worker.join().unwrap();
     }
 
     #[test]

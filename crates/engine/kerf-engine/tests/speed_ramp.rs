@@ -225,7 +225,6 @@ fn a_ramp_through_a_crossfade_still_fades_across_the_cut() {
         &silent,
         Catalog::builtin(),
         &kerf_engine::program::ProgramOptions {
-            audio_only: true,
             ..Default::default()
         },
     )

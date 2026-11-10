@@ -644,7 +644,6 @@ fn locate_peak(
         Catalog::builtin(),
         &ProgramOptions {
             sequence: Some(sequence.id.to_string()),
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )

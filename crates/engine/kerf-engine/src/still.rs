@@ -22,7 +22,7 @@ pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()?;
     // Read as it writes, so a full stderr cannot stop it taking the frame.
-    let errors = crate::raster::drain_stderr(&mut child);
+    let errors = crate::sidecar::drain_stderr(&mut child);
     child
         .stdin
         .take()
