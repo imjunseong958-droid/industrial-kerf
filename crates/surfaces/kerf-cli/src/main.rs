@@ -1187,9 +1187,9 @@ fn operation_key(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_name, create_project, editor_candidates, editor_command, editor_project, media_file,
-        preset_request, requested_project, run_sync, sync_report, uses_terminal, Args, Command,
-        PresetAction,
+        binary_name, create_project, editor_candidates, editor_command, editor_project, make_plan,
+        media_file, preset_request, requested_project, run_sync, sync_report, uses_terminal, Args,
+        Command, PresetAction,
     };
     use clap::Parser;
     use kerf_collab::git::Pushed;
