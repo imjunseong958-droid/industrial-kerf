@@ -51,6 +51,32 @@ The compositor, the parser, the language reference, and `look` need no change. A
 test fails if the catalog and the code disagree. `image.fill` is the worked
 example.
 
+Every effect the compositor runs on the CPU comes through that one interface,
+whichever crate it is in and wherever its code came from: `kerf-fx` lists the
+color correction and Gaussian blur every Kerf has had, the EffectCraft effects
+Kerf keeps, and FilmCraft's (`kerf-fx/src/picture.rs`), beside `kerf-image`'s.
+An effect gets its parameters, where and when it runs
+(`kerf_draw::effect::EffectRun`), and, on a clip, a host to ask for the clip's
+other frames, another track, or the sequence's sound (`EffectHost`). The
+compositor asks no effect which kind it is.
+
+Still to come, each a place that runs effects its own way and so asks the
+catalog what draws one (`Engine`):
+
+- **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) names the effects with
+  kernels by id. A kernel belongs on the same interface as the CPU's code.
+- **Effect previews in the editor** (`kerf-qt-bridge/src/previews.rs`) run a
+  clip's EffectCraft effects and then its FilmCraft ones, not in the order of
+  the stack.
+- **Playback of plain cuts** (`kerf-playback/src/timeline.rs`) runs EffectCraft
+  effects itself on the frames it decodes.
+- **The graph drawing the picture** (`KERF_GRAPH_RENDER=1`, kept for one
+  release) bakes EffectCraft effects into files first (`kerf-core/src/raster.rs`).
+
+`Engine` goes when the last of these does. How an effect meets an HDR picture
+(`filmcraft::catalog::headroom`) and whether it leaves a picture alone are
+still tables by id beside the interface.
+
 ## The engine
 
 A frame is drawn on the GPU when every part of it has a kernel, and on the CPU

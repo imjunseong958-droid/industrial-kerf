@@ -6,6 +6,7 @@ use super::project::{
     EffectDef, EffectInstance, Param as FxParam, ParamDef, ParamValue, Project, ProjectLut,
 };
 use crate::filmcraft::tick::Tick;
+use kerf_draw::effect::Files;
 use kerf_geom::Vec2;
 use kerf_model::{Effect, Param, Rgba, Time, Value};
 use std::collections::BTreeMap;
@@ -103,8 +104,8 @@ pub struct Run<'a> {
     /// The sequence's timecode now, for burn-ins.
     pub timecode: &'a str,
     pub clip_name: &'a str,
-    /// The LUT files the program's effects name.
-    pub library: &'a Project,
+    /// The LUT files the effect names.
+    pub library: Option<&'a Project>,
     /// The clip's other frames and the sequence's other tracks; none on an adjustment layer.
     pub env: Option<&'a dyn super::vfx::FxEnv>,
     pub frame_rate: f64,
@@ -118,7 +119,7 @@ pub fn apply(picture: &mut kerf_draw::Image, instance: &EffectInstance, run: &Ru
         seconds: run.at.seconds(),
         timecode: run.timecode,
         clip_name: run.clip_name,
-        project: Some(run.library),
+        project: run.library,
         env: run.env,
         frame_rate: run.frame_rate,
         working: run.working,
@@ -175,7 +176,7 @@ pub fn gpu_effect(instance: &EffectInstance, run: &Run, size: (usize, usize)) ->
         seconds: run.at.seconds(),
         timecode: run.timecode,
         clip_name: run.clip_name,
-        project: Some(run.library),
+        project: run.library,
         env: None,
         frame_rate: run.frame_rate,
         working: run.working,
@@ -212,7 +213,7 @@ pub fn apply_rgba(
             per_source,
             timecode: "00:00:00:00",
             clip_name: "",
-            library: &library,
+            library: Some(&library),
             env: None,
             frame_rate,
         };
@@ -400,42 +401,81 @@ pub(crate) fn curve(text: &str) -> Option<Vec<[f32; 2]>> {
     Some(points)
 }
 
+/// The LUT files `effect` names, by the path its parameters give.
+fn lut_paths(effect: &Effect) -> Vec<&String> {
+    let Some(def) = carried(effect.fx.as_str()) else {
+        return Vec::new();
+    };
+    def.params
+        .iter()
+        .filter(|param| written(def.id, param) == Written::Lut)
+        .filter_map(|param| match effect.params.get(param.id) {
+            Some(Param::Static(Value::Text(path))) if !path.trim().is_empty() => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The file at `path` as text.
+fn lut_text(path: &str) -> Result<std::sync::Arc<str>, String> {
+    std::fs::read_to_string(path)
+        .map(crate::filmcraft::luts::shared_text)
+        .map_err(|error| format!("cannot read LUT `{path}`: {error}"))
+}
+
+/// A LUT file as Lumetri reads it (`lib:<path>`).
+fn lut(path: &str, text: std::sync::Arc<str>) -> ProjectLut {
+    let format = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("cube")
+        .to_ascii_lowercase();
+    ProjectLut {
+        id: path.to_owned(),
+        name: path.to_owned(),
+        source_path: Some(path.to_owned()),
+        format,
+        text,
+    }
+}
+
 /// The LUT files a clip's effects name, as Lumetri reads them (`lib:<path>`). A file that
 /// cannot be read is an error naming it.
 pub fn library<'a>(effects: impl IntoIterator<Item = &'a Effect>) -> Result<Project, String> {
     let mut library = Project::new("kerf");
     for effect in effects {
-        let Some(def) = carried(effect.fx.as_str()) else {
-            continue;
-        };
-        for param in def
-            .params
-            .iter()
-            .filter(|p| written(def.id, p) == Written::Lut)
-        {
-            let Some(Param::Static(Value::Text(path))) = effect.params.get(param.id) else {
-                continue;
-            };
-            if path.trim().is_empty() || library.luts.iter().any(|l| l.id == *path) {
-                continue;
+        for path in lut_paths(effect) {
+            if !library.luts.iter().any(|l| l.id == *path) {
+                library.luts.push(lut(path, lut_text(path)?));
             }
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| format!("cannot read LUT `{path}`: {error}"))?;
-            let format = std::path::Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("cube")
-                .to_ascii_lowercase();
-            library.luts.push(ProjectLut {
-                id: path.clone(),
-                name: path.clone(),
-                source_path: Some(path.clone()),
-                format,
-                text: crate::filmcraft::luts::shared_text(text),
-            });
         }
     }
     Ok(library)
+}
+
+/// Read the LUT files `effect` names into `files`, each once. A file that cannot be read is an
+/// error naming it.
+pub fn read_luts(effect: &Effect, files: &mut Files) -> Result<(), String> {
+    for path in lut_paths(effect) {
+        if files.text(path).is_none() {
+            files.insert(path.as_str(), lut_text(path)?);
+        }
+    }
+    Ok(())
+}
+
+/// The LUT files `effect` names, from those the program had read; none when it names none.
+pub fn luts(effect: &Effect, files: &Files) -> Option<Project> {
+    let mut library = Project::new("kerf");
+    for path in lut_paths(effect) {
+        if let Some(text) = files
+            .text(path)
+            .filter(|_| library.luts.iter().all(|l| l.id != *path))
+        {
+            library.luts.push(lut(path, text.clone()));
+        }
+    }
+    (!library.luts.is_empty()).then_some(library)
 }
 
 #[cfg(test)]

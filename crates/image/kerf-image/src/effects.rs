@@ -127,11 +127,12 @@ fn paint(
 
 /// The clip's picture `frames` away, held to its ends; `None` when it has no other frames to read.
 fn other_frame(picture: &Image, run: &EffectRun, frames: f64) -> Option<Image> {
-    let read = run.picture_at?;
+    let clip = run.frames()?;
     let frame = 1.0 / run.frame_rate.max(1.0);
     let last = (run.duration.seconds() - frame).max(0.0);
     let time = Time::from_seconds((run.at.seconds() + frames * frame).clamp(0.0, last))?;
-    read(time).filter(|other| (other.w, other.h) == (picture.w, picture.h))
+    clip.at(time)
+        .filter(|other| (other.w, other.h) == (picture.w, picture.h))
 }
 
 /// `image.fill`: the area a mask draws, filled from the rest of the picture.
@@ -193,7 +194,7 @@ fn fill_run(
     patch: usize,
     hole_here: &[bool],
 ) -> Option<Vec<[f32; 4]>> {
-    let picture_at = run.picture_at?;
+    let clip = run.frames()?;
     let frame_seconds = 1.0 / run.frame_rate.max(1.0);
     let length = run.number(effect, "reach").round().max(1.0) as i64 * 2 + 1;
     let here = (run.at.seconds() / frame_seconds + 1e-6).floor() as i64;
@@ -217,7 +218,7 @@ fn fill_run(
             pictures.push(picture.clone());
             continue;
         }
-        let Some(other) = picture_at(time) else {
+        let Some(other) = clip.at(time) else {
             continue;
         };
         if (other.w, other.h) != (picture.w, picture.h) {
@@ -373,6 +374,7 @@ fn linear_in_hole(filled: &Raster, hole: &[bool]) -> Vec<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kerf_draw::effect::{EffectHost, Files};
     use kerf_model::{Id, Mask, MaskShape, Param, Value};
     use std::collections::BTreeMap;
 
@@ -415,14 +417,34 @@ mod tests {
     }
 
     fn run(masks: &[Mask]) -> EffectRun<'_> {
+        static NO_FILES: Files = Files::new();
         EffectRun {
             at: Time::ZERO,
+            sequence_at: Time::ZERO,
             per_source: 1.0,
+            per_canvas: 1.0,
+            index: 0,
+            nested: false,
             seed: 1,
             masks,
             frame_rate: 24.0,
             duration: Time::from_seconds(2.0).expect("a time"),
-            picture_at: None,
+            working: Default::default(),
+            timecode: "",
+            clip_name: "",
+            tracks: &[],
+            sounds: &[],
+            files: &NO_FILES,
+            host: None,
+        }
+    }
+
+    /// A host with nothing but the pictures `read` gives.
+    struct Reads<F>(F);
+
+    impl<F: Fn(Time) -> Option<Image> + Sync> EffectHost for Reads<F> {
+        fn picture_at(&self, at: Time, _: usize) -> Option<Image> {
+            (self.0)(at)
         }
     }
 
@@ -541,8 +563,9 @@ mod tests {
             ("hardness", number(1.0)),
             ("from_frame", number(-100.0)),
         ];
+        let host = Reads(read);
         let reading = EffectRun {
-            picture_at: Some(&read),
+            host: Some(&host),
             ..run(&masks)
         };
         Clone.apply(

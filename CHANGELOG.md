@@ -28,6 +28,8 @@ on `main`; its section here becomes the release's notes on GitHub
   with the `.deb`, or once `./install-desktop-entry.sh` has run.
 - Kerf for Mac needs macOS 26 or later, and on an older macOS it now says so
   instead of failing to open.
+- Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
+  left the picture as it was.
 
 ## 0.1.1
 

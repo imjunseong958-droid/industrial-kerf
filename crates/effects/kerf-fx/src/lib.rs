@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 pub mod filmcraft;
 mod guide;
 pub mod kept;
+pub mod picture;
 pub mod transitions;
 
 pub use kerf_draw::mask::cuts;

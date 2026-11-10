@@ -324,7 +324,10 @@ impl Area {
     }
 }
 
-/// What renders a definition.
+/// Where a definition's code came from, for the places that still run
+/// effects their own way: the graph, playback of plain cuts, and the editor's
+/// previews. The compositor does not ask: it finds every effect by id
+/// (`kerf_draw::effect::PictureEffect`; see `docs/architecture.md`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Engine {
     /// Lowered into the render graph.
