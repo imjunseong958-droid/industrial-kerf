@@ -1,6 +1,7 @@
 #include "motion_path.h"
 
 #include <QStringList>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
