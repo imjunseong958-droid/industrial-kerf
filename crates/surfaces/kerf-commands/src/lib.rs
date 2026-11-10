@@ -211,6 +211,12 @@ pub enum Request {
         media: String,
         path: String,
     },
+    /// Make a media's file again from its recipe. Unconfirmed, the bridge
+    /// answers with what it would run and runs nothing.
+    MediaMake {
+        media: String,
+        confirmed: bool,
+    },
     PresetLibrary,
     /// Save the program sequence as `presets/<name>.kerfpreset`.
     PresetSave {
@@ -957,6 +963,10 @@ pub static COMMANDS: &[Command] = &[
         command("media.replace", "Replace Media…", connected),
         r#"{"media": string, "path": string}"#,
     ),
+    params(
+        command("media.make", "Make from Recipe…", connected),
+        r#"{"media": string, "confirmed": bool}"#,
+    ),
     command("preset.library", "Refresh Presets", connected),
     command("projection.import", "Load from Disk", is_diverged),
     command("projection.repair", "Keep Editor Version", is_diverged),
@@ -1620,6 +1630,10 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "media.replace" => Request::MediaReplace {
             media: params.require_string("media")?,
             path: params.require_string("path")?,
+        },
+        "media.make" => Request::MediaMake {
+            media: params.require_string("media")?,
+            confirmed: params.bool("confirmed")?.unwrap_or(false),
         },
         "preset.library" => Request::PresetLibrary,
         "preset.save" => Request::PresetSave {
@@ -2517,6 +2531,7 @@ mod tests {
         assert_eq!(menu_of("help.crashReports"), "Help");
         assert_eq!(menu_of("help.about"), "Help");
         assert_eq!(menu_of("media.replace"), Value::Null);
+        assert_eq!(menu_of("media.make"), Value::Null);
         // Ctrl+O stays Import Media; opening a project takes its own key.
         assert_eq!(find("file.import").unwrap().keys, ["Ctrl+O"]);
         assert_eq!(find("file.openProject").unwrap().keys, ["Ctrl+Shift+O"]);
@@ -2696,6 +2711,19 @@ mod tests {
             ),
             json!({"type": "media_replace", "media": "m1", "path": "/clips/take2.mov"})
         );
+        // Asked for plainly, a recipe is shown and not run.
+        assert_eq!(
+            request("media.make", &context, json!({"media": "m1"})),
+            json!({"type": "media_make", "media": "m1", "confirmed": false})
+        );
+        assert_eq!(
+            request(
+                "media.make",
+                &context,
+                json!({"media": "m1", "confirmed": true})
+            ),
+            json!({"type": "media_make", "media": "m1", "confirmed": true})
+        );
         assert_eq!(
             request("preset.save", &context, json!({"name": "Intro"})),
             json!({"type": "preset_save", "name": "Intro", "replace": false})
@@ -2727,6 +2755,7 @@ mod tests {
         let invocations = [
             ("file.refresh", Value::Null),
             ("media.replace", json!({"media": "m1", "path": "a.mov"})),
+            ("media.make", json!({"media": "m1"})),
             ("preset.library", Value::Null),
             ("preset.save", json!({"name": "Intro"})),
             ("collab.status", Value::Null),

@@ -212,7 +212,15 @@ void kerf_bridge_free(void *bridge);
 // relative to the project. media_replace {media, path} swaps the file behind
 // a media id (every clip that uses it keeps its timing; a file too short or
 // without the streams the clips need is refused, naming them), copying it
-// into media/ the same way.
+// into media/ the same way. media_make {media, confirmed?} makes the file of
+// a media that names a recipe (recipe= on its media line; a source says its
+// recipe). Without confirmed it runs nothing and answers media_make_plan
+// {media, recipe, command, file}: the recipe's file, the command as it
+// would be run, and the file it replaces, for a person to read. With
+// confirmed: true, which only a person's yes to that plan may send, it runs
+// the recipe off the GUI thread, answers media_made {media} and then the
+// state of the replace that follows, or error {message} with the media's
+// file left as it was.
 // Projection: projection_import loads a project.kerf changed outside Kerf
 // (a git pull in a terminal, a text editor) as one revision;
 // projection_repair writes the editor's project over it.

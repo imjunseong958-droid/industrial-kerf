@@ -757,7 +757,8 @@ private slots:
             {"fps", 24}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
                 QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m2"}, {"path", "/Volumes/Shoot/b.mov"}, {"width", 320}, {"duration", 4}},
-                QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}}}}}}});
+                QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}},
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"}}}}}}});
         window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m3"}},
                                        {"pointers", QJsonArray{"m1"}}, {"external", QJsonArray{"m2"}}});
         ProjectPanel *bin = window.m_projectPanel;
@@ -780,6 +781,27 @@ private slots:
         delete menu;
         menu = window.binMenu(QStringLiteral("m3"));
         QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
+        delete menu;
+
+        // Only a media that names a recipe can be made, and asking shows the command before
+        // anything runs.
+        menu = window.binMenu(QStringLiteral("m1"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binMake")));
+        delete menu;
+        QCOMPARE(window.mediaRecipe(QStringLiteral("m4")), QStringLiteral("shots/open.kerfrecipe"));
+        menu = window.binMenu(QStringLiteral("m4"));
+        QAction *make = menu->findChild<QAction *>(QStringLiteral("binMake"));
+        QVERIFY(make && make->isEnabled());
+        QVERIFY(make->toolTip().contains(QStringLiteral("shots/open.kerfrecipe")));
+        make->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", false}}));
+        const QString question = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+                                                                     {"command", "vork render open.json --out /p/shots/.making-open.mp4"},
+                                                                     {"file", "/p/shots/open.mp4"}});
+        QVERIFY(question.contains(QStringLiteral("vork render open.json --out /p/shots/.making-open.mp4")));
+        QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.mp4")));
+        window.runMake(QStringLiteral("m4"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;
 
         window.replaceMedia(QStringLiteral("m2"), QStringLiteral("/Volumes/Shoot/b-take2.mov"));

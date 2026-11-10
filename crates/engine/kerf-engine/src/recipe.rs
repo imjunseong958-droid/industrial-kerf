@@ -100,6 +100,64 @@ impl Recipe {
     }
 }
 
+/// What making a media runs and writes, for a person to see before it is
+/// run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// The recipe's file.
+    pub recipe: PathBuf,
+    /// The media's file, which the run replaces.
+    pub file: PathBuf,
+    /// The media's path as the document has it.
+    pub stored: String,
+    /// The command, as [`Recipe::shown`] gives it.
+    pub command: String,
+}
+
+/// `path`, which a project names, as a file inside `directory`: a recipe is
+/// a command to run and a media's file is written over, so neither may be
+/// somewhere else.
+fn inside_project(directory: &Path, path: &str, what: &str) -> Result<PathBuf> {
+    let given = Path::new(path);
+    let escapes = given
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir));
+    if given.is_absolute() || escapes {
+        return Err(EngineError::msg(format!(
+            "the {what} `{path}` is not inside the project, so it is left alone"
+        )));
+    }
+    Ok(directory.join(given))
+}
+
+/// What making media `id` of `project`, kept in `directory`, would run:
+/// its recipe read, and nothing run.
+pub fn plan(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Plan> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    let recipe = media.recipe.as_deref().ok_or_else(|| {
+        EngineError::msg(format!(
+            "media `{id}` names no recipe; add `recipe=\"<file>\"` to its line with `media replace`"
+        ))
+    })?;
+    let recipe = inside_project(directory, recipe, "recipe")?;
+    let file = inside_project(directory, &media.path, "media file")?;
+    let text = std::fs::read_to_string(&recipe).map_err(|error| {
+        EngineError::msg(format!(
+            "cannot read the recipe {}: {error}",
+            recipe.display()
+        ))
+    })?;
+    let command = Recipe::parse(&text)?.shown(&making_path(&file));
+    Ok(Plan {
+        recipe,
+        file,
+        stored: media.path.clone(),
+        command,
+    })
+}
+
 /// A line's words: split at spaces, with `"…"` keeping what it holds as
 /// one word, `\"` and `\\` inside it standing for themselves.
 fn words(line: &str) -> std::result::Result<Vec<String>, String> {
@@ -255,6 +313,57 @@ mod tests {
         assert!(wrong("kerf-recipe 1\nrun vork \"open {out}").contains("quote is not closed"));
         assert!(wrong("kerf-recipe 1\nrun vork render").contains("names no `{out}`"));
         assert!(wrong("kerf-recipe 1\nrun a {out}\nrun b {out}").contains("line 3"));
+    }
+
+    #[test]
+    fn a_plan_is_only_of_a_recipe_and_a_file_inside_the_project() {
+        let folder = tempfile::tempdir().unwrap();
+        let directory = folder.path();
+        std::fs::create_dir(directory.join("shots")).unwrap();
+        std::fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            "kerf-recipe 1\nrun vork render open.json --out {out}\n",
+        )
+        .unwrap();
+        let media = |id: &str, path: &str, recipe: Option<&str>| kerf_model::Media {
+            id: kerf_model::Id::new(id).unwrap(),
+            path: path.to_owned(),
+            rate: kerf_model::Rate::FPS_24,
+            drop_frame: false,
+            start: kerf_model::Time::ZERO,
+            duration: kerf_model::Time::from_seconds(1.0).unwrap(),
+            video: None,
+            audio: None,
+            reel: None,
+            recipe: recipe.map(str::to_owned),
+        };
+        let project = kerf_model::Project {
+            media: vec![
+                media("m1", "shots/open.mp4", Some("shots/open.kerfrecipe")),
+                media("m2", "a.mov", None),
+                media("m3", "shots/b.mp4", Some("../elsewhere/run.kerfrecipe")),
+                media("m4", "/tmp/c.mp4", Some("shots/open.kerfrecipe")),
+                media("m5", "shots/d.mp4", Some("shots/gone.kerfrecipe")),
+            ],
+            ..kerf_model::Project::default()
+        };
+        let made = plan(&project, directory, "m1").unwrap();
+        assert_eq!(made.recipe, directory.join("shots/open.kerfrecipe"));
+        assert_eq!(made.file, directory.join("shots/open.mp4"));
+        assert_eq!(made.stored, "shots/open.mp4");
+        assert_eq!(
+            made.command,
+            format!(
+                "vork render open.json --out {}",
+                directory.join("shots/.making-open.mp4").display()
+            )
+        );
+        let wrong = |id: &str| plan(&project, directory, id).unwrap_err().to_string();
+        assert!(wrong("m9").contains("no media `m9`"));
+        assert!(wrong("m2").contains("names no recipe"));
+        assert!(wrong("m3").contains("recipe `../elsewhere/run.kerfrecipe` is not inside"));
+        assert!(wrong("m4").contains("media file `/tmp/c.mp4` is not inside"));
+        assert!(wrong("m5").contains("cannot read the recipe"));
     }
 
     #[cfg(unix)]
