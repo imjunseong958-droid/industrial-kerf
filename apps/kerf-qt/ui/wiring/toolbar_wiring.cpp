@@ -3,7 +3,6 @@
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "composer.h"
-#include "keymap_editor.h"
 #include "sequence_settings.h"
 #include "components.h"
 #include "editor_bus.h"
@@ -173,9 +172,6 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     row->addWidget(w->m_exportButton);
     toolbar->setContent(m_content);
 
-    // One's own keys go on before anything reads the registry's (and back
-    // on whenever it loads a keymap).
-    m_customiser = new KeymapCustomiser(w->m_commands, this);
     // ⌥1-2 choose the format, as its segments do: the registry's commands,
     // whose keys work anywhere in the window.
     for (const QString &id : formatCommands())
@@ -257,7 +253,6 @@ void ToolbarWiring::installCommands() {
     const QStringList formats = formatCommands();
     for (int i = 0; i < formats.size(); ++i) w->m_commandHandlers.insert(formats.at(i), [this, i] { chooseFormat(i); });
     w->m_commandHandlers.insert(QStringLiteral("sequence.settings"), [this] { openSequenceSettings(); });
-    w->m_commandHandlers.insert(QStringLiteral("keyboard.customise"), [this] { openKeymapEditor(); });
     w->m_commandHandlers.insert(QStringLiteral("composer.draw"), [this] { drawInComposer(); });
     if (Composer *composer = w->m_chat ? w->m_chat->composerWidget() : nullptr)
         composer->setDrawAction(w->m_commands->action(QStringLiteral("composer.draw")));
@@ -315,22 +310,6 @@ bool ToolbarWiring::applySequenceSettings(const QJsonObject &op) {
 
 SequenceSettingsDialog *ToolbarWiring::sequenceSettings() const {
     return m_sequenceSettings;
-}
-
-KeymapEditor *ToolbarWiring::keymapEditor() const {
-    return m_keymapEditor;
-}
-
-KeymapEditor *ToolbarWiring::openKeymapEditor() {
-    if (!m_keymapEditor) {
-        auto *editor = new KeymapEditor(m_customiser, m_window);
-        editor->setAttribute(Qt::WA_DeleteOnClose);
-        m_keymapEditor = editor;
-    }
-    m_keymapEditor->show();
-    m_keymapEditor->raise();
-    m_keymapEditor->activateWindow();
-    return m_keymapEditor;
 }
 
 void ToolbarWiring::chooseFormat(int index) {
@@ -794,8 +773,6 @@ void ToolbarWiring::buildKeymapMenu(QMenu *menu) {
                     other->setChecked(other->objectName() == QStringLiteral("keymap.%1").arg(id));
         });
     }
-    menu->addSeparator();
-    if (QAction *customise = commands->action(QStringLiteral("keyboard.customise"))) menu->addAction(customise);
     menu->setToolTipsVisible(true);
 }
 

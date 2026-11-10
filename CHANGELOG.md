@@ -51,6 +51,10 @@ on `main`; its section here becomes the release's notes on GitHub
   editor had stopped for several seconds to find that nothing was left.
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
+- The editor is being cut down to the conversation, the picture and the
+  timeline. Gone so far: Customise Keyboard. Edit ▸ Keyboard Shortcuts still
+  chooses between the Kerf, Premiere Pro and Final Cut Pro layouts; keys of your
+  own no longer apply.
 
 ## 0.1.1
 

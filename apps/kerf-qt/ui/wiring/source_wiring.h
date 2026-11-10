@@ -10,9 +10,7 @@
 //   timeline       the open media (the one showing the source position, else
 //                  the first) and moves the playhead to that frame of it.
 //   commands       the registry's source.play and source.reveal run Play and
-//                  Open in timeline (the Play button triggers it, and a key
-//                  one gives them in the keymap editor works while the viewer
-//                  has the focus).
+//                  Open in timeline (the Play button triggers it).
 //   sound          none: no engine path plays a source's sound (the bridge
 //                  plays the program only), so Play is picture-only and says
 //                  nothing about sound.

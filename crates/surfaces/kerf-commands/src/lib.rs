@@ -782,14 +782,6 @@ pub static COMMANDS: &[Command] = &[
         &["Ctrl+,"],
     ),
     keys(
-        frontend(menu(
-            command("keyboard.customise", "Customise Keyboard…", always),
-            Menu::Edit,
-            3,
-        )),
-        &["Ctrl+Alt+K"],
-    ),
-    keys(
         frontend(menu(command("ai.ask", "Ask Kerf…", can_ask), Menu::Clip, 1)),
         &["Ctrl+J"],
     ),
@@ -1970,7 +1962,6 @@ mod tests {
         assert_eq!(keys("export.master"), ["Ctrl+E"]);
         assert_eq!(premiere.keys(find("export.master").unwrap()), ["Ctrl+M"]);
         assert_eq!(keys("sequence.settings"), ["Ctrl+0"]);
-        assert_eq!(keys("keyboard.customise"), ["Ctrl+Alt+K"]);
         assert_eq!(keys("bin.search"), ["Ctrl+F"]);
         assert_eq!(keys("bin.toggleView"), ["Ctrl+Alt+2"]);
         assert_eq!(keys("browser.search"), ["Ctrl+Shift+F"]);
@@ -1993,7 +1984,6 @@ mod tests {
         }
         for id in [
             "sequence.settings",
-            "keyboard.customise",
             "view.annotations",
             "viewer.zoom",
             "playback.loop",
@@ -2033,7 +2023,6 @@ mod tests {
         // itself when one cannot run.
         for id in [
             "sequence.settings",
-            "keyboard.customise",
             "sequence.setFormat.169",
             "sequence.setFormat.916",
             "bin.search",
