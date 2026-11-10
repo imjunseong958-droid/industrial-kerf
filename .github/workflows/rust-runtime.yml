@@ -107,11 +107,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test workspace
-        env:
-          KERF_PARITY_DUMP: ${{ runner.temp }}/parity
-        run: |
-          mkdir -p "$KERF_PARITY_DUMP"
-          cargo test --workspace
+        run: cargo test --workspace
       # The real store API keys and the Kerf Cloud token go to, which every
       # other test replaces with one in memory: here the Secret Service,
       # gnome-keyring on a session bus of its own, its login keyring unlocked
@@ -129,15 +125,6 @@ jobs:
       # The rest of the gate README.md's Verification names.
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-      # The frames the compositor parity tests compared, drawn both ways,
-      # to look at when one fails.
-      - name: Upload compositor parity frames
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compositor-parity-frames
-          path: ${{ runner.temp }}/parity
-          retention-days: 14
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
