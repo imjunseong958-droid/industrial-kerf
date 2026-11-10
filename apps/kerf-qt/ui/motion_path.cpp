@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-namespace kerf::path {
+namespace kerf::motionpath {
 
 namespace {
 
@@ -188,4 +188,4 @@ QList<QPointF> MotionPath::samples() const {
     return line;
 }
 
-} // namespace kerf::path
+} // namespace kerf::motionpath

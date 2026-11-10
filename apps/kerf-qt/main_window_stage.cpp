@@ -137,7 +137,7 @@ void MainWindow::updateViewerMasks() {
     const double along = propertyAt(props, QStringLiteral("along"), clipTime, 0.0);
     m_viewer->setSampledPath(places, places.value(int(std::lround(std::clamp(along, 0.0, 1.0) * kSampledPathSteps))));
     // Each point goes where a drag puts it, by solving from the clip's own placement there.
-    const auto points = path::parsePath(props.value(QStringLiteral("path")).toString());
+    const auto points = motionpath::parsePath(props.value(QStringLiteral("path")).toString());
     if (!points) return;
     const QJsonObject timeline = m_project;
     ViewerWidget::SampledPathEdit edit;
@@ -188,7 +188,7 @@ void MainWindow::startMotionPath() {
     const double clipTime = std::clamp(m_playhead - clip.value(QStringLiteral("timelineStart")).toDouble(), 0.0,
                                        clip.value(QStringLiteral("duration")).toDouble());
     const double from = pathPlacement(clip, picture, fit, canvas, clipTime, QTransform{}, m_project).map(QPointF()).x();
-    QJsonObject props{{QStringLiteral("path"), path::pathText({{0.0, 0.0}, {from > 0.5 ? -0.25 : 0.25, 0.0}})}};
+    QJsonObject props{{QStringLiteral("path"), motionpath::pathText({{0.0, 0.0}, {from > 0.5 ? -0.25 : 0.25, 0.0}})}};
     // Along it over the clip, unless something already says how far along it is.
     if (!clip.value(QStringLiteral("props")).toObject().contains(QStringLiteral("along"))) {
         const qint64 last = std::max<qint64>(1, qint64(clip.value(QStringLiteral("durationFrames")).toDouble()) - 1);
