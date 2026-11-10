@@ -7,10 +7,8 @@ use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
 
-fn render(project: &Project, out: &Path) -> f64 {
-    let began = Instant::now();
+fn render(project: &Project, out: &Path) {
     render_program::<fn(f64)>(
         project,
         None,
@@ -22,7 +20,6 @@ fn render(project: &Project, out: &Path) -> f64 {
         None,
     )
     .expect("renders");
-    began.elapsed().as_secs_f64()
 }
 
 /// The file's frames, as FFmpeg decodes them.
@@ -53,7 +50,7 @@ fn rendering_again_reads_what_was_drawn() {
             "lavfi",
             "-i",
         ])
-        .arg("testsrc2=s=1280x720:r=24:d=4")
+        .arg("testsrc2=s=320x180:r=24:d=1")
         .args([
             "-pix_fmt",
             "yuv420p",
@@ -68,7 +65,7 @@ fn rendering_again_reads_what_was_drawn() {
     assert!(made.success());
     let project = parse_document(
         &format!(
-            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=96f video=1280x720\nsequence s1 rate=24 size=1280x720 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=48f\n      fx color.lumetri@2 exposure=0.5\n      fx light.wonderglow@1\n    clip c2 media=m src=48f at=48f dur=48f\n      fx color.lumetri@2 exposure=0.2\n      fx light.wonderglow@1\n",
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      fx color.lumetri@2 exposure=0.5\n      fx light.wonderglow@1\n    clip c2 media=m src=12f at=12f dur=12f\n      fx color.lumetri@2 exposure=0.2\n      fx light.wonderglow@1\n",
             source.display()
         ),
         Catalog::builtin(),
@@ -80,29 +77,26 @@ fn rendering_again_reads_what_was_drawn() {
         dir.path().join("second.mp4"),
         dir.path().join("third.mp4"),
     );
-    let drawing = render(&project, &first);
+    // Every frame is drawn and kept: 24 are fewer than the writers' queue holds, so none is dropped.
+    render(&project, &first);
     let stats = kerf_compose::frame_cache_stats(&folder);
-    assert_eq!(stats.hits, 0, "{stats:?}");
-    assert!(stats.writes + stats.dropped == 96, "{stats:?}");
-    let reading = render(&project, &second);
-    let after = kerf_compose::frame_cache_stats(&folder);
-    eprintln!(
-        "96 frames at 720p: drawn in {drawing:.2} s, read back in {reading:.2} s ({} of them)",
-        after.hits - stats.hits
+    assert_eq!(
+        (stats.hits, stats.writes, stats.dropped),
+        (0, 24, 0),
+        "{stats:?}"
     );
-    assert_eq!(after.hits - stats.hits, stats.writes, "{after:?}");
+    render(&project, &second);
+    let after = kerf_compose::frame_cache_stats(&folder);
+    assert_eq!(after.hits - stats.hits, 24, "{after:?}");
+    assert_eq!(after.writes, stats.writes, "{after:?}");
     assert_eq!(frames(&first), frames(&second));
     // A small edit to the second clip draws only it.
     let edited = apply_script(&project, Catalog::builtin(), "fx c2 set 1 exposure=0.3")
         .expect("edits")
         .project;
-    let touched = render(&edited, &third);
+    render(&edited, &third);
     let last = kerf_compose::frame_cache_stats(&folder);
-    eprintln!("after an edit to half of it: {touched:.2} s");
-    assert!(last.hits - after.hits >= 40, "{last:?}");
-    assert_eq!(
-        kerf_compose::frame_cache_stats(&folder).damaged,
-        0,
-        "{last:?}"
-    );
+    assert_eq!(last.hits - after.hits, 12, "{last:?}");
+    assert_eq!(last.writes - after.writes, 12, "{last:?}");
+    assert_eq!(last.damaged, 0, "{last:?}");
 }
