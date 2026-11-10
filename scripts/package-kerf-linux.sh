@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Industrial Kerf for Linux as a folder that runs on its own, packed as
-# target/package-linux/<name>.tar.xz with its sha256. bin/ holds the editor, kerfd, kerf,
+# target/package-linux/<name>.tar.xz with its sha256, and the same folder as <name>.deb,
+# which apt installs (scripts/package-kerf-linux-deb.sh). bin/ holds the editor, kerfd, kerf,
 # kerf-mcp, ffmpeg and ffprobe; lib/ every library they load that a desktop Linux does not
 # have of its own (Qt and its ICU, FFmpeg, the xcb utilities, xkbcommon), found through each
 # one's RPATH, $ORIGIN/../lib; plugins/ the Qt plugins, which bin/qt.conf points Qt to. What
 # it takes from the system is apps/kerf-qt/packaging/linux/system-libraries.txt.
 #
-# Runs on Linux with Rust, CMake, patchelf and Xvfb, the Qt in QT_ROOT_DIR (as
+# Runs on Ubuntu with Rust, CMake, patchelf, dpkg-dev and Xvfb, the Qt in QT_ROOT_DIR (as
 # install-qt-action sets it) and a shared GPL build of FFmpeg in FFMPEG_DIR (BtbN's, pinned in
 # package.yml). Built on Ubuntu 24.04, it needs a glibc and a libstdc++ at least that new.
 # The FFmpeg makes the package GPL: target/package-linux/bundled-packages.txt names each
@@ -231,3 +232,7 @@ $skip_run || scripts/check-kerf-linux.sh "$stage"
 tar -C "$out" -cJf "$out/$name.tar.xz" "$name"
 (cd "$out" && sha256sum "$name.tar.xz" > "$name.tar.xz.sha256")
 echo "$out/$name.tar.xz"
+
+# The same folder as a .deb, whose Depends are what the folder takes from the system.
+# Installing it takes root: scripts/check-kerf-linux-deb.sh does, in package.yml.
+scripts/package-kerf-linux-deb.sh "$stage" "$out/$name.deb"

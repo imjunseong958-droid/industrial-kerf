@@ -77,6 +77,19 @@ out, and the check finds each size there as a PNG of that size.
 `scripts/collect-kerf-linux-sources.sh` collects its source, the Ubuntu packages it carries
 libraries of included. Built on Ubuntu 24.04, it needs a glibc and libstdc++ that new.
 
+`scripts/package-kerf-linux-deb.sh` makes a `.deb` of the same folder, for Debian 13,
+Ubuntu 24.04 and what comes from them: the folder in `/opt/industrial-kerf`, the desktop
+entry `packaging/linux/industrial-kerf.desktop` in `/usr/share/applications` (the entry
+`install-desktop-entry.sh` writes, but for where the editor is, which the script holds it
+to), the icon in the system's hicolor theme, and `kerf-qt`, `kerf`, `kerfd` and `kerf-mcp`
+in `/usr/bin` as links. Its Depends come from `dpkg-shlibdeps`: the packages that provide
+each library the binaries name and `lib/` does not carry, so they follow
+`system-libraries.txt` without being written twice. `scripts/check-kerf-linux-deb.sh`,
+as root, installs it with apt, finds every library found with only what its Depends
+brought, runs `check-kerf-linux.sh` on `/opt/industrial-kerf`, checks the links on `PATH`,
+the entry, the icon and a `kerf://` link followed through `gio`, and removes it; the
+Package workflow runs it in bare `ubuntu:24.04` and `debian:trixie` containers.
+
 Kerf's icon is drawn once, in `resources/icon/industrial-kerf.svg`, and `tools/kerf-icon`
 renders the PNG, `.ico` and `.icns` files beside it (`cargo run -p kerf-icon`), which are in
 the repository; `cargo test -p kerf-icon` fails when they no longer match the SVG

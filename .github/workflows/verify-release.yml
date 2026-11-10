@@ -1,11 +1,12 @@
 name: Verify release
 
 # A published release as someone downloads it: its Windows zip and installer, its macOS
-# app and its Linux tar.xz, fetched from the release onto fresh runners with no FFmpeg and
-# no Qt (on macOS, Homebrew moved out of reach), unpacked and run by check-kerf-windows.ps1,
-# check-kerf-macos.sh and check-kerf-linux.sh, the checks the Package workflow runs on what
-# it packs; the Linux one in a Debian container too. Also that each package has its sha256
-# and its complete source beside it.
+# app and its Linux tar.xz and .deb, fetched from the release onto fresh runners with no
+# FFmpeg and no Qt (on macOS, Homebrew moved out of reach), unpacked and run by
+# check-kerf-windows.ps1, check-kerf-macos.sh and check-kerf-linux.sh, the checks the
+# Package workflow runs on what it packs; the Linux one in a Debian container too, and the
+# .deb installed by apt in bare Ubuntu and Debian containers (check-kerf-linux-deb.sh).
+# Also that each package has its sha256 and its complete source beside it.
 #
 # package.yml runs it on the release it has just published. By hand (Actions >
 # Verify release > Run workflow) it checks the tag given, or the newest release; a
@@ -30,6 +31,8 @@ on:
       - "scripts/kerf-windows-icon.ps1"
       - "scripts/check-kerf-macos.sh"
       - "scripts/check-kerf-linux.sh"
+      - "scripts/check-kerf-linux-deb.sh"
+      - "scripts/kerf-linux-desktop.sh"
 
 permissions:
   contents: read
@@ -86,6 +89,11 @@ jobs:
           # The installer, from 0.1.1, holds what the zip does, whose source is beside it.
           for setup in $(grep -E -- '-setup\.exe$' assets.txt || true); do
             grep -qxF "$setup.sha256" assets.txt || missing+="$setup.sha256"$'\n'
+          done
+          # The .deb, from 0.1.2, holds what the tar.xz does, whose source is beside it.
+          for deb in $(grep -E -- '-linux-x64\.deb$' assets.txt || true); do
+            grep -qxF "$deb.sha256" assets.txt || missing+="$deb.sha256"$'\n'
+            grep -qxF "${deb%.deb}.tar.xz" assets.txt || missing+="${deb%.deb}.tar.xz"$'\n'
           done
           if [ -n "$missing" ]; then
             printf '%s has no:\n%s' "$TAG" "$missing" >&2
@@ -249,11 +257,18 @@ jobs:
           # GitHub's release downloads have answered 504 for an hour at a time.
           for try in $(seq 1 10); do
             gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir "$folder" --clobber \
-              --pattern '*-linux-x64.tar.xz' --pattern '*-linux-x64.tar.xz.sha256' && break
+              --pattern '*-linux-x64.tar.xz' --pattern '*-linux-x64.tar.xz.sha256' \
+              --pattern '*-linux-x64.deb' --pattern '*-linux-x64.deb.sha256' && break
             [ "$try" -lt 10 ] || { echo "Could not download the release $TAG" >&2; exit 1; }
             sleep 30
           done
           (cd "$folder" && sha256sum -c ./*-linux-x64.tar.xz.sha256)
+          # The .deb, from 0.1.2.
+          deb="$(find "$folder" -name '*-linux-x64.deb' | head -n 1)"
+          if [ -n "$deb" ]; then
+            (cd "$folder" && sha256sum -c ./*-linux-x64.deb.sha256)
+            echo "DEB=$deb" >> "$GITHUB_ENV"
+          fi
           mkdir -p "$RUNNER_TEMP/unpacked"
           tar -xJf "$folder"/*-linux-x64.tar.xz -C "$RUNNER_TEMP/unpacked"
           package="$(find "$RUNNER_TEMP/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
@@ -286,6 +301,21 @@ jobs:
               libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 libasound2t64 \
               libgssapi-krb5-2 libstdc++6 > /dev/null
             /scripts/check-kerf-linux.sh /package'
+      # The .deb as apt installs it where nothing of a desktop is yet: its Depends bring
+      # all it needs, it runs, takes a kerf:// link, and is removed with nothing left.
+      - name: Install the .deb on Ubuntu and Debian, follow a link and remove it
+        if: env.PACKAGE != ''
+        run: |
+          if [ -z "${DEB:-}" ]; then
+            echo "$TAG has no .deb"
+            exit 0
+          fi
+          for image in ubuntu:24.04 debian:trixie; do
+            echo "::group::$image"
+            docker run --rm -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" -v "$DEB:/industrial-kerf.deb:ro" "$image" \
+              /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb
+            echo "::endgroup::"
+          done
       - name: The check fails a package missing a library
         if: env.PACKAGE != ''
         run: |

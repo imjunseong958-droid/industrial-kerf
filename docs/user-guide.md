@@ -25,8 +25,13 @@ Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for y
 alone, with no administrator, adds it to the Start menu, and opens `kerf://`
 review links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
 run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
-the zip and move Industrial Kerf to Applications. For Linux (x86-64, as new as Ubuntu
-24.04), unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
+the zip and move Industrial Kerf to Applications. For Debian 13, Ubuntu 24.04 and what
+comes from them, `sudo apt install ./Industrial-Kerf-…-linux-x64.deb` in the folder you
+downloaded it to installs Kerf with what it needs from the system, adds it to your
+applications, opens `kerf://` review links in it, and puts `kerf`, `kerfd` and `kerf-mcp`
+on your `PATH`; `sudo apt remove industrial-kerf` takes it away. On any other Linux
+(x86-64, as new as Ubuntu 24.04), or to keep it in a folder of your own,
+unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
 beyond what every desktop has, which `system-libraries.txt` beside it lists. Run
 `./install-desktop-entry.sh` in the folder once to have Kerf among your applications and
 open `kerf://` review links in it, for you alone; run it again after moving the folder,
@@ -131,8 +136,8 @@ edit.
   Master, and an agent's full render all refuse while one is open, and say which
   note and where. A Draft still exports.
 - **Copy link** gives a `kerf://` link to a version and a timecode. On macOS,
-  on Windows with the installer, and on Linux once `install-desktop-entry.sh` has
-  run, a clicked link opens the project there, in the Kerf you already have open
+  on Windows with the installer, and on Linux with the `.deb` or once
+  `install-desktop-entry.sh` has run, a clicked link opens the project there, in the Kerf you already have open
   if there is one.
 
 ## Share through Git

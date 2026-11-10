@@ -4,9 +4,9 @@ name: Package
 # complete source of each, kept as this run's artifacts: the Windows zip and installer
 # (scripts/package-kerf-windows.ps1) and their source (collect-kerf-windows-sources.sh),
 # the macOS app (package-kerf-macos.sh) and its source (collect-kerf-macos-sources.sh),
-# and the Linux tar.xz (package-kerf-linux.sh) and its source
-# (collect-kerf-linux-sources.sh). Both carry a GPL build of FFmpeg: publish each with
-# its source. By hand (Actions > Package > Run workflow), and when what makes them
+# and the Linux tar.xz and .deb (package-kerf-linux.sh, package-kerf-linux-deb.sh) and
+# their source (collect-kerf-linux-sources.sh). All carry a GPL build of FFmpeg: publish
+# each with its source. By hand (Actions > Package > Run workflow), and when what makes them
 # changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
 # release, with that version's section of CHANGELOG.md as its notes; none is signed.
 # Then verify-release.yml downloads the release onto fresh runners and runs it.
@@ -29,6 +29,9 @@ on:
       - "scripts/check-kerf-macos.sh"
       - "scripts/package-kerf-linux.sh"
       - "scripts/check-kerf-linux.sh"
+      - "scripts/package-kerf-linux-deb.sh"
+      - "scripts/check-kerf-linux-deb.sh"
+      - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -50,6 +53,9 @@ on:
       - "scripts/check-kerf-macos.sh"
       - "scripts/package-kerf-linux.sh"
       - "scripts/check-kerf-linux.sh"
+      - "scripts/package-kerf-linux-deb.sh"
+      - "scripts/check-kerf-linux-deb.sh"
+      - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
       - "apps/kerf-qt/packaging/**"
@@ -297,8 +303,42 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package
+      - name: Build, pack and run the package, and make the .deb
         run: scripts/package-kerf-linux.sh
+      # The .deb where nothing of a desktop is installed yet, on each distribution it is
+      # for: apt has to bring all it needs from its Depends alone, and then it runs,
+      # takes a kerf:// link, and is removed with nothing left.
+      - name: Install the .deb on Ubuntu and Debian, follow a link and remove it
+        run: |
+          deb="$(readlink -f target/package-linux/*.deb)"
+          for image in ubuntu:24.04 debian:trixie; do
+            echo "::group::$image"
+            docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$deb:/industrial-kerf.deb:ro" "$image" \
+              /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb
+            echo "::endgroup::"
+          done
+      # Nor is that check satisfied by any .deb: one whose Depends leave out a library
+      # the editor names installs, and has to fail it, and for that.
+      - name: The .deb check fails a package whose Depends leave a library out
+        run: |
+          deb="$(readlink -f target/package-linux/*.deb)"
+          short="$RUNNER_TEMP/short"
+          dpkg-deb -R "$deb" "$short"
+          sed -i '/^Depends:/ s/libopengl0, //' "$short/DEBIAN/control"
+          if grep -q '^Depends:.*libopengl0' "$short/DEBIAN/control"; then
+            echo "libopengl0 is still in the Depends" >&2
+            exit 1
+          fi
+          # Packed fast: it is installed once and thrown away.
+          dpkg-deb --root-owner-group -Zxz -z1 --build "$short" "$RUNNER_TEMP/short.deb" > /dev/null
+          if docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$RUNNER_TEMP/short.deb:/industrial-kerf.deb:ro" debian:trixie \
+            /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb 2> "$RUNNER_TEMP/short.log"; then
+            echo "The check passed a .deb that does not depend on libopengl0" >&2
+            exit 1
+          fi
+          grep -q 'libOpenGL.so.0' "$RUNNER_TEMP/short.log" || { cat "$RUNNER_TEMP/short.log" >&2; exit 1; }
+          echo "Failed, as it should: $(tail -n 1 "$RUNNER_TEMP/short.log")"
+          rm -rf "$short" "$RUNNER_TEMP/short.deb"
       # The source takes several GB; the build's own are no longer needed.
       - name: Free the build's space
         run: rm -rf target/release target/qt-linux
@@ -310,6 +350,8 @@ jobs:
           path: |
             target/package-linux/*.tar.xz
             target/package-linux/*.tar.xz.sha256
+            target/package-linux/*.deb
+            target/package-linux/*.deb.sha256
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
