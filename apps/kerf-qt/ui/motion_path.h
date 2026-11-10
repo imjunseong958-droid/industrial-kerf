@@ -13,7 +13,7 @@
 
 #include <optional>
 
-namespace kerf::path {
+namespace kerf::motionpath {
 
 // How far along a span `interp` is, `t` of the way across.
 double curve(const QString &interp, double t);
@@ -62,4 +62,4 @@ private:
     QList<double> m_distances;
 };
 
-} // namespace kerf::path
+} // namespace kerf::motionpath
