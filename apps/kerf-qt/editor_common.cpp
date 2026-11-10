@@ -1,7 +1,7 @@
 #include "editor_common.h"
 #include "design_tokens.h"
 #include "editor_theme.h"
-#include "graph_model.h"
+#include "motion_path.h"
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -934,7 +934,7 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
         if (clipTime > at(index)) continue;
         const double span = at(index) - at(index - 1);
         const double t = span > 0.0 ? (clipTime - at(index - 1)) / span : 1.0;
-        return valueOf(index - 1) + (valueOf(index) - valueOf(index - 1)) * graph::curve(interp(index - 1), t);
+        return valueOf(index - 1) + (valueOf(index) - valueOf(index - 1)) * motionpath::curve(interp(index - 1), t);
     }
     return valueOf(keys.size() - 1);
 }
@@ -968,8 +968,8 @@ Geometry geometryAt(const QJsonObject &clip, double clipTime) {
 Geometry movedGeometryAt(const QJsonObject &clip, const QSizeF &canvas, double clipTime) {
     Geometry geometry = geometryAt(clip, clipTime);
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    if (const auto points = graph::parsePath(props.value(QStringLiteral("path")).toString())) {
-        const auto on = graph::MotionPath(*points, canvas.width() / std::max(1.0, canvas.height()))
+    if (const auto points = motionpath::parsePath(props.value(QStringLiteral("path")).toString())) {
+        const auto on = motionpath::MotionPath(*points, canvas.width() / std::max(1.0, canvas.height()))
                             .at(propertyAt(props, QStringLiteral("along"), clipTime, 0.0));
         geometry.x += on.x;
         geometry.y += on.y;
@@ -1165,7 +1165,7 @@ std::optional<QPointF> anchorAtPoint(const QJsonObject &clip, const QSizeF &pict
     const double cw = std::max(1.0, canvas.width()), ch = std::max(1.0, canvas.height());
     QJsonObject moved = withPathPoints(clip, points);
     QJsonObject props = moved.value(QStringLiteral("props")).toObject();
-    props.insert(QStringLiteral("along"), graph::MotionPath(points, cw / ch).alongOf(index));
+    props.insert(QStringLiteral("along"), motionpath::MotionPath(points, cw / ch).alongOf(index));
     moved.insert(QStringLiteral("props"), props);
     const Geometry g = geometryAt(clip, clipTime);
     const QPointF anchor(g.cropL + (1.0 - g.cropL - g.cropR) * (0.5 + g.anchorX), g.cropT + (1.0 - g.cropT - g.cropB) * (0.5 + g.anchorY));

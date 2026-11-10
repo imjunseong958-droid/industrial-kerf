@@ -1,6 +1,6 @@
-// Tests for the graph editor: the curves it draws against the compositor's,
-// what it reads of a clip, what a drag, a box, a double-click, Delete, the wheel
-// and the ruler ask for, and a motion path on the picture.
+// Tests for the curves and motion paths the picture draws against the
+// compositor's, and for a motion path on the picture: what a drag, a
+// double-click and Delete ask for.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -9,8 +9,7 @@
 #include "editor_bus.h"
 #include "editor_common.h"
 #include "editor_theme.h"
-#include "graph_editor.h"
-#include "graph_model.h"
+#include "motion_path.h"
 #include "main_window.h"
 #include "ui/stage_shell.h"
 #include "viewer_widget.h"
@@ -35,9 +34,6 @@ namespace kerf {
 
 namespace {
 
-using graph::Handles;
-using graph::Key;
-
 QJsonObject key(int frame, double value, const char *interp = "linear") {
     return {{"at", frame / 24.0}, {"frame", frame}, {"value", value}, {"interp", interp}};
 }
@@ -57,41 +53,6 @@ QJsonObject clip() {
 QJsonObject timeline(const QJsonObject &first) {
     return {{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"clips", QJsonArray{first}}}}}};
 }
-
-struct Harness {
-    EditorBus bus;
-    GraphEditor editor{nullptr, &bus};
-    QSignalSpy edits{&editor, &GraphEditor::editRequested};
-    QSignalSpy seeks{&editor, &GraphEditor::seekRequested};
-
-    Harness() {
-        editor.resize(1000, 320);
-        set(clip());
-        bus.setSelection({QStringLiteral("c1")});
-    }
-    void set(const QJsonObject &first) { bus.setSnapshot(QJsonObject{{"revision", 1}}, timeline(first), 24.0, QSize(1920, 1080)); }
-    // The keys the last edit gave, by the channel's name, and that it was one op.
-    QJsonArray lastKeys(const QString &name) const {
-        const QJsonArray ops = edits.last().at(0).toJsonArray();
-        Q_ASSERT(ops.size() == 1);
-        const QJsonObject op = ops.first().toObject();
-        const QJsonObject values = op.contains("props") ? op.value("props").toObject() : op.value("params").toObject();
-        return values.value(name).toObject().value("keys").toArray();
-    }
-    void drag(QPointF from, QPointF to, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-        QTest::mousePress(&editor, Qt::LeftButton, modifiers, from.toPoint());
-        QMouseEvent move(QEvent::MouseMove, to, editor.mapToGlobal(to), Qt::NoButton, Qt::LeftButton, modifiers);
-        QApplication::sendEvent(&editor, &move);
-        QTest::mouseRelease(&editor, Qt::LeftButton, modifiers, to.toPoint());
-    }
-    void click(QPointF at, Qt::KeyboardModifiers modifiers = Qt::NoModifier) { QTest::mouseClick(&editor, Qt::LeftButton, modifiers, at.toPoint()); }
-    void scroll(QPointF at, QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-        QWheelEvent wheel(at, editor.mapToGlobal(at), QPoint(), angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
-        QApplication::sendEvent(&editor, &wheel);
-    }
-    // Every op of the last edit, in order, by what it sets.
-    QJsonArray lastOps() const { return edits.last().at(0).toJsonArray(); }
-};
 
 // A clip of `frames` frames with keys every `every` frames on x.
 QJsonObject dense(int frames, int every) {
@@ -120,7 +81,7 @@ struct PathStage {
 
 } // namespace
 
-class GraphTest final : public QObject {
+class MotionPathTest final : public QObject {
     Q_OBJECT
 
 private slots:
@@ -143,7 +104,7 @@ private slots:
             {"0,0,1,1", 0.3, 0.3},
         };
         for (const auto &row : table)
-            QVERIFY2(std::abs(graph::curve(QString::fromLatin1(row.interp), row.t) - row.wanted) < 1e-5, row.interp);
+            QVERIFY2(std::abs(motionpath::curve(QString::fromLatin1(row.interp), row.t) - row.wanted) < 1e-5, row.interp);
     }
 
     // The same table holds the compositor to these, in kerf_model's path.rs.
@@ -172,9 +133,9 @@ private slots:
             {"0.3,0.3 0.3,0.3", 1.0, 0.5, 0.3, 0.3, 0.0},
         };
         for (const auto &row : table) {
-            const auto points = graph::parsePath(QString::fromLatin1(row.path));
+            const auto points = motionpath::parsePath(QString::fromLatin1(row.path));
             QVERIFY2(points, row.path);
-            const auto at = graph::MotionPath(*points, row.aspect).at(row.along);
+            const auto at = motionpath::MotionPath(*points, row.aspect).at(row.along);
             const QString where = QStringLiteral("%1 at %2: %3,%4 heading %5").arg(QString::fromLatin1(row.path)).arg(row.along).arg(at.x).arg(at.y).arg(at.heading);
             QVERIFY2(std::abs(at.x - row.x) < 1e-6, qPrintable(where));
             QVERIFY2(std::abs(at.y - row.y) < 1e-6, qPrintable(where));
@@ -183,12 +144,12 @@ private slots:
     }
 
     void aPathReadsAndWritesAsTheDocumentDoes() {
-        const auto points = graph::parsePath(QStringLiteral("0,0 0.5,-0.25"));
+        const auto points = motionpath::parsePath(QStringLiteral("0,0 0.5,-0.25"));
         QVERIFY(points);
         QCOMPARE(*points, (QList<QPointF>{{0.0, 0.0}, {0.5, -0.25}}));
         for (const char *refused : {"", "0,0", "0 0", "0,0 x,1", "0,0 11,0", "0,0 nan,0", "0,0 1,2,3"})
-            QVERIFY2(!graph::parsePath(QString::fromLatin1(refused)), refused);
-        QCOMPARE(graph::pathText({{0.123456, -0.5}, {0.0, 12.0}, {-0.00001, 1.0}}), QStringLiteral("0.1235,-0.5 0,10 0,1"));
+            QVERIFY2(!motionpath::parsePath(QString::fromLatin1(refused)), refused);
+        QCOMPARE(motionpath::pathText({{0.123456, -0.5}, {0.0, 12.0}, {-0.00001, 1.0}}), QStringLiteral("0.1235,-0.5 0,10 0,1"));
     }
 
     void aPlacementFollowsTheClipsPath() {
@@ -295,9 +256,9 @@ private slots:
             QVERIFY2(back && QLineF(*back, row.from).length() < 1e-6, qPrintable(where));
             if (!row.props.contains("path")) continue;
             // A clip's anchor is where its path says, wherever along it the clip is now.
-            const auto points = graph::parsePath(row.props.value("path").toString());
+            const auto points = motionpath::parsePath(row.props.value("path").toString());
             QVERIFY(points);
-            const auto on = graph::MotionPath(*points, row.canvas.width() / row.canvas.height()).at(row.props.value("along").toDouble());
+            const auto on = motionpath::MotionPath(*points, row.canvas.width() / row.canvas.height()).at(row.props.value("along").toDouble());
             for (const double along : {0.0, 0.3, 1.0}) {
                 if (row.props.value("orient").toBool() && along != row.props.value("along").toDouble()) continue;
                 QJsonObject elsewhere = row.props;
@@ -368,7 +329,7 @@ private slots:
                     const auto exact = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, moved).at(index);
                     QVERIFY(exact && QLineF(*exact, wanted).length() < 1e-6);
                     // Through what the document says of it, as it will be drawn from then on.
-                    const auto written = graph::parsePath(graph::pathText(moved));
+                    const auto written = motionpath::parsePath(motionpath::pathText(moved));
                     QVERIFY(written.has_value());
                     const auto landed = sampledPathPoints(clip, canvas, false, canvas, 0.0, parents, QJsonObject{}, *written).at(index);
                     QVERIFY(landed.has_value());
@@ -431,7 +392,7 @@ private slots:
         QCOMPARE(edits.count(), 1);
         const QJsonObject op = edits.takeFirst().at(0).toJsonArray().at(0).toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
-        const auto written = graph::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written.has_value() && written->size() == 3);
         QCOMPARE(written->at(0), start.at(0));
         QCOMPARE(written->at(2), start.at(2));
@@ -495,9 +456,9 @@ private slots:
     void aPointAddedLiesOnTheCurveAndLeavesItsShape() {
         const QList<QPointF> points{{0.0, 0.0}, {0.2, 0.3}, {0.5, -0.1}, {0.8, 0.2}};
         const double aspect = 16.0 / 9.0;
-        const graph::MotionPath before(points, aspect);
+        const motionpath::MotionPath before(points, aspect);
         for (const double u : {0.1, 0.5, 1.25, 1.5, 2.9}) {
-            const QList<QPointF> added = graph::withPointOn(points, aspect, u);
+            const QList<QPointF> added = motionpath::withPointOn(points, aspect, u);
             QCOMPARE(added.size(), points.size() + 1);
             const qsizetype place = qsizetype(u) + 1;
             QVERIFY(QLineF(added.at(place), before.curve(u)).length() < 1e-9);
@@ -507,7 +468,7 @@ private slots:
             QCOMPARE(rest, points);
             // A curve through points has no handles to hold: how far it strays is the
             // price of that, and it is at most a sliver of the canvas.
-            const QList<QPointF> line = graph::MotionPath(added, aspect).samples();
+            const QList<QPointF> line = motionpath::MotionPath(added, aspect).samples();
             for (const QPointF &sample : before.samples()) {
                 double nearest = 1e9;
                 for (const QPointF &along : line) nearest = std::min(nearest, std::hypot((along.x() - sample.x()) * aspect, along.y() - sample.y()));
@@ -516,836 +477,12 @@ private slots:
         }
     }
 
-    void aNamedCurvesHandlesDrawThatCurve() {
-        for (const QString &name : {QStringLiteral("linear"), QStringLiteral("ease"), QStringLiteral("ease-in"), QStringLiteral("ease-out")}) {
-            const auto handles = graph::handlesOf(name);
-            QVERIFY(handles);
-            const QString drawn = graph::interpOf(*handles);
-            for (double t = 0.05; t < 1.0; t += 0.1)
-                QVERIFY2(std::abs(graph::curve(name, t) - graph::curve(drawn, t)) < 1e-3, qPrintable(name));
-        }
-        QVERIFY(!graph::handlesOf(QStringLiteral("hold")));
-    }
-
-    void aCurveIsWrittenAsTheDocumentAllows() {
-        QCOMPARE(graph::interpOf(Handles{0.25, 0.1, 0.75, 0.9}), QStringLiteral("0.25,0.1,0.75,0.9"));
-        // Across stays in the span; up has a limit; four places.
-        QCOMPARE(graph::interpOf(Handles{-1.0, 9.0, 3.0, -9.0}), QStringLiteral("0,5,1,-5"));
-        QCOMPARE(graph::interpOf(Handles{0.123456, 0.0, 0.5, 1.0}), QStringLiteral("0.1235,0,0.5,1"));
-    }
-
-    void valuesFollowTheirKeysAndHoldOutsideThem() {
-        const QList<Key> keys{{10, 1.0, QStringLiteral("linear")}, {20, 3.0, QStringLiteral("hold")}, {30, 7.0, QStringLiteral("linear")}};
-        QCOMPARE(graph::valueAt(keys, 0), 1.0);
-        QCOMPARE(graph::valueAt(keys, 15), 2.0);
-        QCOMPARE(graph::valueAt(keys, 25), 3.0);
-        QCOMPARE(graph::valueAt(keys, 30), 7.0);
-        QCOMPARE(graph::valueAt(keys, 99), 7.0);
-        // What a curve overshoots to counts.
-        const auto [low, high] = graph::reach({{0, 0.0, QStringLiteral("0.5,-1,0.5,2")}, {10, 1.0, QStringLiteral("linear")}});
-        QVERIFY(low < -0.1 && high > 1.1);
-    }
-
-    void onlyNumbersWithKeysAreChannels() {
-        QJsonObject withColor = clip();
-        QJsonObject props = withColor.value("props").toObject();
-        props.insert("color", QJsonArray{QJsonObject{{"frame", 0}, {"value", "#ff0000"}, {"interp", "linear"}}});
-        withColor.insert("props", props);
-        const auto channels = graph::channelsOf(withColor);
-        QCOMPARE(channels.size(), 3);
-        QCOMPARE(channels.at(0).label, QStringLiteral("x"));
-        QCOMPARE(channels.at(0).keys.size(), 3);
-        QCOMPARE(channels.at(1).label, QStringLiteral("blur.gaussian · radius"));
-        QCOMPARE(channels.at(1).index, 0);
-        QCOMPARE(channels.at(2).label, QStringLiteral("k1 · feather"));
-        QCOMPARE(channels.at(2).mask, QStringLiteral("k1"));
-    }
-
-    void eachKindOfChannelHasItsOwnOp() {
-        const auto channels = graph::channelsOf(clip());
-        QCOMPARE(graph::editOf("c1", channels.at(0), 1.0).value("op").toString(), QStringLiteral("set"));
-        const QJsonObject effect = graph::editOf("c1", channels.at(1), 1.0);
-        QCOMPARE(effect.value("op").toString(), QStringLiteral("fx-set"));
-        QCOMPARE(effect.value("index").toInt(), 0);
-        const QJsonObject mask = graph::editOf("c1", channels.at(2), 1.0);
-        QCOMPARE(mask.value("op").toString(), QStringLiteral("mask-set"));
-        QCOMPARE(mask.value("name").toString(), QStringLiteral("k1"));
-    }
-
-    void aKeyStaysBetweenItsNeighboursAndOnTheClip() {
-        const QList<Key> keys{{0, 0.0, {}}, {10, 1.0, {}}, {20, 2.0, {}}};
-        QCOMPARE(graph::moved(keys, 1, 15, 5.0, 49).at(1).frame, 15);
-        QCOMPARE(graph::moved(keys, 1, 40, 5.0, 49).at(1).frame, 19);
-        QCOMPARE(graph::moved(keys, 1, -4, 5.0, 49).at(1).frame, 1);
-        QCOMPARE(graph::moved(keys, 2, 90, 5.0, 49).at(2).frame, 48);
-        QCOMPARE(graph::moved(keys, 0, -9, 5.0, 49).at(0).frame, 0);
-        QCOMPARE(graph::moved(keys, 1, 15, 5.0, 49).at(1).value, 5.0);
-    }
-
-    void keysMovedTogetherKeepTheirSpacingBetweenTheirNeighbours() {
-        const QList<Key> keys{{0, 0.0, {}}, {10, 1.0, {}}, {14, 2.0, {}}, {30, 3.0, {}}};
-        // The two in the middle: back to just past the first, on to just before the last.
-        QCOMPARE(graph::roomToMove(keys, {1, 2}, 49), (std::pair<qint64, qint64>{-9, 15}));
-        // One of them is the other's neighbour no longer.
-        QCOMPARE(graph::roomToMove(keys, {2}, 49), (std::pair<qint64, qint64>{-3, 15}));
-        // The ends of the clip stop the first and the last.
-        QCOMPARE(graph::roomToMove(keys, {0}, 49), (std::pair<qint64, qint64>{0, 9}));
-        QCOMPARE(graph::roomToMove(keys, {3}, 49), (std::pair<qint64, qint64>{-15, 18}));
-        QCOMPARE(graph::roomToMove(keys, {0, 1, 2, 3}, 49), (std::pair<qint64, qint64>{0, 18}));
-        // A key already past the end can stay.
-        QCOMPARE(graph::roomToMove({{60, 0.0, {}}}, {0}, 49), (std::pair<qint64, qint64>{-60, 0}));
-        const QList<Key> moved = graph::shifted(keys, {1, 2}, 5, 0.5);
-        QCOMPARE(moved.at(0).frame, 0);
-        QCOMPARE(moved.at(1).frame, 15);
-        QCOMPARE(moved.at(2).frame, 19);
-        QCOMPARE(moved.at(3).frame, 30);
-        QCOMPARE(moved.at(1).value, 1.5);
-        QCOMPARE(moved.at(3).value, 3.0);
-    }
-
-    void itSaysWhyThereIsNothingToDraw() {
-        EditorBus bus;
-        GraphEditor editor(nullptr, &bus);
-        QVERIFY(editor.message().contains(QStringLiteral("Select a clip")));
-        QJsonObject still = clip();
-        still.remove("effects");
-        still.remove("masks");
-        still.insert("props", QJsonObject{{"x", 0.5}});
-        bus.setSnapshot(QJsonObject{{"revision", 1}}, timeline(still), 24.0, QSize(1920, 1080));
-        bus.setSelection({QStringLiteral("c1")});
-        QVERIFY(editor.message().contains(QStringLiteral("Nothing on this clip moves")));
-        QVERIFY(editor.channelLabels().isEmpty());
-    }
-
-    void itShowsTheSelectedClipsNumbers() {
-        Harness h;
-        QCOMPARE(h.editor.channelLabels(), (QStringList{"x", "blur.gaussian · radius", "k1 · feather"}));
-        QCOMPARE(h.editor.selectedChannel(), 0);
-        h.bus.setSelection({});
-        QVERIFY(h.editor.channelLabels().isEmpty());
-    }
-
-    void draggingAKeyIsOneEditWhenItEnds() {
-        Harness h;
-        const QPointF from = h.editor.keyPoint(0, 1);
-        const QPointF to = h.editor.plotPoint(0, 30.0, 0.25);
-        QTest::mousePress(&h.editor, Qt::LeftButton, Qt::NoModifier, from.toPoint());
-        QMouseEvent move(QEvent::MouseMove, to, h.editor.mapToGlobal(to), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(&h.editor, &move);
-        QCOMPARE(h.edits.size(), 0);
-        // A state arriving during a drag does not take the key from under it.
-        h.set(clip());
-        QCOMPARE(h.editor.selectedKey(), 1);
-        QTest::mouseRelease(&h.editor, Qt::LeftButton, Qt::NoModifier, to.toPoint());
-        QCOMPARE(h.edits.size(), 1);
-        const QJsonArray keys = h.lastKeys("x");
-        QCOMPARE(keys.size(), 3);
-        QCOMPARE(keys.at(1).toObject().value("at").toInt(), 30);
-        QVERIFY(std::abs(keys.at(1).toObject().value("value").toDouble() - 0.25) < 0.01);
-        QCOMPARE(keys.at(0).toObject().value("value").toDouble(), 0.0);
-    }
-
-    void aKeyCannotPassItsNeighbour() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 1), h.editor.plotPoint(0, 60.0, 0.25));
-        QCOMPARE(h.lastKeys("x").at(1).toObject().value("at").toInt(), 47);
-    }
-
-    void shiftMovesAKeyOneWay() {
-        Harness h;
-        const QPointF from = h.editor.keyPoint(0, 1);
-        h.drag(from, from + QPointF(120, 9), Qt::ShiftModifier);
-        const QJsonObject across = h.lastKeys("x").at(1).toObject();
-        QVERIFY(across.value("at").toInt() > 24);
-        QCOMPARE(across.value("value").toDouble(), 0.5);
-        Harness v;
-        const QPointF start = v.editor.keyPoint(0, 1);
-        v.drag(start, start + QPointF(9, 60), Qt::ShiftModifier);
-        const QJsonObject down = v.lastKeys("x").at(1).toObject();
-        QCOMPARE(down.value("at").toInt(), 24);
-        QVERIFY(down.value("value").toDouble() < 0.5);
-    }
-
-    void clickingAKeyOnAnotherCurveTakesThatCurve() {
-        Harness h;
-        h.drag(h.editor.keyPoint(2, 1), h.editor.keyPoint(2, 1));
-        QCOMPARE(h.editor.selectedChannel(), 2);
-        QCOMPARE(h.editor.selectedKey(), 1);
-        QCOMPARE(h.edits.size(), 0);
-    }
-
-    void pressingAKeyWithoutMovingChangesNothing() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 0), h.editor.keyPoint(0, 0));
-        QCOMPARE(h.edits.size(), 0);
-    }
-
-    void aKeyDoesNotJumpToWhereItWasTakenHold() {
-        Harness h;
-        // Taken a few points off its middle and carried straight across.
-        const QPointF grip = h.editor.keyPoint(0, 1) + QPointF(4, 3);
-        h.drag(grip, grip + QPointF(h.editor.plotPoint(0, 30.0, 0.5).x() - h.editor.keyPoint(0, 1).x(), 0));
-        const QJsonObject moved = h.lastKeys("x").at(1).toObject();
-        QCOMPARE(moved.value("at").toInt(), 30);
-        QVERIFY(std::abs(moved.value("value").toDouble() - 0.5) < 0.01);
-    }
-
-    void aHandleShapesTheCurveAsTheDocumentWritesIt() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 0), h.editor.keyPoint(0, 0));
-        const auto handles = h.editor.handlePoints();
-        QVERIFY(handles);
-        h.drag(handles->first, h.editor.plotPoint(0, 6.0, 0.4));
-        QCOMPARE(h.edits.size(), 1);
-        const QString interp = h.lastKeys("x").at(0).toObject().value("interp").toString();
-        QVERIFY2(QRegularExpression(QStringLiteral("^-?[0-9.]+,-?[0-9.]+,-?[0-9.]+,-?[0-9.]+$")).match(interp).hasMatch(), qPrintable(interp));
-        const auto shaped = graph::handlesOf(interp);
-        QVERIFY(std::abs(shaped->x1 - 0.25) < 0.02);
-        QVERIFY(std::abs(shaped->y1 - 0.8) < 0.02);
-        // The other handle is where it was.
-        QVERIFY(std::abs(shaped->x2 - 2.0 / 3.0) < 1e-3);
-    }
-
-    void aHoldOrTheLastKeyHasNoHandles() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 2), h.editor.keyPoint(0, 2));
-        QCOMPARE(h.editor.selectedKey(), 2);
-        QVERIFY(!h.editor.handlePoints());
-        h.drag(h.editor.keyPoint(0, 0), h.editor.keyPoint(0, 0));
-        h.editor.setInterp(QStringLiteral("hold"));
-        QVERIFY(!h.editor.handlePoints());
-        QCOMPARE(h.lastKeys("x").at(0).toObject().value("interp").toString(), QStringLiteral("hold"));
-    }
-
-    void doubleClickingAddsAKeyOnTheCurve() {
-        Harness h;
-        QTest::mouseDClick(&h.editor, Qt::LeftButton, Qt::NoModifier, h.editor.plotPoint(0, 12.0, 0.1).toPoint());
-        QCOMPARE(h.edits.size(), 1);
-        const QJsonArray keys = h.lastKeys("x");
-        QCOMPARE(keys.size(), 4);
-        QCOMPARE(keys.at(1).toObject().value("at").toInt(), 12);
-        QVERIFY(std::abs(keys.at(1).toObject().value("value").toDouble() - 0.25) < 1e-9);
-        QCOMPARE(h.editor.selectedKey(), 1);
-    }
-
-    void deleteTakesAKeyAndTheLastOneLeavesItsValue() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 1), h.editor.keyPoint(0, 1));
-        QTest::keyClick(&h.editor, Qt::Key_Delete);
-        QCOMPARE(h.lastKeys("x").size(), 2);
-        QCOMPARE(h.editor.selectedKey(), -1);
-
-        QJsonObject one = clip();
-        one.insert("props", QJsonObject{{"x", QJsonArray{key(5, 0.75)}}});
-        Harness s;
-        s.set(one);
-        s.drag(s.editor.keyPoint(0, 0), s.editor.keyPoint(0, 0));
-        QTest::keyClick(&s.editor, Qt::Key_Backspace);
-        const QJsonObject op = s.edits.last().at(0).toJsonArray().first().toObject();
-        QCOMPARE(op.value("props").toObject().value("x").toDouble(), 0.75);
-    }
-
-    void theRulerSeeksToWholeFramesOfTheClip() {
-        Harness h;
-        QTest::mouseClick(&h.editor, Qt::LeftButton, Qt::NoModifier, h.editor.rulerPoint(12.0).toPoint());
-        QCOMPARE(h.seeks.size(), 1);
-        QVERIFY(std::abs(h.seeks.last().at(0).toDouble() - (2.0 + 12.0 / 24.0)) < 1e-9);
-        QCOMPARE(h.edits.size(), 0);
-    }
-
     // ------------------------------------------------------------ the time axis
 
-    void itShowsTheWholeClipFirst() {
-        Harness h;
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 48.0}));
-    }
-
-    void scrollingZoomsAroundThePointer() {
-        Harness h;
-        const QPointF at = h.editor.plotPoint(0, 24.0, 0.25);
-        const auto [start, end] = h.editor.viewFrames();
-        h.scroll(at, QPoint(0, 240));
-        const auto [zoomedStart, zoomedEnd] = h.editor.viewFrames();
-        QVERIFY(zoomedEnd - zoomedStart < end - start);
-        // The frame under the pointer is where it was.
-        QVERIFY(std::abs(h.editor.plotPoint(0, 24.0, 0.25).x() - at.x()) < 0.5);
-        // Dense keys stand further apart for it.
-        Harness dense;
-        dense.set(::kerf::dense(2400, 10));
-        const double before = dense.editor.keyPoint(0, 2).x() - dense.editor.keyPoint(0, 1).x();
-        dense.scroll(dense.editor.keyPoint(0, 1), QPoint(0, 1200));
-        QVERIFY(dense.editor.keyPoint(0, 2).x() - dense.editor.keyPoint(0, 1).x() > 5.0 * before);
-        // And back out it stops at the whole clip.
-        h.scroll(at, QPoint(0, -2400));
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 48.0}));
-    }
-
-    void itStopsZoomingWhenAFrameIsPlain() {
-        Harness h;
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 12000));
-        const auto [start, end] = h.editor.viewFrames();
-        QCOMPARE(end - start, 8.0);
-    }
-
-    void scrollingSidewaysPansAndStopsAtTheClipsEnds() {
-        Harness h;
-        h.editor.frameSelection();
-        const QPointF at = h.editor.plotPoint(0, 24.0, 0.25);
-        h.scroll(at, QPoint(0, 480));
-        const auto [start, end] = h.editor.viewFrames();
-        h.scroll(at, QPoint(-120, 0));
-        const auto [later, laterEnd] = h.editor.viewFrames();
-        QVERIFY(later > start);
-        QCOMPARE(laterEnd - later, end - start);
-        // Shift turns a plain wheel into the same thing.
-        h.scroll(at, QPoint(0, -120), Qt::ShiftModifier);
-        QVERIFY(h.editor.viewFrames().first > later);
-        h.scroll(at, QPoint(12000, 0));
-        QCOMPARE(h.editor.viewFrames().first, 0.0);
-        h.scroll(at, QPoint(-12000, 0));
-        QCOMPARE(h.editor.viewFrames().second, 48.0);
-    }
-
-    void theMiddleButtonPans() {
-        Harness h;
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 480));
-        const auto [start, end] = h.editor.viewFrames();
-        const QPointF from = h.editor.plotPoint(0, 24.0, 0.25);
-        const QPointF to = from + QPointF(-50, 7);
-        QTest::mousePress(&h.editor, Qt::MiddleButton, Qt::NoModifier, from.toPoint());
-        QMouseEvent move(QEvent::MouseMove, to, h.editor.mapToGlobal(to), Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-        QApplication::sendEvent(&h.editor, &move);
-        QTest::mouseRelease(&h.editor, Qt::MiddleButton, Qt::NoModifier, to.toPoint());
-        QVERIFY(h.editor.viewFrames().first > start);
-        QCOMPARE(h.editor.viewFrames().second - h.editor.viewFrames().first, end - start);
-        QCOMPARE(h.edits.size(), 0);
-    }
-
-    void aKeyCanBeFramed() {
-        Harness h;
-        h.set(::kerf::dense(2400, 240));
-        // The key at frame 480, with the keys either side for company.
-        h.click(h.editor.keyPoint(0, 2));
-        QCOMPARE(h.editor.selectedKey(), 2);
-        QTest::keyClick(&h.editor, Qt::Key_F);
-        const auto [start, end] = h.editor.viewFrames();
-        QVERIFY(start < 240.0 && end > 720.0);
-        QVERIFY(end - start < 700.0);
-        QVERIFY(std::abs((start + end) / 2.0 - 480.0) < 1.0);
-        // The key is in the middle of the plot, and can be taken there.
-        const QPointF middle = h.editor.keyPoint(0, 2);
-        QVERIFY(std::abs(middle.x() - h.editor.plotPoint(0, (start + end) / 2.0, 0.0).x()) < 0.5);
-        h.click(middle);
-        QCOMPARE(h.editor.selectedKey(), 2);
-        // Shift+F is the whole clip again.
-        QTest::keyClick(&h.editor, Qt::Key_F, Qt::ShiftModifier);
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 2399.0}));
-    }
-
-    void framingAKeyWithFarNeighboursStillBringsItCloser() {
-        Harness h;
-        QJsonObject far = clip();
-        far.insert("props", QJsonObject{{"x", QJsonArray{key(0, 0.0), key(24, 0.5), key(48, 0.0)}}});
-        h.set(far);
-        h.click(h.editor.keyPoint(0, 1));
-        h.editor.frameSelection();
-        const auto [start, end] = h.editor.viewFrames();
-        QVERIFY(end - start < 48.0);
-        QVERIFY(std::abs((start + end) / 2.0 - 24.0) < 0.5);
-    }
-
 #ifdef Q_OS_MACOS
-    // With a Hangul input source on, the F key comes as a letter of its own alphabet.
-    void theFKeyWorksWhateverAlphabetIsOn() {
-        Harness h;
-        h.set(::kerf::dense(2400, 240));
-        h.click(h.editor.keyPoint(0, 2));
-        const auto press = [&h](Qt::KeyboardModifiers modifiers) {
-            QKeyEvent key(QEvent::KeyPress, 0x3139, modifiers, 0, 0x03, 0, QStringLiteral("\u3139"));
-            QApplication::sendEvent(&h.editor, &key);
-        };
-        press(Qt::NoModifier);
-        QVERIFY(h.editor.viewFrames().second - h.editor.viewFrames().first < 2000.0);
-        press(Qt::ShiftModifier);
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 2399.0}));
-        // Another key of that alphabet does nothing.
-        h.editor.frameSelection();
-        const auto framed = h.editor.viewFrames();
-        QKeyEvent other(QEvent::KeyPress, 0x3141, Qt::NoModifier, 0, 0x00, 0, QStringLiteral("\u3141"));
-        QApplication::sendEvent(&h.editor, &other);
-        QCOMPARE(h.editor.viewFrames(), framed);
-    }
 #endif
 
-    void aDragWritesFourPlaces() {
-        Harness h;
-        const QPointF from = h.editor.keyPoint(0, 1);
-        h.drag(from, from + QPointF(0, 37.3));
-        const double value = h.lastKeys("x").at(1).toObject().value("value").toDouble();
-        QCOMPARE(std::round(value * 10000.0) / 10000.0, value);
-        // The keys it did not move keep every place they had.
-        QJsonObject exact = clip();
-        exact.insert("props", QJsonObject{{"x", QJsonArray{key(0, 0.123456789), key(24, 0.5), key(48, 0.0)}}});
-        Harness e;
-        e.set(exact);
-        const QPointF grip = e.editor.keyPoint(0, 1);
-        e.drag(grip, grip + QPointF(0, 20));
-        QCOMPARE(e.lastKeys("x").at(0).toObject().value("value").toDouble(), 0.123456789);
-    }
-
-    void framingSeveralKeysShowsThemAll() {
-        Harness h;
-        h.set(::kerf::dense(2400, 240));
-        h.click(h.editor.keyPoint(0, 3));
-        h.click(h.editor.keyPoint(0, 5), Qt::ShiftModifier);
-        h.editor.frameSelection();
-        const auto [start, end] = h.editor.viewFrames();
-        QVERIFY(start < 720.0 && start > 600.0);
-        QVERIFY(end > 1200.0 && end < 1320.0);
-        // Nothing selected, it shows the whole clip.
-        h.click(h.editor.plotPoint(0, start + 1.0, 0.5));
-        QCOMPARE(h.editor.selectedKey(), -1);
-        h.editor.frameSelection();
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 2399.0}));
-    }
-
-    void aDragWhileZoomedMovesInFrames() {
-        Harness h;
-        h.set(::kerf::dense(2400, 240));
-        h.click(h.editor.keyPoint(0, 2));
-        QTest::keyClick(&h.editor, Qt::Key_F);
-        const QPointF from = h.editor.keyPoint(0, 2);
-        h.drag(from, QPointF(h.editor.plotPoint(0, 500.0, 0.0).x(), from.y()));
-        QCOMPARE(h.lastKeys("x").at(2).toObject().value("at").toInt(), 500);
-    }
-
-    void altScrollingZoomsTheSelectedNumbersValues() {
-        Harness h;
-        h.click(h.editor.channelPoint(1));
-        QCOMPARE(h.editor.selectedChannel(), 1);
-        QVERIFY(!h.editor.valuesZoomed(1));
-        const auto [low, high] = h.editor.viewValues(1);
-        const auto time = h.editor.viewFrames();
-        const auto otherBefore = h.editor.viewValues(0);
-        const QPointF over = h.editor.plotPoint(1, 24.0, (low + high) * 0.5 + (high - low) * 0.2);
-        const double held = (low + high) * 0.5 + (high - low) * 0.2;
-        h.scroll(over, QPoint(0, 120), Qt::AltModifier);
-        QVERIFY(h.editor.valuesZoomed(1));
-        const auto [zoomedLow, zoomedHigh] = h.editor.viewValues(1);
-        QVERIFY(zoomedHigh - zoomedLow < high - low);
-        // The value under the pointer stays under it.
-        QVERIFY(QLineF(h.editor.plotPoint(1, 24.0, held), over).length() < 1.0);
-        // The time axis and the other numbers have not moved.
-        QCOMPARE(h.editor.viewFrames(), time);
-        QCOMPARE(h.editor.viewValues(0), otherBefore);
-        QVERIFY(!h.editor.valuesZoomed(0));
-        // Out again, past what fits, which gives a key room to go further.
-        for (int notch = 0; notch < 6; ++notch) h.scroll(over, QPoint(0, -120), Qt::AltModifier);
-        const auto [wideLow, wideHigh] = h.editor.viewValues(1);
-        QVERIFY(wideHigh - wideLow > high - low);
-        // A wheel turned sideways by Alt, as some platforms do, is the same wheel.
-        const double before = wideHigh - wideLow;
-        h.scroll(over, QPoint(120, 0), Qt::AltModifier);
-        const auto [turnedLow, turnedHigh] = h.editor.viewValues(1);
-        QVERIFY(turnedHigh - turnedLow < before);
-    }
-
-    void plainScrollingStillLeavesTheValuesAlone() {
-        Harness h;
-        const auto values = h.editor.viewValues(0);
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120));
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(40, 0));
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 40), Qt::ShiftModifier);
-        QCOMPARE(h.editor.viewValues(0), values);
-        QVERIFY(!h.editor.valuesZoomed(0));
-    }
-
-    void altShiftScrollingPansTheValues() {
-        Harness h;
-        const auto [low, high] = h.editor.viewValues(0);
-        const auto time = h.editor.viewFrames();
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120), Qt::AltModifier | Qt::ShiftModifier);
-        const auto [movedLow, movedHigh] = h.editor.viewValues(0);
-        QVERIFY(std::abs((movedHigh - movedLow) - (high - low)) < 1e-9);
-        // Up the wheel, what is on the plot goes up with it, so its values go by below.
-        QVERIFY(movedLow > low);
-        QCOMPARE(h.editor.viewFrames(), time);
-    }
-
-    void theMiddleButtonPansZoomedValuesAndOnlyThem() {
-        Harness h;
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 120));
-        const auto values = h.editor.viewValues(0);
-        const auto drag = [&h](QPointF from, QPointF to) {
-            QTest::mousePress(&h.editor, Qt::MiddleButton, Qt::NoModifier, from.toPoint());
-            QMouseEvent move(QEvent::MouseMove, to, h.editor.mapToGlobal(to), Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-            QApplication::sendEvent(&h.editor, &move);
-            QTest::mouseRelease(&h.editor, Qt::MiddleButton, Qt::NoModifier, to.toPoint());
-        };
-        const QPointF from = h.editor.plotPoint(0, 24.0, 0.25);
-        // Fitting still: a hand that wobbles takes it off nothing.
-        drag(from, from + QPointF(-20, 30));
-        QCOMPARE(h.editor.viewValues(0), values);
-        QVERIFY(!h.editor.valuesZoomed(0));
-        h.scroll(from, QPoint(0, 120), Qt::AltModifier);
-        const auto [low, high] = h.editor.viewValues(0);
-        const auto time = h.editor.viewFrames();
-        drag(from, from + QPointF(-20, 30));
-        const auto [movedLow, movedHigh] = h.editor.viewValues(0);
-        QVERIFY(movedLow > low);
-        QVERIFY(std::abs((movedHigh - movedLow) - (high - low)) < 1e-9);
-        QVERIFY(h.editor.viewFrames().first > time.first);
-    }
-
-    void fitReturnsTheValuesToFitting() {
-        Harness h;
-        const auto values = h.editor.viewValues(0);
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 240), Qt::AltModifier);
-        h.click(h.editor.channelPoint(1));
-        h.scroll(h.editor.plotPoint(1, 24.0, 20.0), QPoint(0, 240), Qt::AltModifier);
-        QVERIFY(h.editor.valuesZoomed(0));
-        QVERIFY(h.editor.valuesZoomed(1));
-        QTest::keyClick(&h.editor, Qt::Key_F, Qt::ShiftModifier);
-        QVERIFY(!h.editor.valuesZoomed(0));
-        QVERIFY(!h.editor.valuesZoomed(1));
-        QCOMPARE(h.editor.viewValues(0), values);
-        // The button is the same thing.
-        h.scroll(h.editor.plotPoint(1, 24.0, 20.0), QPoint(0, 240), Qt::AltModifier);
-        QVERIFY(h.editor.valuesZoomed(1));
-        h.editor.findChild<QAbstractButton *>(QStringLiteral("graphFit"))->click();
-        QVERIFY(!h.editor.valuesZoomed(1));
-    }
-
-    void theValueViewOutlastsANewStateButNotAClip() {
-        Harness h;
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 240), Qt::AltModifier);
-        const auto view = h.editor.viewValues(0);
-        h.set(clip());
-        QVERIFY(h.editor.valuesZoomed(0));
-        QCOMPARE(h.editor.viewValues(0), view);
-        QJsonObject other = clip();
-        other.insert("id", "c2");
-        h.bus.setSelection({QStringLiteral("c2")});
-        h.set(other);
-        QVERIFY(!h.editor.valuesZoomed(0));
-    }
-
-    void aKeyDraggedWhileZoomedLandsAtTheValueUnderThePointer() {
-        Harness h;
-        // Close in on the key at 0.5.
-        const QPointF key = h.editor.keyPoint(0, 1);
-        for (int notch = 0; notch < 4; ++notch) h.scroll(key, QPoint(0, 120), Qt::AltModifier);
-        const QPointF kept = h.editor.keyPoint(0, 1);
-        QVERIFY(QLineF(kept, key).length() < 1.0);
-        const QPointF to = h.editor.plotPoint(0, 24.0, 0.48);
-        h.drag(kept, to);
-        QCOMPARE(h.edits.size(), 1);
-        const QJsonArray keys = h.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("x").toObject().value("keys").toArray();
-        QVERIFY(std::abs(keys.at(1).toObject().value("value").toDouble() - 0.48) < 0.002);
-        // The view holds: a fit afterwards would take the plot from under the hand.
-        QVERIFY(h.editor.valuesZoomed(0));
-    }
-
-    void aKeyZoomedOffTheValueAxisIsNotThereToTake() {
-        Harness h;
-        // Close in on the keys at 0, so that the one at 0.5 is off the top of the plot.
-        const QPointF bottom = h.editor.keyPoint(0, 0);
-        for (int notch = 0; notch < 8; ++notch) h.scroll(bottom, QPoint(0, 120), Qt::AltModifier);
-        const auto [low, high] = h.editor.viewValues(0);
-        QVERIFY(high < 0.5);
-        const QPointF key = h.editor.keyPoint(0, 1);
-        QVERIFY(key.y() < 0.0 || key.y() < h.editor.plotPoint(0, 24.0, high).y());
-        h.click(QPointF(key.x(), h.editor.plotPoint(0, 24.0, high).y()));
-        QCOMPARE(h.editor.selectedKey(), -1);
-        // Framing what is on the plot leaves the number as it is.
-        h.click(h.editor.keyPoint(0, 0));
-        QCOMPARE(h.editor.selectedKey(), 0);
-        h.editor.frameSelection();
-        QVERIFY(h.editor.valuesZoomed(0));
-    }
-
-    void framingAKeyZoomedOffTheValueAxisBringsItBack() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 1));
-        QCOMPARE(h.editor.selectedKey(), 1);
-        const QPointF bottom = h.editor.keyPoint(0, 0);
-        for (int notch = 0; notch < 8; ++notch) h.scroll(bottom, QPoint(0, 120), Qt::AltModifier);
-        QVERIFY(h.editor.viewValues(0).second < 0.5);
-        h.editor.frameSelection();
-        QVERIFY(!h.editor.valuesZoomed(0));
-        QVERIFY(h.editor.viewValues(0).second > 0.5);
-    }
-
-    void aKeyOutOfViewIsNotThereToTake() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 2));
-        h.scroll(h.editor.keyPoint(0, 0), QPoint(0, 1200));
-        // It is off the plot's right, however the pointer gets at where it would be.
-        QVERIFY(h.editor.keyPoint(0, 2).x() > h.editor.width());
-        const QPointF inPlot = h.editor.plotPoint(0, h.editor.viewFrames().second - 0.5, 0.0);
-        h.click(inPlot);
-        QCOMPARE(h.editor.selectedKey(), -1);
-        QCOMPARE(h.edits.size(), 0);
-    }
-
-    void theViewOutlastsANewStateButNotAClip() {
-        Harness h;
-        h.scroll(h.editor.plotPoint(0, 24.0, 0.25), QPoint(0, 480));
-        const auto zoomed = h.editor.viewFrames();
-        h.set(clip());
-        QCOMPARE(h.editor.viewFrames(), zoomed);
-        // Whole stays whole as the clip grows.
-        Harness w;
-        QJsonObject longer = clip();
-        longer.insert("durationFrames", 97);
-        w.set(longer);
-        QCOMPARE(w.editor.viewFrames(), (std::pair<double, double>{0.0, 96.0}));
-        // Another clip is seen whole.
-        QJsonObject other = clip();
-        other.insert("id", "c2");
-        h.set(other);
-        h.bus.setSelection({QStringLiteral("c2")});
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 48.0}));
-    }
-
-    void theBarsButtonsFrameAndFit() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.editor.findChild<QAbstractButton *>(QStringLiteral("graphFrame"))->click();
-        QVERIFY(h.editor.viewFrames().second < 48.0);
-        h.editor.findChild<QAbstractButton *>(QStringLiteral("graphFit"))->click();
-        QCOMPARE(h.editor.viewFrames(), (std::pair<double, double>{0.0, 48.0}));
-    }
-
     // ------------------------------------------------------------- many keys
-
-    void shiftClickingAddsAKeyAndTakesItAway() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 2), Qt::ShiftModifier);
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{0, 2}));
-        QCOMPARE(h.editor.selectedKey(), 2);
-        h.click(h.editor.keyPoint(0, 2), Qt::ShiftModifier);
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{0}));
-        QCOMPARE(h.editor.selectedKey(), 0);
-        h.click(h.editor.keyPoint(0, 0), Qt::ShiftModifier);
-        QVERIFY(h.editor.selectedKeys(0).isEmpty());
-        QCOMPARE(h.editor.selectedKey(), -1);
-        QCOMPARE(h.edits.size(), 0);
-    }
-
-    void aPlainClickOnASelectedKeyLeavesJustThatOne() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 1), Qt::ShiftModifier);
-        h.click(h.editor.keyPoint(0, 0));
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{0}));
-    }
-
-    void aBoxSelectsTheKeysInIt() {
-        Harness h;
-        // From before x's middle key to past the clip's end, whichever number a key is of: the
-        // box starts in the margin, since a key can sit on the plot's edge.
-        const QPointF middle = h.editor.keyPoint(0, 1);
-        const QPointF last = h.editor.keyPoint(0, 2);
-        h.drag(middle + QPointF(-6, -6), last + QPointF(6, 6));
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{1, 2}));
-        QCOMPARE(h.editor.selectedKeys(1), (QList<int>{1}));
-        QVERIFY(h.editor.selectedKeys(2).isEmpty());
-        QCOMPARE(h.edits.size(), 0);
-        // With Shift it adds to what is selected.
-        const QPointF first = h.editor.keyPoint(0, 0);
-        h.drag(first + QPointF(-6, 6), first + QPointF(6, -6), Qt::ShiftModifier);
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{0, 1, 2}));
-        // Without, it starts again; an empty box leaves nothing.
-        const QPointF empty = h.editor.plotPoint(0, 12.0, 0.45);
-        h.drag(empty, empty + QPointF(8, 8));
-        QVERIFY(h.editor.selectedKeys(0).isEmpty());
-        QCOMPARE(h.editor.selectedKey(), -1);
-    }
-
-    void aBoxReachesAcrossNumbers() {
-        Harness h;
-        // Everything.
-        const QRectF plot(h.editor.plotPoint(0, 0.0, 0.0), h.editor.plotPoint(0, 48.0, 0.0));
-        h.drag(QPointF(plot.left() - 8, 60), QPointF(plot.right() + 8, h.editor.height() - 2));
-        QCOMPARE(h.editor.selectedKeys(0).size(), 3);
-        QCOMPARE(h.editor.selectedKeys(1).size(), 2);
-        QCOMPARE(h.editor.selectedKeys(2).size(), 2);
-    }
-
-    void selectedKeysMoveTogetherAsOneEdit() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 1));
-        h.click(h.editor.keyPoint(2, 1), Qt::ShiftModifier);
-        QCOMPARE(h.editor.selectedChannel(), 2);
-        const QPointF from = h.editor.keyPoint(2, 1);
-        const double frames = 6.0;
-        const QPointF to(h.editor.plotPoint(2, 12.0 + frames, 0.0).x(), from.y() - 30.0);
-        h.drag(from, to);
-        QCOMPARE(h.edits.size(), 1);
-        const QJsonArray ops = h.lastOps();
-        QCOMPARE(ops.size(), 2);
-        const QJsonArray xKeys = ops.at(0).toObject().value("props").toObject().value("x").toObject().value("keys").toArray();
-        const QJsonArray featherKeys = ops.at(1).toObject().value("params").toObject().value("feather").toObject().value("keys").toArray();
-        QCOMPARE(xKeys.at(1).toObject().value("at").toInt(), 30);
-        QCOMPARE(featherKeys.at(1).toObject().value("at").toInt(), 18);
-        // Each up the plot by the same distance, on its own scale.
-        QVERIFY(xKeys.at(1).toObject().value("value").toDouble() > 0.5);
-        QVERIFY(featherKeys.at(1).toObject().value("value").toDouble() > 9.0);
-        // The keys not selected are where they were.
-        QCOMPARE(xKeys.at(0).toObject().value("at").toInt(), 0);
-        QCOMPARE(xKeys.at(2).toObject().value("at").toInt(), 48);
-        QCOMPARE(xKeys.at(2).toObject().value("value").toDouble(), 0.0);
-    }
-
-    void theTightestNeighbourStopsThemAll() {
-        Harness h;
-        // x's middle key has room back to frame 1, the feather's second back to frame 1 too,
-        // but forward the feather's (12) could go to the end and x's only to 47.
-        h.click(h.editor.keyPoint(0, 1));
-        h.click(h.editor.keyPoint(2, 1), Qt::ShiftModifier);
-        const QPointF from = h.editor.keyPoint(2, 1);
-        h.drag(from, QPointF(h.editor.plotPoint(2, 48.0, 0.0).x(), from.y()));
-        const QJsonArray ops = h.lastOps();
-        const QJsonArray xKeys = ops.at(0).toObject().value("props").toObject().value("x").toObject().value("keys").toArray();
-        const QJsonArray featherKeys = ops.at(1).toObject().value("params").toObject().value("feather").toObject().value("keys").toArray();
-        QCOMPARE(xKeys.at(1).toObject().value("at").toInt(), 47);
-        // The same 23 frames, so they stay as far apart as they were.
-        QCOMPARE(featherKeys.at(1).toObject().value("at").toInt(), 35);
-        QVERIFY(featherKeys.at(1).toObject().value("at").toInt() > featherKeys.at(0).toObject().value("at").toInt());
-    }
-
-    void keysSelectedSideBySideGoPastEachOthersPlaces() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 1), Qt::ShiftModifier);
-        h.drag(h.editor.keyPoint(0, 1), h.editor.plotPoint(0, 34.0, 0.5));
-        const QJsonArray keys = h.lastKeys("x");
-        QCOMPARE(keys.at(0).toObject().value("at").toInt(), 10);
-        QCOMPARE(keys.at(1).toObject().value("at").toInt(), 34);
-        QCOMPARE(keys.at(2).toObject().value("at").toInt(), 48);
-    }
-
-    void aKeyStaysInTheRangeItsNumberAllows() {
-        EditorBus bus;
-        GraphEditor editor(nullptr, &bus);
-        editor.resize(1000, 320);
-        QSignalSpy edits(&editor, &GraphEditor::editRequested);
-        const QJsonObject track{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip()}}};
-        const QJsonObject project{{"tracks", QJsonArray{track}},
-                                  {"properties", QJsonObject{{"video", QJsonArray{QJsonObject{{"name", "x"}, {"min", -0.25}, {"max", 0.6}}}}}},
-                                  {"maskProperties", QJsonArray{QJsonObject{{"name", "feather"}, {"min", 0.0}, {"max", 9.5}}}}};
-        editor.setEffectCatalog(QJsonArray{QJsonObject{{"id", "blur.gaussian"}, {"params", QJsonArray{QJsonObject{{"name", "radius"}, {"min", 0.0}, {"max", 41.0}}}}}});
-        bus.setSnapshot(QJsonObject{{"revision", 1}}, project, 24.0, QSize(1920, 1080));
-        bus.setSelection({QStringLiteral("c1")});
-        const auto drag = [&](QPointF from, QPointF to, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-            QTest::mousePress(&editor, Qt::LeftButton, modifiers, from.toPoint());
-            QMouseEvent move(QEvent::MouseMove, to, editor.mapToGlobal(to), Qt::NoButton, Qt::LeftButton, modifiers);
-            QApplication::sendEvent(&editor, &move);
-            QTest::mouseRelease(&editor, Qt::LeftButton, modifiers, to.toPoint());
-        };
-        const auto keysOf = [](const QJsonObject &op, const char *name) {
-            const QJsonObject values = op.contains("props") ? op.value("props").toObject() : op.value("params").toObject();
-            return values.value(QString::fromLatin1(name)).toObject().value("keys").toArray();
-        };
-        // Far past the top of the plot, and down past the bottom: each held at its limit.
-        const QPointF top = editor.keyPoint(0, 1);
-        drag(top, top + QPointF(0, -400));
-        QCOMPARE(keysOf(edits.last().at(0).toJsonArray().first().toObject(), "x").at(1).toObject().value("value").toDouble(), 0.6);
-        const QPointF again = editor.keyPoint(0, 1);
-        drag(again, again + QPointF(0, 2000));
-        QCOMPARE(keysOf(edits.last().at(0).toJsonArray().first().toObject(), "x").at(1).toObject().value("value").toDouble(), -0.25);
-        // Moved with others, each stops at its own: an effect's and a mask's range count too.
-        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, editor.channelPoint(1).toPoint());
-        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, editor.keyPoint(1, 1).toPoint());
-        QTest::mouseClick(&editor, Qt::LeftButton, Qt::ShiftModifier, editor.keyPoint(2, 1).toPoint());
-        const QPointF grip = editor.keyPoint(2, 1);
-        drag(grip, grip + QPointF(0, -600));
-        const QJsonArray ops = edits.last().at(0).toJsonArray();
-        QCOMPARE(ops.size(), 2);
-        QCOMPARE(keysOf(ops.at(0).toObject(), "radius").at(1).toObject().value("value").toDouble(), 41.0);
-        QCOMPARE(keysOf(ops.at(1).toObject(), "feather").at(1).toObject().value("value").toDouble(), 9.5);
-    }
-
-    void aBoxKeepsTheNumberInHandWhileItCatchesOne() {
-        Harness h;
-        QCOMPARE(h.editor.selectedChannel(), 0);
-        // Over x's middle key (24) and the feather's second (12), reaching the feather's first.
-        const QPointF from = h.editor.plotPoint(0, 8.0, 0.55);
-        const QPointF to = h.editor.plotPoint(0, 28.0, 0.3);
-        QTest::mousePress(&h.editor, Qt::LeftButton, Qt::NoModifier, from.toPoint());
-        const QPointF part = h.editor.plotPoint(0, 16.0, 0.3);
-        QMouseEvent first(QEvent::MouseMove, part, h.editor.mapToGlobal(part), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(&h.editor, &first);
-        // So far it has the feather's only, and that is the number in hand.
-        QCOMPARE(h.editor.selectedChannel(), 2);
-        QMouseEvent second(QEvent::MouseMove, to, h.editor.mapToGlobal(to), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(&h.editor, &second);
-        QTest::mouseRelease(&h.editor, Qt::LeftButton, Qt::NoModifier, to.toPoint());
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{1}));
-        QCOMPARE(h.editor.selectedKeys(2), (QList<int>{1}));
-        // x again, as it was when the box began.
-        QCOMPARE(h.editor.selectedChannel(), 0);
-    }
-
-    void shiftKeepsAGroupToOneWay() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 1), Qt::ShiftModifier);
-        const QPointF from = h.editor.keyPoint(0, 1);
-        h.drag(from, from + QPointF(120, 9), Qt::ShiftModifier);
-        const QJsonArray keys = h.lastKeys("x");
-        QVERIFY(keys.at(1).toObject().value("at").toInt() > 24);
-        QCOMPARE(keys.at(0).toObject().value("value").toDouble(), 0.0);
-        QCOMPARE(keys.at(1).toObject().value("value").toDouble(), 0.5);
-    }
-
-    void deleteTakesEveryKeySelectedAsOneEdit() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 2), Qt::ShiftModifier);
-        h.click(h.editor.keyPoint(2, 1), Qt::ShiftModifier);
-        h.click(h.editor.keyPoint(2, 0), Qt::ShiftModifier);
-        QTest::keyClick(&h.editor, Qt::Key_Delete);
-        QCOMPARE(h.edits.size(), 1);
-        const QJsonArray ops = h.lastOps();
-        QCOMPARE(ops.size(), 2);
-        QCOMPARE(ops.at(0).toObject().value("props").toObject().value("x").toObject().value("keys").toArray().size(), 1);
-        // All of a number's keys gone leaves a value.
-        QCOMPARE(ops.at(1).toObject().value("params").toObject().value("feather").toDouble(), 1.0);
-        QCOMPARE(h.editor.selectedKey(), -1);
-    }
-
-    void aCurveGoesToEveryKeySelected() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(0, 1), Qt::ShiftModifier);
-        h.editor.setInterp(QStringLiteral("ease"));
-        const QJsonArray keys = h.lastKeys("x");
-        QCOMPARE(keys.at(0).toObject().value("interp").toString(), QStringLiteral("ease"));
-        QCOMPARE(keys.at(1).toObject().value("interp").toString(), QStringLiteral("ease"));
-        QCOMPARE(keys.at(2).toObject().value("interp").toString(), QStringLiteral("linear"));
-    }
-
-    void severalKeysHaveNoHandlesToShape() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        QVERIFY(h.editor.handlePoints());
-        h.click(h.editor.keyPoint(0, 1), Qt::ShiftModifier);
-        QVERIFY(!h.editor.handlePoints());
-    }
-
-    void aNewStateKeepsEveryKeySelected() {
-        Harness h;
-        h.click(h.editor.keyPoint(0, 0));
-        h.click(h.editor.keyPoint(2, 1), Qt::ShiftModifier);
-        h.set(clip());
-        QCOMPARE(h.editor.selectedKeys(0), (QList<int>{0}));
-        QCOMPARE(h.editor.selectedKeys(2), (QList<int>{1}));
-        QCOMPARE(h.editor.selectedChannel(), 2);
-        QCOMPARE(h.editor.selectedKey(), 1);
-    }
 
     // ------------------------------------------------------------ on the picture
 
@@ -1358,7 +495,7 @@ private slots:
         QVERIFY(QLineF(points.at(0), canvas.center()).length() < 0.01);
         QVERIFY(QLineF(points.at(1), canvas.center() + QPointF(canvas.width() * 0.25, -canvas.height() * 0.25)).length() < 0.01);
         // The curve is the compositor's, on the same canvas, and goes through every point.
-        const graph::MotionPath path({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0);
+        const motionpath::MotionPath path({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0);
         const QList<QPointF> curve = s.viewer.motionPathCurve();
         const QList<QPointF> samples = path.samples();
         QCOMPARE(curve.size(), samples.size());
@@ -1412,7 +549,7 @@ private slots:
         const QJsonObject op = ops.first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
         QCOMPARE(op.value("clip").toString(), QStringLiteral("c1"));
-        const auto written = graph::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written);
         QCOMPARE(written->size(), 3);
         QCOMPARE(written->at(0), QPointF(0.0, 0.0));
@@ -1442,7 +579,7 @@ private slots:
         QSignalSpy plays(&s.viewer, &ViewerWidget::playRequested);
         const QList<QPointF> curve = s.viewer.motionPathCurve();
         // A quarter of the way along the first span, a little to one side of it.
-        const QPointF on = curve.at(graph::MotionPath::kSamplesPerSpan / 4);
+        const QPointF on = curve.at(motionpath::MotionPath::kSamplesPerSpan / 4);
         const QPointF at = on + QPointF(2, 2);
         QTest::mouseClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, at.toPoint());
         QCOMPARE(s.edits.size(), 0);
@@ -1452,7 +589,7 @@ private slots:
         QCOMPARE(plays.size(), 0);
         const QJsonObject op = s.edits.last().at(0).toJsonArray().first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
-        const auto written = graph::parsePath(op.value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(op.value("props").toObject().value("path").toString());
         QVERIFY(written);
         QCOMPARE(written->size(), 4);
         QCOMPARE(written->at(0), QPointF(0.0, 0.0));
@@ -1564,7 +701,7 @@ private slots:
         const QPointF to = points.at(1) + QPointF(0, canvas.height() * 0.1);
         s.drag(points.at(1), to);
         QCOMPARE(s.edits.size(), 1);
-        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         QVERIFY(std::abs(written->at(1).x() - 0.5) < 0.005);
         QVERIFY(std::abs(written->at(1).y() - 0.2) < 0.005);
@@ -1739,7 +876,7 @@ private slots:
         };
         QVERIFY(QLineF(s.viewer.motionPathPoints().at(1), widget({0.25, -0.25})).length() < 0.01);
         // The curve's samples and the marker go through the same map.
-        const QList<QPointF> samples = graph::MotionPath({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0).samples();
+        const QList<QPointF> samples = motionpath::MotionPath({{0.0, 0.0}, {0.25, -0.25}, {0.5, 0.0}}, 1920.0 / 1080.0).samples();
         QVERIFY(QLineF(s.viewer.motionPathCurve().at(7), widget(samples.at(7))).length() < 0.01);
         QVERIFY(QLineF(s.viewer.motionPathMarker(), widget({0.0, 0.0})).length() < 0.01);
         // A drag writes the share that lands under the pointer, to the four places a path is kept to.
@@ -1747,7 +884,7 @@ private slots:
         const QPointF to = from + QPointF(70, 45);
         s.drag(from, to);
         QCOMPARE(s.edits.size(), 1);
-        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         QVERIFY2(QLineF(widget(written->at(1)), to).length() < 1.5, qPrintable(QStringLiteral("%1,%2").arg(widget(written->at(1)).x()).arg(widget(written->at(1)).y())));
         // The other points stay.
@@ -1759,7 +896,7 @@ private slots:
         const QPointF onCurve = s.viewer.motionPathCurve().at(16);
         QTest::mouseDClick(&s.viewer, Qt::LeftButton, Qt::NoModifier, onCurve.toPoint());
         QCOMPARE(s.edits.size(), 1);
-        const auto added = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto added = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(added);
         QCOMPARE(added->size(), 4);
         QVERIFY(QLineF(widget(added->at(1)), onCurve).length() < 2.0);
@@ -1769,7 +906,7 @@ private slots:
         s.viewer.setFocus();
         QTest::keyClick(&s.viewer, Qt::Key_Delete);
         QCOMPARE(s.edits.size(), 1);
-        QCOMPARE(graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString())->size(), 3);
+        QCOMPARE(motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString())->size(), 3);
     }
 
     void aDragPastAPlanesHorizonStaysWhereItWas() {
@@ -1789,7 +926,7 @@ private slots:
         QVERIFY(!pointInSight(placement, QPointF(0.5, past)));
         const QPointF good = *pointInSight(placement, QPointF(0.5, horizon - 0.4));
         const QPointF other = *pointInSight(placement, QPointF(0.7, horizon - 0.4));
-        s.viewer.setMotionPath(QStringLiteral("c1"), graph::pathText({good, other}), placement, 0.0);
+        s.viewer.setMotionPath(QStringLiteral("c1"), motionpath::pathText({good, other}), placement, 0.0);
         QVERIFY(s.viewer.showsMotionPath());
         const QRectF picture = s.viewer.pictureRect();
         const QPointF from = s.viewer.motionPathPoints().at(0);
@@ -1803,7 +940,7 @@ private slots:
         // would land elsewhere: it stays, as it does beyond.
         const double nearly = horizon - 0.002;
         const auto tooFar = pointInSight(placement, QPointF(0.5, nearly));
-        QVERIFY(tooFar && !graph::pathHolds(*tooFar));
+        QVERIFY(tooFar && !motionpath::pathHolds(*tooFar));
         const QPointF close(picture.center().x(), picture.top() + picture.height() * nearly);
         QMouseEvent almost(QEvent::MouseMove, close, s.viewer.mapToGlobal(close), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&s.viewer, &almost);
@@ -1815,7 +952,7 @@ private slots:
         QTest::mouseRelease(&s.viewer, Qt::LeftButton, Qt::NoModifier, beyond.toPoint());
         // What is written is where it stayed.
         QCOMPARE(s.edits.size(), 1);
-        const auto written = graph::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
+        const auto written = motionpath::parsePath(s.edits.last().at(0).toJsonArray().first().toObject().value("props").toObject().value("path").toString());
         QVERIFY(written);
         const QPointF shares = placement.map(written->at(0));
         QVERIFY(QLineF(QPointF(picture.left() + shares.x() * picture.width(), picture.top() + shares.y() * picture.height()), lastGood).length() < 1.5);
@@ -1959,78 +1096,10 @@ private slots:
         emit window.m_viewer->editRequested(QJsonArray{QJsonObject{{"op", "set"}, {"clip", "c1"}, {"props", QJsonObject{{"path", "0,0 1,1"}}}}});
         QVERIFY(!window.m_lastCommand.isEmpty());
     }
-
-    void aRefusedEditIsTakenBack() {
-        Harness h;
-        h.drag(h.editor.keyPoint(0, 1), h.editor.plotPoint(0, 30.0, 0.25));
-        QCOMPARE(h.edits.size(), 1);
-        h.bus.dispatch(QJsonObject{{"type", "error"}, {"message", "no"}});
-        const QPointF back = h.editor.keyPoint(0, 1);
-        QVERIFY(std::abs(back.x() - h.editor.plotPoint(0, 24.0, 0.5).x()) < 0.01);
-    }
-
-    void aNewStateKeepsWhatIsSelected() {
-        Harness h;
-        h.drag(h.editor.keyPoint(1, 1), h.editor.keyPoint(1, 1));
-        QCOMPARE(h.editor.selectedChannel(), 1);
-        h.set(clip());
-        QCOMPARE(h.editor.selectedChannel(), 1);
-        QCOMPARE(h.editor.selectedKey(), 1);
-    }
-
-    void itComesUpAsATrayOverTheTimeline() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        QAction *action = window.m_commands->action(QStringLiteral("view.graph"));
-        QVERIFY(action);
-        QVERIFY(action->isCheckable());
-        action->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Graph);
-        QVERIFY(action->isChecked());
-        QCOMPARE(window.m_shell->widgetOf(StageShell::Tray::Graph), static_cast<QWidget *>(window.m_graphEditor));
-        // It is a panel over the review, not a workspace of its own.
-        QCOMPARE(window.bus()->workspace(), QStringLiteral("Review"));
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
-        // Finish takes its place, and it unchecks.
-        window.m_commands->action(QStringLiteral("workspace.finish"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
-        QVERIFY(!action->isChecked());
-        action->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Graph);
-        action->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
-    }
-
-    void itsEditsReachTheWindow() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.m_lastCommand = {};
-        emit window.m_graphEditor->editRequested(QJsonArray{QJsonObject{{"op", "set"}, {"clip", "c1"}, {"props", QJsonObject{{"x", 0.5}}}}});
-        QVERIFY(!window.m_lastCommand.isEmpty());
-    }
-
-    // `{0f:0 96f:1}` on a clip of 96 frames is how a move across a clip is written, and its last key
-    // lies past the clip's last frame: it has to be on the plot, or it cannot be seen or dragged.
-    void aKeyAtTheClipsEndIsOnThePlot() {
-        Harness h;
-        h.set(QJsonObject{{"id", "c1"}, {"name", "Clip"}, {"timelineStart", 0.0}, {"durationFrames", 96}, {"props", QJsonObject{{"x", QJsonArray{key(0, 0.0), key(96, 1.0)}}}}});
-        const QPointF last = h.editor.plotPoint(0, 96.0, 1.0);
-        QVERIFY2(last.x() <= h.editor.width() - 12.0 + 0.5, qPrintable(QString::number(last.x())));
-        const QPointF first = h.editor.plotPoint(0, 0.0, 0.0);
-        QVERIFY(first.x() >= 0.0);
-        // A key past that, kept by a trim, stays where it was: off the plot, and so is the rest of it.
-        Harness trimmed;
-        trimmed.set(QJsonObject{{"id", "c1"}, {"name", "Clip"}, {"timelineStart", 0.0}, {"durationFrames", 24}, {"props", QJsonObject{{"x", QJsonArray{key(0, 0.0), key(96, 1.0)}}}}});
-        QVERIFY(trimmed.editor.plotPoint(0, 96.0, 1.0).x() > trimmed.editor.width());
-    }
 };
 
 } // namespace kerf
 
-KERF_TEST_CLASS(kerf::GraphTest)
+KERF_TEST_CLASS(kerf::MotionPathTest)
 
-#include "graph_test.moc"
+#include "motion_path_test.moc"

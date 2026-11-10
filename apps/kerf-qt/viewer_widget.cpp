@@ -6,7 +6,7 @@
 #include <QVariantAnimation>
 #include "editor_common.h"
 #include "editor_theme.h"
-#include "graph_model.h"
+#include "motion_path.h"
 #include "stage_shell.h"
 #include "ui/components.h"
 
@@ -675,10 +675,10 @@ void ViewerWidget::setMotionPath(const QString &clip, const QString &text, const
         m_pathAlong = along;
         return;
     }
-    auto points = clip.isEmpty() || !placement.isInvertible() ? std::nullopt : graph::parsePath(text);
+    auto points = clip.isEmpty() || !placement.isInvertible() ? std::nullopt : motionpath::parsePath(text);
     // All of it on or behind the camera is no curve to show.
     if (points) {
-        const QList<QPointF> samples = graph::MotionPath(*points, aspect()).samples();
+        const QList<QPointF> samples = motionpath::MotionPath(*points, aspect()).samples();
         if (std::none_of(samples.cbegin(), samples.cend(), [&placement](const QPointF &sample) { return inSight(placement, sample); })) points.reset();
     }
     const QString shown = points ? clip : QString();
@@ -767,7 +767,7 @@ int ViewerWidget::pathPointAt(const QPointF &widget) const {
 
 double ViewerWidget::pathCurveAt(const QPointF &widget) const {
     const QList<QPointF> line = motionPathCurve();
-    const QList<QPointF> samples = m_pathClip.isEmpty() ? QList<QPointF>{} : graph::MotionPath(m_pathPoints, aspect()).samples();
+    const QList<QPointF> samples = m_pathClip.isEmpty() ? QList<QPointF>{} : motionpath::MotionPath(m_pathPoints, aspect()).samples();
     double nearest = kHandleReach;
     double found = -1.0;
     for (qsizetype index = 0; index + 1 < line.size(); ++index) {
@@ -779,7 +779,7 @@ double ViewerWidget::pathCurveAt(const QPointF &widget) const {
         const double distance = QLineF(from + along * t, widget).length();
         if (distance > nearest) continue;
         nearest = distance;
-        found = (double(index) + t) / graph::MotionPath::kSamplesPerSpan;
+        found = (double(index) + t) / motionpath::MotionPath::kSamplesPerSpan;
     }
     return found;
 }
@@ -793,7 +793,7 @@ void ViewerWidget::selectPathPoint(int point) {
 void ViewerWidget::writePath() {
     emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
                                               {QStringLiteral("clip"), m_pathClip},
-                                              {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_pathPoints)}}}}});
+                                              {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), motionpath::pathText(m_pathPoints)}}}}});
 }
 
 void ViewerWidget::removeSelectedPathPoint() {
@@ -815,13 +815,13 @@ QList<QPointF> ViewerWidget::motionPathPoints() const {
 QList<QPointF> ViewerWidget::motionPathCurve() const {
     QList<QPointF> line;
     if (m_pathClip.isEmpty()) return line;
-    for (const QPointF &point : graph::MotionPath(m_pathPoints, aspect()).samples()) line.append(pathToWidget(point));
+    for (const QPointF &point : motionpath::MotionPath(m_pathPoints, aspect()).samples()) line.append(pathToWidget(point));
     return line;
 }
 
 QPointF ViewerWidget::motionPathMarker() const {
     if (m_pathClip.isEmpty()) return {};
-    const auto on = graph::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
+    const auto on = motionpath::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
     return pathToWidget({on.x, on.y});
 }
 
@@ -1129,7 +1129,7 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         const QPointF to = position + m_sampledHeld;
         const QPointF share((to.x() - canvas.left()) / std::max(1.0, canvas.width()), (to.y() - canvas.top()) / std::max(1.0, canvas.height()));
         // What cannot land there, as past a horizon, stays where it last was.
-        if (const auto at = m_sampledEdit.solve(m_sampledEdit.points, m_sampledDrag, share); at && graph::pathHolds(*at)) {
+        if (const auto at = m_sampledEdit.solve(m_sampledEdit.points, m_sampledDrag, share); at && motionpath::pathHolds(*at)) {
             m_sampledEdit.points[m_sampledDrag] = *at;
             m_sampledPath = m_sampledEdit.curve(m_sampledEdit.points);
             m_sampledHandles = m_sampledEdit.handles(m_sampledEdit.points);
@@ -1141,7 +1141,7 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
         // A hand that wobbles while clicking has not moved anything.
         if (!m_pathMoved && QLineF(position, m_pathPressed).length() < kPathDragStart) return;
         m_pathMoved = true;
-        if (const auto at = pathPoint(position + m_pathHeld); at && graph::pathHolds(*at)) m_pathPoints[m_pathDrag] = *at;
+        if (const auto at = pathPoint(position + m_pathHeld); at && motionpath::pathHolds(*at)) m_pathPoints[m_pathDrag] = *at;
         update();
         return;
     }
@@ -1220,7 +1220,7 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
         if (moved)
             emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
                                                       {QStringLiteral("clip"), m_sampledEdit.clip},
-                                                      {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), graph::pathText(m_sampledEdit.points)}}}}});
+                                                      {QStringLiteral("props"), QJsonObject{{QStringLiteral("path"), motionpath::pathText(m_sampledEdit.points)}}}}});
         return;
     }
     if (m_pathDrag >= 0) {
@@ -1252,7 +1252,7 @@ void ViewerWidget::mouseDoubleClickEvent(QMouseEvent *event) {
     const QPointF position = event->position();
     if (event->button() == Qt::LeftButton && !m_capturing && m_maskTool == MaskTool::None && pathPointAt(position) < 0 && handleAt(position) < 0) {
         if (const double u = pathCurveAt(position); u >= 0.0) {
-            m_pathPoints = graph::withPointOn(m_pathPoints, aspect(), u);
+            m_pathPoints = motionpath::withPointOn(m_pathPoints, aspect(), u);
             selectPathPoint(int(std::clamp<qsizetype>(qsizetype(std::floor(u)), 0, m_pathPoints.size() - 3)) + 1);
             update();
             writePath();
@@ -1363,7 +1363,7 @@ void ViewerWidget::paintMotionPath(QPainter &p) {
     p.setBrush(Qt::NoBrush);
     // In depth, what is on or behind the camera breaks the curve.
     const QList<QPointF> line = motionPathCurve();
-    const QList<QPointF> samples = graph::MotionPath(m_pathPoints, aspect()).samples();
+    const QList<QPointF> samples = motionpath::MotionPath(m_pathPoints, aspect()).samples();
     QPainterPath path;
     bool going = false;
     for (qsizetype index = 0; index < line.size(); ++index) {
@@ -1384,7 +1384,7 @@ void ViewerWidget::paintMotionPath(QPainter &p) {
         p.setBrush(selected ? theme.maskHandleBorder : theme.maskHandleFill);
         p.drawRect(QRectF(points.at(index) - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
     }
-    const auto on = graph::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
+    const auto on = motionpath::MotionPath(m_pathPoints, aspect()).at(m_pathAlong);
     if (inSight(m_pathPlacement, QPointF(on.x, on.y))) {
         p.setPen(QPen(theme.maskHandleFill, 1.0));
         p.setBrush(theme.maskHandleBorder);
