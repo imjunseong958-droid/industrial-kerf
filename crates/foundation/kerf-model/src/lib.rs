@@ -6,6 +6,7 @@
 
 pub mod catalog;
 pub mod diag;
+mod features;
 pub mod id;
 pub mod look;
 pub mod model;
@@ -18,6 +19,7 @@ pub mod value;
 
 pub use catalog::{Area, Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
 pub use diag::{Diagnostic, Severity, Span};
+pub use features::parse_features;
 pub use id::{Id, IdGen, InvalidId};
 pub use model::{
     Retime,

@@ -281,6 +281,22 @@ fn a_title_is_measured_at_its_axes() {
     assert_eq!(safe("wght=0"), 0);
 }
 
+/// Thirty 1s in Inter at 0.1 of the frame's height: 44 pixels each as they come, or 1318 in all
+/// and inside title safe's 1728, and 70 each as tabular figures, or 2100.
+#[test]
+fn a_title_is_measured_with_its_features() {
+    let safe = |set: &str| {
+        let text = "1".repeat(30);
+        let titled = project(&format!("set bg text=\"{text}\" size=0.1 {set}"));
+        with(&run(&titled), "text.safe_area").len()
+    };
+    assert_eq!(safe(""), 0);
+    assert_eq!(safe("features=tnum"), 1);
+    // Off, or one Inter has not, it takes the room it did.
+    assert_eq!(safe("features=-tnum"), 0);
+    assert_eq!(safe("features=smcp"), 0);
+}
+
 #[test]
 fn a_keyed_axis_is_measured_at_the_widest_it_reaches() {
     let safe = |set: &str| with(&run(&long_title(set)), "text.safe_area").len();

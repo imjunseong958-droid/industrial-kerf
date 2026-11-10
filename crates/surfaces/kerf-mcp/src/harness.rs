@@ -413,7 +413,8 @@ struct LookInput {
     cost: bool,
 }
 
-/// What `look` says of a font: its faces and axes, or the families a name no font has could mean.
+/// What `look` says of a font: its faces, their axes and the OpenType features each has, or the
+/// families a name no font has could mean.
 fn font_description(wanted: &str) -> Value {
     use kerf_text::fonts;
     // Four places say all a font does, where a float says it with noise.
@@ -451,6 +452,7 @@ fn font_description(wanted: &str) -> Value {
                 "weight": face.info.weight,
                 "italic": face.info.italic,
                 "axes": axes,
+                "features": face.features().iter().map(|tag| String::from_utf8_lossy(tag).into_owned()).collect::<Vec<_>>(),
             })
         })
         .collect();

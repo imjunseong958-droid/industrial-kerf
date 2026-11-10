@@ -487,6 +487,10 @@ fn the_graph_refuses_what_only_the_compositor_draws_by_name() {
             "gen=title@1 at=0f dur=24f\n      set text=\"a\" ital={0f:0 12f:1}",
             "axes",
         ),
+        (
+            "gen=title@1 at=0f dur=24f\n      set text=\"a\" features=tnum",
+            "features",
+        ),
     ] {
         let project = kerf_lang::parse_document(
             &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 {clip}\n"),

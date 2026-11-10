@@ -62,6 +62,9 @@ pub struct TextStyle {
     pub underline: bool,
     /// Where to set a variable font's axes. A face without them ignores them.
     pub axes: Vec<fonts::Axis>,
+    /// OpenType features to turn on or off, over what the font has on by itself and over
+    /// `kerning` and `ligatures`. A face without one ignores it.
+    pub features: Vec<fonts::Feature>,
 }
 
 impl Default for TextStyle {
@@ -79,6 +82,7 @@ impl Default for TextStyle {
             caps: Caps::Normal,
             underline: false,
             axes: Vec::new(),
+            features: Vec::new(),
         }
     }
 }
@@ -117,6 +121,7 @@ impl Hash for TextStyle {
             tag.hash(h);
             hf(h, *value);
         }
+        self.features.hash(h);
     }
 }
 
@@ -365,6 +370,8 @@ fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId
         feats.push(Feature::new(Tag::new(b"liga"), 0, ..));
         feats.push(Feature::new(Tag::new(b"clig"), 0, ..));
     }
+    // Last, so that what the style asks for by name holds over the switches above.
+    feats.extend(style.features.iter().map(|(tag, value)| Feature::new(Tag::new(tag), *value, ..)));
     let out = shaper.shape(buf, harfrust::ShapeOptions::new().features(&feats));
     let k = size / f.units_per_em();
     let _ = text;

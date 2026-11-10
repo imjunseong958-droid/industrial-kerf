@@ -140,6 +140,18 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
                     says("a light falls only on clips in depth, and none shows with it".to_owned());
                 }
             }
+            "title" => {
+                if let Some(Param::Static(Value::Text(features))) = params.get("features") {
+                    let font = match params.get("font") {
+                        Some(Param::Static(Value::Text(font))) if !font.trim().is_empty() => font.as_str(),
+                        _ => "sans-serif",
+                    };
+                    let (family, unread) = crate::text_lint::features_unread(font, features);
+                    for tag in unread {
+                        says(format!("`features`: {family} has no `{tag}`, which draws nothing (`look` `font` names the ones it has)"));
+                    }
+                }
+            }
             "camera" => {
                 if params.get("focus").is_some() && !ever_above_zero(params.get("aperture")) {
                     says("`focus` does nothing without an `aperture`".to_owned());

@@ -56,6 +56,10 @@ pub type FaceId = usize;
 /// An axis of a variable font and where to set it, by its OpenType tag (`wght`, `wdth`, ...).
 pub type Axis = ([u8; 4], f32);
 
+/// An OpenType feature by its tag (`tnum`, `smcp`, `ss01`, ...) and what to set it to: 0 turns it
+/// off, 1 on, and where a feature offers alternates, the number of the one to take.
+pub type Feature = ([u8; 4], u32);
+
 /// An axis a variable font has, on the scale it has it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxisRange {
@@ -307,6 +311,20 @@ impl Face {
             .iter()
             .map(|axis| AxisRange { tag: axis.tag().to_be_bytes(), min: axis.min_value(), default: axis.default_value(), max: axis.max_value() })
             .collect()
+    }
+    /// The OpenType features the face has, substitutions and positioning alike, by tag in
+    /// alphabetical order; none for a face without layout tables.
+    pub fn features(&self) -> Vec<[u8; 4]> {
+        use skrifa::raw::TableProvider;
+        let Some(font) = self.font() else { return Vec::new() };
+        let mut tags = std::collections::BTreeSet::new();
+        if let Ok(list) = font.gsub().and_then(|table| table.feature_list()) {
+            tags.extend(list.feature_records().iter().map(|record| record.feature_tag().to_be_bytes()));
+        }
+        if let Ok(list) = font.gpos().and_then(|table| table.feature_list()) {
+            tags.extend(list.feature_records().iter().map(|record| record.feature_tag().to_be_bytes()));
+        }
+        tags.into_iter().collect()
     }
     /// Glyph for a character (None when the face does not cover it).
     pub fn glyph(&self, c: char) -> Option<u32> {

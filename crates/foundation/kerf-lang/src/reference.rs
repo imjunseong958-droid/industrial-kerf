@@ -243,6 +243,7 @@ fn describe(param: &ParamDef) -> String {
         ParamType::Mask => facts.push("one of the clip's masks, by name".into()),
         ParamType::Points => facts.push("points, \"x,y x,y\"".into()),
         ParamType::Moves => facts.push("moves, \"x,y>x,y x,y>x,y>x,y\"".into()),
+        ParamType::Features => facts.push("font features, \"tnum -liga salt=2\"".into()),
         ParamType::File(extensions) => facts.push(format!(
             "a file ({}), relative to the project",
             extensions

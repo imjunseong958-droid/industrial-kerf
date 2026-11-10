@@ -1830,6 +1830,7 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
             | ParamType::Track
             | ParamType::Sound
             | ParamType::Mask
+            | ParamType::Features
             // A time given as text names a marker to land on.
             | ParamType::Time,
             Json::String(s),
@@ -1857,6 +1858,15 @@ mod tests {
         assert_eq!(found[1].interp, Interp::Hold);
         let wrong = serde_json::json!({"keys": [{"at": 0, "value": 0.0, "interp": "9,0,0,1"}]});
         assert!(super::json_param(&ParamType::Number, &wrong, Rate::FPS_24).is_none());
+    }
+
+    /// The Inspector sets a title's features as the line of text it shows them as.
+    #[test]
+    fn a_titles_features_come_as_text() {
+        use kerf_model::{ParamType, Value};
+        let features = serde_json::json!("tnum -liga");
+        assert_eq!(super::json_value(&ParamType::Features, &features), Some(Value::Text("tnum -liga".into())));
+        assert_eq!(super::json_value(&ParamType::Features, &serde_json::json!(1)), None);
     }
 
     use super::*;

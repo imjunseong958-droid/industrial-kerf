@@ -629,6 +629,9 @@ impl<'a> Graph<'a> {
                     {
                         return Err(ProgramError::unsupported(&clip.id, "a title's font axes"))
                     }
+                    "title" if params.contains_key("features") => {
+                        return Err(ProgramError::unsupported(&clip.id, "a title's font features"))
+                    }
                     "title" => Source::Generated(format!(
                         "color=c=black@0:s={width}x{height}:r={color}:d={span},format=rgba,{}",
                         self.title(clip, params, height)?
