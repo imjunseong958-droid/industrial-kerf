@@ -28,6 +28,7 @@ pub mod correct;
 pub mod effect;
 pub mod image;
 pub mod mask;
+pub mod source;
 pub mod text;
 pub mod wipe;
 

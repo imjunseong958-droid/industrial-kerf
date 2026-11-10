@@ -4,7 +4,9 @@
 pub mod outline;
 pub mod particles;
 pub mod shape;
+mod sources;
 
 pub use outline::Combine;
 pub use particles::Emitter;
 pub use shape::{Figure, Outline, Shape};
+pub use sources::SOURCES;

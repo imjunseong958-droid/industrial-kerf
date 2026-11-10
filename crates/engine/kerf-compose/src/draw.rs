@@ -28,6 +28,7 @@ use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::{EffectHost, EffectRun, Files};
+use kerf_draw::source::{premultiplied, PictureSource, SourceRun};
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
 use kerf_fx::filmcraft::{self, catalog::Headroom};
@@ -248,7 +249,8 @@ enum Source {
     },
     Solid(Rgba),
     Title(TitlePlan),
-    Motion(Motion),
+    /// A generator a crate draws (`crate::domains`).
+    Drawn(&'static dyn PictureSource),
     Adjustment,
     /// A null: it draws nothing, and other clips move with it.
     Nothing,
@@ -280,13 +282,6 @@ struct Reveals {
     /// In degrees.
     rotation: Param,
     opacity: Param,
-}
-
-/// A shape or particles, drawn from their parameters at the moment.
-#[derive(Clone, Copy, PartialEq)]
-enum Motion {
-    Shape,
-    Particles,
 }
 
 impl Drawing {
@@ -1116,10 +1111,13 @@ impl Drawing {
                 scale,
             ),
             Source::Title(title) => (Arc::new(title_on(title, (cw, ch), time)), scale),
-            Source::Motion(motion) => (
-                Arc::new(motion_on(*motion, &plan.clip, (cw, ch), time)),
-                scale,
-            ),
+            Source::Drawn(source) => {
+                let run = SourceRun {
+                    at: time,
+                    size: (cw, ch),
+                };
+                (Arc::new(source.draw(&plan.clip, &run)), scale)
+            }
             Source::Adjustment | Source::Nothing => return None,
         })
     }
@@ -1424,183 +1422,6 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
     };
     text::draw_pieces(&mut image, &text, at, 0.5, reveal.by_word, &look);
     image
-}
-
-/// A generator's numbers at clip time `time`.
-struct Reading<'a> {
-    params: Option<&'a kerf_model::Params>,
-    def: Option<&'a FxDef>,
-    time: Time,
-}
-
-impl<'a> Reading<'a> {
-    /// A generator's numbers at `time`, from its clip.
-    fn generator(clip: &'a Clip, name: &str, time: Time) -> Self {
-        let params = match &clip.content {
-            Content::Generator { params, .. } => Some(params),
-            _ => None,
-        };
-        Self {
-            params,
-            def: Catalog::builtin().fx(name),
-            time,
-        }
-    }
-
-    fn value(&self, name: &str) -> Option<Value> {
-        match self.params?.get(name) {
-            Some(param) => Some(param.value_at(self.time)),
-            None => self
-                .def
-                .and_then(|def| def.find(name))
-                .map(|def| def.default.clone()),
-        }
-    }
-
-    fn number(&self, name: &str) -> f64 {
-        self.value(name).and_then(|value| value.as_number()).unwrap_or(0.0)
-    }
-
-    fn color(&self, name: &str) -> [f32; 4] {
-        match self.value(name) {
-            Some(Value::Color(color)) => premultiplied(color),
-            _ => [0.0; 4],
-        }
-    }
-
-    fn word(&self, name: &str) -> String {
-        match self.value(name) {
-            Some(Value::Enum(word) | Value::Text(word)) => word,
-            _ => String::new(),
-        }
-    }
-
-    fn on(&self, name: &str) -> bool {
-        matches!(self.value(name), Some(Value::Bool(true)))
-    }
-}
-
-/// A shape or particles on a transparent canvas of `(w, h)`.
-fn motion_on(motion: Motion, clip: &Clip, (w, h): (usize, usize), time: Time) -> Image {
-    let mut image = Image::new(w, h);
-    let height = h as f64;
-    let center = [w as f64 / 2.0, height / 2.0];
-    match motion {
-        Motion::Shape => {
-            let read = Reading::generator(clip, "shape", time);
-            let size = |name: &str| (read.number(name) * height) as f32;
-            kerf_motion::Shape {
-                figure: figure_of(&read, height),
-                outlines: outlines_of(clip, height, time),
-                offset: size("offset"),
-                fill: read.color("fill"),
-                stroke: read.color("stroke"),
-                stroke_width: size("stroke_width"),
-                trim: (
-                    read.number("trim_start") as f32,
-                    read.number("trim_end") as f32,
-                    read.number("trim_offset") as f32,
-                ),
-                taper: (
-                    read.number("taper_start") as f32,
-                    read.number("taper_end") as f32,
-                ),
-            }
-            .draw(&mut image, [center[0] as f32, center[1] as f32]);
-        }
-        Motion::Particles => {
-            let read = Reading::generator(clip, "particles", time);
-            // Who is alive and where they are comes from the rate and the rest at the start, since
-            // a particle's way is worked out from its birth.
-            let start = Reading::generator(clip, "particles", Time::ZERO);
-            kerf_motion::Emitter {
-                rate: start.number("rate"),
-                life: start.number("life"),
-                velocity: start.number("velocity") * height,
-                vary: start.number("vary"),
-                direction: start.number("direction"),
-                spread: start.number("spread"),
-                gravity: start.number("gravity") * height,
-                size: (read.number("size") * height, read.number("size_end") * height),
-                color: (read.color("color"), read.color("color_end")),
-                soft: read.number("soft"),
-                origin: center,
-                area: [
-                    read.number("area_width") * height,
-                    read.number("area_height") * height,
-                ],
-                seed: read.number("seed").round() as u64,
-            }
-            .draw(&mut image, time.seconds());
-        }
-    }
-    image
-}
-
-/// An outline's numbers as the shape draws them, in pixels of a picture `height` high.
-fn figure_of(read: &Reading, height: f64) -> kerf_motion::Figure {
-    let size = |name: &str| (read.number(name) * height) as f32;
-    let (width, tall) = (size("width"), size("height"));
-    match read.word("kind").as_str() {
-        "ellipse" => kerf_motion::Figure::Ellipse {
-            width,
-            height: tall,
-        },
-        "polygon" => kerf_motion::Figure::Polygon {
-            width,
-            height: tall,
-            sides: read.number("sides").round().max(3.0) as u32,
-        },
-        "star" => kerf_motion::Figure::Star {
-            width,
-            height: tall,
-            points: read.number("sides").round().max(2.0) as u32,
-            inner: read.number("inner") as f32,
-        },
-        "path" => kerf_motion::Figure::Path {
-            points: kerf_model::parse_points(&read.word("points"))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|point| [(point[0] * height) as f32, (point[1] * height) as f32])
-                .collect(),
-            closed: read.on("closed"),
-            smooth: read.on("smooth"),
-        },
-        _ => kerf_motion::Figure::Rect {
-            width,
-            height: tall,
-            round: size("round"),
-        },
-    }
-}
-
-/// A shape clip's further outlines, in the order its `fx shape.outline` lines give them.
-fn outlines_of(clip: &Clip, height: f64, time: Time) -> Vec<kerf_motion::Outline> {
-    clip.effects
-        .iter()
-        .filter(|effect| effect.enabled && effect.fx == kerf_model::SHAPE_OUTLINE)
-        .map(|effect| {
-            let read = Reading {
-                params: Some(&effect.params),
-                def: Catalog::builtin().fx(kerf_model::SHAPE_OUTLINE),
-                time,
-            };
-            kerf_motion::Outline {
-                combine: match read.word("mode").as_str() {
-                    "subtract" => kerf_motion::Combine::Subtract,
-                    "intersect" => kerf_motion::Combine::Intersect,
-                    "difference" => kerf_motion::Combine::Difference,
-                    _ => kerf_motion::Combine::Add,
-                },
-                figure: figure_of(&read, height),
-                at: [
-                    (read.number("x") * height) as f32,
-                    (read.number("y") * height) as f32,
-                ],
-                rotation: read.number("rotation") as f32,
-            }
-        })
-        .collect()
 }
 
 /// The size a caption's text is drawn at.
@@ -2309,10 +2130,11 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
-                "shape" => (Source::Motion(Motion::Shape), canvas, false, true),
-                "particles" => (Source::Motion(Motion::Particles), canvas, false, true),
                 "null" | "camera" | "light" => (Source::Nothing, canvas, false, true),
-                other => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
+                other => match domains::source(other) {
+                    Some(source) => (Source::Drawn(source), canvas, false, true),
+                    None => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
+                },
             },
             Content::Caption { .. } => return Ok(None),
         };
@@ -2331,7 +2153,7 @@ impl<'a> Builder<'a> {
                 continue;
             }
             match effect.fx.as_str() {
-                // Part of the shape: `motion_on` reads it where it draws.
+                // Part of the shape, which reads it where it draws.
                 kerf_model::SHAPE_OUTLINE => {}
                 id if domains::effect(id).is_some() => effects.push(effect.clone()),
                 other => {
@@ -2720,18 +2542,6 @@ fn unsupported(entity: &Id, what: impl Into<String>) -> ComposeError {
 
 fn number(value: &Value) -> f64 {
     value.as_number().unwrap_or(0.0)
-}
-
-/// A color as premultiplied linear light.
-fn premultiplied(color: Rgba) -> [f32; 4] {
-    let decode = kerf_draw::color::decode_table();
-    let alpha = f32::from(color.a) / 255.0;
-    [
-        decode[usize::from(color.r)] * alpha,
-        decode[usize::from(color.g)] * alpha,
-        decode[usize::from(color.b)] * alpha,
-        alpha,
-    ]
 }
 
 /// How far a transition has got at `time`, from 0 to 1.
