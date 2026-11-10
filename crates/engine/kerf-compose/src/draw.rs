@@ -2142,7 +2142,7 @@ impl<'a> Builder<'a> {
             || !matches!(param(clip, "path"), Param::Static(Value::Text(text)) if text.is_empty())
             || GEOMETRY
                 .iter()
-                .any(|name| matches!(param(clip, name), Param::Animated(_)));
+                .any(|name| param(clip, name).varies());
         let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)));
         let mut effects = Vec::new();
         for effect in clip.effects.iter().filter(|effect| effect.enabled) {
@@ -2169,7 +2169,9 @@ impl<'a> Builder<'a> {
                 .parse::<Blend>()
                 .map_err(|_| unsupported(&clip.id, format!("blend `{blend}`")))?,
             Param::Static(_) => Blend::Normal,
-            Param::Animated(_) => return Err(unsupported(&clip.id, "animated `blend`")),
+            Param::Animated(_) | Param::Expr(_) => {
+                return Err(unsupported(&clip.id, "animated `blend`"))
+            }
         };
         self.effects.extend(effects.iter().cloned());
         let media = match &clip.content {
@@ -2244,7 +2246,7 @@ impl<'a> Builder<'a> {
             match params.get(name) {
                 None => Ok(def.find(name).expect("title parameter").default.clone()),
                 Some(Param::Static(value)) => Ok(value.clone()),
-                Some(Param::Animated(_)) => {
+                Some(Param::Animated(_) | Param::Expr(_)) => {
                     Err(unsupported(&clip.id, format!("animated title `{name}`")))
                 }
             }

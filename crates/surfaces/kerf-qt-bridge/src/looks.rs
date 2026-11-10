@@ -109,6 +109,8 @@ fn word(value: &Value, ty: &ParamType) -> Option<String> {
 fn param(param: &Param, ty: &ParamType) -> Option<String> {
     match param {
         Param::Static(value) => word(value, ty),
+        // A look's file has no way to write a clip's expression.
+        Param::Expr(_) => None,
         Param::Animated(keys) => {
             let time = *ty == ParamType::Time;
             let keys: Option<Vec<String>> = keys

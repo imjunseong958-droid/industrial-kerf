@@ -1617,6 +1617,35 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     }
 
     #[test]
+    fn expressions_round_trip_and_say_what_is_wrong() {
+        let text = SAMPLE.replace(
+            "set x=0.1 scale={0f:1 48f:1.1:ease} opacity=0.9",
+            "set x=(sin(t*pi)*0.1) scale={0f:1 48f:1.1:ease} opacity=(0.5+t/10)",
+        );
+        assert_ne!(text, SAMPLE);
+        let project = parse_document(&text, Catalog::builtin()).unwrap().project;
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+        // Quoted, it may hold spaces; it prints without them.
+        let spaced = text.replace("x=(sin(t*pi)*0.1)", "x=\"( sin(t * pi) * 0.1 )\"");
+        let project = parse_document(&spaced, Catalog::builtin()).unwrap().project;
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+        let wrong = |from: &str, to: &str| {
+            let errors = parse_document(&SAMPLE.replace(from, to), Catalog::builtin()).unwrap_err();
+            errors[0].message.clone()
+        };
+        assert!(wrong("x=0.1", "x=(t*)").contains("ends early"));
+        assert!(wrong("x=0.1", "x=(wiggle(t))").contains("`wiggle` is not known"));
+        // Only a number takes one: on a choice, it is a word that is not one of the choices.
+        assert!(wrong("align=start", "align=(t)").contains("`(t)` is not"));
+    }
+
+    #[test]
     fn what_a_file_was_made_from_round_trips() {
         let text = SAMPLE.replace(
             "reel=\"A001\"",

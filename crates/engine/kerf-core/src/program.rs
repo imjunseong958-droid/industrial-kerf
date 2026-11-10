@@ -665,6 +665,7 @@ impl<'a> Graph<'a> {
         filters.extend(geometry.filters);
         let mut alpha = geometry.alpha;
         let effects = self.video_effects(clip)?;
+        no_expressions(clip, "the graph draws")?;
         let opacity = self.param(clip, Domain::Video, "opacity");
         let tau = clip_time("T", portion.offset(clip));
         let fade = item.fade_in.map(|(reveal, start, end)| {
@@ -743,7 +744,7 @@ impl<'a> Graph<'a> {
             match params.get(name) {
                 None => Ok(def.find(name).expect("title parameter").default.clone()),
                 Some(Param::Static(value)) => Ok(value.clone()),
-                Some(Param::Animated(_)) => Err(ProgramError::unsupported(
+                Some(Param::Animated(_) | Param::Expr(_)) => Err(ProgramError::unsupported(
                     &clip.id,
                     format!("animated title `{name}`"),
                 )),
@@ -963,6 +964,7 @@ impl<'a> Graph<'a> {
             }
         }
         filters.push("format=rgba".into());
+        no_expressions(clip, "the graph draws")?;
         let opacity = self.param(clip, Domain::Video, "opacity");
         match &opacity {
             Param::Static(Value::Number(value)) if *value != 1.0 => {
@@ -1382,6 +1384,7 @@ pub fn sound_filters(
     // that could not be keeps the length it should have, at its speed as one number.
     filters.extend(atempo_filters(speed.average(clip.duration)));
     let local = clip_time("t", portion.offset(clip));
+    no_expressions(clip, "sound plays")?;
     match param(catalog, clip, Domain::Audio, "gain") {
         Param::Static(Value::Number(gain)) if gain != 0.0 => {
             filters.push(format!("volume={}dB", fmt(gain)));
@@ -1467,6 +1470,15 @@ pub fn bus_filters(catalog: &Catalog, bus: &kerf_model::Bus, from: Time) -> Resu
             )
         })
     };
+    if let Some(name) = ["gain", "pan"]
+        .into_iter()
+        .find(|name| matches!(number(name), Param::Expr(_)))
+    {
+        return Err(ProgramError::unsupported(
+            &bus.id,
+            format!("`{name}` as an expression: sound plays numbers and, on gain, keyframes"),
+        ));
+    }
     match number("gain") {
         Param::Static(Value::Number(gain)) if gain != 0.0 => {
             filters.push(format!("volume={}dB", fmt(gain)));
@@ -1730,11 +1742,30 @@ fn curve_expression(curve: Bezier, u: &str) -> String {
     format!("({expr})")
 }
 
+/// Refuse `clip` when any of its properties or effect parameters is an expression, which only
+/// Kerf's compositor works out: `what` says who cannot.
+fn no_expressions(clip: &Clip, what: &str) -> Result<()> {
+    let named = clip
+        .props
+        .iter()
+        .chain(clip.effects.iter().flat_map(|effect| effect.params.iter()))
+        .find(|(_, param)| matches!(param, Param::Expr(_)));
+    match named {
+        Some((name, _)) => Err(ProgramError::unsupported(
+            &clip.id,
+            format!("`{name}` as an expression: {what} numbers and keyframes"),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// A numeric parameter as an FFmpeg expression of clip time `tau`, with
 /// the same interpolation curves as `Param::value_at`.
 fn expression(param: &Param, tau: &str) -> String {
     let keys = match param {
         Param::Static(value) => return fmt(value.as_number().unwrap_or(0.0)),
+        // The graph draws no expression: `no_expressions` refuses a clip that has one.
+        Param::Expr(expression) => return fmt(expression.value_at(Time::ZERO)),
         Param::Animated(keys) => keys,
     };
     let value = |index: usize| keys[index].value.as_number().unwrap_or(0.0);
