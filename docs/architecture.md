@@ -80,9 +80,10 @@ The editor makes one from the bin's menu, and shows the command and asks
 first: the bridge answers a plain `media_make` with the plan and runs nothing,
 and runs only one sent confirmed, which a person's yes to that plan sends.
 
-Still to come: an agent asking for a media to be made, which has to go through
-that same question to a person; and saying when a recipe has changed since its
-file was made.
+An agent's tools run no recipe. `look` tells it which media want making
+(`toMake`: a file that is not there, or a recipe changed since its file was
+written) and that a person makes them, so an agent writes the scene and the
+recipe, adds the media line, and asks.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
