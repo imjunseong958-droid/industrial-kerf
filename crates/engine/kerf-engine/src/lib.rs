@@ -15,6 +15,7 @@ pub mod proxy;
 pub mod qc;
 pub mod ramps;
 pub mod raster;
+pub mod recipe;
 pub mod render;
 pub mod resources;
 pub mod sidecar;

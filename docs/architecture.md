@@ -66,6 +66,20 @@ when it reads the document, and an adjustment layer, a null, a camera, and a
 light draw nothing of their own. A test fails if the catalog has a generator
 with no code.
 
+### Media another program makes
+
+A renderer or a model outside Kerf is not an effect or a generator: it makes a
+file, and the file is media. The media line names its recipe (`recipe=`), a
+text file with the one command that makes the file, and `kerf make` runs it
+(`kerf-engine/src/recipe.rs`) as a supervised sidecar, as FFmpeg is run. So a
+new engine needs no code here: a recipe that runs it. What it made is kept as
+the media's file, not as a cache, since a model does not give the same shot
+twice.
+
+Still to come: making from the editor and by an agent, each of which has to
+ask a person before a project's command is run; and saying when a recipe has
+changed since its file was made.
+
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
 color correction and Gaussian blur every Kerf has had, the EffectCraft effects

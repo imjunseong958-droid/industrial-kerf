@@ -124,6 +124,14 @@ enum Command {
         #[arg(short = 'm', long)]
         message: Option<String>,
     },
+    /// Make a media's file again by running its recipe (`recipe=` on its media line).
+    Make {
+        /// The media's id, as its line in the document names it.
+        media: String,
+        /// Run the recipe's command without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -234,6 +242,10 @@ fn run() -> Result<()> {
                 .canonicalize()
                 .with_context(|| format!("no project at {}", directory.display()))?;
             return run_sync(&directory, args.kerfd.as_deref(), message.as_deref());
+        }
+        Some(Command::Make { media, yes }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_make(&directory, args.kerfd.as_deref(), media, *yes);
         }
         Some(Command::Preset { action }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
@@ -573,6 +585,88 @@ fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Re
     for line in sync_report(&report, &pushed, upstream.as_deref(), downloaded) {
         println!("{line}");
     }
+    Ok(())
+}
+
+/// `path`, which a project names, as a file inside `directory`: a recipe is
+/// a command to run and a media's file is written over, so neither may be
+/// somewhere else.
+fn inside_project(directory: &Path, path: &str, what: &str) -> Result<PathBuf> {
+    let given = Path::new(path);
+    let escapes = given
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir));
+    if given.is_absolute() || escapes {
+        bail!("the {what} `{path}` is not inside the project, so `kerf make` leaves it alone");
+    }
+    Ok(directory.join(given))
+}
+
+/// What `kerf make` runs for media `id` of `project`: its recipe's file and
+/// the file it makes.
+fn make_plan(
+    project: &kerf_model::Project,
+    directory: &Path,
+    id: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| anyhow!("no media `{id}` in this project"))?;
+    let recipe = media.recipe.as_deref().ok_or_else(|| {
+        anyhow!("media `{id}` names no recipe; add `recipe=\"<file>\"` to its line with `media replace`")
+    })?;
+    Ok((
+        inside_project(directory, recipe, "recipe")?,
+        inside_project(directory, &media.path, "media file")?,
+    ))
+}
+
+/// Whether the person at the terminal says yes to `question`; no where
+/// there is no terminal to ask.
+fn confirmed(question: &str) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return false;
+    }
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    stdin.lock().read_line(&mut answer).is_ok()
+        && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+}
+
+fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Result<()> {
+    let kerfd = kerfd
+        .map(Path::to_path_buf)
+        .or_else(discover_kerfd)
+        .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd))
+        .map_err(runtime_error)?
+        .with_request_timeout(Duration::from_secs(60));
+    let state = runtime.get_state().map_err(runtime_error)?;
+    let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    let (recipe, file) = make_plan(&project, directory, id)?;
+    let text = std::fs::read_to_string(&recipe)
+        .with_context(|| format!("cannot read the recipe {}", recipe.display()))?;
+    let parsed = kerf_engine::recipe::Recipe::parse(&text).map_err(|error| anyhow!(error))?;
+    let shown = parsed.shown(&kerf_engine::recipe::making_path(&file));
+    println!("recipe  {}", recipe.display());
+    println!("runs    {shown}");
+    println!("makes   {}", file.display());
+    // A recipe is a command someone wrote, perhaps someone else.
+    if !yes && !confirmed("Run it?") {
+        bail!("not run; `kerf make {id} --yes` runs it without asking");
+    }
+    let cancellation = kerf_engine::CancellationToken::new();
+    kerf_engine::recipe::make(&recipe, &file, &cancellation, |line| eprintln!("{line}"))
+        .map_err(|error| anyhow!(error))?;
+    // The document takes the new file's length and streams; clips keep their timing.
+    let stored = project.media(id).map(|media| media.path.clone()).unwrap_or_default();
+    let state = runtime
+        .replace_media_request("ui", &operation_key("make"), id, &stored, state.revision)
+        .map_err(runtime_error)?;
+    println!("made {id} (revision {})", state.revision);
     Ok(())
 }
 
@@ -1230,6 +1324,53 @@ mod tests {
             panic!("sync command");
         };
         assert_eq!(message, None);
+    }
+
+    #[test]
+    fn make_names_a_media_and_asks_unless_told_not_to() {
+        let Some(Command::Make { media, yes }) =
+            Args::try_parse_from(["kerf", "make", "m3", "--dir", "p"]).unwrap().command
+        else {
+            panic!("make command");
+        };
+        assert_eq!((media.as_str(), yes), ("m3", false));
+        let Some(Command::Make { yes, .. }) =
+            Args::try_parse_from(["kerf", "make", "m3", "--yes"]).unwrap().command
+        else {
+            panic!("make command");
+        };
+        assert!(yes);
+    }
+
+    #[test]
+    fn make_runs_only_a_recipe_and_a_file_inside_the_project() {
+        let project = |media: &str| {
+            kerf_runtime::parse_document(&format!(
+                "kerf 1\nproject name=\"t\"\nmedia m1 {media}\nmedia m2 path=\"a.mov\" rate=24 dur=24f video=320x180\n"
+            ))
+            .unwrap()
+        };
+        let directory = Path::new("/films/a");
+        let line = |path: &str, recipe: &str| {
+            format!("path=\"{path}\" rate=24 dur=24f video=320x180 recipe=\"{recipe}\"")
+        };
+        let made = project(&line("shots/open.mp4", "shots/open.kerfrecipe"));
+        assert_eq!(
+            make_plan(&made, directory, "m1").unwrap(),
+            (
+                directory.join("shots/open.kerfrecipe"),
+                directory.join("shots/open.mp4")
+            )
+        );
+        let wrong = |project: &kerf_model::Project, id: &str| {
+            make_plan(project, directory, id).unwrap_err().to_string()
+        };
+        assert!(wrong(&made, "m9").contains("no media `m9`"));
+        assert!(wrong(&made, "m2").contains("names no recipe"));
+        let outside = project(&line("shots/open.mp4", "../elsewhere/run.kerfrecipe"));
+        assert!(wrong(&outside, "m1").contains("recipe `../elsewhere/run.kerfrecipe` is not inside"));
+        let absolute = project(&line("/tmp/open.mp4", "open.kerfrecipe"));
+        assert!(wrong(&absolute, "m1").contains("media file `/tmp/open.mp4` is not inside"));
     }
 
     #[test]

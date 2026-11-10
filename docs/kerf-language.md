@@ -128,9 +128,23 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   tags itself, so write its `color=` by hand, with `media replace`.
 - `recipe="shots/open.json"` on a media line names the text file its file was
   made from, where another program made it: the scene a renderer drew, or what
-  a model was asked for and with which seed. Kerf reads nothing from it; it is
-  there so that the document says how a generated shot can be made again, and
-  it merges apart from the file, as `reel=` does.
+  a model was asked for and with which seed. It merges apart from the file, as
+  `reel=` does. A recipe says what to run:
+
+  ```text
+  kerf-recipe 1
+  # The opening shot, drawn from its scene.
+  run vork render open.scene.json --frame-end 95 --out {out}
+  ```
+
+  `run` is a program and its arguments, quoted where they hold spaces, and
+  `{out}` is the file to write. `kerf make m3` shows the command, asks, runs it
+  in the recipe's folder, and puts what it wrote in the media's place, with the
+  document taking the new file's length and streams; `--yes` does not ask. The
+  program is run as it is named, never through a shell, and a run that fails or
+  writes nothing leaves the media as it was. The recipe and the media's file
+  have to be inside the project. Only `kerf make` runs a recipe: opening,
+  drawing, and an agent's tools never do.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
