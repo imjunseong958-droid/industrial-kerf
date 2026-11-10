@@ -353,7 +353,11 @@ KeymapEditor::KeymapEditor(KeymapCustomiser *customiser, QWidget *parent) : QDia
     editRow->addWidget(m_chosen, 1);
     m_recorder = new QKeySequenceEdit;
     m_recorder->setObjectName(QStringLiteral("keymapRecorder"));
+    // A shortcut is one key press. Before Qt 6.5 the recorder cannot be told
+    // so, and what it hands over is cut to its first press instead.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     m_recorder->setMaximumSequenceLength(1);
+#endif
     m_recorder->setFixedWidth(140);
     m_recorder->setFont(tokens::font(tokens::monoSmall));
     m_recorder->setAccessibleName(QStringLiteral("New shortcut"));
@@ -406,7 +410,12 @@ KeymapEditor::KeymapEditor(KeymapCustomiser *customiser, QWidget *parent) : QDia
     });
     connect(m_recorder, &QKeySequenceEdit::editingFinished, this, [this] {
         if (m_recording) return;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         const QKeySequence key = m_recorder->keySequence();
+#else
+        const QKeySequence recorded = m_recorder->keySequence();
+        const QKeySequence key = recorded.isEmpty() ? recorded : QKeySequence(recorded[0]);
+#endif
         if (!key.isEmpty()) record(key);
     });
     connect(m_clear, &QAbstractButton::clicked, this, [this] {

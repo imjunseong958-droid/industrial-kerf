@@ -550,7 +550,13 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
 }
 
 bool ProjectPanel::event(QEvent *event) {
+    // Tiles are drawn at the window's pixel ratio. Qt 6.6 tells a widget when
+    // that changes; before it, the change comes with the window's new screen.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (event->type() == QEvent::DevicePixelRatioChange) refreshTiles();
+#else
+    if (event->type() == QEvent::ScreenChangeInternal) refreshTiles();
+#endif
     return QWidget::event(event);
 }
 

@@ -822,6 +822,19 @@ ProjectLauncher::~ProjectLauncher() {
 void ProjectLauncher::applyTheme() {
     m_theme = launcherTheme();
     setStyleSheet(launcherStyleSheet(m_theme));
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    // Style sheets take placeholder-text-color from Qt 6.5. Before it a
+    // placeholder is the field's text at half strength, so the fields are
+    // handed the sheet's two colours once it has polished them.
+    for (QLineEdit *field : findChildren<QLineEdit *>()) {
+        field->ensurePolished();
+        QPalette palette = field->palette();
+        for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
+            palette.setColor(group, QPalette::PlaceholderText, m_theme.secondary);
+        palette.setColor(QPalette::Disabled, QPalette::PlaceholderText, m_theme.disabledText);
+        field->setPalette(palette);
+    }
+#endif
     m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.secondary));
     for (QListWidget *list : {m_sidebar, m_templates, m_recent, m_presetChoices}) list->viewport()->update();
     update();
