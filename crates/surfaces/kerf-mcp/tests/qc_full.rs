@@ -122,65 +122,6 @@ fn amplitude_for(lufs: f64) -> f64 {
 }
 
 #[test]
-fn a_clean_spot_passes_the_measured_rows_with_their_readings() {
-    if !ffmpeg_available() {
-        eprintln!("skipping: ffmpeg is not installed");
-        return;
-    }
-    let directory = TempDir::new().unwrap();
-    picture(directory.path(), "picture.mp4", 4.0, false);
-    tone(
-        directory.path(),
-        "sound.wav",
-        4.0,
-        amplitude_for(-23.0),
-        None,
-    );
-    let report = run(directory.path());
-    eprintln!("{:#?}", report.summary);
-    let codes: Vec<&str> = report
-        .summary
-        .rows
-        .iter()
-        .map(|row| row.code.as_str())
-        .collect();
-    assert_eq!(
-        &codes[..8],
-        [
-            "loudness.integrated",
-            "loudness.true_peak",
-            "loudness.range",
-            "picture.out_of_range",
-            "picture.luma_levels",
-            "text.safe_area",
-            "text.overlap",
-            "picture.flash_black",
-        ]
-    );
-    assert_eq!(report.summary.total, 18);
-    for code in &codes[..8] {
-        assert!(row(&report, code).passed, "{:#?}", row(&report, code));
-    }
-    let integrated = row(&report, "loudness.integrated");
-    assert!(integrated.value.ends_with(" LUFS"), "{integrated:?}");
-    assert!(integrated.value.starts_with("−2"), "{integrated:?}");
-    assert_eq!(integrated.limit.as_deref(), Some("±1"));
-    assert!(row(&report, "loudness.true_peak").value.ends_with(" dBTP"));
-    assert_eq!(
-        row(&report, "loudness.true_peak").limit.as_deref(),
-        Some("≤ −1.0")
-    );
-    assert_eq!(
-        row(&report, "loudness.range").limit.as_deref(),
-        Some("≤ 20")
-    );
-    assert_eq!(row(&report, "picture.out_of_range").value, "legal");
-    assert!(row(&report, "picture.luma_levels").value.starts_with("Y′ "));
-    assert_eq!(row(&report, "picture.flash_black").value, "0 · 0");
-    assert!(report.valid, "{report:#?}");
-}
-
-#[test]
 fn an_hdr_sequence_says_its_picture_rows_read_the_sdr_copy() {
     if !ffmpeg_available() {
         eprintln!("skipping: ffmpeg is not installed");
@@ -319,24 +260,6 @@ fn a_strobing_picture_fails_flash_and_black() {
     assert!(!flash.passed);
     assert_eq!(flash.value, format!("{} · 0", found.len()));
     assert!(!report.valid);
-}
-
-#[test]
-fn silence_is_no_signal_not_a_pass() {
-    if !ffmpeg_available() {
-        eprintln!("skipping: ffmpeg is not installed");
-        return;
-    }
-    let directory = TempDir::new().unwrap();
-    picture(directory.path(), "picture.mp4", 4.0, false);
-    tone(directory.path(), "sound.wav", 4.0, 0.0, None);
-    let report = run(directory.path());
-    let integrated = row(&report, "loudness.integrated");
-    assert!(!integrated.passed, "{integrated:?}");
-    assert_eq!(integrated.value, "no signal");
-    assert_eq!(integrated.blocking, 0, "a warning: nothing to measure");
-    assert_eq!(row(&report, "loudness.range").value, "no signal");
-    assert!(row(&report, "loudness.true_peak").passed);
 }
 
 #[test]

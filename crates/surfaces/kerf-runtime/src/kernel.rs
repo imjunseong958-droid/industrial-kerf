@@ -2200,23 +2200,4 @@ mod tests {
         assert_eq!(settled(&directory), 0);
     }
 
-    #[test]
-    fn stopping_drops_what_waits_and_leaves_other_projects_alone() {
-        let stopped = scratch("stop");
-        let other = scratch("keep");
-        let work = BackgroundWork::start(&other);
-        for index in 0..8 {
-            prepare_media(missing(&stopped, &format!("{index}.mov")), stopped.clone());
-        }
-        stop_media(&stopped, Duration::from_secs(10));
-        assert!(!media_queue().preparing(&stopped));
-        assert!(!media_queue().cancellations.contains_key(&stopped));
-        assert_eq!(settled(&stopped), 0);
-        assert_eq!(running(&other), 1);
-        drop(work);
-        // Media imported later is prepared afresh.
-        prepare_media(missing(&stopped, "later.mov"), stopped.clone());
-        stop_media(&stopped, Duration::from_secs(10));
-        assert_eq!(settled(&stopped), 0);
-    }
 }

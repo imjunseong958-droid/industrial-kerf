@@ -483,6 +483,14 @@ fn composited_programs_play_and_seek_frame_exactly() {
         times.push(frame.timeline_time);
     }
     assert!(times.windows(2).all(|pair| pair[0] < pair[1]), "{times:?}");
+
+    // Played on, it ends where the program does, and says so.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let ended = std::iter::from_fn(|| {
+        (Instant::now() < deadline).then(|| session.next_event_timeout(Duration::from_millis(100)))
+    })
+    .any(|event| matches!(event, Some(PlaybackEvent::Ended)));
+    assert!(ended, "the program never ended");
 }
 
 #[test]

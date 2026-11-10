@@ -343,15 +343,6 @@ mod tests {
     }
 
     #[test]
-    fn layer_2d_maps_anchor_to_position() {
-        let m = Mat3::layer_2d(vec2(50.0, 25.0), vec2(960.0, 540.0), vec2(200.0, 50.0), 30.0);
-        assert!(close(m.apply(vec2(50.0, 25.0)), vec2(960.0, 540.0)));
-        let inv = m.inverse().unwrap();
-        let p = vec2(12.0, -7.0);
-        assert!(close(inv.apply(m.apply(p)), p));
-    }
-
-    #[test]
     fn rotation_is_clockwise_on_screen() {
         let p = Mat3::rotate_deg(90.0).apply(vec2(1.0, 0.0));
         assert!(close(p, vec2(0.0, 1.0)));

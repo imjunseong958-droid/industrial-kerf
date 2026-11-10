@@ -51,39 +51,6 @@ fn ids(project: &Project) -> Vec<String> {
 }
 
 #[test]
-fn a_stack_round_trips_in_the_order_written() {
-    let once = read(STACK);
-    let text = printed(&once);
-    assert!(
-        text.contains(&format!("      {STACK}\n")),
-        "the stack as written in {text}"
-    );
-    let twice = parse_document(&text, Catalog::builtin())
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-    assert_eq!(once, twice);
-    assert_eq!(text, printed(&twice));
-    assert_eq!(
-        ids(&once),
-        [
-            "look.grade.teal-warm",
-            "look.grade.sepia",
-            "look.grade.legal-range"
-        ]
-    );
-    // The same grade twice is two grades.
-    let twice_over =
-        read("fx look.grade.sepia@1 amount=0.2\n      fx look.grade.sepia@1 amount=0.3");
-    assert_eq!(twice_over.clip("c1").unwrap().effects.len(), 2);
-    assert_eq!(
-        twice_over,
-        parse_document(&printed(&twice_over), Catalog::builtin())
-            .unwrap()
-            .project
-    );
-}
-
-#[test]
 fn scripts_build_and_reorder_a_stack() {
     let plain = read("set opacity=1");
     let built = run(

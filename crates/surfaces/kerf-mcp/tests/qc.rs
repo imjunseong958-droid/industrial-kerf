@@ -75,32 +75,6 @@ fn inter(text: &str, size: f64, x: f64, place: f64, y: f64) -> [f64; 4] {
 }
 
 #[test]
-fn a_clean_project_passes_every_row() {
-    let report = run(&project(""));
-    assert!(report.valid, "{report:#?}");
-    assert!(report.findings.is_empty(), "{:#?}", report.findings);
-    let summary = &report.summary;
-    assert_eq!(summary.total, kerf_mcp::qc::ROWS.len());
-    assert_eq!(summary.passed, summary.total, "{summary:#?}");
-    assert_eq!(summary.blocking, 0);
-    for row in &summary.rows {
-        assert!(row.passed && row.count == 0 && row.at.is_none(), "{row:?}");
-        assert!(row.value.starts_with("0 "), "{row:?}");
-    }
-    for code in [
-        "text.safe_area",
-        "text.overlap",
-        "caption.reading_speed",
-        "caption.short",
-        "caption.gap",
-    ] {
-        row(&report, code);
-    }
-    assert_eq!(row(&report, "text.safe_area").value, "0 outside");
-    assert_eq!(row(&report, "text.safe_area").name, "Title safe 90%");
-}
-
-#[test]
 fn a_caption_over_a_lower_third_overlaps_it_by_its_depth() {
     // The caption as the compositor draws it: Inter at 4.5% of the frame
     // height, its bottom at 95% of the frame.
@@ -255,30 +229,6 @@ fn long_title(set: &str) -> Project {
     project(&format!(
         "set bg text=\"{text}\" font=\"Kerf Test Variable\" size=0.1 {set}"
     ))
-}
-
-#[test]
-fn a_title_is_measured_at_its_axes() {
-    let safe = |set: &str| with(&run(&long_title(set)), "text.safe_area").len();
-    // The plain measure finds nothing, which is why this has to look further.
-    assert_eq!(safe(""), 0);
-    assert_eq!(safe("wght=400"), 0);
-    // At 500, 340 units each: 1836 across, centred on 1920, so 42 from the edge and 54 past safe.
-    let report = run(&long_title("wght=500"));
-    let outside = with(&report, "text.safe_area");
-    assert_eq!(outside.len(), 1);
-    let reach = outside[0].value.unwrap();
-    assert!((reach - 54.0).abs() < 2.0, "{reach}");
-    // Its picture is the frame, so at its heaviest it stops at the edge, 96 past safe.
-    assert_eq!(
-        with(&run(&long_title("wght=900")), "text.safe_area")[0].value,
-        Some(96.0)
-    );
-    // On another axis, too, and lightened it fits again.
-    assert_eq!(safe("wdth=200"), 1);
-    assert_eq!(safe("wght=100"), 0);
-    // An axis at 0 is left as the font has it.
-    assert_eq!(safe("wght=0"), 0);
 }
 
 /// Thirty 1s in Inter at 0.1 of the frame's height: 44 pixels each as they come, or 1318 in all

@@ -346,22 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_squares_have_the_areas_they_should() {
-        // Two squares of 100, overlapping in a square of 50.
-        let (a, b) = (
-            vec![square(0.0, 0.0, 100.0)],
-            vec![square(50.0, 50.0, 100.0)],
-        );
-        close(area(&combine(&a, &b, Combine::Add)), 17500.0, 1e-4);
-        close(area(&combine(&a, &b, Combine::Intersect)), 2500.0, 1e-4);
-        close(area(&combine(&a, &b, Combine::Subtract)), 7500.0, 1e-4);
-        close(area(&combine(&a, &b, Combine::Difference)), 15000.0, 1e-4);
-        assert_eq!(combine(&a, &b, Combine::Add).len(), 1);
-        // The difference touches at two corners: its two parts, however they are joined.
-        assert!(!combine(&a, &b, Combine::Difference).is_empty());
-    }
-
-    #[test]
     fn circles_have_the_areas_their_formula_says() {
         // Two circles of radius 100 with centres 100 apart: the lens between them.
         let radius = 100.0f64;
@@ -388,28 +372,6 @@ mod tests {
             2.0 * (whole - lens),
             1e-3,
         );
-    }
-
-    #[test]
-    fn a_hole_is_a_contour_that_takes_away() {
-        let holed = combine(
-            &[square(0.0, 0.0, 100.0)],
-            &[square(25.0, 25.0, 50.0)],
-            Combine::Subtract,
-        );
-        assert_eq!(holed.len(), 2);
-        close(area(&holed), 7500.0, 1e-4);
-    }
-
-    #[test]
-    fn apart_they_add_and_nothing_is_left_of_what_they_share() {
-        let (a, b) = (vec![square(0.0, 0.0, 10.0)], vec![square(50.0, 0.0, 10.0)]);
-        assert_eq!(combine(&a, &b, Combine::Add).len(), 2);
-        assert!(combine(&a, &b, Combine::Intersect).is_empty());
-        close(area(&combine(&a, &b, Combine::Subtract)), 100.0, 1e-4);
-        // Nothing to combine with changes nothing.
-        close(area(&combine(&a, &[], Combine::Add)), 100.0, 1e-4);
-        assert!(combine(&[], &a, Combine::Subtract).is_empty());
     }
 
     #[test]

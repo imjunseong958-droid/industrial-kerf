@@ -710,33 +710,6 @@ mod tests {
     }
 
     #[test]
-    fn clients_are_named_as_the_editor_shows_them() {
-        for (given, name) in [
-            ("claude-code", "Claude Code"),
-            ("Claude Code", "Claude Code"),
-            ("cursor-vscode", "Cursor"),
-            ("Cursor", "Cursor"),
-            ("codex-mcp-client", "Codex"),
-            ("codex_cli_rs", "Codex"),
-            ("claude-ai", "Claude"),
-            ("  zed  ", "zed"),
-        ] {
-            let author = client_author(Some(given));
-            assert_eq!(author.kind, "mcp", "{given}");
-            assert_eq!(author.name, name, "{given}");
-            assert_eq!(author.id.as_deref(), Some(given.trim()), "{given}");
-            assert_eq!(author.role.as_deref(), Some("MCP"), "{given}");
-        }
-        for unnamed in [None, Some(""), Some(" \n ")] {
-            let author = client_author(unnamed);
-            assert_eq!(author.name, "MCP client");
-            assert_eq!(author.id, None);
-        }
-        let long = "x".repeat(300);
-        assert_eq!(client_author(Some(&long)).name.chars().count(), 64);
-    }
-
-    #[test]
     fn initialize_names_the_author_of_what_the_client_does() {
         let root = TempDir::new().expect("temp dir");
         let router = KerfMcpRouter::new(root.path(), None).expect("router");

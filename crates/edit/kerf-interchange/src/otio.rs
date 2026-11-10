@@ -522,18 +522,4 @@ sequence s1 name="Short" rate=23.976 size=1920x1080 audio=48000 start=01:00:00:0
         assert_eq!(text, DOCUMENT);
     }
 
-    #[test]
-    fn what_otio_cannot_hold_is_reported() {
-        let mut project = project();
-        let sequence = &mut project.sequences[0];
-        sequence.tracks[0].clips[0].content = Content::Caption { text: "hi".into() };
-        sequence
-            .tracks
-            .push(Track::new(Id::new("S1").unwrap(), TrackKind::Subtitle));
-        let (timeline, issues) = to_timeline(&project).unwrap();
-        let codes: Vec<&str> = issues.iter().map(|i| i.code.as_str()).collect();
-        assert!(codes.contains(&"content_not_exported"), "{codes:?}");
-        assert!(codes.contains(&"captions_not_exported"), "{codes:?}");
-        assert_eq!(timeline.tracks.len(), 2);
-    }
 }

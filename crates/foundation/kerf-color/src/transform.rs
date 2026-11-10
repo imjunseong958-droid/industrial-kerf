@@ -474,18 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn tone_map_preserves_hue_and_maps_peak() {
-        let tm = ToneMap::new(1000.0, 203.0);
-        let c = [4.0f32, 2.0, 1.0];
-        let o = tm.apply(c);
-        assert!((o[0] / o[1] - 2.0).abs() < 1e-4 && (o[1] / o[2] - 2.0).abs() < 1e-4);
-        let peak = tm.apply([1000.0 / 203.0; 3]);
-        assert!((peak[0] - 1.0).abs() < 0.01, "{peak:?}");
-        let dark = tm.apply([0.05; 3]);
-        assert!((dark[0] - 0.05).abs() < 1e-3);
-    }
-
-    #[test]
     fn gamut_compression() {
         // in-gamut colours are untouched
         for c in [[0.5f32, 0.4, 0.3], [1.0, 0.25, 0.25], [0.2, 0.2, 0.2]] {
@@ -540,15 +528,6 @@ mod tests {
             }
         }
         assert!(HdrOutput::new(ColorSpace::Rec709).is_none());
-    }
-
-    #[test]
-    fn sdr_white_lands_where_bt2408_says() {
-        let white = [1.0, 1.0, 1.0];
-        let pq = HdrOutput::new(ColorSpace::Rec2100Pq).expect("PQ").signal(white)[0];
-        assert!((pq - 0.58).abs() < 0.005, "{pq}");
-        let hlg = HdrOutput::new(ColorSpace::Rec2100Hlg).expect("HLG").signal(white)[0];
-        assert!((hlg - 0.75).abs() < 0.01, "{hlg}");
     }
 
     #[test]

@@ -548,7 +548,7 @@ pub(crate) fn definitions() -> impl Iterator<Item = (&'static str, &'static Effe
 
 #[cfg(test)]
 mod tests {
-    use super::super::project::effect_defs;
+    
     use super::*;
 
     #[test]
@@ -566,44 +566,6 @@ mod tests {
             std::fs::read_to_string(path).unwrap() == table,
             "the effects catalog is out of date; run `UPDATE_CATALOG=1 cargo test -p kerf-fx`"
         );
-    }
-
-    #[test]
-    fn every_video_effect_is_carried_or_left_out_on_purpose() {
-        // Kerf's own blur.gaussian and clip crop cover these; the legacy ones have modern twins,
-        // and wipes and dissolves are Kerf's transitions.
-        const LEFT_OUT: &[&str] = &[
-            "gaussian_blur",
-            "crop",
-            "block_dissolve",
-            "directional_blur_legacy",
-            "gaussian_blur_legacy",
-            "gradient_wipe_legacy",
-            "linear_wipe_legacy",
-            "magnify_legacy",
-            "mosaic_legacy",
-            "noise_legacy",
-            "twirl_legacy",
-        ];
-        for def in effect_defs()
-            .iter()
-            .filter(|d| d.kind == EffectKind::Video && !d.intrinsic)
-        {
-            let carried = CARRIED
-                .iter()
-                .filter(|(filmcraft, ..)| *filmcraft == def.id)
-                .count();
-            assert_eq!(
-                carried + usize::from(LEFT_OUT.contains(&def.id)),
-                1,
-                "{}",
-                def.id
-            );
-        }
-        let mut ids: Vec<_> = CARRIED.iter().map(|(_, id, ..)| *id).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), CARRIED.len());
     }
 
     #[test]

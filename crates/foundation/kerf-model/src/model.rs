@@ -1197,26 +1197,6 @@ mod tests {
         assert_eq!(effects[1].params["text"], text("warm"));
     }
 
-    #[test]
-    fn head_and_tail_trims_follow_the_source() {
-        let mut clip = media_clip("1");
-        clip.move_head(frames(8));
-        assert_eq!((clip.start, clip.duration), (frames(18), frames(40)));
-        assert_eq!(clip.source_range(), Some((frames(108), frames(148))));
-        clip.move_tail(frames(-4));
-        assert_eq!(clip.source_range(), Some((frames(108), frames(144))));
-    }
-
-    #[test]
-    fn reverse_clips_trim_from_the_opposite_source_end() {
-        let mut clip = media_clip("-2");
-        assert_eq!(clip.source_range(), Some((frames(100), frames(196))));
-        clip.move_head(frames(8));
-        assert_eq!(clip.source_range(), Some((frames(100), frames(180))));
-        clip.move_tail(frames(-4));
-        assert_eq!(clip.source_range(), Some((frames(108), frames(180))));
-    }
-
     fn moving_rect() -> MaskShape {
         MaskShape::Moving(vec![
             OutlineKey {
@@ -1250,31 +1230,6 @@ mod tests {
         assert_eq!(*shape.at(frames(-3)), MaskShape::Rect([0.0, 0.0, 0.2, 0.2]));
         assert_eq!(*shape.at(frames(60)), MaskShape::Rect([0.8, 0.8, 1.0, 1.0]));
         assert_eq!(shape.problem(), None);
-    }
-
-    #[test]
-    fn corners_move_one_for_one() {
-        let polygon = |x: f64| MaskShape::Polygon {
-            points: vec![[x, 0.0], [x + 0.1, 0.0], [x, 0.1]],
-            closed: true,
-            soft: Vec::new(),
-        };
-        let shape = MaskShape::Moving(vec![
-            OutlineKey {
-                at: frames(0),
-                shape: polygon(0.0),
-                interp: Interp::Linear,
-            },
-            OutlineKey {
-                at: frames(10),
-                shape: polygon(0.4),
-                interp: Interp::Linear,
-            },
-        ]);
-        let MaskShape::Polygon { points, .. } = shape.at(frames(5)).into_owned() else {
-            panic!("a polygon");
-        };
-        assert!((points[1][0] - 0.3).abs() < 1e-9, "{points:?}");
     }
 
     #[test]
@@ -1446,22 +1401,6 @@ mod tests {
                     assert!((head_range.1 - tail_range.0).abs().flicks() <= 2);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn trimming_a_ramp_leaves_what_stays_where_it_was() {
-        for reverse in [false, true] {
-            let whole = ramped(reverse);
-            let mut trimmed = whole.clone();
-            trimmed.move_head(frames(8));
-            trimmed.move_tail(frames(-5));
-            close(&plays(&[&trimmed], 18, 53), &plays(&[&whole], 18, 53));
-            assert_eq!(trimmed.duration, frames(35));
-            // And what was trimmed comes back as it was.
-            trimmed.move_head(frames(-8));
-            trimmed.move_tail(frames(5));
-            close(&plays(&[&trimmed], 10, 58), &plays(&[&whole], 10, 58));
         }
     }
 

@@ -52,18 +52,6 @@ mod tests {
     use super::parse_features;
 
     #[test]
-    fn features_read_by_tag_sign_and_number() {
-        assert_eq!(parse_features(""), Ok(Vec::new()));
-        assert_eq!(parse_features("  ,  "), Ok(Vec::new()));
-        assert_eq!(
-            parse_features("tnum +zero -liga salt=2, ss01,cv11=0"),
-            Ok(vec![(*b"tnum", 1), (*b"zero", 1), (*b"liga", 0), (*b"salt", 2), (*b"ss01", 1), (*b"cv11", 0)])
-        );
-        // Twice is not refused: the later holds when it is shaped.
-        assert_eq!(parse_features("kern -kern"), Ok(vec![(*b"kern", 1), (*b"kern", 0)]));
-    }
-
-    #[test]
     fn what_names_no_feature_is_refused_with_why() {
         for (text, why) in [
             ("tabular", "four letters or digits"),

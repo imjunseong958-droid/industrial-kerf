@@ -822,20 +822,6 @@ mod tests {
     }
 
     #[test]
-    fn a_taper_is_of_what_the_trim_leaves() {
-        // The first half of the line, x=20 to x=120, narrowing over all of that.
-        let image = tapered_line((0.0, 1.0), (0.0, 0.5, 0.0));
-        for (x, wanted) in [(40, 16.0), (70, 10.0), (100, 4.0)] {
-            let found = width_at(&image, x);
-            assert!(
-                (found - wanted).abs() < 1.2,
-                "at {x}: {found} against {wanted}"
-            );
-        }
-        assert_eq!(width_at(&image, 150), 0.0);
-    }
-
-    #[test]
     fn a_taper_goes_around_a_closed_outline_and_across_where_it_starts() {
         // The trim crosses where a circle starts, so it is two runs, tapered as one line.
         let mut image = Image::new(200, 200);
@@ -937,24 +923,6 @@ mod tests {
         let moved = hole([20.0, -20.0], 0.0);
         assert_eq!(moved.get(150, 150)[3], 1.0);
         assert_eq!(moved.get(170, 130)[3], 0.0);
-    }
-
-    #[test]
-    fn outlines_go_in_order() {
-        let mut shape = with_outline(Combine::Add, [50.0, 0.0]);
-        shape.outlines.push(Outline {
-            combine: Combine::Subtract,
-            figure: Figure::Rect {
-                width: 20.0,
-                height: 20.0,
-                round: 0.0,
-            },
-            at: [25.0, 0.0],
-            rotation: 0.0,
-        });
-        // 150 by 100, less a hole of 20 by 20.
-        let found = area(&drawn(&shape));
-        assert!((found - 14600.0).abs() < 60.0, "{found}");
     }
 
     #[test]

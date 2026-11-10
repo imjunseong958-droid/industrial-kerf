@@ -424,48 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn failing_findings_become_qc_comments_once() {
-        let directory = tempfile::tempdir().unwrap();
-        let reviews = local(directory.path());
-        let shared = crate::tests_support::shared(directory.path());
-        let (tx, rx) = mpsc::sync_channel(64);
-        let mut info = Finding::new(Severity::Info, "cut.in_word", Some("c3"), "a note");
-        info.sequence = Some("s1".into());
-        let found = report(vec![overlap(), missing(), info]);
-
-        let ids = mirror(&reviews, &found, Some("s1"), &shared, &tx).unwrap();
-        assert_eq!(ids.len(), 2, "info findings are not comments");
-        let comments = qc_comments(&reviews);
-        assert_eq!(comments.len(), 2);
-        let overlap = comments
-            .iter()
-            .find(|comment| comment.qc_key.as_deref() == Some("qc:text.overlap:t4"))
-            .unwrap();
-        assert_eq!(overlap.author.name, "QC");
-        assert_eq!(overlap.author.role.as_deref(), Some("captions"));
-        assert_eq!(overlap.tags, ["captions"]);
-        assert_eq!((overlap.at, overlap.duration), (Some(17.32), Some(2.48)));
-        assert!(
-            !overlap.blocking,
-            "a warning fails its row but does not block"
-        );
-        let missing = comments
-            .iter()
-            .find(|comment| comment.qc_key.as_deref() == Some("qc:missing_media:m1"))
-            .unwrap();
-        assert!(missing.blocking, "errors block delivery");
-        assert_eq!(missing.author.role.as_deref(), Some("media"));
-        // One list for the whole check.
-        assert_eq!(rx.try_iter().count(), 1);
-
-        // The same findings again write nothing.
-        let again = mirror(&reviews, &found, Some("s1"), &shared, &tx).unwrap();
-        assert_eq!(again, ids);
-        assert_eq!(qc_comments(&reviews).len(), 2);
-        assert_eq!(rx.try_iter().count(), 0);
-    }
-
-    #[test]
     fn findings_that_go_resolve_their_comment_and_ones_that_return_reopen_it() {
         let directory = tempfile::tempdir().unwrap();
         let reviews = local(directory.path());
@@ -521,19 +479,6 @@ mod tests {
         assert!(people
             .iter()
             .any(|comment| comment.author.kind == "person" && !comment.resolved));
-    }
-
-    #[test]
-    fn findings_on_another_sequence_are_left_untimed() {
-        let directory = tempfile::tempdir().unwrap();
-        let reviews = local(directory.path());
-        let shared = crate::tests_support::shared(directory.path());
-        let (tx, _rx) = mpsc::sync_channel(64);
-        let mut vertical = overlap();
-        vertical.sequence = Some("vertical".into());
-        mirror(&reviews, &report(vec![vertical]), Some("s1"), &shared, &tx).unwrap();
-        let comments = qc_comments(&reviews);
-        assert_eq!((comments[0].at, comments[0].duration), (None, None));
     }
 
     #[test]

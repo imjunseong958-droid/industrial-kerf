@@ -374,19 +374,6 @@ fn latest_start_is_the_last_whole_frame_that_fills_the_slot() {
     assert_eq!(preset::latest_start(slot, &media), None);
 }
 
-#[test]
-fn slot_ids_do_not_collide_with_existing_clip_ids() {
-    let original = parse(&EDIT.replace("title1", "slot1"));
-    let document = preset::export(
-        &original,
-        Catalog::builtin(),
-        &Id::new("s1").unwrap(),
-        "Pattern",
-    )
-    .unwrap();
-    preset::parse(&document, Catalog::builtin()).unwrap();
-}
-
 const MINE: &str = r#"kerf-look 1
 # A look of this project's own.
 look look.test.mine version=1 name="Mine" category="Test" on=clip

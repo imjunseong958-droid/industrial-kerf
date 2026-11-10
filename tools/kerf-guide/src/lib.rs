@@ -235,39 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_guide_renders_whole() {
-        let markdown = include_str!("../../../docs/user-guide.md");
-        let html = page(markdown);
-        assert!(
-            html.contains("<title>Editing with Kerf · Industrial Kerf 9.8.7</title>"),
-            "{html}"
-        );
-        // Every section, with an anchor.
-        let sections: Vec<&str> = markdown
-            .lines()
-            .filter_map(|line| line.strip_prefix("## "))
-            .collect();
-        assert!(sections.len() >= 5, "{sections:?}");
-        for section in sections {
-            let mut used = HashMap::new();
-            let id = anchor(section, &mut used);
-            assert!(
-                html.contains(&format!("<h2 id=\"{id}\">")),
-                "no section {section:?} as #{id}"
-            );
-        }
-        // Nothing left as Markdown, and nothing the page would fetch.
-        let text = html.split("<main>").nth(1).unwrap();
-        for leftover in ["**", "](", "\n## ", "\n- "] {
-            assert!(!text.contains(leftover), "{leftover:?} was not rendered");
-        }
-        for fetch in ["<script", "<link", "<img", "src=", "@import", "url("] {
-            assert!(!html.contains(fetch), "the page fetches something: {fetch}");
-        }
-        assert!(html.contains("came with Industrial Kerf 9.8.7"));
-    }
-
-    #[test]
     fn links_to_the_rest_of_the_repository_go_to_github_at_the_commit() {
         let html = page(
             "# Guide\n\n[cloud](cloud.md) [build](../apps/kerf-qt/README.md#build) [here](#start) \

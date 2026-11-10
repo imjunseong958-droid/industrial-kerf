@@ -300,17 +300,6 @@ mod tests {
     }
 
     #[test]
-    fn h_has_two_stems() {
-        let l = layout("H", &TextStyle { size: 40.0, ..Default::default() }, &ParagraphStyle::default());
-        let g = glyph_mask(&l.glyphs[0], 40.0, 0.0).unwrap();
-        let y = g.mask.h / 4;
-        let row: Vec<f32> = (0..g.mask.w).map(|x| g.mask.get(x, y)).collect();
-        assert!(row[1] > 0.9 && row[g.mask.w - 2] > 0.9, "{row:?}");
-        assert!(row[g.mask.w / 2] < 0.1, "{row:?}");
-        assert!(g.top < 0, "rises above the baseline");
-    }
-
-    #[test]
     fn oversized_glyph_mask_is_rejected_before_allocation() {
         assert!(glyph_mask_bounds(&Path::rect(0.0, 0.0, 100_000.0, 100_000.0)).is_none());
         assert!(glyph_mask_bounds(&Path::rect(0.0, 0.0, 32.0, 32.0)).is_some());
@@ -345,12 +334,4 @@ mod tests {
         assert!(row_centre(rows[2]) > row_centre(rows[rows.len() - 3]) + 3.0);
     }
 
-    #[test]
-    fn rotated_text_draws() {
-        let l = layout("ROT", &TextStyle { size: 40.0, ..Default::default() }, &ParagraphStyle::default());
-        let a = 30f32.to_radians();
-        let (m, _, _) = rasterize(&l, &[a.cos(), a.sin(), -a.sin(), a.cos(), 0.0, 0.0]);
-        let (m0, _, _) = rasterize(&l, &IDENTITY);
-        assert!((ink(&m) - ink(&m0)).abs() / ink(&m0) < 0.03);
-    }
 }

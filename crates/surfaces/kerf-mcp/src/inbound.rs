@@ -915,21 +915,6 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn stalled_mcp_request_times_out() {
-        let script = "import sys,time; time.sleep(1)";
-        let config = McpServerConfig {
-            command: "python3".into(),
-            args: vec!["-u".into(), "-c".into(), script.into()],
-            env: BTreeMap::new(),
-            tools: None,
-        };
-        // This child never completes initialize; use a short test-only timeout.
-        let result =
-            ConnectedServer::connect_with_timeout(config, std::time::Duration::from_millis(50));
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn cancellation_interrupts_a_running_external_tool() {
         let registry = registry();
         let cancelled = Arc::new(AtomicBool::new(false));

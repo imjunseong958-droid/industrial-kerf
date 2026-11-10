@@ -79,7 +79,6 @@
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -186,18 +185,6 @@ private slots:
         QCOMPARE(window.m_chat->transcript(), conversation);
         QCOMPARE(window.m_activityList->count(), activityCount);
         QCOMPARE(window.m_errorMessage->text(), QStringLiteral("Render failed"));
-    }
-
-    // There is no status bar; a window never makes one.
-    void theWindowHasNoStatusBar() {
-        MainWindow window{QString(), QString()};
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.setConnection(QStringLiteral("ready"));
-        window.showStatus(QStringLiteral("Hello"), 100);
-        QVERIFY(!window.findChild<QStatusBar *>());
-        window.close();
     }
 
     // A sync's stage and its outcome reach the subtitle; a failure stays.

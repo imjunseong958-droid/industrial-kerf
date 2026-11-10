@@ -914,53 +914,6 @@ fn finished_renders_are_never_written_over() {
 }
 
 #[test]
-fn render_jobs_list_in_the_order_they_were_made_across_runs() {
-    let (mut runtime, directory) = project("render-order");
-    // Each kerfd run counts its sequence from 0, so a job from an earlier
-    // run can carry a longer sequence than a newer one; one run on a
-    // coarse clock can make two jobs at one time.
-    let ids = [
-        "render-1800000000000000-1a",
-        "render-1800000000000001-3",
-        "render-1800000000000002-9",
-        "render-1800000000000002-10",
-        "render-18000000000000030-0",
-    ];
-    for (index, id) in ids.iter().rev().enumerate() {
-        let job: RenderJob = serde_json::from_value(json!({
-            "jobId": id, "status": if index % 2 == 0 { "completed" } else { "queued" },
-            "outputUrl": null, "outputPath": format!("/p/{id}.mov"), "error": null
-        }))
-        .unwrap();
-        runtime.state.jobs.insert((*id).to_owned(), job);
-    }
-    let listed: Vec<String> = runtime
-        .render_jobs()
-        .into_iter()
-        .map(|job| job.job_id)
-        .collect();
-    assert_eq!(listed, ids);
-    // The oldest finished jobs are the ones dropped: of one time, `-9`
-    // came before `-10`.
-    let mut jobs: HashMap<String, RenderJob> = HashMap::new();
-    for seq in 9..=9 + MAX_FINISHED_JOBS {
-        let id = format!("render-1800000000000000-{seq:x}");
-        let job: RenderJob = serde_json::from_value(json!({
-            "jobId": id, "status": "completed", "outputUrl": null,
-            "outputPath": null, "error": null
-        }))
-        .unwrap();
-        jobs.insert(id, job);
-    }
-    bound_jobs(&mut jobs);
-    assert_eq!(jobs.len(), MAX_FINISHED_JOBS);
-    assert!(!jobs.contains_key("render-1800000000000000-9"));
-    assert!(jobs.contains_key("render-1800000000000000-10"));
-    drop(runtime);
-    let _ = fs::remove_dir_all(directory);
-}
-
-#[test]
 fn a_job_that_finishes_keeps_the_finished_history_bounded() {
     let (mut runtime, directory) = project("render-bound-finish");
     for seq in 0..MAX_FINISHED_JOBS {

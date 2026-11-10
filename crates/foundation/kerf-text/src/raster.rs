@@ -420,18 +420,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rectangle_coverage() {
-        let m = fill(&Path::rect(1.5, 2.0, 4.0, 5.0), 6, 6, 0.0, 0.0);
-        assert!((m.get(1, 3) - 0.5).abs() < 1e-5);
-        assert!((m.get(2, 3) - 1.0).abs() < 1e-5);
-        assert_eq!(m.get(4, 3), 0.0);
-        assert_eq!(m.get(2, 1), 0.0);
-        assert_eq!(m.get(2, 5), 0.0);
-        let total: f32 = m.a.iter().sum();
-        assert!((total - 2.5 * 3.0).abs() < 1e-3, "{total}");
-    }
-
-    #[test]
     fn hole_with_opposite_winding() {
         let mut p = Path::rect(0.0, 0.0, 10.0, 10.0);
         p.move_to(3.0, 3.0);

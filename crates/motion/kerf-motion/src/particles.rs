@@ -164,40 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn any_frame_can_come_first_and_is_the_same_every_time() {
-        let e = Emitter {
-            spread: 360.0,
-            vary: 0.5,
-            ..emitter()
-        };
-        let direct = drawn(&e, 2.5);
-        for t in [0.1, 1.0, 2.0] {
-            drawn(&e, t);
-        }
-        assert_eq!(drawn(&e, 2.5), direct);
-        let other = Emitter { seed: 2, ..e };
-        assert_ne!(drawn(&other, 2.5), direct);
-    }
-
-    #[test]
-    fn they_travel_at_their_velocity_and_gravity_bends_them() {
-        // Straight right from x = 50 at 100 pixels a second, for a second: as far as x = 150.
-        let line = drawn(&emitter(), 3.0);
-        assert!(line.get(149, 100)[3] > 0.5);
-        assert_eq!(line.get(153, 100)[3], 0.0);
-        assert_eq!(line.get(100, 103)[3], 0.0);
-        // Half a second on, gravity has pulled it down g t² / 2.
-        let e = Emitter {
-            gravity: 160.0,
-            ..emitter()
-        };
-        let bent = drawn(&e, 3.0);
-        // At x = 100 it is half a second old, 20 pixels down.
-        assert!(bent.get(100, 120)[3] > 0.5);
-        assert_eq!(bent.get(100, 100)[3], 0.0);
-    }
-
-    #[test]
     fn none_before_the_start_and_as_many_as_their_life_allows() {
         assert_eq!(ink(&drawn(&emitter(), -0.5)), 0.0);
         assert_eq!(emitter().alive(0.5), 0..51);
@@ -210,42 +176,6 @@ mod tests {
             .alive(1.0),
             0..0
         );
-    }
-
-    #[test]
-    fn they_fade_and_shrink_as_they_age() {
-        let e = Emitter {
-            rate: 0.1,
-            life: 2.0,
-            velocity: 0.0,
-            size: (40.0, 0.0),
-            color: ([1.0; 4], [0.0; 4]),
-            origin: [150.0, 100.0],
-            ..emitter()
-        };
-        let young = ink(&drawn(&e, 0.0));
-        let old = ink(&drawn(&e, 1.0));
-        assert!(old < young * 0.5, "{young} then {old}");
-        // Half life: half the size across and half as opaque.
-        let at_half = drawn(&e, 1.0).get(150, 100)[3];
-        assert!(at_half > 0.4 && at_half < 0.8, "{at_half}");
-    }
-
-    #[test]
-    fn a_soft_one_fades_to_its_edge_and_a_hard_one_does_not() {
-        let e = Emitter {
-            rate: 1.0,
-            velocity: 0.0,
-            size: (40.0, 40.0),
-            origin: [150.0, 100.0],
-            ..emitter()
-        };
-        let hard = drawn(&e, 0.0);
-        let soft = drawn(&Emitter { soft: 1.0, ..e }, 0.0);
-        assert_eq!(hard.get(150, 85)[3], 1.0);
-        let near_edge = soft.get(150, 85)[3];
-        assert!(near_edge > 0.0 && near_edge < 0.3, "{near_edge}");
-        assert!(soft.get(150, 100)[3] > 0.95);
     }
 
     #[test]

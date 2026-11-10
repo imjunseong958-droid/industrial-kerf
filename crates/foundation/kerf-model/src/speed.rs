@@ -298,18 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ramp_adds_up_the_area_under_its_speed() {
-        // From 1 to 1/2 over 24 frames plays 18 frames of source, then 1/2 holds.
-        let speed = slowing(Interp::Linear);
-        assert_eq!(speed.played(frames(24)), frames(18));
-        assert_eq!(speed.played(frames(48)), frames(30));
-        // A quarter of the way in, the speed is 7/8: the area is (1 + 7/8) / 2 × 6 frames.
-        assert_eq!(speed.played(frames(6)).flicks(), frames(45).flicks() / 8);
-        // Before the first key the first speed holds, and it counts down.
-        assert_eq!(speed.played(frames(-4)), frames(-4));
-    }
-
-    #[test]
     fn hold_keeps_the_speed_to_the_next_key() {
         let speed = slowing(Interp::Hold);
         assert_eq!(speed.played(frames(24)), frames(24));

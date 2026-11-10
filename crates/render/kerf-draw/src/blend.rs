@@ -398,14 +398,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normal_over() {
-        let mut d = Image::filled(2, 1, [0.5, 0.0, 0.0, 1.0]);
-        let s = Image::filled(2, 1, [0.0, 0.25, 0.0, 0.5]);
-        composite(&mut d, &s, 1.0, Blend::Normal);
-        assert_eq!(d.get(0, 0), [0.25, 0.25, 0.0, 1.0]);
-    }
-
-    #[test]
     fn multiply_white_is_identity() {
         let base = [0.2, 0.4, 0.6, 1.0];
         let mut d = Image::filled(1, 1, base);

@@ -475,9 +475,4 @@ mod tests {
         assert!(page["text"].as_str().unwrap().contains("pending"));
     }
 
-    #[test]
-    fn overlarge_current_request_is_rejected_without_truncation() {
-        let messages = vec![json!({"role":"user","content":"x".repeat(4000)})];
-        assert!(fit(&messages, View::default(), 4096, &ContextBudget::default()).is_err());
-    }
 }

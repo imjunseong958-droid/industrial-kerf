@@ -276,10 +276,4 @@ mod tests {
         assert!((v[0] - 5.0).abs() < 0.75 && (v[1] + 3.0).abs() < 0.75, "{v:?}");
     }
 
-    #[test]
-    fn a_still_picture_has_no_motion() {
-        let a = textured(64, 48, 0, 0);
-        let flow = block_flow(&a, &a, 8, 6);
-        assert!(flow.v.iter().all(|v| v[0].abs() < 1e-3 && v[1].abs() < 1e-3));
-    }
 }

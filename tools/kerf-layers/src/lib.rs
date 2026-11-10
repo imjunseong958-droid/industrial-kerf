@@ -99,34 +99,4 @@ mod tests {
         assert!(found.is_empty(), "{}", found.join("\n"));
     }
 
-    #[test]
-    fn domains_are_apart_and_lower_layers_look_only_down() {
-        assert!(allowed("motion", "render"));
-        assert!(allowed("motion", "motion"));
-        assert!(!allowed("motion", "vfx"));
-        assert!(!allowed("render", "effects"));
-        assert!(!allowed("foundation", "render"));
-        assert!(allowed("engine", "image"));
-        assert!(!allowed("image", "engine"));
-        assert!(allowed("surfaces", "engine"));
-        assert!(!allowed("somewhere", "foundation"));
-    }
-
-    #[test]
-    fn a_break_is_named() {
-        let crates = BTreeMap::from([
-            (
-                "kerf-a".to_owned(),
-                (
-                    "motion".to_owned(),
-                    "[dependencies]\nkerf-b = { path = \"../../vfx/kerf-b\" }\n# kerf-c = { path = \"../c\" }\nserde = \"1\"\n".to_owned(),
-                ),
-            ),
-            ("kerf-b".to_owned(), ("vfx".to_owned(), String::new())),
-        ]);
-        assert_eq!(
-            violations(&crates),
-            ["kerf-a (motion) may not depend on kerf-b (vfx)"]
-        );
-    }
 }

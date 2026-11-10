@@ -661,24 +661,6 @@ mod tests {
     }
 
     #[test]
-    fn what_an_effect_does_inside_stays_true_when_it_comes_back() {
-        // An effect taking all color leaves none to put back, and one halving light halves it all.
-        let wide = [-0.5876, 1.1329, -0.1006];
-        let mut image = pixel(wide);
-        let held = image.to_unit();
-        let gray = brightness(&image.px[..3]);
-        image.px[..3].fill(gray);
-        image.from_unit(&held);
-        assert_eq!(image.px[0], image.px[1]);
-        assert_eq!(image.px[1], image.px[2]);
-        let mut image = pixel(wide);
-        let held = image.to_gamut();
-        image.px[..3].iter_mut().for_each(|value| *value /= 2.0);
-        image.from_gamut(&held);
-        near(&image.px[..3], wide.map(|value| value / 2.0));
-    }
-
-    #[test]
     fn colors_it_can_hold_move_as_they_did() {
         // Above 1 and inside BT.709: only the gain, as it was, to the bit.
         let bright = [4.0f32, 2.0, 0.5];

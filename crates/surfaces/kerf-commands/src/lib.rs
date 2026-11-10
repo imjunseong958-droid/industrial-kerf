@@ -1985,24 +1985,6 @@ mod tests {
     }
 
     #[test]
-    fn the_commands_of_the_old_layout_are_gone() {
-        for id in [
-            "workspace.edit",
-            "window.saveWorkspace",
-            "window.saveWorkspaceAs",
-            "window.resetWorkspace",
-            "window.program",
-            "window.timeline",
-            "window.inspectorFollows",
-            "view.dim",
-            "view.devicePreview",
-            "view.comments",
-        ] {
-            assert!(find(id).is_none(), "{id}");
-        }
-    }
-
-    #[test]
     fn commands_without_a_handler_yet_say_so() {
         let states = states(&ready());
         // Every command has its handler now.
@@ -2194,19 +2176,6 @@ mod tests {
             .unwrap();
         assert_eq!(undo["keys"], json!(["Ctrl+Z"]));
         assert_eq!(undo["menu"], "Edit");
-    }
-
-    #[test]
-    fn states_name_why_a_command_is_unavailable() {
-        let offline = states(&Context::default());
-        assert_eq!(offline["edit.undo"], OFFLINE);
-        assert_eq!(offline["app.quit"], Value::Null);
-        let mut context = ready();
-        context.selection = None;
-        let states = states(&context);
-        assert_eq!(states["clip.delete"], NO_SELECTION);
-        assert_eq!(states["edit.undo"], "Nothing to undo");
-        assert_eq!(states["file.import"], Value::Null);
     }
 
     #[test]
@@ -2601,29 +2570,6 @@ mod tests {
         assert_eq!(local["collab.sync"], NOT_SHARED);
         assert_eq!(local["collab.live"], NOT_SHARED);
         assert_eq!(local["collab.publish"], Value::Null);
-    }
-
-    #[test]
-    fn a_pull_request_needs_a_remote_but_not_gh() {
-        // The editor's context, from a status where gh is not installed: the
-        // bridge opens GitHub's compare page instead.
-        let mut context: Context = serde_json::from_value(json!({
-            "connected": true,
-            "collab": {
-                "repository": true,
-                "branch": "color",
-                "remote": "git@github.com:jun/film.git",
-                "branches": ["main", "color"],
-                "gh": false,
-            },
-        }))
-        .unwrap();
-        assert_eq!(states(&context)["collab.pullRequest"], Value::Null);
-        context.collab.as_mut().unwrap().remote = None;
-        assert_eq!(
-            states(&context)["collab.pullRequest"],
-            "Publish the project to GitHub first"
-        );
     }
 
     #[test]

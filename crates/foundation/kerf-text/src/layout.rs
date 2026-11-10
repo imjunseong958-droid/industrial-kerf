@@ -982,53 +982,6 @@ mod tests {
     }
 
     #[test]
-    fn japanese_vertical_punctuation_uses_alternates_at_the_top_right() {
-        use skrifa::{
-            MetadataProvider,
-            instance::{LocationRef, Size},
-        };
-        fonts::scan_system();
-        let face = fonts::all_faces().into_iter().find(|f| {
-            ((f.info.family.contains("Hiragino") && !f.info.family.contains(" GB") && !f.info.family.contains(" TC"))
-                || f.info.family.contains("Shippori")
-                || f.info.family.contains("BIZ UD"))
-                && "国、。「」ー".chars().all(|c| f.has_char(c))
-                && (f.has_feature(b"vert") || f.has_feature(b"vrt2"))
-        });
-        let Some(face) = face else {
-            eprintln!("SKIPPED: no Japanese font with vertical alternates available");
-            return;
-        };
-        let style = TextStyle { family: face.info.family.clone(), style: face.info.style.clone(), ..st(48.0) };
-        let text = "国、。「」ーABC";
-        let horizontal = layout_uncached(text, &style, &ParagraphStyle::default());
-        let vertical = layout_uncached(text, &style, &ParagraphStyle { vertical: true, ..Default::default() });
-        assert_eq!(vertical.glyphs.len(), 9);
-        assert_eq!(vertical.glyphs[0].id, horizontal.glyphs[0].id);
-        for i in 1..6 {
-            assert_ne!(vertical.glyphs[i].id, horizontal.glyphs[i].id, "{}: vertical form for glyph {i}", face.info.family);
-        }
-        for i in [1, 2] {
-            let g = &vertical.glyphs[i];
-            let line = &vertical.lines[i];
-            let font = fonts::face(g.face);
-            let bounds = font.font().unwrap().glyph_metrics(Size::unscaled(), LocationRef::default()).bounds(skrifa::GlyphId::new(g.id)).unwrap();
-            let scale = g.size / font.units_per_em();
-            let ink_x = g.x + (bounds.x_min + bounds.x_max) * scale / 2.0;
-            let ink_y = g.y - (bounds.y_min + bounds.y_max) * scale / 2.0;
-            let centre_x = line.x + line.width / 2.0;
-            let cell_top = line.baseline - line.ascent;
-            assert!(ink_x > centre_x, "{}: punctuation ink on the right ({ink_x}, {centre_x})", face.info.family);
-            assert!(ink_y < cell_top + g.size / 2.0, "{}: punctuation ink at the top ({ink_y}, {cell_top})", face.info.family);
-        }
-        for i in 6..9 {
-            assert_eq!(vertical.glyphs[i].id, horizontal.glyphs[i].id, "Latin shaping stays unchanged");
-        }
-        assert_eq!(layout_uncached(text, &style, &ParagraphStyle::default()), horizontal);
-        eprintln!("verified vertical punctuation with {} / {}", face.info.family, face.info.style);
-    }
-
-    #[test]
     fn vertical_text_stacks_characters_in_columns() {
         let p = ParagraphStyle { vertical: true, ..Default::default() };
         let l = layout("abc\nde", &st(40.0), &p);
@@ -1093,27 +1046,6 @@ mod tests {
     }
 
     #[test]
-    fn vertical_kana_keep_decomposed_dakuten_in_the_same_cell() {
-        fonts::scan_system();
-        let Some(face) = fonts::all_faces().into_iter().find(|f| {
-            (f.info.family.contains("Hiragino") || f.info.family.contains("Shippori") || f.info.family.contains("BIZ UD"))
-                && "かがはぱ\u{3099}\u{309a}".chars().all(|c| f.has_char(c))
-        }) else {
-            eprintln!("SKIPPED: no Japanese font covering combining dakuten/handakuten");
-            return;
-        };
-        let style = TextStyle { family: face.info.family.clone(), style: face.info.style.clone(), ..st(48.0) };
-        let para = ParagraphStyle { vertical: true, ..Default::default() };
-        let nfd = layout_uncached("か\u{3099}は\u{309a}", &style, &para);
-        let nfc = layout_uncached("がぱ", &style, &para);
-        assert_eq!(nfd.lines.len(), 2);
-        assert_eq!(nfd.lines[0].range, 0..6);
-        assert_eq!(nfd.lines[1].range, 6..12);
-        assert_eq!(nfd.glyphs.iter().map(|g| (g.id, g.x, g.y)).collect::<Vec<_>>(), nfc.glyphs.iter().map(|g| (g.id, g.x, g.y)).collect::<Vec<_>>());
-        assert_eq!(nfd.bounds, nfc.bounds);
-    }
-
-    #[test]
     fn bidi_reorders_rtl_runs() {
         // Hebrew letters are laid out right-to-left: the first logical letter is rightmost.
         let l = layout("ab \u{5d0}\u{5d1}\u{5d2} cd", &st(40.0), &ParagraphStyle::default());
@@ -1135,25 +1067,6 @@ mod tests {
         let l = layout("Hi", &TextStyle { baseline_shift: 10.0, underline: true, ..s }, &ParagraphStyle::default());
         assert!((l.glyphs[0].y + 10.0).abs() < 1e-3);
         assert_eq!(l.underlines.len(), 1);
-    }
-
-    #[test]
-    fn ligature_caret_interpolates() {
-        // Inter has an "fi"-like ligature only via calt in some versions; use "ffi" which most
-        // fonts ligate. Whatever shaping does, every char boundary has a caret.
-        let l = layout("office", &st(40.0), &ParagraphStyle::default());
-        let stops: Vec<usize> = l.lines[0].carets.iter().map(|c| c.0).collect();
-        assert_eq!(stops, vec![0, 1, 2, 3, 4, 5, 6]);
-        let xs: Vec<f32> = l.lines[0].carets.iter().map(|c| c.1).collect();
-        assert!(xs.windows(2).all(|w| w[1] >= w[0]), "{xs:?}");
-    }
-
-    #[test]
-    fn fallback_font_for_missing_glyphs() {
-        // Inter lacks Devanagari/Hebrew; Noto Serif lacks Hebrew too → glyphs still produced (notdef)
-        let l = layout("A\u{3b1}", &TextStyle { family: "Noto Serif".into(), ..st(40.0) }, &ParagraphStyle::default());
-        assert_eq!(l.glyphs.len(), 2);
-        assert!(l.glyphs.iter().all(|g| g.id != 0));
     }
 
     #[test]

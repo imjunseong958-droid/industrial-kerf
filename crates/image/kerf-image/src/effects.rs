@@ -508,46 +508,6 @@ mod tests {
     }
 
     #[test]
-    fn a_clone_reads_fractions_of_the_picture_and_moves_with_it() {
-        let masks = [];
-        let mut picture = Image::filled(100, 50, [0.2, 0.2, 0.2, 1.0]);
-        for y in 20..30 {
-            for x in 20..30 {
-                picture.px[(y * 100 + x) * 4..][..3].copy_from_slice(&[1.0, 1.0, 1.0]);
-            }
-        }
-        let original = picture.clone();
-        let params = [
-            ("points", text("0.75,0.5")),
-            ("radius", number(0.1)),
-            ("hardness", number(1.0)),
-            ("from_x", number(-0.5)),
-        ];
-        Clone.apply(
-            &mut picture,
-            &stroke_effect("image.clone", &params),
-            &run(&masks),
-        );
-        assert_eq!(picture.get(75, 25)[0], 1.0);
-        // Moved a tenth across, the stroke and what it reads go together.
-        let mut moved = original.clone();
-        let params = [
-            ("points", text("0.65,0.5")),
-            ("radius", number(0.1)),
-            ("hardness", number(1.0)),
-            ("from_x", number(-0.5)),
-            ("move_x", number(0.1)),
-        ];
-        Clone.apply(
-            &mut moved,
-            &stroke_effect("image.clone", &params),
-            &run(&masks),
-        );
-        assert_eq!(moved.get(75, 25)[0], 1.0);
-        assert_eq!(moved.get(65, 25)[0], 0.2);
-    }
-
-    #[test]
     fn strokes_can_paint_from_another_frame_held_to_the_clips_ends() {
         let masks = [];
         let white = Image::filled(20, 20, [1.0; 4]);

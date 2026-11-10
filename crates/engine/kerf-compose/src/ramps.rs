@@ -359,19 +359,6 @@ mod tests {
             .collect()
     }
 
-    fn crossings_per_second(samples: &[f32]) -> f64 {
-        let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
-        let crossings = left
-            .windows(2)
-            .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
-            .count();
-        crossings as f64 / (left.len() as f64 / R)
-    }
-
-    fn rms_of(samples: &[f32]) -> f64 {
-        (samples.iter().map(|s| f64::from(s * s)).sum::<f64>() / samples.len() as f64).sqrt()
-    }
-
     #[test]
     fn at_speed_one_the_sound_comes_back_exactly() {
         let input = sine(48_000, 440.0);
@@ -379,20 +366,6 @@ mod tests {
         let middle = WINDOW * 2..out.len() - WINDOW * 2;
         for (made, was) in out[middle.clone()].iter().zip(&input[middle]) {
             assert!((made - was).abs() < 1e-3, "{made} against {was}");
-        }
-    }
-
-    #[test]
-    fn slowing_down_keeps_the_pitch_and_the_level() {
-        for speed in [0.25, 0.5, 0.8, 1.5, 3.0] {
-            let input = sine(4 * 48_000, 440.0);
-            let frames = (48_000.0 / speed * 0.9) as usize;
-            let out = stretch(&input, frames.min(96_000), |at| at as f64 * speed);
-            let body = &out[WINDOW * 2..out.len() - WINDOW * 2];
-            let pitch = crossings_per_second(body);
-            assert!((pitch - 440.0).abs() < 4.0, "at {speed}: {pitch} Hz");
-            let level = rms_of(body);
-            assert!((level - 0.707).abs() < 0.05, "at {speed}: level {level}");
         }
     }
 

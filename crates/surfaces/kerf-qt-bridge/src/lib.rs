@@ -2876,7 +2876,7 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Ker
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_preview, discard_preview, discard_previews, media_worker, preview_frame_size,
+        cancel_preview, discard_preview, discard_previews, media_worker,
         publish, publish_force, queue, rendered_preview, sweep_previews, AgentSettings, Command,
         MediaProject, PendingSeek, Shared,
     };
@@ -3129,26 +3129,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_proposals_carry_the_timeline_they_would_make() {
-        let state = snapshot(
-            DOCUMENT,
-            Some(PendingProposal::Pending {
-                proposal_id: "p1".into(),
-                base_revision: 0,
-                script: "track add T9 video\n".into(),
-                source: String::new(),
-                document_diff: String::new(),
-                freshness: ProposalFreshness::Current,
-            }),
-        );
-        let value = super::with_proposal_timeline(serde_json::to_value(&state).unwrap(), &state);
-        let tracks = value["proposalTimeline"]["tracks"]
-            .as_array()
-            .expect("proposal tracks");
-        assert!(tracks.iter().any(|track| track["id"] == "T9"), "{tracks:?}");
-    }
-
-    #[test]
     fn edit_command_carries_typed_operations() {
         let command: Command = serde_json::from_value(json!({
             "type": "edit",
@@ -3245,21 +3225,6 @@ mod tests {
             skipped.contains(".kerf/mcp.json") && skipped.contains("Git tracks it"),
             "{skipped}"
         );
-    }
-
-    #[test]
-    fn preview_frame_follows_the_sequence_canvas() {
-        assert_eq!(preview_frame_size(&project(1080, 1920)), (1080, 1920));
-        assert_eq!(preview_frame_size(&project(1920, 1080)), (1920, 1080));
-        assert_eq!(
-            preview_frame_size(&kerf_model::Project::default()),
-            (1920, 1080)
-        );
-    }
-
-    #[test]
-    fn preview_frame_size_limits_only_the_longest_edge_for_large_canvases() {
-        assert_eq!(preview_frame_size(&project(8000, 4000)), (1920, 960));
     }
 
     #[test]

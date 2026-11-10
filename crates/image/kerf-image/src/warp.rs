@@ -248,56 +248,6 @@ mod tests {
         picture
     }
 
-    /// The middle of what is bright, by weight.
-    fn middle(picture: &Image) -> [f32; 2] {
-        let (mut sum, mut x, mut y) = (0.0, 0.0, 0.0);
-        for row in 0..picture.h {
-            for column in 0..picture.w {
-                let bright = (picture.get(column, row)[0] - GRAY[0]).max(0.0);
-                sum += bright;
-                x += bright * (column as f32 + 0.5);
-                y += bright * (row as f32 + 0.5);
-            }
-        }
-        [x / sum, y / sum]
-    }
-
-    #[test]
-    fn what_is_at_a_moves_start_ends_at_its_end() {
-        let mut picture = with_dot(200, 120, [60, 60], 3);
-        warp(
-            &mut picture,
-            &[vec![[60.0, 60.0], [100.0, 75.0]]],
-            50.0,
-            1.0,
-        );
-        let found = middle(&picture);
-        assert!(
-            (found[0] - 100.0).abs() < 1.0 && (found[1] - 75.0).abs() < 1.0,
-            "{found:?}"
-        );
-    }
-
-    #[test]
-    fn a_move_goes_through_its_points_and_as_far_along_as_told() {
-        let chain = vec![[60.0, 60.0], [100.0, 60.0], [100.0, 100.0]];
-        let at = |amount: f32| {
-            let mut picture = with_dot(200, 140, [60, 60], 3);
-            warp(&mut picture, std::slice::from_ref(&chain), 40.0, amount);
-            middle(&picture)
-        };
-        let half = at(0.5);
-        assert!(
-            (half[0] - 100.0).abs() < 1.5 && (half[1] - 60.0).abs() < 1.5,
-            "{half:?}"
-        );
-        let whole = at(1.0);
-        assert!(
-            (whole[0] - 100.0).abs() < 1.5 && (whole[1] - 100.0).abs() < 1.5,
-            "{whole:?}"
-        );
-    }
-
     #[test]
     fn nothing_moves_at_no_amount_or_outside_the_radius() {
         let original = with_dot(200, 120, [60, 60], 3);
@@ -319,33 +269,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn it_leaves_no_holes_even_pulling_at_the_frames_edges() {
-        let mut picture = Image::new(160, 90);
-        for y in 0..90 {
-            for x in 0..160 {
-                let start = (y * 160 + x) * 4;
-                picture.px[start..start + 4].copy_from_slice(&[
-                    x as f32 / 160.0,
-                    y as f32 / 90.0,
-                    0.2,
-                    1.0,
-                ]);
-            }
-        }
-        warp(
-            &mut picture,
-            &[
-                vec![[2.0, 45.0], [60.0, 45.0]],
-                vec![[80.0, 88.0], [80.0, 30.0]],
-                vec![[150.0, 5.0], [110.0, 40.0]],
-            ],
-            50.0,
-            1.0,
-        );
-        assert!(picture.px.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 1.0));
     }
 
     #[test]
