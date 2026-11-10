@@ -27,14 +27,7 @@ pub(crate) fn source(id: &str) -> Option<&'static dyn PictureSource> {
 
 /// The generators the compositor draws or reads itself.
 #[cfg(test)]
-const OWN_GENERATORS: &[&str] = &[
-    "solid",
-    "title",
-    "adjustment",
-    "null",
-    "camera",
-    "light",
-];
+const OWN_GENERATORS: &[&str] = &["solid", "title", "adjustment", "null", "camera", "light"];
 
 #[cfg(test)]
 mod tests {

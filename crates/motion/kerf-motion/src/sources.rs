@@ -71,7 +71,10 @@ impl PictureSource for Particles {
             direction: start.number("direction"),
             spread: start.number("spread"),
             gravity: start.number("gravity") * height,
-            size: (read.number("size") * height, read.number("size_end") * height),
+            size: (
+                read.number("size") * height,
+                read.number("size_end") * height,
+            ),
             color: (read.color("color"), read.color("color_end")),
             soft: read.number("soft"),
             origin: [w as f64 / 2.0, height / 2.0],
