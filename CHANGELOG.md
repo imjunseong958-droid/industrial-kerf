@@ -37,6 +37,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.
+- Moving the playhead just as an edit lands no longer leaves the viewer on the
+  frame it showed before: the picture follows the playhead to where it was put.
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 
