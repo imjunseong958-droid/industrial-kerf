@@ -16,15 +16,10 @@
 #include "editor_bus.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -121,63 +116,23 @@ private slots:
 
     // ---- edits as typed operations ------------------------------------
 
-    // Esc on the timeline asks to clear the selection (when no proposal
-    // takes Esc for Reject); so does a click on an empty lane.
-    // An effect card (application/x-kerf-fx) held over a clip rings it; a
-    // drop adds the effect to that clip (fx-add), as the Inspector's does.
-    // Over an empty lane it is refused.
-    void effectCardsDropOnClips() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
-        window.resize(1440, 900);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        TimelineWidget *timeline = window.m_timeline;
-        QVERIFY(timeline->acceptDrops());
-        timeline->fitToWidth(window.m_timelineScroll->viewport()->width());
-        QCoreApplication::processEvents();
-        const QRect clip = timeline->clipBounds(QStringLiteral("v1b"));
-        QVERIFY(!clip.isEmpty());
-        QMimeData mime;
-        mime.setData(QStringLiteral("application/x-kerf-fx"), QByteArrayLiteral("blur.gaussian"));
-        QDragEnterEvent enter(clip.center(), Qt::CopyAction, &mime, Qt::LeftButton, {});
-        QCoreApplication::sendEvent(timeline, &enter);
-        QVERIFY(enter.isAccepted());
-        // Past the last clip, nothing takes it.
-        const QPoint empty(timeline->width() - 4, clip.center().y());
-        QVERIFY(timeline->clipAt(empty).id.isEmpty());
-        QDragMoveEvent away(empty, Qt::CopyAction, &mime, Qt::LeftButton, {});
-        QCoreApplication::sendEvent(timeline, &away);
-        QVERIFY(!away.isAccepted());
-        QVERIFY(timeline->m_dropClip.isEmpty());
-        QDragMoveEvent over(clip.center(), Qt::CopyAction, &mime, Qt::LeftButton, {});
-        QCoreApplication::sendEvent(timeline, &over);
-        QVERIFY(over.isAccepted());
-        QCOMPARE(timeline->m_dropClip, QStringLiteral("v1b"));
-        QSignalSpy dropped(timeline, &TimelineWidget::effectDropped);
-        window.m_lastCommand = {};
-        QDropEvent drop(QPointF(clip.center()), Qt::CopyAction, &mime, Qt::LeftButton, {});
-        QCoreApplication::sendEvent(timeline, &drop);
-        QCOMPARE(dropped.size(), 1);
-        QVERIFY(timeline->m_dropClip.isEmpty());
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
-        QCOMPARE(window.m_lastCommand.value("ops").toArray(),
-                 (QJsonArray{QJsonObject{{"op", "fx-add"}, {"clip", "v1b"}, {"fx", "blur.gaussian"}}}));
-    }
-
-    // The heads' target toggles choose where the Source's Insert and
-    // Overwrite land (MainWindow::sourceTargets); a kind switched off is
-    // not edited.
+    // The heads' target toggles choose where Insert and Overwrite put the
+    // bin's media (MainWindow::sourceTargets); a kind switched off is not
+    // edited.
     void targetTogglesChooseWhereSourceEditsLand() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+        QJsonObject program = snapshot.value("timeline").toObject();
+        program.insert("sources", QJsonArray{QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"width", 1920},
+                                                         {"height", 1080}, {"hasAudio", true}, {"duration", 20.0}}});
+        snapshot.insert("timeline", program);
+        window.applySnapshot(snapshot);
         TimelineWidget *timeline = window.m_timeline;
         QVERIFY(timeline->targetsEditable());
-        window.m_sourceMonitor->open(QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"width", 1920}, {"height", 1080},
-                                                 {"hasAudio", true}, {"duration", 20.0}},
-                                     QString());
+        QVERIFY(window.sourceTargets().isEmpty());
+        window.m_projectPanel->m_list->setCurrentRow(0);
+        QCOMPARE(window.m_projectPanel->currentMedia(), QStringLiteral("wide"));
         QCOMPARE(window.sourceTargets(), (QStringList{"V1", "A1"}));
         timeline->setTargetTracks({QStringLiteral("V2"), QStringLiteral("A2")});
         QCOMPARE(window.sourceTargets(), (QStringList{"V2", "A2"}));

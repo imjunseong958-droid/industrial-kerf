@@ -6,12 +6,8 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -81,9 +77,7 @@
 #include <limits>
 #include <utility>
 #include "wiring/main_window_shared.h"
-#include "browser_panel.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 #include "wiring/toolbar_wiring.h"
 
 namespace kerf {
@@ -126,10 +120,9 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     } else if (!wasConnected) {
         addActivity(QStringLiteral("system"), QStringLiteral("Project connected"));
     }
-    updateInspector();
+    updateViewerMasks();
     updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
     updateChatControls();
-    if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
     // The first snapshot can come before this does.
     if (m_connected) runStart();

@@ -61,14 +61,6 @@ set(KERF_QT_SOURCES
     editor_theme.h
     home_window.cpp
     home_window.h
-    effects_panel.cpp
-    effects_panel.h
-    inspector_panel.cpp
-    inspector_panel.h
-    inspector_presentation.cpp
-    inspector_presentation.h
-    inspector_widgets.cpp
-    inspector_widgets.h
     toolbar_widgets.cpp
     toolbar_widgets.h
     launcher_style.h
@@ -76,8 +68,6 @@ set(KERF_QT_SOURCES
     main_window.h
     media_artwork.cpp
     media_artwork.h
-    presets_panel.cpp
-    presets_panel.h
     project_launcher.cpp
     project_launcher.h
     project_panel.cpp
@@ -86,8 +76,6 @@ set(KERF_QT_SOURCES
     secret_store.h
     settings_migration.cpp
     settings_migration.h
-    source_monitor_panel.cpp
-    source_monitor_panel.h
     test_friends.h
     timeline_widget.cpp
     timeline_widget.h

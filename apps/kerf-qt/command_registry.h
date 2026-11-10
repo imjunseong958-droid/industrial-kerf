@@ -26,8 +26,7 @@ public:
     // (`composer`) is attached by its owner (Composer::setDrawAction).
     CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent = nullptr);
 
-    // A command's current id: renamed ones answer to their old ids too
-    // (`window.effectControls` is `window.inspector`).
+    // A command's current id: a renamed one answers to its old id too.
     static QString resolve(const QString &id);
     // A keymap's key as this platform binds it (`mac` says which). The keymaps
     // write a Mac's Control key as Meta; elsewhere Qt reads Meta as the Windows

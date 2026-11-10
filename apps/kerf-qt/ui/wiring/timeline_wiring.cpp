@@ -3,7 +3,6 @@
 #include "command_registry.h"
 #include "editor_bus.h"
 #include "main_window.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 
 #include <QAction>
@@ -77,13 +76,6 @@ void TimelineWiring::attach() {
     // again.
     timeline->installEventFilter(this);
     // The rubber band writes the clip's gain: a level, or its keys.
-    // An effect card dropped on a clip adds it at the end of its stack, as
-    // the Inspector's drop does.
-    connect(timeline, &TimelineWidget::effectDropped, this, [this](const QString &clip, const QString &fx) {
-        m_window->sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")},
-                                                  {QStringLiteral("clip"), clip},
-                                                  {QStringLiteral("fx"), fx}}});
-    });
     connect(timeline, &TimelineWidget::gainRequested, this, [this](const QString &clip, const QJsonValue &gain) {
         m_window->sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
                                                   {QStringLiteral("clip"), clip},

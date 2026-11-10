@@ -9,14 +9,10 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "change_reel.h"
 #include "project_sidebar.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -25,14 +21,10 @@
 #include "toolbar_widgets.h"
 #include "user_guide.h"
 #include "viewer_widget.h"
-#include "browser_panel.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/bin_wiring.h"
-#include "wiring/inspector_wiring.h"
 #include "wiring/review_wiring.h"
-#include "wiring/source_wiring.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/timeline_wiring.h"
 #include "wiring/toolbar_wiring.h"
@@ -123,10 +115,8 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     m_reviewWiring = std::make_unique<ReviewWiring>(this, m_bus);
     m_stageWiring = std::make_unique<StageWiring>(this, m_bus);
     m_toolbarWiring = std::make_unique<ToolbarWiring>(this, m_bus);
-    m_inspectorWiring = std::make_unique<InspectorWiring>(this, m_bus);
     m_timelineWiring = std::make_unique<TimelineWiring>(this, m_bus);
     m_binWiring = std::make_unique<BinWiring>(this, m_bus);
-    m_sourceWiring = std::make_unique<SourceWiring>(this, m_bus);
     buildUi();
     setupActions();
     updateCloudStatus();
@@ -181,8 +171,6 @@ bool MainWindow::showProgramFrame(const KerfFrame &frame) {
     m_hasShownFrame = true;
     const QImage shown = image.copy();
     m_viewer->setFrame(shown, frame.time);
-    // The sequence's thumbnail in the Inspector, with nothing selected.
-    if (m_selectedClip.isEmpty()) m_inspector->setProgramFrame(shown);
     // The frame the viewer got, for the regions.
     m_bus->setProgramFrame(shown);
     return true;
@@ -325,7 +313,7 @@ void MainWindow::selectClip(const QString &id) {
     m_selectedClip = id;
     m_selectedClips = id.isEmpty() ? QStringList{} : QStringList{id};
     m_timeline->setSelectedClip(id);
-    updateInspector();
+    updateViewerMasks();
     updateCommandStates();
     updateChatControls();
     m_bus->setSelection(m_selectedClips);
@@ -346,7 +334,7 @@ void MainWindow::extendClipSelection(const QString &id, bool toggle) {
     m_selectedClip = clips.constLast();
     m_selectedClips = clips;
     m_timeline->setSelectedClips(clips);
-    updateInspector();
+    updateViewerMasks();
     updateCommandStates();
     updateChatControls();
     m_bus->setSelection(m_selectedClips);
@@ -691,16 +679,15 @@ void MainWindow::buildUi() {
     // each other in.
     buildReview();
     buildStage();
+    buildMaskTools();
     buildTimeline();
-    buildSource();
-    buildInspector();
     buildBin();
     buildPreferences();
     buildShell();
     setCentralWidget(m_shell);
     wireTimeline();
     updateProposal(QJsonValue());
-    updateInspector();
+    updateViewerMasks();
 }
 
 void MainWindow::buildPreferences() {
@@ -1000,7 +987,7 @@ void MainWindow::buildShell() {
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
     buildSidebar();
     buildAgentViews();
-    m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
+    m_shell->setSheets(m_projectPanel);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
     // Each sheet closes from the end of its strip.
     const auto closeButton = [this](StageShell::Sheet sheet) {
@@ -1013,16 +1000,10 @@ void MainWindow::buildShell() {
         return button;
     };
     m_projectPanel->addToStrip(closeButton(StageShell::Sheet::Media));
-    m_browserPanel->addToStrip(closeButton(StageShell::Sheet::Browser));
-    m_inspectorColumn->addToStrip(closeButton(StageShell::Sheet::Inspector));
     connect(m_shell, &StageShell::sheetChanged, this, [this](StageShell::Sheet sheet) {
-        // Closing Effects without adding: a later add made there stays there.
-        if (sheet != StageShell::Sheet::Browser) m_effectsFromInspector = false;
         syncPanelCommands();
         if (sheet == StageShell::Sheet::None) settleFocus();
     });
-    // A page chosen in a sheet's own strip keeps its commands in step.
-    connect(m_browserPanel, &BrowserPanel::pageChanged, this, &MainWindow::syncPanelCommands);
     // The error bar shown or dismissed, the toolbar's subtitle follows it.
     m_errorBanner->installEventFilter(this);
     // Esc in an empty composer, with nothing of its own to stop or cancel.
@@ -1034,7 +1015,7 @@ void MainWindow::setupActions() {
     // Frontend commands and engine commands that need a dialog first have
     // handlers here; every other command resolves to a bridge request.
     m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(),
-                                     {{QStringLiteral("timeline"), m_timeline}, {QStringLiteral("source"), m_sourceMonitor}}, this);
+                                     {{QStringLiteral("timeline"), m_timeline}}, this);
     m_commandHandlers = {
         {QStringLiteral("file.newProject"), [this] { newProject(); }},
         {QStringLiteral("file.openProject"), [this] { openProjectFolder(); }},
@@ -1082,11 +1063,6 @@ void MainWindow::setupActions() {
         {QStringLiteral("help.about"), [this] { showAbout(); }},
         {QStringLiteral("timeline.addTrack"), [this] { addTrack(); }},
         {QStringLiteral("ai.ask"), [this] { askAi(); }},
-        {QStringLiteral("source.markIn"), [this] { m_sourceMonitor->markIn(); }},
-        {QStringLiteral("source.markOut"), [this] { m_sourceMonitor->markOut(); }},
-        {QStringLiteral("source.clearMarks"), [this] { m_sourceMonitor->clearMarks(); }},
-        {QStringLiteral("source.previousFrame"), [this] { m_sourceMonitor->step(-1); }},
-        {QStringLiteral("source.nextFrame"), [this] { m_sourceMonitor->step(1); }},
     };
     connect(m_commands, &CommandRegistry::triggered, this, &MainWindow::triggerCommand);
     // Tools are one exclusive choice; snapping is a switch.
@@ -1097,40 +1073,7 @@ void MainWindow::setupActions() {
     };
     connect(m_commands, &CommandRegistry::toggled, this, [this, tools](const QString &id, bool checked) {
         if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
-        else if (id == QStringLiteral("inspector.video")) {
-            m_shell->setSheet(StageShell::Sheet::Inspector);
-            m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
-            m_inspectorColumn->setKind(InspectorColumn::Kind::Video);
-            syncPanelCommands();
-        } else if (id == QStringLiteral("window.source")) {
-            // The Inspector sheet's Source page.
-            if (checked) {
-                m_shell->setSheet(StageShell::Sheet::Inspector);
-                m_inspectorColumn->setPage(InspectorColumn::Page::Source);
-            } else {
-                m_shell->setSheet(StageShell::Sheet::None);
-            }
-            syncPanelCommands();
-        } else if (id == QStringLiteral("window.effects") || id == QStringLiteral("window.presets")) {
-            // The browser, on that page; unchecked, the sheet closes.
-            if (checked) {
-                m_shell->setSheet(StageShell::Sheet::Browser);
-                m_browserPanel->setPage(id == QStringLiteral("window.effects") ? BrowserPanel::Page::Effects : BrowserPanel::Page::Presets);
-            } else {
-                m_shell->setSheet(StageShell::Sheet::None);
-            }
-            syncPanelCommands();
-        } else if (id == QStringLiteral("window.inspector")) {
-            // Open on Source, the sheet turns to the Inspector; only on its
-            // own page does the command close it.
-            if (m_shell->sheet() == StageShell::Sheet::Inspector && m_inspectorColumn->page() == InspectorColumn::Page::Source) {
-                m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
-            } else {
-                m_shell->toggleSheet(StageShell::Sheet::Inspector);
-                if (m_shell->sheet() == StageShell::Sheet::Inspector) m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
-            }
-            syncPanelCommands();
-        } else if (id == QStringLiteral("window.project")) {
+        else if (id == QStringLiteral("window.project")) {
             m_shell->toggleSheet(StageShell::Sheet::Media);
             syncPanelCommands();
         } else if (id == QStringLiteral("view.sidebar") || id == QStringLiteral("view.picture") || id == QStringLiteral("view.timeline")) {
@@ -1155,7 +1098,6 @@ void MainWindow::setupActions() {
     m_branchMenu->setObjectName(QStringLiteral("switchBranchMenu"));
     connect(m_branchMenu, &QMenu::aboutToShow, this, [this] { buildBranchMenu(m_branchMenu); });
     m_commands->action(QStringLiteral("collab.switchBranch"))->setMenu(m_branchMenu);
-    m_presets->setActions(m_commands->action(QStringLiteral("preset.save")), m_commands->action(QStringLiteral("preset.library")));
     auto *toolGroup = new QActionGroup(this);
     toolGroup->setExclusive(true);
     for (const QString &id : {QStringLiteral("tool.selection"), QStringLiteral("tool.razor"), QStringLiteral("tool.ripple"),
@@ -1168,21 +1110,9 @@ void MainWindow::setupActions() {
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
     m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
-    // The Source monitor's marks and edits are drawn symbols, as the Program
-    // monitor's transport; their tooltips name them with their shortcuts.
-    for (const auto &[id, glyph] : {std::pair{QStringLiteral("source.markIn"), TransportGlyph::MarkIn},
-                                    std::pair{QStringLiteral("source.markOut"), TransportGlyph::MarkOut},
-                                    std::pair{QStringLiteral("source.insert"), TransportGlyph::Insert},
-                                    std::pair{QStringLiteral("source.overwrite"), TransportGlyph::Overwrite}}) {
-        QAction *action = m_commands->action(id);
-        action->setIcon(transportIcon(glyph));
-        m_sourceGlyphs.append({action, glyph});
-    }
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
     m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
     m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
-    m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
-                                 m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
     // macOS puts About in the application menu, as every Mac app has it.
@@ -1309,7 +1239,6 @@ void MainWindow::buildRecentMenu(QMenu *menu) {
 
 void MainWindow::startSession() {
     execute(QStringLiteral("collab.status"));
-    execute(QStringLiteral("preset.library"));
     if (liveSyncRemembered()) execute(QStringLiteral("collab.live"), QJsonObject{{QStringLiteral("enabled"), true}});
 }
 
@@ -1410,9 +1339,6 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
                 showStatus(summary.isEmpty() ? QStringLiteral("Synced: up to date")
                                              : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
                            8000);
-            // A pull or branch switch changes presets/, and a commit who
-            // last changed each preset.
-            execute(QStringLiteral("preset.library"));
             m_syncRequested = false;
         } else if (stage == QStringLiteral("failed")) {
             m_syncRequested = false;
@@ -1641,13 +1567,14 @@ QJsonObject MainWindow::commandContext() const {
         if (m_proposalBlocked) proposal.insert(QStringLiteral("blocked"), QStringLiteral("stale"));
         context.insert(QStringLiteral("proposal"), proposal);
     }
-    if (m_sourceMonitor->isOpen()) {
-        // The marked range: in frames of the media, length in frames of the sequence.
-        const double in = m_sourceMonitor->inPoint();
+    if (const QJsonObject media = binMedia(); !media.isEmpty()) {
+        // The whole of the media chosen in the bin; a still, which has no
+        // length of its own, for five seconds.
+        const double seconds = media.value(QStringLiteral("duration")).toDouble();
         context.insert(QStringLiteral("source"),
-                       QJsonObject{{QStringLiteral("media"), m_sourceMonitor->mediaId()},
-                                   {QStringLiteral("inFrame"), std::llround(in * m_sourceMonitor->fps())},
-                                   {QStringLiteral("durationFrames"), frameAt(m_sourceMonitor->outPoint() - in)}});
+                       QJsonObject{{QStringLiteral("media"), media.value(QStringLiteral("id")).toString()},
+                                   {QStringLiteral("inFrame"), 0},
+                                   {QStringLiteral("durationFrames"), frameAt(seconds > 0.0 ? seconds : 5.0)}});
     }
     const QJsonObject clip = selectedClipObject();
     if (!clip.isEmpty()) {
@@ -1767,14 +1694,11 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         showPresetBindings(event.value(QStringLiteral("path")).toString(), event.value(QStringLiteral("preset")).toObject());
     } else if (type == QStringLiteral("preset_applied")) {
         showStatus(QStringLiteral("Preset proposal ready for review"), 6000);
-    } else if (type == QStringLiteral("preset_library")) {
-        m_presets->setLibrary(event, m_projectDirectory);
     } else if (type == QStringLiteral("preset_saved")) {
         m_savingPreset.clear();
         const QString path = event.value(QStringLiteral("path")).toString();
         showStatus(QStringLiteral("Saved preset %1").arg(path), 6000);
         addActivity(QStringLiteral("preset"), path);
-        execute(QStringLiteral("preset.library"));
     } else if (type == QStringLiteral("collab") || type == QStringLiteral("collab_sync") ||
                type == QStringLiteral("collab_pull_request")) {
         handleCollabEvent(event);
@@ -1792,9 +1716,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         m_bus->setPlayhead(m_playhead);
         updateCommandStates();
         // An animated clip's picture moves with the playhead, and its masks
-        // with it; so do the Inspector's animated values.
+        // with it.
         if (!m_selectedClip.isEmpty()) updateViewerMasks();
-        m_inspector->setPlayhead(m_playhead);
     } else if (type == QStringLiteral("playback")) {
         m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
         m_bus->setPlaying(m_playing);
@@ -1876,7 +1799,6 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     };
     // project.kerf changing outside Kerf (a pull in a terminal), or being
     // loaded, can come with other presets.
-    const bool presetsMayDiffer = m_connected && diverged(m_snapshot) != diverged(snapshot);
     m_snapshot = snapshot;
     m_revision = static_cast<quint64>(snapshot.value(QStringLiteral("revision")).toDouble());
     m_duration = std::max(0.0, snapshot.value(QStringLiteral("duration")).toDouble());
@@ -1910,24 +1832,17 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     syncCanvasPreset(canvasSize);
     m_artwork->request(sources, m_projectDirectory);
     m_projectPanel->setSources(sources);
-    if (m_sourceMonitor->isOpen()) {
-        const bool present = std::any_of(sources.cbegin(), sources.cend(), [this](const QJsonValue &value) {
-            return value.toObject().value(QStringLiteral("id")).toString() == m_sourceMonitor->mediaId();
-        });
-        if (!present) m_sourceMonitor->close();
-    }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     // The pinned proposal's (the version its card shows), not just the first open one.
     m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
     showProposedCut();
     refreshCompare();
     m_divergedBanner->setVisible(diverged(snapshot));
-    updateInspector();
+    updateViewerMasks();
     updateCommandStates();
     m_bus->setDuration(m_duration);
     m_bus->setSelection(m_selectedClips);
     m_bus->setSnapshot(snapshot, m_project, m_fps, canvasSize);
-    if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
     applyPendingLink();
     followContentWithPanes();
     followLiveProposal();
@@ -2026,7 +1941,6 @@ void MainWindow::applyAppearance() {
     for (QToolButton *disclosure : std::as_const(m_disclosures))
         disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
-    for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
 }
 
 void MainWindow::addActivity(const QString &kind, const QString &text) {
@@ -2093,19 +2007,8 @@ void MainWindow::uncoverComposer() {
 void MainWindow::syncPanelCommands() {
     if (!m_commands || !m_shell) return;
     const StageShell::Sheet sheet = m_shell->sheet();
-    const bool inspector = sheet == StageShell::Sheet::Inspector;
-    const bool browser = sheet == StageShell::Sheet::Browser;
-    const bool presets = browser && m_browserPanel->page() == BrowserPanel::Page::Presets;
-    const bool source = inspector && m_inspectorColumn->page() == InspectorColumn::Page::Source;
     const QList<QPair<QString, bool>> states{
         {QStringLiteral("window.project"), sheet == StageShell::Sheet::Media},
-        {QStringLiteral("window.inspector"), inspector && !source},
-        {QStringLiteral("window.source"), source},
-        {QStringLiteral("window.effects"), browser && !presets},
-        {QStringLiteral("window.presets"), presets},
-        {QStringLiteral("inspector.video"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Video},
-        {QStringLiteral("inspector.audio"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Audio},
-        {QStringLiteral("inspector.info"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Info},
         {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
         {QStringLiteral("view.picture"), m_shell->panes().picture},
         {QStringLiteral("view.timeline"), m_shell->panes().timeline},

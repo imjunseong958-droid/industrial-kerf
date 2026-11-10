@@ -63,8 +63,7 @@ Import media with File ▸ Import Media… (⌘O).
 - **Conversation** on the left: you and Kerf, and every comment on the project.
 - **Picture** and **timeline** at the right, once there is something to show.
   ⌥⌘P and ⌥⌘T open and close them.
-- **Sheets** open over the conversation from the Window menu: Media (⌘1),
-  Source Monitor, Inspector (⌘4), Effects and titles (⌘5), and Presets.
+- **Media** (⌘1) opens over the conversation: the project's media, with Import.
 - The toolbar's format picker switches the sequence between 16:9 and 9:16.
 
 ## Ask Kerf
@@ -109,14 +108,12 @@ Edit ▸ Settings… (⌘, ; on macOS in the Kerf menu) ▸ AI chooses how Kerf 
   menu has Split at Playhead, Delete and Ripple Delete; the timeline also has a
   Razor and a Ripple Edit tool. Edit ▸ Undo
   and Redo cover every edit, Kerf's included.
-- **Source Monitor.** Open a clip from Media, mark in and out, then Insert or
-  Overwrite at the playhead.
-- **Inspector** (⌘4). Click a clip and the Inspector shows its controls: its
-  picture's position, scale and crop, its sound, and its effects in order. Esc,
-  or a click on an empty lane, goes back.
-- **Effects and titles** (⌘5). Cards show the selected clip through each effect.
-  Double-click a card or press Return to add it, or drag it onto the Inspector to
-  put it where it lands. **Titles** has a card for each generator.
+- **Media into the timeline.** Double-click media in the Media sheet, or choose
+  it and use Clip ▸ Insert or Overwrite: the whole of it goes in at the
+  playhead, on the tracks the timeline's heads target. Trim it there.
+- **Everything finer** (a clip's position, scale and crop, its sound, its
+  effects, titles) is Kerf's to do: ask in the conversation and it proposes the
+  change for you to accept.
 - **Masks.** The Rectangle, Ellipse and Pen tools in the picture's title bar draw
   on the selected clip. Drag a handle to reshape, drag inside to move, Delete to
   remove.
@@ -163,7 +160,7 @@ When `project.kerf` changes outside Kerf, a banner offers **Load from Disk** or
 - **Export** in the toolbar renders a Draft (H.264) or a Master (ProRes 422 HQ
   with 24-bit sound; ⌘E). A master goes to `deliveries/` in the project.
 - **Presets.** File ▸ Save Current as Preset… keeps the program as a preset
-  others can fill with their own media (Window ▸ Presets).
+  others can fill with their own media (File ▸ Import Editing Preset…).
 
 ## When something goes wrong
 

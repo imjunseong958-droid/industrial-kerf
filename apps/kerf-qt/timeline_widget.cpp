@@ -188,7 +188,6 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Minimum, QSizePolicy::MinimumExpanding);
     updateContentSize();
     setMouseTracking(true);
-    setAcceptDrops(true);
 }
 
 void TimelineWidget::setProject(const QJsonObject &project, double duration, double fps) {
@@ -2129,15 +2128,6 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     p.setRenderHint(QPainter::Antialiasing, false);
     // The playhead, over the clips.
     p.fillRect(QRect(playX, laneTop, 1, height() - laneTop), C(tk::playhead));
-    // The clip an effect card is held over.
-    if (!m_dropClip.isEmpty()) {
-        p.save();
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(QPen(C(tk::accent), 1.5));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(m_dropRect.adjusted(0.75, 0.75, -0.75, -0.75), tk::radius::small, tk::radius::small);
-        p.restore();
-    }
     // The edit point a drag has snapped to.
     if (m_dragging && m_dragMoved && m_snapTime >= 0.0)
         p.fillRect(QRect(static_cast<int>(std::floor(timeToX(m_snapTime))), laneTop, 1, height() - laneTop), C(tk::accentInk));
@@ -2441,46 +2431,6 @@ void TimelineWidget::updateAddLane(const QPoint &point) {
         update(addLaneHitRect());
     }
     if (visible) setCursor(Qt::PointingHandCursor);
-}
-
-// ---- effect drops ------------------------------------------------------------
-
-namespace {
-const char *kFxMime = "application/x-kerf-fx";
-}
-
-void TimelineWidget::dragEnterEvent(QDragEnterEvent *event) {
-    if (isEnabled() && !m_showsProposedCut && event->mimeData()->hasFormat(QString::fromLatin1(kFxMime))) event->acceptProposedAction();
-}
-
-void TimelineWidget::dragMoveEvent(QDragMoveEvent *event) {
-    if (!event->mimeData()->hasFormat(QString::fromLatin1(kFxMime))) return;
-    const ClipHit hit = clipAt(event->position().toPoint());
-    if (hit.id != m_dropClip) {
-        if (!m_dropClip.isEmpty()) update(m_dropRect.toAlignedRect().adjusted(-2, -2, 2, 2));
-        m_dropClip = hit.id;
-        m_dropRect = hit.rect;
-        if (!m_dropClip.isEmpty()) update(m_dropRect.toAlignedRect().adjusted(-2, -2, 2, 2));
-    }
-    // Only a clip takes an effect.
-    if (hit.id.isEmpty()) event->ignore();
-    else event->acceptProposedAction();
-}
-
-void TimelineWidget::dragLeaveEvent(QDragLeaveEvent *) {
-    if (m_dropClip.isEmpty()) return;
-    update(m_dropRect.toAlignedRect().adjusted(-2, -2, 2, 2));
-    m_dropClip.clear();
-}
-
-void TimelineWidget::dropEvent(QDropEvent *event) {
-    const QString fx = QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kFxMime)));
-    const ClipHit hit = clipAt(event->position().toPoint());
-    if (!m_dropClip.isEmpty()) update(m_dropRect.toAlignedRect().adjusted(-2, -2, 2, 2));
-    m_dropClip.clear();
-    if (fx.isEmpty() || hit.id.isEmpty()) return;
-    event->acceptProposedAction();
-    emit effectDropped(hit.id, fx);
 }
 
 TimelineWidget::ClipHit TimelineWidget::clipAt(const QPoint &point) const {

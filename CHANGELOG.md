@@ -52,9 +52,10 @@ on `main`; its section here becomes the release's notes on GitHub
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 - The editor is being cut down to the conversation, the picture and the
-  timeline. Gone so far: Customise Keyboard, the Graph Editor, and the Finish and
+  timeline. Gone so far: Customise Keyboard, the Graph Editor, the Finish and
   Deliver trays (scopes, the loudness meter, the QC pane, the render queue and
-  the paperwork).
+  the paperwork), the Inspector with its Source Monitor, the Effects, Titles and
+  Presets browser, and Sequence Settings.
   - Edit ▸ Keyboard Shortcuts still chooses between the Kerf, Premiere Pro and
     Final Cut Pro layouts; keys of your own no longer apply.
   - Keyframes and their curves are still the project's, for Kerf and `kerf` to
@@ -65,6 +66,13 @@ on `main`; its section here becomes the release's notes on GitHub
     paperwork (comments CSV, markers, EDL, captions).
   - A proposal that changes one clip's colour says so in a line, without the
     small vectorscope.
+  - Media goes into the timeline from the Media sheet: double-click it, or
+    choose it and use Clip ▸ Insert or Overwrite, and the whole of it lands at
+    the playhead. A clip's position, crop, sound, effects and titles are Kerf's
+    to change: ask in the conversation. The mask tools still draw on the
+    picture.
+  - File ▸ Save Current as Preset… and Import Editing Preset… still save and
+    apply a preset; the list of a project's presets is gone.
 
 ## 0.1.1
 

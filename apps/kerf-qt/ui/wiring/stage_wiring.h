@@ -86,7 +86,7 @@ public:
     void setZoom(double zoom);
     double zoom() const;
     static QString zoomText(double zoom);
-    // The Fit menu (Fit, 50%, 100%, 200%, Sequence settings…), as the ≡ menu's
+    // The Fit menu (Fit, 50%, 100%, 200%), as the ≡ menu's
     // Viewer zoom; viewer.zoom's key shows it under the ≡ button.
     QMenu *zoomMenu();
     void showZoomMenu(QWidget *anchor = nullptr);
@@ -141,7 +141,6 @@ private:
     bool m_wrapped = false;
     QPointer<QMenu> m_zoomMenu;
     QList<QPair<double, QAction *>> m_zoomActions;
-    QPointer<QAction> m_sequenceSettings;
     QPointer<ReviewModel> m_review;
     QList<QMetaObject::Connection> m_reviewConnections;
     QString m_current;

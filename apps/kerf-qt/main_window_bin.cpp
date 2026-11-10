@@ -7,12 +7,8 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -82,9 +78,7 @@
 #include <limits>
 #include <utility>
 #include "wiring/main_window_shared.h"
-#include "browser_panel.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 #include "wiring/bin_wiring.h"
 
 namespace kerf {
@@ -309,12 +303,6 @@ void MainWindow::replaceSavedPreset(const QString &path) {
         execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), true}});
 }
 
-void MainWindow::applyLibraryPreset(const QString &path) {
-    // The preset's slots and the media able to fill them come back as
-    // preset_inspect, which opens the bindings dialog.
-    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")}, {QStringLiteral("path"), path}});
-}
-
 QString MainWindow::mediaPath(const QString &mediaId) const {
     for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
         const QJsonObject source = value.toObject();
@@ -369,14 +357,46 @@ void MainWindow::revealMedia(const QString &mediaId) {
 #endif
 }
 
+QJsonObject MainWindow::binMedia() const {
+    const QString id = m_projectPanel ? m_projectPanel->currentMedia() : QString();
+    if (id.isEmpty()) return {};
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
+        if (value.toObject().value(QStringLiteral("id")).toString() == id) return value.toObject();
+    return {};
+}
+
+QStringList MainWindow::sourceTargets() const {
+    // The timeline's targeted track of each kind the bin's media has (its
+    // heads' target toggles; by default the first unlocked of each kind).
+    // A kind whose target is switched off is not edited.
+    const QJsonObject source = binMedia();
+    const QStringList targeted = m_timeline ? m_timeline->targetTracks() : QStringList{};
+    QStringList targets;
+    for (const QString &kind : {QStringLiteral("video"), QStringLiteral("audio")}) {
+        const bool has = kind == QStringLiteral("video") ? source.contains(QStringLiteral("width"))
+                                                         : source.value(QStringLiteral("hasAudio")).toBool();
+        if (!has) continue;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
+            const QJsonObject track = value.toObject();
+            const QString id = track.value(QStringLiteral("id")).toString();
+            if (track.value(QStringLiteral("type")).toString() == kind && !track.value(QStringLiteral("locked")).toBool() &&
+                targeted.contains(id)) {
+                targets.append(id);
+                break;
+            }
+        }
+    }
+    return targets;
+}
+
 QMenu *MainWindow::binMenu(const QString &mediaId) {
     auto *menu = new QMenu(this);
     menu->setObjectName(QStringLiteral("binMenu"));
     menu->setToolTipsVisible(true);
     if (!mediaId.isEmpty()) {
-        QAction *open = menu->addAction(QStringLiteral("Open in Source Monitor"));
-        open->setObjectName(QStringLiteral("binOpen"));
-        connect(open, &QAction::triggered, this, [this, mediaId] { openSource(mediaId); });
+        // The menu is for the media under the pointer, which is the one chosen.
+        menu->addAction(m_commands->action(QStringLiteral("source.insert")));
+        menu->addAction(m_commands->action(QStringLiteral("source.overwrite")));
         menu->addSeparator();
         QAction *replace = menu->addAction(QStringLiteral("Replace Media…"));
         replace->setObjectName(QStringLiteral("binReplace"));
@@ -403,61 +423,23 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
     return menu;
 }
 
-// The media bin, the presets and the effects, and the browser that holds them.
+// The media bin.
 void MainWindow::buildBin() {
     m_projectPanel = new ProjectPanel(m_artwork);
-    connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
+    // Double-click puts the media in at the playhead, as Insert does; what
+    // Insert and Overwrite can do follows the media chosen.
+    connect(m_projectPanel, &ProjectPanel::openRequested, this, [this](const QString &) {
+        updateCommandStates();
+        if (m_commands->isEnabled(QStringLiteral("source.insert"))) triggerCommand(QStringLiteral("source.insert"));
+        else showStatus(m_commands->reason(QStringLiteral("source.insert")), 4000);
+    });
+    connect(m_projectPanel, &ProjectPanel::currentMediaChanged, this, &MainWindow::updateCommandStates);
     connect(m_projectPanel, &ProjectPanel::menuRequested, this, [this](const QString &media, const QPoint &at) {
         QMenu *menu = binMenu(media);
         menu->exec(at);
         menu->deleteLater();
     });
-    m_presets = new PresetsPanel;
-    connect(m_presets, &PresetsPanel::applyRequested, this, &MainWindow::applyLibraryPreset);
-
-    // The effects offered: cards on the selected clip (or the program's
-    // clip under the playhead), from the whole catalog, picture and sound;
-    // the Inspector edits the picture catalog's parameters.
-    m_effects = new EffectsPanel;
-    if (char *catalog = kerf_fx_catalog_all()) {
-        m_effects->setCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
-        kerf_bridge_string_free(catalog);
-    }
-    connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
-        const QStringList clips = m_inspector->selection();
-        if (clips.isEmpty()) return;
-        QJsonArray ops;
-        for (const QString &clip : clips)
-            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")}, {QStringLiteral("clip"), clip}, {QStringLiteral("fx"), fx}});
-        sendEdit(ops);
-        // Adding selects nothing new: back to the Inspector, the new effect
-        // open and in view.
-        if (m_effectsFromInspector && clips.size() == 1) {
-            m_effectsFromInspector = false;
-            m_inspector->revealEffect(int(selectedClipObject().value(QStringLiteral("effects")).toArray().size()));
-            m_shell->setSheet(StageShell::Sheet::Inspector);
-            m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
-        }
-    });
-    connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
-                               {QStringLiteral("clip"), clip},
-                               {QStringLiteral("at"), m_playhead},
-                               {QStringLiteral("effects"), QJsonArray::fromStringList(effects)},
-                               {QStringLiteral("width"), EffectsPanel::kPreviewWidth},
-                               {QStringLiteral("key"), QString::fromLatin1(EffectsPanel::kCardKey)}});
-    });
-
-    // The browser at the band's right: Effects | Titles | Presets.
-    m_browserPanel = new BrowserPanel(nullptr, m_bus);
-    m_browserPanel->setEffects(m_effects);
-    m_browserPanel->setPresets(m_presets);
-    // Leaving Effects without adding: a later add made there stays there.
-    connect(m_browserPanel, &BrowserPanel::pageChanged, this, [this](BrowserPanel::Page page) {
-        if (page != BrowserPanel::Page::Effects) m_effectsFromInspector = false;
-        syncPanelCommands();
-    });
-    // The Titles page, the bin's Index and Roles, and the region's engine traffic.
+    // The bin's Index and Roles, and the region's engine traffic.
     m_binWiring->build();
 }
 

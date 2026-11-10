@@ -11,9 +11,6 @@
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
 #include "ui/components.h"
@@ -21,10 +18,8 @@
 #include "ui/wiring/stage_wiring.h"
 #include "ui/wiring/timeline_wiring.h"
 #include "ui/wiring/toolbar_wiring.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -723,14 +718,8 @@ private slots:
         // A sound clip has no picture to mask.
         window.selectClip(QStringLiteral("a1"));
         QVERIFY(!rectangle->isEnabled());
-        QVERIFY(!window.m_inspector->section(QStringLiteral("masks")));
         window.selectClip(QStringLiteral("c1"));
         QVERIFY(rectangle->isEnabled());
-        // The Inspector's Masks section, with the tools in its header.
-        InspectorSection *masksSection = window.m_inspector->section(QStringLiteral("masks"));
-        QVERIFY(masksSection);
-        QCOMPARE(masksSection->header()->findChildren<QToolButton *>(QStringLiteral("maskTool")).size(), 3);
-        QVERIFY(window.m_inspector->findChild<QLabel *>(QStringLiteral("masksHint")));
         // With no masks and no tool, the viewer still scrubs.
         QSignalSpy scrubs(viewer, &ViewerWidget::scrubbed);
         mouse(viewer, QEvent::MouseMove, QPointF(300, 200));
@@ -783,78 +772,20 @@ private slots:
         mouse(viewer, QEvent::MouseMove, QPointF(20, 20));
         QCOMPARE(scrubs.size(), 1);
 
-        // The Inspector's Masks section edits its mode, inversion, and
-        // properties (feather in px), and an effect's mask parameter picks it.
-        snapshot(5, QJsonArray{k1});
-        InspectorPanel *inspector = window.m_inspector;
-        const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("maskBox"));
-        QCOMPARE(boxes.size(), 1);
-        QVERIFY(boxes.at(0)->findChild<QToolButton *>(QStringLiteral("maskName"))->isChecked());
-        // The selected mask is open.
-        QVERIFY(!boxes.at(0)->findChild<QWidget *>(QStringLiteral("maskBody"))->isHidden());
-        QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("1"));
-        auto *mode = boxes.at(0)->findChild<QComboBox *>(QStringLiteral("maskMode"));
-        auto *inverted = boxes.at(0)->findChild<InspectorSwitch *>(QStringLiteral("maskInverted"));
-        auto *feather = boxes.at(0)->findChild<ScrubField *>(QStringLiteral("maskParam_feather"));
-        auto *maskOpacity = boxes.at(0)->findChild<ScrubField *>(QStringLiteral("maskParam_opacity"));
-        QVERIFY(mode && inverted && feather && maskOpacity);
-        QCOMPARE(feather->format().unit, QStringLiteral("px"));
-        QCOMPARE(maskOpacity->format().unit, QStringLiteral("%"));
-        QCOMPARE(maskOpacity->text(), QStringLiteral("100"));
-        QCOMPARE(mode->count(), 3);
-        QCOMPARE(mode->currentText(), QStringLiteral("add"));
-        mode->setCurrentIndex(2);
-        emit mode->activated(2);
-        set = op();
-        QCOMPARE(set.value("op").toString(), QStringLiteral("mask-set"));
-        QCOMPARE(set.value("mode").toString(), QStringLiteral("none"));
-        inverted->click();
-        QCOMPARE(op().value("inverted").toBool(), true);
-        feather->commitText(QStringLiteral("12"));
-        set = op();
-        QCOMPARE(set.value("op").toString(), QStringLiteral("mask-set"));
-        QCOMPARE(set.value("name").toString(), QStringLiteral("k1"));
-        QCOMPARE(set.value("params").toObject().value("feather").toDouble(), 12.0);
-        snapshot(5, QJsonArray{QJsonObject{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "add"},
-                                           {"inverted", false}, {"params", QJsonObject{{"feather", 12.0}}}}});
-        QCOMPARE(feather->text(), QStringLiteral("12"));
-        feather->commitText(QStringLiteral("0"));
-        QVERIFY(op().value("params").toObject().value("feather").isNull());
-        auto *source = inspector->findChild<QComboBox *>(QStringLiteral("effectParam_path"));
-        QVERIFY(source);
-        QCOMPARE(source->count(), 2);
-        QCOMPARE(source->itemText(1), QStringLiteral("k1"));
         // A mask with mode none is a path only, still drawn and edited.
         snapshot(6, QJsonArray{QJsonObject{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "none"},
                                            {"inverted", false}, {"params", QJsonObject{{"feather", 12.0}}}}});
-        QCOMPARE(mode->currentText(), QStringLiteral("none"));
-        QCOMPARE(feather->value(), 12.0);
         QCOMPARE(viewer->maskAt(toWidget.map(QPointF(0.5, 0.5))), QStringLiteral("k1"));
-        // Choosing it in the panel selects it on the viewer; Delete there
-        // removes it, as ⋯ ▸ Remove in the panel does.
-        viewer->selectMask(QString());
-        boxes.at(0)->findChild<QToolButton *>(QStringLiteral("maskName"))->click();
-        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+        // Delete on the picture removes the selected mask.
+        viewer->selectMask(QStringLiteral("k1"));
         key(viewer, Qt::Key_Delete);
         QJsonObject removed = op();
         QCOMPARE(removed.value("op").toString(), QStringLiteral("mask-remove"));
         QCOMPARE(removed.value("name").toString(), QStringLiteral("k1"));
-        snapshot(7, QJsonArray{k1});
-        inspector->findChild<QAction *>(QStringLiteral("maskRemove"))->trigger();
-        QCOMPARE(op().value("op").toString(), QStringLiteral("mask-remove"));
-        // Selecting it on the picture opens its row there.
-        snapshot(7, QJsonArray{k1});
-        QWidget *body = inspector->findChild<QWidget *>(QStringLiteral("maskBody"));
-        inspector->m_openMasks.clear();
-        body->hide();
-        viewer->selectMask(QStringLiteral("k1"));
-        emit viewer->maskSelected(QStringLiteral("k1"));
-        QVERIFY(!body->isHidden());
 
         // The pen closes an outline on its first point, and Return leaves
         // it open; names take the next free number.
         snapshot(8, {});
-        QVERIFY(inspector->findChildren<QWidget *>(QStringLiteral("maskBox")).isEmpty());
         pen->trigger();
         for (const QPointF &corner : {QPointF(0.1, 0.1), QPointF(0.9, 0.1), QPointF(0.5, 0.9), QPointF(0.1, 0.1)}) {
             mouse(viewer, QEvent::MouseButtonPress, toWidget.map(corner));
@@ -894,26 +825,6 @@ private slots:
         QCOMPARE(viewer->maskTool(), MaskTool::None);
         QVERIFY(!pen->isChecked());
         QVERIFY(op().isEmpty());
-        // Two masks are two rows of the section, a row's height apart; the
-        // section's title and the masks' names are semibold.
-        {
-            QJsonObject k2 = k1;
-            k2.insert("name", "k2");
-            snapshot(9, QJsonArray{k1, k2});
-            const auto pair = inspector->findChildren<QWidget *>(QStringLiteral("maskBox"));
-            QCOMPARE(pair.size(), 2);
-            inspector->ensurePolished();
-            QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("2"));
-            // The group's title, flat: UI 500 (spec 0.3 has only 400 and 500).
-            QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionTitle"))->font().weight(), QFont::Medium);
-            for (QWidget *box : pair) {
-                box->ensurePolished();
-                auto *name = box->findChild<QToolButton *>(QStringLiteral("maskName"));
-                name->ensurePolished();
-                // The flat sheet's UI 500 (spec 0.3 has only 400 and 500).
-                QCOMPARE(name->font().weight(), QFont::Medium);
-            }
-        }
         // A mask whose bottom edge runs within 20 pt of the picture's foot
         // draws its outline there while paused: the stage has no controls
         // on the picture for it to keep clear of.

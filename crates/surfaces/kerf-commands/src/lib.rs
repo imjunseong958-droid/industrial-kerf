@@ -31,8 +31,6 @@ pub enum Scope {
     Window,
     /// Only while the timeline has focus, so typing elsewhere is unaffected.
     Timeline,
-    /// Only while the source monitor has focus.
-    Source,
     /// Only while the comment composer has focus (not its text field,
     /// which types the key).
     Composer,
@@ -83,7 +81,7 @@ pub struct Context {
     pub preview_renderable: bool,
     pub video_tracks: u32,
     pub audio_tracks: u32,
-    /// The marked range of the media open in the source monitor.
+    /// The media chosen in the bin, as the range a source edit places.
     pub source: Option<SourceRange>,
     /// The tracks a source edit places the media on: the first unlocked
     /// track of each kind the media has.
@@ -217,7 +215,6 @@ pub enum Request {
         media: String,
         confirmed: bool,
     },
-    PresetLibrary,
     /// Save the program sequence as `presets/<name>.kerfpreset`.
     PresetSave {
         name: String,
@@ -377,19 +374,11 @@ fn can_render_preview(context: &Context) -> Result<(), &'static str> {
     }
 }
 
-fn has_source(context: &Context) -> Result<(), &'static str> {
-    if context.source.is_some() {
-        Ok(())
-    } else {
-        Err("Open media in the source monitor")
-    }
-}
-
 fn can_edit_source(context: &Context) -> Result<(), &'static str> {
     connected(context)?;
     match &context.source {
-        None => Err("Open media in the source monitor"),
-        Some(range) if range.duration_frames <= 0 => Err("Mark an out point after the in point"),
+        None => Err("Select media in the bin"),
+        Some(range) if range.duration_frames <= 0 => Err("The media has no length"),
         Some(_) if context.source_targets.is_empty() => {
             Err("Add an unlocked track for the source media")
         }
@@ -599,11 +588,6 @@ const fn timeline(mut command: Command) -> Command {
     command
 }
 
-const fn source(mut command: Command) -> Command {
-    command.scope = Scope::Source;
-    command
-}
-
 const fn composer(mut command: Command) -> Command {
     command.scope = Scope::Composer;
     command
@@ -767,14 +751,6 @@ pub static COMMANDS: &[Command] = &[
     ),
     keys(
         frontend(menu(
-            command("browser.search", "Find in Browser", always),
-            Menu::Edit,
-            2,
-        )),
-        &["Ctrl+Shift+F"],
-    ),
-    keys(
-        frontend(menu(
             command("app.preferences", "Settings…", always),
             Menu::Edit,
             3,
@@ -835,30 +811,6 @@ pub static COMMANDS: &[Command] = &[
         &["."],
     ),
     keys(
-        source(frontend(menu(
-            command("source.markIn", "Mark In", has_source),
-            Menu::Markers,
-            0,
-        ))),
-        &["I"],
-    ),
-    keys(
-        source(frontend(menu(
-            command("source.markOut", "Mark Out", has_source),
-            Menu::Markers,
-            0,
-        ))),
-        &["O"],
-    ),
-    keys(
-        source(frontend(menu(
-            command("source.clearMarks", "Clear In and Out", has_source),
-            Menu::Markers,
-            0,
-        ))),
-        &["Ctrl+Shift+X"],
-    ),
-    keys(
         timeline(params(
             menu(
                 command("marker.add", "Add Marker", connected),
@@ -869,30 +821,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["M"],
     ),
-    keys(
-        source(frontend(command(
-            "source.previousFrame",
-            "Previous Frame",
-            has_source,
-        ))),
-        &["Left"],
-    ),
-    keys(
-        source(frontend(command(
-            "source.nextFrame",
-            "Next Frame",
-            has_source,
-        ))),
-        &["Right"],
-    ),
-    // The Source monitor's own buttons: its picture played on its own,
-    // and the clip it shows opened in the timeline.
-    source(frontend(command("source.play", "Play Source", always))),
-    source(frontend(command(
-        "source.reveal",
-        "Open in Timeline",
-        always,
-    ))),
     // The comment composer's Draw on Frame button.
     keys(
         composer(frontend(command("composer.draw", "Draw on Frame", always))),
@@ -959,7 +887,6 @@ pub static COMMANDS: &[Command] = &[
         command("media.make", "Make from Recipe…", connected),
         r#"{"media": string, "confirmed": bool}"#,
     ),
-    command("preset.library", "Refresh Presets", connected),
     command("projection.import", "Load from Disk", is_diverged),
     command("projection.repair", "Keep Editor Version", is_diverged),
     command("collab.status", "Refresh Sync Status", connected),
@@ -1100,14 +1027,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Alt+2"],
     ),
-    keys(
-        frontend(menu(
-            command("sequence.settings", "Sequence Settings…", always),
-            Menu::Sequence,
-            3,
-        )),
-        &["Ctrl+0"],
-    ),
     menu(command("qc.run", "Run QC", connected), Menu::Sequence, 3),
     // The window's panes: the folders, and the panel beside the conversation.
     checkable(keys(
@@ -1151,32 +1070,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Shift+Z"],
     ),
-    // The Inspector column's kinds, ⌃⌥4-6 as in Final Cut Pro.
-    checkable(keys(
-        frontend(menu(
-            command("inspector.video", "Video Inspector", always),
-            Menu::View,
-            2,
-        )),
-        // Meta is a Mac's Control key; the editor binds it to Ctrl elsewhere.
-        &["Meta+Alt+4"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("inspector.audio", "Audio Inspector", always),
-            Menu::View,
-            2,
-        )),
-        &["Meta+Alt+5"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("inspector.info", "Info Inspector", always),
-            Menu::View,
-            2,
-        )),
-        &["Meta+Alt+6"],
-    )),
     frontend(menu(
         command("view.fitTracks", "Fit Tracks to Panel", always),
         Menu::View,
@@ -1271,35 +1164,6 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Ctrl+1"],
     )),
-    checkable(frontend(menu(
-        command("window.source", "Source Monitor", always),
-        Menu::Window,
-        1,
-    ))),
-    // The selected clip's controls, or the sequence's when nothing is
-    // selected; Ctrl+4 as in Final Cut Pro. (Formerly
-    // `window.effectControls`, which the editor still resolves.)
-    checkable(keys(
-        frontend(menu(
-            command("window.inspector", "Inspector", always),
-            Menu::Window,
-            1,
-        )),
-        &["Ctrl+4"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("window.effects", "Effects and titles", always),
-            Menu::Window,
-            1,
-        )),
-        &["Ctrl+5"],
-    )),
-    checkable(frontend(menu(
-        command("window.presets", "Presets", always),
-        Menu::Window,
-        1,
-    ))),
     // Kerf's conversation is always open: this puts the keys in its composer.
     // Ask Kerf is Ctrl+J.
     keys(
@@ -1594,7 +1458,6 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             media: params.require_string("media")?,
             confirmed: params.bool("confirmed")?.unwrap_or(false),
         },
-        "preset.library" => Request::PresetLibrary,
         "preset.save" => Request::PresetSave {
             name: params.require_trimmed("name")?,
             replace: params.bool("replace")?.unwrap_or(false),
@@ -1890,14 +1753,9 @@ mod tests {
         let premiere = Keymap::find("premiere");
         let keys = |id: &str| kerf.keys(find(id).unwrap());
         assert_eq!(keys("window.project"), ["Ctrl+1"]);
-        assert_eq!(keys("window.inspector"), ["Ctrl+4"]);
-        assert_eq!(keys("window.effects"), ["Ctrl+5"]);
         assert_eq!(find("window.project").unwrap().label, "Media");
-        assert_eq!(find("window.effects").unwrap().label, "Effects and titles");
-        for id in ["window.project", "window.inspector", "window.effects"] {
-            let command = find(id).unwrap();
-            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
-        }
+        let media = find("window.project").unwrap();
+        assert!(media.checkable && media.kind == Kind::Frontend);
         assert_eq!(keys("view.annotations"), ["Shift+A"]);
         assert_eq!(keys("view.safeZones"), ["'"]);
         assert_eq!(keys("viewer.zoom"), ["Shift+Z"]);
@@ -1905,23 +1763,14 @@ mod tests {
         assert_eq!(keys("mark.in"), ["I"]);
         assert_eq!(keys("mark.out"), ["O"]);
         assert_eq!(keys("timeline.addTrack"), ["Ctrl+Shift+T"]);
-        assert_eq!(keys("inspector.video"), ["Meta+Alt+4"]);
-        assert_eq!(keys("inspector.audio"), ["Meta+Alt+5"]);
-        assert_eq!(keys("inspector.info"), ["Meta+Alt+6"]);
         assert_eq!(keys("export.master"), ["Ctrl+E"]);
         assert_eq!(premiere.keys(find("export.master").unwrap()), ["Ctrl+M"]);
-        assert_eq!(keys("sequence.settings"), ["Ctrl+0"]);
         assert_eq!(keys("bin.search"), ["Ctrl+F"]);
         assert_eq!(keys("bin.toggleView"), ["Ctrl+Alt+2"]);
-        assert_eq!(keys("browser.search"), ["Ctrl+Shift+F"]);
         assert_eq!(keys("composer.draw"), ["D"]);
-        assert!(keys("source.play").is_empty());
-        assert!(keys("source.reveal").is_empty());
         assert_eq!(keys("window.assistant"), ["Ctrl+Shift+J"]);
-        // The program's marks are the timeline's, the source's the Source
-        // monitor's: the same keys in their own panels.
+        // The program's marks are the timeline's.
         assert_eq!(find("mark.in").unwrap().scope, Scope::Timeline);
-        assert_eq!(find("source.markIn").unwrap().scope, Scope::Source);
     }
 
     #[test]
@@ -1932,17 +1781,13 @@ mod tests {
             assert_ne!(states[command.id], COMING, "{}", command.id);
         }
         for id in [
-            "sequence.settings",
             "view.annotations",
             "viewer.zoom",
             "playback.loop",
             "mark.in",
             "mark.out",
             "mark.clear",
-            "inspector.audio",
-            "inspector.info",
             "view.safeZones",
-            "inspector.video",
             "timeline.addTrack",
             "export.master",
             "qc.run",
@@ -1960,22 +1805,16 @@ mod tests {
         for id in [
             "view.annotations",
             "viewer.zoom",
-            "inspector.audio",
-            "inspector.info",
         ] {
             assert!(offline[id].is_null(), "{id}: {}", offline[id]);
         }
         // The editor's own commands, carried out in the editor, which says
         // itself when one cannot run.
         for id in [
-            "sequence.settings",
             "sequence.setFormat.169",
             "sequence.setFormat.916",
             "bin.search",
             "bin.toggleView",
-            "browser.search",
-            "source.play",
-            "source.reveal",
             "composer.draw",
         ] {
             let command = find(id).unwrap();
@@ -2017,24 +1856,17 @@ mod tests {
             [
                 "sequence.setFormat.169",
                 "sequence.setFormat.916",
-                "sequence.settings",
                 "qc.run"
             ]
         );
         for (id, menu) in [
             ("bin.search", Menu::Edit),
-            ("browser.search", Menu::Edit),
             ("bin.toggleView", Menu::View),
         ] {
             assert_eq!(find(id).unwrap().menu, Some(menu), "{id}");
             assert_eq!(find(id).unwrap().scope, Scope::Window, "{id}");
         }
-        // The Source monitor's buttons and the composer's Draw live in
-        // their panels, not in a menu.
-        for id in ["source.play", "source.reveal"] {
-            let command = find(id).unwrap();
-            assert_eq!((command.menu, command.scope), (None, Scope::Source), "{id}");
-        }
+        // The composer's Draw lives in its panel, not in a menu.
         let draw = find("composer.draw").unwrap();
         assert_eq!((draw.menu, draw.scope), (None, Scope::Composer));
         assert_eq!(kerf.keys(draw), ["D"]);
@@ -2227,7 +2059,7 @@ mod tests {
         let mut context = ready();
         assert_eq!(
             run("source.insert", &context, &Value::Null).unwrap_err(),
-            "Open media in the source monitor"
+            "Select media in the bin"
         );
         context.source = Some(SourceRange {
             media: "m1".into(),
@@ -2430,7 +2262,7 @@ mod tests {
         assert_eq!(menu_of("collab.sync"), "Collaborate");
         assert_eq!(menu_of("collab.consolidate"), "Collaborate");
         assert_eq!(menu_of("file.openProject"), "File");
-        assert_eq!(menu_of("window.presets"), "Window");
+        assert_eq!(menu_of("window.project"), "Window");
         assert_eq!(menu_of("help.guide"), "Help");
         assert_eq!(menu_of("help.crashReports"), "Help");
         assert_eq!(menu_of("help.about"), "Help");
@@ -2609,10 +2441,6 @@ mod tests {
             request("preset.save", &context, json!({"name": "Intro"})),
             json!({"type": "preset_save", "name": "Intro", "replace": false})
         );
-        assert_eq!(
-            request("preset.library", &context, Value::Null),
-            json!({"type": "preset_library"})
-        );
         let mut diverged = context.clone();
         diverged.projection_status = Some("diverged".into());
         assert_eq!(
@@ -2637,7 +2465,6 @@ mod tests {
             ("file.refresh", Value::Null),
             ("media.replace", json!({"media": "m1", "path": "a.mov"})),
             ("media.make", json!({"media": "m1"})),
-            ("preset.library", Value::Null),
             ("preset.save", json!({"name": "Intro"})),
             ("collab.status", Value::Null),
             ("collab.sync", Value::Null),

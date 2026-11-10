@@ -4,8 +4,7 @@ This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Work starts as a conversation: the folders
 at the left and Kerf beside them. The picture and the timeline open in a panel at
-the right once there is something to show; Media, Effects and titles and the
-Inspector open on demand. All of them are backed by the
+the right once there is something to show; Media opens on demand. All of them are backed by the
 bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
@@ -144,13 +143,13 @@ project's name is centred on the window with its state under it
 
 Sources live in the `kerf` namespace. `main_window.cpp` builds the window;
 its members are split by region into `main_window_<region>.cpp` (stage,
-review, inspector, timeline, bin, source, toolbar, status), and each region
+review, agent, timeline, bin, toolbar, status), and each region
 keeps its state in a wiring class under `ui/wiring/` that talks to the others
 only through `ui/editor_bus.h` (the bridge's events, the snapshot, the
 playhead and cross-region requests). `ui/` holds the shared
 parts: the kit (`components`, `icons`), `stage_shell` (the
 window's content and its geometry), the review model and the comments panel's
-rows and proposal cards, the agent HUD, the Inspector column, and
+rows and proposal cards, the agent HUD, and
 `review_link` (kerf:// links). `viewer_widget` is the
 picture, `editor_theme`/`editor_style.h` the colour roles and the
 style sheet generated from them, and `project_launcher` the Choose a Project
@@ -172,7 +171,7 @@ The project directory is created by the runtime when it does not already
 exist. Importing media, timeline edits, undo/redo, proposal approval, preview
 seeking, and export are sent as bounded asynchronous bridge commands. The
 timeline draws the `timeline` view of the model that each snapshot carries,
-and timeline and Inspector edits go to `kerfd` as typed operations counted in
+and timeline edits go to `kerfd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
@@ -185,15 +184,11 @@ same span, and Slide (U) moves a clip between its neighbours. With Snap on
 (Sequence → Snap, Shift+S), dragged clips and edges snap to clip edges, the
 playhead, and the start. A drop lands where the drag's preview showed it.
 
-The Project panel shows the project's media as a bin; double-click an item
-to open it in the Inspector sheet's Source page. There, scrub the bar under the
-picture or step with Left and Right, and mark the range with I and O (Clear In
-and Out is Ctrl+Shift+X); ⇧F goes to its clip in the timeline, and the Media
-sheet's Index lists its shots. Insert (,) and Overwrite (.) place the marked range at
-the playhead on the first unlocked picture and sound tracks the media needs;
-a picture and its sound are placed as linked clips, and Insert ripples the
-rest of the sequence. The Inspector (see below) shows and edits the
-selected clip.
+The Media sheet shows the project's media as a bin, and its Index lists a
+media's shots. Double-click an item, or choose it and use Insert (,) or
+Overwrite (.), to place the whole of it at the playhead on the picture and
+sound tracks the timeline's heads target; a picture and its sound are placed
+as linked clips, and Insert ripples the rest of the sequence.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
@@ -335,9 +330,8 @@ does.
 
 The toolbar holds the traffic lights' room, one ≡ button, the sidebar's button,
 the centred title and subtitle, the panes' two buttons, the two format icons and
-the Export split. ≡ opens Media (⌘1), Effects and titles (⌘5), Inspector (⌘4), the
-three panes, Import…,
-Sequence settings…, Settings… and View: the mask tools, annotations, safe zones
+the Export split. ≡ opens Media (⌘1), the
+three panes, Import…, Settings… and View: the mask tools, annotations, safe zones
 (off by default), viewer zoom, the keyboard's choice and the sync's rows. Every
 row is a registry command. The undo, redo, split, delete and import commands have
 their keys and native menu items.
@@ -351,13 +345,12 @@ composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
 
-**Sheets.** Media (the bin and roles, 272 wide), Effects and titles (the browser,
-304) and the Inspector (its pages, Source among them, 304) are overlays over the
+**The Media sheet.** Media (the bin and roles, 272 wide) is an overlay over the
 conversation, at its panel side, its top and of its height, with a left hairline
-and a close button at the end of their strip. One shows at a time; the
-same command toggles and Esc closes; asking Kerf (⇧⌘J, Ask Kerf on a row) closes
-one that lies over the composer. Selecting a clip opens nothing by itself. A
-sheet never covers the timeline, so a drag from Media or Effects reaches it.
+and a close button at the end of its strip. Its command toggles it and Esc
+closes it; asking Kerf (⇧⌘J, Ask Kerf on a row) closes it when it lies over
+the composer. Selecting a clip opens nothing by itself. The sheet never covers
+the timeline.
 
 **The picture.** Masks, annotations, captions and overlays lie on the frame at
 its size. While a proposal is being previewed, a chip 12 points inside the
@@ -467,107 +460,17 @@ banner. When `project.kerf` changes outside Kerf (a `git pull` in a
 terminal, a text editor), a banner offers Load from Disk or Keep Editor
 Version.
 
-The Presets panel (Window → Presets, behind the Project bin) lists the
-project's preset library, which travels with the repository: each preset's
-slots, author, and last change. Apply chooses this project's media for its
-slots and stages it as a proposal; Save Current as Preset… (also in File)
-adds the program sequence to `presets/`. The list refreshes after each save
-and sync. Right-click media in the Project bin to Replace Media… (swap the
+File ▸ Save Current as Preset… adds the program sequence to the project's
+`presets/`, which travels with the repository. Right-click media in the Project bin to Replace Media… (swap the
 file behind the media for everyone; its clips keep their timing), Reveal in
 Finder, or Consolidate Media. Bin items show Offline when the file is
 missing, Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
 
-## Inspector
-
-Click a clip and the column beside the picture turns into that clip: the
-Inspector comes to the front of the Project / Inspector / Effects / Presets
-column (Window ▸ Inspector, ⌘4) and the chat beside the picture is never
-touched. It remembers the tab it came from and goes back when the selection
-clears (Esc, or a click on an empty lane), unless you chose the Inspector
-yourself; a clip selected by an edit (an insert, a drop, a proposal, undo)
-raises nothing, and a closed Inspector is never reopened by a click. While
-you have Effects or Presets in front, a click on another clip leaves the
-browser there (it follows the selection), so a look can be applied clip by
-clip; only the Inspector's own Add effect brings Effects up for the next
-click to replace, and after an effect is added there a deselect still goes
-back to the tab from before the Inspector came up (Project). Raising never
-moves keyboard focus. What the Inspector keeps open is a preference of this Mac
-(QSettings `editor/inspector/…`). The command's old name,
-`window.effectControls`, still names it.
-
-Its header says what the clip is: a thumbnail, its name (double-click to
-rename it, `set {name}`), its kind in the clip's timeline colour (Video,
-Sequence, Audio, Title, Solid, Adjustment, Caption) with its track, and Start,
-End and Duration as timecode fields (drop-frame where the sequence is). Under
-it are the handful of things you change, with no header — Scale (with Fit /
-Fill), Position, Rotation, Opacity, Blend and Speed for a picture; Volume, Pan
-and Speed for sound; Text, Font and size, Colour, Align and Place for a title
-— then sections folded by default whose headers say what changed in them
-("Bottom 60 px"), in whole words or not at all — the folded Effects header
-names the effects that are on as far as they fit, then " +N" and " · 1 off",
-or just "1 on · 1 off": Crop, Anchor & flip, the linked clip's Audio, Masks,
-Effects, and Source (its file and format, and Source In and Out, which slip
-the clip). Values read in px, %, °, dB, s, /s and timecode; a value at its default
-is drawn quieter than a changed one, and a fill means it can be changed.
-A row shows only where it would do something: a bevel's profile waits for a
-bevel, a camera's Focus for an aperture, a light's Shadow for a light that casts
-one and its Size for a Shadow, a shape's rows for its kind and all a stroke does
-for a Stroke width, and a Lumetri's HDR White and HDR Specular for an HDR sequence.
-A camera, a light and a null draw nothing, so they have no Effects, Compositing,
-Crop or Masks, and an ambient light has no Transform.
-Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
-click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), and step with ↑↓
-while typing (a held key or a quick run of presses is one edit; Esc takes back
-a run not yet sent). A click or a drag in the
-Inspector takes no keyboard focus, and Return or Esc after typing (or Esc
-anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
-working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
-value fields, 84 pt sliders at the 300-point column, controls ending at one
-edge); a click on a slider changes nothing, and a drag moves the knob by as
-much as the pointer moves, wherever it was grabbed (⌥ ÷10). The
-default catches the knob only on the one pixel nearest it, so every value next
-to it can still be dragged to; a double-click on the knob resets it. A slider's
-default is a 1-point tick; under the knob its ends show above and below it, and
-nothing is drawn on the knob, whose edge stands out against the groove and
-panel once the value differs from its default (quieter at it). A switched-off
-effect's values stay in the secondary ink, readable and editable;
-↺ on hover, or a double-click on the label, resets a row, and a section's ↺
-resets it all. Each effect has a switch, its name, a second line listing what
-changed while folded, five parameters before "N more" when that hides two or
-more (six show whole; grouped under quiet sub-headers when the catalog groups
-them, each group's own switch first in it), and ⋯ for Reset Parameters, Ask
-Kerf and Remove. Effect names read in Title Case and row labels in sentence
-case, on one 12-point line: a first word the effect's name already says goes
-("Threshold" under Edge Glow), and a label still too long ends in an ellipsis,
-whole in its tooltip. Animated values show their value at the playhead, read-only.
-With several clips it shows what they share ("Mixed" where they differ; a drag
-moves each alike, in one edit; End is the span's end, and a new End trims only
-the clip ending there, so no gaps open inside the span); with nothing selected, the sequence's format,
-tracks and markers, with only its frame size to change. ⋯ ▸ Ask Kerf opens the
-chat about the clip, and the composer names the selected clip. Selecting
-another clip of the same shape (kind, effect stack, masks) only sets values:
-the rows are not rebuilt, and open sections and the scroll position stay. From
-the click to the painted values takes 7.9 ms (median, a clip with ten effects
-open, measured unoptimized and offscreen on an M-series Mac; the test prints
-it and allows four times that, as GitHub's shared macOS runner takes 17-21 ms).
-
-## Effects
-
-The Effects panel (Window → Effects) shows the catalog's picture effects as
-cards, narrowed by category and by words ("glow", "zoom", "retro"), each
-card the selected media clip's picture at the playhead through that effect,
-named as the Inspector will name it. Titles has a card for each generator, named
-for what it is, with what it does in its tip.
-Double-click a card, or press Return, to add the effect to the selected clip;
-the edit is an ordinary one, undone like any other. Dragging a card onto the
-Inspector inserts the effect where it lands. The Inspector lists the clip's
-effects in order (see below).
-
 ## Masks
 
 The Rectangle, Ellipse, and Pen mask tools sit in the Program panel's title
-bar and in the Inspector's Masks header; they draw on the selected picture
+bar; they draw on the selected picture
 clip. Drag out a rectangle or an ellipse on the picture; with the
 pen, click each corner and click the first one again to close the outline,
 or press Return to leave it open as a path (Escape drops it). A new mask is
@@ -576,9 +479,8 @@ holds its picture: drag a handle to move a corner or point, drag inside a
 mask to move it, and press Delete to remove the selected one. Masks are
 drawn where the clip's picture lands, after its crop, scale, rotation, and
 position; a mask with mode `none` is dashed, a path that effects such as
-Stroke and Reshape read. The Inspector lists the masks with their mode,
-inversion, feather, opacity, and expansion, and an effect's mask parameters
-pick from them. Each change is one edit (`mask-add`, `mask-set`, or
+Stroke and Reshape read. A mask's mode, inversion, feather, opacity and
+expansion are Kerf's to set. Each change is one edit (`mask-add`, `mask-set`, or
 `mask-remove`), undone like any other; a masked clip previews through the
 compositor.
 
@@ -618,8 +520,8 @@ it says what Kerf is working on (with Stop) or names the pinned proposal
 
 Use the project-format picker in the toolbar to switch between 16:9
 (1920 × 1080) and 9:16 (1080 × 1920). It names the format as the window's
-subtitle and the Inspector's Frame size do ("9:16 · 1080 × 1920"), and any other
-size, set with Frame size's or Sequence settings' Custom, as
+subtitle does ("9:16 · 1080 × 1920"), and any other
+size as
 "Custom · 1280 × 720". The viewer fits either canvas
 inside the available panel without cropping and keeps preview captions inside
 the video safe area.
@@ -664,15 +566,15 @@ ctest --test-dir target/qt --output-on-failure
 ```
 
 The tests cover every region (one class per region: the picture, the stage shell
-and its geometry, comments and the review model, Inspector, timeline, bin and
-browser, Source, toolbar, status, the kit, theme, launcher,
+and its geometry, comments and the review model, timeline, bin,
+toolbar, status, the kit, theme, launcher,
 wiring guards, kerf:// links), each fed bridge events shaped as kerfd sends them,
 and `MockupParityTest` checks the whole editor against the design at 1600 × 1000
 in 16:9 and 9:16, with each sheet and a preview.
 With `KERF_SCREENSHOT_DIR` set, it saves each state under the mockup's query state
-(`169.png`, `916-inspector.png`, `916-preview.png`, …), and the
+(`169.png`, `916-media.png`, `916-preview.png`, …), and the
 region galleries save theirs (`editor-<format>-dark.png`,
-`inspector-<pane>.png`, the launcher's pages, the comments panel's states).
+the launcher's pages, the comments panel's states).
 The pictures in them are the tests' procedural footage (`test_footage.h`:
 a harbor at dawn, a close-up on a dock and a drone pass over the coast,
 drawn in code with texture and grain), so no media files are needed.

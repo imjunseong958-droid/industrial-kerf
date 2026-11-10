@@ -276,7 +276,7 @@ signals:
     void razorRequested(const QString &clipId, double timelineFrame);
     // A head's lock, eye (`enabled`), mute or sync-lock (`syncLocked`).
     void trackToggleRequested(const QString &trackId, const QString &field, bool value);
-    // Double-click: open the clip's media in the source monitor.
+    // A clip was double-clicked.
     void clipActivated(const QString &clipId);
     // Option-double-click: ask Kerf about the clip.
     void askRequested(const QString &clipId);
@@ -285,9 +285,6 @@ signals:
     // The S toggles: the tracks to hear alone (empty: all).
     void soloChanged(const QStringList &tracks);
     void targetsChanged(const QStringList &tracks);
-    // An effect card (application/x-kerf-fx, from the Effects browser)
-    // dropped on a clip.
-    void effectDropped(const QString &clipId, const QString &fx);
     // The rubber band dragged: a clip's gain, a level in dB or
     // {keys: [{at: frame, value, interp}]}.
     void gainRequested(const QString &clipId, const QJsonValue &gain);
@@ -311,10 +308,6 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void leaveEvent(QEvent *) override;
-    void dragEnterEvent(QDragEnterEvent *event) override;
-    void dragMoveEvent(QDragMoveEvent *event) override;
-    void dragLeaveEvent(QDragLeaveEvent *event) override;
-    void dropEvent(QDropEvent *event) override;
 
 private:
     struct ClipHit {
@@ -503,9 +496,6 @@ private:
     QList<ProposalBand> m_effectiveBands;
     QSet<QString> m_proposedClips;
     QString m_previewId;
-    // The clip an effect card is held over, ringed in the accent.
-    QString m_dropClip;
-    QRectF m_dropRect;
     QJsonObject m_previewTimeline;
     QHash<QString, QJsonObject> m_previewTracks;
     QList<CommentMark> m_marks;

@@ -27,10 +27,8 @@ QByteArray compact(const QJsonObject &value) {
 } // namespace
 
 QString CommandRegistry::resolve(const QString &id) {
-    static const QHash<QString, QString> aliases{
-        {QStringLiteral("window.effectControls"), QStringLiteral("window.inspector")},
-    };
-    return aliases.value(id, id);
+    // None is renamed now.
+    return id;
 }
 
 CommandRegistry::CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent)

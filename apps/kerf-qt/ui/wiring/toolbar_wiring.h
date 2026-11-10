@@ -7,9 +7,8 @@
 // The toolbar (mockup, minimal pass; 40 tall): the traffic lights' room, one
 // ≡ button (appMenu), the centred title and subtitle, the two format icons and
 // the Export split. Engine paths:
-//   ≡ menu              the registry's commands: window.project, window.effects,
-//                       window.inspector (the sheets), file.import,
-//                       sequence.settings, app.preferences; View ▸ the mask
+//   ≡ menu              the registry's commands: window.project (the Media
+//                       sheet), file.import, app.preferences; View ▸ the mask
 //                       tools, view.annotations, view.safeZones, viewer.zoom,
 //                       the keymap choice and the collab.* commands
 //   title               snapshot timeline.name + timeline.sequences[].name,
@@ -21,10 +20,6 @@
 //                       "Edited 2 min ago · rev 22"
 //   format ⌥1-2         the registry's sequence.setFormat.169/.916 ->
 //                       sequence.setFormat {width, height} (edit set-sequence)
-//   sequence settings   sequence.settings (⌘0) -> SequenceSettingsDialog ->
-//                       edit {set-sequence {name?, width?, height?, start?,
-//                       rate? (empty sequences only)}}; kerfd's refusal shows
-//                       in the dialog, the next revision closes it
 //   composer.draw       D while the composer has the focus: its Draw
 //   Export              export {quality: master, codec: prores_hq} or
 //                       {quality: review, codec: h264}; Render preview is
@@ -59,7 +54,6 @@ class QWidget;
 
 namespace kerf {
 
-class SequenceSettingsDialog;
 class EditorBus;
 class ExportButton;
 class FormatBank;
@@ -160,15 +154,8 @@ public:
     // ---- the commands the window carries out for the features (W3)
     // The registry's format commands, in canvasPresets() order.
     static QStringList formatCommands();
-    // Registers sequence.setFormat.*, sequence.settings and composer.draw,
-    // and the bin's and the source's.
+    // Registers sequence.setFormat.* and composer.draw, and the bin's.
     void installCommands();
-    // Sequence Settings…: opens (or raises) the dialog over the program
-    // sequence; it is not modal, so the window goes on as it is open.
-    SequenceSettingsDialog *openSequenceSettings();
-    SequenceSettingsDialog *sequenceSettings() const;
-    // Sends the dialog's set-sequence op as an edit.
-    bool applySequenceSettings(const QJsonObject &op);
     // composer.draw: the composer's Draw when it has the focus.
     bool drawInComposer();
 
@@ -197,12 +184,6 @@ private:
     // The native menus, kept reachable where there is no menu bar.
     QHash<QString, QMenu *> m_menus;
     QList<QAction *> m_formatActions; // ⌥1-2: the registry's sequence.setFormat.*
-    QPointer<SequenceSettingsDialog> m_sequenceSettings;
-    // A set-sequence edit sent from the dialog, and the revision it went at.
-    bool m_sequencePending = false;
-    quint64 m_sequenceRevision = 0;
-    // The set-sequence op that is waiting for kerfd's answer.
-    QJsonObject m_sequenceOp;
     QTimer *m_titleTimer = nullptr;
 
     // The passing message and when it ends.

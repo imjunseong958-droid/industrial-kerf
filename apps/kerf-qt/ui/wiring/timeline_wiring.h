@@ -17,7 +17,7 @@
 //     its thread; "Ask · N notes" counts the open threads while the panel
 //     is closed;
 //   - QC dots from `check` findings, ghosts from `preview` of a proposal;
-//   - the source patch from the Source viewer's media (sourceTargets()),
+//   - the source patch for the bin's media (sourceTargets()),
 //     again whenever the timeline's targets change;
 //   - solo → `solo {tracks}`, sent again when the engine is ready after a
 //     reconnect; the rubber band → `set {props: {gain}}`.

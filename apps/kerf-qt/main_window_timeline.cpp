@@ -7,12 +7,8 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -84,9 +80,7 @@
 #include "wiring/main_window_shared.h"
 #include "wiring/timeline_wiring.h"
 #include "components.h"
-#include "browser_panel.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 
 namespace kerf {
 
@@ -486,6 +480,36 @@ void MainWindow::buildTimeline() {
     connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
 }
 
+QImage MainWindow::sourceFrame(const QJsonObject &clip, double timelineTime) const {
+    const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
+    QString path;
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() == sourceId) {
+            path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+            break;
+        }
+    }
+    if (path.isEmpty()) return {};
+    const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
+    const double sourceTime = clip.value(QStringLiteral("in")).toDouble() +
+                              (timelineTime - clipStart) * clip.value(QStringLiteral("speed")).toDouble(1.0);
+    QProcess process;
+    process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-v"), QStringLiteral("error"),
+                                             QStringLiteral("-ss"), QString::number(std::max(0.0, sourceTime), 'f', 6),
+                                             QStringLiteral("-i"), path, QStringLiteral("-frames:v"), QStringLiteral("1"),
+                                             QStringLiteral("-vf"), QStringLiteral("scale=960:-2"),
+                                             QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-vcodec"),
+                                             QStringLiteral("png"), QStringLiteral("pipe:1")});
+    if (!process.waitForStarted(3000) || !process.waitForFinished(15000)) {
+        process.kill();
+        process.waitForFinished();
+        return {};
+    }
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0
+               ? QImage::fromData(process.readAllStandardOutput(), "PNG") : QImage();
+}
+
 // The timeline's gestures, and the viewer's scrubs that show on it.
 void MainWindow::wireTimeline() {
     // The bar's tools, the review on the ruler, QC, previews, solo and gain.
@@ -512,14 +536,6 @@ void MainWindow::wireTimeline() {
     connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { selectClip(QString()); });
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
-    connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
-        // Double-click opens the clip's media in the source monitor at its in point.
-        const QJsonObject clip = clipObject(id);
-        const QString media = clip.value(QStringLiteral("sourceId")).toString();
-        if (media.isEmpty()) return;
-        openSource(media);
-        m_sourceMonitor->seek(clip.value(QStringLiteral("in")).toDouble());
-    });
     connect(m_timeline, &TimelineWidget::askRequested, this, [this](const QString &id) {
         selectClip(id);
         triggerCommand(QStringLiteral("ai.ask"));
