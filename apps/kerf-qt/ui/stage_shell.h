@@ -98,7 +98,7 @@ class StageShell final : public QWidget {
     KERF_TEST_FRIENDS
 public:
     enum class Sheet { None, Media, Browser, Inspector };
-    enum class Tray { None, Finish, Deliver, Graph };
+    enum class Tray { None, Finish, Deliver };
 
     explicit StageShell(QWidget *parent = nullptr);
 
@@ -114,7 +114,7 @@ public:
     // the transport.
     void setTransport(QWidget *transport);
     void setSheets(QWidget *media, QWidget *browser, QWidget *inspector);
-    void setTrays(QWidget *finish, QWidget *deliver, QWidget *graph = nullptr);
+    void setTrays(QWidget *finish, QWidget *deliver);
     // Bars that take over the top of the content while they show (the
     // connection, an error, project.kerf changed on disk), over the regions:
     // the three regions keep their rects.
@@ -202,7 +202,7 @@ private:
     QWidget *m_timeline = nullptr;
     QWidget *m_transport = nullptr;
     QWidget *m_sheets[3] = {};
-    QWidget *m_trays[3] = {};
+    QWidget *m_trays[2] = {};
     QList<QWidget *> m_banners;
     // The hairlines between the regions and at a sheet's left and a tray's top.
     QWidget *m_seamSidebar = nullptr;

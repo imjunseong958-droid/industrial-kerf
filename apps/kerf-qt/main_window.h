@@ -50,7 +50,6 @@ class ChatPanel;
 class DeliverTray;
 class EditorBus;
 class FinishTray;
-class GraphEditor;
 class InspectorColumn;
 // The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
 // its region's own state.
@@ -421,7 +420,6 @@ private:
     InspectorColumn *m_inspectorColumn = nullptr;
     BrowserPanel *m_browserPanel = nullptr;
     FinishTray *m_finishTray = nullptr;
-    GraphEditor *m_graphEditor = nullptr;
     DeliverTray *m_deliverTray = nullptr;
     MediaArtwork *m_artwork = nullptr;
     QToolBar *m_toolbar = nullptr;

@@ -1126,10 +1126,6 @@ pub static COMMANDS: &[Command] = &[
         frontend(menu(command("view.followKerf", "Follow Kerf", always), Menu::View, 0)),
         &["Ctrl+Alt+F"],
     )),
-    checkable(keys(
-        frontend(menu(command("view.graph", "Graph Editor", always), Menu::View, 0)),
-        &["Ctrl+Alt+G"],
-    )),
     // The program viewer's switches.
     checkable(keys(
         frontend(menu(

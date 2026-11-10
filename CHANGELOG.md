@@ -52,9 +52,11 @@ on `main`; its section here becomes the release's notes on GitHub
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 - The editor is being cut down to the conversation, the picture and the
-  timeline. Gone so far: Customise Keyboard. Edit ▸ Keyboard Shortcuts still
-  chooses between the Kerf, Premiere Pro and Final Cut Pro layouts; keys of your
-  own no longer apply.
+  timeline. Gone so far: Customise Keyboard and the Graph Editor. Edit ▸ Keyboard
+  Shortcuts still chooses between the Kerf, Premiere Pro and Final Cut Pro
+  layouts; keys of your own no longer apply. Keyframes and their curves are
+  still the project's, for Kerf and `kerf` to write; a motion path is still
+  drawn and dragged on the picture.
 
 ## 0.1.1
 
