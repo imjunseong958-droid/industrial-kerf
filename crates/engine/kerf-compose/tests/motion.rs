@@ -504,6 +504,34 @@ fn a_title_that_sets_no_axis_draws_as_it_does() {
     );
 }
 
+/// The columns a frame has anything lit in, from the first to the last.
+fn lit_span(frame: &Frame) -> u32 {
+    let lit = |column: u32| (0..frame.height).any(|row| pixel(frame, column, row)[0] > 128);
+    let first = (0..frame.width).find(|column| lit(*column));
+    let last = (0..frame.width).rev().find(|column| lit(*column));
+    first.zip(last).map_or(0, |(first, last)| last - first + 1)
+}
+
+#[test]
+fn a_titles_features_change_what_its_font_draws() {
+    let of = |text: &str, set: &str| frame(&clip("title", &format!(r#"text="{text}" size=0.2 {set}"#)), 3);
+    // Inter's 1 is narrower than its 0, until figures are tabular.
+    let (ones, zeros) = (lit_span(&of("1111", "")), lit_span(&of("0000", "")));
+    assert!(ones + 20 < zeros, "{ones} against {zeros}");
+    let (tabular, zeros) = (lit_span(&of("1111", "features=tnum")), lit_span(&of("0000", "features=tnum")));
+    assert!(tabular.abs_diff(zeros) < 6 && tabular > ones + 15, "{tabular} against {zeros}, from {ones}");
+    // A feature takes the font's other glyph, and one turned off undoes what the font does by itself.
+    assert_ne!(of("0", "").rgba, of("0", "features=zero").rgba);
+    assert_ne!(of("->", "").rgba, of("->", "features=-calt").rgba);
+    // As it comes in, where each piece is drawn on its own.
+    assert_eq!(of("0", "features=zero").rgba, of("0", "features=zero reveal=1").rgba);
+    assert_ne!(of("0", "reveal=1").rgba, of("0", "features=zero reveal=1").rgba);
+    // None named, or one the font has not, draws as it did.
+    assert_eq!(of("Hello 0", "").rgba, of("Hello 0", r#"features="""#).rgba);
+    assert_eq!(of("Hello 0", "").rgba, of("Hello 0", "features=smcp").rgba);
+    assert_eq!(of("AV", "").rgba, of("AV", "features=+kern").rgba);
+}
+
 #[test]
 fn a_title_comes_in_from_the_start_of_the_text() {
     let body = clip(

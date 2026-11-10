@@ -17,6 +17,11 @@ on `main`; its section here becomes the release's notes on GitHub
   links in it, and puts `kerf`, `kerfd` and `kerf-mcp` on your `PATH`;
   `sudo apt remove industrial-kerf` takes it away. The `.tar.xz` is still there
   for other distributions, and for those who want a folder.
+- A title can turn its font's OpenType features on and off:
+  `features="tnum zero"` gives tabular figures and a slashed zero, `smcp` small
+  capitals where the font has them, `-liga` turns ligatures off, and `ss01` or
+  `salt=2` take a stylistic set or an alternate. An agent's `look` with `font`
+  names the features a font has.
 - Kerf has an icon of its own, a crane cutting a clip: on its windows and in the
   taskbar, in the Dock and Finder on a Mac, on `kerf-qt.exe`, the installer, the
   Start menu and `kerf://` links on Windows, and among your applications on Linux

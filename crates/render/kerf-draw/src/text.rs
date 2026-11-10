@@ -45,6 +45,8 @@ pub struct Text<'a> {
     pub outline: Option<(Rgba, f32)>,
     /// Where to set a variable font's axes.
     pub axes: &'a [kerf_text::fonts::Axis],
+    /// The font's OpenType features to turn on or off, over what it has on by itself.
+    pub features: &'a [kerf_text::fonts::Feature],
 }
 
 /// Draw `text` over `image`, its lines placed against `at`'s x by its
@@ -62,6 +64,7 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: text.size,
         axes: text.axes.to_vec(),
+        features: text.features.to_vec(),
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -122,6 +125,7 @@ pub fn draw_pieces(
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: text.size,
         axes: text.axes.to_vec(),
+        features: text.features.to_vec(),
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -269,6 +273,7 @@ mod tests {
             justify: Justify::Center,
             outline: None,
             axes: &[],
+            features: &[],
         }
     }
 
@@ -360,6 +365,7 @@ mod tests {
             justify: Justify::Center,
             outline: None,
             axes: &[],
+            features: &[],
         };
         draw(&mut image, &text, [200.0, 100.0], 0.5);
         let (x0, y0, x1, y1) = covered(&image);
@@ -379,6 +385,7 @@ mod tests {
                 justify,
                 outline: None,
                 axes: &[],
+                features: &[],
             };
             draw(&mut image, &text, [200.0, 50.0], 0.5);
             covered(&image)
@@ -399,6 +406,7 @@ mod tests {
             justify: Justify::Center,
             outline: None,
             axes: &[],
+            features: &[],
         };
         draw(&mut plain, &text, [150.0, 50.0], 0.5);
         let outlined = Text {

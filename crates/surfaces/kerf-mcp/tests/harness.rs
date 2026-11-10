@@ -326,6 +326,15 @@ fn look_says_what_axes_a_font_has_on_its_own_scale() {
         .unwrap()
         .iter()
         .all(|face| face["axes"] == json!([])));
+    // Each face names the OpenType features it has, by tag: Inter has tabular figures and no
+    // small capitals, and the test font has none at all.
+    let has = |font: &Value, tag: &str| {
+        let features = font["faces"][0]["features"].as_array().expect("features").clone();
+        features.contains(&json!(tag))
+    };
+    assert!(has(&plain, "tnum") && has(&plain, "kern") && !has(&plain, "smcp"), "{plain}");
+    assert!(has(&ok(&router, "look", json!({"font":"serif"})), "smcp"));
+    assert_eq!(font["faces"][0]["features"], json!([]));
     // A name no font has: the families that contain it, and for nothing, all of them.
     let near = ok(&router, "look", json!({"font":"kerf test"}));
     assert_eq!(near["found"], false);
@@ -2524,8 +2533,13 @@ fn the_check_says_what_does_nothing() {
         "track add V3 video\noverwrite gen=camera at=0f dur=30f on=V3 as=lens\nmask lens add k1 rect=0,0,1,1",
         "draws nothing",
     );
+    // A feature the title's font has not, by the font's name; one turned off asks nothing of it.
+    says(
+        "track add V3 video\noverwrite gen=title at=0f dur=30f on=V3 text=\"No. 10\" features=\"tnum smcp\" as=word",
+        "Inter has no `smcp`",
+    );
     // A scene that means what it says has none of them.
-    let clean = run("set c1 three_d=true z=0.4\nset s1a three_d=true depth=0.1 bevel=0.02 bevel_profile=round\ntrack add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=directional shadow=0.5 size=3 as=lamp\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 aperture=0.03 focus=0.1 as=lens");
+    let clean = run("set c1 three_d=true z=0.4\nset s1a three_d=true depth=0.1 bevel=0.02 bevel_profile=round\ntrack add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=directional shadow=0.5 size=3 as=lamp\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 aperture=0.03 focus=0.1 as=lens\ntrack add V5 video\noverwrite gen=title at=0f dur=30f on=V5 text=\"No. 10\" features=\"tnum -smcp\" as=word");
     let findings = clean["check"]["findings"]
         .as_array()
         .cloned()

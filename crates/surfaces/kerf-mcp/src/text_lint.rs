@@ -15,7 +15,7 @@ use kerf_lang::Clock;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Param, Project, Rgba, Sequence, Time, TrackKind, Value,
 };
-use kerf_text::fonts::Axis;
+use kerf_text::fonts::{self, Axis, Feature};
 use kerf_text::{layout, Align, ParagraphStyle, TextStyle};
 
 /// The most characters a viewer reads in a second (Netflix's limit for
@@ -164,6 +164,22 @@ fn axes_keyed(clip: &Clip) -> bool {
     title_axes(clip).any(|(_, param)| matches!(param, Param::Animated(_)))
 }
 
+/// The features a title names that the font it is drawn in has not, with that font's family: they
+/// draw nothing. One turned off is not among them, as nothing was asked of the font.
+pub(crate) fn features_unread(font: &str, features: &str) -> (String, Vec<String>) {
+    let family = family_of(font);
+    let face = fonts::face(fonts::resolve(if family.is_empty() { "Inter" } else { family }, "Regular").face);
+    let has = face.features();
+    let mut unread: Vec<String> = kerf_model::parse_features(features)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(tag, value)| *value != 0 && !has.contains(tag))
+        .map(|(tag, _)| String::from_utf8_lossy(&tag).into_owned())
+        .collect();
+    unread.dedup();
+    (face.info.family.clone(), unread)
+}
+
 /// The family `font` stands for, as the compositor resolves it.
 pub(crate) fn family_of(font: &str) -> &str {
     GENERIC
@@ -182,7 +198,7 @@ fn canvas(sequence: &Sequence) -> (f64, f64) {
 /// `place` of their height above `at`'s y and its x where `align` puts it.
 fn laid_box(
     text: &str,
-    (font, axes): (&str, Vec<Axis>),
+    (font, axes, features): (&str, Vec<Axis>, Vec<Feature>),
     size: f64,
     align: Align,
     at: [f64; 2],
@@ -196,6 +212,7 @@ fn laid_box(
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
         size: size as f32,
         axes,
+        features,
         ..TextStyle::default()
     };
     let paragraph = ParagraphStyle {
@@ -223,7 +240,7 @@ fn caption_box(sequence: &Sequence, text: &str) -> Option<[f64; 4]> {
     let size = (f64::from(sequence.height) * 0.045).max(12.0);
     laid_box(
         text,
-        ("sans-serif", Vec::new()),
+        ("sans-serif", Vec::new(), Vec::new()),
         size,
         Align::Center,
         [w / 2.0, h * 0.95],
@@ -280,10 +297,15 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
         })
         .filter(|(_, value)| *value != 0.0)
         .collect();
+    // And with the features it names, which change what room the text takes.
+    let features = match get("features")? {
+        Value::Text(features) => kerf_model::parse_features(&features).unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let (cw, ch) = canvas(sequence);
     let laid = laid_box(
         &text,
-        (&font, axes),
+        (&font, axes, features),
         (size * ch).max(1.0),
         align,
         [cw / 2.0, ch / 2.0],

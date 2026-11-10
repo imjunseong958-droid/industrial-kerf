@@ -80,6 +80,28 @@ fn a_titles_axes_round_trip_and_a_bad_one_is_refused() {
 }
 
 #[test]
+fn a_titles_features_round_trip_and_what_names_none_is_refused() {
+    let features = AXES.replace("ital=1", r#"features="tnum -liga salt=2""#);
+    let once =
+        parse_document(&features, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    assert!(printed.contains(r#"features="tnum -liga salt=2""#), "{printed}");
+    // One feature needs no quotes, and commas part them as spaces do.
+    for one in ["features=tnum", "features=tnum,zero", "features=-kern", r#"features="""#] {
+        parse_document(&AXES.replace("ital=1", one), Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{one}: {errors:?}"));
+    }
+    refused(&AXES.replace("ital=1", "features=tabular"), "four letters or digits");
+    refused(&AXES.replace("ital=1", r#"features="tnum salt=two""#), "whole number");
+    refused(&AXES.replace("ital=1", "features={0f:tnum 24f:zero}"), "features");
+    // A shape has no font to set.
+    refused(&OUTLINES.replace("kind=rect", "kind=rect features=tnum"), "features");
+}
+
+#[test]
 fn outlines_round_trip_with_what_animates() {
     let once =
         parse_document(OUTLINES, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));

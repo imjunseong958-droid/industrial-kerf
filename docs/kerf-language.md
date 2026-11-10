@@ -236,6 +236,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   them, and animate: `wght={0f:100 24f:900}`. `look` with `font` names the axes a font has and each one's
   least, default, and most. At 0 an axis stays as the font has it, and a font without that axis takes no
   notice. Check measures a title at its axes, across all of a keyed one. Line height stays the font's.
+  `features` turns the font's OpenType features on and off, by the four-character tags fonts name them
+  with: `features="tnum zero"` for tabular figures and a slashed zero, `-liga` to turn off one the font
+  has on by itself, `salt=2` for its second alternate. Spaces or commas part them, and one alone needs no
+  quotes: `features=smcp`. `look` with `font` names the features each face has; one the font has not
+  draws nothing, which check says. Features do not animate.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

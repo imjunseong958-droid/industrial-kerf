@@ -261,6 +261,8 @@ struct TitlePlan {
     justify: Justify,
     /// Where a variable font's axes are set, by tag, as they are given.
     axes: Vec<([u8; 4], Param)>,
+    /// The font's OpenType features it turns on or off, as `features` names them.
+    features: Vec<([u8; 4], u32)>,
     /// How it comes in, when it does.
     reveal: Option<Box<Reveals>>,
 }
@@ -1454,6 +1456,7 @@ fn title_key(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> String {
     for (tag, _) in &title.axes {
         let _ = write!(key, "|{tag:?}");
     }
+    let _ = write!(key, "|{:?}", title.features);
     if let Some(reveal) = &title.reveal {
         let _ = write!(key, "|{}", reveal.by_word);
     }
@@ -1478,6 +1481,7 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
         justify: title.justify,
         outline: None,
         axes: &axes,
+        features: &title.features,
     };
     let at = [w as f32 / 2.0, h as f32 / 2.0];
     let Some(reveal) = &title.reveal else {
@@ -1707,6 +1711,7 @@ fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
             (size * 0.06) as f32,
         )),
         axes: &[],
+        features: &[],
     }
 }
 
@@ -2559,6 +2564,11 @@ impl<'a> Builder<'a> {
                 .iter()
                 .filter_map(|tag| Some((*tag, params.get(std::str::from_utf8(tag).ok()?)?.clone())))
                 .collect(),
+            // The document is refused where they do not read; a title built past it draws without.
+            features: match get("features")? {
+                Value::Text(features) => kerf_model::parse_features(&features).unwrap_or_default(),
+                _ => Vec::new(),
+            },
             reveal: {
                 let raw = |name: &str| {
                     params

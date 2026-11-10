@@ -51,14 +51,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-apt-get update -q > /dev/null
+# apt-get update succeeds with a warning when it reaches no archive, and then nothing is
+# installable: what it said is kept for that case.
+apt-get update -q > "$scratch/update.log" 2>&1 || { cat "$scratch/update.log" >&2; echo "apt could not read its archives" >&2; exit 1; }
 # As `sudo apt install ./the.deb` would, but for the Recommends: what Kerf needs to start
 # has to be in its Depends. apt reads the file as its own user where it can.
 cp "$deb" "$scratch/industrial-kerf.deb"
 chmod 755 "$scratch"
 installed=true
 apt-get install -y -q --no-install-recommends "$scratch/industrial-kerf.deb" > "$scratch/apt.log" 2>&1 ||
-    { cat "$scratch/apt.log" >&2; echo "apt could not install $deb" >&2; exit 1; }
+    { grep -E '^(W|E|Err):' "$scratch/update.log" >&2 || true; cat "$scratch/apt.log" >&2; echo "apt could not install $deb" >&2; exit 1; }
 [ "$(dpkg-query -W -f='${Version}' industrial-kerf)" = "$version" ] || { echo "apt installed another version than $version" >&2; exit 1; }
 [ -x "$prefix/bin/kerf-qt" ] || { echo "The package installed no $prefix/bin/kerf-qt" >&2; exit 1; }
 

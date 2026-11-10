@@ -35,6 +35,9 @@ pub enum ParamType {
     Points,
     /// Moves, `x,y>x,y x,y>x,y`, held as text.
     Moves,
+    /// A font's OpenType features to turn on or off, `tnum ss01 -liga salt=2`, held as text
+    /// ([`crate::parse_features`]).
+    Features,
     Color,
     Enum(Vec<String>),
 }
@@ -52,6 +55,8 @@ impl ParamType {
             Self::Mask => "mask",
             Self::Points => "points",
             Self::Moves => "moves",
+            // Text to whoever edits it: only what it may hold differs.
+            Self::Features => "text",
             Self::Color => "color",
             Self::Enum(_) => "enum",
         }
@@ -90,6 +95,10 @@ impl ParamDef {
 
     pub fn points(name: &str) -> Self {
         Self::new(name, ParamType::Points, Value::Text(String::new()), false)
+    }
+
+    pub fn features(name: &str) -> Self {
+        Self::new(name, ParamType::Features, Value::Text(String::new()), false)
     }
 
     pub fn moves(name: &str) -> Self {
@@ -201,6 +210,9 @@ impl ParamDef {
                 .map(|_| ())
                 .map_err(|problem| format!("`{}`: {problem}", self.name)),
             (ParamType::Moves, Value::Text(text)) => crate::path::parse_moves(text)
+                .map(|_| ())
+                .map_err(|problem| format!("`{}`: {problem}", self.name)),
+            (ParamType::Features, Value::Text(text)) => crate::features::parse_features(text)
                 .map(|_| ())
                 .map_err(|problem| format!("`{}`: {problem}", self.name)),
             (ParamType::Bool, Value::Bool(_))
@@ -1067,17 +1079,17 @@ fn builtin_catalog() -> Catalog {
             "A line of text. `reveal` animates it by character or word, from the look the `from_` numbers give.",
         )
         .category("Generate")
-        .param(P::text("text", "").doc("The text to show."))
+        .param(P::text("text", ""))
         .param(
             P::number("reveal", 1.0)
                 .range(0.0, 1.0)
-                .doc("How far through the text it has come in; animate 0 to 1."),
+                .doc("How far in it has come; animate 0 to 1."),
         )
         .param(P::choice("reveal_by", &["char", "word"]))
         .param(
             P::number("reveal_soft", 3.0)
                 .range(0.01, 1000.0)
-                .doc("How many characters or words are coming in at once."),
+                .doc("How many come in at once."),
         )
         .param(
             P::number("from_x", 0.0)
@@ -1102,6 +1114,8 @@ fn builtin_catalog() -> Catalog {
         .param(P::number("slnt", 0.0).range(-90.0, 90.0))
         .param(P::number("opsz", 0.0).range(0.0, 1000.0))
         .param(P::number("ital", 0.0).range(0.0, 1.0))
+        // No doc: the reference an agent reads is at its budget, and says what one looks like.
+        .param(P::features("features"))
         .param(
             P::number("size", 0.08)
                 .range(0.005, 1.0)
