@@ -2,8 +2,11 @@ name: Rust runtime
 
 # Linux carries the testing, the Qt editor included; Windows and macOS
 # check what differs on them. The repository is public, so hosted runners
-# cost nothing and all three run side by side on every pull request, every
-# merge to main, and by hand (Actions > Rust runtime > Run workflow).
+# cost nothing: the systems run side by side, and so do the parts of one
+# that do not wait on each other (Linux's tests, lint and editor; macOS's
+# editor and workspace), on every pull request, every merge to main, and by
+# hand (Actions > Rust runtime > Run workflow). A run takes as long as its
+# slowest job, not the sum of them.
 # Feature branches are not built on push: their pull request runs the
 # jobs. A weekly run catches what a newer toolchain, Qt, or FFmpeg broke.
 on:
@@ -21,6 +24,7 @@ on:
       - "apps/kerf-qt/**"
       - "scripts/test-kerf-qt-bridge.py"
       - ".github/workflows/rust-runtime.yml"
+      - ".github/actions/**"
   pull_request:
     paths:
       - "Cargo.toml"
@@ -31,6 +35,7 @@ on:
       - "apps/kerf-qt/**"
       - "scripts/test-kerf-qt-bridge.py"
       - ".github/workflows/rust-runtime.yml"
+      - ".github/actions/**"
   workflow_dispatch:
 
 # A newer push supersedes the checks still running for the one before it, on a
@@ -60,51 +65,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # libclang for ffmpeg-sys-next's bindgen; ALSA for playback's audio
-      # output (cpal); Qt with its private GUI headers and xcb for the
-      # docking library; the offscreen platform plugin and a font for the
-      # UI tests.
-      - name: Install native and Qt dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libclang-dev libasound2-dev \
-            qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
-            libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
-            mesa-vulkan-drivers gnome-keyring dbus-daemon
-      # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
-      # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
-      # shared build with libx264; BtbN keeps its month-end builds for about
-      # two years. Tests, kerfd, and the bridge load its libraries through
-      # LD_LIBRARY_PATH.
-      # GitHub's release downloads have answered 504 for an hour at a time
-      # (2026-11-09), so the pinned archive is kept in the Actions cache and
-      # fetched only when it is not there, with retries over several minutes.
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ffmpeg-archive
-          key: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
-      - name: Install FFmpeg
-        run: |
-          build=autobuild-2026-09-30-13-08
-          name=ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
-          sha256=01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
-          mkdir -p "$RUNNER_TEMP/ffmpeg-archive"
-          archive="$RUNNER_TEMP/ffmpeg-archive/$name.tar.xz"
-          [ -s "$archive" ] || curl -fsSL --retry 8 --retry-all-errors --retry-delay 30 -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
-          echo "$sha256  $archive" | sha256sum -c -
-          tar -xJf "$archive" -C "$RUNNER_TEMP"
-          root="$RUNNER_TEMP/$name"
-          echo "$root/bin" >> "$GITHUB_PATH"
-          echo "FFMPEG_DIR=$root" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$root/lib" >> "$GITHUB_ENV"
-          LD_LIBRARY_PATH="$root/lib" "$root/bin/ffmpeg" -hide_banner -version | head -n 1
+      - uses: ./.github/actions/linux-setup
       # Caches the registry and dependency builds, keyed on Cargo.lock.
       # Workspace crates, the EffectCraft ones included, rebuild each run.
-      # Only main saves, in all three jobs: a pull request's own cache would
-      # serve only that pull request, so pull requests restore main's.
+      # Only main saves: a pull request's own cache would serve only that
+      # pull request, so pull requests restore main's. The editor job of a
+      # system builds a part of what its test job builds, so it restores
+      # that job's cache and saves none.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test workspace
         env:
@@ -126,9 +96,6 @@ jobs:
         env:
           KERF_GPU: software
         run: cargo test -p kerf-compose --test catalog_cost -- --nocapture
-      # The rest of the gate README.md's Verification names.
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
       # The frames the compositor parity tests compared, drawn both ways,
       # to look at when one fails.
       - name: Upload compositor parity frames
@@ -138,6 +105,40 @@ jobs:
           name: compositor-parity-frames
           path: ${{ runner.temp }}/parity
           retention-days: 14
+
+  # The rest of the gate README.md's Verification names. Clippy checks
+  # rather than builds, so it shares nothing with the tests' build and
+  # waits on none of it.
+  linux-lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: ./.github/actions/linux-setup
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  # The Qt editor, its UI tests, and the bridge workflow against a real
+  # kerfd. They need the bridge and the daemon built, not the tests.
+  linux-editor:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/linux-setup
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux
+          save-if: false
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
@@ -262,7 +263,8 @@ jobs:
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: macos
+          save-if: false
       # Only what Linux cannot show: the editor's dylib against Homebrew's
       # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
       # and sockets, which the bridge workflow below goes through.
@@ -276,7 +278,31 @@ jobs:
         run: ctest --test-dir target/qt --output-on-failure
       - name: Test real media and cross-client workflow
         run: python3 scripts/test-kerf-qt-bridge.py
-      # The whole workspace on macOS, after the editor's own steps: its paths,
+
+  macos-workspace:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
+      # build against; ffmpeg-next 9 binds it.
+      - name: Install native media dependencies
+        run: |
+          brew install ffmpeg pkg-config
+          ffmpeg_prefix="$(brew --prefix ffmpeg)"
+          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
+          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The whole workspace on macOS, beside the editor's job: its paths,
       # sockets, and VideoToolbox, and the runner's Metal GPU, so the GPU
       # parity tests run somewhere other than a developer's Mac. "kerf-gpu: no
       # usable GPU" in this step's log means they skipped.
