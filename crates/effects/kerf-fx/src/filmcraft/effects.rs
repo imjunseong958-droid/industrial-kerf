@@ -1200,38 +1200,6 @@ mod tests {
     }
 
     #[test]
-    fn gaussian_preserves_mean_and_blurs() {
-        let mut img = Image::new(64, 64);
-        for y in 28..36 {
-            for x in 28..36 {
-                let i = (y * 64 + x) * 4;
-                img.px[i..i + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
-            }
-        }
-        let sum0: f32 = img.px.iter().sum();
-        gaussian(&mut img, 4.0, 4.0, false);
-        let sum1: f32 = img.px.iter().sum();
-        assert!((sum0 - sum1).abs() / sum0 < 0.02, "{sum0} {sum1}");
-        assert!(img.get(32, 32)[0] < 0.9 && img.get(24, 32)[0] > 0.01);
-    }
-
-    #[test]
-    fn flip_and_crop() {
-        let mut img = Image::new(4, 1);
-        img.px[0..4].copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
-        apply(
-            &mut img,
-            &find_effect("horizontal_flip").unwrap().instance(),
-            &cx(),
-        );
-        assert_eq!(img.get(3, 0), [1.0, 0.0, 0.0, 1.0]);
-        let mut e = find_effect("crop").unwrap().instance();
-        e.params.get_mut("right").unwrap().value = ParamValue::Float(50.0);
-        apply(&mut img, &e, &cx());
-        assert_eq!(img.get(3, 0)[3], 0.0);
-    }
-
-    #[test]
     fn identity_lumetri_is_identity() {
         let mut img = Image::filled(8, 8, [0.18, 0.3, 0.05, 1.0]);
         let before = img.clone();

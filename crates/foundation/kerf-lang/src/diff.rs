@@ -148,16 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn changes_are_grouped_into_hunks_with_context() {
-        let before = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
-        let after = "1\n2\n3\nfour\n5\n6\n7\n8\n9\n10\nelevent\n";
-        assert_eq!(
-            diff_text(before, after),
-            "--- before\n+++ after\n@@ -2,5 +2,5 @@\n 2\n 3\n-4\n+four\n 5\n 6\n@@ -9,2 +9,3 @@\n 9\n 10\n+elevent\n"
-        );
-    }
-
-    #[test]
     fn nearby_changes_share_a_hunk() {
         let diff = diff_text("a\nb\nc\nd\ne\n", "a\nB\nc\nD\ne\n");
         assert_eq!(

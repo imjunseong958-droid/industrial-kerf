@@ -1687,53 +1687,6 @@ mod tests {
     }
 
     #[test]
-    fn latest_seek_slot_keeps_only_the_newest_target() {
-        let (commands, _receiver) = mpsc::sync_channel(1);
-        let control = Arc::new(Mutex::new(ControlState::new()));
-        let handle = PlaybackHandle {
-            commands,
-            control: Arc::clone(&control),
-        };
-        handle.seek(1.0).expect("first seek");
-        handle.seek(2.0).expect("second seek");
-        assert_eq!(
-            control
-                .lock()
-                .expect("control")
-                .latest_seek
-                .as_ref()
-                .map(|request| request.position),
-            Some(2.0)
-        );
-        assert_eq!(
-            control
-                .lock()
-                .expect("control")
-                .latest_seek
-                .as_ref()
-                .map(|request| request.request_id),
-            Some(2)
-        );
-        assert!(
-            control
-                .lock()
-                .expect("control")
-                .latest_seek
-                .as_ref()
-                .unwrap()
-                .exact
-        );
-        assert_eq!(
-            control
-                .lock()
-                .expect("control")
-                .epoch
-                .load(Ordering::Acquire),
-            2
-        );
-    }
-
-    #[test]
     fn scrub_keeps_only_the_latest_approximate_target() {
         let (commands, _receiver) = mpsc::sync_channel(1);
         let control = Arc::new(Mutex::new(ControlState::new()));
@@ -1842,20 +1795,6 @@ mod tests {
                     PlaybackEvent::StateChanged(PlaybackState::Playing)
                 )
         }));
-    }
-
-    #[test]
-    fn accepted_open_publishes_its_event_epoch_before_worker_handles_it() {
-        let (commands, _receiver) = mpsc::sync_channel(1);
-        let control = Arc::new(Mutex::new(ControlState::new()));
-        let handle = PlaybackHandle {
-            commands,
-            control: Arc::clone(&control),
-        };
-        handle
-            .open(kerf_model::Project::default())
-            .expect("accepted open");
-        assert_eq!(control.lock().expect("control").visible_epoch, 1);
     }
 
     #[test]

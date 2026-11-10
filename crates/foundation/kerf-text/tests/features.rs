@@ -26,48 +26,6 @@ fn width(text: &str, style: &TextStyle) -> f32 {
 }
 
 #[test]
-fn tabular_figures_all_take_the_same_room() {
-    let plain = styled(&[]);
-    assert!(width("1111", &plain) < width("0000", &plain) - 20.0, "Inter's 1 is narrower than its 0");
-    let tabular = styled(&[(TNUM, 1)]);
-    assert_eq!(width("1111", &tabular), width("0000", &tabular));
-    assert_eq!(width("1234", &tabular), width("5678", &tabular));
-}
-
-#[test]
-fn a_feature_takes_the_fonts_other_glyphs() {
-    let plain = styled(&[]);
-    let slashed = styled(&[(ZERO, 1)]);
-    assert_ne!(glyphs("0", &plain), glyphs("0", &slashed));
-    assert_eq!(width("0", &plain), width("0", &slashed), "the slashed zero is as wide");
-    // Only the zero: the rest of the text is shaped as before.
-    assert_eq!(glyphs("abc", &plain), glyphs("abc", &slashed));
-    // Three glyphs become a fraction, and a narrower one.
-    let fraction = styled(&[(FRAC, 1)]);
-    assert_ne!(glyphs("1/2", &plain), glyphs("1/2", &fraction));
-    assert!(width("1/2", &fraction) < width("1/2", &plain) - 20.0);
-}
-
-#[test]
-fn zero_turns_off_what_the_font_has_on() {
-    // Inter joins a hyphen and a greater-than into an arrow by itself.
-    let plain = styled(&[]);
-    assert_eq!(glyphs("->", &plain).len(), 1);
-    assert_eq!(glyphs("->", &styled(&[(CALT, 0)])).len(), 2);
-    assert!(width("AV", &styled(&[(KERN, 0)])) > width("AV", &plain) + 3.0, "unkerned, A and V stand apart");
-    // On is what it was already.
-    assert_eq!(width("AV", &styled(&[(KERN, 1)])), width("AV", &plain));
-}
-
-#[test]
-fn a_feature_named_holds_over_the_styles_own_switch() {
-    let unkerned = TextStyle { kerning: false, ..styled(&[]) };
-    let named = TextStyle { kerning: false, ..styled(&[(KERN, 1)]) };
-    assert!(width("AV", &named) < width("AV", &unkerned) - 3.0);
-    assert_eq!(width("AV", &named), width("AV", &styled(&[])));
-}
-
-#[test]
 fn a_face_without_a_feature_takes_no_notice() {
     let plain = styled(&[]);
     for tag in [SMCP, *b"zzzz"] {

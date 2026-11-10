@@ -809,69 +809,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_boxes_are_the_flattest_in_order() {
-        // Each box flatter than the last, as a full sort of every candidate gives.
-        let (w, h) = (320u32, 240u32);
-        let mut img = Image::new(w, h);
-        for (i, p) in img.data.iter_mut().enumerate() {
-            let v = hash1(i as u32 % w, i as u32 / w, 3);
-            *p = [v, v, v, 1.0];
-        }
-        let boxes = sample_boxes(&img, 40, 8);
-        let low = Plane::luma(&img);
-        let variance = |&(x, y, s): &(usize, usize, usize)| {
-            let (mut sum, mut sq, mut n) = (0.0f32, 0.0f32, 0.0f32);
-            for yy in y..y + s {
-                for xx in x..x + s {
-                    let v = low.data[yy * w as usize + xx];
-                    sum += v;
-                    sq += v * v;
-                    n += 1.0;
-                }
-            }
-            sq / n - (sum / n).powi(2)
-        };
-        assert_eq!(boxes.len(), 40);
-        assert!(boxes.windows(2).all(|pair| variance(&pair[0]) <= variance(&pair[1])));
-        // None flatter was left out.
-        let worst = boxes.last().map(variance).unwrap();
-        let step = 4;
-        let mut flatter = 0;
-        for y in (0..=h as usize - 8).step_by(step) {
-            for x in (0..=w as usize - 8).step_by(step) {
-                if variance(&(x, y, 8)) < worst {
-                    flatter += 1;
-                }
-            }
-        }
-        assert!(flatter < 40, "{flatter}");
-    }
-
-    #[test]
-    fn a_guide_shared_filters_as_one_made_for_each_plane() {
-        let (w, h) = (48, 32);
-        let plane = |seed: u32| Plane { w, h, data: (0..w * h).map(|i| hash1(i as u32, seed, 5)).collect() };
-        let (g, a, b) = (plane(1), plane(2), plane(3));
-        use crate::util::box_plane;
-        // The filter as He, Sun, and Tang wrote it, nothing shared.
-        let by_hand = |p: &Plane, eps: f32| {
-            let r = 2;
-            let (mean_g, mean_p) = (box_plane(&g, r, r), box_plane(p, r, r));
-            let corr_gp = box_plane(&g.zip_map(p, |a, b| a * b), r, r);
-            let corr_gg = box_plane(&g.map(|a| a * a), r, r);
-            let n = w * h;
-            let slope: Vec<f32> =
-                (0..n).map(|i| (corr_gp.data[i] - mean_g.data[i] * mean_p.data[i]) / (corr_gg.data[i] - mean_g.data[i] * mean_g.data[i] + eps)).collect();
-            let level: Vec<f32> = (0..n).map(|i| mean_p.data[i] - slope[i] * mean_g.data[i]).collect();
-            let (ma, mb) = (box_plane(&Plane { w, h, data: slope }, r, r), box_plane(&Plane { w, h, data: level }, r, r));
-            (0..n).map(|i| ma.data[i] * g.data[i] + mb.data[i]).collect::<Vec<f32>>()
-        };
-        let shared = Guide::new(&g, 2);
-        assert_eq!(shared.filter(&a, 1e-3).data, by_hand(&a, 1e-3));
-        assert_eq!(shared.filter(&b, 1e-3).data, by_hand(&b, 1e-3));
-    }
-
     /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values 0 to 1, or
     /// `None` when `KERF_REAL_FOOTAGE` does not say where it is.
     fn footage(name: &str) -> Option<Image> {

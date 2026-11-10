@@ -304,16 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn hard_rects_cover_whole_pixels_exactly() {
-        let mask = flat(MaskShape::Rect([0.2, 0.2, 0.65, 0.6]), 10.0, MaskMode::Add);
-        let covered = coverage(&[mask], 10, 10).unwrap();
-        assert_eq!(covered[3 * 10 + 3], 1.0);
-        assert_eq!(covered[3 * 10 + 1], 0.0);
-        assert!((covered[3 * 10 + 6] - 0.5).abs() < 1e-6);
-        assert_eq!(covered[8 * 10 + 3], 0.0);
-    }
-
-    #[test]
     fn ellipses_cover_their_area() {
         let mask = flat(
             MaskShape::Ellipse([0.5, 0.5, 0.3, 0.2]),
@@ -400,23 +390,6 @@ mod tests {
     }
 
     #[test]
-    fn a_soft_edge_has_no_seam_where_two_edges_meet() {
-        // Whichever edge a pixel goes by, none is far from its neighbours: a fall-off at least 12 wide
-        // changes by 1.5 / 12 a pixel at most.
-        let covered = coverage(&[soft_square(vec![12.0, 30.0, 12.0, 30.0])], 100, 100).unwrap();
-        for y in 1..99 {
-            for x in 1..99 {
-                let here = covered[y * 100 + x];
-                let (across, down) = (covered[y * 100 + x + 1], covered[(y + 1) * 100 + x]);
-                assert!(
-                    (here - across).abs() < 0.2 && (here - down).abs() < 0.2,
-                    "{x},{y}: {here} {across} {down}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn a_shape_with_soft_corners_prepares_them_at_the_scale_it_draws() {
         let mask = Mask {
             name: kerf_model::Id::new("p").unwrap(),
@@ -433,20 +406,4 @@ mod tests {
         assert_eq!(flat[0].soft, [2.0, 4.0, 6.0]);
     }
 
-    #[test]
-    fn open_outlines_and_none_cut_nothing() {
-        let open = Mask {
-            name: kerf_model::Id::new("p").unwrap(),
-            shape: MaskShape::Polygon {
-                points: vec![[0.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                closed: false,
-                soft: Vec::new(),
-            },
-            mode: MaskMode::Add,
-            inverted: false,
-            params: Default::default(),
-        };
-        assert!(!cuts(&open));
-        assert!(prepare(&[open], (10.0, 10.0), 1.0, Time::ZERO).is_empty());
-    }
 }

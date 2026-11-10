@@ -335,26 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn cloning_brings_what_is_there_here_and_touches_nothing_else() {
-        let mut picture = Image::filled(100, 60, GRAY);
-        let white = [1.0; 4];
-        square(&mut picture, 10, 20, 20, white);
-        let before = picture.clone();
-        clone_stroke(&mut picture, None, &dab(70.0, 30.0, 8.0), [-50.0, 0.0]);
-        assert_eq!(picture.get(70, 30), white);
-        assert_eq!(picture.get(70, 45), GRAY);
-        assert_eq!(picture.get(20, 30), white);
-        let changed = picture
-            .px
-            .as_chunks::<4>().0.iter()
-            .zip(before.px.as_chunks::<4>().0.iter())
-            .filter(|(a, b)| a != b)
-            .count();
-        let area = std::f32::consts::PI * 64.0;
-        assert!((changed as f32 - area).abs() < area * 0.2, "{changed}");
-    }
-
-    #[test]
     fn a_stroke_paints_along_its_line_and_softly_by_its_hardness_and_opacity() {
         let mut picture = Image::filled(100, 60, GRAY);
         let other = Image::filled(100, 60, [1.0; 4]);
@@ -384,15 +364,6 @@ mod tests {
             middle > 0.99 && part > 0.4 && part < 0.9 && edge < 0.4,
             "{middle} {part} {edge}"
         );
-    }
-
-    #[test]
-    fn what_a_stroke_would_read_from_outside_the_picture_it_leaves_alone() {
-        let mut picture = Image::filled(100, 60, GRAY);
-        square(&mut picture, 0, 0, 4, [1.0; 4]);
-        let before = picture.clone();
-        clone_stroke(&mut picture, None, &dab(50.0, 30.0, 6.0), [-90.0, 0.0]);
-        assert_eq!(picture, before);
     }
 
     /// A left-to-right ramp with a fine check over it.

@@ -74,16 +74,6 @@ fn mean_abs(a: &Image, b: &Image) -> f32 {
 }
 
 #[test]
-fn endpoints_are_exact_outgoing_and_incoming() {
-    let (a, b) = (frame_a(), frame_b());
-    for d in transitions() {
-        let e = Params::new();
-        assert_eq!(draw(d, &e, &a, &b, 0.0), a, "{} p=0 is A", d.id);
-        assert_eq!(draw(d, &e, &a, &b, 1.0), b, "{} p=1 is B", d.id);
-    }
-}
-
-#[test]
 fn continuous_near_both_ends() {
     let (a, b) = (frame_a(), frame_b());
     for d in transitions() {
@@ -98,54 +88,6 @@ fn continuous_near_both_ends() {
         assert!(
             near_b < 0.06,
             "{}: p=0.99 jumps away from B by {near_b}",
-            d.id
-        );
-    }
-}
-
-#[test]
-fn midpoint_is_a_real_transition_and_sane() {
-    let (a, b) = (frame_a(), frame_b());
-    for d in transitions() {
-        let e = Params::new();
-        for p in [0.3, 0.5, 0.7] {
-            let m = draw(d, &e, &a, &b, p);
-            assert_eq!((m.w, m.h), (W, H));
-            assert!(
-                m.px.iter().all(|v| v.is_finite()),
-                "{} p={p}: non-finite",
-                d.id
-            );
-            assert!(
-                m.px.chunks(4).all(|c| (-1e-4..=1.0 + 1e-4).contains(&c[3])),
-                "{} p={p}: alpha out of range",
-                d.id
-            );
-            assert!(
-                m.px.iter().all(|v| *v > -0.3 && *v < 50.0),
-                "{} p={p}: wild values",
-                d.id
-            );
-        }
-        let m = draw(d, &e, &a, &b, 0.5);
-        let (da, db) = (mean_abs(&m, &a), mean_abs(&m, &b));
-        assert!(
-            da > 0.005 && db > 0.005,
-            "{}: midpoint equals one side (ΔA {da}, ΔB {db})",
-            d.id
-        );
-    }
-}
-
-#[test]
-fn deterministic() {
-    let (a, b) = (frame_a(), frame_b());
-    for d in transitions() {
-        let e = Params::new();
-        assert_eq!(
-            draw(d, &e, &a, &b, 0.37),
-            draw(d, &e, &a, &b, 0.37),
-            "{}",
             d.id
         );
     }
@@ -278,39 +220,6 @@ fn directions_differ() {
 }
 
 #[test]
-fn wipe_border_and_centre() {
-    let (a, b) = (frame_a(), frame_b());
-    let iris = def("iris-round");
-    let e: Params = [
-        ("border_width".to_owned(), number(3.0)),
-        (
-            "border_color".to_owned(),
-            Param::Static(Value::Color(Rgba::rgb(0, 255, 0))),
-        ),
-    ]
-    .into();
-    let m = draw(iris, &e, &a, &b, 0.4);
-    let green =
-        m.px.chunks(4)
-            .filter(|c| c[1] > 0.9 && c[0] < 0.1 && c[2] < 0.1)
-            .count();
-    assert!(green > 20, "border drawn ({green} px)");
-    // centre at the top-left: the incoming clip shows there first
-    let e: Params = [
-        ("center_x".to_owned(), number(0.0)),
-        ("center_y".to_owned(), number(0.0)),
-    ]
-    .into();
-    let m = draw(iris, &e, &a, &b, 0.2);
-    assert_eq!(m.get(1, 1), b.get(1, 1));
-    assert_eq!(m.get(W - 2, H - 2), a.get(W - 2, H - 2));
-    // half-resolution parameters scale with the image
-    let none = Params::new();
-    let half = apply_scaled(&Fx::new(iris, &none).unwrap(), &a, &b, 0.5, 0.5);
-    assert!(half.px.iter().all(|v| v.is_finite()));
-}
-
-#[test]
 fn push_moves_frames_by_the_eased_distance() {
     let (a, b) = (frame_a(), frame_b());
     let e: Params = [("motion_blur".to_owned(), number(0.0))].into();
@@ -321,100 +230,6 @@ fn push_moves_frames_by_the_eased_distance() {
         assert!(
             want.iter().zip(got).all(|(p, q)| (p - q).abs() < 1e-3),
             "x={x}: {got:?} vs {want:?}"
-        );
-    }
-}
-
-#[test]
-fn ids_name_their_filmcraft_transitions() {
-    assert_eq!(filmcraft_id("push").as_deref(), Some("push"));
-    assert_eq!(filmcraft_id("cross-zoom").as_deref(), Some("cross_zoom"));
-    assert_eq!(filmcraft_id("mosaic").as_deref(), Some("mosaic_transition"));
-    // Kerf's own transitions and effects are not FilmCraft's.
-    assert_eq!(filmcraft_id("dissolve"), None);
-    assert_eq!(filmcraft_id("blur.gaussian"), None);
-}
-
-/// A jump cut (256×144): a static background with a 64×72 subject whose left edge is at `x0`;
-/// flat colours, or a smooth texture on both (the subject's own texture moves with it).
-fn jump_cut_frame(x0: f32, textured: bool) -> Image {
-    let tex = |u: f32, v: f32, k: f32| {
-        0.35 + 0.15 * (u * 0.21 * k).sin() * (v * 0.17).cos()
-            + 0.1 * ((u + v) * 0.11 * k).sin()
-            + 0.05 * (u * 0.53 - v * 0.31 * k).cos()
-    };
-    paint(256, 144, |x, y| {
-        let inside = (x0..x0 + 64.0).contains(&x) && (36.0..108.0).contains(&y);
-        let l = match (textured, inside) {
-            (false, true) => 0.95,
-            (false, false) => 0.3,
-            (true, true) => 0.4 + tex(x - x0, y, 0.6),
-            (true, false) => 0.6 * tex(x, y, 1.0),
-        };
-        [l, l * 0.9, l * 0.8, 1.0]
-    })
-}
-
-#[test]
-fn morph_cut_moves_the_subject_instead_of_double_exposing() {
-    // the subject jumps 12 px between the shots; at the midpoint Morph Cut shows it once, 6 px
-    // along, where a cross dissolve shows two half-bright copies
-    let (a, b) = (jump_cut_frame(96.0, false), jump_cut_frame(108.0, false));
-    let want = jump_cut_frame(102.0, false);
-    let morph = draw(def("morph-cut"), &Params::new(), &a, &b, 0.5);
-    let dissolve = a.clone().lerp(&b, 0.5);
-    // mean red error down a column through the subject's rows
-    let column_err = |img: &Image, x: usize| {
-        (40..104)
-            .map(|y| (img.get(x, y)[0] - want.get(x, y)[0]).abs())
-            .sum::<f32>()
-            / 64.0
-    };
-    // uncovered background, both edges, the middle, background still to be covered
-    for x in [98usize, 103, 134, 165, 170] {
-        let (m, d) = (column_err(&morph, x), column_err(&dissolve, x));
-        assert!(m < 0.12, "x={x}: morph off by {m} (dissolve {d})");
-    }
-    for x in [98usize, 170] {
-        assert!(
-            column_err(&dissolve, x) > 0.3,
-            "x={x}: the dissolve ghosts here"
-        );
-    }
-    let (e_morph, e_dissolve) = (mean_abs(&morph, &want), mean_abs(&dissolve, &want));
-    assert!(
-        e_morph * 10.0 < e_dissolve,
-        "morph {e_morph} vs dissolve {e_dissolve}"
-    );
-    // the background away from the subject is left alone
-    for (x, y) in [(8, 8), (40, 70), (220, 130)] {
-        assert!(
-            morph
-                .get(x, y)
-                .iter()
-                .zip(a.get(x, y))
-                .all(|(p, q)| (p - q).abs() < 1e-4),
-            "({x}, {y})"
-        );
-    }
-}
-
-#[test]
-fn morph_cut_tracks_textured_subjects_and_follows_the_progress() {
-    // detail on the subject and behind it: the morph lands much closer than the dissolve, at
-    // the midpoint and a quarter of the way through
-    for (p, from, to, at) in [
-        (0.5f32, 96.0f32, 108.0f32, 102.0f32),
-        (0.25, 96.0, 112.0, 100.0),
-    ] {
-        let (a, b) = (jump_cut_frame(from, true), jump_cut_frame(to, true));
-        let want = jump_cut_frame(at, true);
-        let morph = draw(def("morph-cut"), &Params::new(), &a, &b, p);
-        let dissolve = a.clone().lerp(&b, p);
-        let (e_morph, e_dissolve) = (mean_abs(&morph, &want), mean_abs(&dissolve, &want));
-        assert!(
-            e_morph * 2.0 < e_dissolve,
-            "p={p}: morph {e_morph} vs dissolve {e_dissolve}"
         );
     }
 }

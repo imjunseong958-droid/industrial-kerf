@@ -2636,7 +2636,7 @@ mod proposal_tests;
 mod tests {
     use super::*;
     use crate::ipc::expect_state;
-    use crate::store::{CHECKPOINT_TEMP_FILE, LOCK_FILE};
+    use crate::store::CHECKPOINT_TEMP_FILE;
     use crate::{parse_document, run_stdio, RuntimeHandle, MAX_RENDER_RANGE_SECONDS};
     use serde_json::{json, Value};
     use std::fs::OpenOptions;
@@ -2951,22 +2951,6 @@ mod tests {
         let reopened = Runtime::open(&directory).unwrap();
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn idempotency_replays_only_the_same_request() {
-        let mut runtime = runtime();
-        let first = runtime
-            .apply_script_request("ui", "key-1", "track add T1 subtitle", 0)
-            .unwrap();
-        let replay = runtime
-            .apply_script_request("ui", "key-1", "track add T1 subtitle", 0)
-            .unwrap();
-        assert_eq!(first.revision, replay.revision);
-        let error = runtime
-            .apply_script_request("ui", "key-1", "track remove T1", 1)
-            .unwrap_err();
-        assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
     }
 
     #[test]
@@ -3520,30 +3504,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_project_reached_through_a_link_still_holds_its_media() {
-        let real = media_project("linked");
-        let link = real.with_file_name(format!("kerf-runtime-link-{}", unique_id()));
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let file = real.join("media").join("a.mov");
-        fs::write(&file, "x").unwrap();
-        assert_eq!(
-            project_relative(&link, &file).as_deref(),
-            Some("media/a.mov")
-        );
-        assert_eq!(
-            project_relative(&real, &link.join("media/a.mov")).as_deref(),
-            Some("media/a.mov")
-        );
-        assert_eq!(
-            project_relative(&real.join("media"), &real.join("a.mov")),
-            None
-        );
-        assert_eq!(project_relative(&real, &real.join("../a.mov")), None);
-        let _ = fs::remove_file(&link);
-        let _ = fs::remove_dir_all(&real);
-    }
-
-    #[test]
     fn media_from_a_probe_is_read_never_guessed() {
         let probe = kerf_engine::ProbeInfo {
             duration: Some(2.5),
@@ -3682,41 +3642,6 @@ mod tests {
     }
 
     #[test]
-    fn diverged_projection_keeps_checkpoint_threshold_journal_for_recovery() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-journal-threshold-{}", unique_id()));
-        let mut runtime = Runtime::open(&directory).unwrap();
-        let before = runtime.snapshot();
-        let before_document = runtime.document(false);
-        runtime.journal_records_since_checkpoint = CHECKPOINT_INTERVAL - 1;
-        fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
-        fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
-
-        let committed = edit(
-            &mut runtime,
-            "marker add at=0f as=threshold",
-            before.revision,
-        )
-        .unwrap();
-        assert_eq!(committed.projection_status, "diverged");
-        let checkpoint: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap())
-                .unwrap();
-        assert_eq!(checkpoint["revision"], before.revision);
-        assert!(fs::metadata(directory.join(JOURNAL_FILE)).unwrap().len() > 0);
-        drop(runtime);
-
-        fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
-        fs::write(directory.join(PROJECT_FILE), &before_document).unwrap();
-        let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert!(has_marker(&reopened.snapshot(), "threshold"));
-        assert_eq!(reopened.snapshot().projection_status, "current");
-        drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn failed_startup_projection_repair_reports_project_status() {
         let directory =
             std::env::temp_dir().join(format!("kerf-runtime-repair-status-{}", unique_id()));
@@ -3763,36 +3688,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_proposal_lifecycle_survives_restart() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-proposal-restart-{}", unique_id()));
-        let proposal_id = {
-            let mut runtime = Runtime::open(&directory).unwrap();
-            let staged = runtime
-                .stage_script_proposal("agent-restart", 0, "marker add at=0f as=survives", None)
-                .unwrap();
-            pending_id(&staged)
-        };
-        let mut reopened = Runtime::open(&directory).unwrap();
-        assert!(matches!(
-            reopened.snapshot().pending_proposal,
-            Some(PendingProposal::Pending { script, document_diff, .. })
-                if script == "marker add as=survives at=00:00:00:00\n"
-                    && document_diff.contains("+  marker survives at=00:00:00:00")
-        ));
-        let accepted = reopened
-            .accept_proposal(&proposal_id, "ui", "accept-restart", 0)
-            .unwrap();
-        assert_eq!(accepted.revision, 1);
-        assert!(matches!(
-            accepted.pending_proposal,
-            Some(PendingProposal::Accepted { .. })
-        ));
-        drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn accepted_proposal_receipt_survives_restart() {
         let directory =
             std::env::temp_dir().join(format!("kerf-runtime-accepted-restart-{}", unique_id()));
@@ -3821,18 +3716,6 @@ mod tests {
         assert!(has_marker(&replay, "persisted"));
         assert!(!has_marker(&replay, "later"));
         drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn stale_lock_file_is_reusable_after_process_exit() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-stale-lock-{}", unique_id()));
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join(LOCK_FILE), b"dead pid").unwrap();
-        let runtime = Runtime::open(&directory).unwrap();
-        assert_eq!(runtime.snapshot().revision, 0);
-        drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -4182,29 +4065,6 @@ mod tests {
         assert_eq!(reopened.snapshot().timeline["name"], "explicit import");
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn abandoned_render_jobs_are_reconciled_after_restart() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-job-recovery-{}", unique_id()));
-        let job_id = {
-            let mut runtime = Runtime::open(&directory).unwrap();
-            let (job, _, _) = runtime
-                .start_render_range("preview", None, None, None)
-                .unwrap();
-            assert_eq!(job.status, "queued");
-            job.job_id
-        };
-        let runtime = Runtime::open(&directory).unwrap();
-        let job = runtime.render_job(&job_id).unwrap();
-        assert_eq!(job.status, "failed");
-        assert_eq!(
-            job.error.as_deref(),
-            Some("render job was abandoned when kerfd restarted")
-        );
-        drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
 

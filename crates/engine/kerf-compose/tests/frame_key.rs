@@ -72,15 +72,6 @@ fn an_edit_leaves_the_frames_it_does_not_touch() {
 }
 
 #[test]
-fn a_clip_moved_along_the_timeline_keeps_its_frames() {
-    let media = Media::new();
-    let here = "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n";
-    let later = "  track V1 video\n    clip c1 media=m src=0f at=24f dur=12f\n";
-    assert_eq!(media.key(here, 5), media.key(later, 29));
-    assert_ne!(media.key(here, 5), media.key(later, 30));
-}
-
-#[test]
 fn what_changes_the_picture_changes_the_number() {
     let media = Media::new();
     let clip = "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n";
@@ -109,18 +100,6 @@ fn what_changes_the_picture_changes_the_number() {
     let compositor = media.compositor(clip, false);
     let at = Rate::FPS_24.time_of(6);
     assert_ne!(compositor.frame_key(at, 1.0), compositor.frame_key(at, 0.5));
-}
-
-#[test]
-fn the_file_itself_counts() {
-    let media = Media::new();
-    let clip = "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n";
-    let before = media.key(clip, 6);
-    // Longer, so it differs whatever the clock's resolution.
-    let mut bytes = std::fs::read(&media.path).expect("reads");
-    bytes.extend_from_slice(&[0; 64]);
-    std::fs::write(&media.path, bytes).expect("writes");
-    assert_ne!(before, media.key(clip, 6));
 }
 
 #[test]

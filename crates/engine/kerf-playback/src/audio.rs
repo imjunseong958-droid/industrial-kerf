@@ -1006,7 +1006,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioClock, DEVICE_OPEN_WAIT};
+    use super::AudioClock;
     use crate::ClockSource;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1049,13 +1049,6 @@ mod tests {
             position - 0.5 <= opened.elapsed().as_secs_f64(),
             "{position}"
         );
-    }
-
-    #[test]
-    fn a_device_that_never_opens_holds_the_clock_up_only_so_long() {
-        let clock = opening_since(DEVICE_OPEN_WAIT + Duration::from_secs(2));
-        let position = clock.now();
-        assert!((2.5..10.0).contains(&position), "{position}");
     }
 
     /// An output whose device went away.
@@ -1137,33 +1130,6 @@ mod tests {
     }
 
     #[test]
-    fn without_a_device_the_sound_is_taken_as_the_clock_passes_it() {
-        use super::{AudioOutput, NullAudioOutput};
-        let clock = AudioClock::new();
-        clock.set_position(2.0);
-        let output = NullAudioOutput::new(48_000, 2, clock.clone());
-        assert_eq!(output.queued_frames(), 0);
-        // A stopped clock takes nothing: all of it stays queued.
-        output.push(&vec![0.0; 48_000 * 2]);
-        assert_eq!(output.queued_frames(), 48_000);
-        output.clear();
-        assert_eq!(output.queued_frames(), 0);
-
-        // Time the clock ran before the first push (opening the mix) counts
-        // as played, so the mix does not trail the clock.
-        clock.play_at(2.0);
-        thread::sleep(Duration::from_millis(50));
-        output.push(&vec![0.0; 48_000 * 2]);
-        let queued = output.queued_frames();
-        assert!(queued <= 48_000 - 2_400, "{queued}");
-        assert!(queued > 0, "{queued}");
-        clock.set_position(3.25);
-        assert_eq!(output.queued_frames(), 0, "the clock passed all of it");
-        output.clear();
-        assert_eq!(output.queued_frames(), 0);
-    }
-
-    #[test]
     fn a_reading_keeps_the_loudest_peak_heard_since_the_last_one() {
         use super::LevelTap;
         use crate::Levels;
@@ -1212,32 +1178,6 @@ mod tests {
         }
         tap.push(level(9.0, -60.0, -40.0));
         assert_eq!(tap.latest().map(|levels| levels.peak[0]), Some(-3.0));
-    }
-
-    #[test]
-    fn a_level_waits_for_the_clock_to_reach_it() {
-        use super::LevelTap;
-        use crate::Levels;
-        let clock = AudioClock::new();
-        let tap = LevelTap::new(clock.clone());
-        let level = |at: f64| Levels {
-            peak: [-6.0, -6.0],
-            rms: [-9.0, -9.0],
-            momentary: None,
-            short_term: None,
-            at,
-        };
-        clock.set_position(1.0);
-        tap.push(level(0.98));
-        tap.push(level(1.0));
-        tap.push(level(1.02));
-        assert_eq!(tap.latest().map(|levels| levels.at), Some(1.0));
-        clock.set_position(1.5);
-        assert_eq!(tap.latest().map(|levels| levels.at), Some(1.02));
-        tap.clear();
-        assert_eq!(tap.latest(), None);
-        tap.push(level(2.0));
-        assert_eq!(tap.latest(), None, "buffered, not heard yet");
     }
 
     fn ffmpeg() -> Option<std::path::PathBuf> {

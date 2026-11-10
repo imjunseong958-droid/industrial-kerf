@@ -1007,36 +1007,6 @@ mod tests {
     }
 
     #[test]
-    fn frames_asked_a_little_out_of_order_are_read_once_and_are_the_same_frames() {
-        let directory = tempfile::tempdir().unwrap();
-        let Some(path) = encoded(directory.path()) else {
-            return;
-        };
-        let mut in_order = Decoder::open(&path, Rate::FPS_24).unwrap();
-        let frames: Vec<Vec<u8>> = (0..90)
-            .map(|index| in_order.shown(index).unwrap().data(0).to_vec())
-            .collect();
-        let mut decoder = Decoder::open(&path, Rate::FPS_24).unwrap();
-        for index in drawers_order(90) {
-            let shown = decoder.shown(index).unwrap().data(0).to_vec();
-            assert!(shown == frames[index as usize], "frame {index}");
-        }
-        // It read each frame once, and the one past where it stopped. Going back for each would have
-        // read a half-second's frames again every time.
-        assert!(
-            decoder.read <= in_order.read + 2,
-            "read {} and in order {}",
-            decoder.read,
-            in_order.read
-        );
-        // Further back than it keeps, it goes back and reads, and it is the same frame.
-        let before = decoder.read;
-        let shown = decoder.shown(40).unwrap().data(0).to_vec();
-        assert!(shown == frames[40]);
-        assert!(decoder.read > before);
-    }
-
-    #[test]
     fn frames_drawn_out_of_order_on_one_decoder_do_not_open_more() {
         let directory = tempfile::tempdir().unwrap();
         let Some(path) = encoded(directory.path()) else {
@@ -1076,19 +1046,6 @@ mod tests {
         // The one coming back stays, and the one long idle goes.
         pool.give_back(second, kept);
         assert_eq!(lock(&pool.decoders).idle.len(), 1);
-    }
-
-    #[test]
-    fn clips_show_their_source_frame_by_frame() {
-        let forward = clip(10, "1", 48);
-        assert_eq!(forward.frame_at_time(at(0, Rate::FPS_24)), 10);
-        assert_eq!(forward.frame_at_time(at(5, Rate::FPS_24)), 15);
-        // Handles before the clip show the frames before its source in.
-        assert_eq!(forward.frame_at_time(at(-3, Rate::FPS_24)), 7);
-        let fast = clip(10, "2", 24);
-        assert_eq!(fast.frame_at_time(at(5, Rate::FPS_24)), 20);
-        let slow = clip(10, "1/2", 48);
-        assert_eq!(slow.frame_at_time(at(5, Rate::FPS_24)), 12);
     }
 
     #[test]

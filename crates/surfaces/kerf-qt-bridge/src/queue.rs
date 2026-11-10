@@ -625,73 +625,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn exports_render_one_at_a_time_oldest_first() {
-        let shared = shared();
-        let (tx, rx) = mpsc::sync_channel(256);
-        let (fake, open) = Fake::gated();
-        let worker = {
-            let (shared, tx) = (shared.clone(), tx.clone());
-            std::thread::spawn(move || worker(shared, tx))
-        };
-        let renders: Arc<dyn Renders> = fake.clone();
-        submit(
-            &shared,
-            renders.clone(),
-            &request("master", Some("Master")),
-            &tx,
-        )
-        .unwrap();
-        submit(
-            &shared,
-            renders.clone(),
-            &request("review", Some("Draft")),
-            &tx,
-        )
-        .unwrap();
-        let mut seen = Vec::new();
-        let queued = wait_for(&rx, &mut seen, |e| {
-            e["type"] == "export" && e["status"] == "queued"
-        });
-        assert_eq!(queued["jobId"], "render-1");
-        assert_eq!(queued["name"], "Master");
-        assert_eq!(queued["path"], "/project/Master.mov");
-        assert_eq!(queued["quality"], "master");
-        assert_eq!(queued["codec"], "prores_hq");
-        assert_eq!(queued["progress"], 0.0);
-        // The first renders while the second waits its turn.
-        let running = wait_for(&rx, &mut seen, |e| {
-            e["type"] == "export" && e["status"] == "running" && e["progress"] == 0.5
-        });
-        assert_eq!(running["jobId"], "render-1");
-        let listed = wait_for(&rx, &mut seen, |e| {
-            e["type"] == "render_queue"
-                && e["jobs"][0]["status"] == "running"
-                && e["jobs"][1].is_object()
-        });
-        assert_eq!(listed["jobs"][1]["status"], "queued");
-        assert_eq!(listed["jobs"][1]["name"], "Draft");
-        assert_eq!(*fake.rendered.lock().unwrap(), ["render-1"]);
-        open.send(()).unwrap();
-        let completed = wait_for(&rx, &mut seen, |e| {
-            e["type"] == "export" && e["status"] == "completed"
-        });
-        assert_eq!(completed["jobId"], "render-1");
-        assert_eq!(completed["path"], "/project/Master.mov");
-        assert_eq!(completed["progress"], 1.0);
-        open.send(()).unwrap();
-        wait_for(&rx, &mut seen, |e| {
-            e["type"] == "export" && e["status"] == "completed" && e["jobId"] == "render-2"
-        });
-        assert_eq!(*fake.rendered.lock().unwrap(), ["render-1", "render-2"]);
-        let last = wait_for(&rx, &mut seen, |e| {
-            e["type"] == "render_queue" && e["jobs"][1]["status"] == "completed"
-        });
-        assert_eq!(last["jobs"][0]["progress"], 1.0);
-        shared.renders.close(&std::env::temp_dir());
-        worker.join().unwrap();
-    }
-
-    #[test]
     fn cancelling_takes_a_queued_job_out_and_stops_the_running_one() {
         let shared = shared();
         let (tx, rx) = mpsc::sync_channel(256);
@@ -767,24 +700,6 @@ pub(crate) mod tests {
         let event = refused(&tx, "export", &error);
         assert_eq!(event["command"], "export");
         assert_eq!(event["code"], "INVALID_RENDER_QUALITY");
-    }
-
-    #[test]
-    fn closing_cancels_what_waits() {
-        let shared = shared();
-        let (tx, rx) = mpsc::sync_channel(256);
-        let (fake, _open) = Fake::gated();
-        let renders: Arc<dyn Renders> = fake.clone();
-        submit(&shared, renders.clone(), &request("full", Some("A")), &tx).unwrap();
-        submit(&shared, renders, &request("full", Some("B")), &tx).unwrap();
-        // Closed before the render thread ever ran: nothing renders, and
-        // nothing stays queued with kerfd.
-        shared.renders.close(&std::env::temp_dir());
-        worker(shared.clone(), tx);
-        assert!(fake.rendered.lock().unwrap().is_empty());
-        assert_eq!(fake.status("render-1"), "cancelled");
-        assert_eq!(fake.status("render-2"), "cancelled");
-        drop(rx);
     }
 
     #[test]

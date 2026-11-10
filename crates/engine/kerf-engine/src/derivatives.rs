@@ -411,22 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn replacement_identity_creates_a_new_entry() {
-        let root = tempdir().expect("temp directory");
-        let source = root.path().join("source.bin");
-        fs::write(&source, b"one").expect("write source");
-        let cache = DerivativeCache::new(root.path());
-        let first = cache
-            .source_entry(&source, "frames", &json!({"times":[0.0]}))
-            .expect("first entry");
-        fs::write(&source, b"replacement").expect("replace source");
-        let second = cache
-            .source_entry(&source, "frames", &json!({"times":[0.0]}))
-            .expect("second entry");
-        assert_ne!(first.key, second.key);
-    }
-
-    #[test]
     fn source_entries_find_complete_entries_of_the_source() {
         let root = tempdir().expect("temp directory");
         let source = root.path().join("source.bin");

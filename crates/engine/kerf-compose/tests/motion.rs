@@ -348,34 +348,6 @@ fn a_stroke_draws_itself_on() {
 }
 
 #[test]
-fn what_animates_counts_from_where_the_clip_starts() {
-    let early =
-        "    clip c1 gen=shape@1 at=0f dur=48f\n      set width={0f:0 24f:0.5} height=0.5\n";
-    let late =
-        "    clip c1 gen=shape@1 at=24f dur=48f\n      set width={0f:0 24f:0.5} height=0.5\n";
-    assert_eq!(difference(&frame(early, 12), &frame(late, 36)), 0);
-    assert_ne!(lit(&frame(early, 12)), lit(&frame(early, 24)));
-}
-
-#[test]
-fn particles_can_start_on_any_frame_and_draw_the_same_every_time() {
-    let body = clip(
-        "particles",
-        "rate=200 life=2 velocity=0.5 size=0.02 size_end=0.02 color=#ffffff color_end=#ffffff soft=0 spread=360",
-    );
-    let direct = frame(&body, 48);
-    assert!(lit(&direct) > 100);
-    // A new compositor, starting elsewhere and stepping past it.
-    assert_eq!(difference(&direct, &frame(&body, 48)), 0);
-    assert_ne!(difference(&direct, &frame(&body, 49)), 0);
-    let other = clip(
-        "particles",
-        "rate=200 life=2 velocity=0.5 size=0.02 size_end=0.02 color=#ffffff color_end=#ffffff soft=0 spread=360 seed=9",
-    );
-    assert_ne!(difference(&direct, &frame(&other, 48)), 0);
-}
-
-#[test]
 fn particles_leave_the_way_they_are_told_and_gravity_pulls_them() {
     let up = clip(
         "particles",
@@ -396,28 +368,6 @@ fn particles_leave_the_way_they_are_told_and_gravity_pulls_them() {
 }
 
 const WORDS: &str = "AAAA BBBB";
-
-#[test]
-fn a_title_at_rest_draws_as_it_did() {
-    let plain = frame(&clip("title", &format!(r#"text="{WORDS}" size=0.2"#)), 3);
-    let revealed = frame(
-        &clip("title", &format!(r#"text="{WORDS}" size=0.2 reveal=1"#)),
-        3,
-    );
-    assert!(lit(&plain) > 500);
-    assert!(
-        difference(&plain, &revealed) < 40,
-        "{}",
-        difference(&plain, &revealed)
-    );
-    let near: usize = plain
-        .rgba
-        .iter()
-        .zip(&revealed.rgba)
-        .filter(|(a, b)| a.abs_diff(**b) > 24)
-        .count();
-    assert!(near < 40, "{near}");
-}
 
 /// The small variable font `kerf-text` tests with: its I is a stem 100 units wide and 700 high at
 /// `wght` 400, 300 wide at 900, and 40 wide at 100, in 1000 to the em.

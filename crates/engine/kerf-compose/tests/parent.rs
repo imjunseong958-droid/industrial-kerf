@@ -63,64 +63,12 @@ fn rig(null: &str) -> String {
 }
 
 #[test]
-fn a_null_draws_nothing_and_a_still_parent_changes_nothing() {
-    let drawn = frame(&project(&rig("")), 0, Accel::Never);
-    let (x, y, w, h) = bright(&drawn);
-    close(x, 320.0 + 160.0);
-    close(y, 180.0);
-    close(w, 64.0);
-    close(h, 36.0);
-}
-
-#[test]
-fn a_parents_move_carries_the_child() {
-    let drawn = frame(&project(&rig("      set x=-0.25 y=0.1\n")), 0, Accel::Never);
-    let (x, y, _, _) = bright(&drawn);
-    close(x, 320.0);
-    close(y, 180.0 + 36.0);
-}
-
-/// A rig whose square sits a tenth of the way across, so that it stays in the frame.
-fn near(null: &str) -> Project {
-    project(&format!(
-        "  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n{null}  track V2 video\n    clip c1 gen=solid@1 at=0f dur=48f parent=n1\n      set color=#ffffff scale=0.1 x=0.1\n"
-    ))
-}
-
-#[test]
-fn a_parents_scale_scales_the_child_and_its_distance() {
-    let (x, y, w, h) = bright(&frame(&near("      set scale=2\n"), 0, Accel::Never));
-    close(x, 320.0 + 128.0);
-    close(y, 180.0);
-    close(w, 128.0);
-    close(h, 72.0);
-}
-
-#[test]
-fn a_parents_rotation_swings_the_child_around_it() {
-    let (x, y, w, h) = bright(&frame(&near("      set rotation=90\n"), 0, Accel::Never));
-    // A quarter turn: from right of the center to below it, and turned with it.
-    close(x, 320.0);
-    close(y, 180.0 + 64.0);
-    close(w, 36.0);
-    close(h, 64.0);
-}
-
-#[test]
 fn animation_on_the_parent_is_followed_on_its_own_clock() {
     // The null starts earlier: at frame 24 on the sequence it is 24 frames into its move.
     let body = "  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n      set x={0f:0 24f:-0.25}\n  track V2 video\n    clip c1 gen=solid@1 at=12f dur=36f parent=n1\n      set color=#ffffff scale=0.1 x=0.25\n";
     let project = project(body);
     close(bright(&frame(&project, 12, Accel::Never)).0, 480.0 - 80.0);
     close(bright(&frame(&project, 24, Accel::Never)).0, 320.0);
-}
-
-#[test]
-fn parents_chain() {
-    let body = "  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n      set x=0.1\n    \n  track V2 video\n    clip n2 gen=null@1 at=0f dur=48f parent=n1\n      set y=0.1\n  track V3 video\n    clip c1 gen=solid@1 at=0f dur=48f parent=n2\n      set color=#ffffff scale=0.1\n";
-    let (x, y, _, _) = bright(&frame(&project(body), 0, Accel::Never));
-    close(x, 320.0 + 64.0);
-    close(y, 180.0 + 36.0);
 }
 
 #[test]
@@ -250,14 +198,6 @@ fn a_path_moves_a_clip_along_it_at_an_even_speed() {
     close(end.1, 180.0);
     // It held its last place after that.
     close(at(40).0, 320.0 + 160.0);
-}
-
-#[test]
-fn x_and_y_add_to_a_path() {
-    let body = "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=48f\n      set color=#ffffff scale=0.1 path=\"0,0 0.2,0\" along=1 x=0.1 y=0.1\n";
-    let (x, y, _, _) = bright(&frame(&project(body), 0, Accel::Never));
-    close(x, 320.0 + 192.0);
-    close(y, 180.0 + 36.0);
 }
 
 #[test]

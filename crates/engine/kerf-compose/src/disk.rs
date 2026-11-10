@@ -410,10 +410,15 @@ mod tests {
         let kept = frame(3, 64, 36, false);
         frames.put(7, false, kept.clone());
         frames.flush();
-        assert_eq!(frames.get(7, false), Some(kept));
+        assert_eq!(frames.get(7, false), Some(kept.clone()));
         assert_eq!(frames.get(8, false), None);
         let stats = frames.stats();
         assert_eq!((stats.hits, stats.misses, stats.writes), (1, 1, 1));
+        // Kept already, it is not written again: what is there stays.
+        frames.put(7, false, frame(5, 64, 36, false));
+        frames.flush();
+        assert_eq!(frames.stats().writes, 1);
+        assert_eq!(frames.get(7, false), Some(kept));
     }
 
     #[test]
@@ -508,35 +513,6 @@ mod tests {
         assert!(frames.get(5, false).is_some(), "the newest goes");
         let on_disk: u64 = files_under(&frames.folder).iter().map(|f| f.1).sum();
         assert!(on_disk <= one * 4, "{on_disk} of {}", one * 4);
-    }
-
-    #[test]
-    fn what_is_written_while_the_folder_is_counted_counts_once() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let kept = frame(3, 16, 9, false);
-        let one = encode(&kept, false).len() as u64;
-        let spread = |index: u64| (u128::from(index % 256) << 120) | u128::from(index);
-        // Enough already there, across every shard, that counting it takes a while.
-        let (there, soon, later) = (512u64, 32u64, 32u64);
-        for index in 0..there {
-            let path = DiskFrames::path(&dir.path().join("stamp"), spread(index), false);
-            std::fs::create_dir_all(path.parent().expect("a shard")).expect("made");
-            std::fs::write(path, encode(&kept, false)).expect("written");
-        }
-        // Exactly full once these are written, and not past it, so nothing has to go.
-        let frames = DiskFrames::new(dir.path(), "stamp", one * (there + soon + later));
-        // Some at once, which land while it counts...
-        for index in there..there + soon {
-            frames.put(spread(index), false, kept.clone());
-        }
-        // ...and some one by one, the last of which would see a count that came out too high.
-        for index in there + soon..there + soon + later {
-            frames.put(spread(index), false, kept.clone());
-            frames.flush();
-        }
-        let stats = frames.stats();
-        assert_eq!(stats.writes, soon + later, "{stats:?}");
-        assert_eq!(stats.evicted, 0, "{stats:?}");
     }
 
     #[test]

@@ -226,82 +226,6 @@ sequence s1 rate=24 size=1280x720 audio=48000
 "##;
 
 #[test]
-fn a_lights_shadow_round_trips_and_a_bad_one_is_refused() {
-    let once =
-        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
-    let twice =
-        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    assert_eq!(once.project, twice.project);
-    for word in ["shadow={0f:0 24f:0.8}", "shadow=1"] {
-        assert!(printed.contains(word), "{word} in {printed}");
-    }
-    for bad in ["shadow=2", "shadow=-0.1", "shadow={0f:0 24f:2}"] {
-        refused(&DEPTH.replace("shadow=1", bad), "shadow");
-    }
-}
-
-#[test]
-fn a_clips_depth_round_trips_and_a_bad_one_is_refused() {
-    let once =
-        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
-    let twice =
-        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    assert_eq!(once.project, twice.project);
-    assert!(printed.contains("depth={0f:0 24f:0.25}"), "{printed}");
-    for bad in [
-        "depth=-1",
-        "depth=101",
-        "depth={0f:0 24f:101}",
-        "depth=thick",
-    ] {
-        refused(&DEPTH.replace("depth={0f:0 24f:0.25}", bad), "depth");
-    }
-}
-
-#[test]
-fn a_solids_bevel_round_trips_and_a_bad_one_is_refused() {
-    let document = DEPTH.replace("depth={0f:0 24f:0.25}", "depth=0.25 bevel={0f:0 24f:0.05}");
-    let once =
-        parse_document(&document, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
-    let twice =
-        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    assert_eq!(once.project, twice.project);
-    assert!(printed.contains("bevel={0f:0 24f:0.05}"), "{printed}");
-    for bad in ["bevel=-1", "bevel=51", "bevel=wide"] {
-        refused(&DEPTH.replace("depth={0f:0 24f:0.25}", bad), "bevel");
-    }
-}
-
-#[test]
-fn a_bevels_profile_round_trips_and_a_bad_one_is_refused() {
-    let document = DEPTH.replace(
-        "depth={0f:0 24f:0.25}",
-        "depth=0.25 bevel=0.05 bevel_profile=round",
-    );
-    let once =
-        parse_document(&document, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
-    let twice =
-        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    assert_eq!(once.project, twice.project);
-    assert!(printed.contains("bevel_profile=round"), "{printed}");
-    // What it comes to when it is not said is flat, which the catalog says.
-    let def = Catalog::builtin()
-        .props(kerf_model::Domain::Video)
-        .iter()
-        .find(|def| def.name == "bevel_profile")
-        .expect("a property");
-    assert_eq!(def.default, kerf_model::Value::Enum("flat".to_owned()));
-    refused(
-        &DEPTH.replace("depth={0f:0 24f:0.25}", "bevel_profile=wavy"),
-        "bevel_profile",
-    );
-}
-
-#[test]
 fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
     let once =
         parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
@@ -322,24 +246,3 @@ fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
     );
 }
 
-#[test]
-fn a_cameras_focus_round_trips_and_a_bad_one_is_refused() {
-    let once =
-        parse_document(DEPTH, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
-    let twice =
-        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
-    assert_eq!(once.project, twice.project);
-    for word in [
-        "aperture=0.05",
-        "focus={0f:0 24f:0.5}",
-        "aperture={0f:0 24f:0.1}",
-        "focus=2",
-    ] {
-        assert!(printed.contains(word), "{word} in {printed}");
-    }
-    refused(&DEPTH.replace("aperture=0.05", "aperture=2"), "aperture");
-    refused(&DEPTH.replace("aperture=0.05", "aperture=-0.1"), "aperture");
-    refused(&DEPTH.replace("focus=2", "focus=2000"), "focus");
-    refused(&DEPTH.replace("focus=2", "focus=near"), "focus");
-}

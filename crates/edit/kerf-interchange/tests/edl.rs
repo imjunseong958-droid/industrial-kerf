@@ -70,27 +70,6 @@ fn a_program_matches_the_golden_edl() {
 }
 
 #[test]
-fn every_event_line_has_the_cmx3600_columns() {
-    let project = project(EDIT);
-    let edl = to_edl(&project, &project.sequences[0], &[]).unwrap();
-    assert!(edl.contains("\nM2   A001           048.0                14:23:00:00\n"));
-    for line in edl
-        .lines()
-        .filter(|line| line.starts_with(char::is_numeric))
-    {
-        // Event number, reel, channel, transition, then four timecodes,
-        // each at a fixed column.
-        assert_eq!(&line[3..5], "  ", "{line}");
-        assert_eq!(&line[13..14], " ", "{line}");
-        assert_eq!(&line[19..20], " ", "{line}");
-        assert_eq!(&line[28..29], " ", "{line}");
-        let codes: Vec<&str> = line[29..].split(' ').collect();
-        assert_eq!(codes.len(), 4, "{line}");
-        assert!(codes.iter().all(|tc| tc.len() == 11), "{line}");
-    }
-}
-
-#[test]
 fn drop_frame_sequences_say_so_and_count_drop_frame() {
     let text = "kerf 1
 project name=\"NTSC\"

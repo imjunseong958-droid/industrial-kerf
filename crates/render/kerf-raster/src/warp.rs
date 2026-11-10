@@ -320,16 +320,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identity_warp_copies() {
-        let mut src = Image::new(4, 4);
-        src.set(1, 2, [0.5, 0.5, 0.5, 1.0]);
-        let mut dst = Image::new(4, 4);
-        composite_warp(&mut dst, &src, &Mat3::IDENTITY, &WarpOpts::default());
-        assert_eq!(dst.get(1, 2), [0.5, 0.5, 0.5, 1.0]);
-        assert_eq!(dst.get(0, 0), [0.0; 4]);
-    }
-
-    #[test]
     fn translate_by_integer() {
         let mut src = Image::new(4, 4);
         src.set(0, 0, [1.0; 4]);

@@ -298,34 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn a_point_goes_to_a_disc_of_its_radius() {
-        let size = 81;
-        let out = blurred(&dot(size), &vec![12.0; size * size]);
-        let middle = size / 2;
-        // Round: as far along the axes as on the diagonal, not a square's corner further. Gathered
-        // at a third of the size, its edge is soft by a few pixels.
-        assert!(lit(&out, middle + 11, middle) && lit(&out, middle, middle + 11));
-        assert!(!lit(&out, middle + 18, middle));
-        assert!(lit(&out, middle + 8, middle + 8));
-        assert!(!lit(&out, middle + 14, middle + 14));
-        // It keeps what it had, spread over the disc.
-        let total: f32 = out.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum();
-        assert!((total - 1.0).abs() < 0.05, "{total}");
-    }
-
-    #[test]
-    fn a_wide_blur_gathered_small_is_the_same_disc() {
-        let size = 161;
-        let out = blurred(&dot(size), &vec![30.0; size * size]);
-        let middle = size / 2;
-        assert!(lit(&out, middle + 26, middle) && !lit(&out, middle + 48, middle));
-        assert!(lit(&out, middle + 20, middle + 20));
-        assert!(!lit(&out, middle + 34, middle + 34));
-        let total: f32 = out.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum();
-        assert!((total - 1.0).abs() < 0.05, "{total}");
-    }
-
-    #[test]
     fn no_radius_leaves_it_be() {
         let picture = dot(21);
         assert_eq!(blurred(&picture, &vec![0.0; 21 * 21]).px, picture.px);

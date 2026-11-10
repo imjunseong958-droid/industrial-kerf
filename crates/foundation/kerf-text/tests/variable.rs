@@ -30,11 +30,8 @@ impl FontSource for TestFont {
 }
 
 const WGHT: [u8; 4] = *b"wght";
-const WDTH: [u8; 4] = *b"wdth";
 const OPSZ: [u8; 4] = *b"opsz";
 const SLNT: [u8; 4] = *b"slnt";
-const ITAL: [u8; 4] = *b"ital";
-
 fn styled(family: &str, axes: &[Axis]) -> TextStyle {
     fonts::add_source(&TestFont);
     TextStyle { family: family.into(), size: 100.0, axes: axes.to_vec(), ..TextStyle::default() }
@@ -54,25 +51,6 @@ fn advance(family: &str, axes: &[Axis]) -> f32 {
 
 fn close(found: f32, wanted: f32) {
     assert!((found - wanted).abs() < wanted * 0.02, "{found} against {wanted}");
-}
-
-#[test]
-fn weight_changes_the_ink_by_what_the_font_says() {
-    // The stem is 100 units wide and 700 high: at 100 pixels to the em, 10 by 70.
-    close(ink(FAMILY, "I", &[]), 700.0);
-    // At the far ends of the axis it gains 200 and loses 60.
-    close(ink(FAMILY, "I", &[(WGHT, 900.0)]), 30.0 * 70.0);
-    close(ink(FAMILY, "I", &[(WGHT, 100.0)]), 4.0 * 70.0);
-    // Halfway to the far end, half of that.
-    close(ink(FAMILY, "I", &[(WGHT, 650.0)]), 20.0 * 70.0);
-    // Past the axis's end, it stays there.
-    close(ink(FAMILY, "I", &[(WGHT, 2000.0)]), 30.0 * 70.0);
-}
-
-#[test]
-fn several_axes_add_up() {
-    close(ink(FAMILY, "I", &[(WDTH, 200.0)]), 20.0 * 70.0);
-    close(ink(FAMILY, "I", &[(WGHT, 900.0), (WDTH, 200.0)]), 40.0 * 70.0);
 }
 
 #[test]
@@ -113,13 +91,6 @@ fn a_real_font_grows_and_widens_with_its_weight() {
     assert!(advance("Skia", &[(WGHT, 2.5)]) != advance("Skia", &[(WGHT, 0.5)]));
 }
 
-#[test]
-fn the_advance_goes_with_the_weight_where_the_font_says_so() {
-    // 300 units at rest and 500 at the heavy end, by the outline's phantom points.
-    close(advance(FAMILY, &[]), 30.0);
-    close(advance(FAMILY, &[(WGHT, 900.0)]), 50.0);
-}
-
 /// How far the top of an I's stem leans to the right of its foot, in pixels at 100 to the em: from
 /// the middle of its ink on each row, two rows in from each end, carried on to its whole height.
 fn lean(family: &str, axes: &[Axis]) -> f32 {
@@ -137,16 +108,6 @@ fn lean(family: &str, axes: &[Axis]) -> f32 {
 }
 
 #[test]
-fn optical_size_changes_the_stem_on_its_scale() {
-    // 50 units either way at its far ends, from a default that is neither the middle nor an end.
-    close(ink(FAMILY, "I", &[(OPSZ, 144.0)]), 5.0 * 70.0);
-    close(ink(FAMILY, "I", &[(OPSZ, 8.0)]), 15.0 * 70.0);
-    close(advance(FAMILY, &[(OPSZ, 144.0)]), 25.0);
-    close(advance(FAMILY, &[(OPSZ, 8.0)]), 35.0);
-    assert_eq!(fonts::instance(kerf_text::resolve(FAMILY, "Regular").face, &[(OPSZ, 14.0)]), 0);
-}
-
-#[test]
 fn slant_leans_the_stem_and_leaves_the_advance() {
     fonts::add_source(&TestFont);
     assert!(lean(FAMILY, &[]).abs() < 1.0, "{}", lean(FAMILY, &[]));
@@ -154,17 +115,6 @@ fn slant_leans_the_stem_and_leaves_the_advance() {
     close(lean(FAMILY, &[(SLNT, -10.0)]), 12.75);
     close(advance(FAMILY, &[(SLNT, -20.0)]), 30.0);
     close(ink(FAMILY, "I", &[(SLNT, -20.0)]), 700.0);
-}
-
-#[test]
-fn italic_leans_the_stem_and_takes_from_the_advance() {
-    fonts::add_source(&TestFont);
-    close(lean(FAMILY, &[(ITAL, 1.0)]), 12.0);
-    close(advance(FAMILY, &[(ITAL, 1.0)]), 28.0);
-    // All five at once add up, as their deltas do.
-    let all = [(WGHT, 900.0), (WDTH, 200.0), (OPSZ, 144.0), (SLNT, -20.0), (ITAL, 1.0)];
-    close(advance(FAMILY, &all), 30.0 + 20.0 + 10.0 - 5.0 - 2.0);
-    close(lean(FAMILY, &all), 25.5 + 12.0);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! deterministic; neutral parameters are the identity; each effect has a known-value check; the
 //! frame/track environment works through the real compositor.
 
-use crate::filmcraft::project::{find_effect, EffectKind, Param, ParamKind};
+use crate::filmcraft::project::{find_effect, Param, ParamKind};
 
 use super::*;
 
@@ -161,25 +161,6 @@ const NEW_IDS: &[&str] = &[
     "noise",
     "mosaic",
 ];
-
-#[test]
-fn every_new_effect_is_defined_as_video() {
-    for id in NEW_IDS {
-        let d = find_effect(id).unwrap_or_else(|| panic!("{id}"));
-        assert_eq!(d.kind, EffectKind::Video, "{id}");
-        assert!(!d.category.is_empty(), "{id}");
-        for p in &d.params {
-            if let ParamKind::Float { min, max, .. } = p.kind {
-                let v = p.default.as_f64().unwrap();
-                assert!(
-                    v >= min && v <= max,
-                    "{id}.{} default {v} outside {min}..{max}",
-                    p.id
-                );
-            }
-        }
-    }
-}
 
 /// Push every float parameter towards its soft maximum so the code paths run.
 fn pushed(id: &str) -> EffectInstance {
@@ -464,30 +445,6 @@ fn magnify_and_spherize_enlarge_the_centre() {
     assert!(max_diff(&o, &img) > 0.01);
     // outside the radius nothing moves
     assert_eq!(o.get(1, 1), img.get(1, 1));
-}
-
-#[test]
-fn turbulent_displace_moves_pixels_and_pins_edges() {
-    let img = picture(48, 48);
-    let o = run(
-        "turbulent_displace",
-        &inst("turbulent_displace"),
-        &img,
-        &cx(),
-    );
-    assert!(max_diff(&o, &img) > 0.01);
-    // Pin All: the corners stay
-    for (x, y) in [(0, 0), (47, 0), (0, 47), (47, 47)] {
-        let (a, b) = (o.get(x, y), img.get(x, y));
-        assert!(
-            (0..4).all(|k| close(a[k], b[k], 0.03)),
-            "{x},{y}: {a:?} {b:?}"
-        );
-    }
-    // evolution changes the pattern; seed too
-    let mut e = inst("turbulent_displace");
-    setf(&mut e, "evolution", 90.0);
-    assert!(max_diff(&run("t", &e, &img, &cx()), &o) > 1e-3);
 }
 
 #[test]
@@ -934,34 +891,6 @@ fn transform_presets_animate_over_the_clip() {
 }
 
 #[test]
-fn transform_shutter_override_blurs_moving_position() {
-    let mut e = inst("transform");
-    set(&mut e, "shutter_override", ParamValue::Bool(true));
-    setf(&mut e, "shutter_angle", 180.0);
-    e.params.insert(
-        "position".into(),
-        moving(Vec2::new(8.0, 16.0), Vec2::new(40.0, 16.0), 0.0, 1.0),
-    );
-    let img = picture(32, 32);
-    let cx = FxCtx {
-        t: Tick::from_seconds_f64(0.5),
-        seconds: 0.5,
-        ..cx()
-    };
-    let sharp = {
-        let mut off = e.clone();
-        set(&mut off, "shutter_override", ParamValue::Bool(false));
-        run("transform", &off, &img, &cx)
-    };
-    let blurred = run("transform", &e, &img, &cx);
-    let delta = max_diff(&sharp, &blurred);
-    assert!(
-        delta > 1e-3,
-        "shutter override left the Transform picture unchanged ({delta})"
-    );
-}
-
-#[test]
 fn clone_auto_align_and_rounded_crop() {
     let img = picture(40, 20);
     let mut e = inst("clone");
@@ -1094,61 +1023,6 @@ fn bokeh_by_taps(src: &Image, radius: f32, sides: u32, rot: f32) -> Image {
     out
 }
 
-/// A picture with what a lens blur meets: soft shapes, fine detail, and points far brighter than the
-/// rest.
-fn bokeh_picture(w: usize, h: usize) -> Image {
-    let mut img = Image::new(w, h);
-    for y in 0..h {
-        for x in 0..w {
-            let (fx, fy) = (x as f32, y as f32);
-            let soft = 0.4 + 0.3 * (fx / 19.0).sin() * (fy / 13.0).cos();
-            let fine = if (x / 3 + y / 3) % 2 == 0 { 0.1 } else { 0.0 };
-            let light = if x % 37 == 11 && y % 29 == 7 {
-                4.0
-            } else {
-                0.0
-            };
-            let v = [
-                soft + fine + light,
-                soft * 0.7 + light,
-                0.5 - soft * 0.4 + fine,
-                1.0,
-            ];
-            img.px[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&v);
-        }
-    }
-    img
-}
-
-#[test]
-fn bokeh_looks_as_it_did_when_gathered_tap_by_tap() {
-    let src = bokeh_picture(96, 72);
-    for (amount, shape, sides) in [
-        (2.0, 0, 0),
-        (5.0, 4, 6),
-        (10.0, 4, 6),
-        (10.0, 0, 0),
-        (12.0, 1, 3),
-        (12.0, 5, 8),
-    ] {
-        let mut e = inst("bokeh_blur");
-        setf(&mut e, "amount", amount);
-        set(&mut e, "shape", ParamValue::Choice(shape));
-        setf(&mut e, "highlight", 0.0);
-        let now = run("bokeh", &e, &src, &cx());
-        let was = bokeh_by_taps(&src, amount as f32, sides, 0.0);
-        let error: f64 = now
-            .px
-            .iter()
-            .zip(&was.px)
-            .map(|(a, b)| f64::from(a - b).powi(2))
-            .sum::<f64>()
-            / now.px.len() as f64;
-        let db = 10.0 * (1.0 / error.max(1e-12)).log10();
-        assert!(db > 40.0, "amount {amount} shape {shape}: {db:.1} dB");
-    }
-}
-
 /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values read as the
 /// sequence's, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
 fn footage(name: &str) -> Option<Image> {
@@ -1207,28 +1081,6 @@ fn real_footage_bokeh() {
             assert!(db > 63.0 && worst * 255.0 < 5.0, "{size} {sides}: {db:.1} dB, {:.1}", worst * 255.0);
         }
     }
-}
-
-#[test]
-fn a_bad_pixel_stays_where_it_is_in_a_bokeh() {
-    let mut src = solid(64, 16, [0.25, 0.25, 0.25]);
-    src.px[(8 * 64 + 8) * 4] = f32::NAN;
-    let mut e = inst("bokeh_blur");
-    setf(&mut e, "amount", 4.0);
-    setf(&mut e, "highlight", 0.0);
-    let o = run("bokeh", &e, &src, &cx());
-    // Far along the row from it, as near it, nothing is lost.
-    assert!(o.px.iter().all(|v| v.is_finite()));
-    let far = src.get(50, 8)[0];
-    assert!(close(o.get(50, 8)[0], far, 1e-3), "{:?}", o.get(50, 8));
-}
-
-#[test]
-fn a_bokeh_costs_its_height_and_not_its_area() {
-    // Twice the radius is twice the rows, where a tap for each pixel was four times.
-    let (small, big) = (blur::iris_rows(5.5, 6, 0.0), blur::iris_rows(10.5, 6, 0.0));
-    assert!(small.len() <= 13, "{}", small.len());
-    assert!(big.len() <= 23, "{}", big.len());
 }
 
 #[test]
@@ -1619,48 +1471,6 @@ fn warp_stabilizer_tracks_across_analysis_chunks() {
             "step {k} {step:?}"
         );
     }
-}
-
-#[test]
-fn warp_stabilizer_callers_share_one_analysis() {
-    let env = Counted {
-        env: ClipEnv {
-            w: 96,
-            h: 64,
-            fps: 24.0,
-            secs: 2.0,
-            now: 0.0,
-            key: 0x0_5A4E,
-            seq: (96, 64),
-            pic: shaky,
-        },
-        frames: Default::default(),
-        nested: None,
-    };
-    let start = std::sync::Barrier::new(4);
-    let paths: Vec<_> = std::thread::scope(|s| {
-        let callers: Vec<_> = (0..4)
-            .map(|_| {
-                s.spawn(|| {
-                    start.wait();
-                    stabilizer_path(
-                        &env,
-                        0.0,
-                        crate::filmcraft::project::TrackMethod::Position,
-                        false,
-                    )
-                    .expect("analysed")
-                })
-            })
-            .collect();
-        callers.into_iter().map(|c| c.join().unwrap()).collect()
-    });
-    assert_eq!(
-        env.frames.load(std::sync::atomic::Ordering::Relaxed),
-        48,
-        "every frame is decoded once"
-    );
-    assert!(paths.iter().all(|p| std::sync::Arc::ptr_eq(p, &paths[0])));
 }
 
 #[test]

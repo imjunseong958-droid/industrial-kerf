@@ -1,6 +1,7 @@
 //! Delivery through the editor's C ABI and a real kerfd: the render queue
-//! with a ProRes master, the paperwork beside it, programme loudness, what
-//! the media say of themselves, their index, and effects presets.
+//! with a ProRes master and one that is refused, the paperwork beside it and
+//! captions that fail, programme loudness, what the media say of themselves,
+//! their index, and effects presets.
 //!
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`) and FFmpeg; without FFmpeg it says so and passes.
@@ -323,6 +324,24 @@ fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
     assert!(fs::read_to_string(folder.join("Master.srt"))
         .unwrap()
         .contains("Hello there"));
+    // A picture track has no captions: the export fails, and says so.
+    assert!(editor.send(json!({"type": "export_captions", "format": "srt", "track": "V1"})));
+    let failed = editor.expect("captions of a picture track", |event| {
+        event["type"] == "export" && event["kind"] == "captions" && event["status"] == "failed"
+    });
+    assert_eq!(failed["format"], "srt", "{failed}");
+    assert!(
+        failed["message"].as_str().is_some_and(|message| !message.is_empty()),
+        "{failed}"
+    );
+    // A master is a .mov: asked for as an .mp4 it is refused, by the command's name.
+    assert!(editor.send(
+        json!({"type": "export", "quality": "master", "output": "deliveries/master.mp4"})
+    ));
+    let refused = editor.expect("a master into an .mp4 refused", |event| {
+        event["type"] == "error" && event["command"] == "export"
+    });
+    assert_eq!(refused["code"], "INVALID_RENDER_OUTPUT", "{refused}");
 
     // Markers: one edit, and a second export sets the same marker again.
     for _ in 0..2 {

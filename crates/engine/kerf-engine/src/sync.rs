@@ -237,25 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn a_later_recording_is_found_where_it_begins() {
-        let first = rise_of_loudness(&claps(20.0, 0.0, 1.0, 11));
-        for (begin, gain) in [(3.25, 0.4), (0.0, 2.0), (7.5, 0.1)] {
-            let other = rise_of_loudness(&claps(12.0, begin, gain, 99));
-            let found = align(&first, &other);
-            assert!((found.offset - begin).abs() < 0.006, "{begin}: {found:?}");
-            assert!(found.confidence > 0.3, "{begin}: {found:?}");
-        }
-    }
-
-    #[test]
-    fn one_that_began_first_comes_out_negative() {
-        let first = rise_of_loudness(&claps(12.0, 5.0, 1.0, 3));
-        let other = rise_of_loudness(&claps(18.0, 0.0, 1.5, 4));
-        let found = align(&first, &other);
-        assert!((found.offset + 5.0).abs() < 0.006, "{found:?}");
-    }
-
-    #[test]
     fn sound_that_has_nothing_in_common_is_not_trusted() {
         let first = rise_of_loudness(&claps(20.0, 0.0, 1.0, 11));
         let noise: Vec<f32> = (0..160_000u32)

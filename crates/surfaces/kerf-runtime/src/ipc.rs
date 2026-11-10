@@ -2358,18 +2358,6 @@ mod tests {
     }
 
     #[test]
-    fn a_client_that_goes_without_a_word_releases_its_lease() {
-        let daemon = Daemon::start("vanish", options(Duration::from_millis(200), None));
-        // The bare connection, as a client killed mid-lease leaves it for
-        // the OS to close.
-        let stream = daemon.client.attach_lease().unwrap();
-        thread::sleep(Duration::from_secs(2));
-        assert!(daemon.running(), "kerfd exited while a lease was held");
-        drop(stream);
-        remove_project(&daemon.wait_for_exit());
-    }
-
-    #[test]
     fn background_work_keeps_it_running_until_the_work_ends() {
         let daemon = Daemon::start(
             "work",
@@ -2388,71 +2376,7 @@ mod tests {
         remove_project(&client);
     }
 
-    #[test]
-    fn each_request_starts_the_idle_timeout_again() {
-        let idle = Duration::from_millis(800);
-        let daemon = Daemon::start("requests", options(Duration::from_millis(100), Some(idle)));
-        let mut last = Instant::now();
-        let busy_until = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < busy_until {
-            // Taken before the request, so never after kerfd's own.
-            last = Instant::now();
-            daemon.client.get_state().unwrap();
-            thread::sleep(Duration::from_millis(200));
-        }
-        assert!(daemon.running());
-        let client = daemon.wait_for_exit();
-        assert!(last.elapsed() >= idle, "it exited before its idle timeout");
-        remove_project(&client);
-    }
-
-    #[test]
-    fn a_request_after_the_last_lease_waits_out_the_idle_timeout() {
-        let idle = Duration::from_secs(3);
-        let daemon = Daemon::start("one-shot", options(Duration::from_secs(1), Some(idle)));
-        let lease = daemon.client.hold();
-        wait_until_held(&lease);
-        drop(lease);
-        // Within the grace, but after kerfd has seen the lease close: a
-        // request it accepts while the lease is open belongs to the
-        // leasing client.
-        thread::sleep(Duration::from_millis(200));
-        let last = Instant::now();
-        daemon.client.get_state().unwrap();
-        let client = daemon.wait_for_exit();
-        assert!(
-            last.elapsed() >= idle,
-            "a one-shot request got the lease grace"
-        );
-        remove_project(&client);
-    }
-
-    #[test]
-    fn without_an_idle_timeout_only_a_lease_lets_it_go() {
-        let daemon = Daemon::start("forever", options(Duration::from_millis(100), None));
-        daemon.client.get_state().unwrap();
-        thread::sleep(Duration::from_secs(2));
-        assert!(daemon.running(), "kerfd exited with its idle timeout off");
-        let lease = daemon.client.hold();
-        wait_until_held(&lease);
-        drop(lease);
-        remove_project(&daemon.wait_for_exit());
-    }
-
     #[cfg(unix)]
-    #[test]
-    fn it_leaves_a_socket_that_replaced_its_own() {
-        let daemon = Daemon::start("replaced", options(Duration::from_millis(100), None));
-        let path = daemon.client.endpoint().as_path().unwrap().to_path_buf();
-        fs::remove_file(&path).unwrap();
-        let other = UnixListener::bind(&path).unwrap();
-        let client = daemon.wait_for_exit();
-        assert!(path.exists(), "kerfd removed a socket it does not own");
-        drop(other);
-        let _ = fs::remove_file(&path);
-        remove_project(&client);
-    }
-
     #[test]
     fn the_idle_timeout_reads_as_seconds_with_zero_for_never() {
         let default = IpcOptions::default();

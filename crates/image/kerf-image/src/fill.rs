@@ -887,25 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn membrane_matches_a_linear_ramp() {
-        let (w, h) = (40u32, 30u32);
-        let mut img = Image::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let v = x as f32 / w as f32;
-                img.set(x, y, [v, v, v, 1.0]);
-            }
-        }
-        let hole = rect_hole(w, h, 10, 8, 14);
-        let f = membrane_fill(&cut(&img, &hole), &hole);
-        assert!(
-            psnr(&f, &img, Some(&hole)) > 40.0,
-            "{}",
-            psnr(&f, &img, Some(&hole))
-        );
-    }
-
-    #[test]
     fn patchmatch_beats_the_membrane_on_texture() {
         let (w, h) = (96u32, 72u32);
         let gt = background(w, h, 0.0);

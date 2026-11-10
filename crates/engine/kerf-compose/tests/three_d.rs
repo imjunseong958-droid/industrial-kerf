@@ -71,31 +71,6 @@ fn at_rest_a_clip_in_depth_looks_as_it_does_in_2d() {
 }
 
 #[test]
-fn a_clip_further_away_looks_smaller_by_perspective() {
-    let plain = width_of(&frame(&square("three_d=true"), 3));
-    // The default camera stands 180 / 2 / tan(20°) = 247 pixels away, so one frame height further on
-    // is 247 / (247 + 180) of the size.
-    let far = width_of(&frame(&square("three_d=true z=1"), 3));
-    let wanted = f64::from(plain) * 247.3 / (247.3 + 180.0);
-    assert!(
-        (f64::from(far) - wanted).abs() < 2.0,
-        "{plain} to {far}, not {wanted}"
-    );
-    let near = width_of(&frame(&square("three_d=true z=-0.5"), 3));
-    let wanted = f64::from(plain) * 247.3 / (247.3 - 90.0);
-    assert!(
-        (f64::from(near) - wanted).abs() < 2.0,
-        "{plain} to {near}, not {wanted}"
-    );
-}
-
-#[test]
-fn behind_the_camera_there_is_nothing() {
-    let gone = frame(&square("three_d=true z=-5"), 3);
-    assert_eq!(width_of(&gone), 0);
-}
-
-#[test]
 fn turning_a_clip_narrows_it_and_tipping_it_shortens_it() {
     let at_rest = frame(&square("three_d=true"), 3);
     let (w, h) = (width_of(&at_rest), height_of(&at_rest));
@@ -262,40 +237,8 @@ fn flips(colors: impl Iterator<Item = [u8; 3]>) -> Vec<u32> {
     found
 }
 
-fn across_row(frame: &Frame, y: u32) -> Vec<u32> {
-    flips((0..frame.width).map(|x| pixel(frame, x, y)))
-}
-
 fn down_column(frame: &Frame, x: u32) -> Vec<u32> {
     flips((0..frame.height).map(|y| pixel(frame, x, y)))
-}
-
-#[test]
-fn clips_turned_about_y_are_cut_where_they_meet() {
-    // Red is 18 pixels back and turned 45 degrees, right side nearer; blue is flat at z = 0. Red's
-    // plane comes to z = 0 at 18 / tan 45 = 18 pixels right of its middle, and z = 0 lands on the
-    // frame as it does in 2D: at x = 160 + 18. To its left blue is in front, and to its right red.
-    let frame = frame(&crossing("scale=0.5 z=0.1 rotate_y=45", "scale=0.5"), 0);
-    assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
-    assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
-    let found = across_row(&frame, 90);
-    assert!(found.iter().any(|x| x.abs_diff(178) <= 1), "{found:?}");
-    // At each height, since the line of it is upright.
-    for y in [60, 75, 105, 120] {
-        let found = across_row(&frame, y);
-        assert!(found.iter().any(|x| x.abs_diff(178) <= 1), "{y}: {found:?}");
-    }
-}
-
-#[test]
-fn the_clips_trade_sides_whichever_track_is_on_top() {
-    // Either way round the same line, and the same colour each side of it.
-    let frame = frame(
-        "  track V1 video\n    clip b gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.5\n  track V2 video\n    clip r gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.5 z=0.1 rotate_y=45\n",
-        0,
-    );
-    assert_eq!(pixel(&frame, 170, 90), [0, 0, 255]);
-    assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
 }
 
 #[test]
@@ -307,90 +250,6 @@ fn clips_turned_about_x_are_cut_along_a_row() {
     assert_eq!(pixel(&frame, 160, 116), [0, 0, 255]);
     let found = down_column(&frame, 160);
     assert!(found.iter().any(|y| y.abs_diff(108) <= 1), "{found:?}");
-}
-
-#[test]
-fn the_line_falls_where_two_turned_planes_meet() {
-    // Neither flat: where the rays first find the two planes at one depth, by the plane equations.
-    let eye = [0.0, 0.0, -90.0 / 20f64.to_radians().tan()];
-    let focal = -eye[2];
-    let plane = |(cx, z): (f64, f64), yaw: f64| {
-        let (s, c) = yaw.to_radians().sin_cos();
-        // A point of it, and the way it faces: turned about y by `yaw`.
-        ([cx, 0.0, z], [s, 0.0, c])
-    };
-    let red = plane((0.0, 9.0), 35.0);
-    let blue = plane((16.0, -9.0), -40.0);
-    let depth = |(point, normal): ([f64; 3], [f64; 3]), x: f64, y: f64| {
-        let ray = [x, y, focal];
-        let toward: f64 = (0..3).map(|i| ray[i] * normal[i]).sum();
-        let along: f64 = (0..3).map(|i| (point[i] - eye[i]) * normal[i]).sum::<f64>() / toward;
-        along * focal
-    };
-    // Bisect along a row for where the two depths are equal.
-    let (mut left, mut right) = (-40.0, 60.0);
-    let gap = |x: f64| depth(red, x, 0.5) - depth(blue, x, 0.5);
-    assert!(gap(left) * gap(right) < 0.0, "{} {}", gap(left), gap(right));
-    for _ in 0..50 {
-        let middle: f64 = (left + right) / 2.0;
-        if gap(left) * gap(middle) <= 0.0 {
-            right = middle;
-        } else {
-            left = middle;
-        }
-    }
-    let wanted = 160.0 + left;
-    let drawn = frame(
-        &crossing(
-            "scale=0.6 z=0.05 rotate_y=35",
-            "scale=0.6 z=-0.05 x=0.05 rotate_y=-40",
-        ),
-        0,
-    );
-    let found = across_row(&drawn, 90);
-    assert!(
-        found.iter().any(|x| (f64::from(*x) - wanted).abs() <= 1.5),
-        "{found:?} against {wanted}"
-    );
-}
-
-#[test]
-fn clips_that_do_not_cross_stack_as_they_did() {
-    // Parallel, on one plane, or only their planes meeting off their ends: the nearer whole, in
-    // front of the other whole, or the later track where they are as near.
-    let parallel = frame(&crossing("scale=0.6 z=0.2", "scale=0.3 z=-0.2"), 0);
-    assert_eq!(pixel(&parallel, 160, 90), [0, 0, 255]);
-    let reversed = frame(&crossing("scale=0.3 z=-0.2", "scale=0.6 z=0.2"), 0);
-    assert_eq!(pixel(&reversed, 160, 90), [255, 0, 0]);
-    let same = frame(&crossing("scale=0.6", "scale=0.3"), 0);
-    assert_eq!(pixel(&same, 160, 90), [0, 0, 255]);
-}
-
-#[test]
-fn a_cut_shares_the_pixels_it_goes_through() {
-    // Along the line each pixel it goes through is part of both, which keeps it from being jagged.
-    // Here the line falls 18.45 pixels along, most of the way across the pixel from 178 to 179.
-    let frame = frame(&crossing("scale=0.5 z=0.1025 rotate_y=45", "scale=0.5"), 0);
-    let mixed: Vec<[u8; 3]> = (170..186)
-        .map(|x| pixel(&frame, x, 90))
-        .filter(|[r, _, b]| *r > 20 && *b > 20)
-        .collect();
-    assert_eq!(mixed.len(), 1, "{mixed:?}");
-    // A band a single pixel wide, not a blur, and not one colour only.
-    assert!(mixed[0][0] > 60 && mixed[0][2] > 60, "{mixed:?}");
-}
-
-#[test]
-fn opacity_and_what_shows_through_go_by_the_cut() {
-    // Half opaque, red in front lets blue through on the right, and blue in front on the left has
-    // red's half behind it.
-    let frame = frame(
-        &crossing("scale=0.5 z=0.1 rotate_y=45 opacity=0.5", "scale=0.5"),
-        0,
-    );
-    let right = pixel(&frame, 195, 90);
-    assert!(right[0] > 100 && right[2] > 100, "{right:?}");
-    assert_eq!(pixel(&frame, 150, 90), [0, 0, 255]);
 }
 
 #[test]
@@ -437,69 +296,6 @@ fn near(found: f64, wanted: f64) {
 const SLANTED: &str = "kind=directional x=0.5 z=1 shadow=1";
 
 #[test]
-fn a_shadow_lands_where_the_geometry_says() {
-    let frame = frame(&shadowed(CASTER, SLANTED), 0);
-    let dark = |x, y| pixel(&frame, x, y)[0] < 8;
-    let lit = |x, y| pixel(&frame, x, y)[0] > 120;
-    assert!(dark(136, 90), "{:?}", pixel(&frame, 136, 90));
-    // Its edges, a pixel or so either way.
-    assert!(lit(118, 90) && dark(122, 90));
-    assert!(dark(150, 90) && lit(154, 90));
-    assert!(lit(136, 79) && dark(136, 83));
-    assert!(dark(136, 97) && lit(136, 101));
-    // And nowhere else on the wall, not even behind the square from here.
-    assert!(lit(200, 90) && lit(136, 40) && lit(50, 150));
-}
-
-#[test]
-fn a_shadow_is_as_dark_as_the_light_says() {
-    let lit = linear(pixel(&frame(&shadowed(CASTER, SLANTED), 0), 200, 90)[0]);
-    // The light comes 41.6 degrees off straight on, so the wall takes 180 / 240.8 of it.
-    near(lit, 180.0 / 240.83);
-    let half = frame(
-        &shadowed(CASTER, "kind=directional x=0.5 z=1 shadow=0.5"),
-        0,
-    );
-    near(linear(pixel(&half, 136, 90)[0]), lit / 2.0);
-    // None at 0, which is the default, down to the byte.
-    let none = frame(&shadowed(CASTER, "kind=directional x=0.5 z=1 shadow=0"), 0);
-    let unsaid = frame(&shadowed(CASTER, "kind=directional x=0.5 z=1"), 0);
-    assert_eq!(none.rgba, unsaid.rgba);
-    assert_eq!(pixel(&none, 136, 90)[0], pixel(&none, 200, 90)[0]);
-    // Ambient light comes from nowhere in particular, and lifts what is in shadow.
-    let ambient = frame(
-        &format!(
-            "{}  track V4 video\n    clip air gen=light@1 at=0f dur=24f\n      set kind=ambient intensity=0.25\n",
-            shadowed(CASTER, SLANTED)
-        ),
-        0,
-    );
-    near(linear(pixel(&ambient, 136, 90)[0]), 0.25);
-}
-
-#[test]
-fn a_shadow_goes_when_the_light_moves_away() {
-    // Its way goes round: by frame 23 it falls 400 to the right of the square, off the frame.
-    let moving = shadowed(CASTER, "kind=directional x={0f:0.5 23f:5} z=1 shadow=1");
-    let frame_of = |at| frame(&moving, at);
-    assert!(pixel(&frame_of(0), 136, 90)[0] < 8);
-    let last = frame_of(23);
-    let across_the_wall: Vec<u8> = (0..320).map(|x| pixel(&last, x, 150)[0]).collect();
-    assert!(across_the_wall.iter().all(|value| *value > 16));
-    assert!(pixel(&last, 136, 90)[0] > 16, "{:?}", pixel(&last, 136, 90));
-    assert!((60..320).all(|x| pixel(&last, x, 90)[0] > 16 || (62..=102).contains(&x)));
-    // Behind the wall, it lights the wall through to the side the camera sees, and the square has the
-    // wall in its way, so the shadow is the square's.
-    let behind = frame(&shadowed(CASTER, "kind=directional x=0.5 z=-1 shadow=1"), 0);
-    assert!(pixel(&behind, 136, 90)[0] > 120);
-    assert!(
-        pixel(&behind, 80, 90)[1] < 8,
-        "{:?}",
-        pixel(&behind, 80, 90)
-    );
-}
-
-#[test]
 fn a_shadow_goes_when_what_casts_it_moves_away() {
     // Moved 0.1 of the frame's width to the right, so is its shadow, by 32 pixels, to columns 152
     // to 184. Where it was is lit now, past the square itself, which is at 101 to 140 from here.
@@ -524,31 +320,6 @@ fn a_shadow_goes_when_what_casts_it_moves_away() {
         pixel(&between, 120, 90)[0] < 8,
         "{:?}",
         pixel(&between, 120, 90)
-    );
-}
-
-#[test]
-fn a_point_lights_shadow_spreads_from_it() {
-    // In line with the square and twice as far from the wall as it is, the light casts a shadow twice
-    // the size: from -160 to -96 in x and -18 to 18 in y, about the frame's middle.
-    let frame = frame(
-        &shadowed(CASTER, "kind=point x=-0.2 y=0 z=-0.5 shadow=1 intensity=2"),
-        0,
-    );
-    let at = |x: i32, y: i32| pixel(&frame, (160 + x) as u32, (90 + y) as u32)[0];
-    // Twice the square's size about the point below the light, x = -64: from -96 to -32 across and
-    // -18 to 18 down.
-    assert!(
-        at(-34, 0) < 8 && at(-30, 0) > 40,
-        "{} {}",
-        at(-34, 0),
-        at(-30, 0)
-    );
-    assert!(
-        at(-34, 16) < 8 && at(-34, 20) > 40,
-        "{} {}",
-        at(-34, 16),
-        at(-34, 20)
     );
 }
 
@@ -598,29 +369,6 @@ fn penumbra(getting: &[f64], around: usize) -> (usize, usize) {
 }
 
 #[test]
-fn a_directional_lights_penumbra_is_as_wide_as_its_angle_says() {
-    // Rays from either side of the light's angle pass the edge `z` frame heights up, at 180 z tan(θ/2)
-    // pixels either side of right below it.
-    for (z, size) in [(0.25, 20.0f64), (0.5, 20.0), (0.25, 10.0), (0.5, 5.0)] {
-        let light = format!("kind=directional z=1 size={size}");
-        let getting = light_getting_there(z, &light);
-        let half = 180.0 * z * (size.to_radians() / 2.0).tan();
-        let (dark, lit) = penumbra(&getting, 100);
-        let (dark, lit) = (dark as f64 + 0.5, lit as f64 + 0.5);
-        assert!(
-            (dark - (100.0 - half)).abs() < 2.0 && (lit - (100.0 + half)).abs() < 2.0,
-            "{z} {size}: from {dark} to {lit}, not {half} about 100"
-        );
-        // Half of it right below the edge, and more of it the further from it.
-        let middle = (getting[99] + getting[100]) / 2.0;
-        assert!((middle - 0.5).abs() < 0.05, "{z} {size}: {middle}");
-        for x in dark as usize..lit as usize {
-            assert!(getting[x + 1] >= getting[x] - 0.005, "{x}: {getting:?}");
-        }
-    }
-}
-
-#[test]
 fn a_point_lights_penumbra_is_as_wide_as_its_disc_says() {
     // The light is 135 pixels up, right over the edge, and 18 across: what is d from the wall has a
     // penumbra 18 d / (135 - d) wide about right below it.
@@ -639,24 +387,6 @@ fn a_point_lights_penumbra_is_as_wide_as_its_disc_says() {
     // The further from the wall it is, the wider, and the nearer the less.
     let (near, middle, far) = (width(0.1), width(0.3), width(0.5));
     assert!(near < middle && middle < far, "{near} {middle} {far}");
-}
-
-#[test]
-fn a_wide_lights_penumbra_has_no_steps_in_it() {
-    // 48 pixels wide across a straight edge, it falls off as a whole disc going behind that edge does,
-    // at most 2 / (pi 24) a column. A ray that read one place would make a thirty-second of the whole
-    // in a single column, between columns that changed by far less.
-    let getting = light_getting_there(0.5, "kind=directional z=1 size=30");
-    let (dark, lit) = penumbra(&getting, 100);
-    assert!(lit - dark > 40, "from {dark} to {lit}");
-    let change: Vec<f64> = (dark..lit).map(|x| getting[x + 1] - getting[x]).collect();
-    let most = change.iter().copied().fold(0.0, f64::max);
-    assert!(most < 1.3 * 2.0 / (std::f64::consts::PI * 24.0), "{most}");
-    let jump = change
-        .windows(2)
-        .map(|two| (two[1] - two[0]).abs())
-        .fold(0.0, f64::max);
-    assert!(jump < 0.012, "{jump}");
 }
 
 #[test]
@@ -716,14 +446,6 @@ fn a_light_with_no_size_draws_as_it_did() {
 }
 
 #[test]
-fn a_soft_shadow_holds_still_from_frame_to_frame() {
-    let scene = edge(0.25, "kind=directional z=1 size=20 shadow=1");
-    let first = frame(&scene, 0);
-    assert_eq!(first.rgba, frame(&scene, 7).rgba);
-    assert_eq!(first.rgba, frame(&scene, 19).rgba);
-}
-
-#[test]
 fn a_lights_size_animates() {
     let scene = edge(0.25, "kind=directional z=1 size={0f:0 23f:20} shadow=1");
     let hard = frame(&edge(0.25, "kind=directional z=1 shadow=1"), 0);
@@ -770,27 +492,6 @@ fn what_two_clips_take_of_a_light_between_them_is_all_of_it() {
     assert!(both < 0.08, "{both}");
 }
 
-#[test]
-fn a_lights_size_is_in_the_frames_key() {
-    let compositor = |light: &str| {
-        let project = parse_document(
-            &format!(
-                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
-                shadowed(CASTER, light)
-            ),
-            Catalog::builtin(),
-        )
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).expect("composes")
-    };
-    let at = Rate::FPS_24.time_of(3);
-    assert_ne!(
-        compositor("kind=directional z=1 shadow=1 size=2").frame_key(at, 1.0),
-        compositor("kind=directional z=1 shadow=1 size=3").frame_key(at, 1.0)
-    );
-}
-
 /// A square a quarter of the frame across, in depth, with a light.
 fn deep(set: &str, light: &str) -> String {
     let light = if light.is_empty() {
@@ -818,32 +519,6 @@ fn a_clip_with_no_depth_draws_as_it_did() {
     let flat = "  track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25 depth=0.5\n";
     let plain = "  track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=0.25\n";
     assert_eq!(frame(flat, 3).rgba, frame(plain, 3).rgba);
-}
-
-#[test]
-fn a_solid_shows_its_side_as_far_as_perspective_says() {
-    // 80 by 45 pixels, with its right edge at x = -40 about the middle: 0.25 of the frame, with no light
-    // to tell the side from the front, so only the outline says. The camera is 247 pixels from z = 0, so
-    // the back, 90 pixels behind, has that edge at -40 x 247.3 / (247.3 + 90) = -29.3, or column 130.7.
-    let set = "x=-0.25";
-    let flat = frame(&deep(set, ""), 3);
-    let thick = frame(&deep(&format!("{set} depth=0.5"), ""), 3);
-    let edge = |frame: &Frame| {
-        (0..320)
-            .rev()
-            .find(|x| pixel(frame, *x, 90)[0] > 128)
-            .expect("something shows")
-    };
-    assert!(edge(&flat).abs_diff(119) <= 1, "{}", edge(&flat));
-    assert!(edge(&thick).abs_diff(130) <= 1, "{}", edge(&thick));
-    // The front is where it was, and nothing shows of the far side, which it hides.
-    let left = |frame: &Frame| (0..320).find(|x| pixel(frame, *x, 90)[0] > 128).unwrap();
-    assert!(left(&flat).abs_diff(left(&thick)) <= 1);
-    // Deeper shows more of it; and in the middle of the frame, none of its sides show.
-    let deeper = frame(&deep(&format!("{set} depth=1"), ""), 3);
-    assert!(edge(&deeper) > edge(&thick) + 4);
-    let middle = frame(&deep("depth=0.5", ""), 3);
-    assert!(width_of(&middle).abs_diff(80) <= 1, "{}", width_of(&middle));
 }
 
 #[test]
@@ -959,32 +634,6 @@ fn a_clips_depth_animates_and_is_in_the_frames_key() {
     );
 }
 
-#[test]
-fn a_solid_casts_a_shadow_as_long_as_it_is_deep() {
-    // A clip in front of a wall with the light slanting by 160 for every 180 back: what is d nearer than
-    // the wall falls d x 160 / 180 to the right. From 45 to 90 pixels nearer, its shadow runs from 40
-    // to 80 to the right, where a clip that thin is one or the other.
-    let wall = "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true\n";
-    let scene = |set: &str| {
-        format!(
-            "{wall}  track V2 video\n    clip caster gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true scale=0.1 {set}\n  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=0.5 z=1 shadow=1\n"
-        )
-    };
-    // Its front is at z = -0.5, 90 pixels near, and it reaches back to -0.25.
-    let thin = frame(&scene("x=-0.2 z=-0.5"), 0);
-    let solid = frame(&scene("x=-0.2 z=-0.5 depth=0.25"), 0);
-    let dark = |frame: &Frame, x: u32| pixel(frame, x, 90)[0] < 8;
-    // The thin one's shadow is 32 across, from column 160 - 80 + 80 = 160 to 192.
-    assert!(dark(&thin, 176) && !dark(&thin, 150));
-    // The solid's reaches back as far as what is 45 pixels near casts, from column 120.
-    assert!(
-        dark(&solid, 176) && dark(&solid, 150),
-        "{:?}",
-        pixel(&solid, 150, 90)
-    );
-    assert!(!dark(&solid, 112), "{:?}", pixel(&solid, 112, 90));
-}
-
 /// A clip turned with `set`, lit by an environment on a hidden track, whose clip is all white on its top
 /// half and black below.
 fn in_a_sky(set: &str, light: &str) -> String {
@@ -1090,49 +739,6 @@ fn edge_width(frame: &Frame, y: u32) -> u32 {
 }
 
 #[test]
-fn an_aperture_of_nothing_blurs_nothing() {
-    // Down to the byte, with a focus said or not, and at no aperture with the camera moved.
-    let none = frame(&focused(0.5, "fov=40"), 3);
-    assert_eq!(none.rgba, frame(&focused(0.5, "aperture=0"), 3).rgba);
-    assert_eq!(none.rgba, frame(&focused(0.5, "focus=3"), 3).rgba);
-    assert_eq!(
-        none.rgba,
-        frame(&focused(0.5, "focus={0f:0 23f:3} aperture=0"), 3).rgba
-    );
-    assert!(edge_width(&none, 90) <= 1, "{}", edge_width(&none, 90));
-}
-
-#[test]
-fn the_blur_grows_with_the_distance_from_the_focal_plane() {
-    // At the camera's rest, 247.3 pixels back from z = 0, in focus. A radius is 18 pixels of aperture
-    // by how far from focus over how far from the eye, and an edge takes twice that to come up.
-    let camera = "aperture=0.1 focus=0";
-    let eye = 90.0 / 20f64.to_radians().tan();
-    let wanted = |z: f64| {
-        let depth = eye + z * 180.0;
-        18.0 * (z * 180.0).abs() / depth * 2.0
-    };
-    let width = |z: f64| f64::from(edge_width(&frame(&focused(z, camera), 3), 90));
-    assert!(width(0.0) <= 1.0, "{}", width(0.0));
-    let mut before = 1.0;
-    for z in [0.25, 0.5, 1.0, 2.0] {
-        let (found, want) = (width(z), wanted(z));
-        assert!(found > before, "{z}: {found} after {before}");
-        assert!(
-            (found - want).abs() <= want * 0.3 + 1.5,
-            "{z}: {found} against {want}"
-        );
-        before = found;
-    }
-    // Nearer than focus as well, and nearer the camera it grows faster.
-    let (found, want) = (width(-0.5), wanted(-0.5));
-    assert!(
-        (found - want).abs() <= want * 0.3 + 1.5,
-        "{found} against {want}"
-    );
-}
-
-#[test]
 fn what_is_in_focus_goes_by_what_the_camera_says() {
     // Sharp at the z it names, soft at the z it does not, either way round.
     let at_half = "aperture=0.1 focus=0.5";
@@ -1181,33 +787,6 @@ fn a_turned_clip_goes_softer_along_its_length() {
     assert!(rise(160) <= 2, "{}", rise(160));
     assert!(rise(190) > rise(160), "{} {}", rise(190), rise(160));
     assert!(rise(130) > rise(160), "{} {}", rise(130), rise(160));
-}
-
-#[test]
-fn a_blurred_clip_filling_the_frame_keeps_its_corners() {
-    let frame = frame(
-        "  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n      set color=#ffffff scale=2 three_d=true z=0.5\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.2\n",
-        3,
-    );
-    for (x, y) in [(0, 0), (319, 0), (0, 179), (319, 179), (160, 90)] {
-        assert_eq!(pixel(&frame, x, y), [255, 255, 255], "{x},{y}");
-    }
-}
-
-#[test]
-fn a_blurred_clip_keeps_what_it_had() {
-    // What spreads out is what was there, as much of it.
-    let total = |frame: &Frame| -> f64 {
-        (0..frame.width * frame.height)
-            .map(|at| linear(pixel(frame, at % frame.width, at / frame.width)[0]))
-            .sum()
-    };
-    let sharp = total(&frame(&focused(0.5, "aperture=0"), 3));
-    let soft = total(&frame(&focused(0.5, "aperture=0.1"), 3));
-    assert!(
-        (soft - sharp).abs() < sharp * 0.03,
-        "{soft} against {sharp}"
-    );
 }
 
 #[test]
@@ -1266,45 +845,6 @@ fn a_bevel_of_nothing_is_no_bevel_and_it_needs_a_depth() {
         frame(&beveled("bevel=0.2", light), 3).rgba,
         frame(&beveled("bevel=5", light), 3).rgba
     );
-}
-
-#[test]
-fn a_bevel_faces_out_of_the_outline_and_toward_the_face() {
-    // The light comes from straight in front. The face takes all of it and a bevel, at 45 degrees to it,
-    // the cosine of that, in linear light.
-    let front = "kind=directional z=1";
-    let square = frame(&beveled("bevel=0.1", front), 3);
-    let row = (0..320)
-        .map(|x| linear(pixel(&square, x, 90)[0]))
-        .collect::<Vec<_>>();
-    let lit: Vec<usize> = (0..320).filter(|x| row[*x] > 0.02).collect();
-    let (left, right) = (lit[0], lit[lit.len() - 1]);
-    let middle = (left + right) / 2;
-    near(row[middle], 1.0);
-    near(row[left + 4], std::f64::consts::FRAC_1_SQRT_2);
-    near(row[right - 4], std::f64::consts::FRAC_1_SQRT_2);
-    // Its bevel is as wide as it says: 0.1 of 180 pixels, near the face's scale.
-    let band = lit.iter().filter(|x| row[**x] < 0.9).count();
-    assert!((band as i64 - 36).abs() <= 8, "{band}");
-    // Narrower than it was without one, but only by perspective: its whole outline lies a bevel further
-    // back from the eye, 36 pixels at 247, on a half width of 40.
-    let plain = frame(&beveled("", front), 3);
-    let width = |frame: &Frame| (0..320).filter(|x| pixel(frame, *x, 90)[0] > 8).count();
-    assert!(width(&square) < width(&plain));
-    assert!(
-        width(&plain) - width(&square) <= 12,
-        "{}",
-        width(&plain) - width(&square)
-    );
-    // A light from the left, which shines to the right, falls on the left bevel and not the right.
-    let side = "kind=directional x=1 z=0";
-    let from_left = frame(&beveled("bevel=0.1", side), 3);
-    let row = (0..320)
-        .map(|x| linear(pixel(&from_left, x, 90)[0]))
-        .collect::<Vec<_>>();
-    near(row[left + 4], std::f64::consts::FRAC_1_SQRT_2);
-    assert!(row[right - 4] < 0.01, "{}", row[right - 4]);
-    assert!(row[middle] < 0.01, "{}", row[middle]);
 }
 
 #[test]

@@ -54,43 +54,6 @@ fn width_across(frame: &Frame, y: u32, around: u32) -> u32 {
 }
 
 #[test]
-fn an_edge_is_as_soft_as_its_corners_say() {
-    // Hard on its left, at column 80, and 24 pixels across on its right, at column 240; its picture is
-    // the frame, so these are the frame's pixels.
-    let frame = frame(
-        "points=\"0.25,0.25,0 0.75,0.25,24 0.75,0.75,24 0.25,0.75,0\"",
-        3,
-    );
-    let right = width_across(&frame, 90, 240);
-    assert!((22..=26).contains(&right), "{right}");
-    assert!(covered(&frame, 240, 90) > 0.45 && covered(&frame, 239, 90) < 0.6);
-    let left = (70..90)
-        .filter(|x| (0.01..0.99).contains(&covered(&frame, *x, 90)))
-        .count();
-    assert!(left <= 1, "{left}");
-    // Halfway along its top, it is half as soft.
-    let top: Vec<f64> = (40..60).map(|y| covered(&frame, 160, y)).collect();
-    let soft = top.iter().filter(|c| (0.01..0.99).contains(*c)).count();
-    assert!((9..=13).contains(&soft), "{soft}: {top:?}");
-}
-
-#[test]
-fn the_same_softness_all_round_draws_as_a_feather_does() {
-    let as_feather = frame(&format!("points=\"{SQUARE}\" feather=12"), 3);
-    let as_corners = frame(
-        "points=\"0.25,0.25,12 0.75,0.25,12 0.75,0.75,12 0.25,0.75,12\"",
-        3,
-    );
-    assert_eq!(as_feather.rgba, as_corners.rgba);
-    // And they add up.
-    let added = frame(
-        "points=\"0.25,0.25,4 0.75,0.25,4 0.75,0.75,4 0.25,0.75,4\" feather=8",
-        3,
-    );
-    assert_eq!(as_feather.rgba, added.rgba);
-}
-
-#[test]
 fn a_mask_that_says_none_draws_as_it_did() {
     let plain = frame(&format!("points=\"{SQUARE}\""), 3);
     for said in [

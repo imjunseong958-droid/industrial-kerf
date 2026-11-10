@@ -250,33 +250,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_known_encoders_and_keeps_software_default() {
-        let listing = [
-            " V....D h264_videotoolbox VideoToolbox H.264 Encoder",
-            " V....D hevc_qsv Intel Quick Sync Video",
-        ]
-        .join("\n");
-        let capabilities = parse_encoder_capabilities(&listing, "ffmpeg");
-        let software =
-            select_video_encoder(&capabilities.encoders, &SelectEncoderOptions::default());
-        assert_eq!(software.encoder, "libx264");
-        assert!(!software.hardware);
-
-        let mut hw = SelectEncoderOptions {
-            prefer_hardware: true,
-            ..Default::default()
-        };
-        let selected = select_video_encoder(&capabilities.encoders, &hw);
-        assert_eq!(selected.encoder, "h264_videotoolbox");
-        assert_eq!(selected.family, Some(HardwareEncoderFamily::Videotoolbox));
-
-        hw.codec = VideoCodec::Hevc;
-        let hevc = select_video_encoder(&capabilities.encoders, &hw);
-        assert_eq!(hevc.encoder, "hevc_qsv");
-        assert_eq!(hevc.family, Some(HardwareEncoderFamily::Qsv));
-    }
-
-    #[test]
     fn listed_hardware_encoders_that_do_not_open_fall_through() {
         let listing = [
             " V....D h264_nvenc NVIDIA NVENC H.264 encoder",

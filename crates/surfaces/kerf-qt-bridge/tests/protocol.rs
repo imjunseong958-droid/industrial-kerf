@@ -1,9 +1,9 @@
 //! What the other suites leave out, through the editor's C ABI and a real
-//! kerfd: the meter while a -23 dBFS tone plays, solo kept across a kerfd
-//! restart, keyframes kept through it, proposals waiting side by side and a
-//! revised version, a proposal previewed in place of the program, and
-//! titles placed by the generator insert op on a sequence whose frame rate
-//! was set while it was empty.
+//! kerfd: the meter while a -23 dBFS tone plays and when the program ends,
+//! solo kept across a kerfd restart, keyframes kept through it, proposals
+//! waiting side by side and a revised version, a proposal previewed in place
+//! of the program, and titles placed by the generator insert op on a sequence
+//! whose frame rate was set while it was empty.
 //!
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`) and FFmpeg; the tests that need media say so and pass without
@@ -369,6 +369,24 @@ fn the_meter_reads_a_tone_and_solo_holds_across_a_kerfd_restart() {
         clocks.iter().all(|clock| clock["dropped"].is_u64()),
         "{clocks:?}"
     );
+
+    // Played to the end, the meter clears without a pause; played again from
+    // there, the program starts over.
+    editor.forget("meter");
+    editor.send(json!({"type": "seek", "position": 3.4}));
+    editor.send(json!({"type": "play"}));
+    editor.expect("a reading near the end", |event| {
+        event["type"] == "meter" && !event["peak"].is_null()
+    });
+    editor.expect("the meter cleared at the end", |event| {
+        event["type"] == "meter" && event["peak"].is_null()
+    });
+    editor.forget("clock");
+    editor.send(json!({"type": "play"}));
+    editor.expect("the clock starting over", |event| {
+        event["type"] == "clock" && event["position"].as_f64().is_some_and(|at| at < 1.0)
+    });
+    editor.send(json!({"type": "pause"}));
 
     // Keys as the Inspector writes them: frames from the clip's start.
     editor.send(

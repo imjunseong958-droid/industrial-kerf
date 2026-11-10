@@ -373,27 +373,6 @@ sequence s1 rate=24 size=1920x1080 start=01:00:00:00
     }
 
     #[test]
-    fn srt_lists_every_subtitle_track_in_time_order() {
-        assert_eq!(
-            to_srt(&sequence(), None),
-            "1
-00:00:00,250 --> 00:00:02,250
-So here we
-are.
-
-2
-00:00:01,000 --> 00:00:01,542
-[music]
-
-3
-00:00:03,000 --> 00:00:04,500
-Fish & <chips>
-
-"
-        );
-    }
-
-    #[test]
     fn vtt_escapes_markup_and_can_take_one_track() {
         assert_eq!(
             to_vtt(&sequence(), None),

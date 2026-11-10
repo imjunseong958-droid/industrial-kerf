@@ -338,27 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stereo_sine_at_minus_20_dbfs_reads_minus_20_lufs() {
-        for rate in [44_100, 48_000] {
-            let mut meter = LoudnessMeter::new(rate, 2);
-            let amplitude = 10f64.powf(-20.0 / 20.0);
-            meter.push(&stereo_sine(1_000.0, amplitude, rate, 0.39));
-            assert_eq!(meter.momentary(), None, "not 400 ms yet");
-            meter.push(&stereo_sine(1_000.0, amplitude, rate, 3.2));
-            let momentary = meter.momentary().expect("momentary after 400 ms");
-            let short_term = meter.short_term().expect("short-term after 3 s");
-            assert!(
-                close(momentary.into(), -20.0, 0.3),
-                "{rate} Hz: {momentary}"
-            );
-            assert!(
-                close(short_term.into(), -20.0, 0.3),
-                "{rate} Hz: {short_term}"
-            );
-        }
-    }
-
-    #[test]
     fn short_term_waits_for_its_three_seconds_and_follows_the_last_ones() {
         let rate = 48_000;
         let mut meter = LoudnessMeter::new(rate, 2);

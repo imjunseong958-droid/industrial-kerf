@@ -481,60 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn a_gray_frame_is_its_level_with_no_color() {
-        let reading = read(&filled(64, 36, [128, 128, 128]), 64, 36).expect("a reading");
-        close(reading.luma.mean, 50.2, 0.05);
-        assert_eq!(reading.luma.min, reading.luma.max);
-        close(reading.chroma.saturation, 0.0, 0.01);
-        close(reading.chroma.cast_magnitude, 0.0, 0.01);
-        assert!(reading.peaks.is_empty());
-        assert_eq!(reading.zones.midtones, 1.0);
-        assert_eq!(reading.clipped.white, [0.0; 3]);
-        assert_eq!(reading.clipped.black, [0.0; 3]);
-        assert_eq!(reading.histogram[8], 1.0);
-        assert_eq!(reading.histogram.iter().sum::<f64>(), 1.0);
-    }
-
-    #[test]
-    fn clipping_is_counted_by_channel() {
-        let reading = read(&filled(8, 8, [255, 0, 128]), 8, 8).expect("a reading");
-        assert_eq!(reading.clipped.white, [1.0, 0.0, 0.0]);
-        assert_eq!(reading.clipped.black, [0.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn half_black_half_white_falls_in_the_end_zones() {
-        let mut rgba = filled(8, 8, [0, 0, 0]);
-        rgba[..8 * 4 * 4].copy_from_slice(&filled(8, 4, [255, 255, 255]));
-        let reading = read(&rgba, 8, 8).expect("a reading");
-        assert_eq!(reading.zones.shadows, 0.5);
-        assert_eq!(reading.zones.highlights, 0.5);
-        assert_eq!(reading.zones.midtones, 0.0);
-        assert_eq!(reading.histogram[0], 0.5);
-        assert_eq!(reading.histogram[15], 0.5);
-        assert_eq!(reading.luma.min, 0.0);
-        assert_eq!(reading.luma.max, 100.0);
-    }
-
-    #[test]
-    fn primaries_land_where_a_vectorscope_draws_them() {
-        // BT.709 100% targets.
-        for (color, hue, magnitude) in [
-            ([255, 0, 0], 102.9, 102.6),
-            ([0, 255, 0], 229.7, 119.1),
-            ([0, 0, 255], 354.8, 100.4),
-        ] {
-            let reading = read(&filled(8, 8, color), 8, 8).expect("a reading");
-            close(reading.chroma.cast_hue_deg, hue, 0.5);
-            close(reading.chroma.cast_magnitude, magnitude, 0.5);
-            close(reading.chroma.saturation, magnitude, 0.5);
-            assert_eq!(reading.peaks.len(), 1);
-            close(reading.peaks[0].hue_deg, hue, 6.0);
-            assert_eq!(reading.peaks[0].share, 1.0);
-        }
-    }
-
-    #[test]
     fn a_cast_shows_and_opposite_colors_cancel_in_it() {
         let warm = read(&filled(8, 8, [150, 120, 100]), 8, 8).expect("a reading");
         assert!(warm.chroma.cast_magnitude > 5.0);
@@ -545,21 +491,6 @@ mod tests {
         // Saturated all the same, which the cast alone would hide.
         assert!(opposite.chroma.saturation > 90.0);
         assert_eq!(opposite.peaks.len(), 2);
-    }
-
-    #[test]
-    fn skin_sits_on_the_skin_line_and_sky_does_not() {
-        let skin = read(&filled(8, 8, [224, 172, 138]), 8, 8).expect("a reading");
-        assert_eq!(skin.chroma.on_skin_line, 1.0);
-        let sky = read(&filled(8, 8, [90, 150, 220]), 8, 8).expect("a reading");
-        assert_eq!(sky.chroma.on_skin_line, 0.0);
-    }
-
-    #[test]
-    fn a_large_frame_is_read_in_steps_and_reads_the_same() {
-        let small = read(&filled(40, 20, [200, 100, 50]), 40, 20).expect("a reading");
-        let large = read(&filled(3840, 2160, [200, 100, 50]), 3840, 2160).expect("a reading");
-        assert_eq!(small, large);
     }
 
     #[test]

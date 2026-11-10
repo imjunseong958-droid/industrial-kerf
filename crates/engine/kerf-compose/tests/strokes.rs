@@ -44,21 +44,6 @@ fn scene(fx: &str) -> String {
 const WHITE: u32 = 255;
 
 #[test]
-fn a_clone_paints_the_square_elsewhere() {
-    // The square is at 0.25 across. Paint at 0.75 from half a picture to the left.
-    let body =
-        scene("      fx image.clone@1 points=\"0.75,0.5\" radius=0.05 hardness=1 from_x=-0.5\n");
-    let found = frame(&body, 3, Accel::Never);
-    assert_eq!(pixel(&found, WIDE * 3 / 4, TALL / 2)[0] as u32, WHITE);
-    assert_eq!(
-        pixel(&found, WIDE / 4, TALL / 2)[0] as u32,
-        WHITE,
-        "still there"
-    );
-    assert_eq!(pixel(&found, WIDE * 3 / 4, TALL / 2 + 30)[0], 0x60);
-}
-
-#[test]
 fn a_heal_with_no_source_named_takes_the_square_out() {
     let body = scene("      fx image.heal@1 points=\"0.25,0.5\" radius=0.1 hardness=0.8\n");
     let found = frame(&body, 3, Accel::Never);

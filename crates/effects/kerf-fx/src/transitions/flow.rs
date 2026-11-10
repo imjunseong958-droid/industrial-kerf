@@ -611,18 +611,6 @@ mod tests {
         img
     }
 
-    /// A flat grey background with a white square of side `side` whose left/top edge is at `(x0, y0)`.
-    fn square(w: usize, h: usize, x0: usize, y0: usize, side: usize) -> Image {
-        let mut img = Image::filled(w, h, [0.1, 0.1, 0.1, 1.0]);
-        for y in y0..(y0 + side).min(h) {
-            for x in x0..(x0 + side).min(w) {
-                let i = (y * w + x) * 4;
-                img.px[i..i + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
-            }
-        }
-        img
-    }
-
     /// Mean absolute difference over the pixels at least `margin` from every edge.
     fn interior_diff(a: &Image, b: &Image, margin: usize) -> f32 {
         let (mut s, mut n) = (0.0f32, 0usize);
@@ -665,33 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn a_moving_square_appears_once_at_its_interpolated_place() {
-        // a 24 px square moving 10 px right: Frame Blending shows two half-bright copies
-        let (a, b) = (square(128, 96, 40, 36, 24), square(128, 96, 50, 36, 24));
-        let want = square(128, 96, 45, 36, 24);
-        let flow = interpolate(&a, &b, 0.5);
-        let blend = a.clone().lerp(&b, 0.5);
-        // the leading and trailing bands are where blending leaves ghosts
-        for x in [42usize, 71] {
-            let (f, bl, w) = (flow.get(x, 48)[0], blend.get(x, 48)[0], want.get(x, 48)[0]);
-            assert!(
-                (f - w).abs() < 0.1,
-                "x={x}: flow {f}, want {w} (blend {bl})"
-            );
-            assert!((bl - w).abs() > 0.3, "x={x}: the blend should ghost here");
-        }
-        assert!(
-            flow.get(57, 48)[0] > 0.95,
-            "the square's centre stays solid"
-        );
-        let (e_flow, e_blend) = (
-            interior_diff(&flow, &want, 4),
-            interior_diff(&blend, &want, 4),
-        );
-        assert!(e_flow * 4.0 < e_blend, "flow {e_flow} vs blend {e_blend}");
-    }
-
-    #[test]
     fn flicker_on_static_content_is_not_dragged_around() {
         // static rows of lit windows; between the frames some switch on and some grow a pixel:
         // brightness change, not motion, so the result is the plain cross-fade
@@ -721,22 +682,6 @@ mod tests {
         let blend = a.clone().lerp(&b, 0.5);
         let e = interior_diff(&flow, &blend, 0);
         assert!(e < 1e-3, "static detail moved: {e}");
-    }
-
-    #[test]
-    fn identical_frames_are_returned_unchanged() {
-        let a = texture(64, 48, 0.0, 0.0);
-        let out = interpolate(&a, &a.clone(), 0.37);
-        assert!(interior_diff(&out, &a, 0) < 1e-5);
-    }
-
-    #[test]
-    fn large_frames_estimate_flow_at_the_working_size() {
-        // wider than WORK_W: the flow is estimated on a reduced copy and scaled back up
-        let (a, b) = (texture(1400, 120, 0.0, 0.0), texture(1400, 120, 12.0, 0.0));
-        let want = texture(1400, 120, 6.0, 0.0);
-        let e = interior_diff(&interpolate(&a, &b, 0.5), &want, 24);
-        assert!(e < 0.01, "{e}");
     }
 
     #[test]

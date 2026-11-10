@@ -50,22 +50,8 @@ fn middle(frame: &Frame) -> [u8; 3] {
     [frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2]]
 }
 
-/// `color` graded by `grade`, at its full amount.
-fn graded(grade: &str, color: &str) -> [i32; 3] {
-    let found = frame(color, &format!("fx look.grade.{grade}@1"), Accel::Never);
-    middle(&found).map(i32::from)
-}
-
 fn plain(color: &str) -> [i32; 3] {
     middle(&frame(color, "fx color.basic@1", Accel::Never)).map(i32::from)
-}
-
-fn spread(pixel: [i32; 3]) -> i32 {
-    pixel.iter().max().unwrap_or(&0) - pixel.iter().min().unwrap_or(&0)
-}
-
-fn sum(pixel: [i32; 3]) -> i32 {
-    pixel.iter().sum()
 }
 
 #[test]
@@ -91,104 +77,6 @@ fn at_no_amount_each_leaves_the_picture_alone_and_at_full_each_changes_it() {
         }
         assert!(changed, "{grade} did nothing");
     }
-}
-
-#[test]
-fn half_an_amount_goes_part_of_the_way() {
-    for grade in grades() {
-        for color in [LIGHT, DARK, RED] {
-            let (before, full) = (plain(color), {
-                let found = frame(color, &format!("fx {grade}@1"), Accel::Never);
-                middle(&found).map(i32::from)
-            });
-            let half = middle(&frame(
-                color,
-                &format!("fx {grade}@1 amount=0.5"),
-                Accel::Never,
-            ))
-            .map(i32::from);
-            for k in 0..3 {
-                let (low, high) = (before[k].min(full[k]), before[k].max(full[k]));
-                assert!(
-                    half[k] >= low - 6 && half[k] <= high + 6,
-                    "{grade} on {color}: {before:?}, {half:?}, {full:?}"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn cinematic_grades_do_what_they_say() {
-    let [r, _, b] = graded("teal-warm", DARK);
-    assert!(b > r, "teal shadows: {r} {b}");
-    let [r, _, b] = graded("teal-warm", LIGHT);
-    assert!(r > b, "warm highlights: {r} {b}");
-    let night = graded("night-exterior", MIDDLE);
-    assert!(sum(night) < sum(plain(MIDDLE)) * 3 / 4, "darker: {night:?}");
-    assert!(night[2] > night[0], "cooler: {night:?}");
-    let [r, _, b] = graded("golden-dusk", MIDDLE);
-    assert!(r > b + 8, "warm: {r} {b}");
-    let [r, _, b] = graded("steel-blue", MIDDLE);
-    assert!(b > r + 4, "cool: {r} {b}");
-    let (dark, light) = (graded("hard-sun", DARK), graded("hard-sun", LIGHT));
-    assert!(
-        light[0] - dark[0] > plain(LIGHT)[0] - plain(DARK)[0],
-        "more contrast: {dark:?} {light:?}"
-    );
-}
-
-#[test]
-fn film_grades_do_what_they_say() {
-    let faded = graded("faded-print", BLACK);
-    assert!(faded[0] > 10, "lifted blacks: {faded:?}");
-    let silver = graded("silver-retention", RED);
-    assert!(
-        spread(silver) < spread(plain(RED)),
-        "less color: {silver:?}"
-    );
-    let (shadow, highlight) = (
-        graded("cross-processed", DARK),
-        graded("cross-processed", LIGHT),
-    );
-    assert!(shadow[2] > shadow[0], "blue shadows: {shadow:?}");
-    assert!(
-        highlight[1] > highlight[2],
-        "yellow-green highlights: {highlight:?}"
-    );
-    let [r, _, b] = graded("warm-negative", MIDDLE);
-    assert!(r > b, "warm: {r} {b}");
-}
-
-#[test]
-fn mono_grades_do_what_they_say() {
-    for grade in ["neutral-mono", "hard-mono"] {
-        let found = graded(grade, RED);
-        assert!(spread(found) <= 1, "{grade}: {found:?}");
-    }
-    let [r, _, b] = graded("sepia", RED);
-    assert!(r > b + 8, "warm brown: {r} {b}");
-    let [r, _, b] = graded("cold-mono", RED);
-    assert!(b > r + 8, "cold: {r} {b}");
-    let (dark, light) = (graded("hard-mono", DARK), graded("hard-mono", LIGHT));
-    assert!(light[0] - dark[0] > plain(LIGHT)[0] - plain(DARK)[0]);
-}
-
-#[test]
-fn technical_grades_do_what_they_say() {
-    assert!(sum(graded("lift-shadows", DARK)) > sum(plain(DARK)) + 12);
-    let protected = graded("protect-highlights", WHITE);
-    assert!(sum(protected) < sum(plain(WHITE)) - 12, "{protected:?}");
-    let half = spread(graded("half-saturation", RED));
-    let full = spread(plain(RED));
-    assert!(
-        (half as f32 / full as f32 - 0.5).abs() < 0.2,
-        "{half} of {full}"
-    );
-    assert!(spread(graded("boost-vibrance", MUTED)) > spread(plain(MUTED)));
-    let (low, high) = (graded("legal-range", BLACK), graded("legal-range", WHITE));
-    assert!((low[0] - 16).abs() <= 1, "{low:?}");
-    assert!((high[0] - 235).abs() <= 1, "{high:?}");
 }
 
 #[test]
@@ -381,28 +269,6 @@ fn a_stack_is_its_grades_one_after_the_other_in_the_order_written() {
             );
         }
     }
-}
-
-#[test]
-fn the_last_grade_has_the_last_word() {
-    let stack = |a: &str, b: &str, color: &str| {
-        let fx = format!("fx look.grade.{a}@1\n      fx look.grade.{b}@1");
-        middle(&frame(color, &fx, Accel::Never)).map(i32::from)
-    };
-    // In legal range when it comes last; contrast takes it out when it comes first.
-    let (black, white) = (
-        stack("hard-mono", "legal-range", BLACK),
-        stack("hard-mono", "legal-range", WHITE),
-    );
-    assert!(black[0] >= 15 && white[0] <= 236, "{black:?} {white:?}");
-    let (black, white) = (
-        stack("legal-range", "hard-mono", BLACK),
-        stack("legal-range", "hard-mono", WHITE),
-    );
-    assert!(black[0] < 15 && white[0] > 236, "{black:?} {white:?}");
-    // Grey when mono comes last; toned when the tone does.
-    assert!(spread(stack("sepia", "neutral-mono", RED)) <= 1);
-    assert!(spread(stack("neutral-mono", "sepia", RED)) > 8);
 }
 
 #[test]

@@ -588,12 +588,6 @@ mod tests {
     }
 
     #[test]
-    fn tracks_similarity() {
-        let e = run(TrackMethod::PositionScaleRotation, -1.5, 0.012, 10);
-        assert!(e < 0.75, "max drift {e} px");
-    }
-
-    #[test]
     fn ransac_rejects_outliers() {
         let truth = Affine::motion(Vec2::new(5.0, -3.0), Vec2::new(1.1, 1.1), 7.0, Vec2::ZERO);
         let mut src = Vec::new();

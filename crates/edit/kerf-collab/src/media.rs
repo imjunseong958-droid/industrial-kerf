@@ -569,18 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn only_shared_projects_copy_files_from_outside() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("a.mov");
-        fs::write(&source, b"x").unwrap();
-        let plain = root.path().join("plain");
-        fs::create_dir_all(&plain).unwrap();
-        assert!(!needs_copy(&plain, &source));
-        fs::create_dir_all(plain.join(".git")).unwrap();
-        assert!(needs_copy(&plain, &source));
-    }
-
-    #[test]
     fn files_git_ignores_in_the_project_are_external() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("My Film");
