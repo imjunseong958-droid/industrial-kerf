@@ -27,9 +27,9 @@ line, applied in order and atomically.
   closed"`): an in point where it starts, an out point where it ends.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
   Seconds round to a frame.
-- Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
-  Interpolation: linear (default), hold, ease-in, ease-out, ease, or a curve
-  `x1,y1,x2,y2` that may overshoot: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
+- Keyframes, clip time: `opacity={0f:0 12f:1:ease}`; linear, hold, ease-in,
+  ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
+  Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
 - `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,

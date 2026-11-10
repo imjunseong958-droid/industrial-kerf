@@ -96,7 +96,7 @@ impl Shown<'_> {
         self.kind == Kind::Title
             && (GEOMETRY
                 .iter()
-                .any(|name| matches!(self.clip.props.get(*name), Some(Param::Animated(_))))
+                .any(|name| self.clip.props.get(*name).is_some_and(Param::varies))
                 || axes_keyed(self.clip))
     }
 
@@ -161,7 +161,7 @@ fn title_axes(clip: &Clip) -> impl Iterator<Item = ([u8; 4], &Param)> {
 }
 
 fn axes_keyed(clip: &Clip) -> bool {
-    title_axes(clip).any(|(_, param)| matches!(param, Param::Animated(_)))
+    title_axes(clip).any(|(_, param)| param.varies())
 }
 
 /// The features a title names that the font it is drawn in has not, with that font's family: they
@@ -271,7 +271,7 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
             None => def.find(name).map(|param| param.default.clone()),
             Some(Param::Static(value)) => Some(value.clone()),
             // The compositor refuses animated titles; validation says so.
-            Some(Param::Animated(_)) => None,
+            Some(Param::Animated(_) | Param::Expr(_)) => None,
         }
     };
     let text = match get("text")? {
@@ -645,7 +645,7 @@ fn cropped_still(clip: &Clip) -> bool {
     at_all
         && !CROPS
             .iter()
-            .any(|name| matches!(clip.props.get(*name), Some(Param::Animated(_))))
+            .any(|name| clip.props.get(*name).is_some_and(Param::varies))
 }
 
 /// Whether `cropped` has fewer of a text's glyphs than `whole`. By how much ink, not by where, since a crop

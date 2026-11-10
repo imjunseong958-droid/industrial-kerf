@@ -6,6 +6,7 @@
 
 pub mod catalog;
 pub mod diag;
+pub mod expr;
 mod features;
 pub mod id;
 pub mod look;

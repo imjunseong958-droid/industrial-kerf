@@ -186,6 +186,7 @@ pub fn print_value(value: &Value) -> String {
 pub fn print_param(param: &Param, rate: Rate) -> String {
     match param {
         Param::Static(value) => print_value(value),
+        Param::Expr(expression) => format!("({expression})"),
         Param::Animated(keys) => {
             let keys: Vec<String> = keys
                 .iter()
@@ -293,8 +294,26 @@ fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
 }
 
 /// Read a value for `def`; `{time:value[:interp] …}` animates it.
+/// What is between the parentheses of an expression, when `text` is written as one: `(…)`.
+fn expression_text(text: &str) -> Option<&str> {
+    text.trim().strip_prefix('(')?.strip_suffix(')')
+}
+
+/// A number parameter written as an expression of the clip's time, kept inside its range.
+fn parse_expression(inner: &str, def: &ParamDef) -> Result<Param, String> {
+    kerf_model::expr::Expression::parse(inner)
+        .map(|expression| Param::Expr(expression.within(def.min, def.max)))
+        .map_err(|problem| format!("`{}`: {problem}", def.name))
+}
+
 pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, String> {
     match atom {
+        // A number may be worked out from the time: `(t*90)`, or quoted to hold spaces.
+        Atom::Word(text) | Atom::Str(text)
+            if def.ty == ParamType::Number && expression_text(text).is_some() =>
+        {
+            parse_expression(expression_text(text).unwrap_or_default(), def)
+        }
         // A time is an offset into the clip, or a marker's id to land on it.
         Atom::Word(word) if def.ty == ParamType::Time => match amount(word, rate) {
             Ok(time) => Ok(Param::Static(Value::Number(time.seconds()))),

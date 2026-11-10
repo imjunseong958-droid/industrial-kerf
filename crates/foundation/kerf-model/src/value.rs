@@ -275,14 +275,26 @@ pub enum Param {
     Static(Value),
     /// Keyframes in strictly increasing time order.
     Animated(Vec<Keyframe>),
+    /// A number worked out from the clip's time (`rotation=(t*90)`).
+    Expr(crate::expr::Expression),
 }
 
 impl Param {
+    /// Whether it may give different values at different times.
+    pub fn varies(&self) -> bool {
+        match self {
+            Self::Static(_) => false,
+            Self::Animated(_) => true,
+            Self::Expr(expression) => !expression.is_constant(),
+        }
+    }
+
     /// The value at `at`, clip-relative. Before the first keyframe and after
     /// the last, the nearest keyframe's value holds.
     pub fn value_at(&self, at: Time) -> Value {
         let keys = match self {
             Self::Static(value) => return value.clone(),
+            Self::Expr(expression) => return Value::Number(expression.value_at(at)),
             Self::Animated(keys) => keys,
         };
         let next = keys.partition_point(|key| key.at <= at);
@@ -302,6 +314,8 @@ impl Param {
     pub fn shifted(&self, delta: Time) -> Self {
         match self {
             Self::Static(_) => self.clone(),
+            // Keys moved by `delta` show at `at` what they showed at `at - delta`.
+            Self::Expr(expression) => Self::Expr(expression.starting(Time::ZERO - delta)),
             Self::Animated(keys) => Self::Animated(
                 keys.iter()
                     .map(|key| Keyframe {
@@ -318,6 +332,9 @@ impl Param {
     pub fn split(&self, at: Time) -> (Self, Self) {
         let keys = match self {
             Self::Static(_) => return (self.clone(), self.clone()),
+            Self::Expr(expression) => {
+                return (self.clone(), Self::Expr(expression.starting(at)));
+            }
             Self::Animated(keys) => keys,
         };
         let value = self.value_at(at);

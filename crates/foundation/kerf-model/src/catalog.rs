@@ -248,6 +248,15 @@ impl ParamDef {
                 }
                 keys.iter().try_for_each(|key| self.check_value(&key.value))
             }
+            Param::Expr(_) if self.ty != ParamType::Number => Err(format!(
+                "`{}` is a {}, and an expression gives a number",
+                self.name,
+                self.ty.name()
+            )),
+            Param::Expr(_) if !self.animatable => {
+                Err(format!("`{}` cannot be animated", self.name))
+            }
+            Param::Expr(_) => Ok(()),
         }
     }
 }
