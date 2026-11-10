@@ -11,7 +11,6 @@
 #include "components.h"
 #include "editor_bus.h"
 #include "editor_common.h"
-#include "keymap_editor.h"
 #include "project_panel.h"
 #include "main_window.h"
 #include "render_queue_view.h"
@@ -212,7 +211,7 @@ private slots:
         QCOMPARE(window.m_maskTools.size(), 3);
         for (const char *row : {"Annotations", "Safe Zones", "Viewer zoom", "Keyboard", "Sync"})
             QVERIFY2(names.contains(QString::fromLatin1(row)), row);
-        // The keyboard's choice and Customise, and the sync's rows.
+        // The keyboard's choice, and the sync's rows.
         QMenu *keymaps = view->findChild<QMenu *>(QStringLiteral("keymapMenu"));
         QVERIFY(keymaps);
         QVERIFY(findAction(keymaps, QStringLiteral("keymapChoice.premiere")));
@@ -393,71 +392,6 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("ops").toArray(),
                  (QJsonArray{QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"width", 1080}, {"height", 1920}}}));
         again->reject();
-    }
-
-    // Customise Keyboard… (⌥⌘K) opens the keymap editor over the registry:
-    // a key recorded there applies at once (menus, tips) and is kept for
-    // the next window; a taken key warns first; Reset all goes back.
-    void keymapEditorChangesKeysLive() {
-        QSettings().remove(QStringLiteral("commands/custom"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("commands/custom")); });
-        const QKeySequence own(Qt::CTRL | Qt::ALT | Qt::Key_3);
-        {
-            MainWindow window{QString(), QString()};
-            ToolbarWiring *wiring = window.m_toolbarWiring.get();
-            QAction *customise = window.m_commands->action(QStringLiteral("keyboard.customise"));
-            QVERIFY(customise && customise->isEnabled());
-            QCOMPARE(customise->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_K));
-            customise->trigger();
-            KeymapEditor *editor = wiring->keymapEditor();
-            QVERIFY(editor && editor->isVisible());
-            QCOMPARE(editor->customiser(), wiring->keymapCustomiser());
-            // The commands without a menu are there too.
-            editor->setFilter(QString());
-            for (const char *id : {"bin.search", "bin.toggleView", "browser.search", "source.play", "source.reveal", "composer.draw",
-                                   "sequence.setFormat.169", "sequence.settings"})
-                QVERIFY2(editor->shownCommands().contains(QString::fromLatin1(id)), id);
-            editor->setFilter(QStringLiteral("switch bin"));
-            QCOMPARE(editor->shownCommands(), QStringList{QStringLiteral("bin.toggleView")});
-            QCOMPARE(editor->selectedCommand(), QStringLiteral("bin.toggleView"));
-            QSignalSpy keys(window.m_commands, &CommandRegistry::shortcutsChanged);
-            editor->record(own);
-            QAction *view = window.m_commands->action(QStringLiteral("bin.toggleView"));
-            QCOMPARE(view->shortcut(), own);
-            QVERIFY(keys.size() >= 1);
-            QVERIFY(view->toolTip().contains(own.toString(QKeySequence::NativeText)));
-            QCOMPARE(ui::tipShortcut(window.m_projectPanel->m_viewButton), own.toString(QKeySequence::NativeText));
-            // ⌘E is Export Master's: a warning first, and nothing moves.
-            editor->record(QKeySequence(Qt::CTRL | Qt::Key_E));
-            QVERIFY(editor->conflictPending());
-            QVERIFY(editor->warning().contains(window.m_commands->action(QStringLiteral("export.master"))->text()));
-            QCOMPARE(view->shortcut(), own);
-            editor->cancelConflict();
-            QVERIFY(!editor->conflictPending());
-            QCOMPARE(window.m_commands->action(QStringLiteral("export.master"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_E));
-            editor->close();
-        }
-        {
-            // The next window has it, and the toolbar's format keys follow
-            // the registry the same way.
-            MainWindow window{QString(), QString()};
-            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), own);
-            ToolbarWiring *wiring = window.m_toolbarWiring.get();
-            KeymapEditor *editor = wiring->openKeymapEditor();
-            editor->selectCommand(QStringLiteral("sequence.setFormat.916"));
-            editor->record(QKeySequence(Qt::META | Qt::Key_9));
-            QCOMPARE(ui::tipShortcut(window.m_formatBank->segment(1)), QKeySequence(Qt::META | Qt::Key_9).toString(QKeySequence::NativeText));
-            // A keymap chosen keeps its own keys, and one's own come back with it.
-            window.m_commands->setKeymap(QStringLiteral("premiere"));
-            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
-            window.m_commands->setKeymap(QStringLiteral("kerf"));
-            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), own);
-            editor->m_resetAll->click();
-            QCOMPARE(window.m_commands->action(QStringLiteral("bin.toggleView"))->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
-            QCOMPARE(window.m_commands->action(QStringLiteral("sequence.setFormat.916"))->shortcut(), QKeySequence(Qt::ALT | Qt::Key_2));
-            QCOMPARE(ui::tipShortcut(window.m_formatBank->segment(1)), QKeySequence(Qt::ALT | Qt::Key_2).toString(QKeySequence::NativeText));
-            editor->close();
-        }
     }
 
     // composer.draw (D) is the composer's Draw, while the composer has the

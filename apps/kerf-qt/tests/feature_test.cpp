@@ -1,7 +1,6 @@
-// Tests for the W3 features on their own: the Sequence Settings dialog and
-// the keymap editor over the command registry. Their wiring into the window
-// is pinned by the region tests (toolbar_test: sequenceSettingsSendsSetSequence,
-// keymapEditorChangesKeysLive, composerDrawIsTheRegistrysCommand;
+// Tests for the W3 features on their own: the Sequence Settings dialog. Their
+// wiring into the window is pinned by the region tests (toolbar_test:
+// sequenceSettingsSendsSetSequence, composerDrawIsTheRegistrysCommand;
 // bin_browser_test: titlesAddAGeneratorClipThroughKerfd,
 // binAndBrowserKeysAreRegistryCommands; source_test:
 // sourcePlayAndRevealAreRegistryCommands).
@@ -9,7 +8,6 @@
 #include "test_registry.h"
 
 #include "command_registry.h"
-#include "keymap_editor.h"
 #include "sequence_settings.h"
 #include "ui/components.h"
 
@@ -46,9 +44,6 @@ class FeatureTest final : public QObject {
     }
 
 private slots:
-    void init() { QSettings().remove(QStringLiteral("commands/custom")); }
-    void cleanup() { QSettings().remove(QStringLiteral("commands/custom")); }
-
     // The dialog reads the program sequence from the snapshot's timeline
     // and writes kerfd's set-sequence with only what changed.
     void sequenceSettingsWritesWhatChanged() {
@@ -181,125 +176,8 @@ private slots:
         QCOMPARE(dialog.op().value("rate").toObject(), (QJsonObject{{"num", 48000}, {"den", 1001}}));
     }
 
-    // One's own keys: kept in the settings per keymap, applied to the
-    // registry's actions (again whenever it loads), taken from the commands
-    // they collided with, and reset.
-    void keymapCustomiserKeepsOwnKeys() {
-        CommandRegistry registry(QStringLiteral("kerf"), {});
-        KeymapCustomiser customiser(&registry);
-        QCOMPARE(customiser.keymap(), QStringLiteral("kerf"));
-        QVERIFY(customiser.has(QStringLiteral("bin.search")));
-        QVERIFY(customiser.has(QStringLiteral("source.play")));
-        QVERIFY(customiser.has(QStringLiteral("composer.draw")));
-        // Engine commands that need parameters are not offered.
-        QVERIFY(!customiser.has(QStringLiteral("clip.move")));
-        QCOMPARE(customiser.command(QStringLiteral("bin.toggleView")).where, QStringLiteral("View"));
-        QCOMPARE(customiser.command(QStringLiteral("source.play")).where, QStringLiteral("Source"));
-        QCOMPARE(customiser.defaults(QStringLiteral("bin.search")), QList<QKeySequence>{QKeySequence(Qt::CTRL | Qt::Key_F)});
-        QVERIFY(KeymapCustomiser::scopesOverlap(QStringLiteral("window"), QStringLiteral("timeline")));
-        QVERIFY(KeymapCustomiser::scopesOverlap(QStringLiteral("source"), QStringLiteral("source")));
-        QVERIFY(!KeymapCustomiser::scopesOverlap(QStringLiteral("source"), QStringLiteral("timeline")));
-
-        QSignalSpy changed(&registry, &CommandRegistry::shortcutsChanged);
-        const QKeySequence own(Qt::CTRL | Qt::ALT | Qt::Key_8);
-        QVERIFY(customiser.conflicts(QStringLiteral("bin.toggleView"), own).isEmpty());
-        customiser.assign(QStringLiteral("bin.toggleView"), own);
-        QCOMPARE(registry.action(QStringLiteral("bin.toggleView"))->shortcuts(), QList<QKeySequence>{own});
-        QVERIFY(customiser.isCustom(QStringLiteral("bin.toggleView")));
-        QCOMPARE(changed.size(), 1);
-        QCOMPARE(QSettings().value(QStringLiteral("commands/custom/kerf/bin.toggleView")).toString(), own.toString(QKeySequence::PortableText));
-        // ⌘E is Export Master's, window-wide: taking it takes it from there.
-        const QKeySequence exportKey(Qt::CTRL | Qt::Key_E);
-        QCOMPARE(customiser.conflicts(QStringLiteral("bin.toggleView"), exportKey), QStringList{QStringLiteral("export.master")});
-        customiser.assign(QStringLiteral("bin.toggleView"), exportKey);
-        QVERIFY(registry.action(QStringLiteral("export.master"))->shortcuts().isEmpty());
-        QVERIFY(customiser.isCustom(QStringLiteral("export.master")));
-        // A key of one panel and another's do not collide.
-        const QList<QKeySequence> markIn = customiser.keys(QStringLiteral("mark.in"));
-        QVERIFY(!markIn.isEmpty());
-        QVERIFY(!customiser.conflicts(QStringLiteral("source.play"), markIn.first()).contains(QStringLiteral("mark.in")));
-        // Another registry over the same settings comes up with them.
-        CommandRegistry later(QStringLiteral("kerf"), {});
-        KeymapCustomiser again(&later);
-        QCOMPARE(later.action(QStringLiteral("bin.toggleView"))->shortcuts(), QList<QKeySequence>{exportKey});
-        QVERIFY(later.action(QStringLiteral("export.master"))->shortcuts().isEmpty());
-        // Another keymap has its own keys; back on Kerf, one's own return.
-        later.setKeymap(QStringLiteral("premiere"));
-        QCOMPARE(again.keymap(), QStringLiteral("premiere"));
-        QCOMPARE(later.action(QStringLiteral("export.master"))->shortcuts(), QList<QKeySequence>{QKeySequence(Qt::CTRL | Qt::Key_M)});
-        later.setKeymap(QStringLiteral("kerf"));
-        QCOMPARE(later.action(QStringLiteral("bin.toggleView"))->shortcuts(), QList<QKeySequence>{exportKey});
-        // None, then the keymap's own.
-        customiser.clear(QStringLiteral("bin.search"));
-        QVERIFY(registry.action(QStringLiteral("bin.search"))->shortcuts().isEmpty());
-        QVERIFY(customiser.isCustom(QStringLiteral("bin.search")));
-        customiser.reset(QStringLiteral("bin.search"));
-        QCOMPARE(registry.action(QStringLiteral("bin.search"))->shortcuts(), QList<QKeySequence>{QKeySequence(Qt::CTRL | Qt::Key_F)});
-        QVERIFY(!customiser.isCustom(QStringLiteral("bin.search")));
-        customiser.resetAll();
-        QCOMPARE(registry.action(QStringLiteral("export.master"))->shortcuts(), QList<QKeySequence>{exportKey});
-        QCOMPARE(registry.action(QStringLiteral("bin.toggleView"))->shortcuts(),
-                 QList<QKeySequence>{QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2)});
-        QSettings settings;
-        settings.beginGroup(KeymapCustomiser::settingsGroup(QStringLiteral("kerf")));
-        QVERIFY(settings.childKeys().isEmpty());
-        // The tip names the key, as the registry's own tips do.
-        QCOMPARE(registry.action(QStringLiteral("bin.toggleView"))->toolTip(), registry.labelWithShortcut(QStringLiteral("bin.toggleView")));
-    }
-
-    // The editor: search, the rows' keys, the recorder, the warning, and
-    // Reset to default.
-    void keymapEditorRecordsAndWarns() {
-        CommandRegistry registry(QStringLiteral("kerf"), {});
-        KeymapCustomiser customiser(&registry);
-        KeymapEditor editor(&customiser);
-        editor.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&editor));
-        QCOMPARE(editor.width(), KeymapEditor::kWidth);
-        // Every word must match: a name, where it acts, or its key.
-        editor.setFilter(QStringLiteral("find bin"));
-        QCOMPARE(editor.shownCommands(), QStringList{QStringLiteral("bin.search")});
-        QCOMPARE(editor.keyText(QStringLiteral("bin.search")), QKeySequence(Qt::CTRL | Qt::Key_F).toString(QKeySequence::NativeText));
-        editor.setFilter(QStringLiteral("source"));
-        QVERIFY(editor.shownCommands().contains(QStringLiteral("source.play")));
-        QVERIFY(editor.shownCommands().contains(QStringLiteral("source.reveal")));
-        editor.setFilter(QString());
-        QVERIFY(editor.shownCommands().size() > 40);
-        // Source ▸ Play has no key; one is recorded with the recorder.
-        editor.selectCommand(QStringLiteral("source.play"));
-        QCOMPARE(editor.selectedCommand(), QStringLiteral("source.play"));
-        QVERIFY(editor.keyText(QStringLiteral("source.play")).isEmpty());
-        QVERIFY(!editor.m_reset->isEnabled());
-        editor.recorder()->setFocus();
-        QTest::keyClick(editor.recorder(), Qt::Key_P, Qt::MetaModifier | Qt::AltModifier);
-        QTRY_COMPARE(registry.action(QStringLiteral("source.play"))->shortcut(), QKeySequence(Qt::META | Qt::ALT | Qt::Key_P));
-        QCOMPARE(editor.keyText(QStringLiteral("source.play")), QKeySequence(Qt::META | Qt::ALT | Qt::Key_P).toString(QKeySequence::NativeText));
-        QVERIFY(editor.m_reset->isEnabled());
-        // A taken key: the warning names who has it; Use here moves it.
-        editor.record(QKeySequence(Qt::CTRL | Qt::Key_F));
-        QVERIFY(editor.conflictPending());
-        QVERIFY(editor.m_warnRow->isVisibleTo(&editor));
-        QVERIFY(editor.warning().contains(registry.action(QStringLiteral("bin.search"))->text()));
-        QCOMPARE(registry.action(QStringLiteral("source.play"))->shortcut(), QKeySequence(Qt::META | Qt::ALT | Qt::Key_P));
-        editor.confirmConflict();
-        QVERIFY(!editor.conflictPending());
-        QCOMPARE(registry.action(QStringLiteral("source.play"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_F));
-        QVERIFY(registry.action(QStringLiteral("bin.search"))->shortcuts().isEmpty());
-        QVERIFY(editor.keyText(QStringLiteral("bin.search")).isEmpty());
-        // Reset to default, for the one chosen.
-        editor.m_reset->click();
-        QVERIFY(registry.action(QStringLiteral("source.play"))->shortcuts().isEmpty());
-        // Clear: no key at all.
-        editor.selectCommand(QStringLiteral("sequence.settings"));
-        editor.m_clear->click();
-        QVERIFY(registry.action(QStringLiteral("sequence.settings"))->shortcuts().isEmpty());
-        editor.m_resetAll->click();
-        QCOMPARE(registry.action(QStringLiteral("sequence.settings"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_0));
-        QCOMPARE(registry.action(QStringLiteral("bin.search"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_F));
-    }
-
     // KERF_SCREENSHOT_DIR=<dir>: the Sequence Settings dialog (empty and
-    // with content) and the keymap editor with a warning, saved for a look.
+    // with content), saved for a look.
     void featureGallery() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         if (shots.isEmpty()) QSKIP("Set KERF_SCREENSHOT_DIR to save the feature dialogs");
@@ -314,14 +192,6 @@ private slots:
         SequenceSettingsDialog full(timeline(true));
         full.setError(SequenceSettingsDialog::rateNote());
         save(full, QStringLiteral("sequence-settings-content"));
-        CommandRegistry registry(QStringLiteral("kerf"), {});
-        KeymapCustomiser customiser(&registry);
-        KeymapEditor editor(&customiser);
-        editor.setFilter(QStringLiteral("bin"));
-        editor.selectCommand(QStringLiteral("bin.toggleView"));
-        editor.record(QKeySequence(Qt::CTRL | Qt::Key_E));
-        save(editor, QStringLiteral("keymap-editor"));
-        editor.cancelConflict();
     }
 };
 

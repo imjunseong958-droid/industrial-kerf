@@ -317,8 +317,7 @@ private slots:
         }
         QVERIFY2(unwired.isEmpty(), qPrintable(unwired.join(QStringLiteral(", "))));
         coming.sort();
-        // Nothing is left "Coming in this release" (W3: Sequence Settings and
-        // Customise Keyboard have their dialogs).
+        // Nothing is left "Coming in this release".
         QVERIFY2(coming.isEmpty(), qPrintable(coming.join(QStringLiteral(", "))));
         // Export Master is ⌘E; Export… keeps the toolbar's chosen quality.
         QAction *master = window.m_commands->action(QStringLiteral("export.master"));

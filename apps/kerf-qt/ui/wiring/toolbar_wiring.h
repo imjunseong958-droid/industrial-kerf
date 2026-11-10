@@ -26,9 +26,6 @@
 //                       edit {set-sequence {name?, width?, height?, start?,
 //                       rate? (empty sequences only)}}; kerfd's refusal shows
 //                       in the dialog, the next revision closes it
-//   keyboard            keyboard.customise (⌥⌘K) -> KeymapEditor over the
-//                       registry; one's own keys kept by KeymapCustomiser
-//                       (QSettings commands/custom/<keymap>/<id>)
 //   composer.draw       D while the composer has the focus: its Draw
 //   Export              export {quality: master, codec: prores_hq} or
 //                       {quality: review, codec: h264}; Render preview is
@@ -64,8 +61,6 @@ class QWidget;
 
 namespace kerf {
 
-class KeymapCustomiser;
-class KeymapEditor;
 class SequenceSettingsDialog;
 class EditorBus;
 class ExportButton;
@@ -170,8 +165,8 @@ public:
     // ---- the commands the window carries out for the features (W3)
     // The registry's format commands, in canvasPresets() order.
     static QStringList formatCommands();
-    // Registers sequence.setFormat.*, sequence.settings,
-    // keyboard.customise and composer.draw, and the bin's and the source's.
+    // Registers sequence.setFormat.*, sequence.settings and composer.draw,
+    // and the bin's and the source's.
     void installCommands();
     // Sequence Settings…: opens (or raises) the dialog over the program
     // sequence; it is not modal, so the window goes on as it is open.
@@ -179,10 +174,6 @@ public:
     SequenceSettingsDialog *sequenceSettings() const;
     // Sends the dialog's set-sequence op as an edit.
     bool applySequenceSettings(const QJsonObject &op);
-    // Customise Keyboard…
-    KeymapEditor *openKeymapEditor();
-    KeymapEditor *keymapEditor() const;
-    KeymapCustomiser *keymapCustomiser() const { return m_customiser; }
     // composer.draw: the composer's Draw when it has the focus.
     bool drawInComposer();
 
@@ -211,8 +202,6 @@ private:
     // The native menus, kept reachable where there is no menu bar.
     QHash<QString, QMenu *> m_menus;
     QList<QAction *> m_formatActions; // ⌥1-2: the registry's sequence.setFormat.*
-    KeymapCustomiser *m_customiser = nullptr;
-    QPointer<KeymapEditor> m_keymapEditor;
     QPointer<SequenceSettingsDialog> m_sequenceSettings;
     // A set-sequence edit sent from the dialog, and the revision it went at.
     bool m_sequencePending = false;
