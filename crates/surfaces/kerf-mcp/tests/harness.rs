@@ -2310,6 +2310,45 @@ fn message(value: &Value) -> String {
     value["message"].as_str().unwrap_or_default().to_owned()
 }
 
+/// A media that names a recipe and has no file yet: an agent is told so, and that a person makes
+/// it. Once made, nothing is said.
+#[test]
+fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    std::fs::create_dir(directory.path().join("shots")).unwrap();
+    std::fs::write(
+        directory.path().join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrun vork render open.json --out {out}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        "kerf 1\nproject name=\"Harness\"\nmedia m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=30 size=320x180\n",
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let looked = ok(&router, "look", json!({}));
+    let to_make = &looked["toMake"];
+    assert_eq!(to_make.as_array().map(Vec::len), Some(1), "{looked}");
+    assert_eq!(to_make[0]["media"], json!("m1"));
+    assert_eq!(to_make[0]["recipe"], json!("shots/open.kerfrecipe"));
+    assert_eq!(to_make[0]["why"], json!("its file is not there yet"));
+    assert!(
+        to_make[0]["make"]
+            .as_str()
+            .is_some_and(|make| make.contains("kerf make m1") && make.contains("a person")),
+        "{to_make}"
+    );
+    // Its file written after its recipe, it is made.
+    std::fs::write(directory.path().join("shots/open.mp4"), "frames").unwrap();
+    let looked = ok(&router, "look", json!({}));
+    assert!(looked.get("toMake").is_none(), "{looked}");
+}
+
 /// A fresh folder: footage beside the document, and nothing in it yet.
 #[test]
 fn a_fresh_folder_says_what_footage_it_could_add_and_how() {

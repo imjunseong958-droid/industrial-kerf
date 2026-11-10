@@ -66,7 +66,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run or has changed: a recipe is a command, so a person runs it, not you. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
@@ -906,6 +906,31 @@ impl KerfMcpRouter {
         files
     }
 
+    /// `look` with no arguments adds this: the media that name a recipe and want making, each with
+    /// why and who can. An agent's tools run no recipe.
+    fn to_make(&self, project: &Project) -> Vec<Value> {
+        project
+            .media
+            .iter()
+            .filter_map(|media| {
+                let recipe = media.recipe.as_deref()?;
+                let why = kerf_engine::recipe::unmade(
+                    &self.dir.join(recipe),
+                    &self.dir.join(&media.path),
+                )?;
+                Some(json!({
+                    "media": media.id.as_str(),
+                    "recipe": recipe,
+                    "why": why.reason(),
+                    "make": format!(
+                        "a person runs `kerf make {}`, or Make from Recipe… in the editor's bin; ask them to",
+                        media.id
+                    ),
+                }))
+            })
+            .collect()
+    }
+
     /// What a file holds, and the `media add` line that puts it in the document.
     fn look_at_file(&self, file: &str) -> Result<Value, McpError> {
         let path = self.dir.join(file);
@@ -1226,14 +1251,21 @@ impl KerfMcpRouter {
         {
             let (revision, document) = self.runtime.get_document(true)?;
             let state = self.runtime.get_state()?;
-            let unplaced =
-                parse(&document).map_or_else(|_| Vec::new(), |project| self.unplaced(&project));
-            return Ok(json!({
+            let project = parse(&document).ok();
+            let unplaced = project
+                .as_ref()
+                .map_or_else(Vec::new, |project| self.unplaced(project));
+            let mut result = json!({
                 "revision": revision,
                 "document": document,
                 "proposal": proposals_status(&state),
                 "unplaced": unplaced,
-            }));
+            });
+            let to_make = project.map_or_else(Vec::new, |project| self.to_make(&project));
+            if !to_make.is_empty() {
+                result["toMake"] = json!(to_make);
+            }
+            return Ok(result);
         }
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
         let default_width = if input.sheet.is_some() {

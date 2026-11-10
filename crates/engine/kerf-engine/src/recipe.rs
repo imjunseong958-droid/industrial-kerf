@@ -158,6 +158,37 @@ pub fn plan(project: &kerf_model::Project, directory: &Path, id: &str) -> Result
     })
 }
 
+/// Why a media that names a recipe wants making.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unmade {
+    /// Its file is not there.
+    Missing,
+    /// Its recipe was changed after its file was written.
+    Stale,
+}
+
+impl Unmade {
+    /// The reason, as a person or an agent is told it.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Missing => "its file is not there yet",
+            Self::Stale => "its recipe changed after its file was made",
+        }
+    }
+}
+
+/// Whether the file at `file` wants making from the recipe at `recipe`:
+/// it is missing, or older than the recipe. `None` when it is made, and
+/// when the recipe cannot be read, since then nothing could make it.
+pub fn unmade(recipe: &Path, file: &Path) -> Option<Unmade> {
+    let written = std::fs::metadata(recipe).ok()?.modified().ok()?;
+    match std::fs::metadata(file).and_then(|made| made.modified()) {
+        Err(_) => Some(Unmade::Missing),
+        Ok(made) if made < written => Some(Unmade::Stale),
+        Ok(_) => None,
+    }
+}
+
 /// A line's words: split at spaces, with `"…"` keeping what it holds as
 /// one word, `\"` and `\\` inside it standing for themselves.
 fn words(line: &str) -> std::result::Result<Vec<String>, String> {
@@ -313,6 +344,36 @@ mod tests {
         assert!(wrong("kerf-recipe 1\nrun vork \"open {out}").contains("quote is not closed"));
         assert!(wrong("kerf-recipe 1\nrun vork render").contains("names no `{out}`"));
         assert!(wrong("kerf-recipe 1\nrun a {out}\nrun b {out}").contains("line 3"));
+    }
+
+    #[test]
+    fn a_file_wants_making_when_it_is_missing_or_older_than_its_recipe() {
+        let folder = tempfile::tempdir().unwrap();
+        let (recipe, file) = (
+            folder.path().join("r.kerfrecipe"),
+            folder.path().join("f.mp4"),
+        );
+        assert_eq!(
+            unmade(&recipe, &file),
+            None,
+            "no recipe, nothing to make it"
+        );
+        std::fs::write(&recipe, "kerf-recipe 1\nrun a {out}\n").unwrap();
+        assert_eq!(unmade(&recipe, &file), Some(Unmade::Missing));
+        std::fs::write(&file, "frames").unwrap();
+        let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let set = |path: &Path, time| {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap()
+        };
+        set(&recipe, earlier);
+        assert_eq!(unmade(&recipe, &file), None);
+        set(&file, earlier - std::time::Duration::from_secs(3600));
+        assert_eq!(unmade(&recipe, &file), Some(Unmade::Stale));
     }
 
     #[test]
