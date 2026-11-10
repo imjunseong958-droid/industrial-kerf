@@ -99,7 +99,13 @@ impl Picture {
             ]
         };
         let mut most = 0;
-        for (ours, theirs) in self.rgba.chunks_exact(4).zip(other.rgba.chunks_exact(4)) {
+        for (ours, theirs) in self
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.rgba.as_chunks::<4>().0)
+        {
             for (a, b) in weighed(ours).into_iter().zip(weighed(theirs)) {
                 most = most.max(a.abs_diff(b));
             }
@@ -128,7 +134,7 @@ pub fn png(picture: &Picture) -> Vec<u8> {
     for (pixel, rgba) in pixmap
         .pixels_mut()
         .iter_mut()
-        .zip(picture.rgba.chunks_exact(4))
+        .zip(picture.rgba.as_chunks::<4>().0)
     {
         *pixel =
             resvg::tiny_skia::ColorU8::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3]).premultiply();
@@ -152,7 +158,10 @@ fn ico_bitmap(picture: &Picture) -> Vec<u8> {
     out.extend(((side * side * 4 + mask_row * side) as u32).to_le_bytes());
     out.extend([0u8; 16]);
     for row in (0..side).rev() {
-        for pixel in picture.rgba[row * side * 4..(row + 1) * side * 4].chunks_exact(4) {
+        for pixel in picture.rgba[row * side * 4..(row + 1) * side * 4]
+            .as_chunks::<4>()
+            .0
+        {
             out.extend([pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
@@ -237,7 +246,9 @@ fn icns_argb(picture: &Picture) -> Vec<u8> {
     for channel in [3, 0, 1, 2] {
         let bytes: Vec<u8> = picture
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| pixel[channel])
             .collect();
         icns_pack(&bytes, &mut out);
@@ -328,7 +339,10 @@ pub fn ico_pictures(ico: &[u8]) -> Result<Vec<Picture>, String> {
         let pixels = image.get(40..40 + side * side * 4).ok_or_else(short)?;
         let mut rgba = Vec::with_capacity(side * side * 4);
         for row in (0..side).rev() {
-            for pixel in pixels[row * side * 4..(row + 1) * side * 4].chunks_exact(4) {
+            for pixel in pixels[row * side * 4..(row + 1) * side * 4]
+                .as_chunks::<4>()
+                .0
+            {
                 rgba.extend([pixel[2], pixel[1], pixel[0], pixel[3]]);
             }
         }
