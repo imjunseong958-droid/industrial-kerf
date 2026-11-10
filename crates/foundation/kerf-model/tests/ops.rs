@@ -65,6 +65,7 @@ fn scene() -> Project {
             sample_rate: 48_000,
         }),
         reel: None,
+        recipe: None,
     });
     project.media.push(Media {
         id: id("m2"),
@@ -79,6 +80,7 @@ fn scene() -> Project {
             sample_rate: 48_000,
         }),
         reel: None,
+        recipe: None,
     });
     project.sequences.push(Sequence {
         buses: Vec::new(),
@@ -927,6 +929,7 @@ fn camera_take(frames: i64, video: bool, audio: bool) -> Media {
             sample_rate: 48_000,
         }),
         reel: None,
+        recipe: None,
     }
 }
 
@@ -972,6 +975,7 @@ fn replacing_media_keeps_its_id_and_every_clip_s_timing() {
             sample_rate: 96_000,
         }),
         reel: Some("B002".into()),
+        recipe: None,
     };
     let (project, report) = apply(
         &scene,

@@ -267,6 +267,7 @@ impl Planner<'_> {
                 }),
                 audio: None,
                 reel: None,
+                recipe: None,
             });
             baked.push(Baked {
                 clip: clip.id.clone(),

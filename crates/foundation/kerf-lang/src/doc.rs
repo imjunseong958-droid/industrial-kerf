@@ -653,7 +653,7 @@ fn unknown_param(
     )
 }
 
-/// `path= rate= [tc=] dur= [video= [alpha=] [bits=] [color=]] [audio=] [reel=]`.
+/// `path= rate= [tc=] dur= [video= [alpha=] [bits=] [color=]] [audio=] [reel=] [recipe=]`.
 pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Diagnostic> {
     let line = fields.line();
     let path = fields
@@ -714,6 +714,13 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
     });
     let audio = fields.take_with("audio", parse_audio)?;
     let reel = fields.take_text("reel")?.map(str::to_owned);
+    let recipe = fields.take_text("recipe")?.map(str::to_owned);
+    if recipe
+        .as_deref()
+        .is_some_and(|recipe| recipe.trim().is_empty())
+    {
+        return Err(line.error(1, "`recipe=` names no file; leave it out instead"));
+    }
     Ok(Media {
         id,
         path,
@@ -724,6 +731,7 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
         video,
         audio,
         reel,
+        recipe,
     })
 }
 
@@ -1105,6 +1113,9 @@ pub(crate) fn media_line(media: &Media) -> String {
     }
     if let Some(reel) = &media.reel {
         write!(line, " reel={}", quote(reel)).unwrap();
+    }
+    if let Some(recipe) = &media.recipe {
+        write!(line, " recipe={}", quote(recipe)).unwrap();
     }
     line
 }
@@ -1603,6 +1614,27 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
             newer[0].message.contains("newer than this Kerf"),
             "{newer:#?}"
         );
+    }
+
+    #[test]
+    fn what_a_file_was_made_from_round_trips() {
+        let text = SAMPLE.replace(
+            "reel=\"A001\"",
+            "reel=\"A001\" recipe=\"shots/day one.json\"",
+        );
+        let project = parse_document(&text, Catalog::builtin()).unwrap().project;
+        assert_eq!(
+            project.media[0].recipe.as_deref(),
+            Some("shots/day one.json")
+        );
+        assert_eq!(project.media[1].recipe, None);
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+        let empty = SAMPLE.replace("reel=\"A001\"", "recipe=\"\"");
+        let errors = parse_document(&empty, Catalog::builtin()).unwrap_err();
+        assert!(errors[0].message.contains("names no file"), "{errors:?}");
     }
 
     #[test]

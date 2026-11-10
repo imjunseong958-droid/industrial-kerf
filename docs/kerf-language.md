@@ -126,6 +126,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `logc4-awg4`, `vlog-vgamut`, `clog3-cinemagamut`, or `applelog`. HDR and log come in tone
   mapped for an SDR picture. Importing finds both from the file's tags; log footage rarely
   tags itself, so write its `color=` by hand, with `media replace`.
+- `recipe="shots/open.json"` on a media line names the text file its file was
+  made from, where another program made it: the scene a renderer drew, or what
+  a model was asked for and with which seed. Kerf reads nothing from it; it is
+  there so that the document says how a generated shot can be made again, and
+  it merges apart from the file, as `reel=` does.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
@@ -320,7 +325,7 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   transcript.
 - `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
   video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
-  takes the same fields as `media add` (`tc=`, `alpha=`, and `reel=` too).
+  takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`, and `recipe=` too).
   Every clip that uses it keeps its timing; a file one no longer fits (too
   short for its source range or a transition's handles, or without the
   picture or sound its track needs) is refused, naming the clips.

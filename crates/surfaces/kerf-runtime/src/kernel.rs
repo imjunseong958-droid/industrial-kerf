@@ -626,6 +626,7 @@ pub(crate) fn media_from_probe(
         video,
         audio,
         reel: None,
+        recipe: None,
     })
 }
 

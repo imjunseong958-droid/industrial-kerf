@@ -76,6 +76,7 @@ pub fn with_sound<'a>(
                         sample_rate: RATE,
                     }),
                     reel: None,
+                    recipe: None,
                 });
                 out.sequences[s].tracks[t].clips[c].content = Content::Media {
                     media: id,

@@ -307,6 +307,7 @@ pub fn from_timeline(
                 sample_rate: 48_000,
             }),
             reel: None,
+            recipe: None,
         });
     }
     if !media.is_empty() {

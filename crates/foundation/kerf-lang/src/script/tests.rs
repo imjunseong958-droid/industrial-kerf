@@ -710,6 +710,7 @@ fn media_replace_prints_every_field_and_replays() {
         }),
         audio: None,
         reel: None,
+        recipe: None,
     });
     let printed = print_op(&silent, Catalog::builtin(), &op);
     assert!(printed.contains("tc=01:00:00;00"), "{printed}");
