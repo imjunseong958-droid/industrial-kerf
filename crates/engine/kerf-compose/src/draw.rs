@@ -15,10 +15,10 @@
 //!   two clips' pictures, each drawn as it shows there, across the cut.
 //! - Titles are text centered on a transparent canvas, solids a color, and
 //!   an adjustment layer applies its effects to the picture beneath it.
-//! - The video effects carried from FilmCraft (`kerf_fx::filmcraft`) and
-//!   the EffectCraft effects Kerf keeps (`kerf_fx::kept`) run on a clip's
-//!   picture in order, after its masks, and read its other frames, the
-//!   sequence's other tracks, and its sound tracks as they need.
+//! - A clip's effects run on its picture in order, after its masks, each
+//!   found by its id and run the same way (`crate::domains`), and read the
+//!   clip's other frames, the sequence's other tracks, and its sound tracks
+//!   as they need.
 
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{domains, frames};
@@ -27,15 +27,15 @@ use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
-use kerf_draw::effect::EffectRun;
+use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
-use kerf_fx::filmcraft::{self, catalog::Headroom, instance::Picture, vfx::FxEnv};
+use kerf_fx::filmcraft::{self, catalog::Headroom};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Media, MotionPath, Param, ParamType,
-    Params, Project, Rate, Rgba, Sequence, Speed, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, FxDef, Id, Media, MotionPath, Param, ParamType, Params,
+    Project, Rate, Rgba, Sequence, Speed, Time, Track, TrackKind, Value,
 };
 use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -94,8 +94,8 @@ pub(crate) struct Drawing {
     accel: Accel,
     keep_frames: bool,
     disk: Option<std::sync::Arc<crate::disk::DiskFrames>>,
-    /// The LUT files FilmCraft's effects name.
-    library: filmcraft::project::Project,
+    /// The files the program's effects name, read once.
+    files: Files,
 }
 
 struct SequencePlan {
@@ -108,6 +108,8 @@ struct SequencePlan {
     drop_frame: bool,
     duration: Time,
     tracks: Vec<TrackPlan>,
+    /// Its picture tracks' ids, from the lowest, for effects that read one.
+    track_ids: Vec<String>,
     /// Its sound tracks, for effects that draw their sound, and their ids
     /// in order.
     sounds: Vec<SoundPlan>,
@@ -316,8 +318,13 @@ impl Drawing {
         builder.sequences.push(None);
         let plan = builder.sequence(top)?;
         builder.sequences[0] = Some(plan);
-        let library =
-            filmcraft::instance::library(&builder.effects).map_err(ComposeError::Invalid)?;
+        let mut files = Files::new();
+        for effect in &builder.effects {
+            if let Some(code) = domains::effect(effect.fx.as_str()) {
+                code.prepare(effect, &mut files)
+                    .map_err(ComposeError::Invalid)?;
+            }
+        }
         Ok(Self {
             hdr: HdrOutput::new(top.color),
             sequences: builder
@@ -331,7 +338,7 @@ impl Drawing {
             accel,
             keep_frames,
             disk,
-            library,
+            files,
         })
     }
 
@@ -1133,8 +1140,8 @@ impl Drawing {
     }
 
     /// Run a clip's effects before the one at `upto` on its picture at clip
-    /// time `time`, placed as `placed` says. FilmCraft's effects that read
-    /// other frames are left out of a picture drawn for one of them.
+    /// time `time`, placed as `placed` says. Each is found by its id and run
+    /// the same way, whichever crate it is in.
     fn effects(
         &self,
         picture: &mut Image,
@@ -1143,149 +1150,55 @@ impl Drawing {
         placed: &Placed,
         upto: usize,
     ) {
+        let sequence = placed.sequence;
         // How many of the picture's pixels a canvas pixel is.
-        let density = placed.scale / placed.to_output.determinant().abs().sqrt().max(1e-6);
-        let nested = upto < plan.effects.len();
-        for (index, effect) in plan.effects[..upto].iter().enumerate() {
-            if filmcraft::instance::leaves_alone(effect, time, self.working()) {
-                continue;
-            }
-            let value = |name: &str| effect_number(effect, name, time);
-            let held = self.hold_headroom(picture, effect);
-            match effect.fx.as_str() {
-                "color.basic" => {
-                    let correction = Correction::new(&value);
-                    if !correction.is_identity() {
-                        picture.map_encoded(|rgb| correction.apply(rgb));
-                    }
-                }
-                "blur.gaussian" => {
-                    // The graph blurs by half the radius, in canvas pixels.
-                    let sigma = (value("radius") / 2.0 * density) as f32;
-                    blur::gaussian(picture, sigma, sigma, true);
-                }
-                id if kerf_fx::kept::kept(id) => self.kept(picture, plan, time, placed, index),
-                id => match domains::effect(id) {
-                    Some(area) => {
-                        let env = ClipEnv {
-                            drawing: self,
-                            plan,
-                            placed,
-                            upto: index,
-                            working: (picture.w, picture.h),
-                        };
-                        let read = |at: Time| {
-                            let mut other = env.picture_at(plan.clip.start + at)?;
-                            if let Held::Scale(lift, by) = held {
-                                other.lift_rgb(lift, by);
-                            }
-                            Some(other)
-                        };
-                        let run = EffectRun {
-                            at: time,
-                            per_source: placed.per_source,
-                            seed: kerf_core::raster::seed(plan.clip.id.as_str())
-                                .wrapping_add(index as u32),
-                            masks: &plan.clip.masks,
-                            frame_rate: placed.sequence.rate.fps(),
-                            duration: plan.clip.duration,
-                            picture_at: (placed.env && !nested)
-                                .then_some(&read as &(dyn Fn(Time) -> Option<Image> + Sync)),
-                        };
-                        area.apply(picture, effect, &run);
-                    }
-                    None => self.filmcraft(picture, plan, time, placed, index, nested),
-                },
-            }
-            held.put_back(picture);
-        }
-    }
-
-    /// Run the EffectCraft effect Kerf keeps at `index` among a clip's
-    /// effects.
-    fn kept(
-        &self,
-        picture: &mut Image,
-        plan: &ClipPlan,
-        time: Time,
-        placed: &Placed,
-        index: usize,
-    ) {
-        let env = ClipEnv {
-            drawing: self,
-            plan,
-            placed,
-            upto: index,
-            working: (picture.w, picture.h),
-        };
-        let sequence = placed.sequence;
-        let run = kerf_fx::kept::Run {
-            at: time,
-            sequence_time: placed.at.seconds(),
-            frame_rate: sequence.rate.fps(),
-            index,
-            seed: kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32),
-            per_source: placed.per_source,
-            masks: &plan.clip.masks,
-            sounds: &sequence.sound_ids,
-            host: placed.env.then_some(&env as &dyn kerf_fx::kept::Host),
-        };
-        kerf_fx::kept::apply(picture, &plan.effects[index], &run);
-    }
-
-    /// Run the FilmCraft effect at `index` among a clip's effects; `nested`
-    /// when the picture is drawn for another of its effects.
-    fn filmcraft(
-        &self,
-        picture: &mut Image,
-        plan: &ClipPlan,
-        time: Time,
-        placed: &Placed,
-        index: usize,
-        nested: bool,
-    ) {
-        let effect = &plan.effects[index];
-        let sequence = placed.sequence;
-        let track = |id: &str| {
-            sequence
-                .tracks
-                .iter()
-                .position(|track| track.id == id)
-                .map(|place| place + 1)
-        };
-        let on = Picture {
-            size: (picture.w, picture.h),
-            per_source: placed.per_source as f32,
-        };
-        let Some(instance) = filmcraft::instance::instance(effect, time, on, &track) else {
-            return;
-        };
-        if nested && filmcraft::vfx::is_temporal(&instance.effect) {
-            return;
-        }
-        let env = ClipEnv {
-            drawing: self,
-            plan,
-            placed,
-            upto: index,
-            working: (picture.w, picture.h),
-        };
+        let per_canvas = placed.scale / placed.to_output.determinant().abs().sqrt().max(1e-6);
         let timecode = format_timecode(
             sequence.start + placed.at,
             sequence.rate,
             sequence.drop_frame,
         );
-        let run = filmcraft::instance::Run {
-            working: self.working(),
-            at: time,
-            per_source: placed.per_source as f32,
-            timecode: &timecode,
-            clip_name: &plan.name,
-            library: &self.library,
-            env: placed.env.then_some(&env as &dyn FxEnv),
-            frame_rate: sequence.rate.fps(),
-        };
-        filmcraft::instance::apply(picture, &instance, &run);
+        for (index, effect) in plan.effects[..upto].iter().enumerate() {
+            if filmcraft::instance::leaves_alone(effect, time, self.working()) {
+                continue;
+            }
+            let Some(code) = domains::effect(effect.fx.as_str()) else {
+                continue;
+            };
+            let held = self.hold_headroom(picture, effect);
+            let env = ClipEnv {
+                drawing: self,
+                plan,
+                placed,
+                upto: index,
+                working: (picture.w, picture.h),
+                lift: match held {
+                    Held::Scale(lift, by) => Some((lift, by)),
+                    _ => None,
+                },
+            };
+            let run = EffectRun {
+                at: time,
+                sequence_at: placed.at,
+                per_source: placed.per_source,
+                per_canvas,
+                index,
+                nested: upto < plan.effects.len(),
+                seed: kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32),
+                masks: &plan.clip.masks,
+                frame_rate: sequence.rate.fps(),
+                duration: plan.clip.duration,
+                working: self.working(),
+                timecode: &timecode,
+                clip_name: &plan.name,
+                tracks: &sequence.track_ids,
+                sounds: &sequence.sound_ids,
+                files: &self.files,
+                host: placed.env.then_some(&env as &dyn EffectHost),
+            };
+            code.apply(picture, effect, &run);
+            held.put_back(picture);
+        }
     }
 
     /// Bring an HDR picture under 1 for an effect written for 0 to 1. SDR footage in an HDR
@@ -1790,8 +1703,8 @@ struct Placed<'a> {
     env: bool,
 }
 
-/// What FilmCraft's effect at `upto` among a clip's effects reads beyond
-/// its picture.
+/// What the effect at `upto` among a clip's effects reads beyond its
+/// picture.
 #[derive(Clone, Copy)]
 struct ClipEnv<'a> {
     drawing: &'a Drawing,
@@ -1800,6 +1713,9 @@ struct ClipEnv<'a> {
     upto: usize,
     /// The size of the picture the effect runs on.
     working: (usize, usize),
+    /// What the effect's picture had taken from it, and what was left divided by, when an HDR
+    /// picture was brought under 1 for it whole: the clip's other frames meet it the same way.
+    lift: Option<(f32, f32)>,
 }
 
 impl ClipEnv<'_> {
@@ -1827,13 +1743,17 @@ impl ClipEnv<'_> {
     }
 }
 
-impl kerf_fx::kept::Host for ClipEnv<'_> {
+impl EffectHost for ClipEnv<'_> {
     fn picture_at(&self, at: Time, before: usize) -> Option<Image> {
         let env = ClipEnv {
             upto: before.min(self.upto),
             ..*self
         };
-        env.picture_at(self.plan.clip.start + at)
+        let mut picture = env.picture_at(self.plan.clip.start + at)?;
+        if let Some((lift, by)) = self.lift {
+            picture.lift_rgb(lift, by);
+        }
+        Some(picture)
     }
 
     fn sound(&self, track: &str, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>> {
@@ -1870,29 +1790,20 @@ impl kerf_fx::kept::Host for ClipEnv<'_> {
         }
         Some(mixed)
     }
-}
 
-impl FxEnv for ClipEnv<'_> {
-    fn frame(&self, dt: f64, _: &filmcraft::project::EffectInstance) -> Option<Image> {
-        self.picture_at(self.placed.at + Time::from_seconds(dt)?)
-    }
-
-    fn source_frame(&self, dt: f64, scale: f32) -> Option<Image> {
-        let placed = self.placed;
-        let at = placed.at + Time::from_seconds(dt)?;
-        let time = at - self.plan.clip.start;
+    fn source_at(&self, at: Time, scale: f32) -> Option<Image> {
         let (picture, _) = self.drawing.picture(
-            placed.sequence,
+            self.placed.sequence,
             self.plan,
-            time,
+            at,
             f64::from(scale.clamp(1.0 / 64.0, 1.0)),
         )?;
         Some(Arc::unwrap_or_clone(picture))
     }
 
-    fn track(&self, index: usize) -> Option<Image> {
+    fn track(&self, id: &str) -> Option<Image> {
         let placed = self.placed;
-        let track = placed.sequence.tracks.get(index)?;
+        let track = placed.sequence.tracks.iter().find(|track| track.id == id)?;
         let (w, h) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
         let mut canvas = Image::new(w, h);
         let (at, scale) = (placed.at, placed.scale);
@@ -1911,23 +1822,11 @@ impl FxEnv for ClipEnv<'_> {
         Some(canvas)
     }
 
-    fn layer_to_output(&self) -> Affine {
+    fn to_output(&self) -> Affine {
         self.placed.to_output
     }
 
-    fn clip_seconds(&self) -> f64 {
-        self.plan.clip.duration.seconds()
-    }
-
-    fn clip_offset(&self) -> f64 {
-        (self.placed.at - self.plan.clip.start).seconds()
-    }
-
-    fn frame_rate(&self) -> f64 {
-        self.placed.sequence.rate.fps()
-    }
-
-    fn media_timecode(&self) -> String {
+    fn source_timecode(&self) -> String {
         let time = self.placed.at - self.plan.clip.start;
         let source = match &self.plan.clip.content {
             Content::Media {
@@ -1940,10 +1839,6 @@ impl FxEnv for ClipEnv<'_> {
         };
         let sequence = self.placed.sequence;
         format_timecode(source, sequence.rate, sequence.drop_frame)
-    }
-
-    fn file_name(&self) -> String {
-        self.plan.name.clone()
     }
 
     fn sequence_name(&self) -> String {
@@ -2131,6 +2026,7 @@ impl<'a> Builder<'a> {
             start: sequence.start,
             drop_frame: sequence.drop_frame,
             duration: sequence.duration(),
+            track_ids: tracks.iter().map(|track| track.id.to_string()).collect(),
             tracks,
             sound_ids: sounds.iter().map(|sound| sound.id.clone()).collect(),
             sounds,
@@ -2434,21 +2330,11 @@ impl<'a> Builder<'a> {
             if def.domain != Domain::Video {
                 continue;
             }
-            match (def.engine, effect.fx.as_str()) {
-                (Engine::Graph, "color.basic" | "blur.gaussian") => effects.push(effect.clone()),
+            match effect.fx.as_str() {
                 // Part of the shape: `motion_on` reads it where it draws.
-                (Engine::Graph, kerf_model::SHAPE_OUTLINE) => {}
-                (Engine::Kerf, id)
-                    if filmcraft::catalog::carried(id).is_some()
-                        || domains::effect(id).is_some() =>
-                {
-                    effects.push(effect.clone())
-                }
-                (Engine::Raster, id) if kerf_fx::kept::kept(id) => effects.push(effect.clone()),
-                (Engine::Raster, id) => {
-                    return Err(unsupported(&clip.id, format!("raster effect `{id}`")))
-                }
-                (_, other) => {
+                kerf_model::SHAPE_OUTLINE => {}
+                id if domains::effect(id).is_some() => effects.push(effect.clone()),
+                other => {
                     return Err(unsupported(
                         &clip.id,
                         format!("effect `{other}` on a picture"),

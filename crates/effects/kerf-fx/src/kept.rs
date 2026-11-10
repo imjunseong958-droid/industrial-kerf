@@ -10,6 +10,7 @@
 
 use crate::{spec, value_at};
 use kerf_draw::color::{to_encoded, to_linear};
+use kerf_draw::effect::EffectHost as Host;
 use kerf_model::{Effect, Mask, Param, Time, Value};
 use kerf_raster_fx::{
     Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, ParamUi, Params, Value as FxValue,
@@ -48,16 +49,6 @@ pub fn kept(id: &str) -> bool {
     KEPT.contains(&id)
 }
 
-/// What a kept effect reads beyond its picture.
-pub trait Host: Sync {
-    /// The clip's picture at clip time `at` as the effect at `before` among
-    /// its effects gets it: masked, with the effects before it run.
-    fn picture_at(&self, at: Time, before: usize) -> Option<kerf_draw::Image>;
-    /// `frames` stereo frames (interleaved) of sound track `track` from
-    /// sequence time `start` seconds, at `rate` Hz.
-    fn sound(&self, track: &str, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>>;
-}
-
 /// How a kept effect runs on a clip's picture.
 pub struct Run<'a> {
     /// Clip time.
@@ -76,6 +67,7 @@ pub struct Run<'a> {
     pub masks: &'a [Mask],
     /// The sequence's sound tracks, by id.
     pub sounds: &'a [String],
+    /// The clip's other frames and the sequence's sound.
     pub host: Option<&'a dyn Host>,
 }
 

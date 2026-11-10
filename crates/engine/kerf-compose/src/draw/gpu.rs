@@ -6,7 +6,7 @@
 use super::*;
 use kerf_fx::filmcraft::catalog::Headroom;
 use kerf_fx::filmcraft::gpufx::FxOp;
-use kerf_fx::filmcraft::instance::GpuEffect;
+use kerf_fx::filmcraft::instance::{GpuEffect, Picture};
 use kerf_fx::transitions::gpu::Kernel as TransitionKernel;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -517,7 +517,8 @@ impl Drawing {
                     )?;
                     ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
                 }
-                id if kerf_fx::kept::kept(id) || domains::effect(id).is_some() => return None,
+                // Only FilmCraft's effects have kernels beyond those above.
+                id if filmcraft::catalog::carried(id).is_none() => return None,
                 _ => {
                     let track = |id: &str| {
                         sequence
@@ -539,13 +540,14 @@ impl Drawing {
                     }
                     let timecode =
                         format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
+                    let library = filmcraft::instance::luts(effect, &self.files);
                     let run = filmcraft::instance::Run {
                         working: self.working(),
                         at: time,
                         per_source: shape.per_source as f32,
                         timecode: &timecode,
                         clip_name: &plan.name,
-                        library: &self.library,
+                        library: library.as_ref(),
                         env: None,
                         frame_rate: sequence.rate.fps(),
                     };

@@ -650,3 +650,69 @@ fn glows_add_light_to_a_color_past_bt709_and_leave_what_it_is() {
         );
     }
 }
+
+/// A picture that moves, in SDR or as an HLG signal in BT.2020.
+fn moving_footage(dir: &Path, hlg: bool) -> String {
+    let path = dir.join(if hlg { "moving-hlg.mov" } else { "moving.mov" });
+    let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
+    let filter = if hlg {
+        "scale=in_range=pc:out_range=tv:out_color_matrix=bt2020nc,format=yuv422p10le,setparams=range=tv:colorspace=bt2020nc:color_primaries=bt2020:color_trc=arib-std-b67"
+    } else {
+        "format=yuv422p10le"
+    };
+    let output = Command::new(program)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("testsrc2=s=128x72:r=24:d=1")
+        .args(["-vf", filter, "-c:v", "prores_ks"])
+        .arg(&path)
+        .output()
+        .expect("ffmpeg runs");
+    assert!(output.status.success());
+    path.display().to_string()
+}
+
+/// How far `fx` moves the codes of a frame from what they are without it, on average.
+fn moved_by(document: &dyn Fn(&str) -> String, fx: &str) -> f64 {
+    let frame =
+        |fx: &str| compositor(&document(fx), Accel::Never).frame16(Rate::FPS_24.time_of(11), 1.0);
+    let (plain, with) = (frame(""), frame(fx));
+    let codes = |frame: &Frame| -> Vec<f64> {
+        frame
+            .rgba
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|code| f64::from(u16::from_le_bytes(*code)))
+            .collect()
+    };
+    let (plain, with) = (codes(&plain), codes(&with));
+    plain
+        .iter()
+        .zip(&with)
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f64>()
+        / plain.len() as f64
+}
+
+/// An effect brought under 1 whole reads the clip's other frames brought under 1 the same way.
+/// Rolling Shutter Repair once got them as they were, several times brighter than the frame it was
+/// on, found nothing of that frame in them, and so repaired nothing in an HDR sequence.
+#[test]
+fn an_effect_reading_other_frames_reads_them_held_as_its_own() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let (sdr, hlg) = (
+        moving_footage(dir.path(), false),
+        moving_footage(dir.path(), true),
+    );
+    let sdr_document = |fx: &str| {
+        hlg_document(&sdr, fx)
+            .replace(" bits=10 color=rec2100-hlg", " bits=10")
+            .replace(" color=rec2100-hlg", "")
+    };
+    let hlg_document = |fx: &str| hlg_document(&hlg, fx);
+    let fx = "distort.rollingshutterrepair";
+    let in_sdr = moved_by(&sdr_document, fx);
+    let in_hdr = moved_by(&hlg_document, fx);
+    assert!(in_sdr > 20.0, "it does nothing to this shot: {in_sdr}");
+    assert!(in_hdr > in_sdr / 2.0, "{in_hdr} in HDR, {in_sdr} in SDR");
+}
