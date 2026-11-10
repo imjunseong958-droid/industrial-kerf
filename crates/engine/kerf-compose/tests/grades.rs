@@ -193,6 +193,10 @@ fn technical_grades_do_what_they_say() {
 
 #[test]
 fn each_draws_the_same_on_the_gpu_as_on_the_cpu() {
+    if kerf_gpu::shared().is_none() {
+        eprintln!("no GPU here");
+        return;
+    }
     for grade in grades() {
         for color in [LIGHT, MIDDLE, DARK, RED] {
             let fx = format!("fx {grade}@1");
@@ -263,7 +267,15 @@ const PAIRS: [(&str, &str); 5] = [
     ("half-saturation", "cross-processed"),
 ];
 
-const ACCELS: [Accel; 2] = [Accel::Never, Accel::Always];
+/// The ways a frame is drawn: on the CPU, and on the GPU where there is one. Without one, asking
+/// for the GPU draws on the CPU again, which shows nothing its own frame did not.
+fn accels() -> &'static [Accel] {
+    if kerf_gpu::shared().is_some() {
+        &[Accel::Never, Accel::Always]
+    } else {
+        &[Accel::Never]
+    }
+}
 
 impl Footage {
     fn new() -> Self {
@@ -352,7 +364,7 @@ fn a_stack_is_its_grades_one_after_the_other_in_the_order_written() {
     let footage = Footage::new();
     for (first, second) in PAIRS {
         let (a, b) = (full(first), full(second));
-        for accel in ACCELS {
+        for &accel in accels() {
             let one_way = picture(&footage.stack(&[a.clone(), b.clone()]), accel, 1);
             let other_way = picture(&footage.stack(&[b.clone(), a.clone()]), accel, 1);
             assert!(
@@ -398,7 +410,7 @@ fn at_no_amount_a_grade_is_not_there_down_to_the_byte() {
     let footage = Footage::new();
     // Faded Print before a grade at no amount is where a run of it moved a byte on the CPU.
     let others = ["faded-print", "teal-warm", "sepia", "legal-range"].map(full);
-    for accel in ACCELS {
+    for &accel in accels() {
         let plain = picture(&footage.stack(&[]), accel, 1);
         let alone: Vec<(&String, Vec<u8>)> = others
             .iter()
@@ -442,7 +454,7 @@ fn at_no_amount_a_grade_is_not_there_in_hdr_either() {
             .replace("audio=48000\n", "audio=48000 color=rec2100-pq\n")
     };
     let at = Rate::FPS_24.time_of(1);
-    for accel in ACCELS {
+    for &accel in accels() {
         let plain = compositor(&hdr(&[]), accel);
         let on_gpu = plain.draws_on_gpu(at, 1.0);
         let plain = plain.frame16(at, 1.0).rgba;
@@ -515,7 +527,7 @@ fn an_amount_that_animates_draws_the_amount_it_has_then() {
     // Where the keys put the amount: eased halfway up, at the top, and straight back down.
     for (frame, amount) in [(3, 0.15625), (6, 0.5), (12, 1.0), (18, 0.5)] {
         for grade in ["sepia", "golden-dusk", "legal-range", "silver-retention"].map(full) {
-            for accel in ACCELS {
+            for &accel in accels() {
                 let animated = picture(
                     &footage.stack(&[teal.clone(), format!("{grade} amount={keys}")]),
                     accel,
@@ -534,7 +546,7 @@ fn an_amount_that_animates_draws_the_amount_it_has_then() {
         }
     }
     // Where it comes to 0, the grade is not there.
-    for accel in ACCELS {
+    for &accel in accels() {
         let sepia = format!("look.grade.sepia@1 amount={keys}");
         let (only, stacked) = (
             footage.stack(std::slice::from_ref(&teal)),
@@ -550,6 +562,10 @@ fn an_amount_that_animates_draws_the_amount_it_has_then() {
 
 #[test]
 fn stacks_draw_the_same_on_the_gpu_as_on_the_cpu() {
+    if kerf_gpu::shared().is_none() {
+        eprintln!("no GPU here");
+        return;
+    }
     let footage = Footage::new();
     let all = grades();
     let at = Rate::FPS_24.time_of(1);
@@ -598,7 +614,7 @@ fn flattening_a_grade_in_a_stack_draws_the_same() {
         let flat = kerf_lang::apply_script(&project, Catalog::builtin(), script)
             .unwrap_or_else(|errors| panic!("{errors:?}"))
             .project;
-        for accel in ACCELS {
+        for &accel in accels() {
             for at in [0, 5, 12, 23] {
                 let time = Rate::FPS_24.time_of(at);
                 let draw = |project: &kerf_model::Project| {
