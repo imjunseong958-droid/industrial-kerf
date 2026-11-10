@@ -337,6 +337,30 @@ void MainWindow::replaceMedia(const QString &mediaId, const QString &path) {
         addActivity(QStringLiteral("import"), QStringLiteral("Replacing %1 with %2").arg(mediaId, QFileInfo(file).fileName()));
 }
 
+QString MainWindow::mediaRecipe(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() == mediaId) return source.value(QStringLiteral("recipe")).toString();
+    }
+    return {};
+}
+
+void MainWindow::makeMedia(const QString &mediaId) {
+    execute(QStringLiteral("media.make"), QJsonObject{{QStringLiteral("media"), mediaId}});
+}
+
+QString MainWindow::makeQuestion(const QJsonObject &plan) {
+    // A recipe is a command someone wrote, perhaps someone else: show all of it.
+    return QStringLiteral("Making %1 runs this command on your computer:\n\n%2\n\nIt comes from the recipe %3, and what it writes replaces %4.\n\nRun it?")
+        .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
+             plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString());
+}
+
+void MainWindow::runMake(const QString &mediaId) {
+    if (execute(QStringLiteral("media.make"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("confirmed"), true}}))
+        addActivity(QStringLiteral("import"), QStringLiteral("Making %1 from %2").arg(mediaId, mediaRecipe(mediaId)));
+}
+
 void MainWindow::revealMedia(const QString &mediaId) {
     const QString path = mediaPath(mediaId);
     if (path.isEmpty()) return;
@@ -362,6 +386,14 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
         replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
                                                  : m_commands->reason(QStringLiteral("media.replace")));
         connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
+        if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
+            QAction *make = menu->addAction(QStringLiteral("Make from Recipe…"));
+            make->setObjectName(QStringLiteral("binMake"));
+            make->setEnabled(m_commands->isEnabled(QStringLiteral("media.make")));
+            make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first").arg(mediaId, recipe)
+                                               : m_commands->reason(QStringLiteral("media.make")));
+            connect(make, &QAction::triggered, this, [this, mediaId] { makeMedia(mediaId); });
+        }
         QAction *reveal = menu->addAction(QStringLiteral("Reveal in Finder"));
         reveal->setObjectName(QStringLiteral("binReveal"));
         reveal->setEnabled(QFileInfo::exists(mediaPath(mediaId)));

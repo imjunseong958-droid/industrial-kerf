@@ -153,8 +153,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   document taking the new file's length and streams; `--yes` does not ask. The
   program is run as it is named, never through a shell, and a run that fails or
   writes nothing leaves the media as it was. The recipe and the media's file
-  have to be inside the project. Only `kerf make` runs a recipe: opening,
-  drawing, and an agent's tools never do.
+  have to be inside the project. Only a person asking runs a recipe, with
+  `kerf make` or Make from Recipe… in the editor's bin, which shows the command
+  first: opening, drawing, and an agent's tools never do.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,

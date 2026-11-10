@@ -52,6 +52,9 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
                 source["channels"] = json!(audio.channels);
                 source["sampleRate"] = json!(audio.sample_rate);
             }
+            if let Some(recipe) = &media.recipe {
+                source["recipe"] = json!(recipe);
+            }
             source
         }).collect::<Vec<_>>(),
         "sequences": project.sequences.iter().map(|sequence| {

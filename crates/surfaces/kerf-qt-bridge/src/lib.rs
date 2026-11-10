@@ -261,6 +261,13 @@ enum Command {
         media: String,
         path: String,
     },
+    /// Make a media's file from its recipe: `media_make_plan` and nothing
+    /// run unless `confirmed`, which a person's yes to that plan sends.
+    MediaMake {
+        media: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
     /// Load a `project.kerf` changed outside Kerf as one revision.
     ProjectionImport,
     /// Write the editor's project over a `project.kerf` changed outside Kerf.
@@ -772,6 +779,10 @@ fn runtime_worker(
                 media::copy_then(&shared, &path, &commands, &tx, media::probe, move |path| {
                     Command::MediaReplace { media, path }
                 });
+                continue;
+            }
+            Command::MediaMake { media, confirmed } => {
+                media::make(&active_client, &directory, &media, confirmed, &commands, &tx);
                 continue;
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {
