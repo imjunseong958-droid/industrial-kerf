@@ -53,11 +53,12 @@ void kerf_bridge_free(void *bridge);
 // the clip's own effect of that id when it has one, so a look before and
 // after a change can be compared. A generator id (title, solid) draws the
 // generator alone on black on a canvas shaped like the clip's sequence (a
-// title with no text says "Title"); clip may then be "". Raster and
-// FilmCraft effects run on the clip's decoded picture, graph effects
-// (color.basic, blur.gaussian) and generators through Kerf's compositor.
-// Sound effects and the adjustment generator have no preview. A newer
-// request stops an older one.
+// title with no text says "Title"); clip may then be "". Effects run on
+// the decoded picture of a clip of footage, in the order of the stack;
+// on a clip with no file of its own (a title, a nested sequence) and for
+// generators, Kerf's compositor draws the picture. Sound effects, looks
+// and the adjustment generator have no preview. A newer request stops an
+// older one.
 // Review log (review/comments.jsonl, kept by kerfd beside the project,
 // never in the document or undo): comment_list answers comments even when
 // unchanged; comment_add {body, at?, duration?, parent? (the thread's

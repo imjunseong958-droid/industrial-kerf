@@ -6,15 +6,16 @@
 //! its defaults. One given as `{fx, params}` is shown with those
 //! parameters; when the clip already has that effect, in its place, so
 //! the clip's look before and after a proposal can be compared. A
-//! generator is drawn alone on black. Raster and FilmCraft effects run on
-//! one decoded picture of the clip; graph effects and generators are drawn
-//! by Kerf's compositor, which playback uses too.
+//! generator is drawn alone on black. Effects run on one decoded picture
+//! of a clip of footage, in the order of the stack and by the code a render
+//! runs; on a clip with no file of its own (a title, a nested sequence) and
+//! for generators, Kerf's compositor draws the picture, as playback does.
 
 use crate::{emit, Shared};
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_model::{
-    Catalog, Clip, Content, Effect, Engine, FxDef, FxKind, Id, Param, ParamType, Params, Project,
-    Rgba, Sequence, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Effect, FxDef, FxKind, Id, Param, ParamType, Params, Project, Rgba,
+    Sequence, Time, Track, TrackKind, Value,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value as Json};
@@ -129,24 +130,21 @@ pub(crate) fn params(def: &FxDef, params: &Map<String, Json>) -> Params {
 enum Plan {
     /// A generator alone on black.
     Generator,
-    /// A picture effect on the clip's decoded picture.
-    Raster,
-    /// A picture effect the compositor draws.
-    Composited,
+    /// A picture effect on the clip's picture.
+    Effect,
 }
 
 fn plan(def: &FxDef) -> Option<Plan> {
     if def.domain != kerf_model::Domain::Video {
         return None;
     }
-    match (def.kind, def.engine) {
+    match def.kind {
         // An adjustment layer alone draws nothing.
-        (FxKind::Generator, _) if def.id == "adjustment" => None,
-        (FxKind::Generator, _) => Some(Plan::Generator),
-        // It goes only on a shape, so it has no picture of its own to show.
-        (FxKind::Effect, _) if def.id == kerf_model::SHAPE_OUTLINE => None,
-        (FxKind::Effect, Engine::Raster | Engine::Kerf) => Some(Plan::Raster),
-        (FxKind::Effect, Engine::Graph) => Some(Plan::Composited),
+        FxKind::Generator if def.id == "adjustment" => None,
+        FxKind::Generator => Some(Plan::Generator),
+        // Those with code of their own: an outline goes only on a shape, and a look is other
+        // effects by the time it is drawn, so neither has a picture of its own to show.
+        FxKind::Effect if kerf_compose::draws_effect(def.id.as_str()) => Some(Plan::Effect),
         _ => None,
     }
 }
@@ -362,9 +360,8 @@ struct Picture {
     rgba: Vec<u8>,
     /// Seconds into the clip.
     clip_time: Time,
-    /// The source's own size and rate, which effect parameters scale by.
+    /// The source's own size, which effect parameters scale by.
     source: (u32, u32),
-    fps: f64,
 }
 
 fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<Picture>, String> {
@@ -408,18 +405,17 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         rgba,
         clip_time: at - clip.start,
         source: (video.width, video.height),
-        fps: media.rate.fps(),
     }))
 }
 
-/// `picture` through the clip's raster and FilmCraft effects with `effect`
-/// previewed among them.
-fn raster(clip: &Clip, picture: &Picture, effect: Effect, replace: bool) -> Option<Vec<u8>> {
-    let engine_of = |effect: &Effect| {
-        Catalog::builtin()
-            .fx(effect.fx.as_str())
-            .map(|fx| fx.engine)
-    };
+/// `picture` through the clip's effects with `effect` previewed among them.
+fn on_picture(
+    sequence: &Sequence,
+    clip: &Clip,
+    picture: &Picture,
+    effect: Effect,
+    replace: bool,
+) -> Option<Vec<u8>> {
     let enabled: Vec<Effect> = clip
         .effects
         .iter()
@@ -427,35 +423,22 @@ fn raster(clip: &Clip, picture: &Picture, effect: Effect, replace: bool) -> Opti
         .cloned()
         .collect();
     let stack = with_effect(&enabled, effect, replace);
-    let of = |engine: Engine| -> Vec<Effect> {
-        stack
-            .iter()
-            .filter(|effect| engine_of(effect) == Some(engine))
-            .cloned()
-            .collect()
-    };
-    let (raster, filmcraft) = (of(Engine::Raster), of(Engine::Kerf));
-    let seed = kerf_core::raster::seed(clip.id.as_str());
-    let stack =
-        kerf_fx::RasterStack::new(&raster, picture.source.0, picture.source.1, seed).ok()?;
-    let mut frame = picture.rgba.clone();
-    stack.apply(
-        &mut frame,
-        picture.width,
-        picture.height,
-        picture.clip_time,
-        picture.fps,
-    );
-    let per_source = picture.width as f32 / picture.source.0.max(1) as f32;
-    kerf_fx::filmcraft::instance::apply_rgba(
-        &mut frame,
-        (picture.width as usize, picture.height as usize),
-        &filmcraft,
-        picture.clip_time,
+    let per_source = f64::from(picture.width) / f64::from(picture.source.0.max(1));
+    // A clip fits the canvas, so a source pixel is this many of the canvas's.
+    let fit = (f64::from(sequence.width) / f64::from(picture.source.0.max(1)))
+        .min(f64::from(sequence.height) / f64::from(picture.source.1.max(1)));
+    let alone = kerf_compose::Alone {
+        size: (picture.width as usize, picture.height as usize),
+        at: picture.clip_time,
         per_source,
-        picture.fps,
-    )
-    .ok()?;
+        per_canvas: per_source / fit.max(1e-6),
+        rate: sequence.rate,
+        duration: clip.duration,
+        seed: kerf_core::raster::seed(clip.id.as_str()),
+        masks: &clip.masks,
+    };
+    let mut frame = picture.rgba.clone();
+    kerf_compose::effects_on_picture(&mut frame, &stack, &alone).ok()?;
     Some(frame)
 }
 
@@ -495,29 +478,27 @@ pub(crate) fn run(
                     .or(project.sequences.first());
                 compose_generator(def, entry.params(), like, width)
             }
-            Plan::Composited => {
+            Plan::Effect => {
                 let (sequence, clip) =
                     found.ok_or_else(|| format!("no clip `{}`", request.clip))?;
-                let enabled: Vec<Effect> =
-                    clip.effects.iter().filter(|e| e.enabled).cloned().collect();
-                let effects = with_effect(&enabled, previewed(def, entry), replace);
-                let at = Time::from_seconds(request.at)
-                    .unwrap_or(Time::ZERO)
-                    .clamp(clip.start, clip.end() - sequence.rate.frame_duration());
-                compose_clip(&project, sequence, clip, effects, at, width)
-            }
-            Plan::Raster => {
-                let (_, clip) = found.ok_or_else(|| format!("no clip `{}`", request.clip))?;
                 if picture.is_none() {
                     picture = Some(decode(&project, clip, request.at, width)?);
                 }
-                picture
-                    .as_ref()
-                    .and_then(Option::as_ref)
-                    .and_then(|picture| {
-                        raster(clip, picture, previewed(def, entry), replace)
-                            .map(|rgba| (picture.width, picture.height, rgba))
-                    })
+                let effect = previewed(def, entry);
+                match picture.as_ref().and_then(Option::as_ref) {
+                    Some(picture) => on_picture(sequence, clip, picture, effect, replace)
+                        .map(|rgba| (picture.width, picture.height, rgba)),
+                    // A clip with no file of its own is drawn by the compositor.
+                    None => {
+                        let enabled: Vec<Effect> =
+                            clip.effects.iter().filter(|e| e.enabled).cloned().collect();
+                        let effects = with_effect(&enabled, effect, replace);
+                        let at = Time::from_seconds(request.at)
+                            .unwrap_or(Time::ZERO)
+                            .clamp(clip.start, clip.end() - sequence.rate.frame_duration());
+                        compose_clip(&project, sequence, clip, effects, at, width)
+                    }
+                }
             }
         };
         if let Some((width, height, rgba)) = drawn {
@@ -618,11 +599,11 @@ mod tests {
         assert_eq!(plan(catalog.fx("title").unwrap()), Some(Plan::Generator));
         assert_eq!(plan(catalog.fx("solid").unwrap()), Some(Plan::Generator));
         assert_eq!(plan(catalog.fx("adjustment").unwrap()), None);
-        assert_eq!(
-            plan(catalog.fx("blur.gaussian").unwrap()),
-            Some(Plan::Composited)
-        );
-        assert_eq!(plan(catalog.fx("blur.camera").unwrap()), Some(Plan::Raster));
+        for id in ["blur.gaussian", "blur.camera", "color.curves", "image.fill"] {
+            assert_eq!(plan(catalog.fx(id).unwrap()), Some(Plan::Effect), "{id}");
+        }
+        assert_eq!(plan(catalog.fx("look.shake").unwrap()), None);
+        assert_eq!(plan(catalog.fx(kerf_model::SHAPE_OUTLINE).unwrap()), None);
         let audio = catalog
             .all()
             .find(|fx| fx.domain == kerf_model::Domain::Audio && fx.kind == FxKind::Effect)
@@ -795,6 +776,42 @@ mod tests {
         );
         assert!(before > 40.0, "the test picture is colourful: {before}");
         assert!(after < 4.0, "saturation 0 is grey: {after}");
+    }
+
+    #[test]
+    fn an_effect_on_a_clip_with_no_file_is_drawn_by_the_compositor() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Bridge\"\n\
+             sequence s1 rate=24 size=320x180 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=48f\n\
+             \x20     set color=#ff0000\n",
+        )
+        .unwrap();
+        let shared = crate::tests_support::shared(directory.path());
+        *shared.model.lock().unwrap() = Some(project);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let request = Request {
+            clip: "g1".into(),
+            at: 1.0,
+            // One of FilmCraft's and one of EffectCraft's, which once needed a file to decode.
+            effects: vec![
+                PreviewEffect::Id("channel.invert".into()),
+                PreviewEffect::Id("color.huesaturation".into()),
+            ],
+            width: 64,
+            key: None,
+        };
+        run(&shared, 0, &request, &tx).unwrap();
+        let events: Vec<Json> = rx.try_iter().collect();
+        assert_eq!(events.len(), 2);
+        use base64::Engine as _;
+        let inverted = base64::engine::general_purpose::STANDARD
+            .decode(events[0]["rgba"].as_str().unwrap())
+            .unwrap();
+        let middle = &inverted[(18 * 64 + 32) * 4..][..3];
+        assert!(middle[0] < 10 && middle[1] > 245 && middle[2] > 245, "{middle:?}");
     }
 
     #[test]

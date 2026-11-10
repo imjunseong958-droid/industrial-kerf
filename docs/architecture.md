@@ -58,16 +58,15 @@ Kerf keeps, and FilmCraft's (`kerf-fx/src/picture.rs`), beside `kerf-image`'s.
 An effect gets its parameters, where and when it runs
 (`kerf_draw::effect::EffectRun`), and, on a clip, a host to ask for the clip's
 other frames, another track, or the sequence's sound (`EffectHost`). The
-compositor asks no effect which kind it is.
+compositor asks no effect which kind it is. The editor's effect previews run
+the same code on one decoded picture (`kerf_compose::effects_on_picture`), in
+the order of the stack.
 
 Still to come, each a place that runs effects its own way and so asks the
 catalog what draws one (`Engine`):
 
 - **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) names the effects with
   kernels by id. A kernel belongs on the same interface as the CPU's code.
-- **Effect previews in the editor** (`kerf-qt-bridge/src/previews.rs`) run a
-  clip's EffectCraft effects and then its FilmCraft ones, not in the order of
-  the stack.
 - **Playback of plain cuts** (`kerf-playback/src/timeline.rs`) runs EffectCraft
   effects itself on the frames it decodes.
 - **The graph drawing the picture** (`KERF_GRAPH_RENDER=1`, kept for one

@@ -189,40 +189,6 @@ pub fn gpu_effect(instance: &EffectInstance, run: &Run, size: (usize, usize)) ->
         .map(GpuEffect::Op)
 }
 
-/// Run a clip's carried FilmCraft `effects` on an 8-bit RGBA `picture` of `size` alone, as a
-/// preview of them does: without the clip's other frames or the sequence's other tracks, at clip
-/// time `at`, with `per_source` of its pixels to a source pixel.
-pub fn apply_rgba(
-    picture: &mut [u8],
-    size: (usize, usize),
-    effects: &[Effect],
-    at: Time,
-    per_source: f32,
-    frame_rate: f64,
-) -> Result<(), String> {
-    let library = library(effects)?;
-    let mut image = kerf_draw::Image::from_rgba8(picture, size.0, size.1, size.0 * 4, true);
-    let on = Picture { size, per_source };
-    for effect in effects {
-        let Some(instance) = instance(effect, at, on, &|_| None) else {
-            continue;
-        };
-        let run = Run {
-            working: kerf_color::WorkingSpace::Rec709,
-            at,
-            per_source,
-            timecode: "00:00:00:00",
-            clip_name: "",
-            library: Some(&library),
-            env: None,
-            frame_rate,
-        };
-        apply(&mut image, &instance, &run);
-    }
-    picture.copy_from_slice(&image.to_rgba8_over_black());
-    Ok(())
-}
-
 /// A parameter as FilmCraft's effect reads it; `None` keeps FilmCraft's default.
 fn read(
     def: &EffectDef,
@@ -439,20 +405,6 @@ fn lut(path: &str, text: std::sync::Arc<str>) -> ProjectLut {
     }
 }
 
-/// The LUT files a clip's effects name, as Lumetri reads them (`lib:<path>`). A file that
-/// cannot be read is an error naming it.
-pub fn library<'a>(effects: impl IntoIterator<Item = &'a Effect>) -> Result<Project, String> {
-    let mut library = Project::new("kerf");
-    for effect in effects {
-        for path in lut_paths(effect) {
-            if !library.luts.iter().any(|l| l.id == *path) {
-                library.luts.push(lut(path, lut_text(path)?));
-            }
-        }
-    }
-    Ok(library)
-}
-
 /// Read the LUT files `effect` names into `files`, each once. A file that cannot be read is an
 /// error naming it.
 pub fn read_luts(effect: &Effect, files: &mut Files) -> Result<(), String> {
@@ -484,6 +436,21 @@ mod tests {
     use crate::filmcraft::effects::{apply, FxCtx};
     use kerf_draw::Image;
     use kerf_model::{Catalog, Id, Interp, Keyframe};
+
+    /// The LUT files `effects` name, read as a program reads them.
+    fn library<'a>(effects: impl IntoIterator<Item = &'a Effect>) -> Result<Project, String> {
+        let mut files = Files::new();
+        let mut library = Project::new("kerf");
+        for effect in effects {
+            read_luts(effect, &mut files)?;
+            library.luts.extend(
+                luts(effect, &files)
+                    .into_iter()
+                    .flat_map(|named| named.luts),
+            );
+        }
+        Ok(library)
+    }
 
     fn effect(id: &str, params: &[(&str, Param)]) -> Effect {
         Effect {
