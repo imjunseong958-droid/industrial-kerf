@@ -76,6 +76,10 @@ jobs:
         with:
           shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Built in a step of its own, so the run's page says how long the
+      # build took and how long the tests did.
+      - name: Build workspace tests
+        run: cargo test --workspace --no-run
       - name: Test workspace
         env:
           KERF_PARITY_DUMP: ${{ runner.temp }}/parity
@@ -306,6 +310,8 @@ jobs:
       # sockets, and VideoToolbox, and the runner's Metal GPU, so the GPU
       # parity tests run somewhere other than a developer's Mac. "kerf-gpu: no
       # usable GPU" in this step's log means they skipped.
+      - name: Build workspace tests
+        run: cargo test --workspace --no-run
       - name: Test workspace
         run: cargo test --workspace
       # The real store API keys and the Kerf Cloud token go to, which every
