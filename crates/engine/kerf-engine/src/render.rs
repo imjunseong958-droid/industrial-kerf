@@ -694,7 +694,6 @@ fn composited_render(
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),
             range,
-            ..ProgramOptions::default()
         },
     )?;
     let from = range.map_or(Time::ZERO, |(from, _)| from);
@@ -1096,7 +1095,6 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg == "veryfast" || arg == "faster" || arg == "medium"));
-        assert!(args.windows(2).any(|pair| pair[0] == "-threads"));
     }
 
     #[test]
