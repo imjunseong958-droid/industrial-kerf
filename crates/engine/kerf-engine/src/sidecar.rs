@@ -263,6 +263,24 @@ pub fn forward_termination_signals() {
         }
     }
 }
+/// Read `child`'s stderr to its end on a thread of its own, keeping the
+/// last of it to report.
+pub(crate) fn drain_stderr(child: &mut Child) -> thread::JoinHandle<String> {
+    let pipe = child.stderr.take();
+    thread::spawn(move || {
+        let mut tail = String::new();
+        let Some(pipe) = pipe else {
+            return tail;
+        };
+        for line in BufReader::new(pipe).split(b'\n') {
+            let Ok(line) = line else {
+                break;
+            };
+            append_bounded(&mut tail, &String::from_utf8_lossy(&line));
+        }
+        tail
+    })
+}
 
 /// Append `line` to `tail`, keeping only the last `MAX_STDERR_TAIL_BYTES`.
 pub(crate) fn append_bounded(tail: &mut String, line: &str) {

@@ -629,7 +629,6 @@ mod tests {
     ) -> Vec<f32> {
         let options = ProgramOptions {
             range,
-            audio_only: true,
             ..ProgramOptions::default()
         };
         let compiled = compile_program(project, Catalog::builtin(), &options).expect("compiles");

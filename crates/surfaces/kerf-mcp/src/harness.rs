@@ -1694,7 +1694,7 @@ impl KerfMcpRouter {
         kind: &str,
         options: &Value,
     ) -> Result<kerf_engine::derivatives::CacheEntry, McpError> {
-        kerf_engine::render::renderable(project, Some(sequence), &RenderOptions::default())
+        kerf_engine::render::renderable(project, Some(sequence))
             .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
         let identities = crate::qc::used_media(project)

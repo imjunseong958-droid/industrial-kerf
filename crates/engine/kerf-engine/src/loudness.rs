@@ -159,7 +159,6 @@ pub fn measure_program_with_progress(
         kerf_model::Catalog::builtin(),
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )?;

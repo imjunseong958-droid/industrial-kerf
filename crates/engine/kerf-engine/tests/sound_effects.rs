@@ -56,7 +56,6 @@ fn mixed(dir: &Path, media: &[(&str, &str)], body: &str) -> Vec<f32> {
         &project,
         Catalog::builtin(),
         &ProgramOptions {
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )

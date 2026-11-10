@@ -32,6 +32,10 @@ on `main`; its section here becomes the release's notes on GitHub
   `rotation=(t*90)`, `x=(sin(t*pi)*0.1)`, `opacity=(0.5+0.5*noise(t*3))`. The
   Inspector shows what it gives at the clip's first frame; setting the value
   there replaces it.
+- `KERF_GRAPH_RENDER=1` and `kerf-engine render --graph`, which had FFmpeg draw
+  the picture as renders did before Kerf's own renderer, are gone. Renders,
+  playback, and previews already drew with that renderer; nothing about them
+  changes.
 - A media line can say what its file was made from: `recipe="shots/open.json"`
   names a recipe, a text file with the command that makes it, and
   `kerf make <media>` runs it and puts the new file in the media's place. A

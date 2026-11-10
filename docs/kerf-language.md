@@ -212,8 +212,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   last it holds. The picture follows it exactly, `retime=` included. The sound keeps its pitch and
   stays within 10 ms of the picture; it is made once for each ramp and reused. Trims and splits
   keep what plays where it was, by moving the keyframes with the clip and keeping those that fall
-  outside it, so trimming back brings back what was there. An EDL gets the speed overall; the
-  FFmpeg graph (`KERF_GRAPH_RENDER=1`) cannot draw a ramp's picture.
+  outside it, so trimming back brings back what was there. An EDL gets the speed overall.
 - `angle=` on a clip of a nested sequence shows that one track of it, even if hidden, or on a sound
   track plays that one sound track, even if muted: a multicam is a sequence with a camera on each
   track. `set c1 angle=V3` switches it, `angle=""` shows them all, and `split` cuts between them.

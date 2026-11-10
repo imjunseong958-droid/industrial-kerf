@@ -48,12 +48,11 @@ depend on each other, so each can be rewritten alone
 
 Renders, playback, and previews read the model. A render job and a proposal
 preview carry the `.kerf` document with media paths resolved against the
-project, and the render compiler lowers its first sequence to one FFmpeg
-graph with exact times: picture tracks stack in order, sound comes from
-audio tracks, transitions play across their cuts using the clips' handles,
-nested sequences composite on their own canvas, and effects, transitions,
-and generators lower from their catalog definitions. A feature without a
-lowering is reported with the clip it is on. Native playback plays the same
+project. The compositor draws the picture, and the sound of the sequence is
+lowered to one FFmpeg graph with exact times: sound comes from audio tracks,
+crossfades play across their cuts using the clips' handles, and sound effects
+lower from their catalog definitions. A feature the picture or the sound
+cannot take is reported with the clip it is on. Native playback plays the same
 sequence as cuts, running a media clip's raster effects live on each
 picture (except keys and mattes, whose transparency needs the tracks
 below, and time effects, which read the clip's other frames), and asks for
@@ -79,10 +78,7 @@ instead. Playful effects are looks ([docs/looks.md](docs/looks.md)): text
 files in the Kerf language that combine those effects, keyframes, and masks
 behind a few parameters, bundled with Kerf or kept in a project's
 `.kerf/looks`, and expanded when a program draws.
-The graph can still render a program without FilmCraft's effects and
-transitions: it first bakes a clip's kept EffectCraft effects into a lossless
-file with transparency in `.kerf/cache/derived`, and plays that in the
-clip's place. Media can carry transparency too (`alpha=true`, found from the
+Media can carry transparency too (`alpha=true`, found from the
 pixel format on import), which compositing keeps, and depth and color (`bits=10
 color=rec2100-hlg`, found from its tags on import, or written by hand for log footage), which
 drawing honors, with HDR and log tone mapped for an SDR picture. `kerf-fx` generates the

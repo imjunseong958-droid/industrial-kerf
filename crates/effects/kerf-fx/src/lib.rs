@@ -12,8 +12,7 @@
 //! across the picture: the catalog lists them from a table this crate
 //! generates (`kerf-model/src/raster_effects.tsv`). Kerf's renderer runs
 //! them through [`kept`]; [`RasterStack`] runs them on a clip's 8-bit
-//! source frames, after its masks cut them, as playback and the graph's
-//! bake do.
+//! source frames, after its masks cut them, as playback of plain cuts does.
 
 use kerf_model::{Catalog, Effect, Engine, Rgba, Time, Value};
 use kerf_raster_fx::{
@@ -30,12 +29,6 @@ pub mod picture;
 pub mod transitions;
 
 pub use kerf_draw::mask::cuts;
-
-/// The version of what the EffectCraft effects (`kerf-raster-fx`, on
-/// `kerf-raster`) draw, in the cache key of every baked and prerendered
-/// file. Bump it with a change there that changes a picture, so files made
-/// before it are made again.
-pub const EFFECTS_VERSION: u32 = 1;
 
 /// Kept effects that read the clip's other frames: they fix what changes
 /// between neighbouring frames.

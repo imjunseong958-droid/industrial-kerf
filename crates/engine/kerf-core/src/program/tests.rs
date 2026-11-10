@@ -29,7 +29,7 @@ fn seconds_and_samples_are_exact() {
 }
 
 #[test]
-fn plain_cuts_concatenate_and_sound_comes_from_audio_tracks() {
+fn sound_comes_from_audio_tracks_alone() {
     let project = project(
         "sequence s1 rate=24 size=1920x1080 audio=48000\n\
          \x20 track V1 video\n\
@@ -43,44 +43,17 @@ fn plain_cuts_concatenate_and_sound_comes_from_audio_tracks() {
     assert_eq!(compiled.rate_arg(), "24/1");
     let argv = compiled.argv.join(" ");
     assert!(argv.contains("-ss 2 -t 1 -i /media/a.mov"), "{argv}");
-    assert!(argv.contains("-ss 10 -t 0.5 -i /media/b.mov"), "{argv}");
+    assert!(
+        !argv.contains("/media/b.mov"),
+        "picture clips carry no sound: {argv}"
+    );
     let graph = &compiled.filter_complex;
-    assert!(graph.contains("concat=n=3:v=1:a=0"), "{graph}");
     assert!(graph.contains("[0:a]"), "{graph}");
-    assert!(
-        !graph.contains("[1:a]"),
-        "picture clips carry no sound: {graph}"
-    );
-    assert!(graph.contains("amix=inputs=2"), "{graph}");
+    assert_eq!(compiled.argv.iter().filter(|arg| *arg == "-map").count(), 1);
 }
 
 #[test]
-fn layered_clips_overlay_with_exact_ntsc_times() {
-    let project = project(
-        "sequence s1 rate=23.976 size=1920x1080 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip c1 media=m1 src=0f at=0f dur=48f\n\
-         \x20 track V2 video\n\
-         \x20   clip c2 media=m2 src=0f at=1f dur=24f\n\
-         \x20     set opacity=0.5 x=0.25 scale={0f:1:ease 24f:2}\n",
-    );
-    let graph = compile(&project).filter_complex;
-    assert!(graph.contains("r=24000/1001"), "{graph}");
-    assert!(graph.contains("colorchannelmixer=aa=0.5"), "{graph}");
-    assert!(
-        graph.contains("enable='between(t,0.041708333,1.042708333)'"),
-        "{graph}"
-    );
-    assert!(graph.contains("main_w*(0.25)"), "{graph}");
-    assert!(graph.contains("eval=frame"), "{graph}");
-    assert!(
-        graph.contains("*(3-2*"),
-        "ease keyframes keep their curve: {graph}"
-    );
-}
-
-#[test]
-fn transitions_use_handles_and_reveal_the_incoming_clip() {
+fn crossfades_use_handles_and_fade_both_sides() {
     let project = project(
         "sequence s1 rate=24 size=1920x1080 audio=48000\n\
          \x20 track V1 video\n\
@@ -99,7 +72,6 @@ fn transitions_use_handles_and_reveal_the_incoming_clip() {
     assert!(argv.contains("-ss 2 -t 2.25 -i /media/a.mov"), "{argv}");
     assert!(argv.contains("-ss 1.75 -t 2.25 -i /media/b.mov"), "{argv}");
     let graph = &compiled.filter_complex;
-    assert!(graph.contains("fade=t=in:st=0:d=0.5:alpha=1"), "{graph}");
     assert!(
         graph.contains("afade=t=out:st=1.75:d=0.5:curve=qsin"),
         "{graph}"
@@ -115,86 +87,7 @@ fn transitions_use_handles_and_reveal_the_incoming_clip() {
 }
 
 #[test]
-fn a_range_keeps_a_transition_that_began_before_it() {
-    let project = project(
-        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip c1 media=m1 src=00:00:02:00 at=0f dur=48f\n\
-         \x20   clip c2 media=m2 src=00:00:02:00 at=48f dur=48f\n\
-         \x20   transition t1 from=c1 to=c2 fx=dissolve dur=12f\n",
-    );
-    let options = ProgramOptions {
-        range: Some((Rate::FPS_24.time_of(48), Rate::FPS_24.time_of(72))),
-        ..ProgramOptions::default()
-    };
-    let compiled = compile_program(&project, Catalog::builtin(), &options).unwrap();
-    assert_eq!(compiled.duration, Rate::FPS_24.time_of(24));
-    let graph = &compiled.filter_complex;
-    // c2 is decoded from the transition's start and trimmed to the range.
-    assert!(
-        graph.contains("fade=t=in:st=0:d=0.5:alpha=1,trim=start=0.25:duration=1"),
-        "{graph}"
-    );
-    assert!(graph.contains("trim=start=0:duration=0.25"), "{graph}");
-}
-
-#[test]
-fn generators_captions_and_adjustment_layers_render() {
-    let project = project(
-        "sequence s1 rate=24 size=1080x1920 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip bg gen=solid at=0f dur=48f\n\
-         \x20     set color=#336699\n\
-         \x20 track V2 video\n\
-         \x20   clip t gen=title at=0f dur=24f\n\
-         \x20     set text=\"Hello, world\" y=0.3\n\
-         \x20 track V3 video\n\
-         \x20   clip adj gen=adjustment at=12f dur=24f\n\
-         \x20     fx color.basic saturation=0\n\
-         \x20 track S1 subtitle\n\
-         \x20   clip cap caption=\"Hi\" at=0f dur=12f\n",
-    );
-    let compiled = compile(&project);
-    assert_eq!((compiled.width, compiled.height), (1080, 1920));
-    let graph = &compiled.filter_complex;
-    assert!(graph.contains("color=c=0x336699"), "{graph}");
-    assert!(graph.contains("drawtext=text=Hello\\,\\ world"), "{graph}");
-    assert!(graph.contains("fontsize=153.6"), "{graph}");
-    assert!(graph.contains("eq=saturation=0"), "{graph}");
-    assert!(graph.contains("split"), "{graph}");
-    assert!(graph.contains("text=Hi"), "{graph}");
-}
-
-#[test]
-fn nested_sequences_composite_on_their_own_canvas() {
-    let project = project(
-        "sequence inner rate=24 size=1280x720 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip i1 media=m2 src=0f at=0f dur=48f\n\
-         \x20 track A1 audio\n\
-         \x20   clip i2 media=m2 src=0f at=0f dur=48f\n\
-         sequence main rate=24 size=1920x1080 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip n1 seq=inner src=12f at=0f dur=24f\n\
-         \x20 track A1 audio\n\
-         \x20   clip n2 seq=inner src=12f at=0f dur=24f\n",
-    );
-    let options = ProgramOptions {
-        sequence: Some("main".into()),
-        ..ProgramOptions::default()
-    };
-    let compiled = compile_program(&project, Catalog::builtin(), &options).unwrap();
-    let graph = &compiled.filter_complex;
-    assert!(graph.contains("color=c=black@0:s=1280x720"), "{graph}");
-    assert!(compiled
-        .argv
-        .join(" ")
-        .contains("-ss 0.5 -t 1 -i /media/b.mov"));
-    assert_eq!(graph.matches("amix").count(), 2, "{graph}");
-}
-
-#[test]
-fn reverse_and_speed_change_read_the_right_source() {
+fn a_speed_change_reads_the_right_source() {
     let project = project(
         "sequence s1 rate=24 size=1920x1080 audio=48000\n\
          \x20 track V1 video\n\
@@ -204,35 +97,9 @@ fn reverse_and_speed_change_read_the_right_source() {
     );
     let compiled = compile(&project);
     let argv = compiled.argv.join(" ");
-    assert!(argv.contains("-ss 2 -t 2 -i /media/a.mov"), "{argv}");
     assert!(argv.contains("-ss 2 -t 0.5 -i /media/a.mov"), "{argv}");
     let graph = &compiled.filter_complex;
-    assert!(graph.contains("reverse,setpts=PTS*1/2"), "{graph}");
     assert!(graph.contains("atempo=0.5"), "{graph}");
-}
-
-#[test]
-fn features_without_a_lowering_are_named() {
-    let project = project(
-        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip c1 media=m1 src=0f at=0f dur=24f\n\
-         \x20     set blend=multiply\n",
-    );
-    let error =
-        compile_program(&project, Catalog::builtin(), &ProgramOptions::default()).unwrap_err();
-    assert_eq!(error.entity(), Some("c1"));
-    assert!(error.to_string().contains("blend `multiply`"), "{error}");
-    let masked = self::project(
-        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
-         \x20 track V1 video\n\
-         \x20   clip c1 media=m1 src=0f at=0f dur=24f\n\
-         \x20     mask k1 rect=0.1,0.1,0.9,0.9\n",
-    );
-    let error =
-        compile_program(&masked, Catalog::builtin(), &ProgramOptions::default()).unwrap_err();
-    assert_eq!(error.entity(), Some("c1"));
-    assert!(error.to_string().contains("masks"), "{error}");
 }
 
 #[test]
@@ -245,7 +112,7 @@ fn empty_sequences_are_refused() {
 }
 
 #[test]
-fn the_sound_compiles_alone_for_a_picture_drawn_elsewhere() {
+fn the_sound_compiles_whatever_the_picture_is() {
     let project = project(
         "sequence s1 rate=24 size=1920x1080 audio=48000\n\
          \x20 track V1 video\n\
@@ -254,17 +121,8 @@ fn the_sound_compiles_alone_for_a_picture_drawn_elsewhere() {
          \x20 track A1 audio\n\
          \x20   clip a1 media=m2 src=00:00:02:00 at=00:00:00:00 dur=00:00:01:00\n",
     );
-    // The graph cannot blend the picture; the sound does not need it to.
-    assert!(compile_program(&project, Catalog::builtin(), &ProgramOptions::default()).is_err());
-    let compiled = compile_program(
-        &project,
-        Catalog::builtin(),
-        &ProgramOptions {
-            audio_only: true,
-            ..ProgramOptions::default()
-        },
-    )
-    .expect("compiles");
+    // A blend is the compositor's to draw; the sound does not read it.
+    let compiled = compile(&project);
     let argv = compiled.argv.join(" ");
     assert!(argv.contains("-i /media/b.mov"), "{argv}");
     assert!(!argv.contains("/media/a.mov"), "{argv}");
@@ -288,7 +146,6 @@ fn a_range_after_a_crossfade_plays_the_incoming_clip_whole() {
     let f = |frames| Rate::FPS_24.time_of(frames);
     let options = ProgramOptions {
         range: Some((f(72), f(96))),
-        audio_only: true,
         ..ProgramOptions::default()
     };
     // FFmpeg refuses a fade that starts before the stream does.
@@ -305,7 +162,6 @@ fn sound_graph(project: &Project, range: Option<(Time, Time)>) -> String {
         Catalog::builtin(),
         &ProgramOptions {
             range,
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )
@@ -436,7 +292,6 @@ fn an_angle_plays_one_sound_track_of_a_sequence() {
             &project,
             catalog,
             &ProgramOptions {
-                audio_only: true,
                 ..ProgramOptions::default()
             },
         )
@@ -453,53 +308,4 @@ fn an_angle_plays_one_sound_track_of_a_sequence() {
     assert_eq!(heard(" angle=A1"), (vec!["a.mov".to_owned()], false));
     // The camera with its track muted is heard when asked for.
     assert_eq!(heard(" angle=A2"), (vec!["b.mov".to_owned()], true));
-}
-
-#[test]
-fn the_graph_refuses_a_picture_angle_by_name() {
-    let catalog = Catalog::builtin();
-    let project = kerf_lang::parse_document(
-        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 seq=mc src=0f at=0f dur=24f angle=V1\nsequence mc rate=24 size=64x36 audio=48000\n  track V1 video\n    clip a gen=solid@1 at=0f dur=48f\n",
-        catalog,
-    )
-    .unwrap_or_else(|errors| panic!("{errors:?}"))
-    .project;
-    let refused = compile_program(&project, catalog, &ProgramOptions::default())
-        .expect_err("the graph draws no angle");
-    assert!(refused.to_string().contains("angle"), "{refused}");
-}
-
-#[test]
-fn the_graph_refuses_what_only_the_compositor_draws_by_name() {
-    let catalog = Catalog::builtin();
-    for (clip, name) in [
-        ("gen=shape@1 at=0f dur=24f", "shape"),
-        ("gen=particles@1 at=0f dur=24f", "particles"),
-        (
-            "gen=title@1 at=0f dur=24f\n      set text=\"a\" reveal={0f:0 12f:1}",
-            "reveal",
-        ),
-        (
-            "gen=title@1 at=0f dur=24f\n      set text=\"a\" wght=700",
-            "axes",
-        ),
-        (
-            "gen=title@1 at=0f dur=24f\n      set text=\"a\" ital={0f:0 12f:1}",
-            "axes",
-        ),
-        (
-            "gen=title@1 at=0f dur=24f\n      set text=\"a\" features=tnum",
-            "features",
-        ),
-    ] {
-        let project = kerf_lang::parse_document(
-            &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=64x36 audio=48000\n  track V1 video\n    clip c1 {clip}\n"),
-            catalog,
-        )
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-        let refused = compile_program(&project, catalog, &ProgramOptions::default())
-            .expect_err("the graph draws none of these");
-        assert!(refused.to_string().contains(name), "{refused}");
-    }
 }

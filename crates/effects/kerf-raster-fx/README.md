@@ -16,7 +16,5 @@ They keep EffectCraft's edition (2024), lints, `rustfmt.toml`, and
 
 After a change here:
 
-- If it changes a picture, bump `kerf_fx::EFFECTS_VERSION`, so files baked
-  before it are made again.
 - If it changes an effect's parameters, regenerate the catalog table with
   `UPDATE_CATALOG=1 cargo test -p kerf-fx`.

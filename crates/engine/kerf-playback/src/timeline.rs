@@ -537,7 +537,6 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
         project,
         Catalog::builtin(),
         &ProgramOptions {
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )

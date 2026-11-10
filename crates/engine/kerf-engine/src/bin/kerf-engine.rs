@@ -97,9 +97,6 @@ enum Commands {
         /// 360p at 15 fps, encoded fast.
         #[arg(long)]
         draft: bool,
-        /// Draw the picture with the FFmpeg graph, as before the compositor.
-        #[arg(long)]
-        graph: bool,
         /// `standard`, `review` (H.264 12 Mb/s) or `prores_hq` (the
         /// ProRes 422 HQ master in QuickTime with 24-bit PCM).
         #[arg(long, default_value = "standard")]
@@ -484,7 +481,6 @@ fn main() -> Result<()> {
             project,
             sequence,
             draft,
-            graph,
             preset,
             out,
         } => {
@@ -500,7 +496,6 @@ fn main() -> Result<()> {
                 &kerf_engine::render::RenderOptions {
                     output: out.to_string_lossy().into_owned(),
                     draft,
-                    graph,
                     preset,
                     project_dir: project.parent().map(std::path::Path::to_path_buf),
                     ..kerf_engine::render::RenderOptions::default()
