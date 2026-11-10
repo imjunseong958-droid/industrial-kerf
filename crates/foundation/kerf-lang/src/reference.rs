@@ -80,7 +80,7 @@ track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] 
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
 bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|effect>  ·  track set <id> bus=<id>
 track set <id> [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
-media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"]
+media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"] [recipe="…"]
 media replace <id> <same arguments as media add>
     swap the file behind an id; clips keep their timing and must still fit
 media relink <id> path="…"  ·  media remove <id>

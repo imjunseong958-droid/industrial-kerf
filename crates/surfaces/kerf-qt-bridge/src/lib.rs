@@ -1299,6 +1299,7 @@ fn rendered_preview(
                 sample_rate: 48_000,
             }),
             reel: None,
+            recipe: None,
         }],
         sequences: vec![Sequence {
             id: id("program")?,

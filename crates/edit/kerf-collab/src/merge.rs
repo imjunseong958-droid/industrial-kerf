@@ -512,14 +512,22 @@ fn merge_list<K: Ord + Clone, T: Clone + PartialEq>(
 
 /// The file merges as one unit, path and what it holds together: a relink
 /// on one side and a replacement on the other must not make one record of
-/// both. The reel is a label and merges on its own.
+/// both. The reel and the recipe are labels, and each merges on its own.
 fn merge_media(base: &Media, ours: &Media, theirs: &Media, clashes: &mut Vec<String>) -> Media {
     let file = |media: &Media| Media {
         reel: None,
+        recipe: None,
         ..media.clone()
     };
     Media {
         reel: pick("reel", &base.reel, &ours.reel, &theirs.reel, clashes),
+        recipe: pick(
+            "recipe",
+            &base.recipe,
+            &ours.recipe,
+            &theirs.recipe,
+            clashes,
+        ),
         ..pick("file", &file(base), &file(ours), &file(theirs), clashes)
     }
 }
@@ -1512,6 +1520,7 @@ fn media_changes(before: &Media, after: &Media) -> Vec<String> {
     differs(&mut fields, "video", &before.video, &after.video);
     differs(&mut fields, "audio", &before.audio, &after.audio);
     differs(&mut fields, "reel", &before.reel, &after.reel);
+    differs(&mut fields, "recipe", &before.recipe, &after.recipe);
     fields
 }
 
@@ -1916,6 +1925,14 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
         );
         let merged = merge(BASE, &ours, &edit(BASE, &[reel]));
         assert_eq!(merged.text, edit(&ours, &[reel]));
+        assert_eq!(merged.conflicts, vec![]);
+        // Nor is what the file was made from.
+        let recipe = (
+            "audio=2ch@48000\nmedia m2",
+            "audio=2ch@48000 recipe=\"shots/open.json\"\nmedia m2",
+        );
+        let merged = merge(BASE, &ours, &edit(BASE, &[recipe]));
+        assert_eq!(merged.text, edit(&ours, &[recipe]));
         assert_eq!(merged.conflicts, vec![]);
     }
 

@@ -1460,8 +1460,9 @@ impl Runtime {
         // A file without picture keeps the timecode rate the media had.
         let mut replacement =
             kernel::media_from_probe(existing.id.clone(), &stored, &probe, existing.rate)?;
-        // No probe reads a reel, so the one the media was given stays.
+        // No probe reads a reel or a recipe, so those the media was given stay.
         replacement.reel.clone_from(&existing.reel);
+        replacement.recipe.clone_from(&existing.recipe);
         let (mut candidate, change) =
             self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
         let operation = candidate.record_operation(operation, fingerprint);

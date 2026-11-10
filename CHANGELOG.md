@@ -28,6 +28,9 @@ on `main`; its section here becomes the release's notes on GitHub
   with the `.deb`, or once `./install-desktop-entry.sh` has run.
 - Kerf for Mac needs macOS 26 or later, and on an older macOS it now says so
   instead of failing to open.
+- A media line can say what its file was made from: `recipe="shots/open.json"`
+  names the scene a renderer drew or what a model was asked for, so a
+  generated shot's document says how to make it again.
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.

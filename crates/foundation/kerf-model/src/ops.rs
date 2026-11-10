@@ -138,7 +138,7 @@ pub enum Op {
         path: String,
     },
     /// Swap the file behind the media with this `id` for the one described:
-    /// its path, rate, timecode, duration, streams, and reel. Clips keep
+    /// its path, rate, timecode, duration, streams, reel, and recipe. Clips keep
     /// their timing; the edit is refused, naming them, when a clip no longer
     /// fits (its source range, a stream its track needs, transition
     /// handles).

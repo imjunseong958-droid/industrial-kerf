@@ -41,6 +41,11 @@ pub struct Media {
     pub video: Option<VideoInfo>,
     pub audio: Option<AudioInfo>,
     pub reel: Option<String>,
+    /// The text file the media's file was made from, where another program
+    /// made it: a scene a renderer drew, or what a model was asked for. A
+    /// path as the media's own is, and a label as the reel is: Kerf reads
+    /// nothing from it.
+    pub recipe: Option<String>,
 }
 
 impl Media {
@@ -1164,6 +1169,7 @@ mod tests {
             video: None,
             audio: None,
             reel: None,
+            recipe: None,
         });
         project.sequences.push(Sequence {
             buses: Vec::new(),
