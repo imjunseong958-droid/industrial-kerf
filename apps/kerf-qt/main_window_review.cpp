@@ -281,14 +281,6 @@ bool ReviewWiring::post() {
     const double at = w->m_playhead;
     const QJsonArray drawing = composer->drawing();
     bool sent = false;
-    if (composer->versionsOn() && parent.isEmpty()) {
-        if (w->m_agentBusy || !w->sendVersions(text)) return false;
-        composer->versionsButton()->setChecked(false);
-        composer->clear();
-        m_panel->setReplyTarget(QString());
-        w->updateChatControls();
-        return true;
-    }
     if (review::addressesKerf(text)) {
         if (w->m_agentBusy) return false;
         // About the replied thread's mark, or the playhead.
@@ -858,13 +850,11 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        // Versions have a thread each, and no turn of the conversation's own.
-        if (!m_versionsRunning) m_chat->setTurnBusy(busy);
+        m_chat->setTurnBusy(busy);
         if (busy) showSheet();
         quietenCutPreview();
         if (!busy) {
-            if (!m_versionsRunning) m_chat->finishTurn();
-            m_versionsRunning = false;
+            m_chat->finishTurn();
             endAgentFollow();
             // What Kerf was asked to make is made: it goes home.
             if (m_turnRendered) goHome();
@@ -886,8 +876,6 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
     } else if (type == QStringLiteral("agent_focus")) {
         followAgentFocus(event);
-    } else if (type == QStringLiteral("agent_version")) {
-        followVersion(event);
     } else {
         return false;
     }

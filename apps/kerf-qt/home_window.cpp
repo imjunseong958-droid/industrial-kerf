@@ -131,7 +131,6 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_composer->stamp()->hide();
     m_composer->mentionButton()->hide();
     m_composer->drawButton()->hide();
-    m_composer->versionsButton()->hide();
     m_folderChip = new ui::GhostButton;
     m_folderChip->setObjectName(QStringLiteral("homeFolder"));
     m_folderChip->setIconName(QStringLiteral("g-folder"));

@@ -1836,7 +1836,6 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // The pinned proposal's (the version its card shows), not just the first open one.
     m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
     showProposedCut();
-    refreshCompare();
     m_divergedBanner->setVisible(diverged(snapshot));
     updateViewerMasks();
     updateCommandStates();
@@ -1846,7 +1845,6 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     applyPendingLink();
     followContentWithPanes();
     followLiveProposal();
-    refreshCompare();
     runStart();
 }
 

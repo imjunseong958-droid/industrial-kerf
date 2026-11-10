@@ -7,7 +7,6 @@
 #include "chat_panel.h"
 #include "main_window.h"
 #include "timeline_widget.h"
-#include "ui/compare_view.h"
 #include "ui/components.h"
 #include "ui/stage_motion.h"
 #include "ui/stage_shell.h"
@@ -206,32 +205,6 @@ private slots:
             timer->start(41);
         });
         QTest::qWait(1000);
-        run("version cards fan out", 1300, [&] {
-            CompareView::Version version;
-            version.poster = frame;
-            version.state = CompareView::State::Running;
-            QList<CompareView::Version> versions;
-            for (const char *key : {"A", "B", "C"}) {
-                version.key = QString::fromLatin1(key);
-                versions << version;
-            }
-            window.m_compare->setOrigin(picture.translated(-window.m_shell->rects().slot.topLeft()));
-            window.showCompare(true);
-            window.m_compare->setVersions(versions);
-        });
-        window.m_compare->setVersions({});
-        QTest::qWait(300);
-        run("the fan again, fonts loaded", 1300, [&] {
-            CompareView::Version version;
-            version.poster = frame;
-            version.state = CompareView::State::Running;
-            QList<CompareView::Version> versions;
-            for (const char *key : {"A", "B", "C"}) {
-                version.key = QString::fromLatin1(key);
-                versions << version;
-            }
-            window.m_compare->setVersions(versions);
-        });
         window.close();
     }
 
@@ -509,72 +482,6 @@ private slots:
         const QPoint moved = child->pos();
         QTRY_VERIFY(!child->graphicsEffect());
         QCOMPARE(child->pos(), moved);
-    }
-
-    // A version's status arrives often: its card goes on, and is not put back at once
-    // or sent back to where it was.
-    void aCardOnItsWayGoesOn() {
-        ui::setReducedMotionOverride(0);
-        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
-        CompareView view;
-        view.resize(820, 560);
-        view.setOrigin(QRect(100, 50, 600, 340));
-        view.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&view));
-        QImage poster = footageFrame(QSize(320, 180));
-        QList<CompareView::Version> versions;
-        for (const char *key : {"A", "B", "C"}) {
-            CompareView::Version version;
-            version.key = QString::fromLatin1(key);
-            version.poster = poster;
-            versions << version;
-        }
-        view.setVersions(versions);
-        QWidget *last = view.m_byKey.value(QStringLiteral("C")).frame;
-        const QRect rest = view.cardRect(2, 3);
-        // C waits its turn, and a change of state does not put it there.
-        QVERIFY(last->geometry() != rest);
-        versions[2].status = QStringLiteral("Working · trimming");
-        view.setVersions(versions);
-        QVERIFY(last->geometry() != rest);
-        QTest::qWait(300);
-        const QRect midWay = last->geometry();
-        versions[2].status = QStringLiteral("Working · titling");
-        view.setVersions(versions);
-        QCOMPARE(last->geometry(), midWay);
-        // The room changes on the way: it goes on to its new place.
-        view.resize(700, 500);
-        QTRY_COMPARE_WITH_TIMEOUT(last->geometry(), view.cardRect(2, 3), 3000);
-    }
-
-    // Picked while they are fanning out, or as the window changes size.
-    void aPickedCardIsNotCalledBack() {
-        ui::setReducedMotionOverride(0);
-        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
-        CompareView view;
-        view.resize(820, 560);
-        view.setOrigin(QRect(100, 50, 600, 340));
-        view.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&view));
-        QList<CompareView::Version> versions;
-        for (const char *key : {"A", "B"}) {
-            CompareView::Version version;
-            version.key = QString::fromLatin1(key);
-            version.proposalId = QStringLiteral("p") + version.key;
-            version.state = CompareView::State::Ready;
-            version.poster = footageFrame(QSize(320, 180));
-            versions << version;
-        }
-        view.setVersions(versions);
-        QTest::qWait(100);
-        bool done = false;
-        const QRect picture(100, 50, 600, 340);
-        view.playPick(QStringLiteral("pA"), picture, [&done] { done = true; });
-        QTest::qWait(50);
-        view.resize(800, 540);
-        QWidget *chosen = view.m_byKey.value(QStringLiteral("A")).frame;
-        QTRY_VERIFY_WITH_TIMEOUT(done, 3000);
-        QTRY_COMPARE_WITH_TIMEOUT(chosen->geometry(), picture, 500);
     }
 
     // Colour around a picture changes how its colours look: however strong its own,

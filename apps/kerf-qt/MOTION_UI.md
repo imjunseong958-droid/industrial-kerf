@@ -37,8 +37,6 @@ repeating their numbers, so changing a value does not make it wrong.
 | First cut shows | A proposal on an empty program | Timeline shows it, read-only; the picture takes its format and renders it | `MainWindow::showProposedCut` | `aFirstCutShowsOnTheTimelineUntilItIsTheProgram`, `aProposedCutBringsItsOwnFormat` |
 | Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview` | none |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
-| Versions | "Try 3 versions" | Picture fans into leaning posters; the timeline falls back | `MainWindow::showCompare`, `CompareView::placeCards` | `versionsRunSideBySideAndOneIsUsed`, `versionCardsTakeThePicturesShape`, `aCardOnItsWayGoesOn` |
-| Pick a version | "Use this" | The card goes to the picture and gives way to it; the others fall | `MainWindow::useVersion`, `CompareView::playPick` | `anUnusedCardKeepsItsPosterWhenTheStateChanges`, `aPickedCardIsNotCalledBack` |
 | Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
 
@@ -89,7 +87,7 @@ with it. So:
 - **A long animation changes what can be seen, not every tick.** The working chip draws
   `workPulseSteps` a pulse.
 - **One motion per property.** A new one takes over from the last, from where it has
-  got to (`moves::dim`, `CompareView::placeCards`). Two at once fight over each frame.
+  got to (`moves::dim`). Two at once fight over each frame.
 - **Every start has its end**, also when cut short: `transitionFinished` always follows
   `transitionStarted`.
 - Avoid a new `QGraphicsEffect` on a large region: it draws all of it again each frame.

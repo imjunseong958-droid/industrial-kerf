@@ -364,11 +364,7 @@ void MainWindow::refreshSidebar() {
             conversation.id = thread.id;
             conversation.title = thread.root.body.section(QLatin1Char('\n'), 0, 0).trimmed();
             if (conversation.title.isEmpty()) conversation.title = QStringLiteral("Proposal");
-            const bool working = std::any_of(m_versionRuns.cbegin(), m_versionRuns.cend(), [&thread](const VersionRun &run) {
-                return run.thread == thread.id && run.state == CompareView::State::Running;
-            });
-            conversation.state = working                        ? ProjectSidebar::State::Working
-                                 : !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
+            conversation.state = !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
                                  : thread.resolved()            ? ProjectSidebar::State::Settled
                                                                 : ProjectSidebar::State::Idle;
             conversations << conversation;
