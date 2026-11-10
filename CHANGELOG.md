@@ -39,6 +39,8 @@ on `main`; its section here becomes the release's notes on GitHub
   sequence now has a preview of every effect.
 - Moving the playhead just as an edit lands no longer leaves the viewer on the
   frame it showed before: the picture follows the playhead to where it was put.
+- A shape whose offset shrinks it past its middle is gone at once, where the
+  editor had stopped for several seconds to find that nothing was left.
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 

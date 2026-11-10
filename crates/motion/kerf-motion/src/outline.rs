@@ -230,15 +230,39 @@ fn marked_or_held_by_marked(contours: &Contours, mut index: usize, marked: &[boo
     }
 }
 
+/// The narrower side of the box around `region`, in pixels.
+fn narrower_side(region: &[Contour]) -> f64 {
+    let corners = || {
+        region
+            .iter()
+            .filter(|contour| contour.len() >= 3)
+            .flatten()
+            .map(|corner| point(*corner))
+    };
+    let side = |of: fn(Point) -> f64| {
+        let (low, high) = corners().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), at| {
+            (low.min(of(at)), high.max(of(at)))
+        });
+        (high - low).max(0.0)
+    };
+    side(|at| at.x).min(side(|at| at.y))
+}
+
 /// `region` grown by `amount` pixels, or with a negative shrunk.
 pub fn offset(region: &[Contour], amount: f32) -> Vec<Contour> {
     if amount == 0.0 || !amount.is_finite() {
         return region.to_vec();
     }
     let distance = f64::from(amount.abs());
+    let grow = amount > 0.0;
+    // No point of a region is further from its edge than half its narrower side, so shrinking by
+    // that much leaves nothing. The sweep comes to the same, in seconds: the stroke that wide
+    // folds over itself all the way around.
+    if !grow && distance >= narrower_side(region) / 2.0 {
+        return Vec::new();
+    }
     let path = to_path(region);
     let ring = stroked(&path, 2.0 * distance);
-    let grow = amount > 0.0;
     let Ok(topology) = Topology::from_paths_binary(&path, &ring, tolerance([&path, &ring])) else {
         return region.to_vec();
     };
@@ -401,6 +425,9 @@ mod tests {
         // Nothing moves it not at all, and shrinking past the middle leaves nothing.
         assert_eq!(offset(&round, 0.0), round);
         assert!(offset(&round, -150.0).is_empty(), "past the middle");
+        // A square is gone at half its side, and not before.
+        assert!(offset(&square, -50.0).is_empty(), "at the middle");
+        close(area(&offset(&square, -49.0)), 2.0 * 2.0, 1e-3);
     }
 
     #[test]
