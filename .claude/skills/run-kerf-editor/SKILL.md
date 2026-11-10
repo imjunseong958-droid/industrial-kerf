@@ -7,7 +7,7 @@ description: Launch and drive the real Kerf Qt editor (apps/kerf-qt) on a projec
 
 The offscreen tests check strings and state, not what a window looks like at its real size, so
 use this when the question is what a person sees. Written from a session on an M1 Mac with 8 GB.
-It has not been tried on Linux or from a clean machine.
+On Linux without a display, see "Linux, offscreen" below: tried on Ubuntu 24.04 with Qt 6.4.2.
 
 ## Build
 
@@ -77,12 +77,9 @@ It takes about six seconds to show the picture. A blank picture is a failed laun
 With the computer-use tools, the app's bundle identifier is `com.industrial-kerf.editor`. Look at
 every screenshot. Launching proves little.
 
-- **Inspector:** select a clip in the timeline, then Window → Inspector. It lies over the conversation.
-  A section opens with the chevron at its right; the rows in depth are under Transform.
-- **A value:** double-click it, select all, type, Return. The title bar goes from "Live preview" to
-  "Edited just now", and `project.kerf` is rewritten a few seconds later, so read it back to check.
-- **Finish tray:** Window → Finish, then Run QC. It lies over the lower part of the conversation and
-  the timeline. Esc closes it.
+- **Media:** Window → Media (⌘1). It lies over the conversation. Double-click a clip there to insert
+  it at the playhead; the title bar goes to "Edited just now", and `project.kerf` is rewritten a few
+  seconds later, so read it back to check.
 - **A path:** select its clip. The curve and its handles lie on the picture, and the handles drag.
 
 Things that look like faults and are not:
@@ -91,6 +88,23 @@ Things that look like faults and are not:
   on the timeline, unless masks or a path can be dragged.
 - A click refused with "Could not verify which document this window is editing" comes from a tooltip's
   window. Move the pointer away, take a new screenshot, and click again.
+
+## Linux, offscreen
+
+With no display, the editor still draws its window to a file. Build as CI's `linux-editor` job does
+(the debug bridge and `kerfd`, then CMake), with `FFMPEG_DIR` and `LD_LIBRARY_PATH` on the pinned
+FFmpeg 9. Then, with `$P` a project as above and `$D` an empty folder for the run's settings, so the
+user's recent projects are left alone:
+
+```bash
+QT_QPA_PLATFORM=offscreen KERFD_BIN=$PWD/target/debug/kerfd target/qt/kerf-qt "$P" \
+  --settings-dir "$D" --window-size 1600x1000 --screenshot /tmp/editor.png --quit-after-ms 9000
+pkill -f "debug/kerfd"
+```
+
+Without a project it captures the start window. This shows the layout, the conversation, the
+timeline and a CPU-drawn picture. It cannot be clicked: for a state that needs a click, use a test's
+gallery (`KERF_SCREENSHOT_DIR`), and say that no pointer was tried.
 
 ## Leave things as they were
 
