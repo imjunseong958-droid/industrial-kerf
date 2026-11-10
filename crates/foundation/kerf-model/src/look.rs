@@ -1444,6 +1444,12 @@ fn env(
                 Value::Number(marker.at.seconds() - start)
             }
             Some(Param::Static(value)) => value.clone(),
+            Some(Param::Expr(_)) => {
+                return Err(format!(
+                    "`{}` of a look takes a number or keyframes, not an expression",
+                    param.def.name
+                ));
+            }
             Some(Param::Animated(keys)) => {
                 if !look.animates(&param.def, catalog) {
                     return Err(format!("`{}` cannot be animated", param.def.name));
@@ -1595,7 +1601,7 @@ fn parts(
 
 /// Put `parts` on `clip`: its properties combined with the clip's own, its
 /// masks after the clip's, and its effects at `at` in the stack.
-fn apply(clip: &mut Clip, parts: Parts, at: usize, catalog: &Catalog) {
+fn apply(clip: &mut Clip, parts: Parts, at: usize, catalog: &Catalog) -> Result<(), String> {
     for (prop, look) in parts.props {
         let multiply = PROPS.iter().any(|(name, m)| *name == prop && *m);
         let own = clip.props.get(&prop).cloned().unwrap_or_else(|| {
@@ -1607,18 +1613,31 @@ fn apply(clip: &mut Clip, parts: Parts, at: usize, catalog: &Catalog) {
                     }),
             )
         });
-        clip.props.insert(prop, mix(&own, &look, multiply));
+        let mixed = mix(&own, &look, multiply).ok_or_else(|| {
+            format!(
+                "clip `{}`: `{prop}` is an expression, and a look that animates it cannot go on top; write its keyframes, or take the look off",
+                clip.id
+            )
+        })?;
+        clip.props.insert(prop, mixed);
     }
     clip.masks.extend(parts.masks);
     let at = at.min(clip.effects.len());
     clip.effects.splice(at..at, parts.effects);
+    Ok(())
 }
 
-/// The clip's own value and a look's, added or multiplied.
-fn mix(own: &Param, look: &Param, multiply: bool) -> Param {
+/// The clip's own value and a look's, added or multiplied; `None` where one is an expression and
+/// the other keyframes, which no parameter can hold together.
+fn mix(own: &Param, look: &Param, multiply: bool) -> Option<Param> {
     let op = |a: f64, b: f64| if multiply { a * b } else { a + b };
     let number = |v: &Value| v.as_number().unwrap_or(0.0);
-    match (own, look) {
+    Some(match (own, look) {
+        (Param::Expr(expression), Param::Static(by))
+        | (Param::Static(by), Param::Expr(expression)) => {
+            Param::Expr(expression.with(if multiply { '*' } else { '+' }, number(by)))
+        }
+        (Param::Expr(_), _) | (_, Param::Expr(_)) => return None,
         (Param::Static(a), Param::Static(b)) => {
             Param::Static(Value::Number(op(number(a), number(b))))
         }
@@ -1652,7 +1671,7 @@ fn mix(own: &Param, look: &Param, multiply: bool) -> Param {
                     .collect(),
             )
         }
-    }
+    })
 }
 
 /// Expand every look in `project` into the built-in effects, properties,
@@ -1698,7 +1717,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                     )
                     .map_err(|e| format!("`{}`: {e}", transition.id))?;
                     let end = clip.effects.len();
-                    apply(clip, parts, end, catalog);
+                    apply(clip, parts, end, catalog)?;
                 }
                 // Both clips show across the cut, the incoming one over the
                 // outgoing, as the look's lines draw them.
@@ -1722,7 +1741,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                     let parts = flatten(look, &effect, clip, index, rate, &markers, catalog)
                         .map_err(|e| format!("`{}`: {e}", clip.id))?;
                     let added = parts.effects.len();
-                    apply(clip, parts, index, catalog);
+                    apply(clip, parts, index, catalog)?;
                     index += added;
                 }
             }
@@ -1784,8 +1803,7 @@ pub fn flatten_into(
         .ok_or_else(|| format!("`{}@{}` is not a look", effect.fx, effect.version))?;
     let parts = flatten(look, &effect, clip, index, rate, markers, catalog)?;
     clip.effects.remove(index);
-    apply(clip, parts, index, catalog);
-    Ok(())
+    apply(clip, parts, index, catalog)
 }
 
 fn uses_looks(project: &Project, catalog: &Catalog) -> bool {

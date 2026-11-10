@@ -179,6 +179,8 @@ fn ever_above_zero(param: Option<&Param>) -> bool {
         Some(Param::Animated(keys)) => keys
             .iter()
             .any(|key| matches!(key.value, Value::Number(number) if number > 0.0)),
+        // What an expression gives is not known without running it: take it that it does.
+        Some(Param::Expr(_)) => true,
         _ => false,
     }
 }

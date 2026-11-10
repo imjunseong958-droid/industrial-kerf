@@ -126,6 +126,16 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `logc4-awg4`, `vlog-vgamut`, `clog3-cinemagamut`, or `applelog`. HDR and log come in tone
   mapped for an SDR picture. Importing finds both from the file's tags; log footage rarely
   tags itself, so write its `color=` by hand, with `media replace`.
+- A number that may take keyframes may be an expression of the clip's time
+  instead, in parentheses: `set c1 rotation=(t*90)`, `x=(sin(t*pi)*0.1)`,
+  `opacity=(0.5+0.5*noise(t*3))`. `t` is seconds from the clip's first frame.
+  There are numbers, `+ - * /`, parentheses, `pi`, and `sin`, `cos`, `abs`,
+  `floor`, `min`, `max`, and `noise`, a smooth wander between -1 and 1 that is
+  the same on every machine. Written without spaces, or quoted to hold them
+  (`rotation="(t * 90)"`). What it gives is kept inside the parameter's range.
+  A clip cut in two goes on as it was: its second half reads `t` that much on
+  (`rotation=((t+2)*90)`). Sound takes none, nor does a title's text, and a
+  look that animates a property cannot go on a clip whose property is one.
 - `recipe="shots/open.json"` on a media line names the text file its file was
   made from, where another program made it: the scene a renderer drew, or what
   a model was asked for and with which seed. It merges apart from the file, as

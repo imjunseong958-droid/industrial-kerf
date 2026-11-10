@@ -419,6 +419,9 @@ fn param_def_json(def: &ParamDef) -> Json {
 fn param_json(param: &Param, rate: Rate) -> Json {
     match param {
         Param::Static(value) => value_json(value),
+        // The editor has numbers and keyframes: an expression shows as what it gives at the
+        // clip's first frame, and setting it there replaces it.
+        Param::Expr(_) => value_json(&param.value_at(Time::ZERO)),
         Param::Animated(keys) => keys
             .iter()
             .map(|key| {

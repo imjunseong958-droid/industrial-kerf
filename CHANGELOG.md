@@ -28,6 +28,10 @@ on `main`; its section here becomes the release's notes on GitHub
   with the `.deb`, or once `./install-desktop-entry.sh` has run.
 - Kerf for Mac needs macOS 26 or later, and on an older macOS it now says so
   instead of failing to open.
+- A number that takes keyframes can be an expression of the clip's time:
+  `rotation=(t*90)`, `x=(sin(t*pi)*0.1)`, `opacity=(0.5+0.5*noise(t*3))`. The
+  Inspector shows what it gives at the clip's first frame; setting the value
+  there replaces it.
 - A media line can say what its file was made from: `recipe="shots/open.json"`
   names a recipe, a text file with the command that makes it, and
   `kerf make <media>` runs it and puts the new file in the media's place. A
