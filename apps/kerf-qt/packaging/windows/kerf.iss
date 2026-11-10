@@ -1,6 +1,7 @@
 ; Industrial Kerf for Windows as an installer: for the current user alone, with no
 ; administrator, a Start menu entry, kerf:// review links opening the editor, and an
-; uninstaller (Settings > Apps, or unins000.exe). Not signed.
+; uninstaller (Settings > Apps, or unins000.exe). Not signed. The Start menu entry, the
+; links and Settings > Apps show the icon kerf-qt.exe carries; the installer has it too.
 ;
 ; scripts/package-kerf-windows.ps1 compiles it with Inno Setup's ISCC from the folder it
 ; packed, the same files as the zip:
@@ -44,6 +45,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 UninstallDisplayName=Industrial Kerf
 UninstallDisplayIcon={app}\kerf-qt.exe
+; The installer's own icon: Kerf's, the one kerf-qt.exe carries (tools/kerf-icon makes it
+; from apps/kerf-qt/resources/icon/industrial-kerf.svg). Relative to this file.
+SetupIconFile=..\..\resources\icon\industrial-kerf.ico
 ; Tells Explorer the kerf: scheme changed.
 ChangesAssociations=yes
 ; An open editor is closed before its files are replaced or removed.

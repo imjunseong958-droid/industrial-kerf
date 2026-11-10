@@ -1,0 +1,4 @@
+// The editor's icon as a resource of kerf-qt.exe. Windows takes the first icon
+// in a program for the program's own, so it stays the first, and the only one.
+// The .ico is made from industrial-kerf.svg by tools/kerf-icon.
+IDI_ICON1 ICON "industrial-kerf.ico"

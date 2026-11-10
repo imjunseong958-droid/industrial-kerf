@@ -44,6 +44,7 @@ members = [
     # tools
     "tools/kerf-guide",
     "tools/kerf-layers",
+    "tools/kerf-icon",
 ]
 resolver = "2"
 

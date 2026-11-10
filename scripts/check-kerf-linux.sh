@@ -13,7 +13,8 @@
 # FFmpeg may come from anywhere else. What the system's own libraries load in turn (Mesa's
 # driver, GLib's PCRE) is the system's affair. Last, its install-desktop-entry.sh, for a
 # user in a scratch home: the entry runs this folder's editor, takes kerf:// links, and, where
-# GLib's gio is there, a link followed through it starts the editor with the link.
+# GLib's gio is there, a link followed through it starts the editor with the link; and the
+# entry's icon is Kerf's own, found in the user's hicolor theme at each size.
 #
 # package-kerf-linux.sh runs this on the folder it makes, and
 # .github/workflows/verify-release.yml on a published release, unpacked on a fresh runner.
@@ -119,7 +120,8 @@ fi
 # install-desktop-entry.sh writes an entry that runs this folder's editor with the link and
 # makes it the default for x-scheme-handler/kerf; GLib, through which GNOME and most
 # desktops open a link, finds it so and follows a link through it; and --remove takes both
-# away. A package from before 0.1.2 has no such script.
+# away. Its icon is Kerf's own, from the package's icons/. A package from before 0.1.2 has
+# no such script, and no icon.
 if [ -e "$package/install-desktop-entry.sh" ]; then
     home="$scratch/home"
     entry="$home/.local/share/applications/industrial-kerf.desktop"
@@ -136,6 +138,30 @@ if [ -e "$package/install-desktop-entry.sh" ]; then
     grep -qxF 'x-scheme-handler/kerf=industrial-kerf.desktop' "$mimeapps" ||
         { echo "mimeapps.list does not send kerf:// links to Kerf" >&2; exit 1; }
     if command -v desktop-file-validate > /dev/null; then desktop-file-validate "$entry"; fi
+    # The entry's icon, looked up as a desktop does: by name, in the user's part of the
+    # hicolor theme, at the size asked for. Each has to be a PNG of that size, and a size
+    # the system's theme does not list would never be looked in.
+    icon="$(sed -n 's/^Icon=//p' "$entry")"
+    [ "$icon" = industrial-kerf ] || { echo "The desktop entry's icon is '$icon', not Kerf's own" >&2; exit 1; }
+    hicolor="$home/.local/share/icons/hicolor"
+    for size in 16 24 32 48 64 128 256 512; do
+        installed="$hicolor/${size}x${size}/apps/$icon.png"
+        [ -s "$installed" ] || { echo "No $size pixel icon for the desktop entry at $installed" >&2; exit 1; }
+        [ "$(head -c 8 "$installed" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] ||
+            { echo "$installed is not a PNG" >&2; exit 1; }
+        # A PNG's width and height: eight bytes, big-endian, from the sixteenth.
+        read -r w1 w2 w3 w4 h1 h2 h3 h4 < <(od -An -tu1 -j16 -N8 "$installed")
+        width=$((w1 * 16777216 + w2 * 65536 + w3 * 256 + w4))
+        height=$((h1 * 16777216 + h2 * 65536 + h3 * 256 + h4))
+        [ "$width" = "$size" ] && [ "$height" = "$size" ] ||
+            { echo "$installed is ${width}x$height, not ${size}x$size" >&2; exit 1; }
+        cmp -s "$installed" "$package/icons/$icon-$size.png" ||
+            { echo "$installed is not the package's icons/$icon-$size.png" >&2; exit 1; }
+        if [ -f /usr/share/icons/hicolor/index.theme ]; then
+            grep -qE "^Directories=(.*,)?${size}x${size}/apps(,|\$)" /usr/share/icons/hicolor/index.theme ||
+                { echo "The hicolor theme has no ${size}x${size}/apps for the icon to be found in" >&2; exit 1; }
+        fi
+    done
     if command -v gio > /dev/null; then
         # Read whole first: grep -q stops at its match, and with pipefail gio's broken pipe
         # would fail the check.
@@ -159,11 +185,13 @@ if [ -e "$package/install-desktop-entry.sh" ]; then
     fi
     as_user "$package/install-desktop-entry.sh" --remove > /dev/null
     [ ! -e "$entry" ] || { echo "--remove left $entry" >&2; exit 1; }
+    left="$(find "$home/.local/share" -name 'industrial-kerf*' 2> /dev/null)"
+    [ -z "$left" ] || { printf -- "--remove left Kerf's icons:\n%s\n" "$left" >&2; exit 1; }
     if grep -q 'industrial-kerf' "$mimeapps"; then
         echo "--remove left Kerf in mimeapps.list:" >&2
         cat "$mimeapps" >&2
         exit 1
     fi
-    echo "The desktop entry runs this folder's editor, takes kerf:// links, and comes away cleanly."
+    echo "The desktop entry runs this folder's editor under Kerf's own icon, takes kerf:// links, and comes away cleanly."
 fi
 echo "The package ran on its own; it loaded $(grep -cF "$package/" <<< "$loaded") libraries of its own, the rest the system's."

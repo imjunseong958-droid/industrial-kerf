@@ -27,6 +27,7 @@ on:
       - ".github/workflows/verify-release.yml"
       - "scripts/check-kerf-windows.ps1"
       - "scripts/check-kerf-windows-installer.ps1"
+      - "scripts/kerf-windows-icon.ps1"
       - "scripts/check-kerf-macos.sh"
       - "scripts/check-kerf-linux.sh"
 

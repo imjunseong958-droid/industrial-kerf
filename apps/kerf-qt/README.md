@@ -71,9 +71,22 @@ A folder registers nothing of itself, so it carries `install-desktop-entry.sh`
 the file's other lines; `--remove` takes both away. The check runs it for a user in a
 scratch home, validates the entry, has GLib's `gio` name Kerf for `kerf://`, follows
 a link through `gio open` and finds the editor started with it, then removes it. The
-entry has no icon of Kerf's own yet (`applications-multimedia`).
+entry's icon is Kerf's own (`Icon=industrial-kerf`): the script copies the package's
+`icons/` into `~/.local/share/icons/hicolor/<size>x<size>/apps/`, `--remove` takes them
+out, and the check finds each size there as a PNG of that size.
 `scripts/collect-kerf-linux-sources.sh` collects its source, the Ubuntu packages it carries
 libraries of included. Built on Ubuntu 24.04, it needs a glibc and libstdc++ that new.
+
+Kerf's icon is drawn once, in `resources/icon/industrial-kerf.svg`, and `tools/kerf-icon`
+renders the PNG, `.ico` and `.icns` files beside it (`cargo run -p kerf-icon`), which are in
+the repository; `cargo test -p kerf-icon` fails when they no longer match the SVG
+(`resources/icon/README.md`). The editor's windows and taskbar entry take it from the PNGs
+compiled in (`ui/app_icon.cpp`), `kerf-qt.exe` carries the `.ico` as a resource
+(`resources/icon/kerf-qt.rc`) and the installer wears it, the macOS app has the `.icns` in
+`Resources` under `CFBundleIconFile`, and the Linux package carries the PNGs in `icons/`.
+Each package check holds its own: the icon group in `kerf-qt.exe`, the `.icns` `Info.plist`
+names, and the desktop entry's icon in the hicolor theme. A release from before 0.1.2 has
+none and is checked without it.
 
 All the packages carry the user guide as `user-guide.html` (beside `kerf-qt.exe`, and in
 the app's `Resources`), rendered from `docs/user-guide.md` by `tools/kerf-guide`; Help ▸

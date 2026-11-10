@@ -211,10 +211,17 @@ desktop Linux has of its own (system-libraries.txt): glibc and libstdc++ as new 
 
 To have Kerf among your applications, and kerf:// review links open in it, run
 ./install-desktop-entry.sh once: it is for you alone and needs no administrator. Run it
-again after moving the folder; ./install-desktop-entry.sh --remove takes it away.
+again after moving the folder; ./install-desktop-entry.sh --remove takes it away. Its icon
+is in icons/.
 EOF
 # The desktop entry and kerf:// links, which a folder cannot register of itself.
 install -m 755 apps/kerf-qt/packaging/linux/install-desktop-entry.sh "$stage/install-desktop-entry.sh"
+# Kerf's icon at each size that script installs for the entry (tools/kerf-icon makes them
+# from apps/kerf-qt/resources/icon/industrial-kerf.svg).
+mkdir -p "$stage/icons"
+for size in 16 24 32 48 64 128 256 512; do
+    cp "apps/kerf-qt/resources/icon/industrial-kerf-$size.png" "$stage/icons/"
+done
 cp "$system_list" "$stage/system-libraries.txt"
 
 # With nothing on PATH and no library path, it has to find all it needs inside itself, and

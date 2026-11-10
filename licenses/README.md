@@ -50,6 +50,15 @@ embeds them with `include_bytes!`.
 | `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 (`OFL-NotoSerif.txt`) |
 | `JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`OFL-JetBrainsMono.txt`) |
 
+## The photographs in the icon
+
+Kerf's icon (`apps/kerf-qt/resources/icon/industrial-kerf.svg`, and the PNG, `.ico` and
+`.icns` files made from it, which the editor and every package carry) holds five
+photographs of Hong Kong, Tokyo and New York at night, cropped, scaled down and tinted.
+Their authors dedicated each to the public domain on Wikimedia Commons (CC0 1.0), so
+they come with no condition; `apps/kerf-qt/resources/icon/README.md` names each, its
+author and its page.
+
 ## Footage the measurements run on
 
 `scripts/fetch-real-footage.sh` fetches it into `target/real-footage`, outside
