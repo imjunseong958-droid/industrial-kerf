@@ -7,15 +7,57 @@ runs:
     # output (cpal); Qt with its private GUI headers and xcb for the
     # docking library; the offscreen platform plugin and a font for the
     # UI tests.
+    # Ubuntu's mirror on Azure has handed these packages over at 100 kB/s,
+    # fourteen minutes of a job, while the job beside it had them in half a
+    # minute (2026-11-10). So their .deb files are kept in the Actions cache,
+    # under a key made of exactly what apt would download, and the mirror is
+    # asked only for a package that changed since. Main saves them, as it
+    # does the Rust cache; a pull request saves only when there is nothing
+    # to restore at all.
+    - name: List what apt would download
+      id: apt
+      shell: bash
+      run: |
+        packages="libclang-dev libasound2-dev \
+          qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
+          libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
+          mesa-vulkan-drivers gnome-keyring dbus-daemon"
+        sudo apt-get update
+        # Each line is a URL, the file's name, its size and its checksum.
+        sudo apt-get install --print-uris -qq --no-install-recommends $packages > "$RUNNER_TEMP/apt-uris.txt"
+        awk '{ print $2 }' "$RUNNER_TEMP/apt-uris.txt" > "$RUNNER_TEMP/apt-debs.txt"
+        release="$(. /etc/os-release && echo "$VERSION_ID")"
+        {
+          echo "packages=$(echo $packages)"
+          echo "prefix=apt-ubuntu-$release-"
+          echo "key=apt-ubuntu-$release-$(awk '{ print $2, $4 }' "$RUNNER_TEMP/apt-uris.txt" | sort | sha256sum | cut -c1-16)"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: debs
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.apt.outputs.key }}
+        restore-keys: ${{ steps.apt.outputs.prefix }}
     - name: Install native and Qt dependencies
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          libclang-dev libasound2-dev \
-          qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
-          libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
-          mesa-vulkan-drivers gnome-keyring dbus-daemon
+        kept="$RUNNER_TEMP/apt-archives"
+        mkdir -p "$kept"
+        # apt takes a file already in its archives when its size and checksum
+        # are the package's, and downloads the rest.
+        find "$kept" -name '*.deb' -exec sudo cp -t /var/cache/apt/archives {} +
+        began=$SECONDS
+        sudo apt-get install -y --no-install-recommends --download-only ${{ steps.apt.outputs.packages }}
+        echo "apt had its $(wc -l < "$RUNNER_TEMP/apt-debs.txt") packages after $((SECONDS - began)) s, with $(find "$kept" -name '*.deb' | wc -l) restored from the cache"
+        # What is kept is what this install uses, not an older version beside it.
+        rm -rf "$kept" && mkdir -p "$kept"
+        while read -r name; do cp "/var/cache/apt/archives/$name" "$kept/"; done < "$RUNNER_TEMP/apt-debs.txt"
+        sudo apt-get install -y --no-install-recommends ${{ steps.apt.outputs.packages }}
+    - uses: actions/cache/save@v4
+      if: ${{ steps.debs.outputs.cache-hit != 'true' && (github.ref == 'refs/heads/main' || steps.debs.outputs.cache-matched-key == '') }}
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.apt.outputs.key }}
     # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
     # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
     # shared build with libx264; BtbN keeps its month-end builds for about
