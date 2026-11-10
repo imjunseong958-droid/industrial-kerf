@@ -103,8 +103,6 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
         return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, out.conversation.height());
     };
     out.media = sheet(bin);
-    out.browser = sheet(browser);
-    out.inspector = sheet(inspector);
     return out;
 }
 
@@ -267,10 +265,8 @@ void StageShell::setTransport(QWidget *transport) {
     place();
 }
 
-void StageShell::setSheets(QWidget *media, QWidget *browser, QWidget *inspector) {
+void StageShell::setSheets(QWidget *media) {
     m_sheets[0] = media;
-    m_sheets[1] = browser;
-    m_sheets[2] = inspector;
     for (QWidget *sheet : m_sheets)
         if (sheet) {
             sheet->setParent(this);
@@ -295,8 +291,6 @@ QWidget *StageShell::widgetOf(Sheet sheet) const { return sheet == Sheet::None ?
 QString StageShell::sheetId(Sheet sheet) {
     switch (sheet) {
     case Sheet::Media: return QStringLiteral("media");
-    case Sheet::Browser: return QStringLiteral("browser");
-    case Sheet::Inspector: return QStringLiteral("inspector");
     case Sheet::None: break;
     }
     return {};
@@ -420,7 +414,7 @@ void StageShell::transition(const QRect &pictureOrigin) {
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
     stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
-    for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media, &out.browser, &out.inspector})
+    for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
 }
@@ -513,8 +507,8 @@ void StageShell::place() {
     placeSeam(m_seamColumn, QRect());
 
     // A sheet, over the regions.
-    const QRect sheetRects[3] = {r.media, r.browser, r.inspector};
-    for (int index = 0; index < 3; ++index) {
+    const QRect sheetRects[1] = {r.media};
+    for (int index = 0; index < 1; ++index) {
         QWidget *sheet = m_sheets[index];
         if (!sheet) continue;
         const bool shown = int(m_sheet) == index + 1;

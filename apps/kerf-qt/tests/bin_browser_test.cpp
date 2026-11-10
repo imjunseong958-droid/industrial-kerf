@@ -9,15 +9,10 @@
 #include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -25,7 +20,6 @@
 #include "ui/stage_shell.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
-#include "ui/browser_panel.h"
 #include "ui/components.h"
 #include "ui/wiring/bin_wiring.h"
 
@@ -214,60 +208,6 @@ private slots:
         QCOMPARE(prettyTime(59.996), QStringLiteral("01:00.00"));
         QCOMPARE(prettyTime(8.0), QStringLiteral("00:08.00"));
         QCOMPARE(prettyTime(61.25), QStringLiteral("01:01.25"));
-    }
-
-    void effectsPanelShowsCardsAndAddsToTheSelectedClip() {
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        // The browser is in the band, its Effects page in front.
-        window.m_shell->setSheet(StageShell::Sheet::Browser);
-        QVERIFY(window.m_commands->action(QStringLiteral("window.effects")));
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
-            {"fps", 24},
-            {"tracks", QJsonArray{
-                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
-                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
-                                {"duration", 2.0}}}}}}}}}});
-        EffectsPanel *panel = window.m_effects;
-        // The whole effects catalog is offered (picture and sound), by
-        // category and words; transitions and generators are not effects.
-        QVERIFY(panel->m_items.size() > 100);
-        QVERIFY(panel->m_items.contains(QStringLiteral("light.edgeglow")));
-        QVERIFY(panel->m_items.contains(QStringLiteral("audio.limiter")));
-        QVERIFY(!panel->m_items.contains(QStringLiteral("push")));
-        QVERIFY(!panel->m_items.contains(QStringLiteral("title")));
-        panel->m_search->setText(QStringLiteral("neon"));
-        QVERIFY(!panel->m_items.value(QStringLiteral("light.edgeglow"))->isHidden());
-        QVERIFY(panel->m_items.value(QStringLiteral("channel.invert"))->isHidden());
-        // With nothing selected the cards show the program's clip under the playhead.
-        QCOMPARE(panel->previewClip(), QStringLiteral("c1"));
-        window.selectClip(QStringLiteral("c1"));
-        QCOMPARE(panel->m_clip, QStringLiteral("c1"));
-        QVERIFY(panel->m_picture);
-        // The cards shown ask for previews of themselves on the clip, at
-        // twice the thumb's width.
-        panel->requestPreviews();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
-        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
-        QCOMPARE(window.m_lastCommand.value("width").toInt(), EffectsPanel::kPreviewWidth);
-        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("card"));
-        QVERIFY(window.m_lastCommand.value("effects").toArray().contains(QJsonValue("light.edgeglow")));
-        QImage red(16, 9, QImage::Format_RGBA8888);
-        red.fill(Qt::red);
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "light.edgeglow"}, {"key", "card"},
-                                       {"width", 16}, {"height", 9},
-                                       {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(red.constBits()), 16 * 9 * 4).toBase64())}});
-        const QImage card = panel->m_items.value(QStringLiteral("light.edgeglow"))->icon().pixmap(EffectsPanel::kCard).toImage();
-        QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::red));
-        // A card with its preview is not asked for again.
-        QVERIFY(!panel->shownEffects().contains(QStringLiteral("light.edgeglow")));
-        // Double-click adds the effect to the selected clip.
-        emit panel->m_cards->itemActivated(panel->m_items.value(QStringLiteral("light.edgeglow")));
-        const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
-        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-add"));
-        QCOMPARE(op.value("clip").toString(), QStringLiteral("c1"));
-        QCOMPARE(op.value("fx").toString(), QStringLiteral("light.edgeglow"));
     }
 
     void artworkDecodesMediaWithoutBlocking() {
@@ -610,10 +550,6 @@ private slots:
                                     "Shot 3|00:00:05:12–00:00:10:10", "1 silence|", "Silence 1|00:00:06:00–00:00:06:20",
                                     "Loudest moments|", "Loudest 1|00:00:03:05"}));
         QVERIFY(bin->m_index->isVisibleTo(bin) && !bin->m_indexEmpty->isVisibleTo(bin));
-        // Shot 2 shows the media in the Source viewer at its start.
-        emit bin->m_index->itemClicked(bin->m_index->item(2));
-        QCOMPARE(window.m_sourceMonitor->mediaId(), QStringLiteral("vo"));
-        QCOMPARE(window.m_sourceMonitor->position(), 2.0);
         // Without ranges, the shots are the spans between the cuts; a
         // refusal is shown in place of the rows.
         bin->setMediaIndex(QJsonObject{{"media", "vo"}, {"cuts", QJsonArray{4.0}}});
@@ -697,53 +633,6 @@ private slots:
         QCOMPARE(ops, (QStringList{R"({"op":"set-track","role":"","track":"A4"})", R"({"op":"set-track","role":"effects","track":"A2"})"}));
     }
 
-    void presetsPanelListsAppliesAndSavesTheLibrary() {
-        QSettings().remove(QStringLiteral("workspace"));
-        QTemporaryDir project;
-        MainWindow window{project.path(), QString()};
-        // Presets is a page of the Effects and titles sheet.
-        window.triggerCommand(QStringLiteral("window.presets"));
-        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Browser);
-        QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
-        PresetsPanel *panel = window.m_presets;
-        QVERIFY(!panel->m_apply->isEnabled());
-        window.setConnection(QStringLiteral("ready"));
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
-        window.handleEvent(QJsonObject{{"type", "preset_library"}, {"directory", "presets"}, {"presets", QJsonArray{
-            QJsonObject{{"path", "presets/intro.kerfpreset"}, {"name", "Intro"}, {"author", "jun"}, {"updated", "2026-10-30T09:00:00Z"},
-                        {"slots", QJsonArray{
-                            QJsonObject{{"id", "slot1"}, {"seconds", 4}, {"video", true}, {"audio", true}, {"clips", 2}},
-                            QJsonObject{{"id", "slot2"}, {"seconds", 2}, {"video", true}, {"audio", false}, {"clips", 1}}}},
-                        {"texts", QJsonObject{{"c4", "Title"}}}},
-            QJsonObject{{"path", "presets/broken.kerfpreset"}, {"name", "broken"}, {"error", "line 3: unknown statement"}}}}});
-        QCOMPARE(panel->m_list->count(), 2);
-        // 44 pt rows: the name, then clips · slots · texts · date.
-        QVERIFY2(panel->m_list->item(0)->text().startsWith(QStringLiteral("Intro\n3 clips · 2 slots · 1 text · ")),
-                 qPrintable(panel->m_list->item(0)->text()));
-        QVERIFY(panel->m_list->item(0)->toolTip().contains(QStringLiteral("Saved by jun")));
-        QCOMPARE(panel->m_count->text(), QStringLiteral("2 items"));
-        QCOMPARE(panel->m_list->visualItemRect(panel->m_list->item(0)).height(), PresetsPanel::kRowHeight);
-        QVERIFY(panel->m_list->item(0)->toolTip().contains(QStringLiteral("slot1 · 4.00 s · picture and sound · 2 clips")));
-        QVERIFY(panel->m_list->item(1)->text().contains(QStringLiteral("line 3: unknown statement")));
-        panel->m_list->setCurrentRow(1);
-        QVERIFY(!panel->m_apply->isEnabled());
-        panel->m_list->setCurrentRow(0);
-        QVERIFY(panel->m_apply->isEnabled());
-        // Apply asks Kerf which media fits each slot, as Import Editing Preset does.
-        panel->m_apply->click();
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_inspect"},
-                                                    {"path", QDir(project.path()).absoluteFilePath("presets/intro.kerfpreset")}}));
-        answerInput(&window, QStringLiteral("Teaser"));
-        panel->m_save->click();
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_save"}, {"name", "Teaser"}, {"replace", false}}));
-        window.handleEvent(QJsonObject{{"type", "preset_saved"}, {"path", "presets/Teaser.kerfpreset"}});
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
-        window.handleEvent(QJsonObject{{"type", "preset_library"}, {"directory", "presets"}, {"presets", QJsonArray{}}});
-        QVERIFY(panel->m_list->isHidden());
-        QVERIFY(!panel->m_empty->isHidden());
-        QSettings().remove(QStringLiteral("workspace"));
-    }
-
     void projectBinShowsMediaStatusAndReplacesMedia() {
         QTemporaryDir project;
         QVERIFY(QDir(project.path()).mkpath(QStringLiteral("media")));
@@ -775,7 +664,7 @@ private slots:
         QStringList labels;
         for (const QAction *action : menu->actions())
             if (!action->isSeparator()) labels << action->text();
-        QCOMPARE(labels, (QStringList{"Open in Source Monitor", "Replace Media…", "Reveal in Finder", "Import Media…", "Consolidate Media"}));
+        QCOMPARE(labels, (QStringList{"Insert", "Overwrite", "Replace Media…", "Reveal in Finder", "Import Media…", "Consolidate Media"}));
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReplace"))->isEnabled());
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
         delete menu;
@@ -813,20 +702,6 @@ private slots:
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.consolidate")), QStringLiteral("All media is inside the project folder"));
     }
 
-    // An unreadable preset's name is in neg, and still reads on the chrome.
-    void unreadablePresetsTurnRedInEitherAppearance() {
-        PresetsPanel panel;
-        panel.setLibrary(QJsonObject{{"presets", QJsonArray{
-            QJsonObject{{"path", "presets/old.kerfpreset"}, {"name", "old"}, {"error", "line 3: unknown statement"}},
-            QJsonObject{{"path", "presets/intro.kerfpreset"}, {"name", "Intro"}, {"slots", QJsonArray{}}}}}}, QDir::tempPath());
-        QListWidgetItem *unreadable = panel.m_list->item(0);
-        QListWidgetItem *readable = panel.m_list->item(1);
-        QCOMPARE(unreadable->foreground().color(), tokens::color(tokens::neg));
-        QVERIFY(contrastRatio(unreadable->foreground().color(), tokens::color(tokens::chrome)) >= 4.5);
-        QVERIFY(!readable->data(Qt::ForegroundRole).isValid());
-        QCOMPARE(PresetsPanel::metaLine(QJsonObject{{"error", "bad"}}), QStringLiteral("Cannot be read: bad"));
-    }
-
     // Answer the next modal question with `button`, checking that it asks `text`.
     static void answerQuestion(QWidget *parent, QDialogButtonBox::StandardButton button, const QString &text) {
         QTimer::singleShot(0, parent, [button, text] {
@@ -842,34 +717,6 @@ private slots:
         });
     }
 
-    void presetsReloadWhenTheWorkTreeChanges() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
-        // Switching branches brings in no commits, yet changes presets/.
-        window.m_lastCommand = {};
-        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "done"}, {"report", QJsonObject{
-            {"incoming", QJsonArray{}}, {"fastForward", false}, {"pushed", false}, {"conflicts", QJsonArray{}},
-            {"renamed", QJsonArray{}}, {"summary", QJsonArray{}}, {"branch", "color"}}}});
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
-
-        // So does a pull in a terminal, seen as project.kerf changing on disk,
-        // and loading it.
-        const QJsonObject timeline{{"fps", 24}, {"tracks", QJsonArray{}}};
-        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
-        window.m_lastCommand = {};
-        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "diverged"}, {"timeline", timeline}});
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
-        window.m_loadFromDisk->click();
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "projection_import"}}));
-        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
-        // An edit leaves the library alone.
-        window.m_lastCommand = {};
-        window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
-        QCOMPARE(window.m_lastCommand, QJsonObject{});
-    }
-
     void savingOverAPresetAsksAboutTheFileTheBridgeNamed() {
         QTemporaryDir project;
         MainWindow window{project.path(), QString()};
@@ -879,14 +726,14 @@ private slots:
         const QString exists = QStringLiteral("presets/Intro-Outro.kerfpreset already exists; choose another name or replace it");
         const QString question = QStringLiteral("presets/Intro-Outro.kerfpreset already exists. Replace it?");
         answerInput(&window, QStringLiteral("Intro/Outro"));
-        window.m_presets->m_save->click();
+        window.m_commands->action(QStringLiteral("preset.save"))->trigger();
         QCOMPARE(window.m_lastCommand, save);
         answerQuestion(&window, QDialogButtonBox::No, question);
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
         QCOMPARE(window.m_lastCommand, save);
 
         answerInput(&window, QStringLiteral("Intro/Outro"));
-        window.m_presets->m_save->click();
+        window.m_commands->action(QStringLiteral("preset.save"))->trigger();
         answerQuestion(&window, QDialogButtonBox::Yes, question);
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_save"}, {"name", "Intro/Outro"}, {"replace", true}}));
@@ -898,256 +745,6 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
         QCOMPARE(window.m_errorMessage->text(), exists);
     }
-    // The category menu counts the catalog: every picture effect, each of
-    // its categories in catalog order, then the sound effects; the count
-    // follows the category and the search.
-    void browserCategoriesCountTheCatalog() {
-        const QJsonArray catalog{
-            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "color.board"}, {"name", "Color board"}, {"category", "Color"}},
-            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "color.bw"}, {"name", "Black & white"}, {"category", "Color"}},
-            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "blur.gaussian"}, {"name", "Gaussian blur"}, {"category", "Blur and sharpen"}},
-            QJsonObject{{"kind", "effect"}, {"domain", "audio"}, {"id", "audio.eq"}, {"name", "Channel EQ"}, {"category", "Audio"}},
-            QJsonObject{{"kind", "effect"}, {"domain", "audio"}, {"id", "audio.limiter"}, {"name", "Limiter"}, {"category", "Audio"}},
-            QJsonObject{{"kind", "transition"}, {"domain", "video"}, {"id", "dissolve"}, {"name", "Cross dissolve"}, {"category", "Transition"}},
-            QJsonObject{{"kind", "generator"}, {"domain", "video"}, {"id", "title"}, {"name", "A line of text. Position it with x and y"},
-                        {"category", "Generate"}}};
-        EffectsPanel effects;
-        effects.setCatalog(catalog);
-        QStringList rows;
-        for (const EffectsPanel::Category &category : effects.categories())
-            rows << QStringLiteral("%1%2 %3").arg(category.separatorBefore ? "— " : "", category.name).arg(category.count);
-        QCOMPARE(rows, (QStringList{"All video effects 3", "Color 2", "Blur and sharpen 1", "— All audio effects 2"}));
-        QCOMPARE(effects.category(), QStringLiteral("video"));
-        QCOMPARE(effects.m_count->text(), QStringLiteral("3 items"));
-        QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("All video effects"));
-        QVERIFY(effects.m_categoryButton->hasChevron());
-        // The ghost button fits its text: it is sized once before the catalog names it.
-        QCOMPARE(effects.m_categoryButton->size(), effects.m_categoryButton->sizeHint());
-        effects.setCategory(QStringLiteral("video:Color"));
-        QCOMPARE(effects.shownCount(), 2);
-        QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("Color"));
-        QCOMPARE(effects.m_categoryButton->size(), effects.m_categoryButton->sizeHint());
-        effects.setCategory(QStringLiteral("audio"));
-        QCOMPARE(effects.m_count->text(), QStringLiteral("2 items"));
-        QVERIFY(effects.m_items.value(QStringLiteral("blur.gaussian"))->isHidden());
-        // Sound effects have no picture to preview.
-        effects.setClip(QStringLiteral("c1"), true);
-        QVERIFY(effects.shownEffects().isEmpty());
-        // The menu: a checked row per category, its count on the right.
-        std::unique_ptr<QMenu> menu(effects.categoryMenu());
-        QStringList items;
-        for (QAction *action : menu->actions())
-            items << (action->isSeparator() ? QStringLiteral("—") : action->text() + (action->isChecked() ? QStringLiteral(" ✓") : QString()));
-        QCOMPARE(items, (QStringList{"All video effects", "Color", "Blur and sharpen", "—", "All audio effects ✓"}));
-        menu->actions().at(1)->trigger();
-        QCOMPARE(effects.category(), QStringLiteral("video:Color"));
-        // Search narrows within the category; nothing found says so.
-        effects.focusSearch();
-        effects.m_search->setText(QStringLiteral("zebra"));
-        QCOMPARE(effects.m_count->text(), QStringLiteral("0 items"));
-        QVERIFY(effects.m_hint->text().contains(QStringLiteral("zebra")));
-        // No catalog (no engine): an empty state, not sample cards.
-        EffectsPanel none;
-        none.setCatalog({});
-        QVERIFY(none.m_hint->text().contains(QStringLiteral("catalog is not available")));
-        QVERIFY(!none.m_categoryButton->isEnabled());
-        // The real catalog: its generators are the Titles, and its sound
-        // effects count under All audio effects.
-        char *all = kerf_fx_catalog_all();
-        QVERIFY(all);
-        const QJsonArray real = QJsonDocument::fromJson(QByteArray(all)).array();
-        kerf_bridge_string_free(all);
-        EffectsPanel catalogEffects;
-        catalogEffects.setCatalog(real);
-        QVERIFY(catalogEffects.categories().constLast().key == QStringLiteral("audio"));
-        QVERIFY(catalogEffects.categories().constLast().count >= 3);
-        EffectsPanel catalogTitles(nullptr, EffectsPanel::Mode::Titles);
-        catalogTitles.setCatalog(real);
-        QVERIFY(catalogTitles.m_items.contains(QStringLiteral("title")));
-        QVERIFY(catalogTitles.m_items.contains(QStringLiteral("solid")));
-        QCOMPARE(catalogTitles.m_items.value(QStringLiteral("title"))->text(), QStringLiteral("Title"));
-        QCOMPARE(catalogTitles.categories().constFirst().name, QStringLiteral("All titles"));
-    }
-
-    // Hovering a thumb scrubs the effect's main parameter by the pointer's
-    // x: effect_previews with {fx, params}, at most once per 120 ms (the
-    // latest position going when the interval is up); its answer shows on
-    // the card, and leaving puts the resting thumb back.
-    void hoverScrubSendsEffectPreviewsWithParams() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
-            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
-                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
-        window.selectClip(QStringLiteral("c1"));
-        EffectsPanel *panel = window.m_effects;
-        qint64 clock = 1000;
-        panel->setClock([&clock] { return clock; });
-        const QJsonObject radius = EffectsPanel::mainParam(panel->m_fx.value(QStringLiteral("blur.gaussian")));
-        QCOMPARE(radius.value("name").toString(), QStringLiteral("radius"));
-        QCOMPARE(radius.value("max").toDouble(), 500.0);
-        const auto scrubbed = [&window] {
-            const QJsonObject entry = window.m_lastCommand.value("effects").toArray().first().toObject();
-            return entry.value("params").toObject().value("radius").toDouble();
-        };
-        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.5);
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
-        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
-        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("scrub"));
-        QCOMPARE(window.m_lastCommand.value("effects").toArray().first().toObject().value("fx").toString(), QStringLiteral("blur.gaussian"));
-        QCOMPARE(window.m_lastCommand.value("effects").toArray().first().toObject().value("key").toString(), QStringLiteral("scrub"));
-        QCOMPARE(scrubbed(), 250.0);
-        // 50 ms later: held back, the latest position waiting.
-        window.m_lastCommand = {};
-        clock += 50;
-        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.2);
-        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.25);
-        QCOMPARE(window.m_lastCommand, QJsonObject{});
-        QVERIFY(panel->m_scrubTimer->isActive());
-        QCOMPARE(panel->m_scrubTimer->interval(), 70);
-        clock += 70;
-        panel->m_scrubTimer->stop();
-        panel->sendScrub();
-        QCOMPARE(scrubbed(), 125.0);
-        // The resting thumb, then the scrub's frame over it; leaving puts it back.
-        const auto rgba = [](const QColor &color) {
-            QImage image(16, 9, QImage::Format_RGBA8888);
-            image.fill(color);
-            return QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()), 16 * 9 * 4).toBase64());
-        };
-        const auto cardCentre = [panel] {
-            const QImage card = panel->m_items.value(QStringLiteral("blur.gaussian"))->icon().pixmap(EffectsPanel::kCard).toImage();
-            return card.pixelColor(card.width() / 2, card.height() / 2);
-        };
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "blur.gaussian"}, {"key", "card"},
-                                       {"width", 16}, {"height", 9}, {"rgba", rgba(Qt::blue)}});
-        // While the pointer is on the card the resting thumb waits.
-        QVERIFY(cardCentre() != QColor(Qt::blue));
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "blur.gaussian"}, {"key", "scrub"},
-                                       {"width", 16}, {"height", 9}, {"rgba", rgba(Qt::green)}});
-        QCOMPARE(cardCentre(), QColor(Qt::green));
-        QCOMPARE(panel->m_base.value(QStringLiteral("blur.gaussian")).pixelColor(0, 0), QColor(Qt::blue));
-        panel->endScrub();
-        QCOMPARE(cardCentre(), QColor(Qt::blue));
-        QVERIFY(panel->scrubbing().isEmpty());
-        // An effect with no ranged number is not scrubbed.
-        window.m_lastCommand = {};
-        clock += 500;
-        panel->scrubAt(QStringLiteral("channel.invert"), 0.5);
-        if (EffectsPanel::mainParam(panel->m_fx.value(QStringLiteral("channel.invert"))).isEmpty()) QCOMPARE(window.m_lastCommand, QJsonObject{});
-    }
-
-    // effect_preview answers another region asked for (a proposal card's
-    // "before:"/"after:" frames) carry that request's params: no card takes
-    // them, and the page in front asks again for what it was cut short of.
-    void foreignPreviewKeysLeaveCardsAlone() {
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
-            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
-                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
-        window.selectClip(QStringLiteral("c1"));
-        window.m_browserPanel->setPage(BrowserPanel::Page::Effects);
-        EffectsPanel *panel = window.m_effects;
-        EffectsPanel *titles = window.m_binWiring->titles();
-        QCOMPARE(panel->previewClip(), QStringLiteral("c1"));
-        const QString fx = QStringLiteral("blur.gaussian");
-        QVERIFY(panel->m_items.contains(fx));
-        const auto rgba = [](const QColor &color) {
-            QImage image(16, 9, QImage::Format_RGBA8888);
-            image.fill(color);
-            return QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()), 16 * 9 * 4).toBase64());
-        };
-        const auto preview = [&rgba](const QString &clip, const QString &id, const QString &key, const QColor &color) {
-            QJsonObject event{{"type", "effect_preview"}, {"clip", clip}, {"fx", id}, {"width", 16}, {"height", 9}, {"rgba", rgba(color)}};
-            if (!key.isNull()) event.insert("key", key);
-            return event;
-        };
-        const auto cardCentre = [panel, &fx] {
-            const QImage card = panel->m_items.value(fx)->icon().pixmap(EffectsPanel::kCard).toImage();
-            return card.pixelColor(card.width() / 2, card.height() / 2);
-        };
-        const QColor resting = cardCentre();
-        QVERIFY(panel->shownEffects().contains(fx));
-
-        // A proposal's frames for the shown clip and card: dropped, and the
-        // card is still one to ask for.
-        panel->m_previewTimer->stop();
-        window.handleEvent(preview("c1", fx, "after:p1", Qt::red));
-        window.handleEvent(preview("c1", fx, "before:p1", Qt::red));
-        QCOMPARE(cardCentre(), resting);
-        QVERIFY(!panel->m_base.contains(fx));
-        QVERIFY(panel->shownEffects().contains(fx));
-        // That other request stopped the page's own: it asks again soon.
-        QVERIFY(panel->m_previewTimer->isActive());
-        // The Titles page took nothing either.
-        QVERIFY(titles->m_base.isEmpty());
-
-        // The other page's key is not this one's either.
-        panel->setPreview(QStringLiteral("c1"), fx, QString::fromLatin1(EffectsPanel::kTitleKey), QImage(16, 9, QImage::Format_RGB32));
-        QVERIFY(!panel->m_base.contains(fx));
-
-        // The page's own answer is a thumb and asks for nothing more.
-        panel->m_previewTimer->stop();
-        window.handleEvent(preview("c1", fx, "card", Qt::blue));
-        QCOMPARE(cardCentre(), QColor(Qt::blue));
-        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::blue));
-        QVERIFY(!panel->shownEffects().contains(fx));
-        QVERIFY(!panel->m_previewTimer->isActive());
-        // A later proposal frame leaves it as it is.
-        window.handleEvent(preview("c1", fx, "after:p1", Qt::red));
-        QCOMPARE(cardCentre(), QColor(Qt::blue));
-        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::blue));
-        // An unkeyed answer (an older kerfd) is still a resting thumb.
-        window.handleEvent(preview("c1", fx, QString(), Qt::green));
-        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::green));
-    }
-
-    // Titles: the catalog's generators, each previewed alone on black
-    // (effect_previews with clip "" and key title); adding one is a
-    // generator insert at the playhead (titlesAddAGeneratorClipThroughKerfd).
-    void titlesListGeneratorsWithTheirPreviews() {
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        BrowserPanel *browser = window.m_browserPanel;
-        EffectsPanel *titles = window.m_binWiring->titles();
-        QVERIFY(titles);
-        QCOMPARE(browser->titles(), titles);
-        QVERIFY(browser->pageButton(BrowserPanel::Page::Titles)->isEnabled());
-        browser->pageButton(BrowserPanel::Page::Titles)->click();
-        QCOMPARE(browser->page(), BrowserPanel::Page::Titles);
-        QCOMPARE(browser->currentPage(), titles);
-        // Without a bridge the page does not ask on its own; asked, it
-        // wants every generator with a picture.
-        QVERIFY(window.m_lastCommand.value("type").toString() != QStringLiteral("effect_previews"));
-        titles->requestPreviews();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
-        QCOMPARE(window.m_lastCommand.value("clip").toString(), QString());
-        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("title"));
-        const QJsonArray asked = window.m_lastCommand.value("effects").toArray();
-        QVERIFY(asked.contains(QJsonValue("title")) && asked.contains(QJsonValue("solid")));
-        // The adjustment layer has no picture.
-        QVERIFY(!asked.contains(QJsonValue("adjustment")));
-        QImage white(16, 9, QImage::Format_RGBA8888);
-        white.fill(Qt::white);
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", ""}, {"fx", "title"}, {"key", "title"}, {"width", 16}, {"height", 9},
-                                       {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(white.constBits()), 16 * 9 * 4).toBase64())}});
-        const QImage card = titles->m_items.value(QStringLiteral("title"))->icon().pixmap(EffectsPanel::kCard).toImage();
-        QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::white));
-        // The Effects page did not take the generator's picture.
-        QVERIFY(!window.m_effects->m_items.contains(QStringLiteral("title")));
-        // Adding is available: the cards say how, and drag as generators.
-        QVERIFY(titles->addAvailable());
-        QVERIFY(titles->m_items.value(QStringLiteral("title"))->toolTip().contains(QStringLiteral("drag to a video track")));
-        QCOMPARE(titles->m_cards->model()->mimeTypes(), QStringList{QString::fromLatin1(EffectsPanel::kGeneratorMime)});
-        QCOMPARE(window.m_effects->m_cards->model()->mimeTypes(), QStringList{QString::fromLatin1(EffectsPanel::kFxMime)});
-        // Search follows the page in front.
-        browser->focusSearch();
-        QVERIFY(titles->m_searchRow->isVisibleTo(titles));
-    }
-
     // A program of 25 fps with the tracks given, as kerfd sends it.
     static QJsonObject titleSnapshot(int revision, const QJsonArray &tracks) {
         return QJsonObject{{"revision", revision}, {"duration", 10},
@@ -1155,139 +752,6 @@ private slots:
     }
     static QJsonObject videoTrack(const QString &id, const QJsonArray &clips = {}) {
         return QJsonObject{{"id", id}, {"type", "video"}, {"clips", clips}};
-    }
-
-    // Titles ▸ Add (double-click, Return or a drag to a video track): one
-    // generator insert at the playhead, 5 s at the sequence's rate, over
-    // what is there, on the target video track above V1 (else the first
-    // above it, else a new track); kerfd's answer shows on the page.
-    void titlesAddAGeneratorClipThroughKerfd() {
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        const QJsonArray clips{QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 8.0}}};
-        window.applySnapshot(titleSnapshot(3, QJsonArray{videoTrack("V1", clips), videoTrack("V2"), videoTrack("V3"),
-                                                          QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{}}}}));
-        window.queueSeek(2.0);
-        BinWiring *wiring = window.m_binWiring.get();
-        EffectsPanel *titles = wiring->titles();
-        QListWidgetItem *title = titles->m_items.value(QStringLiteral("title"));
-        QVERIFY(title);
-        const auto lastOps = [&window] { return window.m_lastCommand.value("ops").toArray(); };
-        const QJsonObject expected{{"op", "insert"},
-                                   {"generator", QJsonObject{{"fx", "title"}, {"params", QJsonObject{{"text", BinWiring::defaultTitleText()}}}}},
-                                   {"at", 50},
-                                   {"frames", 125},
-                                   {"tracks", QJsonArray{"V2"}},
-                                   {"mode", "overwrite"}};
-
-        // Double-click: on V2, the first video track above V1.
-        window.m_lastCommand = {};
-        emit titles->m_cards->itemActivated(title);
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
-        QCOMPARE(lastOps(), QJsonArray{expected});
-        // No bridge took it here: the page says so, in neg.
-        QVERIFY(titles->statusIsError());
-        QVERIFY(titles->status().contains(QStringLiteral("not connected")));
-        QVERIFY(titles->m_status->isVisibleTo(titles));
-
-        // A targeted video track above V1 is where it goes.
-        window.m_timeline->setTargetsEditable(true);
-        window.m_timeline->setTargetTracks({QStringLiteral("V3"), QStringLiteral("A1")});
-        QVERIFY(wiring->addGenerator(QStringLiteral("title")) == false);
-        QCOMPARE(lastOps().first().toObject().value("tracks").toArray(), QJsonArray{"V3"});
-        // A solid has no text of its own.
-        wiring->addGenerator(QStringLiteral("solid"));
-        QCOMPARE(lastOps().first().toObject().value("generator").toObject(), (QJsonObject{{"fx", "solid"}}));
-
-        // Dropped on V1's row, it goes where Add puts it (V3, the target):
-        // an overwrite on V1 would replace the picture.
-        int v1 = -1;
-        for (int row = 0; row < window.m_timeline->trackRowCount(); ++row)
-            if (window.m_timeline->trackRowId(row) == QStringLiteral("V1")) v1 = row;
-        QVERIFY(v1 >= 0);
-        auto *mime = new QMimeData;
-        mime->setData(QString::fromLatin1(EffectsPanel::kGeneratorMime), QByteArray("title"));
-        const QPointF at(window.m_timeline->trackHeaderRect(v1).right() + 40, window.m_timeline->trackHeaderRect(v1).center().y());
-        QDragEnterEvent enter(at.toPoint(), Qt::CopyAction, mime, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(window.m_timeline, &enter);
-        QVERIFY(enter.isAccepted());
-        QDropEvent drop(at, Qt::CopyAction, mime, Qt::LeftButton, Qt::NoModifier);
-        window.m_lastCommand = {};
-        QApplication::sendEvent(window.m_timeline, &drop);
-        QCOMPARE(lastOps().first().toObject().value("tracks").toArray(), QJsonArray{"V3"});
-        // It lands at the time under the pointer, not at the playhead.
-        {
-            const double fps = window.m_bus->fps() > 0 ? window.m_bus->fps() : 24.0;
-            const double under = window.m_timeline->laneTimeAt(at.x());
-            QVERIFY(under >= 0);
-            QCOMPARE(lastOps().first().toObject().value("at").toInteger(), qint64(std::llround(under * fps)));
-            // Over the track heads there is no time (a drop there goes at
-            // the playhead).
-            QCOMPARE(window.m_timeline->laneTimeAt(window.m_timeline->trackHeaderRect(v1).center().x()), -1.0);
-        }
-        // An effect card held over the timeline is the timeline's own.
-        auto *effect = new QMimeData;
-        effect->setData(QString::fromLatin1(EffectsPanel::kFxMime), QByteArray("blur.gaussian"));
-        QDropEvent effectDrop(at, Qt::CopyAction, effect, Qt::LeftButton, Qt::NoModifier);
-        window.m_lastCommand = {};
-        QApplication::sendEvent(window.m_timeline, &effectDrop);
-        QVERIFY(window.m_lastCommand.value("ops").toArray().isEmpty() ||
-                window.m_lastCommand.value("ops").toArray().first().toObject().value("op").toString() != QStringLiteral("insert"));
-        delete effect;
-        delete mime;
-
-        // kerfd's answers, as they come for a sent edit: a refusal stays on
-        // the page in kerfd's words; a newer revision holding the clip is a
-        // confirmation.
-        wiring->m_titlePending = true;
-        wiring->m_titleLabel = QStringLiteral("Title on V2 at 00:00:02:00");
-        wiring->m_titleRevision = 3;
-        wiring->m_titleFx = QStringLiteral("title");
-        wiring->m_titleTrack = QStringLiteral("V2");
-        wiring->m_titleAt = 50;
-        wiring->m_titleFps = 25;
-        wiring->m_titleBefore = {QStringLiteral("g0")};
-        window.handleEvent(QJsonObject{{"type", "error"}, {"message", "no generator `title`"}});
-        QVERIFY(!wiring->titlePending());
-        QCOMPARE(titles->status(), QStringLiteral("Title on V2 at 00:00:02:00 was not added: no generator `title`"));
-        QVERIFY(titles->statusIsError());
-        // Another region's refusal is not the page's.
-        wiring->m_titlePending = true;
-        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "media_index"}, {"message", "unreadable"}});
-        QVERIFY(wiring->titlePending());
-        // A newer revision without the clip (an agent's edit, another
-        // client's; a title that was there already) is no confirmation.
-        const QJsonObject older{{"id", "g0"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}};
-        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", titleSnapshot(4, QJsonArray{videoTrack("V1", clips), videoTrack("V2", QJsonArray{older})})}});
-        QVERIFY(wiring->titlePending());
-        QVERIFY(titles->status().isEmpty() || !titles->status().startsWith(QStringLiteral("Added")));
-        const QJsonObject added{{"id", "g1"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}};
-        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", titleSnapshot(5, QJsonArray{videoTrack("V1", clips), videoTrack("V2", QJsonArray{added})})}});
-        QVERIFY(!wiring->titlePending());
-        QCOMPARE(titles->status(), QStringLiteral("Added Title on V2 at 00:00:02:00"));
-        QVERIFY(!titles->statusIsError());
-        // No snapshot with the clip before the wait runs out: not added.
-        wiring->m_titlePending = true;
-        wiring->m_titleTimer->start(1);
-        QTRY_VERIFY(!wiring->titlePending());
-        QCOMPARE(titles->status(), QStringLiteral("Title on V2 at 00:00:02:00 was not added: Kerf did not answer"));
-        QVERIFY(titles->statusIsError());
-
-        // With V1 alone, a video track is added for it first.
-        window.applySnapshot(titleSnapshot(6, QJsonArray{videoTrack("V1", clips)}));
-        window.m_timeline->setTargetTracks({QStringLiteral("V1")});
-        wiring->addGenerator(QStringLiteral("title"));
-        QCOMPARE(lastOps().size(), 2);
-        QCOMPARE(lastOps().at(0).toObject(), (QJsonObject{{"op", "add-track"}, {"kind", "video"}, {"id", "V2"}}));
-        QCOMPARE(lastOps().at(1).toObject().value("tracks").toArray(), QJsonArray{"V2"});
-
-        // Offline nothing goes, and the page says why.
-        window.setConnection(QStringLiteral("disconnected"));
-        window.m_lastCommand = {};
-        QVERIFY(!wiring->addGenerator(QStringLiteral("title")));
-        QVERIFY(window.m_lastCommand.isEmpty());
-        QVERIFY(titles->status().contains(QStringLiteral("waiting for the project connection")));
     }
 
     // A subtitle track without a name reads Captions, numbered with the
@@ -1304,131 +768,72 @@ private slots:
         QVERIFY(!isCaptionTrack(QJsonObject{{"type", "video"}}));
     }
 
-    // The ops and track choice on their own.
-    void titleTracksAndOps() {
-        const QJsonObject timeline{{"tracks", QJsonArray{videoTrack("V1"), QJsonObject{{"id", "V2"}, {"type", "video"}, {"locked", true}},
-                                                         videoTrack("V3"), QJsonObject{{"id", "A1"}, {"type", "audio"}}}}};
-        // A locked track takes nothing: the first unlocked above V1.
-        QCOMPARE(BinWiring::titleTrack(timeline, {}), QStringLiteral("V3"));
-        QCOMPARE(BinWiring::titleTrack(timeline, {QStringLiteral("V2")}), QStringLiteral("V3"));
-        // A drop on an audio track goes where Add would.
-        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("A1")), QStringLiteral("V3"));
-        // A drop on V1 goes above it too; one on a free track above V1 stays.
-        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("V1")), QStringLiteral("V3"));
-        QCOMPARE(BinWiring::titleTrack(timeline, {}, QStringLiteral("V3")), QStringLiteral("V3"));
-        QCOMPARE(BinWiring::titleTrack(timeline, {QStringLiteral("V3")}, QStringLiteral("V2")), QStringLiteral("V3"));
-        // A snapshot shows an add by a new generator clip of it at the frame.
-        const QJsonObject held{{"tracks", QJsonArray{videoTrack("V1"), videoTrack("V2", QJsonArray{QJsonObject{
-                                   {"id", "g1"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 2.0}, {"duration", 5.0}}})}}};
-        QVERIFY(BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 50, 25));
-        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 50, 25, {QStringLiteral("g1")}));
-        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("solid"), 50, 25));
-        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V2"), QStringLiteral("title"), 75, 25));
-        QVERIFY(!BinWiring::holdsGenerator(held, QStringLiteral("V1"), QStringLiteral("title"), 50, 25));
-        QCOMPARE(BinWiring::generatorClips(held), (QSet<QString>{QStringLiteral("g1")}));
-        QCOMPARE(BinWiring::newVideoTrackId(timeline), QStringLiteral("V4"));
-        QCOMPARE(BinWiring::newVideoTrackId(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}), QStringLiteral("V2"));
-        QCOMPARE(BinWiring::titleTrack(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}, {}), QString());
-    }
-
-    // With no picture clip selected, the cards show the clip under the
-    // playhead, else the sequence's first picture clip; the placeholder
-    // only when there is no picture clip at all.
-    void effectsPreviewOnTheProgramsFirstPictureClip() {
-        const QJsonArray later{QJsonObject{{"id", "c5"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 5.0}, {"duration", 2.0}},
-                               QJsonObject{{"id", "c3"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 3.0}, {"duration", 1.0}}};
-        const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{
-                                       QJsonObject{{"id", "a1"}, {"kind", "media"}, {"timelineStart", 0.0}, {"duration", 9.0}}}}},
-                                                         videoTrack("V1", later)}}};
-        QCOMPARE(BinWiring::previewClipFor(timeline, 5.5), QStringLiteral("c5"));
-        QCOMPARE(BinWiring::previewClipFor(timeline, 0.0), QStringLiteral("c3"));
-        QCOMPARE(BinWiring::previewClipFor(QJsonObject{{"tracks", QJsonArray{videoTrack("V1")}}}, 0.0), QString());
-
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(titleSnapshot(3, QJsonArray{videoTrack("V1", later)}));
-        EffectsPanel *effects = window.m_effects;
-        QCOMPARE(effects->previewClip(), QStringLiteral("c3"));
-        effects->requestPreviews();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
-        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c3"));
-        window.queueSeek(5.5);
-        QCOMPARE(effects->previewClip(), QStringLiteral("c5"));
-        window.applySnapshot(titleSnapshot(4, QJsonArray{videoTrack("V1")}));
-        QCOMPARE(effects->previewClip(), QString());
-    }
-
-    // ⌘F, ⌘⌥2 and ⌘⇧F are the registry's bin.search, bin.toggleView and
-    // browser.search (no QShortcut of the panels' own is left), so the
-    // keymap lists them and one's own keys reach them.
-    void binAndBrowserKeysAreRegistryCommands() {
+    // ⌘F and ⌘⌥2 are the registry's bin.search and bin.toggleView (no
+    // QShortcut of the panel's own is left), so the keymap lists them.
+    void binKeysAreRegistryCommands() {
         QSettings().remove(QStringLiteral("workspace"));
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         ProjectPanel *bin = window.m_projectPanel;
-        BrowserPanel *browser = window.m_browserPanel;
         QVERIFY(bin->findChildren<QShortcut *>().isEmpty());
-        QVERIFY(browser->findChildren<QShortcut *>().isEmpty());
         QAction *search = window.m_commands->action(QStringLiteral("bin.search"));
         QAction *view = window.m_commands->action(QStringLiteral("bin.toggleView"));
-        QAction *find = window.m_commands->action(QStringLiteral("browser.search"));
-        QVERIFY(search && view && find);
+        QVERIFY(search && view);
         QCOMPARE(search->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_F));
         QCOMPARE(view->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
-        QCOMPARE(find->shortcut(), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
         QVERIFY(bin->actions().contains(search) && bin->actions().contains(view));
-        QVERIFY(browser->actions().contains(find));
         // The bin's ⌘F is the bin's while it has the focus (the comments
         // panel keeps its own ⌘F).
         QCOMPARE(search->shortcutContext(), Qt::WidgetWithChildrenShortcut);
         // The strip's tips name the keymap's keys.
         QCOMPARE(ui::tipShortcut(bin->m_searchButton), search->shortcut().toString(QKeySequence::NativeText));
         QCOMPARE(ui::tipShortcut(bin->m_viewButton), view->shortcut().toString(QKeySequence::NativeText));
-        QCOMPARE(ui::tipShortcut(browser->searchButton()), find->shortcut().toString(QKeySequence::NativeText));
         // They run what the panels' keys ran.
         const bool list = bin->isListView();
         view->trigger();
         QCOMPARE(bin->isListView(), !list);
         search->trigger();
         QVERIFY(bin->m_searchRow->isVisibleTo(bin));
-        find->trigger();
-        QVERIFY(window.m_effects->m_searchRow->isVisibleTo(window.m_effects));
         // A key of one's own follows into the tips.
         view->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_9));
         QCOMPARE(ui::tipShortcut(bin->m_viewButton), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_9).toString(QKeySequence::NativeText));
         view->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
     }
 
-    // The browser at its 304 (303 inside its seam): 3 columns of 88 x 50
-    // thumbs, 8 apart, padded 8 12, rows 12 apart.
-    void browserGridIsThreeColumnsOf88At304() {
-        EffectsPanel effects;
-        QJsonArray catalog;
-        for (int index = 0; index < 7; ++index)
-            catalog.append(QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", QStringLiteral("fx%1").arg(index)},
-                                       {"name", QStringLiteral("Effect %1").arg(index)}, {"category", "Color"}});
-        effects.setCatalog(catalog);
-        effects.resize(tokens::layout::browser - 1, 343 - tokens::layout::strip);
-        effects.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&effects));
-        QCoreApplication::processEvents();
-        const auto thumb = [&effects](int row) {
-            const QRect cell = effects.m_cards->visualItemRect(effects.m_cards->item(row));
-            return QRect(effects.m_cards->viewport()->mapTo(&effects, cell.topLeft()), EffectsPanel::kCard);
-        };
-        // Under the 24 category row, 4 under the strip.
-        QCOMPARE(thumb(0).topLeft(), QPoint(EffectsPanel::kPadX, EffectsPanel::kCategoryRow + 4 + EffectsPanel::kPadY));
-        QCOMPARE(thumb(1).left(), EffectsPanel::kPadX + 88 + 8);
-        QCOMPARE(thumb(2).left(), EffectsPanel::kPadX + 2 * (88 + 8));
-        QCOMPARE(thumb(3).left(), EffectsPanel::kPadX);
-        QCOMPARE(thumb(3).top() - thumb(0).top(), 50 + 4 + 16 + 12);
-        QVERIFY(thumb(2).right() <= effects.width() - EffectsPanel::kPadX);
-        // The category ghost and the count share the row.
-        QCOMPARE(effects.m_categoryButton->mapTo(&effects, QPoint()).x(), 4);
-        QCOMPARE(effects.m_count->mapTo(&effects, QPoint(effects.m_count->width(), 0)).x(), effects.width() - EffectsPanel::kPadX);
+    // The media chosen in the bin goes in at the playhead: Insert and
+    // Overwrite place the whole of it on the targeted tracks, and a
+    // double-click inserts. With none chosen they say so.
+    void binMediaGoesInAtThePlayhead() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        ProjectPanel *bin = window.m_projectPanel;
+        QVERIFY(bin->m_list->count() > 0);
+        bin->m_list->setCurrentItem(nullptr);
+        window.updateCommandStates();
+        QVERIFY(window.binMedia().isEmpty());
+        QCOMPARE(window.m_commands->reason(QStringLiteral("source.insert")), QStringLiteral("Select media in the bin"));
+        bin->m_list->setCurrentRow(0);
+        const QString media = bin->currentMedia();
+        QVERIFY(!media.isEmpty());
+        QCOMPARE(window.binMedia().value("id").toString(), media);
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("source.insert")));
+        window.m_lastCommand = {};
+        emit bin->openRequested(media);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        const QJsonObject insert = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(insert.value("op").toString(), QStringLiteral("insert"));
+        QCOMPARE(insert.value("media").toString(), media);
+        QVERIFY(insert.value("frames").toInt() > 0);
+        window.m_commands->action(QStringLiteral("source.overwrite"))->trigger();
+        QCOMPARE(window.m_lastCommand.value("ops").toArray().first().toObject().value("op").toString(), QStringLiteral("overwrite"));
+        // The bin's menu carries both.
+        QMenu *menu = window.binMenu(media);
+        QVERIFY(menu->actions().contains(window.m_commands->action(QStringLiteral("source.insert"))));
+        QVERIFY(menu->actions().contains(window.m_commands->action(QStringLiteral("source.overwrite"))));
+        delete menu;
     }
 
     // A role's tracks say themselves within the sheet: twelve picture tracks ran past its edge, with
@@ -1463,25 +868,6 @@ private slots:
             }
         }
         QVERIFY(sawVideo);
-    }
-
-    // A generator's card names it. Its name in the catalog is its doc's first sentence, which
-    // shrank to "What `three_d`…" on a card a third of the sheet wide.
-    void aGeneratorsCardNamesIt() {
-        char *all = kerf_fx_catalog_all();
-        QVERIFY(all);
-        const QJsonArray real = QJsonDocument::fromJson(all).array();
-        kerf_bridge_string_free(all);
-        EffectsPanel titles(nullptr, EffectsPanel::Mode::Titles);
-        titles.setCatalog(real);
-        const QHash<QString, QString> names{{"title", "Title"}, {"solid", "Solid"}, {"shape", "Shape"}, {"particles", "Particles"}, {"adjustment", "Adjustment"}, {"camera", "Camera"}, {"light", "Light"}, {"null", "Null"}};
-        for (auto it = names.cbegin(); it != names.cend(); ++it) {
-            QListWidgetItem *item = titles.m_items.value(it.key());
-            QVERIFY2(item, qPrintable(it.key()));
-            QCOMPARE(item->text(), it.value());
-            // What it does is in its tip, as an effect's is.
-            QVERIFY2(!item->toolTip().isEmpty(), qPrintable(it.key()));
-        }
     }
 };
 

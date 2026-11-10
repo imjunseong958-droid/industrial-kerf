@@ -3,7 +3,6 @@
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "composer.h"
-#include "sequence_settings.h"
 #include "components.h"
 #include "editor_bus.h"
 #include "editor_common.h"
@@ -15,7 +14,6 @@
 #include "stage_shell.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/bin_wiring.h"
-#include "wiring/source_wiring.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -109,12 +107,12 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     // (mockup #appBtn).
     row->addSpacing(8);
 #endif
-    // The one way to everything else: Media, Effects and titles, Inspector,
-    // Import, Sequence settings, Settings, and View.
+    // The one way to everything else: Media, the panes, Import, Settings,
+    // and View.
     m_appButton = new ui::IconButton(QStringLiteral("g-menu"), ui::IconButton::Size::S28);
     m_appButton->setObjectName(QStringLiteral("appMenu"));
     m_appButton->setAccessibleName(QStringLiteral("Menu"));
-    m_appButton->setTip(QStringLiteral("Media, effects, inspector"));
+    m_appButton->setTip(QStringLiteral("Media, panes, settings"));
     m_appButton->setFocusPolicy(Qt::TabFocus);
     m_appMenu = new QMenu(m_content);
     m_appMenu->setObjectName(QStringLiteral("appMenuPopup"));
@@ -252,14 +250,12 @@ void ToolbarWiring::installCommands() {
     if (!w->m_commands) return;
     const QStringList formats = formatCommands();
     for (int i = 0; i < formats.size(); ++i) w->m_commandHandlers.insert(formats.at(i), [this, i] { chooseFormat(i); });
-    w->m_commandHandlers.insert(QStringLiteral("sequence.settings"), [this] { openSequenceSettings(); });
     w->m_commandHandlers.insert(QStringLiteral("composer.draw"), [this] { drawInComposer(); });
     if (Composer *composer = w->m_chat ? w->m_chat->composerWidget() : nullptr)
         composer->setDrawAction(w->m_commands->action(QStringLiteral("composer.draw")));
     if (w->m_chat) w->m_chat->setAcceptAction(w->m_commands->action(QStringLiteral("proposal.accept")));
-    // The bin's and the source's commands, now that the registry is there.
+    // The bin's commands, now that the registry is there.
     if (w->m_binWiring) w->m_binWiring->attachCommands();
-    if (w->m_sourceWiring) w->m_sourceWiring->attachCommands();
 }
 
 bool ToolbarWiring::drawInComposer() {
@@ -267,49 +263,6 @@ bool ToolbarWiring::drawInComposer() {
     if (!composer || !composer->hasFocusWithin()) return false;
     composer->requestDraw();
     return true;
-}
-
-SequenceSettingsDialog *ToolbarWiring::openSequenceSettings() {
-    MainWindow *w = m_window;
-    // A dialog closed but not yet deleted starts over from the sequence.
-    if (m_sequenceSettings && !m_sequenceSettings->isVisible()) {
-        m_sequenceSettings->disconnect(this);
-        m_sequenceSettings->deleteLater();
-        m_sequenceSettings = nullptr;
-    }
-    if (!m_sequenceSettings) {
-        auto *dialog = new SequenceSettingsDialog(m_bus->timeline(), w);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        connect(dialog, &SequenceSettingsDialog::applyRequested, this, &ToolbarWiring::applySequenceSettings);
-        connect(dialog, &QDialog::finished, this, [this] { m_sequencePending = false; });
-        m_sequenceSettings = dialog;
-    } else {
-        m_sequenceSettings->setTimeline(m_bus->timeline());
-    }
-    // Window-modal on macOS (a sheet), so the editor stays as it is.
-    m_sequenceSettings->setWindowModality(Qt::WindowModal);
-    m_sequenceSettings->show();
-    m_sequenceSettings->raise();
-    m_sequenceSettings->activateWindow();
-    return m_sequenceSettings;
-}
-
-bool ToolbarWiring::applySequenceSettings(const QJsonObject &op) {
-    MainWindow *w = m_window;
-    if (op.isEmpty()) return false;
-    if (!w->m_connected) {
-        if (m_sequenceSettings) m_sequenceSettings->setError(QStringLiteral("Waiting for the project connection"));
-        return false;
-    }
-    m_sequenceRevision = m_bus->revision();
-    m_sequenceOp = op;
-    m_sequencePending = w->sendEdit(QJsonArray{op});
-    if (!m_sequencePending && m_sequenceSettings) m_sequenceSettings->setError(QStringLiteral("The Kerf engine is not connected"));
-    return m_sequencePending;
-}
-
-SequenceSettingsDialog *ToolbarWiring::sequenceSettings() const {
-    return m_sequenceSettings;
 }
 
 void ToolbarWiring::chooseFormat(int index) {
@@ -345,8 +298,6 @@ void ToolbarWiring::buildAppMenu() {
     menu->clear();
     menu->setToolTipsVisible(true);
     addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
-    addCommandItem(menu, QStringLiteral("window.effects"), QStringLiteral("Effects and titles"), "appMenu.effects");
-    addCommandItem(menu, QStringLiteral("window.inspector"), QStringLiteral("Inspector"), "appMenu.inspector");
     menu->addSeparator();
     addCommandItem(menu, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar"), "appMenu.sidebar");
     addCommandItem(menu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
@@ -354,7 +305,6 @@ void ToolbarWiring::buildAppMenu() {
     addCommandItem(menu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
     menu->addSeparator();
     addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
-    addCommandItem(menu, QStringLiteral("sequence.settings"), QStringLiteral("Sequence settings…"), "appMenu.sequenceSettings");
     addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings");
 
     // The picture's switches, the keyboard's choice and the sync.
@@ -832,18 +782,6 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
 void ToolbarWiring::onSnapshot() {
     // The window is named as the toolbar names it, once the sequence is known.
     m_window->setWindowTitle(titleText());
-    // Sequence Settings: kerfd took the change (a newer revision whose
-    // sequence says what was asked), or the sequence changed under the open
-    // dialog (someone else's edit: the request is still waiting).
-    if (m_sequenceSettings) {
-        if (m_sequencePending && m_bus->revision() > m_sequenceRevision &&
-            SequenceSettingsDialog::holds(m_bus->timeline(), m_sequenceOp)) {
-            m_sequencePending = false;
-            m_sequenceSettings->accept();
-        } else {
-            m_sequenceSettings->setTimeline(m_bus->timeline());
-        }
-    }
     layoutTitle();
 }
 
@@ -896,13 +834,6 @@ void ToolbarWiring::onEvent(const QString &type, const QJsonObject &event) {
         m_previewRunning = status == QStringLiteral("running");
         m_previewFraction = event.value(QStringLiteral("progress")).toDouble();
         if (!status.isEmpty()) layoutTitle();
-    } else if (type == QStringLiteral("error") && m_sequencePending && m_sequenceSettings) {
-        // kerfd refused the sequence's change: its words, in the dialog.
-        const QString command = event.value(QStringLiteral("command")).toString();
-        if (command.isEmpty() || command == QStringLiteral("edit")) {
-            m_sequencePending = false;
-            m_sequenceSettings->setError(event.value(QStringLiteral("message")).toString(QStringLiteral("Kerf could not change the sequence")));
-        }
     }
 }
 

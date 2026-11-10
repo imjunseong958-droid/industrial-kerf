@@ -45,16 +45,12 @@ struct KerfFrame; // bridge.h
 namespace kerf {
 
 class AskPrompt;
-class BrowserPanel;
 class ChatPanel;
 class EditorBus;
-class InspectorColumn;
 // The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
 // its region's own state.
 class BinWiring;
-class InspectorWiring;
 class ReviewWiring;
-class SourceWiring;
 class StageWiring;
 class TimelineWiring;
 class ToolbarWiring;
@@ -63,11 +59,7 @@ class CommentRow;
 class CommandRegistry;
 class ExportButton;
 class FormatBank;
-class InspectorPanel;
-class EffectsPanel;
-class PresetsPanel;
 class ProjectPanel;
-class SourceMonitorPanel;
 class PreviewChip;
 class ChangeReel;
 class ChangeReelBar;
@@ -84,16 +76,14 @@ class ViewerWidget;
 // The editor's window. Its content is a StageShell (ui/stage_shell.h): the
 // picture, the conversation and the timeline, the rest on demand. Its member
 // functions are split by region into main_window_<region>.cpp (review, stage,
-// toolbar, status, timeline, inspector, bin, source), each region's own state in
+// toolbar, status, timeline, bin), each region's own state in
 // its wiring class; the regions talk through the EditorBus (ui/editor_bus.h) it
 // owns.
 class MainWindow final : public QMainWindow {
     Q_OBJECT
     KERF_TEST_FRIENDS
     friend class BinWiring;
-    friend class InspectorWiring;
     friend class ReviewWiring;
-    friend class SourceWiring;
     friend class StageWiring;
     friend class TimelineWiring;
     friend class ToolbarWiring;
@@ -160,8 +150,9 @@ private slots:
     void trimClip(const QString &id, bool leading, double frame);
     void splitClip();
     QJsonObject clipTrack(const QString &id) const;
-    // Load bin media into the source monitor and bring it forward.
-    void openSource(const QString &mediaId);
+    // The media chosen in the bin, as the project describes it; empty for none.
+    QJsonObject binMedia() const;
+    // The tracks Insert and Overwrite place the bin's media on.
     QStringList sourceTargets() const;
 
     // A crop box {x, y, width, height} as the model's crop properties; an
@@ -225,9 +216,9 @@ private:
     // The regions' parts of buildUi, each in its region's file.
     void buildReview();
     void buildStage();
+    // The picture's mask tools (main_window_stage.cpp).
+    void buildMaskTools();
     void buildTimeline();
-    void buildSource();
-    void buildInspector();
     void buildBin();
     // Settings (main_window.cpp).
     void buildPreferences();
@@ -307,7 +298,6 @@ private:
     // The selected picture clip's masks on the viewer, where its picture
     // lands at the playhead.
     void updateViewerMasks();
-    void updateInspector();
 
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
@@ -323,7 +313,7 @@ private:
     void addActivity(const QString &kind, const QString &text);
     void showError(const QString &message);
     void setConnection(const QString &status, const QString &message = QString());
-    // Requests a fresh connection needs: Git status, the preset library,
+    // Requests a fresh connection needs: Git status,
     // and live sync when it was on for this project.
     void startSession();
 
@@ -350,7 +340,6 @@ private:
     // The bridge refused the save in progress because `path` exists: ask,
     // then save again over it.
     void replaceSavedPreset(const QString &path);
-    void applyLibraryPreset(const QString &path);
     // Swap the file behind `mediaId`; asks for the file when `path` is empty.
     void replaceMedia(const QString &mediaId, const QString &path = QString());
     void revealMedia(const QString &mediaId);
@@ -372,12 +361,9 @@ private:
     std::unique_ptr<ReviewWiring> m_reviewWiring;
     std::unique_ptr<StageWiring> m_stageWiring;
     std::unique_ptr<ToolbarWiring> m_toolbarWiring;
-    std::unique_ptr<InspectorWiring> m_inspectorWiring;
     std::unique_ptr<TimelineWiring> m_timelineWiring;
     std::unique_ptr<BinWiring> m_binWiring;
-    std::unique_ptr<SourceWiring> m_sourceWiring;
-    // The regions' containers: the shell, the timeline's panel, the Inspector
-    // column, the browser.
+    // The regions' containers: the shell and the timeline's panel.
     StageShell *m_shell = nullptr;
     ProjectSidebar *m_sidebar = nullptr;
     ChangeReel *m_changeReel = nullptr;
@@ -411,8 +397,6 @@ private:
     QString m_startRequest;
     bool m_startImport = false;
     QWidget *m_timelinePanel = nullptr;
-    InspectorColumn *m_inspectorColumn = nullptr;
-    BrowserPanel *m_browserPanel = nullptr;
     MediaArtwork *m_artwork = nullptr;
     QToolBar *m_toolbar = nullptr;
     // The room at the toolbar's leading end for the window buttons (macOS).
@@ -499,22 +483,15 @@ private:
     QHash<QString, std::function<void()>> m_commandHandlers;
     // Toolbar actions and the symbols drawn for them.
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
-    QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
     // Tool palette actions, whose icons are redrawn when the appearance changes.
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    InspectorPanel *m_inspector = nullptr;
-    // Add effect in the Inspector raised the Effects browser: adding one
-    // brings the Inspector back.
-    bool m_effectsFromInspector = false;
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
-    EffectsPanel *m_effects = nullptr;
     QJsonObject m_lastFocus;
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
-    PresetsPanel *m_presets = nullptr;
     // The name of the preset being saved, until the bridge answers.
     QString m_savingPreset;
     // project.kerf changed outside Kerf: load it or keep the editor's version.
@@ -534,7 +511,6 @@ private:
     // What the last sync brought in, one line each.
     QStringList m_syncLines;
     QJsonObject m_mediaStatus;
-    SourceMonitorPanel *m_sourceMonitor = nullptr;
     AskPrompt *m_askPrompt = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;

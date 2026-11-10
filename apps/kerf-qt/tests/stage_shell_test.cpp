@@ -8,11 +8,9 @@
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "design_tokens.h"
-#include "inspector_panel.h"
 #include "main_window.h"
 #include "project_panel.h"
 #include "timeline_widget.h"
-#include "ui/browser_panel.h"
 #include "ui/components.h"
 #include "ui/editor_bus.h"
 #include "ui/change_reel.h"
@@ -20,7 +18,6 @@
 #include "ui/stage_motion.h"
 #include "ui/composer.h"
 #include "ui/wiring/review_wiring.h"
-#include "ui/inspector_column.h"
 #include "ui/project_sidebar.h"
 #include "ui/stage_shell.h"
 #include "ui/wiring/timeline_wiring.h"
@@ -193,21 +190,18 @@ private slots:
             }
     }
 
-    void sheetsStandOverTheRegions() {
+    void theMediaSheetStandsOverTheConversation() {
         for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             const int side = r.conversation.right() + 1;
             QCOMPARE(r.media, QRect(side - 272, 40, 272, r.conversation.height()));
-            QCOMPARE(r.browser, QRect(side - 304, 40, 304, r.conversation.height()));
-            QCOMPARE(r.inspector, QRect(side - 304, 40, 304, r.conversation.height()));
             // A sheet leaves the timeline free: a drag can reach it.
             QVERIFY(!r.media.intersects(r.timeline));
-            QVERIFY(!r.browser.intersects(r.timeline));
         }
-        // The conversation at its least: a sheet keeps to it.
+        // The conversation at its least: the sheet keeps to it.
         const stage::Rects narrow = stage::rects(QSize(800, 900), kWide);
-        QVERIFY(narrow.conversation.contains(narrow.inspector));
-        QVERIFY(!narrow.inspector.intersects(narrow.timeline));
+        QVERIFY(narrow.conversation.contains(narrow.media));
+        QVERIFY(!narrow.media.intersects(narrow.timeline));
     }
 
     // The transport is in the strip over a wide sequence and under a vertical
@@ -331,7 +325,7 @@ private slots:
         settings.remove(QStringLiteral("editor/inspectorFollowsSelection"));
     }
 
-    void sheetsOpenOneAtATimeFromTheirCommands() {
+    void theMediaSheetOpensFromItsCommand() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
@@ -340,18 +334,14 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         StageShell *shell = window.m_shell;
         QCOMPARE(shell->sheet(), StageShell::Sheet::None);
-        for (QWidget *closed : {static_cast<QWidget *>(window.m_projectPanel), static_cast<QWidget *>(window.m_browserPanel),
-                                static_cast<QWidget *>(window.m_inspectorColumn)})
-            QVERIFY(closed->isHidden());
+        QVERIFY(window.m_projectPanel->isHidden());
         const struct {
             const char *command;
             StageShell::Sheet sheet;
             QWidget *widget;
             int width;
             const char *close;
-        } sheets[] = {{"window.project", StageShell::Sheet::Media, window.m_projectPanel, 272, "sheetClose.media"},
-                      {"window.effects", StageShell::Sheet::Browser, window.m_browserPanel, 304, "sheetClose.browser"},
-                      {"window.inspector", StageShell::Sheet::Inspector, window.m_inspectorColumn, 304, "sheetClose.inspector"}};
+        } sheets[] = {{"window.project", StageShell::Sheet::Media, window.m_projectPanel, 272, "sheetClose.media"}};
         const QRect conversation = inWindow(window.m_chat, &window);
         for (const auto &entry : sheets) {
             window.triggerCommand(QString::fromLatin1(entry.command));
@@ -387,62 +377,8 @@ private slots:
             QCOMPARE(shell->sheet(), StageShell::Sheet::None);
             QVERIFY(!window.m_commands->action(QString::fromLatin1(entry.command))->isChecked());
         }
-        // Another sheet's command takes over.
-        window.triggerCommand(QStringLiteral("window.project"));
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Inspector);
-        QVERIFY(!window.m_commands->action(QStringLiteral("window.project"))->isChecked());
-        // Presets is the browser's page, Source the Inspector's.
-        window.triggerCommand(QStringLiteral("window.presets"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Browser);
-        QCOMPARE(window.m_browserPanel->page(), BrowserPanel::Page::Presets);
-        QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
-        QVERIFY(!window.m_commands->action(QStringLiteral("window.effects"))->isChecked());
-        window.triggerCommand(QStringLiteral("window.effects"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Browser);
-        QCOMPARE(window.m_browserPanel->page(), BrowserPanel::Page::Effects);
-        window.triggerCommand(QStringLiteral("window.source"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Inspector);
-        QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Source);
-        window.triggerCommand(QStringLiteral("window.source"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::None);
-        // The Inspector's kinds open it.
-        window.triggerCommand(QStringLiteral("inspector.audio"));
-        QCOMPARE(shell->sheet(), StageShell::Sheet::Inspector);
-        QCOMPARE(window.m_inspectorColumn->kind(), InspectorColumn::Kind::Audio);
-        window.triggerCommand(QStringLiteral("inspector.video"));
         window.m_shell->setSheet(StageShell::Sheet::None);
         window.close();
-    }
-
-    // Selecting a clip opens nothing by itself.
-    // ⌘4 over the Source page turns to the Inspector, as its menu row (not
-    // checked there) says; on its own page it closes.
-    // The Inspector's tips and its ⋯ menu name the registry's keys, on every
-    // platform and in every keymap.
-    void theInspectorsTipsNameTheRegistrysKeys() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 10}, {"timeline", QJsonObject{{"fps", 25}, {"tracks", QJsonArray{}}}}});
-        const auto key = [&window](const char *id) {
-            return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText);
-        };
-        auto *pages = window.m_inspectorColumn->findChild<ui::SegmentedControl *>(QStringLiteral("inspectorPages"));
-        auto *kinds = window.m_inspectorColumn->findChild<ui::SegmentedControl *>(QStringLiteral("inspectorKinds"));
-        QVERIFY(pages && kinds);
-        QVERIFY(!key("inspector.video").isEmpty());
-        QCOMPARE(ui::tipShortcut(pages->segment(0)), key("window.inspector"));
-        QCOMPARE(ui::tipShortcut(kinds->segment(0)), key("inspector.video"));
-        QCOMPARE(ui::tipShortcut(kinds->segment(1)), key("inspector.audio"));
-        QCOMPARE(ui::tipShortcut(kinds->segment(2)), key("inspector.info"));
-        QCOMPARE(ui::tipName(kinds->segment(2)), QStringLiteral("Info"));
-        QAction *video = window.m_commands->action(QStringLiteral("inspector.video"));
-        video->setShortcut(Qt::Key_F9);
-        emit window.m_commands->shortcutsChanged();
-        QCOMPARE(ui::tipShortcut(kinds->segment(0)), QKeySequence(Qt::Key_F9).toString(QKeySequence::NativeText));
-        auto *ask = window.m_inspector->findChild<QAction *>(QStringLiteral("inspectorAsk"));
-        QVERIFY(ask);
-        QCOMPARE(ui::menuKey(ask), key("ai.ask"));
     }
 
     // A Mac's Control key is Meta in the keymaps. Elsewhere those keys go on
@@ -477,23 +413,9 @@ private slots:
             }
         }
         commands->setKeymap(original);
-        if (CommandRegistry::isMac()) QVERIFY(moved >= 3);
-    }
-
-    void theInspectorCommandTurnsFromSource() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.triggerCommand(QStringLiteral("window.source"));
-        QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Source);
-        QAction *inspector = window.m_commands->action(QStringLiteral("window.inspector"));
-        QVERIFY(!inspector->isChecked());
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Inspector);
-        QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Inspector);
-        QVERIFY(inspector->isChecked());
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-        QVERIFY(!inspector->isChecked());
+        // One is left to move since the Inspector's and the trays' went: Final
+        // Cut Pro's Render Preview.
+        if (CommandRegistry::isMac()) QVERIFY(moved >= 1);
     }
 
     // Ask Kerf and ⇧⌘J: what lies over the composer goes, so the text lands
@@ -508,8 +430,8 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@Kerf fix it"));
-        window.triggerCommand(QStringLiteral("window.inspector"));
-        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Inspector);
+        window.triggerCommand(QStringLiteral("window.project"));
+        QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Media);
         window.triggerCommand(QStringLiteral("window.assistant"));
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
         window.close();
@@ -532,10 +454,6 @@ private slots:
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
         emit window.m_timeline->deselectRequested();
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-        // With the Inspector open on Source, a click leaves it there.
-        window.triggerCommand(QStringLiteral("window.source"));
-        emit window.m_timeline->clipSelected(clip);
-        QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Source);
         window.close();
     }
 
@@ -569,9 +487,8 @@ private slots:
         window.close();
     }
 
-    // Drag from Media and Effects to the timeline keeps working: the timeline
-    // takes drops and no sheet lies over it.
-    void aSheetLeavesTheTimelineOpenToDrops() {
+    // The Media sheet never lies over the timeline.
+    void theSheetLeavesTheTimelineInSight() {
         for (const QSize &canvas : {QSize(1920, 1080), QSize(1080, 1920)}) {
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -579,8 +496,7 @@ private slots:
             window.resize(1600, 1000);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QVERIFY(window.m_timeline->acceptDrops());
-            for (const char *command : {"window.project", "window.effects"}) {
+            for (const char *command : {"window.project"}) {
                 window.triggerCommand(QString::fromLatin1(command));
                 QWidget *sheet = window.m_shell->widgetOf(window.m_shell->sheet());
                 QVERIFY(sheet && sheet->isVisible());

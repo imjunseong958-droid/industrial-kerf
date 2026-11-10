@@ -1,7 +1,7 @@
 #pragma once
 
 // The editor's bus: how the regions of the window (stage, comments,
-// inspector, timeline, bin, source, toolbar) hear the engine and each
+// timeline, bin, toolbar) hear the engine and each
 // other without including each other's headers.
 //
 // MainWindow owns it. Every bridge event reaches `event(type, json)` after

@@ -61,7 +61,7 @@ struct Panes {
 // The sidebar, the panel (empty when closed), the picture's slot (`picture` is
 // the frame inside it, in black bars when the slot is not of its shape), the
 // transport's block under the picture (empty when the timeline's strip carries
-// the transport), the conversation and the timeline, and the three sheets.
+// the transport), the conversation and the timeline, and the Media sheet.
 // A pane that is closed has an empty rect.
 struct Rects {
     bool wide = true;
@@ -74,8 +74,6 @@ struct Rects {
     QRect conversation;
     QRect timeline;
     QRect media;
-    QRect browser;
-    QRect inspector;
 };
 
 // The part of a slot the picture fits inside.
@@ -92,7 +90,7 @@ class StageShell final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    enum class Sheet { None, Media, Browser, Inspector };
+    enum class Sheet { None, Media };
 
     explicit StageShell(QWidget *parent = nullptr);
 
@@ -107,7 +105,7 @@ public:
     // The block under the picture; hidden while the timeline's strip carries
     // the transport.
     void setTransport(QWidget *transport);
-    void setSheets(QWidget *media, QWidget *browser, QWidget *inspector);
+    void setSheets(QWidget *media);
     // Bars that take over the top of the content while they show (the
     // connection, an error, project.kerf changed on disk), over the regions:
     // the three regions keep their rects.
@@ -190,7 +188,7 @@ private:
     QWidget *m_conversation = nullptr;
     QWidget *m_timeline = nullptr;
     QWidget *m_transport = nullptr;
-    QWidget *m_sheets[3] = {};
+    QWidget *m_sheets[1] = {};
     QList<QWidget *> m_banners;
     // The hairlines between the regions and at a sheet's left.
     QWidget *m_seamSidebar = nullptr;

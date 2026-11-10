@@ -9,15 +9,10 @@
 #include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -247,7 +242,6 @@ private slots:
         QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept yours · project.kerf: c3 duration")));
         QCOMPARE(wiring->message(), QStringLiteral("Synced: 1 commit in, pushed, 1 change kept yours"));
         QCOMPARE(window.m_projectSubtitle->text(), wiring->message());
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("preset_library"));
         wiring->showMessage(QString(), 0);
         window.m_errorBanner->hide();
         QCOMPARE(wiring->subtitleText(), normal);

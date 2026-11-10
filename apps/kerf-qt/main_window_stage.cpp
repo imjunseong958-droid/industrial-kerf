@@ -8,14 +8,10 @@
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "composer.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "project_sidebar.h"
 #include "review_model.h"
-#include "source_monitor_panel.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -85,10 +81,8 @@
 #include <limits>
 #include <utility>
 #include "wiring/main_window_shared.h"
-#include "browser_panel.h"
 #include "editor_bus.h"
 #include "motion_path.h"
-#include "inspector_column.h"
 #include "wiring/review_wiring.h"
 #include "stage_motion.h"
 #include "wiring/stage_wiring.h"
@@ -269,7 +263,7 @@ void MainWindow::buildSidebar() {
     });
     // Media and Effects drop on the timeline.
     connect(m_shell, &StageShell::sheetChanged, this, [this](StageShell::Sheet sheet) {
-        if ((sheet == StageShell::Sheet::Media || sheet == StageShell::Sheet::Browser) && !m_shell->panes().panelOpen()) revealPanel(true, true);
+        if (sheet == StageShell::Sheet::Media && !m_shell->panes().panelOpen()) revealPanel(true, true);
     });
     refreshSidebar();
 }
@@ -410,6 +404,40 @@ void MainWindow::runStart() {
     m_startRequest.clear();
     // Kerf cannot take it (no connection chosen yet): it waits in the composer.
     if (!sendAgent(request, QJsonObject{}, QString())) m_chat->composerWidget()->fill(request);
+}
+
+// The mask tools, and the edits the picture asks for.
+void MainWindow::buildMaskTools() {
+    // Mask tools draw a new mask on the selected picture clip over the
+    // picture; the ≡ menu's View carries them.
+    auto *maskTools = new QActionGroup(this);
+    maskTools->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    struct MaskToolAction {
+        MaskTool tool;
+        const char *id;
+        QString label;
+    };
+    for (const MaskToolAction &entry : {
+             MaskToolAction{MaskTool::Rectangle, "maskRectangle", tr("Rectangle mask")},
+             MaskToolAction{MaskTool::Ellipse, "maskEllipse", tr("Ellipse mask")},
+             MaskToolAction{MaskTool::Pen, "maskPen",
+                            tr("Pen mask: click its corners, then the first again to close it (Return leaves it open)")}}) {
+        const MaskTool tool = entry.tool;
+        auto *action = new QAction(maskToolIcon(tool), entry.label, maskTools);
+        action->setObjectName(QString::fromLatin1(entry.id));
+        action->setCheckable(true);
+        action->setEnabled(false);
+        action->setData(static_cast<int>(tool));
+        connect(action, &QAction::toggled, this, [this, tool](bool on) {
+            if (on) m_viewer->setMaskTool(tool);
+            else if (m_viewer->maskTool() == tool) m_viewer->setMaskTool(MaskTool::None);
+        });
+        m_maskTools.append(action);
+    }
+    connect(m_viewer, &ViewerWidget::maskToolChanged, this, [this](MaskTool tool) {
+        for (QAction *action : m_maskTools) action->setChecked(action->data().toInt() == static_cast<int>(tool));
+    });
+    connect(m_viewer, &ViewerWidget::editRequested, this, &MainWindow::sendEdit);
 }
 
 } // namespace kerf

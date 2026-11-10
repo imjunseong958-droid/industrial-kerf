@@ -11,18 +11,12 @@
 #include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
-#include "ui/inspector_column.h"
 #include "media_artwork.h"
-#include "presets_panel.h"
 #include "proposal_card.h"
 #include "comment_row.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -392,126 +386,6 @@ private slots:
         // Both sheets give the stronger handle to a held one as well as a hovered one.
         QVERIFY(editorStyleSheet(editorTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
         QVERIFY(launcherStyleSheet(launcherTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
-    }
-
-    // The chosen mask tool and the selected mask stand out from the others,
-    // at rest, under the pointer and held (the on fill, `raised` while
-    // held), in the Inspector and in the Program panel's title strip alike;
-    // and the Assistant's Model field reads on its hover wash.
-    void chosenMasksAndToolsStandOut() {
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        {
-            QSettings().remove(QStringLiteral("workspace"));
-            const EditorTheme &theme = editorTheme();
-            MainWindow window{QString(), QString()};
-            window.setConnection(QStringLiteral("ready"));
-            const auto mask = [](const char *name) {
-                return QJsonObject{{"name", name}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "add"},
-                                   {"inverted", false}, {"params", QJsonObject{}}};
-            };
-            window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 2}, {"timeline", QJsonObject{
-                {"fps", 24}, {"width", 1920}, {"height", 1080}, {"maskModes", QJsonArray{"add", "subtract", "none"}},
-                {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 2}}}},
-                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
-                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0},
-                                {"masks", QJsonArray{mask("k1"), mask("k2")}}}}}}}}}}});
-            window.selectClip(QStringLiteral("c1"));
-            window.m_inspector->selectMask(QStringLiteral("k1"));
-            window.m_inspector->section(QStringLiteral("masks"))->setOpen(true);
-            window.m_shell->setSheet(StageShell::Sheet::Inspector);
-            window.resize(1440, 900);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            // The bezel's fill, clear of its edge and its symbol or label (a
-            // bare 22pt mask tool's symbol nearly fills it: its top middle).
-            const auto spot = [](QToolButton *button) {
-                return button->objectName() == QLatin1String("maskTool") ? QPoint(button->width() / 2, 3) : QPoint(3, button->height() / 2);
-            };
-            const auto fill = [&spot](QToolButton *button) {
-                const QImage image = button->grab().toImage();
-                return image.pixelColor(spot(button) * image.devicePixelRatio()).rgb();
-            };
-            // Under the pointer, and held.
-            const auto hovered = [&fill](QToolButton *button) {
-                button->setAttribute(Qt::WA_UnderMouse, true);
-                const QRgb color = fill(button);
-                button->setAttribute(Qt::WA_UnderMouse, false);
-                return color;
-            };
-            const auto held = [&fill](QToolButton *button) {
-                button->setDown(true);
-                const QRgb color = fill(button);
-                button->setDown(false);
-                return color;
-            };
-
-            // The chosen tool is `raised`, its accent glyph reading on it.with no accent outline, its
-            // symbol the accent ink, which reads on it; the others are bare
-            // symbols on the panel (no bezel), `raised` under the pointer.
-            auto *rectangle = window.findChild<QAction *>(QStringLiteral("maskRectangle"));
-            QVERIFY(rectangle && rectangle->isEnabled());
-            rectangle->trigger();
-            QVERIFY(rectangle->isChecked());
-            QToolButton *chosen = nullptr;
-            QToolButton *other = nullptr;
-            for (QToolButton *tool : window.m_inspector->findChildren<QToolButton *>(QStringLiteral("maskTool")))
-                (tool->defaultAction() == rectangle ? chosen : other) = tool;
-            QVERIFY(chosen && other && chosen->isVisible() && chosen->isChecked() && !other->isChecked());
-            // (A bare button grabs clear where it paints nothing.)
-            const auto clear = [&spot](QToolButton *button) {
-                const QImage image = button->grab().toImage();
-                return image.pixelColor(spot(button) * image.devicePixelRatio()).alpha() == 0;
-            };
-            QVERIFY(clear(other));
-            QVERIFY(hovered(other) != fill(other) && held(other) != fill(other) && held(other) != hovered(other));
-            for (const QRgb wash : {fill(chosen), hovered(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
-            QCOMPARE(held(chosen), theme.accentTintPressed.rgb());
-            // Its edge is the wash (or the panel behind it), never a line in the accent.
-            const QImage chosenShot = chosen->grab().toImage();
-            for (const int x : {0, 1})
-                QVERIFY(contrastRatio(chosenShot.pixelColor(QPoint(x, chosen->height() / 2) * chosenShot.devicePixelRatio()),
-                                      theme.accentText) >= 2.0);
-            QVERIFY(qGray(theme.accentTintPressed.rgb()) < qGray(theme.accentTint.rgb()));
-            QCOMPARE(ink(chosen->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
-            // At rest the others are quiet (the secondary ink, as the headers
-        // they sit in); full ink under the pointer.
-        QCOMPARE(ink(other->icon()), theme.textSecondary.rgb());
-        QCOMPARE(ink(other->icon(), QIcon::Active, QIcon::Off), theme.text.rgb());
-            QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
-            rectangle->trigger();
-            QVERIFY(!rectangle->isChecked());
-            QVERIFY(clear(chosen));
-
-            // So is the selected mask's name; the other's is plain words, no wash.
-            QToolButton *selected = nullptr;
-            QToolButton *unselected = nullptr;
-            for (QToolButton *name : window.m_inspector->findChildren<QToolButton *>(QStringLiteral("maskName")))
-                (name->text() == QStringLiteral("k1") ? selected : unselected) = name;
-            QVERIFY(selected && unselected && selected->isVisible() && selected->isChecked() && !unselected->isChecked());
-            for (const QRgb wash : {fill(selected), hovered(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
-            QCOMPARE(held(selected), theme.accentTintPressed.rgb());
-            QVERIFY(fill(unselected) != theme.accentTint.rgb());
-            window.close();
-        }
-    }
-
-    // A colour well's swatch is ringed in a grey that reads at 3:1 against
-    // white and black alike, so either swatch shows on the dark bezel,
-    // without a light halo round a black one.
-    void colorWellsRingWhiteAndBlackSwatches() {
-        QPushButton well;
-        well.setIconSize(QSize(32, 12));
-        const QColor bezel = makeEditorTheme().button;
-        for (const QColor &value : {QColor(Qt::white), QColor(Qt::black)}) {
-            InspectorPanel::paintWell(&well, value.name());
-            const QImage swatch = well.icon().pixmap(well.iconSize(), 2.0).toImage();
-            QCOMPARE(swatch.size(), well.iconSize() * 2);
-            QCOMPARE(swatch.pixelColor(swatch.width() / 2, swatch.height() / 2).rgb(), value.rgb());
-            // The ring's outer half, solid at twice the size, as it shows on the bezel.
-            const QColor ring = laidOn(bezel, swatch.pixelColor(0, swatch.height() / 2));
-            QVERIFY2(contrastRatio(ring, value) >= 3.0, qPrintable(ring.name()));
-            if (value == QColor(Qt::black)) QVERIFY2(ring.lightness() < bezel.lightness() + 90, qPrintable(ring.name()));
-        }
     }
 
     // The editor draws the design's graphite ramp (mockup-spec 0.2) and
@@ -984,98 +858,6 @@ private slots:
                 scroll->setHorizontalScrollBarPolicy(horizontalPolicy);
             }
 
-            // The Inspector: every row's controls start after one 84pt label
-            // column, rows are 32pt apart, a colour is a well with its hex, a
-            // file is a field with a folder in it (a look, as FilmCraft's LUT
-            // parameters, stands in for one), and each effect is a header
-            // with its power key, name and ⋯, each section a framed module.
-            window.m_inspector->m_effectDefs.insert(QStringLiteral("test.look"), QJsonObject{
-                {"id", "test.look"}, {"name", "Look"}, {"params", QJsonArray{QJsonObject{
-                    {"name", "look_lut"}, {"type", "file"}, {"doc", "Look LUT"}, {"extensions", QJsonArray{"cube", "3dl"}}, {"default", ""}}}}});
-            window.m_inspector->m_shape.clear();
-            QSettings().setValue(QStringLiteral("editor/inspector/fx/light.edgeglow/open"), true);
-            QSettings().setValue(QStringLiteral("editor/inspector/fx/test.look/open"), true);
-            const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
-            window.applySnapshot(QJsonObject{{"revision", 14}, {"duration", 4}, {"timeline", QJsonObject{{"fps", 24},
-                {"sources", QJsonArray{QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}}}},
-                {"tracks", QJsonArray{
-                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
-                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "wide"}, {"timelineStart", 0.0}, {"duration", 2.0},
-                                {"effects", QJsonArray{QJsonObject{{"fx", "light.edgeglow"}, {"enabled", false}, {"params", QJsonObject{}}},
-                                                       QJsonObject{{"fx", "test.look"}, {"enabled", true},
-                                                                   {"params", QJsonObject{{"look_lut", "looks/harbor-dusk.cube"}}}}}}}}}}}}}}});
-            window.selectClip(QStringLiteral("c1"));
-            window.m_shell->setSheet(StageShell::Sheet::Inspector);
-            InspectorPanel *inspector = window.m_inspector;
-            inspector->section(QStringLiteral("effects"))->setOpen(true);
-            QCoreApplication::processEvents();
-            QVERIFY(inspector->isVisible());
-            const auto rows = inspector->findChildren<InspectorRow *>();
-            QVERIFY(rows.size() > 6);
-            // mockup .row: pad 0 8 0 12, an 84 label, 8 to the controls (a
-            // wide row's label runs on to its controls).
-            for (InspectorRow *row : rows) {
-                if (!row->isVisibleTo(inspector)) continue;
-                QCOMPARE(row->height(), InspectorRow::kHeight);
-                QCOMPARE(row->label()->x(), InspectorRow::kPadLeft);
-                if (row->isWide()) continue;
-                QCOMPARE(row->label()->width(), InspectorRow::kLabelWidth);
-                int left = row->width();
-                for (QWidget *child : row->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
-                    if (child != row->label() && child->isVisibleTo(row) && child->width() > InspectorRow::kKeyframe) left = std::min(left, child->x());
-                QCOMPARE(left, InspectorRow::kPadLeft + InspectorRow::kLabelWidth + InspectorRow::kGap);
-            }
-            // The file's row: its field, the folder inside it.
-            auto *lookFile = inspector->findChild<QWidget *>(QStringLiteral("effectParam_look_lut"));
-            QVERIFY(lookFile && lookFile->findChild<QAction *>(QStringLiteral("chooseFile")));
-            // The file's name, its whole path in the tooltip; the name left as
-            // shown keeps the path, a typed path replaces it.
-            // (The field itself, its folder a trailing action in it.)
-            auto *lookLine = qobject_cast<QLineEdit *>(lookFile);
-            QVERIFY(lookLine);
-            QCOMPARE(lookLine->text(), QStringLiteral("harbor-dusk.cube"));
-            QCOMPARE(lookLine->toolTip(), QStringLiteral("looks/harbor-dusk.cube"));
-            window.m_lastCommand = {};
-            emit lookLine->editingFinished();
-            QVERIFY(takeOps(window).isEmpty());
-            lookLine->setText(QStringLiteral("looks/harbor-night.cube"));
-            emit lookLine->editingFinished();
-            QCOMPARE(takeOps(window).first().toObject().value("params").toObject().value("look_lut").toString(), QStringLiteral("looks/harbor-night.cube"));
-            // (No snapshot answers the edit here: the field shows its value again.)
-            window.m_inspector->refreshValues();
-            QCOMPARE(lookLine->text(), QStringLiteral("harbor-dusk.cube"));
-            // A colour is a well, its hex beside it.
-            auto *well = inspector->findChild<QPushButton *>(QStringLiteral("effectParam_color"));
-            QVERIFY(well);
-            // (mockup .sw: 32 wide, inside the 24 row.)
-            QCOMPARE(well->width(), 32);
-            QVERIFY(well->height() <= InspectorRow::kHeight);
-            QVERIFY(well->text().isEmpty());
-            QCOMPARE(qobject_cast<QLabel *>(well->parentWidget()->findChild<QLabel *>(QStringLiteral("colorHex")))->text(), QStringLiteral("#4DCCFF"));
-            // A switch, not a check box, for an effect's bool and for each effect.
-            QVERIFY(inspector->findChildren<QCheckBox *>().isEmpty());
-            QCOMPARE(inspector->findChildren<InspectorSwitch *>(QStringLiteral("effectEnabled")).size(), 2);
-            // An effect's name is UI 12/16 ink (tokens::control, 400).
-            for (QLabel *title : inspector->findChildren<QLabel *>(QStringLiteral("effectName"))) QCOMPARE(title->font().weight(), QFont::Normal);
-            // The picture shows the whole Inspector: the window grows until
-            // it needs no scrolling.
-            QScrollBar *inspectorScroll = inspector->scrollArea()->verticalScrollBar();
-            for (int grow = 0; inspectorScroll->maximum() > 0 && grow < 20; ++grow) {
-                window.resize(window.width(), window.height() + 20);
-                QCoreApplication::processEvents();
-            }
-            const QImage inspectorImage = window.m_inspectorColumn->grab().toImage();
-            // A group (mockup .grp) is flat on the column, no plate: chrome
-            // above its foot, and a 1 pt line (lighter) at its foot.
-            {
-                const InspectorSection *effects = inspector->section(QStringLiteral("effects"));
-                const QPoint foot = effects->mapTo(window.m_inspectorColumn, QPoint(effects->width() / 2, effects->height() - 1));
-                const qreal ratio = inspectorImage.devicePixelRatio();
-                const QColor line = inspectorImage.pixelColor(foot * ratio);
-                QCOMPARE(inspectorImage.pixelColor((foot - QPoint(0, 2)) * ratio).rgb(), tokens::chrome);
-                QVERIFY2(line.rgb() != tokens::chrome && line.lightness() > QColor(tokens::chrome).lightness(), qPrintable(line.name()));
-            }
-            save(inspectorImage, QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
         // The theme was applied once, before this test; nothing above asked
@@ -1346,33 +1128,9 @@ private slots:
             QJsonObject{{"id", "m4"}, {"path", "media/d.wav"}, {"duration", 4}}});
         bin.setMediaStatus(QJsonObject{{"missing", QJsonArray{"m3"}}, {"pointers", QJsonArray{"m2"}}, {"external", QJsonArray{"m1"}}});
         bin.resize(560, 150);
-        EffectsPanel effects;
-        effects.setCatalog(QJsonArray{
-            QJsonObject{{"kind", "effect"}, {"id", "light.edgeglow"}, {"name", "Edge Glow"}, {"category", "light"}},
-            QJsonObject{{"kind", "effect"}, {"id", "blur.gaussian"}, {"name", "Gaussian Blur"}, {"category", "blur"}}});
-        effects.setClip(QStringLiteral("c1"), true);
-        // The preview as Edge Glow would draw it on the harbor shot: the
-        // frame with a soft, blurred copy of itself screened over it.
-        QImage glow = testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90)).convertToFormat(QImage::Format_RGB32);
-        {
-            const QImage soft = glow.scaled(20, 11, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                    .scaled(glow.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-            QPainter painter(&glow);
-            painter.setCompositionMode(QPainter::CompositionMode_Screen);
-            painter.setOpacity(0.6);
-            painter.drawImage(0, 0, soft);
-        }
-        // A resting thumb comes keyed (the unkeyed call is a no-op now).
-        effects.setPreview(QStringLiteral("c1"), QStringLiteral("light.edgeglow"), QString::fromLatin1(EffectsPanel::kCardKey), glow);
-        effects.resize(420, 200);
         const auto tilePixel = [&bin](int row, const QPoint &at) {
             return bin.m_list->item(row)->icon().pixmap(ProjectPanel::kThumbnail).toImage().pixelColor(at);
         };
-        const auto cardPixel = [&effects](const char *id) {
-            const QImage card = effects.m_items.value(QString::fromLatin1(id))->icon().pixmap(EffectsPanel::kCard).toImage();
-            return card.pixelColor(card.width() / 2, 4);
-        };
-
         {
             const EditorTheme &theme = editorTheme();
             const QString name = QStringLiteral("dark");
@@ -1419,33 +1177,6 @@ private slots:
             QCOMPARE(amberPixels(region), 0);
             save(region, QStringLiteral("region-%1").arg(name));
 
-            // Source monitor: the marked range and the position on the scrub bar.
-            SourceMonitorPanel monitor;
-            monitor.resize(480, 300);
-            monitor.open(QJsonObject{{"id", "m4"}, {"path", "media/d.wav"}, {"duration", 4.0}, {"rate", "24"}}, QString());
-            monitor.seek(1.0);
-            monitor.markIn();
-            monitor.seek(3.0);
-            monitor.markOut();
-            monitor.seek(2.0);
-            monitor.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&monitor));
-            // A 4 pt bar in track, the marked range in track2.
-            const QRect bar = monitor.barRect();
-            QVERIFY(bar.isValid() && bar.height() == 4);
-            {
-                const QImage shot = monitor.grab().toImage();
-                const qreal shotRatio = shot.devicePixelRatio();
-                const auto barX = [&bar](double seconds) { return bar.left() + int(bar.width() * seconds / 4.0); };
-                QCOMPARE(shot.pixelColor(QPoint(barX(0.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
-                QCOMPARE(shot.pixelColor(QPoint(barX(1.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track2).rgb());
-                QCOMPARE(shot.pixelColor(QPoint(barX(3.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
-            }
-            const QImage source = monitor.grab().toImage();
-            QCOMPARE(amberPixels(source), 0);
-            save(source, QStringLiteral("source-%1").arg(name));
-            monitor.close();
-
             // Bin thumbs (72 x 38, mockup-spec 6): sound without peaks on
             // raised, offline media black saying so, a status as a dot.
             const auto tileAt = [&bin](int row, const QPoint &at) {
@@ -1462,16 +1193,6 @@ private slots:
             QCOMPARE(amberPixels(tiles), 0);
             save(tiles, QStringLiteral("bin-%1").arg(name));
 
-            // Effect cards (88 x 50): a placeholder is black, a preview stays.
-            QCOMPARE(cardPixel("blur.gaussian").rgb(), qRgb(0, 0, 0));
-            QVERIFY(nearColor(cardPixel("light.edgeglow").rgb(), glow.pixelColor(glow.width() / 2, 4).rgb(), 24));
-            effects.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&effects));
-            QTest::mouseMove(&effects, QPoint(effects.width() - 2, effects.height() - 2));
-            const QImage browser = effects.grab().toImage();
-            // The category is a ghost menu button (mockup .bcat), not a pop-up.
-            QVERIFY(effects.m_categoryButton->hasChevron());
-            save(browser, QStringLiteral("effects-%1").arg(name));
         }
     }
 
@@ -1493,7 +1214,6 @@ private slots:
         snapshot.insert(QStringLiteral("timeline"), timeline);
         window.applySnapshot(snapshot);
         window.selectClip(QStringLiteral("v1a"));
-        window.m_shell->setSheet(StageShell::Sheet::Inspector);
         QCoreApplication::processEvents();
         QTest::qWait(50);
         QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("editor-dark.png"))));

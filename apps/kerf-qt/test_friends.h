@@ -11,18 +11,13 @@ namespace kerf {
 class BinBrowserTest;
 class BusTest;
 class CommentsTest;
-class DeliverTest;
-class FeatureTest;
-class FinishTest;
 class MotionPathTest;
-class InspectorTest;
 class KitTest;
 class LauncherTest;
 class LinkTest;
 class MockupParityTest;
 class MotionTest;
 class ReviewModelTest;
-class SourceTest;
 class StageShellTest;
 class StageTest;
 class StatusTest;
@@ -42,18 +37,13 @@ struct Access;
     friend class ::kerf::BinBrowserTest;                                                                               \
     friend class ::kerf::BusTest;                                                                                      \
     friend class ::kerf::CommentsTest;                                                                                 \
-    friend class ::kerf::DeliverTest;                                                                                  \
-    friend class ::kerf::FeatureTest;                                                                                  \
-    friend class ::kerf::FinishTest;                                                                                   \
     friend class ::kerf::MotionPathTest;                                                                               \
-    friend class ::kerf::InspectorTest;                                                                                \
     friend class ::kerf::KitTest;                                                                                      \
     friend class ::kerf::LauncherTest;                                                                                 \
     friend class ::kerf::LinkTest;                                                                                     \
     friend class ::kerf::MockupParityTest;                                                                             \
     friend class ::kerf::MotionTest;                                                                                    \
     friend class ::kerf::ReviewModelTest;                                                                              \
-    friend class ::kerf::SourceTest;                                                                                   \
     friend class ::kerf::StageShellTest;                                                                                \
     friend class ::kerf::StageTest;                                                                                    \
     friend class ::kerf::StatusTest;                                                                                   \

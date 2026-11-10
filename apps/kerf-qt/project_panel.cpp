@@ -690,7 +690,7 @@ void ProjectPanel::refresh() {
         item->setData(kBadgeRole, badgeText(duration, m_fps));
         // The name and its length as a timecode (mockup data-tip, data-k).
         QStringList tip{QStringLiteral("%1 · %2").arg(names.value(id), timelineTimecode(duration, m_fps)),
-                        source.value(QStringLiteral("path")).toString(), QStringLiteral("Double-click to open in the Source viewer")};
+                        source.value(QStringLiteral("path")).toString(), QStringLiteral("Double-click to insert at the playhead")};
         if (!badge.isEmpty()) tip << badgeTip(badge);
         item->setToolTip(tip.join(QLatin1Char('\n')));
         m_list->addItem(item);
@@ -853,7 +853,7 @@ void ProjectPanel::rebuildIndex() {
         item->setData(kIndexMetaRole, meta);
         item->setData(kIndexTimeRole, at);
         item->setData(kMediaRole, media);
-        item->setToolTip(QStringLiteral("Show in the Source viewer at %1").arg(meta.section(QStringLiteral("–"), 0, 0)));
+        item->setToolTip(meta.section(QStringLiteral("–"), 0, 0));
         m_index->addItem(item);
     };
     // Shots: the engine's ranges, else the spans between its cuts.

@@ -8,11 +8,9 @@
 
 #include "agent_hud.h"
 #include "bridge.h"
-#include "browser_panel.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 #include "main_window.h"
 #include "ui/wiring/stage_wiring.h"
 #include "timeline_widget.h"

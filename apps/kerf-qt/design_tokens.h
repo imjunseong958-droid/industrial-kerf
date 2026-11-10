@@ -242,9 +242,7 @@ constexpr int canvasWidth = 1600;
 constexpr int canvasHeight = 1000;
 constexpr int toolbar = 40;     // toolbar height
 constexpr int strip = 28;       // the sheets' strips, the timeline's
-constexpr int inspector = 304;  // the Inspector sheet's width
 constexpr int bin = 272;        // the Media sheet's width
-constexpr int browser = 304;    // the Effects and titles sheet's width
 // The minimal layout (ui/stage_shell.h).
 constexpr int sidebar = 240;            // the folders and conversations, at the left
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way

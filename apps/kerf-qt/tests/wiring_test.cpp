@@ -6,21 +6,15 @@
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "editor_bus.h"
-#include "inspector_column.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
 #include "main_window.h"
 #include "ui/wiring/toolbar_wiring.h"
 #include "media_artwork.h"
-#include "presets_panel.h"
 #include "project_launcher.h"
 #include "project_panel.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -215,8 +209,8 @@ private slots:
         {
             MainWindow window{project.path(), QString()};
             window.setConnection(QStringLiteral("ready"));
-            // Without live sync remembered, connecting asks for the status and the library.
-            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+            // Without live sync remembered, connecting asks for the status.
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_status"}}));
             window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
             QAction *live = window.m_commands->action(QStringLiteral("collab.live"));
             QVERIFY(live->isCheckable() && live->isEnabled() && !live->isChecked());

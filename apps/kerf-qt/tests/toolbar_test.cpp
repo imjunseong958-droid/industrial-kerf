@@ -15,7 +15,6 @@
 #include "project_panel.h"
 #include "main_window.h"
 #include "review_model.h"
-#include "sequence_settings.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "wiring/toolbar_wiring.h"
@@ -156,7 +155,7 @@ private slots:
                                  "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu"})
             QVERIFY2(!window.findChild<QWidget *>(QString::fromLatin1(gone)), gone);
         // Their commands, keys and native menu items stay.
-        for (const char *id : {"edit.undo", "edit.redo", "clip.split", "clip.delete", "file.import", "sequence.settings", "app.preferences"}) {
+        for (const char *id : {"edit.undo", "edit.redo", "clip.split", "clip.delete", "file.import", "app.preferences"}) {
             QAction *action = window.m_commands->action(QString::fromLatin1(id));
             QVERIFY2(action, id);
             QVERIFY2(!action->shortcut().isEmpty(), id);
@@ -175,15 +174,13 @@ private slots:
         QMenu *menu = wiring->appMenu();
         QStringList rows;
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
-        const QStringList expected{QStringLiteral("Media"), QStringLiteral("Effects and titles"), QStringLiteral("Inspector"), QStringLiteral("|"),
+        const QStringList expected{QStringLiteral("Media"), QStringLiteral("|"),
                                    QStringLiteral("Sidebar"), QStringLiteral("Picture"), QStringLiteral("Timeline"), QStringLiteral("Follow Kerf"), QStringLiteral("|"),
-                                   QStringLiteral("Import…"), QStringLiteral("Sequence settings…"), QStringLiteral("Settings…"), QStringLiteral("View")};
+                                   QStringLiteral("Import…"), QStringLiteral("Settings…"), QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);
         // Keys as the registry has them, never written here.
         const auto keyOf = [&window](const char *id) { return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText); };
         QCOMPARE(ui::menuKey(findAction(menu, QStringLiteral("appMenu.media"))), keyOf("window.project"));
-        QCOMPARE(ui::menuKey(findAction(menu, QStringLiteral("appMenu.effects"))), keyOf("window.effects"));
-        QCOMPARE(ui::menuKey(findAction(menu, QStringLiteral("appMenu.inspector"))), keyOf("window.inspector"));
         // Each row runs its command.
         findAction(menu, QStringLiteral("appMenu.media"))->trigger();
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Media);
@@ -282,19 +279,6 @@ private slots:
         QVERIFY(!bank->isEnabled());
     }
 
-    // ⌘0 opens the dialog from anywhere, and ≡ ▸ Sequence settings… does.
-    void sequenceSettingsOpensFromTheMenu() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));
-        ToolbarWiring *wiring = window.m_toolbarWiring.get();
-        wiring->buildAppMenu();
-        findAction(wiring->appMenu(), QStringLiteral("appMenu.sequenceSettings"))->trigger();
-        QVERIFY(wiring->sequenceSettings());
-        QVERIFY(wiring->sequenceSettings()->isVisible());
-        wiring->sequenceSettings()->reject();
-    }
-
     // The program of a 25 fps sequence "main", empty or with a clip.
     static QJsonObject sequenceSnapshot(int revision, bool withClip, const QString &name = QStringLiteral("Spot"),
                                         const QString &rate = QStringLiteral("25"), double fps = 25, double start = 0) {
@@ -306,83 +290,6 @@ private slots:
             {"sequences", QJsonArray{QJsonObject{{"id", "main"}, {"name", name}, {"width", 1920}, {"height", 1080}, {"rate", rate}, {"fps", fps}}}},
             {"markers", QJsonArray{}},
             {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", clips}}}}}}};
-    }
-
-    // Sequence Settings… (⌘0) is the registry's sequence.settings: a dialog
-    // whose Apply sends set-sequence with what changed; kerfd's refusal
-    // shows in it and the next revision closes it.
-    void sequenceSettingsSendsSetSequence() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(sequenceSnapshot(3, false));
-        ToolbarWiring *wiring = window.m_toolbarWiring.get();
-        QAction *settings = window.m_commands->action(QStringLiteral("sequence.settings"));
-        QVERIFY(settings && settings->isEnabled());
-        QCOMPARE(settings->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_0));
-        QVERIFY(window.m_commands->reason(QStringLiteral("sequence.settings")).isEmpty());
-        QVERIFY(window.bus()->run(QStringLiteral("sequence.settings")));
-        SequenceSettingsDialog *dialog = wiring->sequenceSettings();
-        QVERIFY(dialog);
-        QVERIFY(dialog->isVisible());
-        QCOMPARE(dialog->nameField()->text(), QStringLiteral("Spot"));
-        QCOMPARE(dialog->formatControl()->currentIndex(), 0);
-        QCOMPARE(dialog->startField()->text(), QStringLiteral("00:00:00:00"));
-        // An empty sequence can take a new rate.
-        QVERIFY(dialog->rateEditable());
-        QVERIFY(dialog->rateField()->isEnabled());
-        QVERIFY(!dialog->rateNoteLabel()->isVisibleTo(dialog));
-        dialog->nameField()->setText(QStringLiteral("Spot v2"));
-        dialog->rateField()->setCurrentIndex(dialog->rateField()->findData(QStringLiteral("30")));
-        dialog->startField()->setText(QStringLiteral("01:00:00:00"));
-        window.m_lastCommand = {};
-        dialog->applyButton()->click();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
-        QCOMPARE(window.m_lastCommand.value("ops").toArray(),
-                 (QJsonArray{QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"name", "Spot v2"},
-                                         {"rate", QJsonObject{{"num", 30}, {"den", 1}}}, {"start", "01:00:00:00"}}}));
-        // No bridge took it here, and the dialog says so.
-        QVERIFY(dialog->error().contains(QStringLiteral("not connected")));
-        // kerfd's refusal, in its words, as it comes for a sent edit.
-        wiring->m_sequencePending = true;
-        wiring->m_sequenceRevision = 3;
-        window.handleEvent(QJsonObject{{"type", "error"}, {"message", SequenceSettingsDialog::rateNote()}});
-        QCOMPARE(dialog->error(), SequenceSettingsDialog::rateNote());
-        QVERIFY(dialog->isVisible());
-        // A newer revision that does not hold the change (someone else's
-        // edit) leaves the request waiting and the dialog open, typed
-        // fields as they were.
-        wiring->m_sequencePending = true;
-        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", sequenceSnapshot(4, false)}});
-        QVERIFY(wiring->m_sequencePending);
-        QVERIFY(dialog->isVisible());
-        QCOMPARE(dialog->nameField()->text(), QStringLiteral("Spot v2"));
-        // The revision whose sequence says what was asked is kerfd taking
-        // it: the dialog closes. kerfd writes the rate back as "30".
-        window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", sequenceSnapshot(5, false, QStringLiteral("Spot v2"), QStringLiteral("30"), 30, 3600.0)}});
-        QTRY_VERIFY(!wiring->sequenceSettings() || !wiring->sequenceSettings()->isVisible());
-        QVERIFY(!wiring->m_sequencePending);
-        // holds() on its own: an NTSC rate as kerfd writes it is the
-        // fraction sent.
-        QVERIFY(SequenceSettingsDialog::holds(sequenceSnapshot(6, false, QStringLiteral("Spot"), QStringLiteral("29.97"), 29.97).value("timeline").toObject(),
-                                              QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"rate", QJsonObject{{"num", 30000}, {"den", 1001}}}}));
-        QVERIFY(!SequenceSettingsDialog::holds(sequenceSnapshot(6, false).value("timeline").toObject(),
-                                               QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"name", "Other"}}));
-
-        // With a clip in it, the rate is read-only and says why.
-        window.applySnapshot(sequenceSnapshot(6, true));
-        SequenceSettingsDialog *again = wiring->openSequenceSettings();
-        QVERIFY(!again->rateEditable());
-        QVERIFY(!again->rateField()->isEnabled());
-        QVERIFY(again->rateNoteLabel()->isVisibleTo(again));
-        QCOMPARE(again->rateNoteLabel()->text(), QStringLiteral("Frame rate can change only while the sequence is empty"));
-        // A format from the segments sends the size only.
-        again->formatControl()->setCurrentIndex(1, false);
-        emit again->formatControl()->activated(1);
-        window.m_lastCommand = {};
-        again->apply();
-        QCOMPARE(window.m_lastCommand.value("ops").toArray(),
-                 (QJsonArray{QJsonObject{{"op", "set-sequence"}, {"sequence", "main"}, {"width", 1080}, {"height", 1920}}}));
-        again->reject();
     }
 
     // composer.draw (D) is the composer's Draw, while the composer has the

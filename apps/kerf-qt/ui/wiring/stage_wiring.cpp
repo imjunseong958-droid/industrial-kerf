@@ -243,19 +243,9 @@ QMenu *StageWiring::zoomMenu() {
         connect(action, &QAction::triggered, this, [this, value] { setZoom(value); });
         m_zoomActions.append({value, action});
     }
-    menu->addSeparator();
-    m_sequenceSettings = menu->addAction(QStringLiteral("Sequence settings…"));
-    m_sequenceSettings->setObjectName(QStringLiteral("viewerZoom.sequenceSettings"));
-    connect(m_sequenceSettings, &QAction::triggered, this, [this] { m_window->triggerCommand(QStringLiteral("sequence.settings")); });
-    // Each time it opens: the zoom checked, Sequence settings as the registry has it.
+    // Each time it opens: the zoom checked.
     connect(menu, &QMenu::aboutToShow, this, [this] {
         for (const auto &[value, action] : std::as_const(m_zoomActions)) action->setChecked(value == zoom());
-        const QAction *settings = m_window->m_commands ? m_window->m_commands->action(QStringLiteral("sequence.settings")) : nullptr;
-        if (m_sequenceSettings) {
-            m_sequenceSettings->setEnabled(settings && settings->isEnabled());
-            m_sequenceSettings->setStatusTip(settings ? settings->statusTip() : QString());
-            if (settings) ui::setMenuKey(m_sequenceSettings, settings->shortcut().toString(QKeySequence::NativeText));
-        }
     });
     m_zoomMenu = menu;
     return menu;

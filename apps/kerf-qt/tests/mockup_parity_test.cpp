@@ -1,13 +1,13 @@
 // The whole editor against the approved minimal mockup (03-review-thread.html)
 // at its 1600 x 1000 canvas: in 16:9 and 9:16, the base
-// state and each of the three sheets, fed the seed (comments,
+// state and the Media sheet, fed the seed (comments,
 // proposals, a check, loudness and a render queue) as kerfd sends it, through
 // handleEvent. Each state's rects are checked against the brief's table, with no
 // gaps, cards, radii or margins around the three regions.
 //
 // With KERF_SCREENSHOT_DIR set, every state is saved under the mockup's query
-// state: <fmt>.png for ?fmt=, <fmt>-media.png, <fmt>-browser.png and
-// <fmt>-inspector.png for the sheets, and <fmt>-preview.png for ?preview=1.
+// state: <fmt>.png for ?fmt=, <fmt>-media.png for the sheet,
+// and <fmt>-preview.png for ?preview=1.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -17,15 +17,12 @@
 #include "command_registry.h"
 #include "design_tokens.h"
 #include "main_window.h"
-#include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "ui/editor_bus.h"
-#include "ui/inspector_column.h"
 #include "ui/review_model.h"
 #include "ui/wiring/review_wiring.h"
 #include "ui/agent_hud.h"
 #include "ui/comment_row.h"
-#include "ui/browser_panel.h"
 #include "ui/proposal_card.h"
 #include "ui/wiring/stage_wiring.h"
 #include "ui/wiring/timeline_wiring.h"
@@ -244,9 +241,7 @@ private slots:
                 const char *command;
                 QWidget *widget;
                 int width;
-            } sheets[] = {{StageShell::Sheet::Media, "media", "window.project", window.m_projectPanel, 272},
-                          {StageShell::Sheet::Browser, "browser", "window.effects", window.m_browserPanel, 304},
-                          {StageShell::Sheet::Inspector, "inspector", "window.inspector", window.m_inspectorColumn, 304}};
+            } sheets[] = {{StageShell::Sheet::Media, "media", "window.project", window.m_projectPanel, 272}};
             for (const auto &sheet : sheets) {
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
@@ -283,7 +278,7 @@ private slots:
             checkConversationRows(window);
             window.close();
         }
-        QCOMPARE(states, 2 * (1 + 3 + 1));
+        QCOMPARE(states, 2 * (1 + 1 + 1));
     }
 
     // The timeline at the design's size: its strip, heads, default heights, and a
@@ -413,9 +408,7 @@ private:
     }
 
     void checkNothingElseShows(MainWindow &window) {
-        for (QWidget *closed : {static_cast<QWidget *>(window.m_projectPanel), static_cast<QWidget *>(window.m_browserPanel),
-                                static_cast<QWidget *>(window.m_inspectorColumn)})
-            QVERIFY2(!closed->isVisible(), qPrintable(closed->objectName()));
+        QVERIFY(!window.m_projectPanel->isVisible());
         QVERIFY(!window.findChild<QStatusBar *>());
         QVERIFY(window.m_stageWiring->previewChip()->isHidden());
         QVERIFY(window.m_stageWiring->hud()->isHidden());

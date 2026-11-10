@@ -10,7 +10,7 @@
 //                   alpha checkerboard for media with alpha; or a list
 //   the Index page  for the chosen media, its shots (the cuts as ranges),
 //                   silences and loudest moments from the engine's media
-//                   index; a row seeks the Source viewer
+//                   index
 //   Roles           the rest of the band: one row per role of the program's
 //                   tracks (tracks without one under their kind), whose box
 //                   switches all of that role's tracks; Edit roles…
@@ -145,7 +145,7 @@ signals:
     void importRequested();
     // The Index page needs `mediaId`'s media_index.
     void indexWanted(const QString &mediaId);
-    // An Index row: show `mediaId` in the Source viewer at `seconds`.
+    // An Index row was chosen: `mediaId` at `seconds`.
     void seekRequested(const QString &mediaId, double seconds);
     // A role's box: switch these tracks on or off.
     void rolesToggled(const QStringList &tracks, bool enabled);
