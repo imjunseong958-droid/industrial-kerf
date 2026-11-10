@@ -354,14 +354,6 @@ private slots:
         // The card's Accept and Reject go out as the proposal's.
         window.bus()->run(QStringLiteral("comment.reject"), QJsonObject{{"proposal", "p4"}});
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "reject"}, {"proposalId", "p4"}, {"revision", 3}}));
-        // The trays' commands and the base state are a radio group.
-        window.m_commands->action(QStringLiteral("workspace.deliver"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Deliver);
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.deliver"))->isChecked());
-        QVERIFY(!window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
-        window.m_commands->action(QStringLiteral("workspace.review"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::None);
-        QVERIFY(window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
     }
 
     void syncConflictsSayWhereAndWhoseVersionWasKept() {

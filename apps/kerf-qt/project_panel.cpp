@@ -226,7 +226,7 @@ private:
     QListWidget *m_view;
 };
 
-// A label in a type style and ink (the trays' helper).
+// A label in a type style and ink.
 QLabel *label(const QString &text, const tokens::TypeStyle &style, QRgb ink) {
     return shell::text(text, style, ink);
 }

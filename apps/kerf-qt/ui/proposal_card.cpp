@@ -153,62 +153,6 @@ QWidget *spaced(QWidget *child, int top) {
 
 } // namespace
 
-// ------------------------------------------------------------------ VectorscopeChip
-
-VectorscopeChip::VectorscopeChip(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("vectorscopeChip"));
-    setFixedSize(kSize, kSize);
-    setAccessibleName(QStringLiteral("Vectorscope, before and after"));
-}
-
-scope::VectorscopeGeometry VectorscopeChip::geometry() {
-    scope::VectorscopeGeometry g;
-    g.centre = QPointF(kSize / 2.0, kSize / 2.0);
-    g.radius = kRadius;
-    g.scale = kRadius / 0.5;
-    return g;
-}
-
-scope::Density VectorscopeChip::bin(const QImage &frame) {
-    if (frame.isNull()) return {};
-    return scope::vectorscope(scope::scopeSource(frame, QSize(160, 90)), QSize(kSize, kSize), geometry(), 1.0);
-}
-
-void VectorscopeChip::setFrames(const QImage &before, const QImage &after) {
-    m_before = bin(before);
-    m_after = bin(after);
-    update();
-}
-
-void VectorscopeChip::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-    p.setBrush(color(well));
-    p.drawRoundedRect(QRectF(rect()), radius::small, radius::small);
-    const scope::VectorscopeGeometry g = geometry();
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(color(track2), 1));
-    p.drawEllipse(g.centre, g.radius, g.radius);
-    // The six 75% colour-bar targets.
-    static const std::array<std::array<int, 3>, 6> bars{{{191, 0, 0}, {191, 0, 191}, {0, 0, 191}, {0, 191, 191}, {0, 191, 0}, {191, 191, 0}}};
-    for (const auto &bar : bars) {
-        const QPointF at = g.point(scope::chroma(bar[0], bar[1], bar[2]), 1.0);
-        p.drawRect(QRectF(at.x() - 2, at.y() - 2, 4, 4));
-    }
-    p.setPen(Qt::NoPen);
-    const auto dots = [&p](const scope::Density &density, QColor ink) {
-        p.setBrush(ink);
-        for (int y = 0; y < density.height; ++y)
-            for (int x = 0; x < density.width; ++x)
-                if (density.at(x, y)) p.drawEllipse(QPointF(x + 0.5, y + 0.5), 0.8, 0.8);
-    };
-    QColor before = color(ink3);
-    before.setAlphaF(0.5);
-    dots(m_before, before);
-    dots(m_after, color(ink));
-}
-
 // ------------------------------------------------------------------ VersionButton
 
 VersionButton::VersionButton(QWidget *parent) : QAbstractButton(parent) {
@@ -311,16 +255,12 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     auto *colour = new QHBoxLayout(m_colourBox);
     colour->setContentsMargins(0, 4, 0, 4);
     colour->setSpacing(12);
-    m_chip = new VectorscopeChip;
-    colour->addWidget(m_chip, 0, Qt::AlignTop);
     auto *colourText = new QVBoxLayout;
     colourText->setContentsMargins(0, 0, 0, 0);
     colourText->setSpacing(4);
     m_colourTitle = makeLabel(control, ink);
     m_colourParams = makeLabel(monoSmall, ink2);
-    m_colourLegend = makeLabel(meta, ink3);
-    m_colourLegend->setText(QStringLiteral("Vectorscope: before grey, after white"));
-    for (QLabel *label : {m_colourTitle, m_colourParams, m_colourLegend}) {
+    for (QLabel *label : {m_colourTitle, m_colourParams}) {
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         colourText->addWidget(label);
     }
@@ -467,7 +407,6 @@ void ProposalCard::setColour(const Colour &colour) {
 
 void ProposalCard::clearColour() { setColour(Colour{}); }
 
-void ProposalCard::setColourFrames(const QImage &before, const QImage &after) { m_chip->setFrames(before, after); }
 
 void ProposalCard::setDiff(const QStringList &lines) {
     m_diffLines = lines;

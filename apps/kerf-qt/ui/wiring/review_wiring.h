@@ -12,7 +12,6 @@
 //   resolve       → comment_set {id, resolved}
 //   accept/reject → accept/reject {proposalId, revision}
 //   Preview       → preview {proposalId, start, duration} / preview_exit
-//   colour chip   → effect_previews {clip, at, effects: [{fx, params, key}]}
 //   row menu      → edit add-marker, comment_set {id, body | deleted}
 //   More menu     → export_comments {format, includeResolved, path?}
 //
@@ -66,7 +65,6 @@ public:
     bool reject(const QString &proposalId);
     bool preview(const QString &proposalId, bool on);
     bool previewRange(const QString &proposalId, double start, double duration);
-    bool requestColour(const QString &versionId);
     bool exportComments(const QString &format, const QString &path = QString());
     bool convertToMarker(const QString &commentId);
     bool deleteComment(const QString &commentId);

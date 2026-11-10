@@ -522,7 +522,7 @@ private slots:
                                        {"width", 1920}, {"height", 1080}, {"duration", 4}});
         bin.setSources(sources);
         QCOMPARE(bin.mediaCount(), 12);
-        bin.resize(tokens::layout::bin - 1, tokens::layout::band - 1);
+        bin.resize(tokens::layout::bin - 1, 343);
         bin.show();
         QVERIFY(QTest::qWaitForWindowExposed(&bin));
         QCoreApplication::processEvents();
@@ -1411,7 +1411,7 @@ private slots:
             catalog.append(QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", QStringLiteral("fx%1").arg(index)},
                                        {"name", QStringLiteral("Effect %1").arg(index)}, {"category", "Color"}});
         effects.setCatalog(catalog);
-        effects.resize(tokens::layout::browser - 1, tokens::layout::band - 1 - tokens::layout::strip);
+        effects.resize(tokens::layout::browser - 1, 343 - tokens::layout::strip);
         effects.show();
         QVERIFY(QTest::qWaitForWindowExposed(&effects));
         QCoreApplication::processEvents();

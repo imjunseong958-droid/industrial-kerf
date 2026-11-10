@@ -28,7 +28,7 @@ constexpr QRgb surround = qRgb(0x0e, 0x0e, 0x0e);    // around the region picker
 constexpr QRgb surroundDim = qRgb(0x05, 0x05, 0x05); // window background
 constexpr QRgb well = qRgb(0x12, 0x12, 0x12);        // bin grid, timeline lanes, scope plots, vectorscope chip
 constexpr QRgb chrome = qRgb(0x17, 0x17, 0x17);      // toolbar, strips, inspector, bands, status, pin bar, diff box
-constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // comments panel, Source viewer, menus, tooltips, tray panes, clips
+constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // comments panel, Source viewer, menus, tooltips, clips
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
@@ -152,7 +152,7 @@ namespace radius {
 constexpr qreal small = 4;   // small chips, clips, thumbs, keyframe button, segment inner
 constexpr qreal marker = 5;  // agent scrub marker
 constexpr qreal control = 6; // buttons, icon buttons, menu items, chips
-constexpr qreal card = 8;    // cards, menus, composer, tray panes, proposal card, HUD
+constexpr qreal card = 8;    // cards, menus, composer, proposal card, HUD
 constexpr qreal panel = 12;  // comments panel, Source viewer
 } // namespace radius
 
@@ -245,7 +245,6 @@ constexpr int strip = 28;       // the sheets' strips, the timeline's
 constexpr int inspector = 304;  // the Inspector sheet's width
 constexpr int bin = 272;        // the Media sheet's width
 constexpr int browser = 304;    // the Effects and titles sheet's width
-constexpr int band = 344;       // a tray's height
 // The minimal layout (ui/stage_shell.h).
 constexpr int sidebar = 240;            // the folders and conversations, at the left
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way

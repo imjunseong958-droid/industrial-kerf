@@ -1262,31 +1262,6 @@ pub static COMMANDS: &[Command] = &[
         Menu::Collaborate,
         2,
     ),
-    // The base state and the two trays over it, one chosen at a time.
-    checkable(keys(
-        frontend(menu(
-            command("workspace.review", "Review", always),
-            Menu::Window,
-            0,
-        )),
-        &["Alt+Shift+2"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("workspace.finish", "Finish", always),
-            Menu::Window,
-            0,
-        )),
-        &["Alt+Shift+3"],
-    )),
-    checkable(keys(
-        frontend(menu(
-            command("workspace.deliver", "Deliver", always),
-            Menu::Window,
-            0,
-        )),
-        &["Alt+Shift+4"],
-    )),
     // The sheets over the conversation; the same command opens and closes one.
     checkable(keys(
         frontend(menu(
@@ -1389,10 +1364,6 @@ pub static KEYMAPS: &[Keymap] = &[
             ("tool.roll", &[]),
             ("tool.slip", &[]),
             ("tool.slide", &[]),
-            // Final Cut Pro's workspaces are on ⌃⇧2, ⌃⇧3, …
-            ("workspace.review", &["Meta+Shift+2"]),
-            ("workspace.finish", &["Meta+Shift+3"]),
-            ("workspace.deliver", &["Meta+Shift+4"]),
         ],
     },
 ];
@@ -1914,27 +1885,9 @@ mod tests {
     }
 
     #[test]
-    fn base_state_trays_sheets_and_viewer_switches_have_their_keys_in_every_keymap() {
+    fn sheets_and_viewer_switches_have_their_keys() {
         let kerf = Keymap::find("kerf");
         let premiere = Keymap::find("premiere");
-        let fcp = Keymap::find("fcp");
-        for (index, id) in ["workspace.review", "workspace.finish", "workspace.deliver"]
-            .into_iter()
-            .enumerate()
-        {
-            let command = find(id).unwrap();
-            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
-            assert_eq!(command.menu, Some(Menu::Window), "{id}");
-            // On the same keys as before the Edit workspace went.
-            let number = index + 2;
-            assert_eq!(kerf.keys(command), [format!("Alt+Shift+{number}")], "{id}");
-            assert_eq!(
-                premiere.keys(command),
-                [format!("Alt+Shift+{number}")],
-                "{id}"
-            );
-            assert_eq!(fcp.keys(command), [format!("Meta+Shift+{number}")], "{id}");
-        }
         let keys = |id: &str| kerf.keys(find(id).unwrap());
         assert_eq!(keys("window.project"), ["Ctrl+1"]);
         assert_eq!(keys("window.inspector"), ["Ctrl+4"]);
@@ -1988,9 +1941,6 @@ mod tests {
             "mark.clear",
             "inspector.audio",
             "inspector.info",
-            "workspace.review",
-            "workspace.finish",
-            "workspace.deliver",
             "view.safeZones",
             "inspector.video",
             "timeline.addTrack",
@@ -2141,7 +2091,7 @@ mod tests {
             json!({"type": "reject", "proposalId": "p1", "revision": 7})
         );
         assert!(run("comment.accept", &context, &Value::Null).is_err());
-        assert!(run("workspace.review", &context, &Value::Null).is_err());
+        assert!(run("view.sidebar", &context, &Value::Null).is_err());
     }
 
     #[test]

@@ -8,8 +8,7 @@
 // ≡ button (appMenu), the centred title and subtitle, the two format icons and
 // the Export split. Engine paths:
 //   ≡ menu              the registry's commands: window.project, window.effects,
-//                       window.inspector (the sheets), workspace.finish,
-//                       workspace.deliver (the trays), file.import,
+//                       window.inspector (the sheets), file.import,
 //                       sequence.settings, app.preferences; View ▸ the mask
 //                       tools, view.annotations, view.safeZones, viewer.zoom,
 //                       the keymap choice and the collab.* commands
@@ -36,7 +35,6 @@
 //   blocking notes      ReviewModel::counts().blocking (else the comments
 //                       event's open blocking threads); Render master and
 //                       Export's master wait (kerfd refuses them too)
-//   EDL locators        deliver::option/setOption (deliver/<project>/edlLocators)
 
 #include "test_friends.h"
 
@@ -138,17 +136,14 @@ public:
     // one, else the last comments event's).
     int blockingCount() const;
     // Sends export {quality, codec} for "master" or "review". A master waits
-    // while a blocking note is open, as Deliver's Render master does: it is
-    // not sent, and holdForNotes says why.
+    // while a blocking note is open: it is not sent, and holdForNotes says
+    // why.
     bool sendExport(const QString &quality);
     // Says which note holds a master back and where, and shows the blocking
     // notes in Review to resolve; `refusal` is kerfd's, when it refused.
     void holdForNotes(const QString &refusal = QString());
     // The Export menu, built each time it opens.
     void buildExportMenu();
-    // The QSettings key of the EDL-locators choice for this project: the
-    // Deliver paperwork's own (deliver::settingsKey); empty without a project.
-    QString edlLocatorsKey() const;
 
     // "Revision 22 · 2 commits to pull": the Sync menu's header.
     QString syncSummary() const;

@@ -114,8 +114,7 @@ public:
     // ---- the review --------------------------------------------------------
     void setReview(ReviewModel *model);
     ReviewModel *review() const { return m_model.data(); }
-    // The snapshot's timeline and proposal timelines (change rows, versions,
-    // the colour preview), and the program's frame rate.
+    // The snapshot's timeline and proposal timelines (change rows, versions), and the program's frame rate.
     void setSnapshot(const QJsonObject &snapshot);
     // The program as the window shows it (clips named after their media),
     // for the names the cards give clips and tracks.
@@ -144,16 +143,8 @@ public:
     // The proposal a running preview shows (empty when none).
     void setPreviewProposal(const QString &proposalId);
     QString previewProposal() const { return m_previewProposal; }
-    // An effect_preview answering a colour card: key "before:<id>" or "after:<id>".
-    bool setEffectPreview(const QString &key, const QImage &frame);
-    // The effect_previews request for a colour card's version: the clip at
-    // the playhead with its current effect ("before:<id>") and the proposed
-    // one ("after:<id>"); empty when the version is no colour change.
-    QJsonObject colourPreviewRequest(const QString &versionId) const;
     // A proposal accepted or rejected from this panel: its card settles to one line.
     void markSettledHere(const QString &proposalId, bool accepted);
-    // Whether the editor is in its base state, no tray open (first-show placement).
-    void setReviewWorkspace(bool review) { m_reviewWorkspace = review; }
 
     // ---- threads -----------------------------------------------------------
     QList<ThreadWidget *> threadWidgets() const;
@@ -166,9 +157,6 @@ public:
     void openThread(const QString &threadId, bool flash = true);
     // Scrolls the list so the thread's root sits 12 under the list's top.
     void scrollToThread(const QString &threadId);
-    // What lies over the panel's bottom, such as a tray: the list gets as much more to scroll, so
-    // that its last thread can still come out from under.
-    void setCoveredBelow(int pixels);
     // The first-show placement (spec 4.5); runs once.
     void placeFirst();
     bool placed() const { return m_placed; }
@@ -292,8 +280,6 @@ signals:
     void changedPartsRequested(const QString &proposalId);
     // A card's Versions menu chose the version it shows.
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
-    // A colour card opened without its before/after frames.
-    void colourPreviewWanted(const QString &proposalId);
     void postRequested();
     void stopRequested();
     void drawRequested();
@@ -330,9 +316,6 @@ private:
     struct ColourChange {
         QString clip;
         QString fx;
-        bool hadBefore = false;
-        QJsonObject before;
-        QJsonObject after;
         QString title;
         QString params;
     };
@@ -377,7 +360,6 @@ private:
     double m_fps = 25.0;
     double m_playhead = 0.0;
     bool m_connected = false;
-    bool m_reviewWorkspace = true;
     bool m_placed = false;
     std::function<ProposalChange(const QString &)> m_describer;
     std::function<QString(double)> m_reviewLink;
@@ -387,8 +369,6 @@ private:
     bool m_modelsChoosable = false;
     QJsonArray m_checkRows;
     QString m_previewProposal;
-    QHash<QString, QImage> m_effectFrames;
-    QSet<QString> m_colourRequested;
     QHash<QString, bool> m_settledHere;
     QHash<QString, QDateTime> m_settledAt;
     QHash<QString, CardState> m_cardState;
@@ -421,7 +401,6 @@ private:
     ui::FadeScrollArea *m_list = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
-    int m_coveredBelow = 0;
     QList<ThreadWidget *> m_threads;
     FootageSheet *m_footage = nullptr;
     bool m_holdingProposals = false;

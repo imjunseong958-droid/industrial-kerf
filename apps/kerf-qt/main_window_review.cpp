@@ -161,9 +161,6 @@ void ReviewWiring::attach(ChatPanel *panel) {
         m_panel->setNamedTimeline(m_bus->timeline());
     });
     connect(m_bus, &EditorBus::viewAsChanged, this, [this](const QString &person) { m_model->setViewAs(person); });
-    connect(m_bus, &EditorBus::workspaceChanged, this, [this](const QString &name) {
-        if (m_panel) m_panel->setReviewWorkspace(name == QLatin1String("Review"));
-    });
     // Cross-region requests.
     connect(m_bus, &EditorBus::openThread, this, [this](const QString &id) {
         if (m_panel) m_panel->openThread(id);
@@ -203,7 +200,6 @@ void ReviewWiring::attach(ChatPanel *panel) {
     connect(panel, &ChatPanel::previewRequested, this, &ReviewWiring::preview);
     // ⌘↩ and Esc act on the version the pinned card shows.
     connect(panel, &ChatPanel::shownVersionChanged, this, &ReviewWiring::syncPinnedProposal);
-    connect(panel, &ChatPanel::colourPreviewWanted, this, &ReviewWiring::requestColour);
     // The composer's Stop, Esc while busy, and the drafting row's Stop: one abort each.
     connect(panel, &ChatPanel::stopRequested, w, [w] {
         if (!w->execute(QStringLiteral("ai.stop"))) return;
@@ -441,12 +437,6 @@ bool ReviewWiring::previewRange(const QString &proposalId, double start, double 
                                    {QStringLiteral("duration"), duration}});
 }
 
-bool ReviewWiring::requestColour(const QString &versionId) {
-    if (!m_panel) return false;
-    const QJsonObject request = m_panel->colourPreviewRequest(versionId);
-    return !request.isEmpty() && m_bus->send(request);
-}
-
 bool ReviewWiring::exportComments(const QString &format, const QString &path) {
     QJsonObject command{{QStringLiteral("type"), QStringLiteral("export_comments")},
                         {QStringLiteral("format"), format},
@@ -529,15 +519,6 @@ void ReviewWiring::handleEvent(const QString &type, const QJsonObject &event) {
             m_panel->setPreviewProposal(QString());
         else if (event.contains(QStringLiteral("proposalId")))
             m_panel->setPreviewProposal(event.value(QStringLiteral("proposalId")).toString());
-    } else if (type == QLatin1String("effect_preview")) {
-        const QString key = event.value(QStringLiteral("key")).toString();
-        if (!m_panel || (!key.startsWith(QLatin1String("before:")) && !key.startsWith(QLatin1String("after:")))) return;
-        const int width = event.value(QStringLiteral("width")).toInt();
-        const int height = event.value(QStringLiteral("height")).toInt();
-        const QByteArray rgba = QByteArray::fromBase64(event.value(QStringLiteral("rgba")).toString().toLatin1());
-        if (width <= 0 || height <= 0 || rgba.size() < qsizetype(width) * height * 4) return;
-        const QImage image(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4, QImage::Format_RGBA8888);
-        m_panel->setEffectPreview(key, image.copy());
     } else if (type == QLatin1String("error")) {
         const QString command = event.value(QStringLiteral("command")).toString();
         if (!m_panel || !command.startsWith(QLatin1String("comment_"))) return;

@@ -12,7 +12,6 @@
 
 #include "ask_prompt.h"
 #include "chat_panel.h"
-#include "finish_tray.h"
 #include "stage_shell.h"
 #include "command_registry.h"
 #include "comment_row.h"
@@ -769,7 +768,6 @@ private slots:
     void firstShowPlacesTheCurrentThread() {
         Seeded seed;
         ChatPanel &panel = seed.panel;
-        panel.setReviewWorkspace(false);
         QVERIFY(panel.placed());
         QCOMPARE(seed.model.currentThread(), QStringLiteral("c-1708"));
         CommentRow *root = panel.threadWidget("c-1708")->root();
@@ -827,29 +825,6 @@ private slots:
         QTest::mousePress(reply, Qt::LeftButton, {}, QPoint(4, 4));
         QCOMPARE(selected.size(), 1);
         QCOMPARE(selected.last().first().toString(), QStringLiteral("c-2614-r1"));
-    }
-
-    void aThreadOpenedUnderATrayComesOutFromUnder() {
-        SeededWindow seeded;
-        MainWindow &window = seeded.window;
-        window.m_shell->setTray(StageShell::Tray::Finish);
-        seeded.settle();
-        ChatPanel *chat = window.m_chat;
-        const int trayTop = window.m_finishTray->mapTo(&window, QPoint()).y();
-        // The list's very end rises above the tray, or a last thread that fits the panel stays
-        // under it, as the fourth of four did in the real window.
-        QScrollBar *bar = chat->scroll()->verticalScrollBar();
-        bar->setValue(bar->maximum());
-        seeded.settle();
-        QVERIFY(chat->m_content->mapTo(&window, QPoint(0, chat->m_content->height() - chat->m_coveredBelow)).y() <= trayTop);
-        bar->setValue(0);
-        emit window.m_bus->openThread(QStringLiteral("c-2718"));
-        seeded.settle();
-        QVERIFY(chat->threadWidget("c-2718")->root()->mapTo(&window, QPoint()).y() < trayTop);
-        // With the tray gone the list has only its own length to scroll.
-        window.m_shell->setTray(StageShell::Tray::None);
-        seeded.settle();
-        QCOMPARE(chat->m_coveredBelow, 0);
     }
 
     void windowWiresTheReviewModel() {
@@ -1126,61 +1101,19 @@ private slots:
         QCOMPARE(seeded.last(QStringLiteral("reject")).value("proposalId").toString(), QStringLiteral("proposal-kg"));
     }
 
-    // The colour card asks for the clip's frame before and after the
-    // proposed effect parameters, and bins both in the 72 pt vectorscope.
-    void colourPreviewRequestsEffectPreviewsWithParams() {
+    // A colour change on one clip has a line of its own on the card, and
+    // asks the engine for no frames.
+    void aColourChangeHasItsOwnLine() {
         SeededWindow seeded;
         MainWindow &window = seeded.window;
         ProposalCard *sea = window.m_chat->card("proposal-kg");
         QVERIFY(sea && sea->hasColour());
+        QCOMPARE(sea->colour().clip, QStringLiteral("sea"));
+        QCOMPARE(sea->colour().fx, QStringLiteral("color.huehue"));
+        QVERIFY(!sea->colourTitle()->text().isEmpty());
         sea->changesLink()->click();
         seeded.settle();
-        const QJsonObject request = seeded.last(QStringLiteral("effect_previews"));
-        QCOMPARE(request.value("clip").toString(), QStringLiteral("sea"));
-        QCOMPARE(request.value("width").toInt(), 160);
-        const double at = request.value("at").toDouble();
-        QVERIFY(at >= 8.48 && at < 13.2);
-        const QJsonArray effects = request.value("effects").toArray();
-        QCOMPARE(effects.size(), 2);
-        QCOMPARE(effects.at(0).toObject().value("key").toString(), QStringLiteral("before:proposal-kg"));
-        QCOMPARE(effects.at(0).toObject().value("fx").toString(), QStringLiteral("color.huehue"));
-        QVERIFY(!effects.at(0).toObject().contains("params")); // a new effect: at its defaults
-        QCOMPARE(effects.at(1).toObject().value("key").toString(), QStringLiteral("after:proposal-kg"));
-        QCOMPARE(effects.at(1).toObject().value("params").toObject(), (QJsonObject{{"hue", -9}, {"sat", -6}}));
-        // The frames land in the chip.
-        const auto frame = [](const QString &key, QColor color) {
-            const QImage image = solid(color);
-            return QJsonObject{{"type", "effect_preview"}, {"clip", "sea"}, {"fx", "color.huehue"}, {"key", key},
-                               {"width", image.width()}, {"height", image.height()},
-                               {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()),
-                                                                       image.sizeInBytes()).toBase64())}};
-        };
-        window.m_reviewWiring->handleEvent(QStringLiteral("effect_preview"), frame(QStringLiteral("before:proposal-kg"), QColor(160, 60, 160)));
-        window.m_reviewWiring->handleEvent(QStringLiteral("effect_preview"), frame(QStringLiteral("after:proposal-kg"), QColor(60, 160, 170)));
-        QVERIFY(sea->chip()->hasBefore() && sea->chip()->hasAfter());
-        QVERIFY(sea->chip()->before().total > 0);
-        // Magenta lands up and right of the centre, cyan down and left.
-        const scope::Density &before = sea->chip()->before();
-        const scope::Density &after = sea->chip()->after();
-        double bx = 0, ax = 0;
-        quint64 bn = 0, an = 0;
-        for (int y = 0; y < before.height; ++y)
-            for (int x = 0; x < before.width; ++x) {
-                bx += before.at(x, y) * x;
-                bn += before.at(x, y);
-                ax += after.at(x, y) * x;
-                an += after.at(x, y);
-            }
-        QVERIFY(bn && an);
-        QVERIFY(bx / bn > ax / an);
-        // Opening it again asks for nothing more.
-        const int requests = int(std::count_if(seeded.sent.begin(), seeded.sent.end(),
-                                               [](const QJsonObject &c) { return c.value("type") == QStringLiteral("effect_previews"); }));
-        sea->changesLink()->click();
-        sea->changesLink()->click();
-        QCOMPARE(int(std::count_if(seeded.sent.begin(), seeded.sent.end(),
-                                   [](const QJsonObject &c) { return c.value("type") == QStringLiteral("effect_previews"); })),
-                 requests);
+        QVERIFY(seeded.last(QStringLiteral("effect_previews")).isEmpty());
     }
 
     // The Preview checkbox renders the proposal's range; off plays the program again.

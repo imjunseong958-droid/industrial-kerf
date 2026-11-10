@@ -95,7 +95,6 @@ int main(int argc, char **argv) {
     bool renderPreview = false;
     int quitAfterMs = 0;
     QSize windowSize;
-    QString workspace;
     QStringList positional;
     QStringList links;
     for (int i = 1; i < argc; ++i) {
@@ -116,9 +115,6 @@ int main(int argc, char **argv) {
             // WxH, e.g. 1600x1000 (the design's canvas).
             const QStringList parts = QString::fromUtf8(argv[++i]).split(QLatin1Char('x'));
             if (parts.size() == 2) windowSize = QSize(parts.at(0).toInt(), parts.at(1).toInt());
-        } else if (argument == QStringLiteral("--workspace") && i + 1 < argc) {
-            // Review (the base state), or the tray to open over it: Finish, Deliver.
-            workspace = QString::fromUtf8(argv[++i]);
         } else if (kerf::links::isReviewLink(argument)) {
             // kerf://<project>/rev<N>[@TC], from a shell (macOS hands a
             // clicked link over as a QFileOpenEvent instead).
@@ -237,7 +233,6 @@ int main(int argc, char **argv) {
     }
     if (!shown && !project.isEmpty()) {
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd, startGeometry);
-        if (!workspace.isEmpty()) window->openTray(workspace);
         if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
         if (!startLook.isNull()) window->takeOverFrom(startLook, startBox);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);

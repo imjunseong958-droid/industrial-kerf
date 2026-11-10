@@ -4,8 +4,7 @@
 // holds the region's own state, so a region changes the window's behaviour
 // only here and in main_window_inspector.cpp.
 //
-// It feeds the Inspector what the bus hears (the Finish workspace for the
-// colour wheels, media_info for the Info pane, the review's threads for the
+// It feeds the Inspector what the bus hears (media_info for the Info pane, the review's threads for the
 // proposal hint), answers its requests (Show a proposal's thread, Save
 // effects preset through look_save) and runs the ⌃⌥5 / ⌃⌥6 commands.
 

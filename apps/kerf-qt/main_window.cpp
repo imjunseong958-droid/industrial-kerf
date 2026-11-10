@@ -26,10 +26,7 @@
 #include "user_guide.h"
 #include "viewer_widget.h"
 #include "browser_panel.h"
-#include "deliver_tray.h"
 #include "editor_bus.h"
-#include "finish_tray.h"
-#include "deliver_pane.h"
 #include "inspector_column.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/bin_wiring.h"
@@ -169,12 +166,6 @@ void MainWindow::pollBridge() {
     }
     KerfFrame frame{};
     if (kerf_bridge_frame(m_bridge, &frame)) showProgramFrame(frame);
-    KerfSignal signal{};
-    if (kerf_bridge_signal(m_bridge, &signal) && signal.pixels && signal.width && signal.height &&
-        signal.length >= size_t(signal.width) * size_t(signal.height) * 8) {
-        const QImage image(signal.pixels, int(signal.width), int(signal.height), int(signal.width) * 8, QImage::Format_RGBA64);
-        m_bus->setProgramSignal(image.copy(), int(signal.curve));
-    }
 }
 
 bool MainWindow::showProgramFrame(const KerfFrame &frame) {
@@ -192,7 +183,7 @@ bool MainWindow::showProgramFrame(const KerfFrame &frame) {
     m_viewer->setFrame(shown, frame.time);
     // The sequence's thumbnail in the Inspector, with nothing selected.
     if (m_selectedClip.isEmpty()) m_inspector->setProgramFrame(shown);
-    // The frame the viewer got, for the scopes and the regions.
+    // The frame the viewer got, for the regions.
     m_bus->setProgramFrame(shown);
     return true;
 }
@@ -628,8 +619,8 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
 }
 
 void MainWindow::buildUi() {
-    // The three regions run edge to edge under the toolbar; the sheets, the
-    // trays and the bars lie over them (StageShell).
+    // The three regions run edge to edge under the toolbar; the sheets and the
+    // bars lie over them (StageShell).
     m_shell = new StageShell(this);
     m_artwork = new MediaArtwork(this);
 
@@ -1006,13 +997,10 @@ void MainWindow::buildPreferences() {
 }
 
 void MainWindow::buildShell() {
-    m_finishTray = new FinishTray(nullptr, m_bus);
-    m_deliverTray = new DeliverTray(nullptr, m_bus);
     m_shell->setRegions(m_viewer, m_chat, m_timelinePanel);
     buildSidebar();
     buildAgentViews();
     m_shell->setSheets(m_projectPanel, m_browserPanel, m_inspectorColumn);
-    m_shell->setTrays(m_finishTray, m_deliverTray);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
     // Each sheet closes from the end of its strip.
     const auto closeButton = [this](StageShell::Sheet sheet) {
@@ -1033,7 +1021,6 @@ void MainWindow::buildShell() {
         syncPanelCommands();
         if (sheet == StageShell::Sheet::None) settleFocus();
     });
-    connect(m_shell, &StageShell::trayChanged, this, &MainWindow::applyTray);
     // A page chosen in a sheet's own strip keeps its commands in step.
     connect(m_browserPanel, &BrowserPanel::pageChanged, this, &MainWindow::syncPanelCommands);
     // The error bar shown or dismissed, the toolbar's subtitle follows it.
@@ -1109,14 +1096,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("tool.slip"), TimelineTool::Slip}, {QStringLiteral("tool.slide"), TimelineTool::Slide},
     };
     connect(m_commands, &CommandRegistry::toggled, this, [this, tools](const QString &id, bool checked) {
-        if (id.startsWith(QStringLiteral("workspace."))) {
-            // The base state, or a tray over it; choosing an open tray again
-            // goes back, and choosing the base state again leaves it chosen.
-            if (id == QStringLiteral("workspace.finish")) m_shell->setTray(checked ? StageShell::Tray::Finish : StageShell::Tray::None);
-            else if (id == QStringLiteral("workspace.deliver")) m_shell->setTray(checked ? StageShell::Tray::Deliver : StageShell::Tray::None);
-            else m_shell->setTray(StageShell::Tray::None);
-            syncPanelCommands();
-        } else if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
+        if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
         else if (id == QStringLiteral("inspector.video")) {
             m_shell->setSheet(StageShell::Sheet::Inspector);
             m_inspectorColumn->setPage(InspectorColumn::Page::Inspector);
@@ -1236,14 +1216,8 @@ void MainWindow::setupActions() {
     }
     setupToolbar(menus);
     setupPictureCommands();
-    m_finishTray->setActions(m_commands->action(QStringLiteral("ai.ask")), m_commands->action(QStringLiteral("qc.run")));
-    m_deliverTray->setRenderAction(m_commands->action(QStringLiteral("export.master")));
-    // Deliver keys its outputs and paperwork by the project (not through the
-    // window's file path).
-    m_deliverTray->setProjectDirectory(m_projectDirectory);
-    if (DeliverPane *pane = m_inspectorColumn ? m_inspectorColumn->deliverPane() : nullptr) pane->setProjectDirectory(m_projectDirectory);
-    // The base state, for every region.
-    applyTray();
+    syncPanelCommands();
+    settleFocus();
     // The keys start on the timeline, so activating the window gives them to no button.
     m_timeline->setFocus(Qt::OtherFocusReason);
 }
@@ -1251,18 +1225,12 @@ void MainWindow::setupActions() {
 void MainWindow::closeEvent(QCloseEvent *event) { QMainWindow::closeEvent(event); }
 
 void MainWindow::keyPressEvent(QKeyEvent *event) {
-    // An Esc no widget under the focus took: the sheet closes, else the tray.
+    // An Esc no widget under the focus took: the sheet closes.
     if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && m_shell && m_shell->dismiss()) {
         event->accept();
         return;
     }
     QMainWindow::keyPressEvent(event);
-}
-
-void MainWindow::openTray(const QString &name) {
-    m_shell->setTray(name.compare(QLatin1String("Finish"), Qt::CaseInsensitive) == 0 ? StageShell::Tray::Finish
-                     : name.compare(QLatin1String("Deliver"), Qt::CaseInsensitive) == 0 ? StageShell::Tray::Deliver
-                                                                                        : StageShell::Tray::None);
 }
 
 void MainWindow::showEvent(QShowEvent *event) {
@@ -2091,26 +2059,12 @@ bool MainWindow::runCommand(const QString &id, const QJsonObject &params) {
     return execute(command, params);
 }
 
-void MainWindow::applyTray() {
-    // The regions hear it and apply theirs: the Inspector's wheels in Finish,
-    // the Inspector column's page.
-    const StageShell::Tray tray = m_shell->tray();
-    m_bus->setWorkspace(tray == StageShell::Tray::Finish ? QStringLiteral("Finish")
-                        : tray == StageShell::Tray::Deliver ? QStringLiteral("Deliver")
-                                                            : QStringLiteral("Review"),
-                        /*reapplied=*/true);
-    const QWidget *open = m_shell->widgetOf(tray);
-    m_chat->setCoveredBelow(open ? open->height() : 0);
-    syncPanelCommands();
-    settleFocus();
-}
-
 void MainWindow::settleFocus() {
-    // A sheet or tray that held the keys may have closed, the timeline may
+    // A sheet that held the keys may have closed, the timeline may
     // just have come back from being disabled, or none held them yet; Qt hands
     // the keys on as if Tab were pressed, to whichever control comes next. The
     // timeline's keys only work from the timeline, so they go there, unless
-    // someone is typing or working in a sheet or tray. This window's own focus
+    // someone is typing or working in a sheet. This window's own focus
     // child: a menu or dialog over it keeps its own. With no timeline open the
     // keys wait in the conversation.
     QWidget *holder = focusWidget();
@@ -2129,18 +2083,16 @@ void MainWindow::settleFocus() {
 }
 
 void MainWindow::uncoverComposer() {
-    // At wide formats a sheet and a tray lie over the composer.
+    // At wide formats a sheet lies over the composer.
     const QWidget *composer = m_chat->composer();
     const QRect rect(composer->mapTo(m_shell, QPoint(0, 0)), composer->size());
     const auto covers = [&rect](const QWidget *over) { return over && over->isVisible() && over->geometry().intersects(rect); };
     if (covers(m_shell->widgetOf(m_shell->sheet()))) m_shell->setSheet(StageShell::Sheet::None);
-    if (covers(m_shell->widgetOf(m_shell->tray()))) m_shell->setTray(StageShell::Tray::None);
 }
 
 void MainWindow::syncPanelCommands() {
     if (!m_commands || !m_shell) return;
     const StageShell::Sheet sheet = m_shell->sheet();
-    const StageShell::Tray tray = m_shell->tray();
     const bool inspector = sheet == StageShell::Sheet::Inspector;
     const bool browser = sheet == StageShell::Sheet::Browser;
     const bool presets = browser && m_browserPanel->page() == BrowserPanel::Page::Presets;
@@ -2154,9 +2106,6 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("inspector.video"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Video},
         {QStringLiteral("inspector.audio"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Audio},
         {QStringLiteral("inspector.info"), m_inspectorColumn && m_inspectorColumn->kind() == InspectorColumn::Kind::Info},
-        {QStringLiteral("workspace.review"), tray == StageShell::Tray::None},
-        {QStringLiteral("workspace.finish"), tray == StageShell::Tray::Finish},
-        {QStringLiteral("workspace.deliver"), tray == StageShell::Tray::Deliver},
         {QStringLiteral("view.sidebar"), m_shell->panes().sidebar},
         {QStringLiteral("view.picture"), m_shell->panes().picture},
         {QStringLiteral("view.timeline"), m_shell->panes().timeline},

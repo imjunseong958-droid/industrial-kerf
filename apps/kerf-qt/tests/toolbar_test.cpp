@@ -5,6 +5,7 @@
 #include "fixtures.h"
 #include "test_registry.h"
 
+#include "master_output.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "composer.h"
@@ -13,7 +14,6 @@
 #include "editor_common.h"
 #include "project_panel.h"
 #include "main_window.h"
-#include "render_queue_view.h"
 #include "review_model.h"
 #include "sequence_settings.h"
 #include "timeline_widget.h"
@@ -177,7 +177,6 @@ private slots:
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
         const QStringList expected{QStringLiteral("Media"), QStringLiteral("Effects and titles"), QStringLiteral("Inspector"), QStringLiteral("|"),
                                    QStringLiteral("Sidebar"), QStringLiteral("Picture"), QStringLiteral("Timeline"), QStringLiteral("Follow Kerf"), QStringLiteral("|"),
-                                   QStringLiteral("Scopes, loudness, QC"), QStringLiteral("Deliver"), QStringLiteral("|"),
                                    QStringLiteral("Import…"), QStringLiteral("Sequence settings…"), QStringLiteral("Settings…"), QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);
         // Keys as the registry has them, never written here.
@@ -192,14 +191,6 @@ private slots:
         QVERIFY(findAction(menu, QStringLiteral("appMenu.media"))->isChecked());
         findAction(menu, QStringLiteral("appMenu.media"))->trigger();
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-        wiring->buildAppMenu();
-        findAction(menu, QStringLiteral("appMenu.finish"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
-        QCOMPARE(window.m_bus->workspace(), QStringLiteral("Finish"));
-        wiring->buildAppMenu();
-        findAction(menu, QStringLiteral("appMenu.deliver"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Deliver);
-        window.m_shell->setTray(StageShell::Tray::None);
         // View: the masks, annotations, safe zones, zoom, keyboard and sync.
         wiring->buildAppMenu();
         QMenu *view = findAction(menu, QStringLiteral("appMenu.view"))->menu();
@@ -424,8 +415,7 @@ private slots:
 
     // Export is a split button: "Export  Master" exports the chosen quality
     // (export {master, prores_hq} or {review, h264}); the chevron opens the
-    // menu: Master and Draft, Render preview, Preflight, Render master, the
-    // EDL locators choice and Open Deliver workspace.
+    // menu: Master and Draft, Render preview, Preflight and Render master.
     void toolbarExportSplitButton() {
         MainWindow window{QString(), QString()};
         window.resize(1366, 768);
@@ -451,8 +441,8 @@ private slots:
         QCOMPARE(ui::tipShortcut(button->mainPart()),
                  window.m_commands->action(QStringLiteral("export.master"))->shortcut().toString(QKeySequence::NativeText));
         QTest::mouseClick(button->mainPart(), Qt::LeftButton);
-        // The Deliver tray's Master command; without a project folder it names no folder or file.
-        QCOMPARE(window.m_lastCommand, deliver::exportCommand(deliver::output(window.m_projectDirectory, QStringLiteral("master"))));
+        // The master's command; without a project folder it names no folder or file.
+        QCOMPARE(window.m_lastCommand, deliver::masterCommand(window.m_projectDirectory));
         QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
         QVERIFY(!window.m_lastCommand.contains("codec"));
 
@@ -469,8 +459,7 @@ private slots:
         QCOMPARE(ui::menuRole(items.at(4)), ui::MenuRole::Header);
         QVERIFY(button->masterAction()->isChecked() && button->masterAction()->actionGroup()->isExclusive());
         QVERIFY(findAction(menu, QStringLiteral("exportRenderMaster")));
-        QVERIFY(findAction(menu, QStringLiteral("exportEdlLocators"))->isCheckable());
-        QCOMPARE(items.last()->text(), QStringLiteral("Open Deliver"));
+        QCOMPARE(items.last(), findAction(menu, QStringLiteral("exportRenderMaster")));
         menu->hide();
 
         // Draft: the label follows, and the main part exports a review copy.
@@ -485,13 +474,6 @@ private slots:
         QCOMPARE(button->quality(), QStringLiteral("preview"));
         button->masterAction()->trigger();
         QCOMPARE(button->quality(), QStringLiteral("full"));
-
-        // Open Deliver.
-        button->showMenu();
-        findAction(menu, QStringLiteral("exportOpenDeliver"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Deliver);
-        menu->hide();
-        window.m_shell->setTray(StageShell::Tray::None);
 
         // Its outline is line2 on the chrome; the label is ink over ink3.
         const QImage image = button->grab().toImage();
@@ -574,14 +556,9 @@ private slots:
         QCOMPARE(prefill.size(), 1);
         QCOMPARE(prefill.at(0).at(0).toString(), QStringLiteral("@Kerf bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"));
         QCOMPARE(prefill.at(0).at(1).toString(), QStringLiteral("c-2718"));
-        // A passed row shows the QC pane in Finish.
-        QSignalSpy highlight(window.m_bus, &EditorBus::highlightPane);
+        // A passed row is there to read.
         wiring->buildExportMenu();
-        findAction(menu, QStringLiteral("preflight.loudness.integrated"))->trigger();
-        QCOMPARE(window.m_shell->tray(), StageShell::Tray::Finish);
-        QCOMPARE(highlight.size(), 1);
-        QCOMPARE(highlight.at(0).at(0).toString(), QStringLiteral("qc"));
-        window.m_shell->setTray(StageShell::Tray::None);
+        QVERIFY(findAction(menu, QStringLiteral("preflight.loudness.integrated")));
 
         // A failed check says so and runs again; its rows stay.
         window.handleEvent(QJsonObject{{"type", "check"}, {"status", "failed"}, {"message", "The check was cancelled"}});
@@ -590,10 +567,10 @@ private slots:
         QVERIFY(findAction(menu, QStringLiteral("preflight.loudness.true_peak")));
     }
 
-    // Export follows Deliver: its master waits while a blocking note is
+    // A master waits while a blocking note is
     // open, says which and where, and brings up the blocking notes to
     // resolve; a draft still goes. kerfd's own refusal is shown the same way.
-    void exportWaitsForBlockingNotesAsDeliverDoes() {
+    void exportWaitsForBlockingNotes() {
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
         window.show();
@@ -687,8 +664,8 @@ private slots:
         QVERIFY(render->isEnabled());
         window.m_lastCommand = {};
         render->trigger();
-        // The Deliver tray's Master command; without a project folder it names no folder or file.
-        QCOMPARE(window.m_lastCommand, deliver::exportCommand(deliver::output(window.m_projectDirectory, QStringLiteral("master"))));
+        // The master's command; without a project folder it names no folder or file.
+        QCOMPARE(window.m_lastCommand, deliver::masterCommand(window.m_projectDirectory));
         QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
         QVERIFY(!window.m_lastCommand.contains("codec"));
         window.m_bus->setReview(nullptr);
@@ -698,37 +675,18 @@ private slots:
         wiring->buildExportMenu();
         QVERIFY(!findAction(menu, QStringLiteral("exportRenderMaster"))->isEnabled());
 
-        // EDL locators: without a project there is nothing to keep it for.
-        QVERIFY(wiring->edlLocatorsKey().isEmpty());
-        wiring->buildExportMenu();
-        QVERIFY(!findAction(menu, QStringLiteral("exportEdlLocators"))->isEnabled());
-
-        // With one it is the Deliver paperwork's own option: on by default,
-        // kept under Deliver's key for the project (deliver::settingsKey,
-        // named after the folder and told apart by its path), and a change
-        // tells Deliver so its paperwork rebuilds.
-        window.m_projectDirectory = QStringLiteral("/tmp/kerf-toolbar-test/atlas");
-        const QString key = wiring->edlLocatorsKey();
-        QCOMPARE(key, deliver::settingsKey(window.m_projectDirectory, QStringLiteral("edlLocators")));
-        QVERIFY(key.startsWith(QStringLiteral("deliver/atlas")) && key.endsWith(QStringLiteral("/edlLocators")));
+        // With a project the master goes to deliveries/ as <project>_master,
+        // unless the project keeps another folder, name or codec for it.
+        const QString project = QStringLiteral("/tmp/kerf-toolbar-test/atlas");
+        const QString key = deliver::settingsKey(project, QStringLiteral("outputs"));
+        QVERIFY(key.startsWith(QStringLiteral("deliver/atlas~")) && key.endsWith(QStringLiteral("/outputs")));
         QSettings().remove(key);
-        wiring->buildExportMenu();
-        QAction *locators = findAction(menu, QStringLiteral("exportEdlLocators"));
-        QVERIFY(locators->isEnabled());
-        QVERIFY(locators->isChecked());
-        QSignalSpy changed(deliver::Settings::instance(), &deliver::Settings::changed);
-        locators->trigger();
-        QVERIFY(!deliver::option(window.m_projectDirectory, QStringLiteral("edlLocators")));
-        QCOMPARE(changed.count(), 1);
-        QCOMPARE(changed.at(0).at(0).toString(), window.m_projectDirectory);
-        wiring->buildExportMenu();
-        QVERIFY(!findAction(menu, QStringLiteral("exportEdlLocators"))->isChecked());
-        // A change made in Deliver shows here.
-        deliver::setOption(window.m_projectDirectory, QStringLiteral("edlLocators"), true);
-        wiring->buildExportMenu();
-        QVERIFY(findAction(menu, QStringLiteral("exportEdlLocators"))->isChecked());
+        QCOMPARE(deliver::masterCommand(project),
+                 (QJsonObject{{"type", "export"}, {"quality", "master"}, {"output", "deliveries/"}, {"name", "atlas_master"}}));
+        QSettings().setValue(key, QStringLiteral(R"({"master":{"folder":"out/","name":"atlas_v2","codec":"hevc"}})"));
+        QCOMPARE(deliver::masterCommand(project),
+                 (QJsonObject{{"type", "export"}, {"quality", "master"}, {"codec", "hevc"}, {"output", "out/"}, {"name", "atlas_v2"}}));
         QSettings().remove(key);
-        window.m_projectDirectory.clear();
     }
 
     // The title: "Project · Sequence" over "Edited 2 min ago · rev 22",

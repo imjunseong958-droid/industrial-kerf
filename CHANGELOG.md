@@ -52,11 +52,19 @@ on `main`; its section here becomes the release's notes on GitHub
 - Rolling Shutter Repair now repairs HDR footage in an HDR sequence, where it had
   left the picture as it was.
 - The editor is being cut down to the conversation, the picture and the
-  timeline. Gone so far: Customise Keyboard and the Graph Editor. Edit ▸ Keyboard
-  Shortcuts still chooses between the Kerf, Premiere Pro and Final Cut Pro
-  layouts; keys of your own no longer apply. Keyframes and their curves are
-  still the project's, for Kerf and `kerf` to write; a motion path is still
-  drawn and dragged on the picture.
+  timeline. Gone so far: Customise Keyboard, the Graph Editor, and the Finish and
+  Deliver trays (scopes, the loudness meter, the QC pane, the render queue and
+  the paperwork).
+  - Edit ▸ Keyboard Shortcuts still chooses between the Kerf, Premiere Pro and
+    Final Cut Pro layouts; keys of your own no longer apply.
+  - Keyframes and their curves are still the project's, for Kerf and `kerf` to
+    write; a motion path is still drawn and dragged on the picture.
+  - Sequence ▸ Run QC still runs the checks, and the Export menu's Preflight
+    lists what they found. Export still renders a Draft or a Master, the master
+    to `deliveries/` as before. The editor no longer writes a delivery's
+    paperwork (comments CSV, markers, EDL, captions).
+  - A proposal that changes one clip's colour says so in a line, without the
+    small vectorscope.
 
 ## 0.1.1
 

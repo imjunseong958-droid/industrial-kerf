@@ -7,14 +7,13 @@
 //   Move logo reveal to the snare                     (UI 500 13/20; click opens)
 //   [2 changes ⌄]                             [v2 ⌄]  (versions menu)
 //   Logo_reveal · V4        → 00:00:26:12      +17f   (open: the changes)
-//   [72 vectorscope] B003_C011 · Hue vs hue          (a colour change on one clip)
+//   B003_C011 · Hue vs hue                           (a colour change on one clip)
 //   - … / + …                                         (Script: the diff)
 //   [□ Preview] [Script]          [Reject] [Accept]   (open: the footer)
 //
 // Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
 // guest mode the buttons give way to "Waiting for the editor".
 
-#include "scope_math.h"
 #include "test_friends.h"
 
 #include <QAbstractButton>
@@ -37,35 +36,6 @@ class Button;
 class CheckBox;
 class GhostButton;
 } // namespace ui
-
-// The 72 pt vectorscope chip (.vs): the well, the r 32 graticule in track2
-// with the six 4 x 4 75% targets, the proposal's before frame as a grey
-// cloud (#828282 at 50%) and its after frame in ink, dots r 0.8.
-class VectorscopeChip final : public QWidget {
-    Q_OBJECT
-public:
-    static constexpr int kSize = 72;
-    static constexpr double kRadius = 32;
-    explicit VectorscopeChip(QWidget *parent = nullptr);
-    // Either may be null (not rendered yet).
-    void setFrames(const QImage &before, const QImage &after);
-    bool hasBefore() const { return !m_before.isEmpty(); }
-    bool hasAfter() const { return !m_after.isEmpty(); }
-    const scope::Density &before() const { return m_before; }
-    const scope::Density &after() const { return m_after; }
-    // The graticule the chip bins with: centre (36, 36), radius 32.
-    static scope::VectorscopeGeometry geometry();
-    // A frame binned as the chip draws it.
-    static scope::Density bin(const QImage &frame);
-    QSize sizeHint() const override { return QSize(kSize, kSize); }
-
-protected:
-    void paintEvent(QPaintEvent *) override;
-
-private:
-    scope::Density m_before;
-    scope::Density m_after;
-};
 
 // The version button (.vbtn): 20 tall, radius 4, mono 11 ink3 "v2" and a
 // 14 pt chevron; hover hover2 and ink.
@@ -95,9 +65,9 @@ public:
         QString proposalId;
         QString label; // "v1 00:00:26:14 · +19 fr"
     };
-    // A colour change on one clip, previewed in the chip.
+    // A colour change on one clip, said in a line of its own.
     struct Colour {
-        QString clip;   // the clip's id, for effect_previews
+        QString clip;   // the clip's id
         QString fx;     // the effect's id
         QString title;  // "B003_C011 · Hue vs hue"
         QString params; // "Hue −9°, Sat −6%"
@@ -120,7 +90,6 @@ public:
     void clearColour();
     bool hasColour() const { return !m_colour.clip.isEmpty(); }
     Colour colour() const { return m_colour; }
-    void setColourFrames(const QImage &before, const QImage &after);
     void setDiff(const QStringList &lines);
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
@@ -156,7 +125,6 @@ public:
     VersionButton *versionButton() const { return m_version; }
     QWidget *changesBox() const { return m_changes; }
     QList<QWidget *> changeRows() const { return m_changeRows; }
-    VectorscopeChip *chip() const { return m_chip; }
     QWidget *colourBox() const { return m_colourBox; }
     QLabel *colourTitle() const { return m_colourTitle; }
     QLabel *colourParams() const { return m_colourParams; }
@@ -210,10 +178,8 @@ private:
     QVBoxLayout *m_changesLayout = nullptr;
     QList<QWidget *> m_changeRows;
     QWidget *m_colourBox = nullptr;
-    VectorscopeChip *m_chip = nullptr;
     QLabel *m_colourTitle = nullptr;
     QLabel *m_colourParams = nullptr;
-    QLabel *m_colourLegend = nullptr;
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
     ui::Button *m_watch = nullptr;

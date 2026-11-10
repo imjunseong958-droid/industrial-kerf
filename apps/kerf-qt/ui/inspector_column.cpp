@@ -1,6 +1,5 @@
 #include "inspector_column.h"
 #include "components.h"
-#include "deliver_pane.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
 #include "inspector_panel.h"
@@ -18,8 +17,8 @@ namespace kerf {
 namespace {
 
 // The column's pages. The column keeps its width (304 at the design's
-// window) whichever page shows: its least size is the Inspector's and the
-// Deliver pane's, not the Source monitor's.
+// window) whichever page shows: its least size is the Inspector's, not the
+// Source monitor's.
 class PageStack final : public QStackedWidget {
 public:
     QWidget *loose = nullptr;
@@ -93,16 +92,7 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     empty->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(tokens::color(tokens::ink3).name()));
     m_empty = empty;
     m_stack->addWidget(m_empty);
-    m_deliver = new DeliverPane(nullptr, bus);
-    m_stack->addWidget(m_deliver);
     layout->addWidget(m_stack, 1);
-    if (m_bus)
-        // A tray opening or closing goes back to the Inspector (spec 10) and
-        // shows the Deliver pane in Deliver.
-        connect(m_bus, &EditorBus::workspaceChanged, this, [this] {
-            setPage(Page::Inspector);
-            showCurrent();
-        });
     showCurrent();
 }
 
@@ -174,11 +164,6 @@ InspectorColumn::Kind InspectorColumn::kindFromId(const QString &id) {
     return Kind::Video;
 }
 
-bool InspectorColumn::deliverShown() const {
-    return m_page == Page::Inspector && m_kind == Kind::Video && m_bus &&
-           m_bus->workspace() == QLatin1String("Deliver");
-}
-
 QAbstractButton *InspectorColumn::pageButton(Page page) const {
     return m_pageButtons[int(page)];
 }
@@ -199,9 +184,7 @@ void InspectorColumn::setKeys(const QString &inspector, const QString &video, co
 }
 
 void InspectorColumn::showCurrent() {
-    QWidget *shown = m_page == Page::Source ? static_cast<QWidget *>(m_source)
-                     : deliverShown()       ? static_cast<QWidget *>(m_deliver)
-                                            : static_cast<QWidget *>(m_inspector);
+    QWidget *shown = m_page == Page::Source ? static_cast<QWidget *>(m_source) : static_cast<QWidget *>(m_inspector);
     m_stack->setCurrentWidget(shown ? shown : m_empty);
 }
 

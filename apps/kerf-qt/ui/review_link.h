@@ -7,7 +7,7 @@
 // <project> is the slug of the project's folder name (links::slug): lower
 // case, every run of anything but letters and digits as one '-', so it is
 // a valid URL host. links::make builds every link the editor writes (the
-// comments' Copy link, Deliver's review link). Following one opens or raises the
+// comments' Copy link). Following one opens or raises the
 // project's editor and seeks to the timecode; a project this Mac does not
 // know (no open window, not among the launcher's recent projects) is an
 // error the user is shown, never a guess.
