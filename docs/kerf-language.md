@@ -131,7 +131,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   a model was asked for and with which seed. It merges apart from the file, as
   `reel=` does. A recipe says what to run:
 
-  ```text
+  ```
   kerf-recipe 1
   # The opening shot, drawn from its scene.
   run vork render open.scene.json --frame-end 95 --out {out}
