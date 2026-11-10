@@ -3,9 +3,7 @@
 //! A render draws the picture with the compositor (`kerf-compose`) and
 //! pipes its frames to FFmpeg, which encodes them with the program's sound
 //! as the graph mixes it. Effects draw as part of each frame, so nothing is
-//! baked first. The graph drawing the picture too, as renders did before
-//! the compositor, is kept for one release: [`RenderOptions::graph`], or
-//! `KERF_GRAPH_RENDER=1` in the environment.
+//! baked first.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -79,10 +77,6 @@ fn hardware_encoder_opens(family: HardwareEncoderFamily, codec: VideoCodec) -> b
         args.extend(["-pix_fmt", "yuv420p", "-f", "null", "-"].map(String::from));
         run_allow_failure(resolve_ffmpeg_bin(), &args).is_ok_and(|output| output.code == 0)
     })
-}
-
-fn draft_post_filters() -> Vec<String> {
-    vec!["scale=-2:360".into(), "fps=15".into()]
 }
 
 fn draft_codec_args() -> Vec<String> {
@@ -224,9 +218,6 @@ pub struct RenderOptions {
     /// when the graph draws the picture. Without one, the graph cannot
     /// render a project with raster effects.
     pub project_dir: Option<std::path::PathBuf>,
-    /// Draw the picture with the FFmpeg graph, as renders did before the
-    /// compositor. Kept for one release.
-    pub graph: bool,
     /// What the file is for. A draft has its own encoding and takes only
     /// [`RenderPreset::Standard`].
     pub preset: RenderPreset,
@@ -342,7 +333,6 @@ impl Default for RenderOptions {
             force_software: false,
             codec: VideoCodec::H264,
             project_dir: None,
-            graph: false,
             preset: RenderPreset::Standard,
             mastering: MasteringDisplay::P3_1000,
             content_light: None,
@@ -615,93 +605,29 @@ pub fn encoder_available(name: &str) -> bool {
     })
 }
 
-/// Whether a render draws the picture with the graph.
-fn graph_render(opts: &RenderOptions) -> bool {
-    opts.graph || std::env::var_os("KERF_GRAPH_RENDER").is_some_and(|value| value == "1")
-}
-
 /// Whether `sequence` of `project` (the first when absent) renders as
 /// [`render_program`] would render it: the error says what it cannot draw
 /// or mix. Reads no media.
-pub fn renderable(
-    project: &kerf_model::Project,
-    sequence: Option<&str>,
-    opts: &RenderOptions,
-) -> Result<()> {
+pub fn renderable(project: &kerf_model::Project, sequence: Option<&str>) -> Result<()> {
     let catalog = kerf_model::Catalog::builtin();
-    let options = ProgramOptions {
-        sequence: sequence.map(str::to_owned),
-        audio_only: !graph_render(opts),
-        ..ProgramOptions::default()
-    };
-    if graph_render(opts) {
-        // The graph bakes raster effects first; compile what it would.
-        let planned = crate::raster::plan(project, catalog, sequence, |_| {
-            Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
-        })
-        .unwrap_or_else(|never| match never {});
-        compile_program(&planned.project, catalog, &options)?;
-    } else {
-        Compositor::new(
-            project,
-            catalog,
-            &ComposeOptions {
-                sequence: sequence.map(str::to_owned),
-                captions: true,
-                ..Default::default()
-            },
-        )?;
-        compile_program(project, catalog, &options)?;
-    }
-    Ok(())
-}
-
-/// The ffmpeg arguments that render `sequence` (the first one when `None`)
-/// of `project`, or `[from, to)` of it, and the output duration in seconds.
-pub fn render_program_args(
-    project: &kerf_model::Project,
-    sequence: Option<&str>,
-    range: Option<(kerf_model::Time, kerf_model::Time)>,
-    opts: &RenderOptions,
-) -> Result<(Vec<String>, f64)> {
-    let compiled = compile_program(
+    Compositor::new(
         project,
-        kerf_model::Catalog::builtin(),
+        catalog,
+        &ComposeOptions {
+            sequence: sequence.map(str::to_owned),
+            captions: true,
+            ..Default::default()
+        },
+    )?;
+    compile_program(
+        project,
+        catalog,
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),
-            range,
-            video_post_filters: if opts.draft {
-                draft_post_filters()
-            } else {
-                Vec::new()
-            },
             ..ProgramOptions::default()
         },
     )?;
-    if kerf_core::program::program_sequence(project, sequence)
-        .is_ok_and(|top| top.color != ColorSpace::default())
-    {
-        return Err(EngineError::msg(
-            "the FFmpeg graph draws in Rec.709; an HDR sequence needs the compositor",
-        ));
-    }
-    let encoding = encoding(opts, ColorSpace::default())?;
-    let mut args = crate::ffmpeg::program_decode_prefix(&compiled.argv);
-    args.extend(compiled.argv.iter().skip(1).cloned());
-    args.extend(encoding.video);
-    if encoding.pix_fmt != "yuv420p" {
-        // The graph finishes in 4:2:0; the codec needs its own format.
-        args.extend(["-pix_fmt".into(), encoding.pix_fmt.into()]);
-    }
-    args.extend(encoding.output);
-    args.extend([
-        "-r".into(),
-        compiled.rate_arg(),
-        "-t".into(),
-        crate::program::secs(compiled.duration),
-        opts.output.clone(),
-    ]);
-    Ok((args, compiled.duration.seconds()))
+    Ok(())
 }
 
 /// Render a project with a caller-owned cancellation token.
@@ -716,20 +642,7 @@ pub fn render_program_with_cancellation<F>(
 where
     F: FnMut(f64),
 {
-    if !graph_render(opts) {
-        return render_composited(project, sequence, range, opts, cancellation, on_progress);
-    }
-    let baked;
-    let project = match &opts.project_dir {
-        Some(directory) => {
-            let cache = crate::derivatives::DerivativeCache::new(directory);
-            baked = crate::raster::bake(project, sequence, &cache, cancellation)?;
-            &baked
-        }
-        None => project,
-    };
-    let (args, duration) = render_program_args(project, sequence, range, opts)?;
-    run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
+    render_composited(project, sequence, range, opts, cancellation, on_progress)
 }
 
 pub fn render_program<F>(
@@ -781,7 +694,6 @@ fn composited_render(
         &ProgramOptions {
             sequence: sequence.map(str::to_owned),
             range,
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )?;
@@ -1165,7 +1077,7 @@ mod tests {
 
     #[test]
     fn production_software_uses_budgeted_x264() {
-        let (args, _) = render_program_args(
+        let render = composited_render(
             &project(),
             None,
             None,
@@ -1174,8 +1086,10 @@ mod tests {
                 force_software: true,
                 ..RenderOptions::default()
             },
+            (160, 120),
         )
-        .expect("args");
+        .expect("render");
+        let args = &render.args;
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "-c:v" && pair[1] == "libx264"));
@@ -1183,52 +1097,6 @@ mod tests {
             .iter()
             .any(|arg| arg == "veryfast" || arg == "faster" || arg == "medium"));
         assert!(args.windows(2).any(|pair| pair[0] == "-threads"));
-    }
-
-    #[test]
-    fn draft_renders_scale_down_with_fast_encoding() {
-        let (args, _) = render_program_args(
-            &project(),
-            None,
-            None,
-            &RenderOptions {
-                output: "out.mp4".into(),
-                draft: true,
-                ..RenderOptions::default()
-            },
-        )
-        .expect("args");
-        let graph = args
-            .iter()
-            .position(|arg| arg == "-filter_complex")
-            .map(|index| args[index + 1].as_str())
-            .expect("filter_complex");
-        assert!(graph.contains("scale=-2:360") && graph.contains("fps=15"));
-        assert!(args.iter().any(|arg| arg == "ultrafast"));
-        assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
-    }
-
-    #[test]
-    fn range_render_args_seek_before_input_not_after_the_graph() {
-        let rate = kerf_model::Rate::FPS_24;
-        let (args, duration) = render_program_args(
-            &project(),
-            None,
-            Some((rate.time_of(48), rate.time_of(120))),
-            &RenderOptions {
-                output: "out.mp4".into(),
-                draft: true,
-                ..RenderOptions::default()
-            },
-        )
-        .expect("args");
-        assert_eq!(duration, 3.0);
-        let graph = args
-            .iter()
-            .position(|arg| arg == "-filter_complex")
-            .expect("filter");
-        assert!(args[..graph].windows(2).any(|pair| pair[0] == "-ss"));
-        assert!(!args[graph..].windows(2).any(|pair| pair[0] == "-ss"));
     }
 
     #[test]
@@ -1346,12 +1214,6 @@ mod tests {
         );
         assert!(!args.iter().any(|arg| arg == "yuv420p"));
         assert_eq!(args.last().map(String::as_str), Some("master.mov"));
-
-        // The graph finishes in 4:2:0, so the master converts it.
-        let (args, _) = render_program_args(&project(), None, None, &opts).expect("args");
-        assert_eq!(flag(&args, "-c:v"), Some("prores_ks"));
-        assert_eq!(flag(&args, "-pix_fmt"), Some("yuv422p10le"));
-        assert_eq!(flag(&args, "-c:a"), Some("pcm_s24le"));
     }
 
     #[test]
@@ -1443,7 +1305,6 @@ mod tests {
             ..RenderOptions::default()
         };
         assert!(composited_render(&project(), None, None, &draft, (160, 120)).is_err());
-        assert!(render_program_args(&project(), None, None, &draft).is_err());
     }
 
     #[test]

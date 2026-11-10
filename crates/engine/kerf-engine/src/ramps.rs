@@ -29,7 +29,6 @@ fn mixed(project: &Project, sequence: &Id, from: Time, to: Time) -> Option<Read>
         &ProgramOptions {
             sequence: Some(sequence.to_string()),
             range: Some((low, high)),
-            audio_only: true,
             ..ProgramOptions::default()
         },
     )

@@ -218,7 +218,7 @@ fn grey_frames_with(
     // Read as it writes: an FFmpeg that says more than a pipe holds (a decoder failing on every
     // frame, as VideoToolbox does on 4:4:4) would otherwise wait on its stderr while this waits on
     // its stdout, and neither would end.
-    let errors = crate::raster::drain_stderr(&mut child);
+    let errors = crate::sidecar::drain_stderr(&mut child);
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut grey = vec![0u8; (width * height) as usize];
     let mut frame = 0u64;

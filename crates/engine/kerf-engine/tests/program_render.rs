@@ -288,7 +288,7 @@ fn a_cropped_cut_shows_its_region_between_full_frames() {
 }
 
 #[test]
-fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
+fn raster_effects_follow_their_keyframes() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(
         dir.path(),
@@ -298,51 +298,23 @@ fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
          \x20     fx color.huesaturation lightness={0f:100 47f:-100}\n",
     );
     let output = dir.path().join("lightened.mp4");
-    let composited = RenderOptions {
+    let options = RenderOptions {
         output: output.to_string_lossy().into_owned(),
         force_software: true,
         project_dir: Some(dir.path().to_path_buf()),
         ..RenderOptions::default()
     };
-    let options = RenderOptions {
-        graph: true,
-        ..composited.clone()
-    };
-    for options in [&composited, &options] {
-        render_program::<fn(f64)>(&project, None, None, options, None).expect("renders");
-        // Red at full lightness is white, and at none black.
-        assert!(
-            is(pixel(&output, 0), [255, 255, 255]),
-            "{:?}",
-            pixel(&output, 0)
-        );
-        assert!(
-            is(pixel(&output, 47), [0, 0, 0]),
-            "{:?}",
-            pixel(&output, 47)
-        );
-    }
-
-    // The graph bakes the effect once, and reads the bake again.
-    let bakes = || {
-        std::fs::read_dir(
-            dir.path()
-                .join(kerf_engine::derivatives::DERIVED_CACHE_RELATIVE_PATH),
-        )
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("raster-"))
-        .map(|entry| entry.path().join("frames.mkv"))
-        .collect::<Vec<_>>()
-    };
-    let baked = bakes();
-    assert_eq!(baked.len(), 1);
-    let made = std::fs::metadata(&baked[0]).unwrap().modified().unwrap();
-    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders again");
-    assert_eq!(bakes(), baked);
-    assert_eq!(
-        std::fs::metadata(&baked[0]).unwrap().modified().unwrap(),
-        made
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
+    // Red at full lightness is white, and at none black.
+    assert!(
+        is(pixel(&output, 0), [255, 255, 255]),
+        "{:?}",
+        pixel(&output, 0)
+    );
+    assert!(
+        is(pixel(&output, 47), [0, 0, 0]),
+        "{:?}",
+        pixel(&output, 47)
     );
 }
 

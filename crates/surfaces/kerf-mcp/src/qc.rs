@@ -8,7 +8,6 @@
 //! the [`Summary`], whether it passes or not.
 
 use crate::lint;
-use kerf_engine::render::RenderOptions;
 use kerf_lang::Clock;
 use kerf_model::{Catalog, Content, Media, Project, Sequence, Time};
 use kerf_runtime::CachedFacts;
@@ -394,9 +393,7 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
     }
     for sequence in &project.sequences {
         let id = sequence.id.as_str();
-        if let Err(error) =
-            kerf_engine::render::renderable(project, Some(id), &RenderOptions::default())
-        {
+        if let Err(error) = kerf_engine::render::renderable(project, Some(id)) {
             let mut finding = Finding::new(
                 Severity::Error,
                 "unrenderable",

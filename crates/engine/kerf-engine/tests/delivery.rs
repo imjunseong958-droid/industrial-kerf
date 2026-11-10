@@ -265,40 +265,6 @@ fn a_prores_master_probes_back_as_prores_hq_with_24_bit_pcm() {
         "ProRes 422 HQ: {text}"
     );
     assert!(text.contains("format_name=mov"), "QuickTime: {text}");
-
-    // The graph draws the picture in 4:2:0; its master is the same codec,
-    // tagged the same way.
-    let graphed = dir.path().join("graph.mov");
-    render_program::<fn(f64)>(
-        &project,
-        None,
-        None,
-        &RenderOptions {
-            output: graphed.to_string_lossy().into_owned(),
-            preset: RenderPreset::ProRes422Hq,
-            graph: true,
-            ..RenderOptions::default()
-        },
-        None,
-    )
-    .expect("renders the graph master");
-    let info = media_info(&graphed.to_string_lossy()).expect("probes");
-    assert_eq!(
-        (
-            info.codec.as_deref(),
-            info.profile.as_deref(),
-            info.audio_codec.as_deref()
-        ),
-        (Some("prores"), Some("HQ"), Some("pcm_s24le"))
-    );
-    assert_eq!(
-        (
-            info.color_space.as_deref(),
-            info.primaries.as_deref(),
-            info.transfer.as_deref()
-        ),
-        (Some("bt709"), Some("bt709"), Some("bt709"))
-    );
 }
 
 #[test]

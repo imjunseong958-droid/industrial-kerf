@@ -1,26 +1,23 @@
-//! Render compiler for `kerf-model` projects.
+//! The sound of a `kerf-model` program, as an FFmpeg filter graph.
 //!
-//! Lowers one sequence of a project to an FFmpeg filter graph. Times stay
-//! exact until they are printed: every position and duration is computed in
-//! flicks and written with nine decimals, and audio is placed by sample.
-//! Clip properties, effects, transitions, and generators are lowered from
-//! their catalog definitions; anything without a lowering is reported as
+//! Lowers the sound of one sequence of a project to a graph FFmpeg mixes;
+//! the picture is the compositor's (`kerf-compose`). Times stay exact until
+//! they are printed: every position and duration is computed in flicks and
+//! written with nine decimals, and sound is placed by sample. Clip
+//! properties, effects, and crossfades are lowered from their catalog
+//! definitions; anything without a lowering is reported as
 //! [`ProgramError::Unsupported`] naming the item, never silently dropped.
 //!
-//! - Picture tracks stack in sequence order, so a later track plays over an
-//!   earlier one. Sound comes only from audio tracks.
-//! - A transition plays across its cut using the clips' handles: a dissolve
-//!   or wipe reveals the incoming clip over the outgoing one, a dip fades
-//!   through its color, and an audio crossfade fades both sides.
-//! - A nested sequence is composited on its own canvas and placed like any
-//!   other picture; its sound is mixed and placed like a clip's.
-//! - An adjustment layer applies its effects to everything beneath it.
+//! - Sound comes only from audio tracks.
+//! - An audio crossfade plays across its cut using the clips' handles and
+//!   fades both sides.
+//! - A nested sequence's sound is mixed and placed like a clip's.
 
-use crate::overlay::{atempo_filters, captions_filter, escape_drawtext_text, fmt, CaptionCue};
+use crate::overlay::{atempo_filters, fmt};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{
-    Bezier, Catalog, Clip, Content, Domain, Engine, Id, Interp, Param, Project, Rate, Rgba,
-    Sequence, Time, Track, TrackKind, Transition, Value,
+    Bezier, Catalog, Clip, Content, Domain, Id, Interp, Param, Project, Rate,
+    Sequence, Time, Track, TrackKind, Value,
 };
 use std::collections::HashMap;
 
@@ -40,20 +37,12 @@ pub struct ProgramOptions {
     pub sequence: Option<String>,
     /// Render only `[from, to)` of the sequence, as an output starting at 0.
     pub range: Option<(Time, Time)>,
-    /// Filters applied to the finished picture before captions are drawn.
-    pub video_post_filters: Vec<String>,
-    /// Keep the picture's transparency: composite over nothing and finish
-    /// in RGBA, as for a file other renders read.
-    pub transparent: bool,
-    /// Compile the sound alone, for a picture drawn elsewhere: the program
-    /// maps `[audio]` and nothing else.
-    pub audio_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledProgram {
-    /// `ffmpeg -y <inputs> -filter_complex <graph> -map [video] -map [audio]`;
-    /// the caller appends codec arguments, the rate, and the output.
+    /// `ffmpeg -y <inputs> -filter_complex <graph> -map [audio]`; the caller
+    /// appends the picture's input, codec arguments, the rate, and the output.
     pub argv: Vec<String>,
     pub filter_complex: String,
     pub duration: Time,
@@ -136,34 +125,7 @@ pub fn compile_program(
             sequence.id
         )));
     }
-    let mut graph = Graph::new(project, catalog, sequence.rate);
-    let video = if options.audio_only {
-        None
-    } else {
-        let video = if options.transparent {
-            graph.composite(sequence, from, to, Background::Clear, false)?
-        } else {
-            match graph.concat_program(sequence, from, to)? {
-                Some(video) => video,
-                None => graph.composite(sequence, from, to, Background::Black, false)?,
-            }
-        };
-        let finished = graph.label("program");
-        graph.parts.push(format!(
-            "[{video}]{}format={}[{finished}]",
-            options
-                .video_post_filters
-                .iter()
-                .map(|filter| format!("{filter},"))
-                .collect::<String>(),
-            if options.transparent {
-                "rgba"
-            } else {
-                "yuv420p"
-            }
-        ));
-        Some(graph.captions(sequence, from, to, finished))
-    };
+    let mut graph = Graph::new(project, catalog);
     let audio = graph.mix(sequence, from, to, None)?;
     let (width, height) = canvas(sequence);
     let filter_complex = graph.parts.join(";\n");
@@ -183,9 +145,6 @@ pub fn compile_program(
         "-filter_complex".to_owned(),
         filter_complex.replace('\n', ""),
     ]);
-    if let Some(video) = video {
-        argv.extend(["-map".to_owned(), format!("[{video}]")]);
-    }
     argv.extend(["-map".to_owned(), format!("[{audio}]")]);
     Ok(CompiledProgram {
         argv,
@@ -228,12 +187,6 @@ pub fn canvas(sequence: &Sequence) -> (u32, u32) {
     (even(sequence.width), even(sequence.height))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Background {
-    Black,
-    Clear,
-}
-
 struct Input {
     path: String,
     seek: Time,
@@ -243,8 +196,8 @@ struct Input {
 /// How a clip enters across a transition.
 #[derive(Clone, Copy)]
 enum Reveal {
-    Dissolve,
-    Wipe { angle: f64, softness: f64 },
+    /// A picture's transition, which sound does not fade through.
+    Picture,
     Crossfade { equal_power: bool },
 }
 
@@ -256,13 +209,6 @@ struct Shown<'a> {
     to: Time,
     fade_in: Option<(Reveal, Time, Time)>,
     fade_out: Option<(Reveal, Time, Time)>,
-}
-
-/// A dip's color, between the two clips of its cut.
-struct Dip {
-    color: Rgba,
-    from: Time,
-    to: Time,
 }
 
 /// The decoded part of a shown clip inside a window, in its sequence's time.
@@ -324,7 +270,6 @@ impl Shown<'_> {
 struct Graph<'a> {
     project: &'a Project,
     catalog: &'a Catalog,
-    rate: Rate,
     next: u32,
     parts: Vec<String>,
     inputs: Vec<Input>,
@@ -333,11 +278,10 @@ struct Graph<'a> {
 }
 
 impl<'a> Graph<'a> {
-    fn new(project: &'a Project, catalog: &'a Catalog, rate: Rate) -> Self {
+    fn new(project: &'a Project, catalog: &'a Catalog) -> Self {
         Self {
             project,
             catalog,
-            rate,
             next: 0,
             parts: Vec::new(),
             inputs: Vec::new(),
@@ -369,7 +313,7 @@ impl<'a> Graph<'a> {
 
     // ---- tracks --------------------------------------------------------------
 
-    fn shown(&self, track: &'a Track, rate: Rate) -> Result<(Vec<Shown<'a>>, Vec<Dip>)> {
+    fn shown(&self, track: &'a Track, rate: Rate) -> Result<Vec<Shown<'a>>> {
         let mut shown: Vec<Shown<'a>> = track
             .clips
             .iter()
@@ -381,7 +325,6 @@ impl<'a> Graph<'a> {
                 fade_out: None,
             })
             .collect();
-        let mut dips = Vec::new();
         for transition in &track.transitions {
             let (Some(from), Some(to)) = (
                 track.clip_index(transition.from.as_str()),
@@ -397,18 +340,9 @@ impl<'a> Graph<'a> {
                     let middle = start + Time::from_flicks((end - start).flicks() / 2);
                     shown[from].to = middle;
                     shown[to].from = middle;
-                    dips.push(Dip {
-                        color: self.color(&transition.id, &transition.params, "dip", "color")?,
-                        from: start,
-                        to: end,
-                    });
                     continue;
                 }
-                "dissolve" => Reveal::Dissolve,
-                "wipe" => Reveal::Wipe {
-                    angle: self.static_number(transition, "wipe", "angle")?,
-                    softness: self.static_number(transition, "wipe", "softness")?,
-                },
+                "dissolve" | "wipe" => Reveal::Picture,
                 "crossfade" => Reveal::Crossfade {
                     equal_power: self.choice(&transition.params, "crossfade", "curve")
                         == "equal-power",
@@ -425,7 +359,7 @@ impl<'a> Graph<'a> {
             shown[to].from = start;
             shown[to].fade_in = Some((reveal, start, end));
         }
-        Ok((shown, dips))
+        Ok(shown)
     }
 
     /// The part of `item` inside `[from, to)`, with its source bounds.
@@ -459,272 +393,6 @@ impl<'a> Graph<'a> {
 
     // ---- picture ---------------------------------------------------------------
 
-    /// A whole sequence window as one picture stream starting at 0.
-    fn composite(
-        &mut self,
-        sequence: &'a Sequence,
-        from: Time,
-        to: Time,
-        background: Background,
-        with_captions: bool,
-    ) -> Result<String> {
-        let (width, height) = canvas(sequence);
-        let base = self.label("base");
-        let (color, format) = match background {
-            Background::Black => ("black", "yuv420p"),
-            Background::Clear => ("black@0", "rgba"),
-        };
-        self.parts.push(format!(
-            "color=c={color}:s={width}x{height}:r={}:d={},format={format}[{base}]",
-            rate_arg(self.rate),
-            secs(to - from)
-        ));
-        let mut current = base;
-        for track in &sequence.tracks {
-            if track.kind != TrackKind::Video || !track.enabled {
-                continue;
-            }
-            let (items, dips) = self.shown(track, sequence.rate)?;
-            for item in &items {
-                if !item.clip.enabled {
-                    continue;
-                }
-                if matches!(&item.clip.content, Content::Generator { fx, .. } if fx == "adjustment")
-                {
-                    if item.fade_in.is_some() || item.fade_out.is_some() {
-                        return Err(ProgramError::unsupported(
-                            &item.clip.id,
-                            "a transition on an adjustment layer",
-                        ));
-                    }
-                    current = self.adjustment(current, item.clip, from, to)?;
-                    continue;
-                }
-                let Some(portion) = self.portion(item, from, to) else {
-                    continue;
-                };
-                if let Some(layer) = self.picture(sequence, item, &portion, from)? {
-                    let out = self.label("layer");
-                    self.parts.push(format!(
-                        "[{current}][{}]overlay=x='{}':y='{}':eof_action=pass:shortest=0:format=auto:enable='between(t,{},{})'[{out}]",
-                        layer.label,
-                        layer.x,
-                        layer.y,
-                        secs(portion.lo - from),
-                        secs(portion.hi - from),
-                    ));
-                    current = out;
-                }
-            }
-            for dip in dips {
-                current = self.dip(sequence, current, &dip, from, to);
-            }
-        }
-        if with_captions {
-            current = self.captions(sequence, from, to, current);
-        }
-        Ok(current)
-    }
-
-    /// Draw the captions of every enabled subtitle track.
-    fn captions(&mut self, sequence: &Sequence, from: Time, to: Time, input: String) -> String {
-        let mut current = input;
-        for track in &sequence.tracks {
-            if track.kind != TrackKind::Subtitle || !track.enabled {
-                continue;
-            }
-            for clip in &track.clips {
-                let Content::Caption { text } = &clip.content else {
-                    continue;
-                };
-                let (start, end) = (clip.start.max(from), clip.end().min(to));
-                if !clip.enabled || start >= end || text.trim().is_empty() {
-                    continue;
-                }
-                let cue = CaptionCue {
-                    start: (start - from).seconds(),
-                    end: (end - from).seconds(),
-                    text: text.clone(),
-                };
-                let out = self.label("caption");
-                self.parts
-                    .push(format!("[{current}]{}[{out}]", captions_filter(&cue)));
-                current = out;
-            }
-        }
-        current
-    }
-
-    /// A clip's picture for `portion`, placed on the window, with the
-    /// overlay position expressions.
-    fn picture(
-        &mut self,
-        sequence: &'a Sequence,
-        item: &Shown,
-        portion: &Portion,
-        window: Time,
-    ) -> Result<Option<Layer>> {
-        let clip = item.clip;
-        if !clip.masks.is_empty() {
-            return Err(ProgramError::unsupported(&clip.id, "masks"));
-        }
-        if clip.angle.is_some() {
-            return Err(ProgramError::unsupported(&clip.id, "a multicam angle"));
-        }
-        if matches!(
-            clip.props.get("three_d"),
-            Some(Param::Static(Value::Bool(true)))
-        ) {
-            return Err(ProgramError::unsupported(&clip.id, "a clip in depth"));
-        }
-        let (width, height) = canvas(sequence);
-        let length = portion.hi - portion.decode;
-        let mut filters = Vec::new();
-        let mut transparent = false;
-        let source = match &clip.content {
-            Content::Media { media, .. } => {
-                let media = self.project.media(media.as_str()).ok_or_else(|| {
-                    ProgramError::Invalid(format!("clip `{}` uses missing media", clip.id))
-                })?;
-                let Some(video) = media.video else {
-                    return Ok(None);
-                };
-                transparent = video.alpha;
-                let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
-                    .expect("media clips have a source");
-                let index = self.input(&media.path, start, end - start);
-                filters.push(format!("trim=start=0:end={}", secs(end - start)));
-                filters.push("setpts=PTS-STARTPTS".into());
-                Source::Stream(format!("{index}:v"))
-            }
-            Content::Sequence {
-                sequence: nested, ..
-            } => {
-                let nested = self.nested(clip, nested)?;
-                let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
-                    .expect("nested clips have a source");
-                self.nesting.push(nested.id.clone());
-                let label = self.composite(nested, start, end, Background::Clear, true)?;
-                self.nesting.pop();
-                Source::Stream(label)
-            }
-            Content::Generator { fx, params, .. } => {
-                let color = rate_arg(self.rate);
-                let span = secs(length);
-                match fx.as_str() {
-                    "solid" => {
-                        let fill = self.color(&clip.id, params, "solid", "color")?;
-                        Source::Generated(format!(
-                            "color=c={}:s={width}x{height}:r={color}:d={span},format=rgba",
-                            ffmpeg_color(fill)
-                        ))
-                    }
-                    "title" if params.contains_key("reveal") => {
-                        return Err(ProgramError::unsupported(&clip.id, "a title's reveal"))
-                    }
-                    "title"
-                        if kerf_model::TITLE_AXES.iter().any(|tag| {
-                            std::str::from_utf8(tag).is_ok_and(|name| params.contains_key(name))
-                        }) =>
-                    {
-                        return Err(ProgramError::unsupported(&clip.id, "a title's font axes"))
-                    }
-                    "title" if params.contains_key("features") => {
-                        return Err(ProgramError::unsupported(&clip.id, "a title's font features"))
-                    }
-                    "title" => Source::Generated(format!(
-                        "color=c=black@0:s={width}x{height}:r={color}:d={span},format=rgba,{}",
-                        self.title(clip, params, height)?
-                    )),
-                    other => {
-                        return Err(ProgramError::unsupported(
-                            &clip.id,
-                            format!("generator `{other}`"),
-                        ))
-                    }
-                }
-            }
-            Content::Caption { .. } => return Ok(None),
-        };
-        let speed = clip.speed();
-        let Some(ratio) = speed.constant() else {
-            return Err(ProgramError::unsupported(&clip.id, "a speed ramp"));
-        };
-        if speed.is_reverse() {
-            filters.push("reverse".into());
-        }
-        if ratio.num().unsigned_abs() != ratio.den() {
-            filters.push(format!(
-                "setpts=PTS*{}/{}",
-                ratio.den(),
-                ratio.num().unsigned_abs()
-            ));
-        }
-        let fit = matches!(source, Source::Stream(_));
-        let geometry = self.geometry(clip, portion, window, (width, height), fit)?;
-        filters.extend(geometry.filters);
-        let mut alpha = geometry.alpha;
-        let effects = self.video_effects(clip)?;
-        let opacity = self.param(clip, Domain::Video, "opacity");
-        let tau = clip_time("T", portion.offset(clip));
-        let fade = item.fade_in.map(|(reveal, start, end)| {
-            (
-                reveal,
-                (start - portion.decode).seconds(),
-                (end - start).seconds(),
-            )
-        });
-        alpha |= transparent || fade.is_some() || !is_number(&opacity, 1.0) || !fit;
-        if geometry.identity && matches!(clip.content, Content::Media { .. }) {
-            filters.push(format!(
-                "pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={},setsar=1",
-                if transparent { "black@0" } else { "black" }
-            ));
-        }
-        filters.push(
-            if alpha {
-                "format=rgba"
-            } else {
-                "format=yuv420p"
-            }
-            .into(),
-        );
-        filters.extend(effects);
-        match &opacity {
-            Param::Static(Value::Number(value)) if *value != 1.0 => {
-                filters.push(format!("colorchannelmixer=aa={}", fmt(*value)));
-            }
-            Param::Animated(_) => filters.push(format!(
-                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({})'",
-                expression(&opacity, &tau)
-            )),
-            _ => {}
-        }
-        if let Some((reveal, start, duration)) = fade {
-            filters.push(reveal_filter(reveal, start, duration));
-        }
-        filters.push(format!(
-            "trim=start={}:duration={}",
-            secs(portion.lo - portion.decode),
-            secs(portion.hi - portion.lo)
-        ));
-        filters.push(format!(
-            "setpts=PTS-STARTPTS+{}/TB",
-            secs(portion.lo - window)
-        ));
-        let label = self.label("clip");
-        let chain = filters.join(",");
-        self.parts.push(match source {
-            Source::Stream(input) => format!("[{input}]{chain}[{label}]"),
-            Source::Generated(head) => format!("{head},{chain}[{label}]"),
-        });
-        Ok(Some(Layer {
-            label,
-            x: geometry.x,
-            y: geometry.y,
-        }))
-    }
-
     fn nested(&self, clip: &Clip, id: &Id) -> Result<&'a Sequence> {
         if self.nesting.len() >= MAX_NESTING || self.nesting.contains(id) {
             return Err(ProgramError::unsupported(
@@ -735,385 +403,6 @@ impl<'a> Graph<'a> {
         self.project.sequence(id.as_str()).ok_or_else(|| {
             ProgramError::Invalid(format!("clip `{}` uses missing sequence `{id}`", clip.id))
         })
-    }
-
-    fn title(&self, clip: &Clip, params: &kerf_model::Params, height: u32) -> Result<String> {
-        let def = self.catalog.fx("title").expect("the catalog defines title");
-        let get = |name: &str| -> Result<Value> {
-            match params.get(name) {
-                None => Ok(def.find(name).expect("title parameter").default.clone()),
-                Some(Param::Static(value)) => Ok(value.clone()),
-                Some(Param::Animated(_)) => Err(ProgramError::unsupported(
-                    &clip.id,
-                    format!("animated title `{name}`"),
-                )),
-            }
-        };
-        let text = match get("text")? {
-            Value::Text(text) => text,
-            _ => String::new(),
-        };
-        let size = get("size")?.as_number().unwrap_or(0.08) * f64::from(height);
-        let color = match get("color")? {
-            Value::Color(color) => color,
-            _ => Rgba::WHITE,
-        };
-        let x = match get("align")? {
-            Value::Enum(align) if align == "left" => "w/2",
-            Value::Enum(align) if align == "right" => "w/2-text_w",
-            _ => "(w-text_w)/2",
-        };
-        let mut options = vec![
-            format!("text={}", escape_drawtext_text(&text)),
-            format!("fontcolor={}", ffmpeg_color(color)),
-            format!("fontsize={}", fmt(size.max(1.0))),
-            format!("x='{x}'"),
-            "y='(h-text_h)/2'".into(),
-            "expansion=none".into(),
-        ];
-        if let Value::Text(font) = get("font")? {
-            if font != "sans-serif" && !font.is_empty() {
-                options.push(format!("font={}", escape_drawtext_text(&font)));
-            }
-        }
-        Ok(format!("drawtext={}", options.join(":")))
-    }
-
-    /// Crop, size, flip, rotation, and position of a clip's picture.
-    fn geometry(
-        &self,
-        clip: &Clip,
-        portion: &Portion,
-        window: Time,
-        (width, height): (u32, u32),
-        fit: bool,
-    ) -> Result<Geometry> {
-        let p = |name: &str| self.param(clip, Domain::Video, name);
-        for name in ["anchor_x", "anchor_y"] {
-            if !is_number(&p(name), 0.0) {
-                return Err(ProgramError::unsupported(&clip.id, format!("`{name}`")));
-            }
-        }
-        if !matches!(p("path"), Param::Static(Value::Text(path)) if path.is_empty()) {
-            return Err(ProgramError::unsupported(&clip.id, "a motion path"));
-        }
-        if let Param::Static(Value::Enum(blend)) | Param::Static(Value::Text(blend)) = p("blend") {
-            if blend != "normal" {
-                return Err(ProgramError::unsupported(
-                    &clip.id,
-                    format!("blend `{blend}`"),
-                ));
-            }
-        }
-        let mut filters = Vec::new();
-        let crop = ["crop_l", "crop_r", "crop_t", "crop_b"].map(&p);
-        if crop.iter().any(|param| matches!(param, Param::Animated(_))) {
-            return Err(ProgramError::unsupported(&clip.id, "animated crop"));
-        }
-        let [left, right, top, bottom] = crop.map(|param| number(&param, 0.0));
-        if left + right >= 1.0 || top + bottom >= 1.0 {
-            return Err(ProgramError::Invalid(format!(
-                "clip `{}` is cropped away entirely",
-                clip.id
-            )));
-        }
-        if [left, right, top, bottom].iter().any(|edge| *edge != 0.0) {
-            filters.push(format!(
-                "crop=w='max(2,trunc(iw*{}/2)*2)':h='max(2,trunc(ih*{}/2)*2)':x='trunc(iw*{}/2)*2':y='trunc(ih*{}/2)*2'",
-                fmt(1.0 - left - right),
-                fmt(1.0 - top - bottom),
-                fmt(left),
-                fmt(top)
-            ));
-        }
-        if fit {
-            filters.push(format!(
-                "scale={width}:{height}:force_original_aspect_ratio=decrease"
-            ));
-        }
-        // Expressions in the clip's own time: `t` before placement counts
-        // from the first decoded frame.
-        let local = clip_time("t", portion.offset(clip));
-        let (scale, scale_x, scale_y) = (p("scale"), p("scale_x"), p("scale_y"));
-        let factor = |axis: &Param| -> String {
-            match (&scale, axis) {
-                (Param::Static(Value::Number(s)), Param::Static(Value::Number(a))) => {
-                    fmt((s * a).abs())
-                }
-                _ => format!(
-                    "abs(({})*({}))",
-                    expression(&scale, &local),
-                    expression(axis, &local)
-                ),
-            }
-        };
-        let (fx, fy) = (factor(&scale_x), factor(&scale_y));
-        if fx != "1" || fy != "1" {
-            filters.push(format!(
-                "scale=w='max(2,trunc(iw*({fx})/2)*2)':h='max(2,trunc(ih*({fy})/2)*2)':eval=frame"
-            ));
-        }
-        if number(&scale, 1.0) * number(&scale_x, 1.0) < 0.0 {
-            filters.push("hflip".into());
-        }
-        if number(&scale, 1.0) * number(&scale_y, 1.0) < 0.0 {
-            filters.push("vflip".into());
-        }
-        let rotation = p("rotation");
-        let rotates = !is_number(&rotation, 0.0);
-        if rotates {
-            filters.push(format!(
-                "format=rgba,rotate='({})*PI/180':fillcolor=none",
-                expression(&rotation, &local)
-            ));
-        }
-        // Overlay expressions run on the window: `t` is window time.
-        let placed = clip_time("t", window - clip.start);
-        let (x, y) = (p("x"), p("y"));
-        let identity =
-            !rotates && fx == "1" && fy == "1" && is_number(&x, 0.0) && is_number(&y, 0.0);
-        Ok(Geometry {
-            filters,
-            alpha: rotates,
-            identity,
-            x: format!("(main_w-overlay_w)/2+main_w*({})", expression(&x, &placed)),
-            y: format!("(main_h-overlay_h)/2+main_h*({})", expression(&y, &placed)),
-        })
-    }
-
-    fn video_effects(&self, clip: &Clip) -> Result<Vec<String>> {
-        let mut filters = Vec::new();
-        for effect in clip.effects.iter().filter(|effect| effect.enabled) {
-            let def = self.catalog.fx(effect.fx.as_str()).ok_or_else(|| {
-                ProgramError::Invalid(format!("clip `{}` uses unknown effect", clip.id))
-            })?;
-            if def.engine == Engine::Raster {
-                return Err(ProgramError::unsupported(
-                    &clip.id,
-                    format!(
-                        "raster effect `{}` here (raster effects run on media clips)",
-                        effect.fx
-                    ),
-                ));
-            }
-            let value = |name: &str| -> Result<f64> {
-                match effect.params.get(name) {
-                    None => Ok(def
-                        .find(name)
-                        .and_then(|param| param.default.as_number())
-                        .unwrap_or(0.0)),
-                    Some(Param::Static(Value::Number(n))) => Ok(*n),
-                    Some(_) => Err(ProgramError::unsupported(
-                        &clip.id,
-                        format!("animated `{}` {name}", effect.fx),
-                    )),
-                }
-            };
-            match effect.fx.as_str() {
-                "color.basic" => filters.extend(color_filters(&ColorParams {
-                    exposure: value("exposure")?,
-                    contrast: value("contrast")?,
-                    brightness: value("brightness")?,
-                    saturation: value("saturation")?,
-                    temperature: value("temperature")?,
-                    tint: value("tint")?,
-                    gamma: value("gamma")?,
-                    highlights: value("highlights")?,
-                    shadows: value("shadows")?,
-                    vibrance: value("vibrance")?,
-                    mix: value("mix")?,
-                })),
-                "blur.gaussian" => {
-                    let radius = value("radius")?;
-                    if radius > 0.0 {
-                        filters.push(format!("gblur=sigma={}", fmt(radius / 2.0)));
-                    }
-                }
-                other => {
-                    return Err(ProgramError::unsupported(
-                        &clip.id,
-                        format!("effect `{other}` on a picture"),
-                    ))
-                }
-            }
-        }
-        Ok(filters)
-    }
-
-    /// Apply an adjustment layer's effects to `input` for the clip's span.
-    fn adjustment(&mut self, input: String, clip: &Clip, from: Time, to: Time) -> Result<String> {
-        let (lo, hi) = (clip.start.max(from), clip.end().min(to));
-        if lo >= hi {
-            return Ok(input);
-        }
-        let mut filters = self.video_effects(clip)?;
-        if filters.is_empty() {
-            return Ok(input);
-        }
-        for name in [
-            "x", "y", "scale", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t",
-            "crop_b",
-        ] {
-            let default = if name.starts_with("scale") { 1.0 } else { 0.0 };
-            if !is_number(&self.param(clip, Domain::Video, name), default) {
-                return Err(ProgramError::unsupported(
-                    &clip.id,
-                    format!("`{name}` on an adjustment layer"),
-                ));
-            }
-        }
-        filters.push("format=rgba".into());
-        let opacity = self.param(clip, Domain::Video, "opacity");
-        match &opacity {
-            Param::Static(Value::Number(value)) if *value != 1.0 => {
-                filters.push(format!("colorchannelmixer=aa={}", fmt(*value)));
-            }
-            Param::Animated(_) => filters.push(format!(
-                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({})'",
-                expression(&opacity, &clip_time("T", lo - clip.start))
-            )),
-            _ => {}
-        }
-        let (keep, process, adjusted, out) = (
-            self.label("keep"),
-            self.label("adjust"),
-            self.label("adjusted"),
-            self.label("layer"),
-        );
-        let (start, end) = (secs(lo - from), secs(hi - from));
-        self.parts
-            .push(format!("[{input}]split[{keep}][{process}]"));
-        self.parts.push(format!(
-            "[{process}]trim=start={start}:end={end},setpts=PTS-STARTPTS,{},setpts=PTS+{start}/TB[{adjusted}]",
-            filters.join(",")
-        ));
-        self.parts.push(format!(
-            "[{keep}][{adjusted}]overlay=eof_action=pass:shortest=0:format=auto:enable='between(t,{start},{end})'[{out}]"
-        ));
-        Ok(out)
-    }
-
-    fn dip(
-        &mut self,
-        sequence: &Sequence,
-        input: String,
-        dip: &Dip,
-        from: Time,
-        to: Time,
-    ) -> String {
-        let (lo, hi) = (dip.from.max(from), dip.to.min(to));
-        if lo >= hi {
-            return input;
-        }
-        let (width, height) = canvas(sequence);
-        let duration = dip.to - dip.from;
-        let half = secs(Time::from_flicks(duration.flicks() / 2));
-        let (layer, out) = (self.label("dip"), self.label("layer"));
-        self.parts.push(format!(
-            "color=c={}:s={width}x{height}:r={}:d={},format=rgba,fade=t=in:st=0:d={half}:alpha=1,fade=t=out:st={half}:d={half}:alpha=1,trim=start={}:duration={},setpts=PTS-STARTPTS+{}/TB[{layer}]",
-            ffmpeg_color(dip.color),
-            rate_arg(self.rate),
-            secs(duration),
-            secs(lo - dip.from),
-            secs(hi - lo),
-            secs(lo - from),
-        ));
-        self.parts.push(format!(
-            "[{input}][{layer}]overlay=eof_action=pass:shortest=0:format=auto:enable='between(t,{},{})'[{out}]",
-            secs(lo - from),
-            secs(hi - from)
-        ));
-        out
-    }
-
-    /// Plain cuts of full-frame media on one track become one concatenation
-    /// instead of a stack of overlays.
-    fn concat_program(
-        &mut self,
-        sequence: &'a Sequence,
-        from: Time,
-        to: Time,
-    ) -> Result<Option<String>> {
-        let mut visible = sequence.tracks.iter().filter(|track| {
-            track.kind == TrackKind::Video
-                && track.enabled
-                && track
-                    .clips
-                    .iter()
-                    .any(|clip| clip.enabled && clip.start < to && clip.end() > from)
-        });
-        let (Some(track), None) = (visible.next(), visible.next()) else {
-            return Ok(None);
-        };
-        if !track.transitions.is_empty() {
-            return Ok(None);
-        }
-        let plain = |clip: &Clip| {
-            let p = |name: &str| self.param(clip, Domain::Video, name);
-            matches!(&clip.content, Content::Media { media, .. }
-                if self.project.media(media.as_str()).is_some_and(|m| m.video.is_some()))
-                && ["x", "y", "rotation", "anchor_x", "anchor_y"]
-                    .iter()
-                    .all(|name| is_number(&p(name), 0.0))
-                && ["scale", "scale_x", "scale_y", "opacity"]
-                    .iter()
-                    .all(|name| is_number(&p(name), 1.0))
-                && matches!(p("blend"), Param::Static(Value::Enum(ref b)) if b == "normal")
-        };
-        let clips: Vec<&Clip> = track
-            .clips
-            .iter()
-            .filter(|clip| clip.enabled && clip.start < to && clip.end() > from)
-            .collect();
-        if clips.len() < 2 || !clips.iter().all(|clip| plain(clip)) {
-            return Ok(None);
-        }
-        let (width, height) = canvas(sequence);
-        let mut segments = Vec::new();
-        let mut cursor = from;
-        for clip in clips {
-            let item = Shown {
-                clip,
-                from: clip.start,
-                to: clip.end(),
-                fade_in: None,
-                fade_out: None,
-            };
-            let Some(portion) = self.portion(&item, from, to) else {
-                continue;
-            };
-            if portion.lo > cursor {
-                segments.push(self.black(width, height, portion.lo - cursor));
-            }
-            let layer = self
-                .picture(sequence, &item, &portion, portion.lo)?
-                .expect("plain clips have a picture");
-            segments.push(layer.label);
-            cursor = portion.hi;
-        }
-        if cursor < to {
-            segments.push(self.black(width, height, to - cursor));
-        }
-        let out = self.label("concat");
-        self.parts.push(format!(
-            "{}concat=n={}:v=1:a=0[{out}]",
-            segments
-                .iter()
-                .map(|segment| format!("[{segment}]"))
-                .collect::<String>(),
-            segments.len()
-        ));
-        Ok(Some(out))
-    }
-
-    fn black(&mut self, width: u32, height: u32, duration: Time) -> String {
-        let label = self.label("gap");
-        self.parts.push(format!(
-            "color=c=black:s={width}x{height}:r={}:d={},format=yuv420p,setsar=1[{label}]",
-            rate_arg(self.rate),
-            secs(duration)
-        ));
-        label
     }
 
     // ---- sound -------------------------------------------------------------------
@@ -1139,7 +428,7 @@ impl<'a> Graph<'a> {
             if !heard(track, angle) {
                 continue;
             }
-            let (items, _) = self.shown(track, sequence.rate)?;
+            let items = self.shown(track, sequence.rate)?;
             for item in &items {
                 if !item.clip.enabled {
                     continue;
@@ -1238,54 +527,6 @@ impl<'a> Graph<'a> {
     }
 
     // ---- parameters ------------------------------------------------------------
-
-    /// A clip property, or its catalog default.
-    fn param(&self, clip: &Clip, domain: Domain, name: &str) -> Param {
-        param(self.catalog, clip, domain, name)
-    }
-
-    fn static_number(&self, transition: &Transition, fx: &str, name: &str) -> Result<f64> {
-        match transition.params.get(name) {
-            None => Ok(self
-                .catalog
-                .fx(fx)
-                .and_then(|def| def.find(name))
-                .and_then(|def| def.default.as_number())
-                .unwrap_or(0.0)),
-            Some(Param::Static(Value::Number(n))) => Ok(*n),
-            Some(_) => Err(ProgramError::unsupported(
-                &transition.id,
-                format!("animated `{name}`"),
-            )),
-        }
-    }
-
-    fn color(
-        &self,
-        entity: &Id,
-        params: &kerf_model::Params,
-        fx: &str,
-        name: &str,
-    ) -> Result<Rgba> {
-        match params.get(name) {
-            None => Ok(
-                match self
-                    .catalog
-                    .fx(fx)
-                    .and_then(|def| def.find(name))
-                    .map(|d| &d.default)
-                {
-                    Some(Value::Color(color)) => *color,
-                    _ => Rgba::BLACK,
-                },
-            ),
-            Some(Param::Static(Value::Color(color))) => Ok(*color),
-            Some(_) => Err(ProgramError::unsupported(
-                entity,
-                format!("animated `{name}`"),
-            )),
-        }
-    }
 
     fn choice(&self, params: &kerf_model::Params, fx: &str, name: &str) -> String {
         match params.get(name) {
@@ -1651,36 +892,6 @@ fn param(catalog: &Catalog, clip: &Clip, domain: Domain, name: &str) -> Param {
     })
 }
 
-enum Source {
-    /// A labelled picture stream, fitted to the canvas.
-    Stream(String),
-    /// A source filter that generates the picture.
-    Generated(String),
-}
-
-struct Layer {
-    label: String,
-    x: String,
-    y: String,
-}
-
-struct Geometry {
-    filters: Vec<String>,
-    alpha: bool,
-    identity: bool,
-    x: String,
-    y: String,
-}
-
-fn ffmpeg_color(color: Rgba) -> String {
-    let base = format!("0x{:02x}{:02x}{:02x}", color.r, color.g, color.b);
-    if color.a == 255 {
-        base
-    } else {
-        format!("{base}@{}", fmt(f64::from(color.a) / 255.0))
-    }
-}
-
 /// A clip-time expression: `variable` plus `offset` seconds.
 fn clip_time(variable: &str, offset: Time) -> String {
     if offset == Time::ZERO {
@@ -1690,17 +901,6 @@ fn clip_time(variable: &str, offset: Time) -> String {
     } else {
         format!("({variable}+{})", secs(offset))
     }
-}
-
-fn number(param: &Param, default: f64) -> f64 {
-    match param {
-        Param::Static(Value::Number(n)) => *n,
-        _ => default,
-    }
-}
-
-fn is_number(param: &Param, value: f64) -> bool {
-    matches!(param, Param::Static(Value::Number(n)) if *n == value)
 }
 
 /// How many straight pieces a curve becomes in an FFmpeg expression, which cannot solve a cubic.
@@ -1763,101 +963,6 @@ fn expression(param: &Param, tau: &str) -> String {
         secs(keys[0].at),
         fmt(value(0))
     )
-}
-
-fn reveal_filter(reveal: Reveal, start: f64, duration: f64) -> String {
-    let progress = format!("clip((T-{})/{},0,1)", fmt(start), fmt(duration));
-    match reveal {
-        Reveal::Dissolve | Reveal::Crossfade { .. } => {
-            format!("fade=t=in:st={}:d={}:alpha=1", fmt(start), fmt(duration))
-        }
-        Reveal::Wipe { angle, softness } => {
-            let (dy, dx) = angle.to_radians().sin_cos();
-            let low = dx.min(0.0) + dy.min(0.0);
-            let span = (dx.max(0.0) + dy.max(0.0) - low).max(1e-6);
-            let soft = softness.max(0.001);
-            let position = format!(
-                "((X/W)*{}+(Y/H)*{}-({}))/{}",
-                fmt(dx),
-                fmt(dy),
-                fmt(low),
-                fmt(span)
-            );
-            format!(
-                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip(({progress}*{}-{position})/{},0,1)'",
-                fmt(1.0 + soft),
-                fmt(soft)
-            )
-        }
-    }
-}
-
-struct ColorParams {
-    exposure: f64,
-    contrast: f64,
-    brightness: f64,
-    saturation: f64,
-    temperature: f64,
-    tint: f64,
-    gamma: f64,
-    highlights: f64,
-    shadows: f64,
-    vibrance: f64,
-    mix: f64,
-}
-
-/// `color.basic`, with `mix` scaling every correction toward identity.
-fn color_filters(params: &ColorParams) -> Vec<String> {
-    let identity = |value: f64, base: f64| (value - base).abs() <= 1e-9;
-    let mix = params.mix;
-    let mut filters = Vec::new();
-    if mix == 0.0 {
-        return filters;
-    }
-    let exposure = params.exposure * mix;
-    if !identity(exposure, 0.0) {
-        filters.push(format!("exposure=exposure={}", fmt(exposure)));
-    }
-    let mut eq = Vec::new();
-    for (name, value, base) in [
-        ("contrast", 1.0 + (params.contrast - 1.0) * mix, 1.0),
-        ("brightness", params.brightness * mix, 0.0),
-        ("saturation", 1.0 + (params.saturation - 1.0) * mix, 1.0),
-        ("gamma", 1.0 + (params.gamma - 1.0) * mix, 1.0),
-    ] {
-        if !identity(value, base) {
-            eq.push(format!("{name}={}", fmt(value)));
-        }
-    }
-    if !eq.is_empty() {
-        filters.push(format!("eq={}", eq.join(":")));
-    }
-    let balance = |value: f64| value.clamp(-1.0, 1.0);
-    let temperature = params.temperature / 1000.0 * mix;
-    let (tint, shadows, highlights) = (
-        params.tint * mix,
-        params.shadows * mix,
-        params.highlights * mix,
-    );
-    let channels = [
-        balance(temperature + tint + shadows),
-        balance(-tint + shadows),
-        balance(-temperature + tint + shadows),
-        balance(highlights),
-        balance(highlights),
-        balance(highlights),
-    ];
-    if channels.iter().any(|value| !identity(*value, 0.0)) {
-        let [rs, gs, bs, rh, gh, bh] = channels.map(fmt);
-        filters.push(format!(
-            "colorbalance=rs={rs}:gs={gs}:bs={bs}:rh={rh}:gh={gh}:bh={bh}:pl=1"
-        ));
-    }
-    let vibrance = params.vibrance * mix;
-    if !identity(vibrance, 0.0) {
-        filters.push(format!("vibrance=intensity={}", fmt(vibrance)));
-    }
-    filters
 }
 
 #[cfg(test)]

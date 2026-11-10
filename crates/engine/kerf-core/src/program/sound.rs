@@ -173,7 +173,7 @@ pub fn program_sound(
     sequence: Option<&str>,
 ) -> Result<Vec<ProgramSound>> {
     let sequence = program_sequence(project, sequence)?;
-    let mut graph = Graph::new(project, catalog, sequence.rate);
+    let mut graph = Graph::new(project, catalog);
     let whole = (Time::ZERO, sequence.duration());
     let order = sequence.buses_in_order();
     let place_of = |id: &Id| order.iter().position(|bus| bus.id == *id);
@@ -223,7 +223,7 @@ impl<'a> Graph<'a> {
             if !super::heard(track, angle.as_ref()) {
                 continue;
             }
-            let (items, _) = self.shown(track, sequence.rate)?;
+            let items = self.shown(track, sequence.rate)?;
             for item in items.iter().filter(|item| item.clip.enabled) {
                 let Some(portion) = self.portion(item, from, to) else {
                     continue;

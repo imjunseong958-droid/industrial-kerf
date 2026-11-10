@@ -98,8 +98,6 @@ catalog what draws one (`Engine`):
   kernels by id. A kernel belongs on the same interface as the CPU's code.
 - **Playback of plain cuts** (`kerf-playback/src/timeline.rs`) runs EffectCraft
   effects itself on the frames it decodes.
-- **The graph drawing the picture** (`KERF_GRAPH_RENDER=1`, kept for one
-  release) bakes EffectCraft effects into files first (`kerf-core/src/raster.rs`).
 
 `Engine` goes when the last of these does. How an effect meets an HDR picture
 (`filmcraft::catalog::headroom`) and whether it leaves a picture alone are
