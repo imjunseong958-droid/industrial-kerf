@@ -17,6 +17,9 @@ pub trait Num:
     fn min(self, other: Self) -> Self;
     fn max(self, other: Self) -> Self;
     fn sqrt(self) -> Self;
+    fn abs(self) -> Self;
+    /// How long the line is that goes this far across and `other` down.
+    fn hypot(self, other: Self) -> Self;
     fn pow(self, power: f32) -> Self;
     /// `yes` where this is at most `limit`, else `no`. The CPU works out the one it takes, and WGSL both.
     fn if_at_most<const N: usize>(
@@ -47,6 +50,14 @@ impl Num for f32 {
     #[inline(always)]
     fn sqrt(self) -> f32 {
         f32::sqrt(self)
+    }
+    #[inline(always)]
+    fn abs(self) -> f32 {
+        f32::abs(self)
+    }
+    #[inline(always)]
+    fn hypot(self, other: f32) -> f32 {
+        f32::hypot(self, other)
     }
     #[inline(always)]
     fn pow(self, power: f32) -> f32 {
@@ -156,6 +167,12 @@ impl Num for Traced {
     }
     fn sqrt(self) -> Traced {
         Traced::of(&format!("sqrt({})", self.name()))
+    }
+    fn abs(self) -> Traced {
+        Traced::of(&format!("abs({})", self.name()))
+    }
+    fn hypot(self, other: Traced) -> Traced {
+        Traced::of(&format!("length(vec2({}, {}))", self.name(), other.name()))
     }
     fn pow(self, power: f32) -> Traced {
         Traced::of(&format!("pow({}, {power:?})", self.name()))
@@ -282,6 +299,120 @@ pub fn wipe<N: Num>(e: &WipeEdge<N>, a: [N; 4], b: [N; 4], d: N) -> [N; 4] {
 pub fn iris_round<N: Num>(x: N, y: N, cx: N, cy: N) -> N {
     let (dx, dy) = (x - cx, y - cy);
     (dx * dx + dy * dy).sqrt()
+}
+
+// ------------------------------------------------------------------------------ A rounded rectangle
+//
+// These run on the GPU only: the CPU's code in `kerf-fx` stays where it is, as the reference, and
+// `kernels_from_one_source_are_the_effects_to_the_bit` there holds these, as `f32`, to its very values.
+
+/// How far the point `x`, `y` is outside a rectangle, given by its left, top, right, and bottom, with
+/// its corners rounded by `r`: below 0 inside it.
+#[inline(always)]
+pub fn round_rect<N: Num>(x: N, y: N, edges: [N; 4], r: N) -> N {
+    let [x0, y0, x1, y1] = edges;
+    let (zero, two) = (N::lit(0.0), N::lit(2.0));
+    let (cx, cy) = ((x0 + x1) / two, (y0 + y1) / two);
+    let (hx, hy) = ((x1 - x0) / two - r, (y1 - y0) / two - r);
+    let (qx, qy) = ((x - cx).abs() - hx, (y - cy).abs() - hy);
+    qx.max(zero).hypot(qy.max(zero)) + qx.max(qy).min(zero) - r
+}
+
+/// A premultiplied pixel with `a` of it kept, where that is less than all of it.
+#[inline(always)]
+fn kept<N: Num>(p: [N; 4], a: N) -> [N; 4] {
+    N::lit(1.0).if_at_most(a, || p, || p.map(|value| value * a))
+}
+
+/// What a rounded crop is told, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoundedCrop<N> {
+    /// Its left, top, right, and bottom.
+    pub edges: [N; 4],
+    pub radius: N,
+    /// How far in from its edge it fades; at 0 its edge is a pixel wide.
+    pub feather: N,
+    /// How wide a band just inside its edge is drawn in `border_color`.
+    pub border: N,
+    pub border_color: [N; 3],
+}
+
+/// The premultiplied pixel whose middle is at `x`, `y`, cropped to a rounded rectangle.
+#[inline(always)]
+pub fn rounded_crop<N: Num>(p: [N; 4], x: N, y: N, told: &RoundedCrop<N>) -> [N; 4] {
+    let (zero, half, one) = (N::lit(0.0), N::lit(0.5), N::lit(1.0));
+    let d = round_rect(x, y, told.edges, told.radius);
+    let p = told.border.if_at_most(
+        zero,
+        || p,
+        || {
+            // How much of the pixel the band covers, which goes over what is there.
+            let k = (half - d).clamp(zero, one) - (half - d - told.border).clamp(zero, one);
+            k.if_at_most(
+                zero,
+                || p,
+                || {
+                    let under = one - k;
+                    let [r, g, b] = told.border_color;
+                    [
+                        r * k + p[0] * under,
+                        g * k + p[1] * under,
+                        b * k + p[2] * under,
+                        k + p[3] * under,
+                    ]
+                },
+            )
+        },
+    );
+    let [a] = told.feather.if_at_most(
+        zero,
+        || [(half - d).clamp(zero, one)],
+        || [(-d / told.feather).clamp(zero, one)],
+    );
+    kept(p, a)
+}
+
+/// What a spacer is told of the picture it has placed, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spacer<N> {
+    /// The placed picture's left, top, right, and bottom.
+    pub edges: [N; 4],
+    pub radius: N,
+    /// 1 to put `color` behind the picture, 0 not to.
+    pub fill: N,
+    pub color: [N; 3],
+}
+
+/// The premultiplied pixel whose middle is at `x`, `y` of a picture a spacer has placed: its corners
+/// rounded, and a color behind it.
+#[inline(always)]
+pub fn spacer<N: Num>(p: [N; 4], x: N, y: N, told: &Spacer<N>) -> [N; 4] {
+    let (zero, half, one) = (N::lit(0.0), N::lit(0.5), N::lit(1.0));
+    let p = told.radius.if_at_most(
+        zero,
+        || p,
+        || {
+            let d = round_rect(x, y, told.edges, told.radius);
+            kept(p, (half - d).clamp(zero, one))
+        },
+    );
+    told.fill.if_at_most(
+        zero,
+        || p,
+        || {
+            let k = one - p[3];
+            let [r, g, b] = told.color;
+            [p[0] + r * k, p[1] + g * k, p[2] + b * k, one]
+        },
+    )
+}
+
+/// A pixel of the shadow a premultiplied pixel casts: `color` by how much of the pixel is there and by
+/// how dark the shadow is.
+#[inline(always)]
+pub fn shadow<N: Num>(p: [N; 4], color: [N; 3], opacity: N) -> [N; 4] {
+    let a = p[3] * opacity;
+    [color[0] * a, color[1] * a, color[2] * a, a]
 }
 
 // ------------------------------------------------------------------------------------------- A blur
@@ -606,6 +737,53 @@ pub fn wipe_wgsl() -> String {
     )
 }
 
+/// A function of WGSL that takes a pixel `q` and where its middle is, `x` and `y`, and returns what
+/// `body` makes of them.
+fn at_a_pixel(name: &str, body: impl FnOnce([Traced; 4], Traced, Traced) -> [Traced; 4]) -> String {
+    let mut result = None;
+    let lines = written(|| {
+        result = Some(body(parts("q"), Traced::named("x"), Traced::named("y")));
+    });
+    format!(
+        "fn {name}(q: vec4<f32>, x: f32, y: f32) -> vec4<f32> {{\n{lines}{}}}\n",
+        returned(result.expect("written"))
+    )
+}
+
+/// `rounded_crop`, `spacer`, and `shadow` as `fn rounded_crop_px`, `fn spacer_px`, and `fn shadow_px`,
+/// for the effects' `vfx/kernels.wgsl`: each takes a premultiplied pixel and where its middle is. A
+/// rounded crop's edges are in `u.p0`, its radius, feather, and border in `u.p1`, and its border's color in
+/// `u.p2`; a spacer's edges in `u.p0`, its radius and whether it fills in `u.p1`, and its color in `u.p2`; a
+/// shadow's color in `u.p0` with how dark it is.
+pub fn rounded_wgsl() -> String {
+    let v = Traced::named;
+    let edges = || [v("u.p0.x"), v("u.p0.y"), v("u.p0.z"), v("u.p0.w")];
+    let color = || [v("u.p2.x"), v("u.p2.y"), v("u.p2.z")];
+    let crop = at_a_pixel("rounded_crop_px", |q, x, y| {
+        let told = RoundedCrop {
+            edges: edges(),
+            radius: v("u.p1.x"),
+            feather: v("u.p1.y"),
+            border: v("u.p1.z"),
+            border_color: color(),
+        };
+        rounded_crop(q, x, y, &told)
+    });
+    let spaced = at_a_pixel("spacer_px", |q, x, y| {
+        let told = Spacer {
+            edges: edges(),
+            radius: v("u.p1.x"),
+            fill: v("u.p1.y"),
+            color: color(),
+        };
+        spacer(q, x, y, &told)
+    });
+    let cast = at_a_pixel("shadow_px", |q, _, _| {
+        shadow(q, [v("u.p0.x"), v("u.p0.y"), v("u.p0.z")], v("u.p0.w"))
+    });
+    format!("{crop}{spaced}{cast}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,6 +1009,12 @@ fn size() -> vec2<i32> { return vec2<i32>(textureDimensions(src)); }
 fn ld(p: vec2<i32>) -> vec4<f32> { return textureLoad(src, p, 0); }
 ";
 
+    /// What the effects' `vfx/kernels.wgsl` gives.
+    const VFX: &str = "
+struct U { a: vec4<u32>, b: vec4<u32>, p0: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: U;
+";
+
     /// And what the transitions' `kernels.wgsl` does.
     const TRANSITIONS: &str = "
 struct U { v: array<vec4<f32>, 200> };
@@ -854,6 +1038,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
     fn what_is_written_out_is_wgsl() {
         valid(&format!("{FX}{}{}", color_balance_wgsl(), box_line_wgsl()));
         valid(&format!("{TRANSITIONS}{}", wipe_wgsl()));
+        valid(&format!("{VFX}{}", rounded_wgsl()));
     }
 
     #[test]
@@ -861,12 +1046,19 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
         assert_eq!(color_balance_wgsl(), color_balance_wgsl());
         assert_eq!(box_line_wgsl(), box_line_wgsl());
         assert_eq!(wipe_wgsl(), wipe_wgsl());
+        assert_eq!(rounded_wgsl(), rounded_wgsl());
     }
 
     /// A kernel's names may not be taken for WGSL's own, as `i32` once was.
     #[test]
     fn names_written_out_are_no_type_of_wgsl() {
-        for written in [color_balance_wgsl(), box_line_wgsl(), wipe_wgsl()] {
+        let all = [
+            color_balance_wgsl(),
+            box_line_wgsl(),
+            wipe_wgsl(),
+            rounded_wgsl(),
+        ];
+        for written in all {
             for shadowed in ["let i32", "let f32", "let u32", "var i32", "var f32"] {
                 assert!(!written.contains(shadowed), "{shadowed}");
             }

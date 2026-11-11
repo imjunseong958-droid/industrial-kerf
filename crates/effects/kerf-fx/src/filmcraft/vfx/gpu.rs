@@ -10,6 +10,8 @@ use crate::filmcraft::effects::{
 use crate::filmcraft::gpu::run as run_ops;
 use crate::filmcraft::gpufx::FxOp;
 use kerf_color::{luma709, rgb_to_ycbcr, Lut, Matrix};
+use kerf_draw::blend::Blend;
+use kerf_geom::Rect;
 use kerf_gpu::{wgpu, Frame, Gpu, Picture};
 use std::sync::{Arc, OnceLock};
 
@@ -98,6 +100,28 @@ pub enum Kernel {
         /// From a pixel to where it comes from across the picture, 0 to 1, row by row.
         map: [f32; 9],
         size: [f32; 2],
+    },
+    DropShadow {
+        /// How far the shadow lies from what casts it, in pixels.
+        offset: [f64; 2],
+        color: [f32; 3],
+        opacity: f32,
+        /// What softens it, when anything does.
+        blur: Option<FxOp>,
+        only: bool,
+    },
+    RoundedCrop(kerf_kernel::RoundedCrop<f32>),
+    Spacer {
+        /// Where the picture is put: its left, its top, and how much smaller it is.
+        place: [f64; 3],
+        told: kerf_kernel::Spacer<f32>,
+    },
+    Mosaic {
+        /// A block's width and height, in pixels.
+        block: [f32; 2],
+        /// How many blocks there are across and down.
+        blocks: [u32; 2],
+        soft: f32,
     },
 }
 
@@ -681,6 +705,84 @@ impl Kernel {
                     size: [w as f32, h as f32],
                 }
             }
+            "drop_shadow" => {
+                let c = crate::filmcraft::effects::color(e, "color", cx);
+                let direction = f64::from(f(e, "direction", cx)).to_radians();
+                let distance = f64::from(f(e, "distance", cx)) * f64::from(cx.px_scale);
+                let soft = f(e, "softness", cx) * cx.px_scale * 0.5;
+                Kernel::DropShadow {
+                    offset: [direction.sin() * distance, -direction.cos() * distance],
+                    color: dec([c[0], c[1], c[2]]),
+                    opacity: f(e, "opacity", cx) / 100.0,
+                    blur: (soft > 0.3).then(|| {
+                        let (rx, ry) = gaussian_boxes(size.0, size.1, soft, soft);
+                        FxOp::Gaussian {
+                            rx,
+                            ry,
+                            repeat: false,
+                        }
+                    }),
+                    only: crate::filmcraft::effects::b(e, "only"),
+                }
+            }
+            "rounded_crop" => {
+                let (w, h) = (size.0 as f32, size.1 as f32);
+                let (l, t, r, b) = (
+                    fv(e, "left", cx) / 100.0 * w,
+                    fv(e, "top", cx) / 100.0 * h,
+                    w - fv(e, "right", cx) / 100.0 * w,
+                    h - fv(e, "bottom", cx) / 100.0 * h,
+                );
+                Kernel::RoundedCrop(kerf_kernel::RoundedCrop {
+                    edges: [l, t, r, b],
+                    radius: (fv(e, "radius", cx) * cx.px_scale)
+                        .min(((r - l).min(b - t) / 2.0).max(0.0)),
+                    feather: fv(e, "feather", cx) * cx.px_scale,
+                    border: fv(e, "border", cx) * cx.px_scale,
+                    border_color: lin(cv(e, "border_color", cx)),
+                })
+            }
+            "spacer" => {
+                let k = f64::from(cx.px_scale);
+                let l = f64::from(fv(e, "left", cx)) * k;
+                let (t, r, b) = if bv(e, "uniform") {
+                    (l, l, l)
+                } else {
+                    (
+                        f64::from(fv(e, "top", cx)) * k,
+                        f64::from(fv(e, "right", cx)) * k,
+                        f64::from(fv(e, "bottom", cx)) * k,
+                    )
+                };
+                let (w, h) = (size.0 as f64, size.1 as f64);
+                let (bw, bh) = ((w - l - r).max(1.0), (h - t - b).max(1.0));
+                let s = (bw / w).min(bh / h);
+                let (dw, dh) = (w * s, h * s);
+                let (x0, y0) = (l + (bw - dw) / 2.0, t + (bh - dh) / 2.0);
+                let radius = (f64::from(fv(e, "radius", cx)) * k).min(dw.min(dh) / 2.0);
+                Kernel::Spacer {
+                    place: [x0, y0, s],
+                    told: kerf_kernel::Spacer {
+                        edges: [x0 as f32, y0 as f32, (x0 + dw) as f32, (y0 + dh) as f32],
+                        radius: if radius > 0.0 { radius as f32 } else { 0.0 },
+                        fill: if bv(e, "fill") { 1.0 } else { 0.0 },
+                        color: lin(cv(e, "color", cx)),
+                    },
+                }
+            }
+            "mosaic" => {
+                let across = fv(e, "horizontal", cx).max(1.0) as usize;
+                let down = fv(e, "vertical", cx).max(1.0) as usize;
+                let (w, h) = (size.0 as f32, size.1 as f32);
+                let bw = (w / across as f32).max(1.0);
+                let bh = (h / down as f32).max(1.0);
+                let blocks = [(w / bw).ceil() as u32, (h / bh).ceil() as u32];
+                Kernel::Mosaic {
+                    block: [bw, bh],
+                    blocks: blocks.map(|count| count.max(1)),
+                    soft: (fv(e, "softness", cx) / 100.0).clamp(0.0, 1.0),
+                }
+            }
             _ => return None,
         })
     }
@@ -1100,6 +1202,97 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::DropShadow {
+                offset,
+                color,
+                opacity,
+                blur,
+                only,
+            } => {
+                let (w, h) = (picture.w, picture.h);
+                let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+                let by = Affine::translate(offset[0], offset[1]);
+                let empty = frame.clear(w, h);
+                let moved = frame.composite(empty, &picture, &by, whole, 1.0, Blend::Normal);
+                let mut cast = stage.pass(
+                    frame,
+                    &stage.shadow,
+                    &moved,
+                    None,
+                    &U::floats([color[0], color[1], color[2], *opacity]),
+                );
+                frame.release(moved);
+                if let Some(blur) = blur {
+                    cast = run_ops(frame, cast, std::slice::from_ref(blur))?;
+                }
+                if !only {
+                    let over = &Affine::IDENTITY;
+                    cast = frame.composite(cast, &picture, over, whole, 1.0, Blend::Normal);
+                }
+                frame.release(picture);
+                cast
+            }
+            Kernel::RoundedCrop(told) => {
+                let [r, g, b] = told.border_color;
+                let out = stage.pass(
+                    frame,
+                    &stage.rounded_crop,
+                    &picture,
+                    None,
+                    &U {
+                        p0: told.edges,
+                        p1: [told.radius, told.feather, told.border, 0.0],
+                        p2: [r, g, b, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Spacer { place, told } => {
+                let (w, h) = (picture.w, picture.h);
+                let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+                let [x0, y0, s] = *place;
+                let to = Affine::translate(x0, y0).then_apply(&Affine::scale(s, s));
+                let empty = frame.clear(w, h);
+                let placed = frame.composite(empty, &picture, &to, whole, 1.0, Blend::Normal);
+                frame.release(picture);
+                let [r, g, b] = told.color;
+                let out = stage.pass(
+                    frame,
+                    &stage.spacer,
+                    &placed,
+                    None,
+                    &U {
+                        p0: told.edges,
+                        p1: [told.radius, told.fill, 0.0, 0.0],
+                        p2: [r, g, b, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(placed);
+                out
+            }
+            Kernel::Mosaic {
+                block,
+                blocks,
+                soft,
+            } => {
+                let numbers = U::floats([block[0], block[1], *soft, 0.0]);
+                // A picture with a pixel to each block, which every pixel of the block then reads.
+                let small = frame.take(blocks[0], blocks[1]);
+                frame.dispatch(
+                    &stage.mosaic_blocks,
+                    &stage.layout,
+                    &numbers.bytes(),
+                    (&picture.view, &small.view, None),
+                    (blocks[0].div_ceil(16), blocks[1].div_ceil(16)),
+                );
+                let out = stage.pass(frame, &stage.mosaic, &picture, Some(&small), &numbers);
+                frame.release(small);
+                frame.release(picture);
+                out
+            }
         })
     }
 }
@@ -1169,6 +1362,15 @@ impl U {
     }
 }
 
+/// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
+fn source() -> String {
+    format!(
+        "{}{}",
+        include_str!("kernels.wgsl"),
+        kerf_kernel::rounded_wgsl()
+    )
+}
+
 struct Stage {
     layout: wgpu::BindGroupLayout,
     highlights: wgpu::ComputePipeline,
@@ -1201,6 +1403,11 @@ struct Stage {
     to_gamut: wgpu::ComputePipeline,
     from_gamut: wgpu::ComputePipeline,
     corner_pin: wgpu::ComputePipeline,
+    shadow: wgpu::ComputePipeline,
+    rounded_crop: wgpu::ComputePipeline,
+    spacer: wgpu::ComputePipeline,
+    mosaic_blocks: wgpu::ComputePipeline,
+    mosaic: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -1208,7 +1415,7 @@ impl Stage {
         let built = gpu.build(|device| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("kerf-vfx"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("kernels.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(source().into()),
             });
             let layout = kerf_gpu::kernel_layout(device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1257,6 +1464,11 @@ impl Stage {
                 to_gamut: kernel("to_gamut"),
                 from_gamut: kernel("from_gamut"),
                 corner_pin: kernel("corner_pin"),
+                shadow: kernel("shadow"),
+                rounded_crop: kernel("rounded_crop"),
+                spacer: kernel("spacer"),
+                mosaic_blocks: kernel("mosaic_blocks"),
+                mosaic: kernel("mosaic"),
                 layout: layout.clone(),
             }
         });
@@ -1593,6 +1805,7 @@ mod tests {
             // One corner alone, the others where the catalog starts them.
             ("corner_pin", vec![("lower_right", pt(70.0, 30.0))]),
         ];
+        let cases: Vec<_> = cases.into_iter().chain(shaped_cases()).collect();
         let image = picture(96, 54);
         let mut failures = Vec::new();
         for (id, params) in cases {
@@ -1613,6 +1826,178 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Drop Shadow, Rounded Crop, Spacer, and Mosaic, each way they can be set.
+    fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
+        let fl = ParamValue::Float;
+        let on = ParamValue::Bool(true);
+        let off = ParamValue::Bool(false);
+        let color = |r: f32, g: f32, b: f32| ParamValue::Color([r, g, b, 1.0]);
+        vec![
+            ("drop_shadow", vec![]),
+            (
+                "drop_shadow",
+                vec![
+                    ("distance", fl(12.0)),
+                    ("softness", fl(8.0)),
+                    ("opacity", fl(80.0)),
+                ],
+            ),
+            (
+                "drop_shadow",
+                vec![
+                    ("distance", fl(7.5)),
+                    ("direction", fl(250.0)),
+                    ("color", color(0.9, 0.2, 0.1)),
+                    ("only", on.clone()),
+                ],
+            ),
+            // Its roundness of 40 is more than half of this picture, so its ends are round.
+            ("rounded_crop", vec![]),
+            (
+                "rounded_crop",
+                vec![
+                    ("left", fl(10.0)),
+                    ("top", fl(20.0)),
+                    ("right", fl(5.0)),
+                    ("bottom", fl(8.0)),
+                    ("radius", fl(9.0)),
+                    ("feather", fl(4.0)),
+                ],
+            ),
+            (
+                "rounded_crop",
+                vec![
+                    ("radius", fl(12.0)),
+                    ("border", fl(3.0)),
+                    ("border_color", color(0.2, 0.6, 1.0)),
+                ],
+            ),
+            (
+                "rounded_crop",
+                vec![
+                    ("radius", fl(0.0)),
+                    ("left", fl(30.0)),
+                    ("border", fl(1.5)),
+                    ("feather", fl(2.0)),
+                ],
+            ),
+            // Its 40 pixels a side leave this picture a fiftieth of its size, halved on the way.
+            ("spacer", vec![]),
+            ("spacer", vec![("left", fl(6.0))]),
+            (
+                "spacer",
+                vec![
+                    ("left", fl(8.0)),
+                    ("radius", fl(6.0)),
+                    ("fill", on.clone()),
+                    ("color", color(0.1, 0.3, 0.2)),
+                ],
+            ),
+            (
+                "spacer",
+                vec![
+                    ("uniform", off),
+                    ("left", fl(20.0)),
+                    ("top", fl(2.0)),
+                    ("right", fl(4.0)),
+                    ("bottom", fl(10.0)),
+                    ("radius", fl(3.0)),
+                ],
+            ),
+            ("spacer", vec![("left", fl(0.0)), ("fill", on.clone())]),
+            ("mosaic", vec![]),
+            (
+                "mosaic",
+                vec![
+                    ("horizontal", fl(7.0)),
+                    ("vertical", fl(4.0)),
+                    ("softness", fl(60.0)),
+                ],
+            ),
+            // More blocks across than there are pixels.
+            (
+                "mosaic",
+                vec![("horizontal", fl(200.0)), ("vertical", fl(3.0))],
+            ),
+            // Blocks of a whole number of pixels, and all the way soft.
+            (
+                "mosaic",
+                vec![
+                    ("horizontal", fl(16.0)),
+                    ("vertical", fl(9.0)),
+                    ("softness", fl(100.0)),
+                ],
+            ),
+        ]
+    }
+
+    /// What a kernel written once in `kerf_kernel` draws on the CPU, as `f32`, with the passes around it
+    /// that the CPU's own code makes; none for a kernel written by hand.
+    fn from_one_source(kernel: &Kernel, image: &Image) -> Option<Image> {
+        let each = |from: &Image, pixel: &dyn Fn([f32; 4], f32, f32) -> [f32; 4]| {
+            let mut out = from.clone();
+            for (at, p) in out.px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (x, y) = (at % from.w, at / from.w);
+                *p = pixel(*p, x as f32 + 0.5, y as f32 + 0.5);
+            }
+            out
+        };
+        let (w, h) = (image.w, image.h);
+        Some(match kernel {
+            Kernel::RoundedCrop(told) => {
+                each(image, &|p, x, y| kerf_kernel::rounded_crop(p, x, y, told))
+            }
+            Kernel::Spacer { place, told } => {
+                let [x0, y0, s] = *place;
+                let to = Affine::translate(x0, y0).then_apply(&Affine::scale(s, s));
+                let placed = image.transformed(w, h, &to);
+                each(&placed, &|p, x, y| kerf_kernel::spacer(p, x, y, told))
+            }
+            Kernel::DropShadow {
+                offset,
+                color,
+                opacity,
+                blur,
+                only,
+            } => {
+                let moved = image.transformed(w, h, &Affine::translate(offset[0], offset[1]));
+                let mut cast = each(&moved, &|p, _, _| kerf_kernel::shadow(p, *color, *opacity));
+                if let Some(blur) = blur {
+                    blur.apply(&mut cast);
+                }
+                if !only {
+                    kerf_draw::blend::composite(&mut cast, image, 1.0, Blend::Normal);
+                }
+                cast
+            }
+            _ => return None,
+        })
+    }
+
+    /// The kernels written once in `kerf_kernel` come, as `f32`, to the very values the CPU's code
+    /// comes to, which needs no GPU to know: what the GPU runs is that source written out.
+    #[test]
+    fn kernels_from_one_source_are_the_effects_to_the_bit() {
+        let image = picture(96, 54);
+        let cx = context(0.0);
+        let mut held = 0;
+        for (id, params) in shaped_cases() {
+            let e = effect(id, &params);
+            let kernel = Kernel::eval(&e, &cx, (image.w, image.h)).expect("a kernel");
+            let Some(twin) = from_one_source(&kernel, &image) else {
+                assert_eq!(id, "mosaic", "{id} is written by hand");
+                continue;
+            };
+            let mut cpu = image.clone();
+            apply(&mut cpu, &e, &cx);
+            // (equal rather than the same bits: a zero may come out with another sign)
+            assert!(twin.px == cpu.px, "{id} {params:?}");
+            assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
+            held += 1;
+        }
+        assert_eq!(held, 12);
     }
 
     /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes
@@ -1802,6 +2187,22 @@ mod tests {
             .map(|(a, b)| (a - b).abs() / (1.0 + a.abs()))
             .fold(0.0f32, f32::max);
         assert!(worst < 2e-3, "differs by {worst:.2e}");
+    }
+
+    /// That the kernels are WGSL, what is written by hand and what is written out together, with no
+    /// GPU to say so: kernels that do not build take every frame off the GPU, and a machine with none
+    /// would not know.
+    #[test]
+    fn the_kernels_are_wgsl() {
+        let source = source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|error| panic!("{error:?}"));
     }
 
     #[test]

@@ -156,6 +156,14 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("corner pin", clip("      fx distort.cornerpin upper_left_x=0.1 upper_left_y=0.15 upper_right_x=0.85 upper_right_y=0.05 lower_right_x=0.95 lower_right_y=0.9 lower_left_x=0.05 lower_left_y=0.8\n")),
         ("corner pin tracked", clip("      set scale=0.9\n      fx distort.cornerpin upper_left_x={0f:0.1 24f:0.3} upper_left_y={0f:0.1 24f:0.2} upper_right_x={0f:0.9 24f:0.8} upper_right_y=0.15 lower_right_x={0f:0.85 24f:0.95} lower_right_y={0f:0.9 24f:0.75} lower_left_x=0.15 lower_left_y={0f:0.85 24f:0.95}\n")),
         ("corner pin past the edges, then blurred", clip("      fx distort.cornerpin upper_left_x=-0.2 upper_left_y=-0.1 upper_right_x=1.1 upper_right_y=0.1 lower_right_x=0.9 lower_right_y=1.2 lower_left_x=0.1 lower_left_y=0.9\n      fx blur.gaussian radius=6\n")),
+        ("drop shadow", clip("      set scale=0.7\n      mask k1 ellipse=0.5,0.5,0.4,0.45\n      fx perspective.dropshadow distance=14 softness=10 opacity=70\n")),
+        ("drop shadow alone", clip("      set scale=0.8\n      mask k1 rect=0.2,0.2,0.8,0.8\n      fx perspective.dropshadow color=#3050c0 direction=250 distance=9 only=true\n")),
+        ("rounded crop", clip("      fx utility.roundedcrop left=8 top=5 right=12 bottom=10 radius=60 border=6 border_color=#ffd040\n")),
+        ("rounded crop feathered", clip("      set scale=0.9\n      fx utility.roundedcrop radius=30 feather=18\n")),
+        ("spacer", clip("      fx transform.spacer left=30 radius=24 fill=true color=#203040\n")),
+        ("spacer to under half", clip("      fx transform.spacer uniform=false left=40 top=110 right=20 bottom=20\n")),
+        ("mosaic", clip("      fx stylize.mosaic horizontal=24 vertical=14\n")),
+        ("mosaic soft", clip("      set scale=0.9\n      fx stylize.mosaic horizontal=17 vertical=9 softness=70\n")),
     ]);
     for look in [
         "look.dreamy",

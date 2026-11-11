@@ -109,6 +109,10 @@ on `main`; its section here becomes the release's notes on GitHub
   draws on the GPU with the rest of its frame, where one had sent every frame
   it was in to the CPU. The picture is the same. How much faster such a shot
   plays and renders has not been measured yet.
+- So do clips with a Drop Shadow, a Rounded Crop, a Spacer or a Mosaic: a
+  picture in a picture with rounded corners and a shadow, or a face hidden
+  behind blocks, no longer takes its frames off the GPU. These are not timed
+  yet either.
 
 ## 0.1.1
 

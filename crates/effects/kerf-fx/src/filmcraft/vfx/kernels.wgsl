@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
+// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
     a: vec4<u32>,
@@ -53,6 +53,22 @@ fn sample(x: f32, y: f32) -> vec4<f32> {
     let b = load_or_clear(p + vec2(1, 0));
     let c = load_or_clear(p + vec2(0, 1));
     let d = load_or_clear(p + vec2(1, 1));
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+// Bilinear, the nearest edge pixel outside the picture (`Image::sample_bilinear_clamped`).
+fn bilinear_clamped(picture: texture_2d<f32>, x: f32, y: f32) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(picture));
+    let f = clamp(vec2(x, y) - 0.5, vec2(0.0), vec2<f32>(size - 1));
+    let p0 = vec2<i32>(f);
+    let p1 = min(p0 + 1, size - 1);
+    let t = f - vec2<f32>(p0);
+    let a = textureLoad(picture, p0, 0);
+    let b = textureLoad(picture, vec2(p1.x, p0.y), 0);
+    let c = textureLoad(picture, vec2(p0.x, p1.y), 0);
+    let d = textureLoad(picture, p1, 0);
     let top = a + (b - a) * t.x;
     let bottom = c + (d - c) * t.x;
     return top + (bottom - top) * t.y;
@@ -1121,4 +1137,63 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     textureStore(dst, vec2<i32>(id.xy), out);
+}
+
+// `distort::mosaic`, its blocks: a picture with a pixel to each, read from the middle of each in
+// `src`. p0.xy: a block's width and height.
+// By hand, not from `kerf_kernel`: it reads a second, smaller picture at whole-number places, a block to
+// a pixel, which `Num` has no way to say.
+@compute @workgroup_size(16, 16)
+fn mosaic_blocks(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let at = (vec2<f32>(id.xy) + 0.5) * u.p0.xy;
+    textureStore(dst, vec2<i32>(id.xy), bilinear_clamped(src, at.x, at.y));
+}
+
+// `distort::mosaic`, each pixel from its block in `aux`, as `mosaic_blocks` made them, and with
+// softness toward what lies between the blocks. p0.xy: a block's width and height; p0.z: softness.
+@compute @workgroup_size(16, 16)
+fn mosaic(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let blocks = vec2<i32>(textureDimensions(aux));
+    let xy = vec2<f32>(id.xy);
+    let block = min(vec2<i32>(xy / u.p0.xy), blocks - 1);
+    var out = textureLoad(aux, block, 0);
+    if u.p0.z > 0.0 {
+        let at = (xy + 0.5) / u.p0.xy;
+        out += (bilinear_clamped(aux, at.x, at.y) - out) * u.p0.z;
+    }
+    textureStore(dst, vec2<i32>(id.xy), out);
+}
+
+// The three below take their arithmetic from `kerf_kernel`, which writes `rounded_crop_px`, `spacer_px`,
+// and `shadow_px` out from what the CPU can run too; they go on the end of this.
+
+// `distort::rounded_crop`. p0: its left, top, right, and bottom; p1: radius, feather, border; p2: the
+// border's color.
+@compute @workgroup_size(16, 16)
+fn rounded_crop(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let xy = vec2<f32>(id.xy) + 0.5;
+    textureStore(dst, p, rounded_crop_px(textureLoad(src, p, 0), xy.x, xy.y));
+}
+
+// What `distort::spacer` does to the picture once it is placed. p0: the placed picture's left, top,
+// right, and bottom; p1: radius, and 1 to fill behind it; p2: the color behind it.
+@compute @workgroup_size(16, 16)
+fn spacer(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let xy = vec2<f32>(id.xy) + 0.5;
+    textureStore(dst, p, spacer_px(textureLoad(src, p, 0), xy.x, xy.y));
+}
+
+// The shadow of `effects`' Drop Shadow, from the picture moved to where it falls. p0: its color, and
+// how dark it is.
+@compute @workgroup_size(16, 16)
+fn shadow(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, shadow_px(textureLoad(src, p, 0), 0.0, 0.0));
 }

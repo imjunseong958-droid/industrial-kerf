@@ -18,3 +18,7 @@ kerf-kernel = { path = "../../render/kerf-kernel" }
 kerf-text = { path = "../../foundation/kerf-text" }
 kerf-raster-fx = { path = "../../effects/kerf-raster-fx" }
 rayon = "1"
+
+[dev-dependencies]
+# The kernels' WGSL is checked with no GPU.
+naga = { version = "30", features = ["wgsl-in"] }
