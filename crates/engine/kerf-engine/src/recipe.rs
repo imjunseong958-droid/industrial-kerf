@@ -93,7 +93,7 @@ impl Recipe {
         for (number, line) in lines {
             let wrong =
                 |what: String| EngineError::msg(format!("line {number} of the recipe: {what}"));
-            let mut words = words(line).map_err(&wrong)?;
+            let mut words = words(line).map_err(wrong)?;
             let verb = words.remove(0);
             if verb != "needs" && recipe.writes_out() {
                 return Err(wrong(format!(
@@ -124,7 +124,7 @@ impl Recipe {
                     });
                 }
                 "generate" if !words.is_empty() => {
-                    let ask = Ask::parse(&words, &made).map_err(&wrong)?;
+                    let ask = Ask::parse(&words, &made).map_err(wrong)?;
                     made.push(ask.out.clone());
                     recipe.steps.push(Step::Generate(Box::new(ask)));
                 }
