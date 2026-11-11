@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, the Cineon Converter, and the
+// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the Cineon Converter, and the
 // color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
@@ -1142,6 +1142,65 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     textureStore(dst, vec2<i32>(id.xy), out);
+}
+
+// The lens distortion in `effects`. p0: its center, half of the picture's diagonal, and its curvature.
+// By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
+// where a pixel comes from.
+@compute @workgroup_size(16, 16)
+fn lens(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let d = (vec2<f32>(id.xy) + 0.5 - u.p0.xy) / u.p0.z;
+    let at = u.p0.xy + d * (1.0 - u.p0.w * dot(d, d)) * u.p0.z;
+    textureStore(dst, vec2<i32>(id.xy), sample(at.x, at.y));
+}
+
+// `vfx::blend_simple`: one straight color on another, normally, added, screened, multiplied, or
+// overlaid.
+fn blend_simple(mode: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
+    switch mode {
+        case 1u: {
+            return b + s;
+        }
+        case 2u: {
+            return screen_on(b, s);
+        }
+        case 3u: {
+            return b * s;
+        }
+        case 4u: {
+            return overlay_on(b, s);
+        }
+        default: {
+            return s;
+        }
+    }
+}
+
+// `distort::magnify`. a.x: square; a.y: how the glass is blended; p0: its center, how much it
+// magnifies, and how far it reaches; p1: its feather, and its opacity.
+// By hand, not from `kerf_kernel`, for `corner_pin`'s reason: where a pixel comes from is worked out in
+// 64 bits on the CPU.
+@compute @workgroup_size(16, 16)
+fn magnify(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let off = vec2<f32>(id.xy) + 0.5 - u.p0.xy;
+    let d = select(length(off), max(abs(off.x), abs(off.y)), u.a.x != 0u);
+    var k = clamp(u.p0.w - d + 0.5, 0.0, 1.0);
+    if u.p1.x > 0.0 {
+        k = clamp((u.p0.w - d) / u.p1.x, 0.0, 1.0);
+    }
+    k *= u.p1.y;
+    if k <= 0.0 {
+        textureStore(dst, p, c);
+        return;
+    }
+    let at = u.p0.xy + off / u.p0.z;
+    let s = sample(at.x, at.y);
+    let o = blend_simple(u.a.y, straight(c), straight(s)) * s.a;
+    textureStore(dst, p, c + (vec4(o, s.a) - c) * k);
 }
 
 // `distort::mosaic`, its blocks: a picture with a pixel to each, read from the middle of each in

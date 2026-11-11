@@ -131,6 +131,11 @@ const SCENES: &[(&str, &str)] = &[
         "spacer",
         "      fx transform.spacer@1 left=120 radius=60 fill=true color=#203040\n",
     ),
+    ("lens", "      fx distort.lens@2 curvature=30\n"),
+    (
+        "magnify",
+        "      fx distort.magnify@2 center_x=0.4 center_y=0.45 size=400 magnification=250 feather=40\n",
+    ),
     // The color effects kept from EffectCraft, and the Cineon Converter.
     (
         "curves",

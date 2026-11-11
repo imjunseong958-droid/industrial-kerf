@@ -736,6 +736,8 @@ const EXACT_EFFECTS: &[&str] = &[
     "      fx utility.roundedcrop left=6 right=10 radius=20 border=3 border_color=#ffffff\n",
     "      fx transform.spacer left=10 radius=8 fill=true color=#ffffff\n",
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",
+    "      fx distort.lens curvature=35 h_decentering=15\n",
+    "      fx distort.magnify center_x=0.4 center_y=0.45 size=30 magnification=250 feather=6\n",
     // Written for 0 to 1, so each pixel is brought under 1 for them and put back.
     "      fx color.curves rgb=\"0,0 0.5,0.6 1,1\"\n",
     "      fx color.huesaturation hue=30 saturation=20\n",
