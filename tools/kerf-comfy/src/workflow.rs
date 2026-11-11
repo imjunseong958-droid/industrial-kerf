@@ -159,6 +159,66 @@ impl Workflow {
         ((wanted - 1).div_ceil(step) * step + 1).min(most)
     }
 
+    /// What the model this workflow runs takes, as a person's models file
+    /// says it under `takes` (`docs/shots.md`): the picture it makes, its
+    /// rate, the longest shot, the files a `generate` line gives that it
+    /// reads, and the other names a line can set, each with the value it
+    /// has when the line does not.
+    pub fn takes(&self) -> Value {
+        let blanks = self.blanks();
+        let most = self.frames(None, None);
+        let mut reads: Vec<&str> = ["guide", "first", "last"]
+            .into_iter()
+            .filter(|name| blanks.contains(*name))
+            .collect();
+        let references = blanks
+            .iter()
+            .filter(|name| name.starts_with("ref") && names_a_file(name))
+            .count();
+        if references > 0 {
+            reads.push("ref");
+        }
+        let more: Map<String, Value> = self
+            .set
+            .iter()
+            .filter(|(name, _)| blanks.contains(*name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        let mut takes = Map::new();
+        if !self.about.is_empty() {
+            takes.insert("about".to_owned(), Value::from(self.about.clone()));
+        }
+        takes.insert(
+            "size".to_owned(),
+            Value::from(vec![self.size.0, self.size.1]),
+        );
+        // A whole rate is written whole.
+        takes.insert(
+            "rate".to_owned(),
+            if self.fps.fract() == 0.0 {
+                Value::from(self.fps as u64)
+            } else {
+                Value::from(self.fps)
+            },
+        );
+        takes.insert(
+            "seconds".to_owned(),
+            Value::from(f64::from(most) / self.fps),
+        );
+        takes.insert(
+            "frames".to_owned(),
+            serde_json::json!({"most": most, "step": self.frames.step}),
+        );
+        takes.insert("reads".to_owned(), Value::from(reads));
+        if references > 1 {
+            takes.insert("refs".to_owned(), Value::from(references));
+        }
+        if !more.is_empty() {
+            takes.insert("more".to_owned(), Value::Object(more));
+        }
+        Value::Object(takes)
+    }
+
     /// The names of every blank the graph has.
     pub fn blanks(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
@@ -401,6 +461,42 @@ mod tests {
         }
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("wan-vace"), "{missing}");
+    }
+
+    #[test]
+    fn a_workflow_says_what_its_model_takes() {
+        let takes = bundled().takes();
+        assert_eq!(takes["size"], json!([832, 480]));
+        assert_eq!(takes["rate"], json!(16));
+        // 81 frames at 16 a second.
+        assert_eq!(takes["seconds"], json!(5.0625));
+        assert_eq!(takes["frames"], json!({"most": 81, "step": 4}));
+        assert_eq!(takes["reads"], json!(["guide", "ref"]));
+        assert_eq!(takes["more"]["steps"], json!(20));
+        assert_eq!(takes["more"]["strength"], json!(1.0));
+        assert!(takes["about"].as_str().unwrap().starts_with("Wan 2.1 VACE"));
+        assert!(takes.get("refs").is_none(), "one reference needs no count");
+
+        // A model that reads first and last frames and two references, at a rate that is not
+        // whole, and that makes fewer frames than `most` says where its step does not reach it.
+        let other = Workflow::parse(
+            r#"{
+                "kerf-comfy": 1, "fps": 23.976, "frames": {"most": 50, "step": 8}, "size": [1280, 720],
+                "set": {"steps": 30, "unused": 1},
+                "workflow": {
+                    "1": {"class_type": "A", "inputs": {"a": "{first}", "b": "{last}", "c": "{ref}", "d": "{ref2}", "e": "{steps}", "f": "{prompt}"}}
+                }
+            }"#,
+        )
+        .unwrap();
+        let takes = other.takes();
+        assert_eq!(takes["rate"], json!(23.976));
+        assert_eq!(takes["frames"], json!({"most": 49, "step": 8}));
+        assert_eq!(takes["reads"], json!(["first", "last", "ref"]));
+        assert_eq!(takes["refs"], json!(2));
+        // What `set` holds with no blank to fill is nothing a line can set.
+        assert_eq!(takes["more"], json!({"steps": 30}));
+        assert!(takes.get("about").is_none());
     }
 
     #[test]
