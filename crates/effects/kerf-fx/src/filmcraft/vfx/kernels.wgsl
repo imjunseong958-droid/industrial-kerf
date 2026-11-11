@@ -1,5 +1,6 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
+// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, the Cineon Converter, and the
+// color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
     a: vec4<u32>,
@@ -483,32 +484,36 @@ fn ultra_keyed(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // `kept::encoded`: premultiplied and sRGB-encoded, as EffectCraft's effects read pictures.
+fn kept_in(c: vec4<f32>) -> vec4<f32> {
+    if c.a <= 1e-6 {
+        return vec4(0.0);
+    }
+    let v = linear_to_srgb(clamp(c.rgb / c.a, vec3(0.0), vec3(1.0)));
+    return vec4(v * c.a, c.a);
+}
+
+// `kept::decode_into`, the way back.
+fn kept_out(c: vec4<f32>) -> vec4<f32> {
+    let a = clamp(c.a, 0.0, 1.0);
+    if a <= 1e-6 {
+        return vec4(0.0);
+    }
+    let v = srgb_to_linear(clamp(c.rgb / a, vec3(0.0), vec3(1.0)));
+    return vec4(v * a, a);
+}
+
 @compute @workgroup_size(16, 16)
 fn encode_kept(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }
     let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    if c.a <= 1e-6 {
-        textureStore(dst, p, vec4(0.0));
-        return;
-    }
-    let v = linear_to_srgb(clamp(c.rgb / c.a, vec3(0.0), vec3(1.0)));
-    textureStore(dst, p, vec4(v * c.a, c.a));
+    textureStore(dst, p, kept_in(textureLoad(src, p, 0)));
 }
 
-// `kept::decode_into`, the way back.
 @compute @workgroup_size(16, 16)
 fn decode_kept(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }
     let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    let a = clamp(c.a, 0.0, 1.0);
-    if a <= 1e-6 {
-        textureStore(dst, p, vec4(0.0));
-        return;
-    }
-    let v = srgb_to_linear(clamp(c.rgb / a, vec3(0.0), vec3(1.0)));
-    textureStore(dst, p, vec4(v * a, a));
+    textureStore(dst, p, kept_out(textureLoad(src, p, 0)));
 }
 
 // `blur3::cc_radial_blur`. a.x its type; p0: center, zoom, arc; p1: quality.
@@ -1196,4 +1201,231 @@ fn shadow(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }
     let p = vec2<i32>(id.xy);
     textureStore(dst, p, shadow_px(textureLoad(src, p, 0), 0.0, 0.0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The color effects kept from EffectCraft (`kerf-raster-fx`), each on a pixel as `kept_in` makes one
+// and back as `kept_out` takes one, in the one pass: the CPU makes a picture of each on the way.
+
+// An effect that changes nothing as set still goes there and back.
+@compute @workgroup_size(16, 16)
+fn kept_through(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, kept_out(kept_in(textureLoad(src, p, 0))));
+}
+
+// `color_fx::photo_filter`, whose arithmetic `photo_filter_px` is written out from `kerf_kernel`, as
+// `unmult_px` and the three of `cineon` are. p0: the filter's color, and its density; p1.x: 1 to keep
+// each pixel's brightness.
+@compute @workgroup_size(16, 16)
+fn photo_filter(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, kept_out(photo_filter_px(kept_in(textureLoad(src, p, 0)))));
+}
+
+// `keying2::unmult`. p0: 1 for a white background, where a pixel begins to show, over how much more
+// it shows whole, and 1 to take the background back out of it; p1.x: 1 to clip what comes of that.
+@compute @workgroup_size(16, 16)
+fn unmult(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, kept_out(unmult_px(kept_in(textureLoad(src, p, 0)))));
+}
+
+// `color::cineon`, on the picture as it is. a.x: which way it converts; p0: the black and the white
+// point as 10-bit codes, and the two inside; p1: gamma, rolloff, and what its points take from every
+// value.
+@compute @workgroup_size(16, 16)
+fn cineon(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    var out: vec4<f32>;
+    switch u.a.x {
+        case 0u: {
+            out = cineon_to_linear_px(c);
+        }
+        case 1u: {
+            out = cineon_to_log_px(c);
+        }
+        default: {
+            out = cineon_log_px(c);
+        }
+    }
+    textureStore(dst, p, out);
+}
+
+const CURVE_STEPS: i32 = 1024;
+
+// `Curve::eval` of the curve `which` of Curves: master, red, green, blue, alpha. aux holds them: its
+// first row a step of the first four to a pixel, its second of alpha, and in its third and fourth
+// each curve's first and last point with the slope it goes on by past it. a.x: which have a curve.
+fn curve_of(which: u32, x: f32) -> f32 {
+    if (u.a.x & (1u << which)) == 0u {
+        return x;
+    }
+    if x < 0.0 || x > 1.0 {
+        let end = textureLoad(aux, vec2<i32>(i32(which), select(3, 2, x < 0.0)), 0);
+        return end.y + (x - end.x) * end.z;
+    }
+    let f = x * f32(CURVE_STEPS);
+    let i = min(i32(f), CURVE_STEPS - 1);
+    let row = i32(which / 4u);
+    let lo = textureLoad(aux, vec2(i, row), 0)[which % 4u];
+    let hi = textureLoad(aux, vec2(i + 1, row), 0)[which % 4u];
+    return lo + (hi - lo) * (f - f32(i));
+}
+
+// `color2::curves`.
+// By hand, not from `kerf_kernel`: a curve is a table read at a whole-number place, and `Num` reads
+// none.
+@compute @workgroup_size(16, 16)
+fn curves(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = kept_in(textureLoad(src, p, 0));
+    var out = px;
+    if px.a <= 0.0 {
+        // Only the alpha curve gives what has none any.
+        let a = curve_of(4u, 0.0);
+        if a > 0.0 {
+            out = vec4(0.0, 0.0, 0.0, clamp(a, 0.0, 1.0));
+        }
+    } else {
+        let c = px.rgb / px.a;
+        let o = vec3(
+            curve_of(1u, curve_of(0u, c.r)),
+            curve_of(2u, curve_of(0u, c.g)),
+            curve_of(3u, curve_of(0u, c.b)),
+        );
+        let a = clamp(curve_of(4u, px.a), 0.0, 1.0);
+        out = vec4(o * a, a);
+    }
+    textureStore(dst, p, kept_out(out));
+}
+
+// `f32::rem_euclid` by a number above 0.
+fn rem_euclid(x: f32, by: f32) -> f32 {
+    return x - by * floor(x / by);
+}
+
+fn adjust_sat(s: f32, by: f32) -> f32 {
+    if by >= 0.0 {
+        return s + (1.0 - s) * by * min(s, 1.0);
+    }
+    return s * (1.0 + by);
+}
+
+fn adjust_light(l: f32, by: f32) -> f32 {
+    if by >= 0.0 {
+        return l + (1.0 - l) * by;
+    }
+    return l * (1.0 + by);
+}
+
+// `HueRange::weight`: how much the hue `h`, in degrees, is in a range that starts and ends at
+// `range.xy`, with the falloffs `range.zw` before and after it.
+fn hue_weight(range: vec4<f32>, h: f32) -> f32 {
+    let width = rem_euclid(range.y - range.x, 360.0);
+    let d = rem_euclid(h - range.x, 360.0);
+    if d <= width {
+        return 1.0;
+    }
+    var after = 0.0;
+    if range.w > 0.0 {
+        after = 1.0 - (d - width) / range.w;
+    }
+    var before = 0.0;
+    if range.z > 0.0 {
+        before = 1.0 - (360.0 - d) / range.z;
+    }
+    return clamp(max(after, before), 0.0, 1.0);
+}
+
+// `color_fx::hue_saturation`. a.x: colorize; a.y: how many ranges are set, a row of aux to each: where
+// it starts and ends and its two falloffs, then its hue, saturation, and lightness. p0: the master's
+// hue, saturation, and lightness; p1: the hue, saturation, and lightness it colorizes by.
+// By hand, not from `kerf_kernel`: `Num` has no remainder to turn a hue by, and each range is taken or
+// passed over by the pixel's own hue, which it could only say by working every one out.
+@compute @workgroup_size(16, 16)
+fn hue_saturation(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = kept_in(textureLoad(src, p, 0));
+    if px.a <= 0.0 {
+        textureStore(dst, p, kept_out(px));
+        return;
+    }
+    let hsl = rgb_to_hsl(px.rgb / px.a);
+    var to: vec3<f32>;
+    if u.a.x != 0u {
+        let l = hsl.z + u.p1.z * select(hsl.z, 1.0 - hsl.z, u.p1.z > 0.0);
+        to = vec3(u.p1.x, u.p1.y, clamp(l, 0.0, 1.0));
+    } else {
+        var h = hsl.x + u.p0.x;
+        var s = adjust_sat(hsl.y, u.p0.y);
+        var l = adjust_light(hsl.z, u.p0.z);
+        for (var r = 0; r < i32(u.a.y); r++) {
+            let by = textureLoad(aux, vec2(1, r), 0);
+            let w = hue_weight(textureLoad(aux, vec2(0, r), 0), hsl.x * 360.0) * min(hsl.y * 20.0, 1.0);
+            if w > 0.0 {
+                h += by.x * w;
+                s = adjust_sat(clamp(s, 0.0, 1.0), by.y * w);
+                l = adjust_light(l, by.z * w);
+            }
+        }
+        to = vec3(h, clamp(s, 0.0, 1.0), l);
+    }
+    let rgb = hsl_to_rgb(vec3(rem_euclid(to.x, 1.0), to.y, to.z));
+    textureStore(dst, p, kept_out(vec4(rgb * px.a, px.a)));
+}
+
+// `color2::selective_color`. a.x: 1 when what it takes is by how much ink there is; aux: a pixel to
+// each of its nine ranges, with the cyan, magenta, yellow, and black it takes from that range.
+// By hand, not from `kerf_kernel`: its ranges go by which channel is the largest and which the
+// smallest, an order `Num` has no way to keep.
+@compute @workgroup_size(16, 16)
+fn selective_color(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = kept_in(textureLoad(src, p, 0));
+    if px.a <= 0.0 {
+        textureStore(dst, p, kept_out(px));
+        return;
+    }
+    let c = px.rgb / px.a;
+    // `sc_weights`: the first of the largest and the last of the smallest, as a sort that keeps
+    // equals in their order finds them.
+    let k = clamp(c, vec3(0.0), vec3(1.0));
+    var hi = 0;
+    if k.g > k[hi] { hi = 1; }
+    if k.b > k[hi] { hi = 2; }
+    var lo = 2;
+    if k.g < k[lo] { lo = 1; }
+    if k.r < k[lo] { lo = 0; }
+    let most = k[hi];
+    let least = k[lo];
+    let middle = k[3 - hi - lo];
+    var w = array<f32, 9>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    // Reds, greens, and blues by the largest; cyans, magentas, and yellows by the smallest.
+    w[hi * 2] = most - middle;
+    w[(lo * 2 + 3) % 6] = middle - least;
+    w[6] = max((least - 0.5) * 2.0, 0.0);
+    w[8] = max((0.5 - most) * 2.0, 0.0);
+    w[7] = clamp(1.0 - (abs(most - 0.5) + abs(least - 0.5)), 0.0, 1.0);
+    var o = c;
+    for (var r = 0; r < 9; r++) {
+        if w[r] <= 0.0 {
+            continue;
+        }
+        let take = textureLoad(aux, vec2(r, 0), 0);
+        var delta = take.xyz + take.w;
+        if u.a.x != 0u {
+            delta *= max(1.0 - c, vec3(0.0));
+        }
+        o -= w[r] * delta;
+    }
+    textureStore(dst, p, kept_out(vec4(max(o, vec3(0.0)) * px.a, px.a)));
 }

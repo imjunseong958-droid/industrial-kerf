@@ -113,6 +113,10 @@ on `main`; its section here becomes the release's notes on GitHub
   picture in a picture with rounded corners and a shadow, or a face hidden
   behind blocks, no longer takes its frames off the GPU. These are not timed
   yet either.
+- Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult and the Cineon
+  Converter draw on the GPU too, in SDR and in HDR sequences, so a clip graded
+  with one of them keeps its frames there. Curves with a point outside 0 to 1
+  is still drawn on the CPU. Not timed yet.
 
 ## 0.1.1
 

@@ -21,6 +21,10 @@ pub trait Num:
     /// How long the line is that goes this far across and `other` down.
     fn hypot(self, other: Self) -> Self;
     fn pow(self, power: f32) -> Self;
+    /// This to a power the kernel is told, where [`Num::pow`] takes one it is written with.
+    fn powf(self, power: Self) -> Self;
+    fn exp(self) -> Self;
+    fn log10(self) -> Self;
     /// `yes` where this is at most `limit`, else `no`. The CPU works out the one it takes, and WGSL both.
     fn if_at_most<const N: usize>(
         self,
@@ -62,6 +66,18 @@ impl Num for f32 {
     #[inline(always)]
     fn pow(self, power: f32) -> f32 {
         self.powf(power)
+    }
+    #[inline(always)]
+    fn powf(self, power: f32) -> f32 {
+        f32::powf(self, power)
+    }
+    #[inline(always)]
+    fn exp(self) -> f32 {
+        f32::exp(self)
+    }
+    #[inline(always)]
+    fn log10(self) -> f32 {
+        f32::log10(self)
     }
     #[inline(always)]
     fn if_at_most<const N: usize>(
@@ -176,6 +192,16 @@ impl Num for Traced {
     }
     fn pow(self, power: f32) -> Traced {
         Traced::of(&format!("pow({}, {power:?})", self.name()))
+    }
+    fn powf(self, power: Traced) -> Traced {
+        Traced::of(&format!("pow({}, {})", self.name(), power.name()))
+    }
+    fn exp(self) -> Traced {
+        Traced::of(&format!("exp({})", self.name()))
+    }
+    fn log10(self) -> Traced {
+        // WGSL has the logarithm to 2 and none to 10.
+        Traced::of(&format!("log2({}) * {:?}", self.name(), std::f32::consts::LOG10_2))
     }
     fn if_at_most<const N: usize>(
         self,
@@ -299,6 +325,188 @@ pub fn wipe<N: Num>(e: &WipeEdge<N>, a: [N; 4], b: [N; 4], d: N) -> [N; 4] {
 pub fn iris_round<N: Num>(x: N, y: N, cx: N, cy: N) -> N {
     let (dx, dy) = (x - cx, y - cy);
     (dx * dx + dy * dy).sqrt()
+}
+
+// ------------------------------------------------------------------------------------- More grades
+//
+// As the rounded rectangle below, these run on the GPU only, and the CPU's code stays the reference:
+// `kept::tests` and `vfx::gpu::tests` in `kerf-fx` hold each, as `f32`, to that code's very values.
+
+/// What a photo filter is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhotoFilter<N> {
+    pub color: [N; 3],
+    pub density: N,
+    /// 1 to keep each pixel's brightness, 0 not to.
+    pub keep: N,
+}
+
+/// A photo filter of a premultiplied pixel.
+#[inline(always)]
+pub fn photo_filter<N: Num>(p: [N; 4], told: &PhotoFilter<N>) -> [N; 4] {
+    let zero = N::lit(0.0);
+    let a = p[3];
+    a.if_at_most(
+        zero,
+        || p,
+        || {
+            let x = [p[0] / a, p[1] / a, p[2] / a];
+            let o: [N; 3] =
+                std::array::from_fn(|k| x[k] + (x[k] * told.color[k] - x[k]) * told.density);
+            let luma =
+                |c: [N; 3]| N::lit(0.2126) * c[0] + N::lit(0.7152) * c[1] + N::lit(0.0722) * c[2];
+            let o = told.keep.if_at_most(
+                zero,
+                || o,
+                || {
+                    let (was, is) = (luma(x), luma(o).max(N::lit(1e-6)));
+                    o.map(|value| value * was / is)
+                },
+            );
+            [o[0] * a, o[1] * a, o[2] * a, a]
+        },
+    )
+}
+
+/// What an unmultiply is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Unmult<N> {
+    /// 1 for a white background, 0 for a black one.
+    pub white: N,
+    /// How far from the background a pixel begins to show, and over how much more it comes to show
+    /// whole; with no more at all it shows whole past where it begins.
+    pub start: N,
+    pub width: N,
+    /// 1 to take the background's color back out of what shows in part, 0 not to.
+    pub decontaminate: N,
+    /// 1 to keep what comes of that between 0 and 1, 0 not to.
+    pub clip: N,
+}
+
+/// A premultiplied pixel with its background turned to transparency.
+#[inline(always)]
+pub fn unmult<N: Num>(p: [N; 4], told: &Unmult<N>) -> [N; 4] {
+    let (zero, one, least) = (N::lit(0.0), N::lit(1.0), N::lit(1e-6));
+    let a = p[3];
+    let [r, g, b, alpha] = a.if_at_most(
+        least,
+        || [zero, zero, zero, a.max(zero)],
+        || [p[0] / a, p[1] / a, p[2] / a, a],
+    );
+    // How far it is from the background.
+    let [d] = told.white.if_at_most(
+        zero,
+        || [r.max(g).max(b)],
+        || [one - r.min(g).min(b)],
+    );
+    let d = d.clamp(zero, one);
+    let [m] = told.width.if_at_most(
+        least,
+        || d.if_at_most(told.start, || [zero], || [one]),
+        || [((d - told.start) / told.width).clamp(zero, one)],
+    );
+    m.if_at_most(
+        least,
+        || [zero; 4],
+        || {
+            let c = [r, g, b];
+            let c = told.decontaminate.if_at_most(
+                zero,
+                || c,
+                || c.map(|value| (value - told.white * (one - m)) / m),
+            );
+            let c = told
+                .clip
+                .if_at_most(zero, || c, || c.map(|value| value.clamp(zero, one)));
+            let alpha = alpha * m;
+            [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+        },
+    )
+}
+
+/// The density of film a 10-bit code is, over the gamma of the film.
+const CINEON_DENSITY: f32 = 0.002 / 0.6;
+
+/// What a Cineon conversion is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cineon<N> {
+    /// The black and the white point, as 10-bit codes.
+    pub black: N,
+    pub white: N,
+    /// The black and the white point of what it converts to or from, 0 to 1.
+    pub black_inside: N,
+    pub white_inside: N,
+    pub gamma: N,
+    /// How much of the top rolls off, 0 to 1.
+    pub rolloff: N,
+    /// [`cineon_offset`] of its black and white points.
+    pub offset: N,
+}
+
+/// What a Cineon conversion takes from every value, by its black and white points.
+pub fn cineon_offset(black: f32, white: f32) -> f32 {
+    10f32.powf((black - white) * CINEON_DENSITY)
+}
+
+/// An sRGB-encoded value through a Cineon conversion: from log to linear (`way` 0), from linear to log
+/// (1), or from log to log.
+#[inline(always)]
+pub fn cineon<N: Num>(v: N, way: u32, told: &Cineon<N>) -> N {
+    let (zero, one, k) = (N::lit(0.0), N::lit(1.0), N::lit(CINEON_DENSITY));
+    match way {
+        0 => {
+            let code = v * N::lit(1023.0);
+            let light = N::lit(10.0).powf((code - told.white) * k);
+            let light = ((light - told.offset) / (one - told.offset)).max(zero);
+            let o = light.powf(one / told.gamma);
+            let o = told.black_inside + o * (told.white_inside - told.black_inside);
+            let knee = one - told.rolloff;
+            let [o] = told.rolloff.if_at_most(
+                N::lit(1e-4),
+                || [o],
+                || {
+                    o.if_at_most(
+                        knee,
+                        || [o],
+                        || [knee + told.rolloff * (one - (-(o - knee) / told.rolloff).exp())],
+                    )
+                },
+            );
+            o.clamp(zero, one)
+        }
+        1 => {
+            let span = (told.white_inside - told.black_inside).max(N::lit(1e-4));
+            let d = ((v - told.black_inside) / span).clamp(zero, one);
+            let light = d.powf(told.gamma);
+            let density = (light * (one - told.offset) + told.offset).max(N::lit(1e-6));
+            let code = told.white + density.log10() / k;
+            (code / N::lit(1023.0)).clamp(zero, one)
+        }
+        _ => {
+            let code = v * N::lit(1023.0);
+            (((code - told.black) / (told.white - told.black)) * N::lit(685.0 - 95.0)
+                + N::lit(95.0))
+                / N::lit(1023.0)
+        }
+    }
+}
+
+/// A Cineon conversion of a premultiplied pixel in linear light, which it reads encoded.
+#[inline(always)]
+pub fn cineon_px<N: Num>(p: [N; 4], way: u32, told: &Cineon<N>) -> [N; 4] {
+    let (zero, one) = (N::lit(0.0), N::lit(1.0));
+    let a = p[3];
+    a.if_at_most(
+        N::lit(1e-6),
+        || p,
+        || {
+            let through = |at: usize| {
+                let v = linear_to_srgb((p[at] / a).max(zero));
+                srgb_to_linear(cineon(v, way, told).clamp(zero, one)) * a
+            };
+            [through(0), through(1), through(2), a]
+        },
+    )
 }
 
 // ------------------------------------------------------------------------------ A rounded rectangle
@@ -750,6 +958,68 @@ fn at_a_pixel(name: &str, body: impl FnOnce([Traced; 4], Traced, Traced) -> [Tra
     )
 }
 
+/// A function of WGSL that takes a pixel `q` and returns what `body` makes of it.
+fn of_a_pixel(name: &str, body: impl FnOnce([Traced; 4]) -> [Traced; 4]) -> String {
+    let mut result = None;
+    let lines = written(|| result = Some(body(parts("q"))));
+    format!(
+        "fn {name}(q: vec4<f32>) -> vec4<f32> {{\n{lines}{}}}\n",
+        returned(result.expect("written"))
+    )
+}
+
+/// `photo_filter`, `unmult`, and `cineon_px` as `fn photo_filter_px`, `fn unmult_px`, and, a function to
+/// each way it converts, `fn cineon_to_linear_px`, `fn cineon_to_log_px`, and `fn cineon_log_px`, for the
+/// effects' `vfx/kernels.wgsl`: each takes a premultiplied pixel. A photo filter's color is in `u.p0`
+/// with its density, and whether it keeps brightness in `u.p1.x`; an unmultiply's background, start,
+/// width, and whether it decontaminates are in `u.p0`, and whether it clips in `u.p1.x`; a Cineon
+/// conversion's black, white, and the two inside are in `u.p0`, and its gamma, rolloff, and offset in
+/// `u.p1`.
+pub fn color_wgsl() -> String {
+    let v = Traced::named;
+    let filter = of_a_pixel("photo_filter_px", |q| {
+        let told = PhotoFilter {
+            color: [v("u.p0.x"), v("u.p0.y"), v("u.p0.z")],
+            density: v("u.p0.w"),
+            keep: v("u.p1.x"),
+        };
+        photo_filter(q, &told)
+    });
+    let unmultiplied = of_a_pixel("unmult_px", |q| {
+        let told = Unmult {
+            white: v("u.p0.x"),
+            start: v("u.p0.y"),
+            width: v("u.p0.z"),
+            decontaminate: v("u.p0.w"),
+            clip: v("u.p1.x"),
+        };
+        unmult(q, &told)
+    });
+    let ways = [
+        "cineon_to_linear_px",
+        "cineon_to_log_px",
+        "cineon_log_px",
+    ];
+    let converted: String = (0u32..)
+        .zip(ways)
+        .map(|(way, name)| {
+            of_a_pixel(name, |q| {
+                let told = Cineon {
+                    black: v("u.p0.x"),
+                    white: v("u.p0.y"),
+                    black_inside: v("u.p0.z"),
+                    white_inside: v("u.p0.w"),
+                    gamma: v("u.p1.x"),
+                    rolloff: v("u.p1.y"),
+                    offset: v("u.p1.z"),
+                };
+                cineon_px(q, way, &told)
+            })
+        })
+        .collect();
+    format!("{filter}{unmultiplied}{converted}")
+}
+
 /// `rounded_crop`, `spacer`, and `shadow` as `fn rounded_crop_px`, `fn spacer_px`, and `fn shadow_px`,
 /// for the effects' `vfx/kernels.wgsl`: each takes a premultiplied pixel and where its middle is. A
 /// rounded crop's edges are in `u.p0`, its radius, feather, and border in `u.p1`, and its border's color in
@@ -1039,6 +1309,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
         valid(&format!("{FX}{}{}", color_balance_wgsl(), box_line_wgsl()));
         valid(&format!("{TRANSITIONS}{}", wipe_wgsl()));
         valid(&format!("{VFX}{}", rounded_wgsl()));
+        valid(&format!("{VFX}{}", color_wgsl()));
     }
 
     #[test]
@@ -1047,6 +1318,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
         assert_eq!(box_line_wgsl(), box_line_wgsl());
         assert_eq!(wipe_wgsl(), wipe_wgsl());
         assert_eq!(rounded_wgsl(), rounded_wgsl());
+        assert_eq!(color_wgsl(), color_wgsl());
     }
 
     /// A kernel's names may not be taken for WGSL's own, as `i32` once was.
@@ -1057,6 +1329,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
             box_line_wgsl(),
             wipe_wgsl(),
             rounded_wgsl(),
+            color_wgsl(),
         ];
         for written in all {
             for shadowed in ["let i32", "let f32", "let u32", "var i32", "var f32"] {

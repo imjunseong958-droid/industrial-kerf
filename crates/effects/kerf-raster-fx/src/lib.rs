@@ -31,6 +31,9 @@ use std::sync::OnceLock;
 
 pub use kerf_raster::Image;
 pub use noise::GrainLook;
+// What a kernel reads of these effects' numbers, as the effects themselves read them.
+pub use color2::{sc_param_id, Curve, SC_IDS};
+pub use color_fx::{huesat_ranges, HueRange, PHOTO_FILTERS, PHOTO_FILTER_CUSTOM};
 
 #[cfg(test)]
 /// Effect categories in Effects & Presets order.

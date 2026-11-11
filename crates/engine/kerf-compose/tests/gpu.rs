@@ -164,6 +164,20 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("spacer to under half", clip("      fx transform.spacer uniform=false left=40 top=110 right=20 bottom=20\n")),
         ("mosaic", clip("      fx stylize.mosaic horizontal=24 vertical=14\n")),
         ("mosaic soft", clip("      set scale=0.9\n      fx stylize.mosaic horizontal=17 vertical=9 softness=70\n")),
+        ("curves", clip("      fx color.curves rgb=\"0,0 0.3,0.2 0.7,0.85 1,1\" red=\"0,0 0.5,0.6 1,1\"\n")),
+        ("curves past their ends", clip("      fx color.curves rgb=\"0.15,0 0.85,1\" blue=\"0,0.1 0.5,0.45 1,0.9\" alpha=\"0,0.3 1,1\"\n")),
+        // A hue turned by 25 and not 30: 30 puts the footage's pure colors half way between two bytes,
+        // which the two then round apart, as `color.procamp hue=30` shows on a kernel long held.
+        ("hue and saturation", clip("      fx color.huesaturation hue=25 saturation=25 redsSaturation=-60 bluesHue=40\n")),
+        ("colorized", clip("      set scale=0.9\n      fx color.huesaturation colorize=true colorizeHue=200 colorizeSaturation=45\n")),
+        ("selective color", clip("      fx color.selectivecolor details/reds/redsCyan=40 details/neutrals/neutralsYellow=30 details/blues/bluesBlack=-25\n")),
+        ("photo filter", clip("      fx color.photofilter filter=cooling-filter-80 density=60\n")),
+        (
+            "unmult",
+            "  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n      set color=#336699\n  track V2 video\n    clip c1 media=m src=0f at=0f dur=24f\n      fx key.unmult blackLevel=10 softness=60\n".to_owned(),
+        ),
+        ("cineon to linear", clip("      fx utility.cineon gamma=2 rolloff=30\n")),
+        ("cineon to log", clip("      fx utility.cineon conversion=linear-to-log\n")),
     ]);
     for look in [
         "look.dreamy",

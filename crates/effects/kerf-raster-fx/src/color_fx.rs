@@ -30,15 +30,15 @@ pub const HUESAT_CHANNELS: [&str; 7] = ["Master", "Reds", "Yellows", "Greens", "
 
 /// One colour range of Hue/Saturation: the hues it covers fully (`start..end`, degrees, may
 /// wrap), the fall-off widths either side, and its hue / saturation / lightness adjustments.
-#[derive(Clone, Copy, Debug)]
-struct HueRange {
-    start: f32,
-    end: f32,
-    fall_start: f32,
-    fall_end: f32,
-    hue: f32,
-    sat: f32,
-    light: f32,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HueRange {
+    pub start: f32,
+    pub end: f32,
+    pub fall_start: f32,
+    pub fall_end: f32,
+    pub hue: f32,
+    pub sat: f32,
+    pub light: f32,
 }
 
 impl HueRange {
@@ -58,7 +58,7 @@ impl HueRange {
 }
 
 /// The colour ranges with non-zero adjustments.
-fn huesat_ranges(ctx: &EffectCtx) -> Vec<HueRange> {
+pub fn huesat_ranges(ctx: &EffectCtx) -> Vec<HueRange> {
     let f = |id: String, d: f64| ctx.params.get(&id).map(Value::as_f64).unwrap_or(d) as f32;
     HUESAT_RANGES
         .iter()
