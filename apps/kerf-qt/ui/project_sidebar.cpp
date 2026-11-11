@@ -7,7 +7,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
@@ -82,6 +84,67 @@ void SidebarRow::paintEvent(QPaintEvent *) {
     if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
 }
 
+SidebarAccount::SidebarAccount(QWidget *parent) : ui::KitButton(parent) {
+    setObjectName(QStringLiteral("sidebarAccount"));
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setFixedHeight(layout::sidebarFoot);
+    setFocusPolicy(Qt::TabFocus);
+}
+
+void SidebarAccount::setAccount(const QString &title, const QString &subtitle) {
+    if (title == m_title && subtitle == m_subtitle) return;
+    m_title = title;
+    m_subtitle = subtitle;
+    setAccessibleName(subtitle.isEmpty() ? title : QStringLiteral("%1, %2").arg(title, subtitle));
+    update();
+}
+
+void SidebarAccount::setOpen(bool open) {
+    if (open == m_open) return;
+    m_open = open;
+    update();
+}
+
+QSize SidebarAccount::sizeHint() const { return {layout::sidebar, layout::sidebarFoot}; }
+
+void SidebarAccount::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF r = rect();
+    QColor fill = tokens::color(raised);
+    if (!m_open) fill.setAlphaF(float(hoverProgress()));
+    p.setPen(Qt::NoPen);
+    p.setBrush(fill);
+    p.drawRoundedRect(r, radius::card, radius::card);
+
+    // The disc, with the name's first letter.
+    constexpr qreal disc = 28;
+    const QRectF avatar(kPadding, (height() - disc) / 2.0, disc, disc);
+    p.setBrush(tokens::color(on));
+    p.drawEllipse(avatar);
+    p.setFont(tokens::font(metaStrong));
+    p.setPen(tokens::color(ink));
+    p.drawText(avatar, Qt::AlignCenter, m_title.left(1).toUpper());
+
+    const qreal right = width() - kPadding - kIcon;
+    icons::paint(p, QStringLiteral("g-updown"), QRectF(right, 0, kIcon, height()), tokens::color(ink3), kIcon);
+    const qreal x = avatar.right() + space::s8 + space::s2;
+    const qreal room = right - space::s8 - x;
+    const bool two = !m_subtitle.isEmpty();
+    const qreal top = two ? (height() - 2 * meta.line) / 2.0 : (height() - body.line) / 2.0;
+    p.setFont(tokens::font(two ? controlStrong : bodyName));
+    p.setPen(tokens::color(ink));
+    p.drawText(QRectF(x, top, room, two ? meta.line : body.line), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetrics(p.font()).elidedText(m_title, Qt::ElideRight, int(room)));
+    if (two) {
+        p.setFont(tokens::font(meta));
+        p.setPen(tokens::color(ink3));
+        p.drawText(QRectF(x, top + meta.line, room, meta.line), Qt::AlignLeft | Qt::AlignVCenter,
+                   QFontMetrics(p.font()).elidedText(m_subtitle, Qt::ElideRight, int(room)));
+    }
+    if (focusVisible()) ui::paintFocusRing(p, r, radius::card);
+}
+
 ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("projectSidebar"));
     setAccessibleName(QStringLiteral("Folders and conversations"));
@@ -96,16 +159,18 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     auto *actions = new QVBoxLayout;
     actions->setContentsMargins(space::s8, 0, space::s8, 0);
     actions->setSpacing(space::s2);
-    m_newProject = new SidebarRow(QStringLiteral("g-plus"), QStringLiteral("New Project…"));
-    m_newProject->setObjectName(QStringLiteral("sidebarNewProject"));
-    connect(m_newProject, &QAbstractButton::clicked, this, &ProjectSidebar::newProjectRequested);
-    actions->addWidget(m_newProject);
-    m_openFolder = new SidebarRow(QStringLiteral("g-folder"), QStringLiteral("Open Folder…"));
-    m_openFolder->setObjectName(QStringLiteral("sidebarOpenFolder"));
-    connect(m_openFolder, &QAbstractButton::clicked, this, &ProjectSidebar::openFolderRequested);
-    actions->addWidget(m_openFolder);
+    m_newConversation = new SidebarRow(QStringLiteral("g-plus"), QStringLiteral("New conversation"));
+    m_newConversation->setObjectName(QStringLiteral("sidebarNewConversation"));
+    connect(m_newConversation, &QAbstractButton::clicked, this, &ProjectSidebar::newConversationRequested);
+    actions->addWidget(m_newConversation);
     m_outer->addLayout(actions);
 
+    // Projects, and at its end the one way to another: a new one, or a folder.
+    auto *head = new QWidget;
+    head->setObjectName(QStringLiteral("sidebarHead"));
+    auto *headRow = new QHBoxLayout(head);
+    headRow->setContentsMargins(space::s16, space::s12, space::s8, space::s4);
+    headRow->setSpacing(space::s4);
     m_heading = new QLabel(QStringLiteral("Projects"));
     m_heading->setObjectName(QStringLiteral("sidebarHeading"));
     m_heading->setFont(tokens::font(meta));
@@ -114,8 +179,25 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
         palette.setColor(QPalette::WindowText, tokens::color(ink3));
         m_heading->setPalette(palette);
     }
-    m_heading->setContentsMargins(space::s16, space::s16, space::s16, space::s4);
-    m_outer->addWidget(m_heading);
+    headRow->addWidget(m_heading, 1);
+    m_add = new ui::IconButton(QStringLiteral("g-plus"), ui::IconButton::Size::S24);
+    m_add->setObjectName(QStringLiteral("sidebarAdd"));
+    m_add->setAccessibleName(QStringLiteral("New project or open folder"));
+    m_add->setTip(QStringLiteral("New project or open folder"));
+    m_add->setCheckable(false);
+    m_add->setFocusPolicy(Qt::TabFocus);
+    m_addMenu = new QMenu(this);
+    m_addMenu->setObjectName(QStringLiteral("sidebarAddMenu"));
+    ui::styleMenu(m_addMenu);
+    QAction *newProject = m_addMenu->addAction(QStringLiteral("New Project…"));
+    newProject->setObjectName(QStringLiteral("sidebarNewProject"));
+    connect(newProject, &QAction::triggered, this, &ProjectSidebar::newProjectRequested);
+    QAction *openFolder = m_addMenu->addAction(QStringLiteral("Open Folder…"));
+    openFolder->setObjectName(QStringLiteral("sidebarOpenFolder"));
+    connect(openFolder, &QAction::triggered, this, &ProjectSidebar::openFolderRequested);
+    connect(m_add, &QAbstractButton::clicked, this, [this] { ui::popupMenu(m_addMenu, m_add); });
+    headRow->addWidget(m_add);
+    m_outer->addWidget(head);
 
     m_scroll = new ui::FadeScrollArea;
     m_scroll->setObjectName(QStringLiteral("sidebarScroll"));
@@ -133,6 +215,24 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_list->addStretch(1);
     m_scroll->setWidget(content);
     m_outer->addWidget(m_scroll, 1);
+
+    auto *foot = new QVBoxLayout;
+    foot->setContentsMargins(space::s8, 0, space::s8, space::s8);
+    m_account = new SidebarAccount;
+    connect(m_account, &QAbstractButton::clicked, this, &ProjectSidebar::accountRequested);
+    m_account->hide();
+    foot->addWidget(m_account);
+    m_outer->addLayout(foot);
+    m_newConversation->setVisible(false);
+}
+
+SidebarRow *ProjectSidebar::newConversationRow() const {
+    return m_conversationsShown && !m_current.isEmpty() ? m_newConversation : nullptr;
+}
+
+void ProjectSidebar::setAccount(const QString &title, const QString &subtitle) {
+    m_account->setAccount(title, subtitle);
+    m_account->setVisible(!title.isEmpty());
 }
 
 void ProjectSidebar::setProjects(const QStringList &paths, const QString &current) {
@@ -198,7 +298,7 @@ void ProjectSidebar::rebuild() {
     const bool first = before.isEmpty();
     m_rows.clear();
     m_rowKeys.clear();
-    m_newConversation = nullptr;
+    m_newConversation->setVisible(m_conversationsShown && !m_current.isEmpty());
     const auto add = [this, before, first](SidebarRow *row, const QString &key) {
         m_list->insertWidget(int(m_rows.size()), row);
         m_rows << row;
@@ -207,7 +307,6 @@ void ProjectSidebar::rebuild() {
         if (!first && !before.contains(key)) moves::fadeIn(row);
     };
     constexpr int kChildIndent = space::s16 + space::s8;
-    m_heading->setVisible(!m_projects.isEmpty());
     for (const QString &path : std::as_const(m_projects)) {
         auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
         row->setObjectName(QStringLiteral("sidebarProject"));
@@ -218,10 +317,6 @@ void ProjectSidebar::rebuild() {
         connect(row, &QAbstractButton::clicked, this, [this, path] { emit projectChosen(path); });
         add(row, QStringLiteral("project:") + path);
         if (!chosen || !m_conversationsShown) continue;
-        m_newConversation = new SidebarRow(QStringLiteral("g-plus"), QStringLiteral("New conversation"), kChildIndent);
-        m_newConversation->setObjectName(QStringLiteral("sidebarNewConversation"));
-        connect(m_newConversation, &QAbstractButton::clicked, this, &ProjectSidebar::newConversationRequested);
-        add(m_newConversation, QStringLiteral("new-conversation"));
         for (const Conversation &conversation : std::as_const(m_conversations)) {
             auto *child = new SidebarRow(QString(), conversation.title, kChildIndent);
             child->setObjectName(QStringLiteral("sidebarConversation"));

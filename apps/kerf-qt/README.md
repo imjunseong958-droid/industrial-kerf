@@ -314,25 +314,36 @@ another, with a strip over the picture: where you are, previous and next, Before
 and After, and Exit. After plays the proposal's rendered preview, and Before the
 program as it is.
 
-**The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) lists the recent
-project folders that still exist, the current one unfolded to New conversation and
-its conversations, the review log's threads, titled by their first line. A
-conversation with a pending proposal says Review, a settled one Done, and the
-folder says Working while Kerf is. Choosing another folder opens it as File ▸ Open
-does.
+**The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) leads with New
+conversation, then lists the recent project folders that still exist, the current
+one unfolded to its conversations, the review log's threads, titled by their first
+line. A conversation with a pending proposal says Review, a settled one Done, and
+the folder says Working while Kerf is. Choosing another folder opens it as File ▸
+Open does; the + beside Projects is New Project… and Open Folder…. At its foot is
+the account: the Kerf Cloud account when one is signed in, else what chat runs on.
+It opens the menu to everything the window does not show: Settings…, Account…, the
+User Guide, Media (⌘1), Import… and View (the panes, the mask tools, annotations,
+safe zones, viewer zoom, the keyboard's choice and the sync's rows), and Sign Out
+when signed in. Every row is a registry command.
 
-The toolbar holds the traffic lights' room, one ≡ button, the sidebar's button,
-the centred title and subtitle, the panes' two buttons, the two format icons and
-the Export split. ≡ opens Media (⌘1), the
-three panes, Import…, Settings… and View: the mask tools, annotations, safe zones
-(off by default), viewer zoom, the keyboard's choice and the sync's rows. Every
-row is a registry command. The undo, redo, split, delete and import commands have
-their keys and native menu items.
+What is left of the toolbar is the top of the room, in its colour, with no line
+under it: the traffic lights' room and the sidebar's top, the sidebar's button, the
+title, Export once the program has a clip, and one button for the panel (the
+picture and the timeline together; ⌥⌘P and ⌥⌘T still take each alone). While the
+sidebar is away, a ⋯ button beside its button opens the account's menu. The Media
+sheet's button, Follow Kerf and the two format icons are in the timeline's strip,
+before its zoom. The undo, redo, split, delete and import commands have their keys
+and native menu items.
 
-There is no status bar. The toolbar's subtitle says what one would: a passing
-message for its timeout, an offline or error state until it clears, a running
-sync's stage or a render's progress ("Draft export · 42%"), and otherwise
-"Edited 2 min ago · rev 22" ("· Viewing as Mina" while a guest's view is on). An
+**Settings** (⌘,) is a page in the room, over the conversation and the panel, not a
+window: Account, AI connection, General and Advanced named down its side, Back or
+Esc to leave (`StageShell::setCover`).
+
+There is no status bar. Beside the title the toolbar says what one would, and only
+when there is something to say: a passing message for its timeout, an offline or
+error state until it clears, a running sync's stage or a render's progress ("Draft
+export · 42%"), and "Viewing as Mina" while a guest's view is on. "Edited 2 min ago
+· rev 22" is the title's tooltip. An
 agent that cannot take requests (no key, Kerf Cloud signed out) says so in the
 composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
@@ -444,8 +455,8 @@ Request…, Publish to GitHub…, and Consolidate Media (which copies media
 from outside the project into `media/` so collaborators get it) complete
 the menu; each unavailable item says why.
 
-The toolbar's subtitle shows what a running sync is doing, an unfinished merge
-or a failed sync, and ≡ ▸ View ▸ Sync says how far the branch is ahead of and
+Beside its title the toolbar shows what a running sync is doing, an unfinished merge
+or a failed sync, and the account's menu ▸ View ▸ Sync says how far the branch is ahead of and
 behind its upstream, with Sync Now. After a sync, each incoming commit
 (`jun · Trimmed c3`) and each change that kept yours is listed in the activity
 log; errors use the error

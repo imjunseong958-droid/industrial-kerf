@@ -2530,6 +2530,10 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
     m_snap->setOn(timeline->snapping());
     layout->addWidget(m_snap, 0, Qt::AlignVCenter);
     layout->addStretch(1);
+    m_extras = new QHBoxLayout;
+    m_extras->setContentsMargins(0, 0, 12, 0);
+    m_extras->setSpacing(4);
+    layout->addLayout(m_extras);
     // The zoom at the far end.
     const auto key = [this](bool plus) {
         auto *button = new ui::IconButton(plus ? QStringLiteral("g-zin") : QStringLiteral("g-zout"), ui::IconButton::Size::S24, this);

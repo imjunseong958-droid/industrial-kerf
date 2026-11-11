@@ -268,9 +268,8 @@ QRect HomeWindow::composerRect() const { return QRect(m_composer->box()->mapTo(t
 
 void HomeWindow::paintEvent(QPaintEvent *event) {
     QPainter p(this);
+    // The sidebar's own colour sets it off; no line between it and the question.
     p.fillRect(event->rect(), tokens::color(chrome));
-    // One hairline between the folders and the question.
-    p.fillRect(QRect(layout::sidebar, 0, layout::seam, height()), tokens::color(line));
 }
 
 } // namespace kerf

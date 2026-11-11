@@ -57,14 +57,19 @@ QString formatTip(int presetIndex);
 
 // ---------------------------------------------------------------- FlatToolBar
 
-// The window's toolbar: chrome with an inset 1 pt line at its foot, 40 tall.
-// It holds no actions; setContent() lays one widget over its whole rect.
+// The window's toolbar, 40 tall, in the room's own colour with no line under
+// it: the top of the room. Its leading stretch, as far as the sidebar reaches
+// under it, is the sidebar's top and has its colour. It holds no actions;
+// setContent() lays one widget over its whole rect.
 class FlatToolBar final : public QToolBar {
     Q_OBJECT
 public:
     explicit FlatToolBar(const QString &title, QWidget *parent = nullptr);
     void setContent(QWidget *content);
     QWidget *content() const { return m_content; }
+    // How far the sidebar reaches under the bar; 0 for none.
+    void setSidebarEdge(int edge);
+    int sidebarEdge() const { return m_sidebarEdge; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -72,6 +77,7 @@ protected:
 
 private:
     QWidget *m_content = nullptr;
+    int m_sidebarEdge = 0;
 };
 // Deprecated: the faceplate is gone; removed in W3.
 using FaceplateToolBar = FlatToolBar;

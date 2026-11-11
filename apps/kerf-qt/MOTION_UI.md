@@ -30,6 +30,10 @@ repeating their numbers, so changing a value does not make it wrong.
 | Scene | When | What moves | Code | Test |
 |---|---|---|---|---|
 | Start window | It opens | Heading, box and ideas rise in turn | `HomeWindow::enter` | `aRiseLeavesTheLayoutAlone` |
+| Sidebar | It opens or closes | It slides in from the window's edge; the toolbar's leading stretch, its top, follows its edge and the title moves with it | `StageShell::transition`, `ToolbarWiring::layoutLeading`, `FlatToolBar::setSidebarEdge` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
+| Export arrives | The program gets its first clip | Export fades in where it is, in the toolbar | `ToolbarWiring::followCut` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
+| Account menu | The account at the sidebar's foot is pressed | The menu fades in and rises over the account, which stays held | `ToolbarWiring::popupAppMenu`, `ui::popupMenu` (`Side::Above`) | none |
+| Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
 | Picture arrives | The first clip or proposal | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
@@ -55,6 +59,8 @@ Look here before writing a new animation.
 | A stand-in for the picture | `Flight::fit`, so it shows footage as the render will |
 | Something to fade in where it is | `moves::fadeIn` |
 | Something to rise into place, in a layout or not | `moves::rise` |
+| A page that takes the room (Settings) | `StageShell::setCover`, shown with `setCovered`; raise its body, not the page (see **What a frame costs**) |
+| Something in the toolbar to keep to the sidebar's edge | `ToolbarWiring::sidebarEdge`, which follows the sidebar while it moves |
 | A region to fall back | `moves::dim` |
 | The timeline to fall back or come in | `StageShell::veilTimeline` (`moves::dim` does not work on it) |
 | A duration, stagger or distance | A name in `tokens::motion`, added there if none fits |

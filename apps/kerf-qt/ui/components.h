@@ -647,7 +647,7 @@ private:
 // Side::Right opens 8 right of the anchor at its top, and falls back below
 // the anchor when there is no room on the right. All in `bounds`
 // coordinates (the window), returning the popover's rect.
-enum class Side { Below, Right };
+enum class Side { Below, Right, Above };
 QRect popoverPlacement(const QRectF &anchor, QSize size, const QRect &bounds, Side side = Side::Below);
 
 // A card (radius 8, card fill, pop shadow, inset line2, pad 4) that floats

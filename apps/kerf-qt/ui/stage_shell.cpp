@@ -263,6 +263,24 @@ void StageShell::setSheets(QWidget *media) {
     place();
 }
 
+void StageShell::setCover(QWidget *cover) {
+    m_cover = cover;
+    if (cover) {
+        cover->setParent(this);
+        cover->hide();
+    }
+    place();
+}
+
+void StageShell::setCovered(bool covered) {
+    covered = covered && m_cover;
+    if (covered == m_covered) return;
+    m_covered = covered;
+    place();
+    followEscape();
+    emit coveredChanged(covered);
+}
+
 void StageShell::setBanners(const QList<QWidget *> &banners) {
     m_banners = banners;
     for (QWidget *banner : banners) {
@@ -418,6 +436,10 @@ void StageShell::setSheet(Sheet sheet) {
 void StageShell::toggleSheet(Sheet sheet) { setSheet(m_sheet == sheet ? Sheet::None : sheet); }
 
 bool StageShell::dismiss() {
+    if (m_covered) {
+        setCovered(false);
+        return true;
+    }
     if (m_sheet != Sheet::None) {
         setSheet(Sheet::None);
         return true;
@@ -426,7 +448,7 @@ bool StageShell::dismiss() {
 }
 
 void StageShell::followEscape() {
-    const bool want = m_sheet != Sheet::None;
+    const bool want = m_sheet != Sheet::None || m_covered;
     if (want == m_filtering || !qApp) return;
     m_filtering = want;
     if (want) qApp->installEventFilter(this);
@@ -441,8 +463,10 @@ bool StageShell::takesEscape(QObject *watched, QEvent *event) {
     if (!target || target->window() != window() || QApplication::activePopupWidget() || QApplication::activeModalWidget()) return false;
     // A text field and the picture (a drawing, a mask tool) answer first; what
     // they leave reaches the window, which closes it too.
-    if (qobject_cast<QLineEdit *>(target) || qobject_cast<QTextEdit *>(target) || qobject_cast<QPlainTextEdit *>(target) ||
-        qobject_cast<QAbstractSpinBox *>(target) || target == m_picture)
+    // On the page that has the room, Esc is the way back wherever the keys are.
+    const bool onCover = m_covered && m_cover && (target == m_cover || m_cover->isAncestorOf(target));
+    if (!onCover && (qobject_cast<QLineEdit *>(target) || qobject_cast<QTextEdit *>(target) || qobject_cast<QPlainTextEdit *>(target) ||
+                     qobject_cast<QAbstractSpinBox *>(target) || target == m_picture))
         return false;
     if (event->type() == QEvent::ShortcutOverride) {
         event->accept();
@@ -482,7 +506,8 @@ void StageShell::place() {
         seam->setVisible(!rect.isEmpty());
         seam->raise();
     };
-    placeSeam(m_seamSidebar, r.sidebar.isEmpty() ? QRect() : QRect(r.conversation.left(), r.conversation.top(), kSeam, r.conversation.height()));
+    // No line beside the sidebar either: its own colour sets it off.
+    placeSeam(m_seamSidebar, QRect());
     // No line between the conversation and the stage: they share the room.
     placeSeam(m_seamUpright, QRect());
     QRect across;
@@ -524,6 +549,15 @@ void StageShell::place() {
         banner->raise();
         top += height;
     }
+    // The page that has the room: all of it but the sidebar, under the bars.
+    if (m_cover) {
+        if (m_covered) {
+            m_cover->setGeometry(barLeft, top, barWidth, std::max(0, height() - top));
+            m_cover->raise();
+        }
+        m_cover->setVisible(m_covered);
+    }
+    if (m_motion && m_covered) m_motion->raise();
     updateRoom();
 }
 

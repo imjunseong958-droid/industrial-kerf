@@ -223,11 +223,12 @@ private slots:
             QCoreApplication::processEvents();
             checkBase(window, format);
             checkNothingElseShows(window);
-            // One painted hairline between the regions.
+            // One painted hairline between the picture and the timeline, and
+            // none beside the sidebar: its own colour sets it off.
             {
                 const QImage shot = window.grab().toImage();
                 const int chrome = tokens::color(tokens::chrome).red();
-                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() > chrome);
+                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() <= chrome);
                 // Over the timeline under a wide picture, at its left beside a vertical one.
                 const QPoint timelineSeam = format.timeline.top() > 40 ? format.timeline.topLeft() + QPoint(100, 0) : format.timeline.topLeft() + QPoint(0, 100);
                 QVERIFY(shot.pixelColor(timelineSeam).red() > chrome);

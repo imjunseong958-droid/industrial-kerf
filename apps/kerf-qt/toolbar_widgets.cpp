@@ -205,10 +205,18 @@ void FlatToolBar::setContent(QWidget *content) {
     content->show();
 }
 
-void FlatToolBar::paintEvent(QPaintEvent *) {
+void FlatToolBar::setSidebarEdge(int edge) {
+    edge = std::clamp(edge, 0, width());
+    if (edge == m_sidebarEdge) return;
+    // Only the stretch the edge crossed.
+    update(QRect(std::min(edge, m_sidebarEdge), 0, std::abs(edge - m_sidebarEdge), height()));
+    m_sidebarEdge = edge;
+}
+
+void FlatToolBar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
-    p.fillRect(rect(), color(chrome));
-    paintEdgeLine(p, rect(), false);
+    p.fillRect(event->rect(), color(chrome));
+    if (m_sidebarEdge > 0) p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(well));
 }
 
 void FlatToolBar::resizeEvent(QResizeEvent *event) {

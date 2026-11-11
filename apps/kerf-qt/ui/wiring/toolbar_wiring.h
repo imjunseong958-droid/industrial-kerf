@@ -4,20 +4,23 @@
 // own state, so a region changes the window's behaviour only here and in
 // main_window_toolbar.cpp and main_window_status.cpp.
 //
-// The toolbar (mockup, minimal pass; 40 tall): the traffic lights' room, one
-// ≡ button (appMenu), the centred title and subtitle, the two format icons and
-// the Export split. Engine paths:
-//   ≡ menu              the registry's commands: window.project (the Media
-//                       sheet), file.import, app.preferences; View ▸ the mask
-//                       tools, view.annotations, view.safeZones, viewer.zoom,
-//                       the keymap choice and the collab.* commands
-//   title               snapshot timeline.name + timeline.sequences[].name,
-//                       revisionTime and revision
-//   subtitle            as the status bar's successor: a passing message for
-//                       its timeout (MainWindow::showStatus), else offline or
-//                       an error, which stay, else the sync's stage or a
-//                       render's progress (export, render_queue, preview), else
-//                       "Edited 2 min ago · rev 22"
+// What is left of the toolbar (40 tall), in the room's own colour: the window
+// buttons' room and the sidebar's top, the sidebar's button, the project and
+// what is going on in it, Export once there is a cut, and the panel's button.
+// Everything else opens from the account at the sidebar's foot (or, with the
+// sidebar away, from a ⋯ button here). Engine paths:
+//   the menu            Settings, Account, the guide, Media and Import, then
+//                       View ▸ the panes, the mask tools, view.annotations,
+//                       view.safeZones, viewer.zoom, the keymap choice and the
+//                       collab.* commands; Sign Out when signed in
+//   title               snapshot timeline.name + timeline.sequences[].name;
+//                       its tip is revisionTime and revision
+//   status              beside the title, only when there is something to
+//                       say: a passing message for its timeout
+//                       (MainWindow::showStatus), else offline or an error,
+//                       which stay, else the sync's stage or a render's
+//                       progress (export, render_queue, preview), else whose
+//                       view a guest's is
 //   format ⌥1-2         the registry's sequence.setFormat.169/.916 ->
 //                       sequence.setFormat {width, height} (edit set-sequence)
 //   composer.draw       D while the composer has the focus: its Draw
@@ -68,25 +71,34 @@ class ToolbarWiring final : public QObject {
     KERF_TEST_FRIENDS
     friend class MainWindow;
 public:
+    // The row's leading padding.
+    static constexpr int kLeadingPad = 16;
     ToolbarWiring(MainWindow *window, EditorBus *bus);
     MainWindow *window() const { return m_window; }
     EditorBus *bus() const { return m_bus; }
 
     // ---- built by MainWindow::setupToolbar
     void buildToolbar(const QHash<QString, QMenu *> &menus);
-    // The ≡ menu, built each time it opens; its View submenu with it.
+    // The menu the account opens, built each time it opens; its View submenu
+    // with it.
     QMenu *appMenu() const { return m_appMenu; }
     void buildAppMenu();
+    // Over the account at the sidebar's foot, or under the bar's own button.
+    void popupAppMenu(QWidget *anchor);
+    // The bar's own way to that menu, shown while the sidebar is away.
     ui::IconButton *appMenuButton() const { return m_appButton; }
 
     // ---- the title, centred on the window
     // "Atlas · 30 s spot v7": the project, then the program sequence's name.
     QString titleText() const;
-    // The line under the title: a passing message, else offline or an error,
-    // else the sync's stage or a render's progress, else the normal line.
+    // The line beside the title: a passing message, else offline or an error,
+    // else the sync's stage or a render's progress, else a guest's view; empty
+    // when there is nothing to say.
     QString subtitleText() const;
+    // "Viewing as Ana" while a guest's view is on.
+    QString guestNote() const;
     // "Edited 2 min ago · rev 22" (just "rev 22" without a revision time),
-    // with "Viewing as Ana" while a guest's view is on.
+    // with "Viewing as Ana" while a guest's view is on: the title's tip.
     QString normalSubtitle() const;
     // What stays until it clears: "Offline", "Connecting…", the error shown,
     // a failed sync; empty when all is well.
@@ -100,10 +112,22 @@ public:
     // The clock relative times are read against (tests set their own).
     void setClock(std::function<QDateTime()> clock);
 
-    // ---- the window buttons' room
+    // ---- the window buttons' room, and the sidebar's
     // Where the first control starts: 16 in, past the macOS window buttons
     // (52 + 16 reserved), or 16 without them.
     static int firstControlX(int windowButtonsRight, bool fullScreen);
+    // The width of the room before the first control, for one that starts at
+    // `firstControl` and a sidebar that ends at `sidebarEdge` (0: none shows).
+    static int leadingRoom(int firstControl, int sidebarEdge);
+    // Where the window buttons let the first control start (MainWindow::fitTitleBar).
+    void setFirstControl(int x);
+    // Where the sidebar ends under the bar now, also while it moves; 0 for none.
+    int sidebarEdge() const;
+    void layoutLeading();
+
+    // ---- Export, there once the program has a clip
+    bool hasCut() const;
+    void followCut();
 
     // ---- export and preflight
     struct PreflightRow {
@@ -176,6 +200,8 @@ private:
 
     // Toolbar.
     QWidget *m_content = nullptr;
+    QWidget *m_titleBox = nullptr;
+    int m_firstControl = kLeadingPad;
     ui::IconButton *m_appButton = nullptr;
     QMenu *m_appMenu = nullptr;
     QMenu *m_viewMenu = nullptr;

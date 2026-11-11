@@ -10,10 +10,14 @@
 #include "main_window_shared.h"
 #include "master_output.h"
 #include "review_model.h"
+#include "project_sidebar.h"
 #include "toolbar_widgets.h"
+#include "stage_motion.h"
 #include "stage_shell.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/bin_wiring.h"
+#include "wiring/timeline_wiring.h"
+#include "timeline_widget.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -95,34 +99,15 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("toolbarRow"));
     auto *row = new QHBoxLayout(m_content);
-    row->setContentsMargins(16, 0, 12, 0);
+    row->setContentsMargins(kLeadingPad, 0, 12, 0);
     row->setSpacing(4);
-#if KERF_EDITOR_OWN_TITLE_BAR
-    // The room the window buttons take; fitTitleBar sizes it.
+    // The room before the first control: the window buttons' on macOS, and the
+    // sidebar's while it shows, whose top this stretch of the bar is.
     w->m_windowButtons = new QWidget;
     w->m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
-    w->m_windowButtons->setFixedWidth(firstControlX(0, false) - 16 - row->spacing());
+    w->m_windowButtons->setFixedWidth(0);
     row->addWidget(w->m_windowButtons);
-    // The toolbar's 4 gap and the ≡ button's own 4 past the lights' room
-    // (mockup #appBtn).
-    row->addSpacing(8);
-#endif
-    // The one way to everything else: Media, the panes, Import, Settings,
-    // and View.
-    m_appButton = new ui::IconButton(QStringLiteral("g-menu"), ui::IconButton::Size::S28);
-    m_appButton->setObjectName(QStringLiteral("appMenu"));
-    m_appButton->setAccessibleName(QStringLiteral("Menu"));
-    m_appButton->setTip(QStringLiteral("Media, panes, settings"));
-    m_appButton->setFocusPolicy(Qt::TabFocus);
-    m_appMenu = new QMenu(m_content);
-    m_appMenu->setObjectName(QStringLiteral("appMenuPopup"));
-    ui::styleMenu(m_appMenu);
     m_menus = menus;
-    connect(m_appButton, &QAbstractButton::clicked, this, [this] {
-        buildAppMenu();
-        ui::popupMenu(m_appMenu, m_appButton);
-    });
-    row->addWidget(m_appButton);
     const auto paneButton = [w](const QString &icon, const char *name, const QString &accessible, const QString &command) {
         auto *button = new ui::IconButton(icon, ui::IconButton::Size::S28);
         button->setObjectName(QString::fromLatin1(name));
@@ -136,8 +121,21 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     };
     w->m_sidebarButton = paneButton(QStringLiteral("g-sidebar"), "paneSidebar", QStringLiteral("Sidebar"), QStringLiteral("view.sidebar"));
     row->addWidget(w->m_sidebarButton);
+    // Everything else is at the sidebar's foot, under the account. With the
+    // sidebar away, the same menu opens from here.
+    m_appButton = new ui::IconButton(QStringLiteral("g-more"), ui::IconButton::Size::S28);
+    m_appButton->setObjectName(QStringLiteral("appMenu"));
+    m_appButton->setAccessibleName(QStringLiteral("Menu"));
+    m_appButton->setTip(QStringLiteral("Settings, account and more"));
+    m_appButton->setCheckable(false);
+    m_appButton->setFocusPolicy(Qt::TabFocus);
+    m_appMenu = new QMenu(m_content);
+    m_appMenu->setObjectName(QStringLiteral("appMenuPopup"));
+    ui::styleMenu(m_appMenu);
+    connect(m_appButton, &QAbstractButton::clicked, this, [this] { popupAppMenu(m_appButton); });
+    row->addWidget(m_appButton);
     if (!w->menuBar()->isNativeMenuBar()) {
-        // The native menus live in the ≡ menu; their keys go on working.
+        // The native menus live in that menu; their keys go on working.
         for (const QString &name : w->m_commands->menuNames()) {
             QMenu *menu = menus.value(name);
             if (!menu) continue;
@@ -146,32 +144,59 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
         w->menuBar()->hide();
     }
-    row->addStretch(1);
-
-    // The right group: the panel's panes, the format, then Export.
-    w->m_followButton = paneButton(QStringLiteral("g-eye"), "paneFollowKerf", QStringLiteral("Follow Kerf"), QStringLiteral("view.followKerf"));
-    w->m_followButton->setOn(w->m_followKerf);
-    row->addWidget(w->m_followButton);
     row->addSpacing(8 - row->spacing());
-    w->m_pictureButton = paneButton(QStringLiteral("g-picture"), "panePicture", QStringLiteral("Picture"), QStringLiteral("view.picture"));
-    row->addWidget(w->m_pictureButton);
-    w->m_timelineButton = paneButton(QStringLiteral("g-timeline"), "paneTimeline", QStringLiteral("Timeline"), QStringLiteral("view.timeline"));
-    row->addWidget(w->m_timelineButton);
-    row->addSpacing(12 - row->spacing());
-    w->m_formatBank = new FormatBank;
-    connect(w->m_formatBank, &FormatBank::formatChosen, w, &MainWindow::canvasPresetChanged);
-    w->m_formatBank->installEventFilter(this);
-    row->addWidget(w->m_formatBank);
-    row->addSpacing(12 - row->spacing());
+
+    // The project and what is going on in it, at the leading end: the room the
+    // row has left is theirs.
+    m_titleBox = new QWidget;
+    m_titleBox->setObjectName(QStringLiteral("toolbarTitle"));
+    m_titleBox->installEventFilter(this);
+    // On macOS it is title bar too: dragging it moves the window.
+    m_titleBox->installEventFilter(w);
+    row->addWidget(m_titleBox, 1);
+
+    // The trailing group: Export once there is a cut, then the panel.
     w->m_exportButton = new ExportButton;
     connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
     connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
     connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
+    w->m_exportButton->hide();
     row->addWidget(w->m_exportButton);
+    row->addSpacing(8 - row->spacing());
+    w->m_panelButton = new ui::IconButton(QStringLiteral("g-panel"), ui::IconButton::Size::S28);
+    w->m_panelButton->setObjectName(QStringLiteral("panePanel"));
+    w->m_panelButton->setAccessibleName(QStringLiteral("Picture and timeline"));
+    w->m_panelButton->setCheckable(true);
+    w->m_panelButton->setFocusPolicy(Qt::TabFocus);
+    connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
+    row->addWidget(w->m_panelButton);
     toolbar->setContent(m_content);
 
-    // ⌥1-2 choose the format, as its segments do: the registry's commands,
-    // whose keys work anywhere in the window.
+    // What belongs to the cut sits with it, in the timeline's strip: the Media
+    // sheet, Follow Kerf, and the format. ⌥1-2 choose the format from anywhere
+    // in the window, as before.
+    const auto stripButton = [w](const QString &icon, const char *name, const QString &accessible, const QString &command) {
+        auto *button = new ui::IconButton(icon, ui::IconButton::Size::S24);
+        button->setObjectName(QString::fromLatin1(name));
+        button->setAccessibleName(accessible);
+        button->setCheckable(true);
+        button->setFocusPolicy(Qt::TabFocus);
+        connect(button, &QAbstractButton::clicked, w, [w, command] {
+            if (QAction *action = w->m_commands->action(command)) action->trigger();
+        });
+        return button;
+    };
+    w->m_mediaButton = stripButton(QStringLiteral("g-grid"), "paneMedia", QStringLiteral("Media"), QStringLiteral("window.project"));
+    w->m_followButton = stripButton(QStringLiteral("g-eye"), "paneFollowKerf", QStringLiteral("Follow Kerf"), QStringLiteral("view.followKerf"));
+    w->m_followButton->setOn(w->m_followKerf);
+    w->m_formatBank = new FormatBank;
+    connect(w->m_formatBank, &FormatBank::formatChosen, w, &MainWindow::canvasPresetChanged);
+    if (TimelineToolStrip *strip = w->m_timelineWiring ? w->m_timelineWiring->tools() : nullptr) {
+        strip->extras()->addWidget(w->m_mediaButton, 0, Qt::AlignVCenter);
+        strip->extras()->addWidget(w->m_followButton, 0, Qt::AlignVCenter);
+        strip->extras()->addSpacing(8);
+        strip->extras()->addWidget(w->m_formatBank, 0, Qt::AlignVCenter);
+    }
     for (const QString &id : formatCommands())
         if (QAction *action = w->m_commands->action(id)) {
             if (!w->actions().contains(action)) w->addAction(action);
@@ -179,14 +204,12 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
     installCommands();
 
-    // The title, centred on the window over the toolbar's row; layoutTitle
-    // places it as the toolbar and its groups move.
-    w->m_projectTitle = new QLabel(toolbar);
+    w->m_projectTitle = new QLabel(m_titleBox);
     w->m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    w->m_projectSubtitle = new QLabel(toolbar);
+    w->m_projectSubtitle = new QLabel(m_titleBox);
     w->m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     // Its own sheet, so the app's QLabel rules leave its type alone:
-    // UI 500 13/16 ink over UI 11/16 ink3.
+    // UI 500 13/16 ink, then UI 11/16 ink3 on the same line.
     w->m_projectTitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 13px; font-weight: 500; padding: 0px; "
                                                     "background: transparent; }")
                                          .arg(tokens::color(tokens::ink).name()));
@@ -196,14 +219,20 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     for (QLabel *label : {w->m_projectTitle, w->m_projectSubtitle}) {
         label->setFont(tokens::font(tokens::TypeStyle{label == w->m_projectTitle ? 13 : 11, 16,
                                                       label == w->m_projectTitle ? 500 : 400, false}));
-        label->setAlignment(Qt::AlignCenter);
-        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        label->installEventFilter(w);
     }
-    // "Edited 2 min ago" moves on by itself.
+    // "Edited 2 min ago", in the title's tip, moves on by itself.
     m_titleTimer = new QTimer(this);
     m_titleTimer->setInterval(30'000);
     connect(m_titleTimer, &QTimer::timeout, this, &ToolbarWiring::layoutTitle);
     m_titleTimer->start();
+
+    // The bar's leading stretch follows the sidebar under it, also as it moves.
+    if (w->m_sidebar) {
+        w->m_sidebar->installEventFilter(this);
+        connect(w->m_sidebar, &ProjectSidebar::accountRequested, this, [this] { popupAppMenu(m_window->m_sidebar->accountRow()); });
+    }
 
     connect(m_bus, &EditorBus::event, this, &ToolbarWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &ToolbarWiring::onSnapshot);
@@ -214,6 +243,67 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     if (QAction *master = w->m_commands->action(QStringLiteral("export.master")))
         connect(master, &QAction::changed, this, &ToolbarWiring::syncCommands);
     syncCommands();
+    layoutLeading();
+    followCut();
+}
+
+int ToolbarWiring::sidebarEdge() const {
+    const QWidget *sidebar = m_window->m_sidebar;
+    if (!sidebar || sidebar->isHidden()) return 0;
+    return std::max(0, sidebar->geometry().right() + 1);
+}
+
+int ToolbarWiring::leadingRoom(int firstControl, int sidebarEdge) {
+    // The first control starts 12 past the sidebar's edge, or where the window
+    // buttons leave it, whichever is further in.
+    return std::max({0, firstControl - kLeadingPad - 4, sidebarEdge > 0 ? sidebarEdge + 12 - kLeadingPad - 4 : 0});
+}
+
+void ToolbarWiring::layoutLeading() {
+    MainWindow *w = m_window;
+    if (!w->m_windowButtons || !w->m_toolbar) return;
+    const int edge = sidebarEdge();
+    const int room = leadingRoom(m_firstControl, edge);
+    // With no room to keep, the row's gap after it goes too.
+    w->m_windowButtons->setVisible(room > 0);
+    w->m_windowButtons->setFixedWidth(room);
+    static_cast<FlatToolBar *>(w->m_toolbar)->setSidebarEdge(edge);
+    // With the sidebar away its foot is too: the menu is here instead.
+    if (m_appButton) m_appButton->setVisible(edge == 0);
+}
+
+void ToolbarWiring::setFirstControl(int x) {
+    if (x == m_firstControl) return;
+    m_firstControl = x;
+    layoutLeading();
+}
+
+bool ToolbarWiring::hasCut() const {
+    for (const QJsonValue &track : m_bus->timeline().value(QStringLiteral("tracks")).toArray())
+        if (!track.toObject().value(QStringLiteral("clips")).toArray().isEmpty()) return true;
+    return false;
+}
+
+void ToolbarWiring::followCut() {
+    ExportButton *button = m_window->m_exportButton;
+    if (!button) return;
+    const bool shown = hasCut();
+    if (shown == !button->isHidden()) return;
+    button->setVisible(shown);
+    // It arrives with the cut, where it is.
+    if (shown) moves::fadeIn(button);
+    layoutTitle();
+}
+
+void ToolbarWiring::popupAppMenu(QWidget *anchor) {
+    buildAppMenu();
+    SidebarAccount *account = m_window->m_sidebar ? m_window->m_sidebar->accountRow() : nullptr;
+    const bool fromAccount = account && anchor == account;
+    if (fromAccount) {
+        account->setOpen(true);
+        connect(m_appMenu, &QMenu::aboutToHide, account, [account] { account->setOpen(false); }, Qt::SingleShotConnection);
+    }
+    ui::popupMenu(m_appMenu, anchor, fromAccount ? ui::Side::Above : ui::Side::Below);
 }
 
 void ToolbarWiring::syncCommands() {
@@ -231,10 +321,10 @@ void ToolbarWiring::syncCommands() {
     }
     // The panes' buttons name their commands' keys.
     for (const auto &[button, id, name] : {std::tuple<ui::IconButton *, QString, QString>{w->m_sidebarButton, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar")},
-                                           {w->m_pictureButton, QStringLiteral("view.picture"), QStringLiteral("Picture")},
-                                           {w->m_timelineButton, QStringLiteral("view.timeline"), QStringLiteral("Timeline")},
-                                           {w->m_followButton, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf")}})
+                                           {w->m_followButton, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf")},
+                                           {w->m_mediaButton, QStringLiteral("window.project"), QStringLiteral("Media")}})
         if (button) button->setTip(name, nativeKeys(commands->action(id)));
+    if (w->m_panelButton) w->m_panelButton->setTip(QStringLiteral("Picture and timeline"));
     // The format segments name the keys of the registry's ⌥1-2.
     if (FormatBank *bank = w->m_formatBank)
         for (int i = 0; i < m_formatActions.size() && i < bank->count(); ++i)
@@ -272,7 +362,7 @@ void ToolbarWiring::chooseFormat(int index) {
     emit bank->activated(index);
 }
 
-// ================================================================ the ≡ menu
+// ================================================================ the account's menu
 
 void ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name) {
     // The mockup's words for the registry's command: its state, its key.
@@ -297,17 +387,18 @@ void ToolbarWiring::buildAppMenu() {
     QMenu *menu = m_appMenu;
     menu->clear();
     menu->setToolTipsVisible(true);
-    addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
-    menu->addSeparator();
-    addCommandItem(menu, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar"), "appMenu.sidebar");
-    addCommandItem(menu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
-    addCommandItem(menu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
-    addCommandItem(menu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
-    menu->addSeparator();
-    addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
+    // What the account opens: Settings and the account first, then the help.
     addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings");
+    QAction *account = menu->addAction(QStringLiteral("Account…"));
+    account->setObjectName(QStringLiteral("appMenu.account"));
+    connect(account, &QAction::triggered, this, [this] { m_window->showSettings(QStringLiteral("account")); });
+    addCommandItem(menu, QStringLiteral("help.guide"), QStringLiteral("User Guide"), "appMenu.guide");
+    menu->addSeparator();
+    addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
+    addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
 
-    // The picture's switches, the keyboard's choice and the sync.
+    // The panes, the picture's switches, the format, the keyboard's choice and
+    // the sync.
     if (!m_viewMenu) {
         m_viewMenu = new QMenu(QStringLiteral("View"), menu);
         m_viewMenu->setObjectName(QStringLiteral("appMenuView"));
@@ -320,6 +411,11 @@ void ToolbarWiring::buildAppMenu() {
         ui::styleMenu(m_syncMenu);
     }
     m_viewMenu->clear();
+    addCommandItem(m_viewMenu, QStringLiteral("view.sidebar"), QStringLiteral("Sidebar"), "appMenu.sidebar");
+    addCommandItem(m_viewMenu, QStringLiteral("view.picture"), QStringLiteral("Picture"), "appMenu.picture");
+    addCommandItem(m_viewMenu, QStringLiteral("view.timeline"), QStringLiteral("Timeline"), "appMenu.timeline");
+    addCommandItem(m_viewMenu, QStringLiteral("view.followKerf"), QStringLiteral("Follow Kerf"), "appMenu.followKerf");
+    m_viewMenu->addSeparator();
     for (QAction *tool : std::as_const(w->m_maskTools)) m_viewMenu->addAction(tool);
     m_viewMenu->addSeparator();
     for (const char *id : {"view.annotations", "view.safeZones"})
@@ -338,6 +434,15 @@ void ToolbarWiring::buildAppMenu() {
         menu->addSeparator();
         for (const QString &name : w->m_commands->menuNames())
             if (QMenu *native = m_menus.value(name)) menu->addMenu(native);
+    }
+    // Signed in to Kerf Cloud, the way out is here too.
+    if (w->cloudSignedIn()) {
+        menu->addSeparator();
+        QAction *signOut = menu->addAction(QStringLiteral("Sign Out"));
+        signOut->setObjectName(QStringLiteral("appMenu.signOut"));
+        connect(signOut, &QAction::triggered, this, [this] {
+            m_window->sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_out")}});
+        });
     }
 }
 
@@ -366,12 +471,7 @@ QString ToolbarWiring::normalSubtitle() const {
     const QDateTime when = QDateTime::fromString(snapshot.value(QStringLiteral("revisionTime")).toString(), Qt::ISODateWithMs);
     const QString ago = editedAgo(when, m_clock());
     QString line = ago.isEmpty() ? revision : QStringLiteral("Edited %1 · %2").arg(ago, revision);
-    const ReviewModel *review = m_bus->review();
-    const bool guest = review ? review->guestMode() : !m_bus->viewAs().isEmpty();
-    if (guest) {
-        const QString name = review ? review->viewAsName() : m_bus->viewAs();
-        line += QStringLiteral(" · Viewing as %1").arg(name.isEmpty() ? m_bus->viewAs() : name);
-    }
+    if (const QString guest = guestNote(); !guest.isEmpty()) line += QStringLiteral(" · ") + guest;
     return line;
 }
 
@@ -402,11 +502,20 @@ QString ToolbarWiring::runningText() const {
     return {};
 }
 
+QString ToolbarWiring::guestNote() const {
+    const ReviewModel *review = m_bus->review();
+    const bool guest = review ? review->guestMode() : !m_bus->viewAs().isEmpty();
+    if (!guest) return {};
+    const QString name = review ? review->viewAsName() : m_bus->viewAs();
+    return QStringLiteral("Viewing as %1").arg(name.isEmpty() ? m_bus->viewAs() : name);
+}
+
 QString ToolbarWiring::subtitleText() const {
     if (!m_message.isEmpty()) return m_message;
     if (const QString problem = standingProblem(); !problem.isEmpty()) return problem;
     if (const QString running = runningText(); !running.isEmpty()) return running;
-    return normalSubtitle();
+    // Nothing to say is said with nothing: when it was edited is the title's tip.
+    return guestNote();
 }
 
 void ToolbarWiring::showMessage(const QString &message, int timeout) {
@@ -420,47 +529,44 @@ void ToolbarWiring::layoutTitle() {
     MainWindow *w = m_window;
     QLabel *title = w->m_projectTitle;
     QLabel *subtitle = w->m_projectSubtitle;
-    QToolBar *toolbar = w->m_toolbar;
-    if (!title || !subtitle || !toolbar || !m_appButton || !w->m_formatBank) return;
+    if (!title || !subtitle || !m_titleBox) return;
     title->ensurePolished();
     subtitle->ensurePolished();
     const QString full = titleText();
     const QString sub = subtitleText();
     const QFontMetrics metrics(title->font());
     const QFontMetrics subMetrics(subtitle->font());
-    // The room between the groups, and the title's own width.
-    const QWidget *leftEnd = w->m_sidebarButton ? static_cast<QWidget *>(w->m_sidebarButton) : m_appButton;
-    const QWidget *rightStart = w->m_followButton ? static_cast<QWidget *>(w->m_followButton) : w->m_formatBank;
-    const int left = leftEnd->mapTo(toolbar, QPoint(leftEnd->width(), 0)).x() + kTitleClearance;
-    const int right = rightStart->mapTo(toolbar, QPoint(0, 0)).x() - kTitleClearance;
-    const int natural = std::max(metrics.horizontalAdvance(full), subMetrics.horizontalAdvance(sub)) + 2;
-    const int width = std::min(natural, std::max(0, right - left));
-    // Centred on the window (the toolbar spans it); moved aside when a group
-    // is in the way, and shortened when there is no room for all of it.
-    const int x = std::clamp((toolbar->width() - width) / 2, left, std::max(left, right - width));
+    // One line: the title, then what is going on, in what the row leaves them.
+    // The title gives way first only when there is nothing else to say.
+    const int room = std::max(0, m_titleBox->width() - kTitleClearance);
+    const int subWidth = sub.isEmpty() ? 0 : std::min(subMetrics.horizontalAdvance(sub) + 2, room * 3 / 5);
+    const int gap = sub.isEmpty() ? 0 : 12;
+    const int width = std::min(metrics.horizontalAdvance(full) + 2, std::max(0, room - subWidth - gap));
     const QString shown = metrics.horizontalAdvance(full) + 2 > width ? metrics.elidedText(full, Qt::ElideRight, width) : full;
     title->setText(shown);
-    title->setToolTip(shown == full ? QString() : full);
-    subtitle->setText(subMetrics.elidedText(sub, Qt::ElideRight, width));
+    // The whole of a shortened title; else when it was edited and at which
+    // revision, for whoever asks.
+    ui::setTip(title, shown == full ? normalSubtitle() : full);
+    const int subRoom = std::max(0, room - width - gap);
+    subtitle->setText(subMetrics.elidedText(sub, Qt::ElideRight, subRoom));
     // The whole of a long message, and an offline or error state in its colour.
-    subtitle->setToolTip(subtitle->text() == sub ? QString() : sub);
+    ui::setTip(subtitle, subtitle->text() == sub ? QString() : sub);
     const bool problem = m_message.isEmpty() && !standingProblem().isEmpty();
     subtitle->setProperty("problem", problem);
     subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; background: transparent; }")
                                 .arg(tokens::color(problem ? tokens::neg : tokens::ink3).name()));
-    // Two 16 pt lines from 4 pt down (mockup-spec 1), on a taller title bar
-    // centred as the controls are.
-    const int top = 4 + std::max(0, (toolbar->height() - kToolbarHeight) / 2);
-    title->setGeometry(x, top, width, 16);
-    subtitle->setGeometry(x, top + 16, width, 16);
+    const int top = (m_titleBox->height() - 16) / 2;
+    title->setGeometry(0, top, width, 16);
+    // The smaller line sits on the title's baseline.
+    subtitle->setGeometry(width + gap, top + 1, subRoom, 16);
     subtitle->setVisible(!sub.isEmpty());
-    title->raise();
-    subtitle->raise();
 }
 
 bool ToolbarWiring::eventFilter(QObject *watched, QEvent *event) {
     const QEvent::Type type = event->type();
-    if (watched == m_window->m_formatBank && (type == QEvent::Move || type == QEvent::Resize)) layoutTitle();
+    if (watched == m_titleBox && type == QEvent::Resize) layoutTitle();
+    if (watched == m_window->m_sidebar && (type == QEvent::Move || type == QEvent::Resize || type == QEvent::Show || type == QEvent::Hide))
+        layoutLeading();
     return QObject::eventFilter(watched, event);
 }
 
@@ -782,6 +888,7 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
 void ToolbarWiring::onSnapshot() {
     // The window is named as the toolbar names it, once the sequence is known.
     m_window->setWindowTitle(titleText());
+    followCut();
     layoutTitle();
 }
 

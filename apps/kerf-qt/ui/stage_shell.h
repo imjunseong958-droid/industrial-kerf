@@ -102,6 +102,12 @@ public:
     // the transport.
     void setTransport(QWidget *transport);
     void setSheets(QWidget *media);
+    // A page that takes the room while it shows (Settings): everything right
+    // of the sidebar, over the regions and a sheet, under the bars. Esc
+    // uncovers.
+    void setCover(QWidget *cover);
+    void setCovered(bool covered);
+    bool covered() const { return m_covered; }
     // Bars that take over the top of the content while they show (the
     // connection, an error, project.kerf changed on disk), over the regions:
     // the three regions keep their rects.
@@ -131,13 +137,14 @@ public:
     void toggleSheet(Sheet sheet);
     // Whether `widget` is in the open sheet.
     bool holdsOpen(const QWidget *widget) const;
-    // Esc: closes the sheet. False when none is open.
+    // Esc: uncovers, else closes the sheet. False when there was neither.
     bool dismiss();
 
     static QString sheetId(Sheet sheet);
 
 signals:
     void sheetChanged(StageShell::Sheet sheet);
+    void coveredChanged(bool covered);
     void panesChanged();
     void transitionStarted();
     // Every start has an end, also when the move is cut short.
@@ -183,6 +190,8 @@ private:
     QWidget *m_timeline = nullptr;
     QWidget *m_transport = nullptr;
     QWidget *m_sheets[1] = {};
+    QWidget *m_cover = nullptr;
+    bool m_covered = false;
     QList<QWidget *> m_banners;
     // The hairlines between the regions and at a sheet's left.
     QWidget *m_seamSidebar = nullptr;

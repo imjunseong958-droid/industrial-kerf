@@ -194,8 +194,10 @@ private slots:
         // Test builds have no runtime to send to; that is not this test's subject.
         window.m_errorBanner->hide();
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
+        // With nothing going on the line is empty; the revision is the title's tip.
         const QString normal = wiring->subtitleText();
-        QVERIFY(normal.contains(QStringLiteral("rev 22")));
+        QVERIFY(normal.isEmpty());
+        QVERIFY(wiring->normalSubtitle().contains(QStringLiteral("rev 22")));
         const QJsonObject status = sharedStatus();
         window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
         QCOMPARE(wiring->syncSummary(), QStringLiteral("Revision 22 · 1 commit to pull · 2 commits to push"));
@@ -204,7 +206,7 @@ private slots:
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.publish")), QStringLiteral("The project is already published"));
         QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.pullRequest")));
 
-        // ≡ ▸ View ▸ Sync holds what the chip's menu held.
+        // The account menu ▸ View ▸ Sync holds what the chip's menu held.
         wiring->buildAppMenu();
         QMenu *menu = wiring->m_syncMenu;
         QVERIFY(menu);
@@ -294,8 +296,11 @@ private slots:
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(showcaseSnapshot(22, QStringLiteral("clean")));
         window.m_errorBanner->hide();
+        // Nothing to say is said with nothing; the revision is the title's tip.
         const QString normal = subtitle->text();
-        QVERIFY(normal.contains(QStringLiteral("rev 22")));
+        QVERIFY(normal.isEmpty());
+        QVERIFY(!subtitle->isVisible());
+        QVERIFY(ui::tipName(window.m_projectTitle).contains(QStringLiteral("rev 22")));
         QVERIFY(!subtitle->property("problem").toBool());
         // For its timeout.
         window.showStatus(QStringLiteral("Saved preset looks/dusk.preset"), 60);
@@ -335,7 +340,8 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QVERIFY(!wiring->subtitleText().contains(QStringLiteral("Viewing as")));
         window.m_bus->setViewAs(QStringLiteral("mina@example.com"));
-        QVERIFY(wiring->subtitleText().endsWith(QStringLiteral(" · Viewing as mina@example.com")));
+        QCOMPARE(wiring->subtitleText(), QStringLiteral("Viewing as mina@example.com"));
+        QVERIFY(wiring->normalSubtitle().endsWith(QStringLiteral(" · Viewing as mina@example.com")));
         QCOMPARE(window.m_projectSubtitle->text(), wiring->subtitleText());
 
         ReviewModel review;
@@ -344,7 +350,7 @@ private slots:
             {"name", "Mina Park"}, {"id", "mina@example.com"}}}, {"at", 1.0}, {"body", "Tighter"}, {"created", "2026-11-04T10:00:00Z"}, {"revision", 1}}});
         review.setViewAs(QStringLiteral("mina@example.com"));
         window.m_bus->setReview(&review);
-        QVERIFY(wiring->subtitleText().endsWith(QStringLiteral(" · Viewing as Mina Park")));
+        QCOMPARE(wiring->subtitleText(), QStringLiteral("Viewing as Mina Park"));
         review.setViewAs(QString());
         QVERIFY(!wiring->subtitleText().contains(QStringLiteral("Viewing as")));
         window.m_bus->setReview(nullptr);

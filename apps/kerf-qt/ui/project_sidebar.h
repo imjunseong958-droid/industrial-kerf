@@ -1,19 +1,22 @@
 #pragma once
 
-// The sidebar: where the work is, as a list of folders. New Project and Open
-// Folder lead it; then the recent project folders, the chosen one unfolded to
-// its conversations (the review log's threads) under New conversation.
+// The sidebar: where the work is, and who is doing it. New conversation leads
+// it; then the recent project folders, the chosen one unfolded to its
+// conversations (the review log's threads); the account at its foot, which
+// opens the way to Settings and everything else.
 //
-//   [+] New Project…                  rows 28 tall, radius 6, UI 12/16
-//   [folder] Open Folder…             on: on fill; hover: raised
-//   Projects                          meta in ink3
-//   [folder] jeju-vlog      Working
-//        [+] New conversation
+//   [+] New conversation              rows 30 tall, radius 6, UI 13/20
+//   Projects                     [+]  meta in ink3; + is New Project, Open Folder
+//   [folder] jeju-vlog      Working   on: on fill; hover: raised
 //        Make a 60-second cut  Review
 //   [folder] atlas-launch
+//   ...
+//   (Y) You                       ⌃   the account, 48 tall
+//       Kerf Cloud
 //
 // Nothing here is invented: the folders are the recent projects that still
-// exist, and a conversation's title is its first comment's first line.
+// exist, a conversation's title is its first comment's first line, and the
+// account is what the window says it is.
 
 #include "components.h"
 #include "test_friends.h"
@@ -24,12 +27,14 @@
 #include <QWidget>
 
 class QLabel;
+class QMenu;
 class QVBoxLayout;
 
 namespace kerf {
 
 namespace ui {
 class FadeScrollArea;
+class IconButton;
 } // namespace ui
 
 class SidebarRow final : public ui::KitButton {
@@ -52,6 +57,28 @@ private:
     QColor m_trailingColor;
     int m_indent = 0;
     bool m_current = false;
+};
+
+// The account at the sidebar's foot: an initial in a disc, a name over what it
+// is signed in to, and the chevrons of something that opens upward.
+class SidebarAccount final : public ui::KitButton {
+    Q_OBJECT
+public:
+    explicit SidebarAccount(QWidget *parent = nullptr);
+    void setAccount(const QString &title, const QString &subtitle);
+    QString title() const { return m_title; }
+    QString subtitle() const { return m_subtitle; }
+    // Held on while its menu is open.
+    void setOpen(bool open);
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QString m_title;
+    QString m_subtitle;
+    bool m_open = false;
 };
 
 class ProjectSidebar final : public QWidget {
@@ -86,9 +113,14 @@ public:
     QList<SidebarRow *> rows() const { return m_rows; }
     SidebarRow *projectRow(const QString &path) const;
     SidebarRow *conversationRow(const QString &id) const;
-    SidebarRow *newConversationRow() const { return m_newConversation; }
-    SidebarRow *newProjectRow() const { return m_newProject; }
-    SidebarRow *openFolderRow() const { return m_openFolder; }
+    // New conversation, while a folder's conversations show.
+    SidebarRow *newConversationRow() const;
+    // The + beside Projects, and the menu it opens: New Project, Open Folder.
+    ui::IconButton *addButton() const { return m_add; }
+    QMenu *addMenu() const { return m_addMenu; }
+    // The account at the foot; hidden until it is given something to say.
+    SidebarAccount *accountRow() const { return m_account; }
+    void setAccount(const QString &title, const QString &subtitle);
 
 signals:
     void projectChosen(const QString &path);
@@ -96,6 +128,8 @@ signals:
     void newConversationRequested();
     void newProjectRequested();
     void openFolderRequested();
+    // The account was pressed: the window opens its menu over it.
+    void accountRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -114,9 +148,10 @@ private:
     QWidget *m_top = nullptr;
     QLabel *m_heading = nullptr;
     ui::FadeScrollArea *m_scroll = nullptr;
-    SidebarRow *m_newProject = nullptr;
-    SidebarRow *m_openFolder = nullptr;
     SidebarRow *m_newConversation = nullptr;
+    ui::IconButton *m_add = nullptr;
+    QMenu *m_addMenu = nullptr;
+    SidebarAccount *m_account = nullptr;
     QList<SidebarRow *> m_rows;
     QStringList m_rowKeys;
 };

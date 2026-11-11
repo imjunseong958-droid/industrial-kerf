@@ -602,19 +602,28 @@ private slots:
         window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        QVERIFY(window.m_pictureButton->isOn());
-        QVERIFY(window.m_timelineButton->isOn());
+        // One button stands for the panel: on while either pane shows.
+        QVERIFY(window.m_panelButton->isOn());
+        QAction *timelinePane = window.m_commands->action(QStringLiteral("view.timeline"));
+        QVERIFY(timelinePane && timelinePane->isChecked());
         ui::IconButton *play = window.m_timelineWiring->tools()->transportButton(TimelineToolStrip::Transport::Play);
         PictureTransport *block = window.m_timelineWiring->pictureTransport();
         QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(play));
         // With the timeline closed the block under the picture has the transport.
-        window.m_timelineButton->click();
-        QVERIFY(!window.m_timelineButton->isOn());
+        timelinePane->trigger();
+        QVERIFY(!timelinePane->isChecked());
         QVERIFY(!window.m_shell->panes().timeline);
+        QVERIFY(window.m_panelButton->isOn());
         QVERIFY(block->isVisible());
         QVERIFY(block->isAncestorOf(play));
-        window.m_timelineButton->click();
+        timelinePane->trigger();
         QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(play));
+        // The button closes both panes, and opens both again.
+        window.m_panelButton->click();
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        QVERIFY(!window.m_panelButton->isOn());
+        window.m_panelButton->click();
+        QVERIFY(window.m_shell->panes().picture && window.m_shell->panes().timeline);
         // The sidebar's choice is remembered.
         QSettings settings;
         window.m_sidebarButton->click();

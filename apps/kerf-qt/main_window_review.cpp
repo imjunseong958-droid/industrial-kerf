@@ -231,7 +231,7 @@ void ReviewWiring::attach(ChatPanel *panel) {
     });
     connect(panel, &ChatPanel::moreAction, this, [this, w](const QString &action, const QString &argument) {
         if (action == QLatin1String("settings")) {
-            w->triggerCommand(QStringLiteral("app.preferences"));
+            w->showSettings(QStringLiteral("ai"));
         } else if (action == QLatin1String("activity")) {
             w->showActivity();
         } else if (action == QLatin1String("viewAs")) {
