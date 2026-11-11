@@ -5,7 +5,7 @@ nothing like: Remove Grain, Dust & Scratches, Rolling Shutter Repair, Optics
 Compensation, Detail-preserving Upscale, Bilateral Blur, Radial Zoom Blur,
 Shadow/Highlight, Curves, Hue/Saturation, Selective Color, Photo Filter, the
 Auto Levels, Contrast, and Color corrections, Key Cleaner, Advanced Spill
-Suppressor, Unmult, Simple Choker, Bulge, Motion Tile, Add Grain, and the
+Suppressor, Unmult, Simple Choker, Add Grain, and the
 Audio Waveform and Spectrum. They draw on `kerf-raster` images, with color
 from `kerf-color`. Kerf's renderer runs them through `kerf_fx::kept`, and
 native playback and the graph's bake through `kerf_fx::RasterStack`.

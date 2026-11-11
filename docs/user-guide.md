@@ -124,6 +124,26 @@ chooses how Kerf thinks, and ▸ Account signs in to Kerf Cloud:
   remove.
 - **Keyboard shortcuts.** Edit ▸ Keyboard Shortcuts chooses a layout.
 
+## Shots a renderer or a model makes
+
+A shot Kerf does not draw itself, a 3D render or a video model's, comes in as
+media with a recipe: a small text file in the project with the steps that make
+it. Ask Kerf for the shot and it writes the recipe and adds the media; Kerf
+never runs one itself. Right-click the media in the Media sheet and choose Make
+from Recipe…, read the steps it shows, and say yes; or run `kerf make <media>`
+in a terminal.
+
+Each making is kept as a take, and the newest is the one in your cut. `kerf
+takes <media>` lists them and `kerf takes <media> --use 1` goes back to one,
+and you can ask Kerf to do the same. Trim, move, grade and title a made shot
+as you like: none of that asks for it again. Kerf says when a shot does want
+making again, and for what: its recipe, a file the recipe reads, or the
+sequence that guides it changed.
+
+Kerf comes with no model. To have a recipe ask one, name the program that
+reaches it in `~/.kerf/models.json`; [shots.md](shots.md) has the format and
+what the program is handed.
+
 ## Review with others
 
 Every thread in the conversation is a comment kept beside the project

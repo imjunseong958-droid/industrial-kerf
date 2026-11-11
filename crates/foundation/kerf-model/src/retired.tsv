@@ -1,5 +1,6 @@
-# EffectCraft effects and transitions Kerf no longer has, with what to use
-# instead: a catalog reference, or words; empty for nothing like it.
+# Effects and transitions Kerf no longer has: EffectCraft's that were never
+# carried, and those cut since. Each with what to use instead: a catalog
+# reference, or words; empty for nothing like it.
 blur.cross	blur.directional@2
 blur.radialfast	blur.radialzoom@1
 blur.vector	blur.directional@2
@@ -45,38 +46,38 @@ color.vibrance	color.lumetri@2
 distort.bezierwarp	distort.cornerpin@2
 distort.bendit	distort.wavewarp@2
 distort.bender	distort.wavewarp@2
-distort.blobbylize	distort.turbulentdisplace@2
-distort.flomotion	distort.twirl@2
-distort.griddler	stylize.replicate@1
+distort.blobbylize	distort.wavewarp@2
+distort.flomotion	
+distort.griddler	clips side by side, each scaled
 distort.pageturn	page-peel@1
 distort.powerpin	distort.cornerpin@2
 distort.ripplepulse	distort.wavewarp@2
 distort.slant	distort.transform@2
-distort.pullsmear	distort.turbulentdisplace@2
-distort.split	utility.clone@1
-distort.split2	utility.clone@1
-distort.tiler	stylize.replicate@1
-distort.displacementmap	distort.turbulentdisplace@2
+distort.pullsmear	distort.wavewarp@2
+distort.split	clips side by side, each scaled
+distort.split2	clips side by side, each scaled
+distort.tiler	clips side by side, each scaled
+distort.displacementmap	distort.wavewarp@2
 distort.polar	vr.projection@1
 distort.reshape	distort.cornerpin@2
 distort.ripple	distort.wavewarp@2
-distort.smear	distort.turbulentdisplace@2
-distort.twirllegacy	distort.twirl@2
-distort.warp	distort.bulge@1
-generate.advancedlightning	generate.lightning@1
-generate.beam	generate.lightning@1
+distort.smear	distort.wavewarp@2
+distort.twirllegacy	
+distort.warp	distort.lens@2
+generate.advancedlightning	
+generate.beam	
 generate.gluegun	utility.stroke@1
-generate.lightburst	light.rays@1
-generate.lightrays	light.rays@1
+generate.lightburst	
+generate.lightrays	
 generate.lightsweep	light.leaks@1
 generate.threads	generate.grid@2
 generate.eyedropperfill	generate.paintbucket@2
 generate.fill	a solid (gen=solid@1)
-generate.fractal	vr.fractalnoise@2
-generate.radiowaves	generate.circle@2
+generate.fractal	
+generate.radiowaves	a `gen=shape@1` clip
 generate.scribble	generate.writeon@2
 generate.stroke	utility.stroke@1
-generate.vegas	light.edgeglow@1
+generate.vegas	light.wonderglow@1
 vr.converter	vr.projection@1
 vr.spheretoplane	vr.projection@1
 key.simplewireremoval	noise.dustscratches@1
@@ -90,20 +91,20 @@ key.screen	key.ultra@1
 matte.mattechoker	matte.simplechoker@1
 matte.refinehard	matte.simplechoker@1
 matte.refinesoft	key.keycleaner@1
-noise.curlnoise	distort.turbulentdisplace@2
-noise.fractal	vr.fractalnoise@2
+noise.curlnoise	distort.wavewarp@2
+noise.fractal	
 noise.matchgrain	noise.addgrain@1
 noise.medianlegacy	noise.median@2
 noise.noisealpha	noise.noise@2
 noise.noisehls	noise.noise@2
 noise.noisehlsauto	noise.noise@2
-noise.turbulent	distort.turbulentdisplace@2
+noise.turbulent	distort.wavewarp@2
 perspective.3dglasses	light.rgbsplit@1
-perspective.beveledges	perspective.bevelalpha@2
-perspective.cylinder	distort.spherize@2
+perspective.beveledges	`depth=` and `bevel=` on a clip in depth
+perspective.cylinder	distort.lens@2
 perspective.environment	
-perspective.sphere	distort.spherize@2
-perspective.spotlight	light.lighting@1
+perspective.sphere	distort.lens@2
+perspective.spotlight	a light on clips in depth, `gen=light@1`
 perspective.radialshadow	perspective.dropshadow@2
 sim.ballaction	
 sim.bubbles	
@@ -125,18 +126,18 @@ sim.shatter
 sim.waveworld	
 stylize.blockload	stylize.mosaic@2
 stylize.burnfilm	burn-alpha@1
-stylize.glass	stylize.emboss@2
+stylize.glass	
 stylize.hextile	stylize.mosaic@2
 stylize.kaleida	distort.mirror@2
 stylize.mrsmoothie	
-stylize.plastic	stylize.emboss@2
-stylize.repetile	stylize.replicate@1
+stylize.plastic	
+stylize.repetile	clips side by side, each scaled
 stylize.smooththreshold	stylize.posterize@2
 stylize.thresholdrgb	stylize.posterize@2
 stylize.cartoon	stylize.posterize@2
 stylize.glow	light.wonderglow@1
-stylize.scatter	stylize.roughenedges@2
-stylize.texturize	stylize.emboss@2
+stylize.scatter	
+stylize.texturize	
 stylize.threshold	stylize.posterize@2
 text.numbers	text.burnin@1
 time.forcemotionblur	distort.transform@2
@@ -167,3 +168,43 @@ utility.colorprofileconverter	color.lumetri@2
 utility.growbounds	
 utility.hdrcompander	
 utility.hdrcompression	color.lumetri@2
+# Cut when Kerf left looks to a model and stopped doing as an effect what a
+# clip's own properties do (docs/architecture.md).
+stylize.brushstrokes	
+stylize.coloremboss	
+stylize.emboss	
+stylize.findedges	
+stylize.roughenedges	
+stylize.motiontile	distort.mirror@2
+stylize.replicate	clips side by side, each scaled
+stylize.strobe	the look `look.flash`
+light.alphaglow	light.wonderglow@1
+light.echoglow	light.wonderglow@1
+light.edgeglow	light.wonderglow@1
+light.lighting	a light on clips in depth, `gen=light@1`
+light.rays	
+generate.lensflare	
+generate.lightning	
+generate.cellpattern	
+distort.bulge	distort.lens@2
+distort.spherize	distort.lens@2
+distort.twirl	
+distort.turbulentdisplace	distort.wavewarp@2
+perspective.longshadow	perspective.dropshadow@2
+vr.chromaticaberrations	light.rgbsplit@1
+vr.colorgradients	
+vr.digitalglitch	the look `look.glitch`
+vr.fractalnoise	
+vr.glow	light.wonderglow@1
+transform.move	keyframes on the clip's `x` and `y`
+transform.grow	keyframes on the clip's `scale`
+transform.shrink	keyframes on the clip's `scale`
+transform.spin	keyframes on the clip's `rotation`
+transform.wiggle	an expression, such as `x=(noise(t*3)*0.02)`
+transform.camerashake	the look `look.shake`
+transform.rotate3d	the clip in depth: `three_d=true` with `rotate_x`, `rotate_y`, and `z`
+perspective.basic3d	the clip in depth: `three_d=true` with `rotate_x`, `rotate_y`, and `z`
+perspective.bevelalpha	`depth=` and `bevel=` on a clip in depth
+generate.circle	a `gen=shape@1` clip
+generate.ellipse	a `gen=shape@1` clip
+utility.clone	clips side by side, each scaled

@@ -1,13 +1,13 @@
-//! CPU implementations of the Premiere 26 video-effect catalogue added in M5.11 (see
-//! `crate::filmcraft::project::effect::vfx` for the definitions), plus the rebuilt versions of a few core
-//! effects (Ultra Key, Lens Flare, Noise, Mosaic, Simple Text, Track Matte Key).
+//! CPU implementations of what Kerf carries of the Premiere 26 video-effect catalogue added in
+//! M5.11 (see `crate::filmcraft::project::effect::vfx` for the definitions), plus the rebuilt versions
+//! of a few core effects (Ultra Key, Noise, Mosaic, Simple Text, Track Matte Key).
 //!
 //! Conventions match [`crate::filmcraft::effects`]: images are premultiplied linear f32; spatial parameters
 //! are full-resolution clip pixels scaled by `FxCtx::px_scale`; colour maths that artists expect
 //! in display space (keys, limiters, CDL) runs on sRGB-encoded straight colour.
 //!
 //! Effects that need more than the current frame — Posterize Time and Echo (other frames), Track
-//! Matte Key / Compound Blur / Gradient Wipe (another track), Auto Reframe and Warp Stabilizer
+//! Matte Key / Compound Blur (another track), Auto Reframe and Warp Stabilizer
 //! (frames for analysis, sequence geometry) — read it through [`FxEnv`]; without an environment
 //! (isolated tests, adjustment layers) they leave the image unchanged.
 
@@ -307,17 +307,7 @@ pub(crate) fn fbm(x: f32, y: f32, z: f32, octaves: f32, seed: u64) -> f32 {
     sum / norm.max(1e-6)
 }
 
-/// Smooth 1-D noise over time (−1..1): for wiggle/shake channels.
-pub(crate) fn noise1(t: f64, channel: u64, seed: u64) -> f32 {
-    noise3(t as f32, channel as f32 * 7.31 + 0.5, 0.37, seed)
-}
-
 // ------------------------------------------------------------------ image helpers
-
-/// The alpha channel as its own buffer.
-pub(crate) fn alpha_of(img: &Image) -> Vec<f32> {
-    img.px.par_chunks(4).map(|p| p[3]).collect()
-}
 
 /// Gaussian-blur a single-channel buffer (via a temporary image).
 pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
@@ -374,111 +364,42 @@ pub(crate) fn affine_warp(img: &mut Image, m: &Affine) {
     *img = img.transformed(img.w, img.h, m);
 }
 
-/// Shift/rotate/scale a layer about `c`: the transform shared by the animated Transform presets.
-pub(crate) fn place(img: &mut Image, c: Vec2, offset: Vec2, scale: f64, rot_deg: f64) {
-    let m = Affine::translate(c.x + offset.x, c.y + offset.y)
-        .then_apply(&Affine::rotate_deg(rot_deg))
-        .then_apply(&Affine::scale(scale, scale))
-        .then_apply(&Affine::translate(-c.x, -c.y));
-    affine_warp(img, &m);
-}
-
-/// Easing curves for [`crate::filmcraft::project::effect::EASINGS`].
-pub(crate) fn ease(kind: u32, t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    match kind {
-        1 => t * t,
-        2 => 1.0 - (1.0 - t) * (1.0 - t),
-        3 => t * t * (3.0 - 2.0 * t),
-        _ => t,
-    }
-}
-
-/// Progress through the clip (0 at its first frame, 1 at its last) when an environment is
-/// available, else 0.
-pub(crate) fn clip_progress(cx: &FxCtx) -> f64 {
-    match cx.env {
-        Some(env) => {
-            let d = env.clip_seconds();
-            if d <= 1e-9 {
-                0.0
-            } else {
-                (cx.seconds / d).clamp(0.0, 1.0)
-            }
-        }
-        None => 0.0,
-    }
-}
-
 // ------------------------------------------------------------------ dispatch
 
 /// Apply `e` if it is one of the effects implemented here; returns `false` for anything else.
 pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
-    let alias = |img: &mut Image, base: &str| {
-        let mut a = e.clone();
-        a.effect = base.to_string();
-        crate::filmcraft::effects::apply(img, &a, cx);
-    };
     match e.effect.as_str() {
         // Adjust / Color / Image Control / Keying / Utility colour
-        "lighting_effects" => color::lighting(img, e, cx),
         "logo_cutout" => color::logo_cutout(img, e, cx),
         "ultra_key" => color::ultra_key(img, e, cx),
         "track_matte" => color::track_matte(img, e, cx),
         "cineon_converter" => color::cineon(img, e, cx),
-        "noise" | "noise_legacy" => color::noise(img, e, cx),
+        "noise" => color::noise(img, e, cx),
         // Blur & Sharpen
         "bokeh_blur" => blur::bokeh(img, e, cx),
         "channel_blur" => blur::channel_blur(img, e, cx),
         "compound_blur" => blur::compound(img, e, cx),
         "focus_blur" => blur::focus(img, e, cx),
         "reduce_interlace_flicker" => blur::interlace_flicker(img, e, cx),
-        "gaussian_blur_legacy" => alias(img, "gaussian_blur"),
-        "directional_blur_legacy" => alias(img, "directional_blur"),
         // Distort / Transform / Utility geometry
         "corner_pin" => distort::corner_pin(img, e, cx),
-        "magnify" | "magnify_legacy" => distort::magnify(img, e, cx),
-        "spherize" => distort::spherize(img, e, cx),
-        "turbulent_displace" => distort::turbulent_displace(img, e, cx),
-        "rotate_3d" => distort::rotate_3d(img, e, cx),
-        "grow" | "shrink" => distort::grow(img, e, cx),
-        "move" => distort::move_fx(img, e, cx),
-        "spin" => distort::spin(img, e, cx),
-        "wiggle" => distort::wiggle(img, e, cx),
-        "camera_shake" => distort::camera_shake(img, e, cx),
+        "magnify" => distort::magnify(img, e, cx),
         "transform" if bv(e, "shutter_override") && fv(e, "shutter_angle", cx) > 0.5 => {
             distort::transform_fx(img, e, cx)
         }
         "spacer" => distort::spacer(img, e, cx),
-        "clone" => distort::clone_fx(img, e, cx),
         "auto_align" => distort::auto_align(img, e, cx),
         "rounded_crop" => distort::rounded_crop(img, e, cx),
-        "mosaic" | "mosaic_legacy" => distort::mosaic(img, e, cx),
-        "twirl_legacy" => alias(img, "twirl"),
+        "mosaic" => distort::mosaic(img, e, cx),
         // Lights & Glows
-        "echo_glow" => lights::echo_glow(img, e, cx),
-        "edge_glow" => lights::edge_glow(img, e, cx),
         "glint" => lights::glint(img, e, cx),
         "light_leaks" => lights::light_leaks(img, e, cx),
         "rgb_split" => lights::rgb_split(img, e, cx),
-        "volumetric_rays" => lights::volumetric_rays(img, e, cx),
         "wonder_glow" => lights::wonder_glow(img, e, cx),
-        "lens_flare" => lights::lens_flare(img, e, cx),
-        "alpha_glow" => lights::alpha_glow(img, e, cx),
         // Stylize / Perspective / Generate / Legacy & obsolete generators
-        "brush_strokes" => stylize::brush_strokes(img, e, cx),
-        "color_emboss" => stylize::color_emboss(img, e, cx),
-        "roughen_edges" => stylize::roughen_edges(img, e, cx),
-        "long_shadow" => stylize::long_shadow(img, e, cx),
         "stroke" => stylize::stroke(img, e, cx),
         "gradient" => stylize::gradient(img, e, cx),
-        "block_dissolve" => stylize::block_dissolve(img, e, cx),
-        "gradient_wipe_legacy" => stylize::gradient_wipe(img, e, cx),
-        "linear_wipe_legacy" => stylize::linear_wipe(img, e, cx),
-        "lightning" => stylize::lightning(img, e, cx),
-        "cell_pattern" => stylize::cell_pattern(img, e, cx),
         "checkerboard" => stylize::checkerboard(img, e, cx),
-        "ellipse" => stylize::ellipse(img, e, cx),
         "paint_bucket" => stylize::paint_bucket(img, e, cx),
         "write_on" => stylize::write_on(img, e, cx),
         // Time / analysis

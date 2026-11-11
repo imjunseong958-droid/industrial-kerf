@@ -684,11 +684,15 @@ private slots:
         QVERIFY(make->toolTip().contains(QStringLiteral("shots/open.kerfrecipe")));
         make->trigger();
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", false}}));
+        // Every step shows, and the take it writes, which leaves the ones before it.
+        const QString steps = QStringLiteral("vork render open.json --out /p/shots/open.takes/002.work/guide.mp4\n"
+                                             "dawn-adapter /p/shots/open.takes/002.work/request.json asks model `dawn` for prompt \"a boat\"");
         const QString question = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
-                                                                     {"command", "vork render open.json --out /p/shots/.making-open.mp4"},
-                                                                     {"file", "/p/shots/open.mp4"}});
-        QVERIFY(question.contains(QStringLiteral("vork render open.json --out /p/shots/.making-open.mp4")));
-        QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.mp4")));
+                                                                     {"command", steps}, {"take", 2},
+                                                                     {"file", "/p/shots/open.takes/002.mp4"}});
+        QVERIFY(question.contains(steps));
+        QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.takes/002.mp4")));
+        QVERIFY(question.contains(QStringLiteral("m4 then is")) && question.contains(QStringLiteral("are kept")));
         window.runMake(QStringLiteral("m4"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;

@@ -11,6 +11,77 @@ So the product is one, and the code is not. Each area can be rewritten without
 touching the others, and this document says where the lines are and what is
 still to come.
 
+## What Kerf draws, and what it leaves to others
+
+A video model now draws pixels no compositor will: texture, light, and the
+look of a thing. So Kerf does not compete for them. Three jobs make a film
+this way, and each has its own owner:
+
+| Job | Who does it | What it has to be |
+|---|---|---|
+| The picture itself: texture, light, realism, style | A model, outside Kerf | Whatever the model is; Kerf draws none of it |
+| Where things are and how the camera moves: the guide a model follows | A guide renderer: a sequence of the project, or a 3D renderer such as vork or Blender | Fast and readable by a model. Not beautiful |
+| When things happen, and everything exact: cuts, sync, titles and logos, color, sound, delivery | Kerf's compositor | Deterministic, and playing in real time |
+
+What joins them is the fourth thing, and it is Kerf's alone: the document
+knows how each shot was made. A shot's recipe says what guided it, what was
+asked, and of which model; each making is a take, and the take says what it
+was made from ([shots.md](shots.md)). No model has that and no renderer does,
+and a text document with proposals and Git merging holds it naturally.
+
+Three rules follow, and the rest of this document should be read by them:
+
+- **The compositor assembles; it does not stylize.** An effect that makes a
+  look or an image a model would make better has no claim on a kernel, and
+  what Kerf's own model already does (keyframes, clips in depth, shapes) is
+  not done a second time as an effect. What an editor needs exact stays:
+  color correction, keys and mattes, tracking, restoration, retouching, text.
+- **Kerf builds no mesh renderer and no model.** A scene with geometry is a
+  renderer's, reached by a recipe's `run`; clips in depth, cameras, and
+  lights stay as the guide that needs nothing installed, and are not made
+  more exact than a guide needs.
+- **The speed that counts is from an intent to an accepted shot.** That is
+  how many makings a shot takes, times how long a model takes, which no
+  kernel shortens. What Kerf can do is make a guide show at once, say which
+  edits are free and which cost a making, and play what came back without a
+  stutter.
+
+### What these rules cut
+
+38 effects went by the first rule, all of them among those with no kernel, and
+none of them reached by a look, a grade, a skill, or a preset:
+
+- *A look or an image a model makes better* (26): Brush Strokes, Color Emboss,
+  Emboss, Find Edges, Roughen Edges, Motion Tile, Replicate, and Strobe Light;
+  Alpha Glow, Echo Glow, Edge Glow, Lighting Effects, and Volumetric Rays; Lens
+  Flare, Lightning, and Cell Pattern; Bulge, Spherize, Twirl, and Turbulent
+  Displace; Long Shadow; and the 360° Chromatic Aberrations, Color Gradients,
+  Digital Glitch, Fractal Noise, and Glow.
+- *What a clip's own properties do* (12): Move, Grow, Shrink, Spin, Wiggle, and
+  Camera Shake (keyframes, an expression, or a look); 3D Rotate and Basic 3D
+  (a clip in depth); Bevel Alpha (`bevel=`); Circle and Ellipse (`gen=shape`);
+  and Clone (clips side by side).
+
+A document that names one is refused with what to use instead
+(`kerf-model/src/retired.tsv`), as one naming an EffectCraft effect Kerf never
+carried is. With them went nine FilmCraft definitions that no Kerf id had ever
+reached (its Legacy bin's Gaussian and Directional Blur, Magnify, Mosaic,
+Noise and Twirl, and Block Dissolve and the two wipes), about 3,700 lines in
+`kerf-fx` and `kerf-raster-fx`.
+
+What stayed among the effects with no kernel is what an editor needs exact,
+whoever draws the shot: color correction (Curves, Hue/Saturation, Selective
+Color, the Auto corrections), keys and mattes, what tracking writes (Corner
+Pin, Warp Stabilizer, Rolling Shutter Repair), lens correction, restoration
+(Remove Grain, Dust & Scratches, Median, Reduce Interlace Flicker), retouching
+(`image.*`), burn-ins and text, gradients and grids to put behind titles, the
+audio visualizers, Mosaic for what must not be seen, and time effects.
+
+Not decided here: the six 360° effects that are left (projection, rotation,
+placing, and seam-safe blur, denoise, and sharpen), which stand or fall with
+whether Kerf edits 360° video at all; and the CPU's code as a second way to
+draw every frame (What others do, vork).
+
 ## Where things live
 
 `crates/<folder>/<crate>`. The folder is the rule: a crate may depend on its
@@ -70,20 +141,45 @@ with no code.
 
 A renderer or a model outside Kerf is not an effect or a generator: it makes a
 file, and the file is media. The media line names its recipe (`recipe=`), a
-text file with the one command that makes the file, and `kerf make` runs it
-(`kerf-engine/src/recipe.rs`) as a supervised sidecar, as FFmpeg is run. So a
-new engine needs no code here: a recipe that runs it. What it made is kept as
-the media's file, not as a cache, since a model does not give the same shot
-twice.
+text file with the steps that make the file, and `kerf make` runs them
+(`kerf-engine/src/recipe.rs`) as supervised sidecars, as FFmpeg is run. So a
+new renderer needs no code here: a recipe that runs it.
 
-The editor makes one from the bin's menu, and shows the command and asks
+A recipe's steps are `run`, a program; `render`, a sequence of the project
+drawn by the compositor, which is how Kerf's own clips in depth are a guide;
+and `generate`, a model asked for the file. `generate` says what is wanted in
+words any model takes (a prompt, a guide, first and last frames, references,
+length, size, seed), and Kerf writes that as a request, a JSON file, for the
+program the person's own `~/.kerf/models.json` names for that model
+(`recipe/model.rs`). Kerf knows no model by name and ships none: with none set
+up, a recipe that asks one is refused with how one is set up. A model with a
+different way of being asked needs a different program, and nothing here.
+
+What a recipe makes is kept as media, not as a cache, since a model does not
+give the same shot twice. Each making is a take, in a folder beside the recipe
+(`recipe/takes.rs`), and the media's line names the one it is, so choosing a
+take is an edit: undone, proposed, and merged as any other. A take records a
+hash of what it was made from, the recipe, the files it reads, and the
+sequences it renders (the sequence, what it nests, and the media lines it
+plays, printed as a document and hashed), and a media wants making when one
+of those has changed, and says which. Nothing else about the project is in
+the record: an edit that trims, moves, grades, or titles a made shot is free,
+and only a change to what guided it or what was asked costs a making.
+
+The editor makes one from the bin's menu, and shows every step and asks
 first: the bridge answers a plain `media_make` with the plan and runs nothing,
 and runs only one sent confirmed, which a person's yes to that plan sends.
 
 An agent's tools run no recipe. `look` tells it which media want making
-(`toMake`: a file that is not there, or a recipe changed since its file was
-written) and that a person makes them, so an agent writes the scene and the
-recipe, adds the media line, and asks.
+(`toMake`: a file that is not there, or something its take was made from
+changed, by name, or a recipe that cannot run, with why), a media's takes, and
+the models set up, and that a person makes them, so an agent writes the scene
+and the recipe, adds the media line, and asks.
+
+Not here yet: passes of Kerf's own sequences (depth, normals, object ids) for
+a model that reads them, which a 3D renderer gives today; a way to choose a
+take in the editor's own window, where `kerf takes` and the conversation do
+it; and a model reached without a program, such as Kerf Cloud hosting one.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -217,20 +313,10 @@ Three limits remain, in this order:
    | Ultra Key, Choke | 56 | 17 | 188 | 54 |
    | Ultra Key, Soften | 59 | 17 | 222 | 69 |
 
-   What was measured and left, on the CPU, in the same terms: no look or grade reaches any of it, and a frame reaching them is a person's choice of a stylized picture rather than a frame of a grade, so kernels for them would be written for few frames.
+   What was measured and left, on the CPU, in the same terms: no look or grade reaches either. Ten more stood in this table (Brush Strokes at 142 and 802, Echo Glow at 99 and 572, down to Replicate at 21 and 65), each a person's choice of a stylized picture; they were not given kernels, and have since been cut with the rest of what a model draws better (What Kerf draws, above).
 
    | Effect | 1080p CPU | 4K CPU |
    |---|---|---|
-   | Brush Strokes | 142 | 802 |
-   | Echo Glow | 99 | 572 |
-   | Volumetric Rays | 93 | 167 |
-   | Edge Glow | 75 | 353 |
-   | Roughen Edges | 66 | 305 |
-   | Color Emboss | 40 | 135 |
-   | Emboss | 31 | 105 |
-   | Alpha Glow | 33 | 127 |
-   | Find Edges | 23 | 69 |
-   | Replicate | 21 | 65 |
    | Mosaic | 15 | 43 |
    | Lumetri, HSL Secondary with Denoise | 89 | 502 |
 
@@ -283,7 +369,7 @@ Three limits remain, in this order:
    them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
    own signal. Other effects written for 0 to 1 get the picture brought between 0 and 1 and put back,
    each pixel or the whole picture as `catalog::headroom` says: a color past BT.709 goes toward the gray of its own brightness until it fits and comes back around
-   the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. `time.echo` adds up what it is given as it is, below 0 and above 1, since adding and weighing need nothing brought under 1, and its Screen operator goes as ever between 0 and SDR white and adds what is past either, where it used to stop at white and multiply what was below 0. Light from `light.echoglow` and `light.glint` adds to a color past BT.709 and leaves how far it stands past the rest, white light by the same in each channel. What changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
+   the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. `time.echo` adds up what it is given as it is, below 0 and above 1, since adding and weighing need nothing brought under 1, and its Screen operator goes as ever between 0 and SDR white and adds what is past either, where it used to stop at white and multiply what was below 0. Light from `light.glint` adds to a color past BT.709 and leaves how far it stands past the rest, white light by the same in each channel. What changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
    8-bit. `look` with `scopes` reads an HDR sequence by its PQ or HLG signal, with what that comes to in cd/m² and how much of it BT.709 cannot hold; so does the Finish tray, whose bridge draws that signal small again on a thread of its own while the scopes are in sight, since playback hands over only the 8-bit frame a monitor gets, and marks where SDR white falls. An HDR10 file (`hevc_hdr`) says what it was mastered on
    (P3 D65 at 1000 nits unless told otherwise) and its MaxCLL and MaxFALL, measured from the frames
    before encoding, which disk-kept frames make cheap; HLG carries its tags without them. Holding an effect costs GPU passes, measured with `examples/frame_bench.rs` on 4K ProRes in PQ on an M1 with 8 GB, ms a frame, decode included:
@@ -565,7 +651,7 @@ Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
 **Settings and projects.** Done: the editor's settings carry a version, `settings/version`, and `migrateSettings` brings an older Kerf's up to it once at start, before anything reads them, and leaves a newer Kerf's alone (`settings_migration.cpp`, `settings_migration_test.cpp`). Version 1 drops the nine keys no code reads any more, and the model the editor wrote into every save before `c58bca5` (`claude-sonnet-4-20250514`, or `claude-3-5-sonnet-latest` from its menu), which held a person who never chose one to a retired model; a model someone chose stays. The Deliver panel's keys from before W3 are still read in place (`render_queue_view.cpp`), since they name a folder and not the path a migration would need. API keys live in the system keychain, macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (`kerf_secret`, `kerf-qt-bridge/src/secrets.rs`, through the `keyring` crate), and one left in plain QSettings moves there the next time the editor loads it; where the keychain cannot be reached, or refuses a key, they stay in QSettings as before (`secret_store.cpp`, `secret_store_test.cpp`). The Kerf Cloud token is kept there too (`cloud_session.rs`): one left in its 0600 file by an older Kerf moves into the keychain the first time the editor reads it, and where no keychain can be reached it stays in the file, as before (`docs/cloud.md`). Those tests take both ways with a keychain in memory and with `KERF_SECRETS=off`, and never touch a real one; `a_key_round_trips_through_the_real_keychain` and `real_keychain_keeps_the_token_out_of_the_file` do, and CI runs them on each system's own store: the login keychain on macOS, Credential Manager on Windows, and gnome-keyring's Secret Service on Linux (`rust-runtime.yml`, Test the system keychain). Credential Manager takes no value over 1280 UTF-16 units, so on Windows a key that long stays in QSettings and a token that long in the file. Fixed here: a key changed while the keychain refused it (locked, or a prompt denied) went to QSettings with the older one still in the keychain, and the next start read the older one and dropped the new; a key in QSettings is now taken first, since only a refused or an older Kerf's key is there (`aKeyTheKeychainRefusedWinsOverTheOneKeptBefore`). Fixed here: Windows sets no `HOME`, so the editor found no `cloud.json` there and Kerf Cloud said it was unavailable; it now takes `USERPROFILE`. A project is `kerf 1` and any other number is refused (`kerf-lang/src/doc.rs`), which is right until the first change to the format, and that change needs a reader of the old one. Fixed here: the editor offered retired Anthropic models and wrote one into new settings, so it overrode kerf-agent's `claude-opus-5-5` (`comments_test.cpp`).
 
-**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU: 101 of the 262 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). None of the 33 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which of the 101 to give a kernel first, and none was written: that waits on knowing what people apply by hand. `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
+**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU: 63 of the 224 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). They were 101 of 262 until the 38 that make a look a model makes better, or do what a clip's own properties do, were cut (What these rules cut). None of the 33 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which of the 63 to give a kernel first, and none was written: that waits on knowing what people apply by hand. `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
 
 **Delivery.** Done: a blocking note holds every delivery back, Deliver, the toolbar's Export and an agent's `render` alike, since kerfd refuses a `full` or `master` render while one is open (`review::delivery_held`; `a_blocking_note_holds_a_delivery_back_and_not_a_draft`, `exportWaitsForBlockingNotesAsDeliverDoes`). A QC error that no comment mirrors, past the bridge's cap of new QC comments, holds back only Deliver.
 
@@ -593,3 +679,29 @@ Since the survey: Export follows Deliver, the quality numbers are checked on rea
   license, FSL-1.1-ALv2, forbids a competing commercial product, and Kerf Cloud is a
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. One idea of it was worth doing our own way, one kernel source for the CPU and WGSL, which is measured and begun under Kernels. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`.
+- **[vork](https://github.com/voyager-so/vork)** (reviewed at `3389022`, 0.5.0) is a headless 3D
+  renderer for agents: scene JSON in, a picture, a movie, or control passes (depth, normals, object
+  ids, motion, the camera) out, in Rust and Slang on wgpu, with no timeline and no editor. It is
+  what Kerf does not build, a guide renderer with real geometry, and a recipe's `run` reaches it
+  ([shots.md](shots.md#guides)). **Its license (vork Preview License) lets anyone use it, and
+  forbids distributing a modified version, selling it, and offering it as a hosted service that
+  renders what others submit, so none of its code comes here, Kerf does not bundle it, and Kerf
+  Cloud could not run it without its makers' leave;** it covers that version only, and it draws
+  only on Apple silicon and NVIDIA cards with ray tracing. So Kerf names no renderer: a recipe
+  runs whichever is installed. Four of its decisions bear on Kerf's own engine:
+  - *A scene and how well it is drawn are apart* (`std/previs`, `draft`, `final`, `path`). Kerf's
+    version of that is a shot's guide and its making: the same recipe, with a model as the last
+    and dearest way of drawing it.
+  - *One implementation.* Its CPU rendering is the same GPU code on Mesa's software Vulkan, not a
+    second renderer. Kerf writes each kernel twice, and one effect with no kernel sends a whole
+    frame to the CPU. `KERF_GPU=software` already passes 378 of 379 tests on llvmpipe, so the
+    CPU's code could become what tests hold kernels to and stop being a way to draw a frame; that
+    is not done, and is the largest thing left to decide about the engine.
+  - *Frames stay on the GPU*, encoded there where the platform can, with reading pixels back as
+    the fallback. Kerf reads every frame back, for a `QImage` the editor paints. Showing a frame
+    without that trip needs a surface made from the editor's window, in the bridge, which already
+    holds the unsafe code of its C interface (the workspace's `unsafe_code = "forbid"` is taken by
+    the 16 crates that ask for it, and neither the bridge nor `kerf-playback` is one). It has not
+    been built or measured.
+  - *What comes out is a contract*: channels by name, and a sidecar saying what each frame's
+    camera was. A request to a model is Kerf's (`recipe/model.rs`).

@@ -1363,11 +1363,12 @@ const EFFECTS: &str = include_str!("effects.tsv");
 /// The image area's effects, drawn by `crates/image/kerf-image`.
 const IMAGE_EFFECTS: &str = include_str!("image_effects.tsv");
 
-/// EffectCraft effects and transitions Kerf no longer has.
+/// Effects and transitions Kerf no longer has: EffectCraft's that were
+/// never carried, and those cut since.
 const RETIRED: &str = include_str!("retired.tsv");
 
-/// What to use instead of `id`, an EffectCraft effect or transition Kerf
-/// no longer has: a catalog reference (`light.wonderglow@1`), words, or
+/// What to use instead of `id`, an effect or transition Kerf no longer
+/// has: a catalog reference (`light.wonderglow@1`), words, or
 /// nothing (`""`). `None` for an id Kerf never had.
 pub fn retired(id: &str) -> Option<&'static str> {
     RETIRED
@@ -1428,13 +1429,13 @@ pub fn unknown(kind: &str, id: &str) -> String {
                 ),
             }
         }
-        Some("") => format!("`{id}` was an EffectCraft {kind}, which Kerf no longer has"),
-        Some(instead) if instead.contains(' ') => format!(
-            "`{id}` was an EffectCraft {kind}, which Kerf no longer has; use {instead} instead"
-        ),
-        Some(instead) => format!(
-            "`{id}` was an EffectCraft {kind}, which Kerf no longer has; use `{instead}` instead"
-        ),
+        Some("") => format!("Kerf no longer has the {kind} `{id}`"),
+        Some(instead) if instead.contains(' ') => {
+            format!("Kerf no longer has the {kind} `{id}`; use {instead} instead")
+        }
+        Some(instead) => {
+            format!("Kerf no longer has the {kind} `{id}`; use `{instead}` instead")
+        }
     }
 }
 
@@ -1606,7 +1607,7 @@ mod tests {
             .filter(|fx| fx.engine == Engine::Raster)
             .collect();
         // The EffectCraft effects Kerf keeps, all effects.
-        assert_eq!(raster.len(), 24);
+        assert_eq!(raster.len(), 22);
         assert!(raster
             .iter()
             .all(|fx| !fx.category.is_empty() && fx.kind == FxKind::Effect));
@@ -1631,7 +1632,7 @@ mod tests {
             .all()
             .filter(|fx| fx.engine == Engine::Kerf && fx.kind == FxKind::Effect)
             .collect();
-        assert!(kerf.len() > 100, "{}", kerf.len());
+        assert!(kerf.len() > 70, "{}", kerf.len());
         // Lumetri is FilmCraft's at version 2, which reads no older version.
         let lumetri = catalog.fx("color.lumetri").unwrap();
         assert_eq!((lumetri.engine, lumetri.version), (Engine::Kerf, 2));
@@ -1641,8 +1642,8 @@ mod tests {
             ParamType::File(vec!["cube".into(), "3dl".into()])
         );
         // A point is two numbers across the picture, and another track a track.
-        let twirl = catalog.fx("distort.twirl").unwrap();
-        assert_eq!(twirl.find("center_x").unwrap().default, Value::Number(0.5));
+        let magnify = catalog.fx("distort.magnify").unwrap();
+        assert_eq!(magnify.find("center_x").unwrap().default, Value::Number(0.5));
         let matte = catalog.fx("key.trackmatte").unwrap();
         assert_eq!(
             (matte.version, matte.find("matte").unwrap().ty.clone()),
@@ -1667,7 +1668,16 @@ mod tests {
         }
         assert_eq!(
             unknown("effect", "stylize.glow"),
-            "`stylize.glow` was an EffectCraft effect, which Kerf no longer has; use `light.wonderglow@1` instead"
+            "Kerf no longer has the effect `stylize.glow`; use `light.wonderglow@1` instead"
+        );
+        // One cut since, whose work a clip's own properties do.
+        assert_eq!(
+            unknown("effect", "transform.spin"),
+            "Kerf no longer has the effect `transform.spin`; use keyframes on the clip's `rotation` instead"
+        );
+        assert_eq!(
+            unknown("effect", "stylize.emboss"),
+            "Kerf no longer has the effect `stylize.emboss`"
         );
         assert_eq!(
             unknown("effect", "nope"),

@@ -94,6 +94,13 @@ its picture, by its index; within half a second unless given.
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
+A media a renderer or a model makes names its recipe (`recipe="shots/open.kerfrecipe"`), a text file you
+may write: `kerf-recipe 1`, then a line each of `needs <file> …`, `run <program> <arguments>`,
+`render <sequence> {name}` (Kerf draws a sequence, as a guide), and `generate model=<name> prompt="…"
+[guide=|first=|last=|ref=<file>] [seconds=<n>] [size=WxH] [seed=<n>]`. `{out}` is the media's file, which the
+last step writes; another `{name}` is a file one step makes and a later one reads. A person runs it. Each
+making is a take: `look` with `media` lists them, and `media replace` with a take's path chooses one.
+
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that
 effects such as `generate.audiowaveform path=<name>` read. Linked clips (a picture
@@ -178,7 +185,8 @@ from, and a center is `center_x`/`center_y` in fractions of the frame.";
 const KERF_EFFECTS: &str = "## Effects from FilmCraft
 Run in stack order on a clip's picture after its
 masks: Lumetri grades and color correction, blurs, keys and track mattes,
-glows and light leaks, distortions, moves, burn-ins, and 360° effects.
+glows and light leaks, distortions, burn-ins, and 360° effects. A move is
+the clip's own: keyframes, an expression, or a look.
 Written like any effect (`fx c1 add color.lumetri@2 exposure=0.5`); `look`
 with `effect: \"<id>\"` lists the parameters of one, or of a transition. A
 point is `<name>_x`/`<name>_y` across the picture (0 to 1), an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT

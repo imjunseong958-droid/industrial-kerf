@@ -36,12 +36,36 @@ on `main`; its section here becomes the release's notes on GitHub
   the picture as renders did before Kerf's own renderer, are gone. Renders,
   playback, and previews already drew with that renderer; nothing about them
   changes.
-- A media line can say what its file was made from: `recipe="shots/open.json"`
-  names a recipe, a text file with the command that makes it, and
-  `kerf make <media>` runs it and puts the new file in the media's place. A
-  3D render or a video model's shot can be made again from the project. In
-  the editor, such a media has Make from Recipe… in the bin's menu, which
-  shows the command and asks before it runs.
+- A media line can say what its file is made from:
+  `recipe="shots/open.kerfrecipe"` names a recipe, a text file with the steps
+  that make it: a program to run, a sequence of the project for Kerf to
+  render, a model to ask. `kerf make <media>` shows the steps, asks, and runs
+  them. A 3D render or a video model's shot can be made again from the
+  project. In the editor, such a media has Make from Recipe… in the bin's
+  menu, which shows every step and asks before any runs.
+- Each making is a take, kept beside the ones before it, and the media is the
+  newest: `kerf takes <media>` lists them and `kerf takes <media> --use 1`
+  goes back to one. Kerf says when a shot wants making again and for what (its
+  recipe, a file the recipe reads, a sequence it renders), and trimming,
+  moving, grading or titling a made shot never asks for it again.
+- A recipe's `generate` line asks a video or image model for the shot: a
+  prompt, a guide to follow, first and last frames, references, a seed. Kerf
+  comes with no model. One is a program you name in `~/.kerf/models.json`,
+  which is handed what was asked as a file; see
+  [docs/shots.md](docs/shots.md#models).
+- Kerf no longer has 38 effects, none of which a look, a grade or a preset
+  used. Gone are those that make a look a video model makes better: Brush
+  Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,
+  Replicate, Strobe Light, Alpha, Echo and Edge Glow, Lighting Effects,
+  Volumetric Rays, Lens Flare, Lightning, Cell Pattern, Bulge, Spherize, Twirl,
+  Turbulent Displace, Long Shadow, and five of the 360° effects (Chromatic
+  Aberrations, Color Gradients, Digital Glitch, Fractal Noise, Glow). And
+  those a clip does by itself: Move, Grow, Shrink, Spin, Wiggle and Camera
+  Shake (keyframes, an expression such as `x=(noise(t*3)*0.02)`, or a look),
+  3D Rotate and Basic 3D (`three_d=true` with `rotate_x`, `rotate_y`, `z`),
+  Bevel Alpha (`depth=` and `bevel=`), Circle and Ellipse (`gen=shape@1`), and
+  Clone. A project that uses one does not open until its line is changed: the
+  error names the line and what to use instead.
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.

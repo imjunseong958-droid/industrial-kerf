@@ -536,7 +536,7 @@ impl Kernel {
                     phase: phase.rem_euclid(std::f64::consts::TAU) as f32,
                 }
             }
-            "noise" | "noise_legacy" => {
+            "noise" => {
                 let amount = fv(e, "amount", cx) / 100.0;
                 if amount <= 0.0 {
                     return Some(Kernel::Nothing);

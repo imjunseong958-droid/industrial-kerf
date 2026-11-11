@@ -1,0 +1,203 @@
+# Shots another program makes
+
+> Status: recipes with several steps, takes, what a take was made from, and
+> the place a model plugs into are in. No model comes with Kerf, and none is
+> set up until a person names one in their own `~/.kerf/models.json`; see
+> [Models](#models).
+
+Kerf draws what has to be exact: cuts, titles, color, sound, and the layers
+between them. It does not try to draw what a renderer or a video model draws
+better. Such a shot is made outside Kerf and comes in as media, and the
+project keeps how it was made beside it, so it can be made again:
+
+- A **recipe** is a text file with the steps that make the shot's file.
+- Each making is a **take**. Takes are kept, and the document says which one
+  the media is.
+- A take records what it was made from, so Kerf can say when a shot wants
+  making again and for what, and never asks for one that only moved.
+
+## Recipes
+
+A media line names its recipe:
+
+```text
+media m3 path="shots/open.mp4" rate=24 dur=96f video=1920x1080 recipe="shots/open.kerfrecipe"
+```
+
+and the recipe says how the file is made, a step a line:
+
+```text
+kerf-recipe 1
+# The opening shot: blocked in a renderer, then filmed by a model.
+needs open.scene.json
+run vork render open.scene.json --profile std/previs --frame-end 95 --out {guide.mp4}
+generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guide={guide.mp4} first=../refs/boat.png seconds=4 seed=7
+```
+
+| Line | What it does |
+|---|---|
+| `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
+| `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
+| `render <sequence> {name}` | Has Kerf draw a sequence of this project into a file. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way. |
+| `generate model=<name> …` | Asks a model for a file. See below. |
+
+`{out}` stands for the shot's file, and the last step writes it. Any other
+`{name}`, such as `{guide.mp4}`, is a file a step makes on the way and a later
+step reads; its extension tells a program the format. Braces around anything
+but a file's name stand for themselves.
+
+`generate` says what is wanted in words any video or image model takes:
+
+| | |
+|---|---|
+| `model=` | The model, by the name the person's models file gives it. |
+| `prompt="…"` | What the file should show. |
+| `guide=` | A picture in motion to follow: a blocking, a rough render, an earlier take. |
+| `first=`, `last=` | The first and the last frame. |
+| `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
+| `seconds=`, `size=WxH` | How long and how large. |
+| `seed=` | A whole number, for a model that gives the same file for the same seed. |
+| `out={name}` | Writes a file for a later step in place of the shot's own, so one model's picture can be the next one's `first=`. |
+
+Anything else on the line, such as `strength=0.6`, goes to the model as it is
+written, for the models that read it. A file is a path from the recipe's
+folder (`../refs/boat.png`) or a `{name}` an earlier step made. Every file a
+recipe names has to be inside the project.
+
+## Making a shot
+
+Only a person asking makes a shot: `kerf make m3`, or Make from Recipe… on the
+media in the editor's bin. Both show every step as it would run and the take
+it would write, and ask first; `kerf make m3 --yes` does not ask. Opening a
+project, drawing it, and an agent's tools never run a recipe. A recipe that
+could not run is refused before anything does, with why: a model that is not
+set up, a sequence the project has not, a file it needs that is not there.
+
+A step that fails, or a last step that writes nothing, leaves no take and the
+media as it was.
+
+## Takes
+
+A model does not give the same shot twice, so a making never writes over the
+one before it. Takes are kept in a folder beside the recipe:
+
+```text
+shots/open.kerfrecipe
+shots/open.takes/001.mp4         the first take
+shots/open.takes/001.take.json   what it was made from
+shots/open.takes/001.work/       the guide its steps drew, the request its model read
+shots/open.takes/002.mp4
+```
+
+After a making, the media's line names the new take
+(`path="shots/open.takes/002.mp4"`), with its length and streams, and clips
+keep their timing. Because the take is named in the document, choosing one is
+an edit like any other: it is undone, proposed, reviewed, and merged as one.
+
+```bash
+kerf takes m3            # the takes, a * on the one the media is
+kerf takes m3 --use 1    # have the media be take 1 again
+```
+
+An agent sees the same with `look` and `media`, and proposes a take with
+`media replace m3 path="shots/open.takes/001.mp4"`.
+
+In a shared project the takes travel with it: a project made with Git LFS
+stores `*.takes/` there, with each take's record and request left as text.
+
+## What asks for a shot again
+
+A take's record holds a hash of each thing it was made from:
+
+- the recipe, without its comments;
+- each file the recipe reads: what `needs` names and what a model is handed;
+- each sequence it has Kerf render: that sequence, the sequences it nests,
+  and the media lines they play.
+
+A media wants making when one of those is no longer what its take was made
+from, and it says which: `look` lists it under `toMake` with
+`shots/open.scene.json changed after its file was made`, and `kerf takes`
+marks each take with what changed since.
+
+Nothing else is in the record. Trimming, moving, retiming, grading, titling,
+or mixing a made shot changes none of it, so those edits are free: they play
+at once and never ask for the shot again. Changing the guide, the prompt, a
+reference, or the seed is what costs a making, and Kerf says so before a
+person pays for one.
+
+A making of a recipe that has not changed is another take: another roll of
+the same shot.
+
+Two limits, as they are now: a media file a rendered sequence plays is seen
+by its length, so one replaced in place by another of the same length is not
+seen; and a file that no take made (one put there by hand, or made before
+takes) is held to its recipe by their times alone.
+
+## Models
+
+Kerf has no model of its own and knows none by name. A model is a program the
+person names in their own `~/.kerf/models.json` (`KERF_MODELS` names another
+file), outside any project, so a project cannot say what runs:
+
+```json
+{
+  "dawn": { "run": ["dawn-adapter", "--request", "{request}"] }
+}
+```
+
+For a `generate` step Kerf writes the request, a JSON file, and runs that
+program with `{request}` as the file's path:
+
+```json
+{
+  "kerf-request": 1,
+  "model": "dawn",
+  "prompt": "a fishing boat leaves the harbour at dawn, fog",
+  "guide": "/project/shots/open.takes/003.work/guide.mp4",
+  "first": "/project/refs/boat.png",
+  "last": null,
+  "references": [],
+  "seconds": 4.0,
+  "size": null,
+  "seed": 7,
+  "more": { "strength": "0.6" },
+  "out": "/project/shots/open.takes/.making-003.mp4"
+}
+```
+
+The program asks its model however that model is asked, writes the file at
+`out`, writes what it has to say to stderr a line at a time, and ends with
+success. It runs supervised, as a recipe's `run` does, and never through a
+shell. A hosted model's program holds its own key; Kerf passes none.
+
+The request is the whole contract, so a model that takes only a prompt and a
+first frame, one that follows a guide video, and one that takes depth are the
+same to Kerf: each program reads the fields its model has a use for. `look`
+with no arguments lists the models set up, as `models`, so an agent writes
+`generate model=` with a name that exists.
+
+With no model set up, a recipe that asks one is refused when a person tries
+to make it:
+
+```text
+no model `dawn` is set up: /home/you/.kerf/models.json names none. A model is
+a program named there, as {"dawn": {"run": ["<program>", "{request}"]}}
+```
+
+## Guides
+
+What a model is given to follow decides how much of a shot is directed and how
+much is left to it. Three places a guide comes from, all through the same
+steps:
+
+- **A sequence of the project** (`render s2 {guide.mp4}`): clips placed in
+  depth, a camera move, lights, a title, cut and timed in Kerf. It needs
+  nothing installed and runs on any machine Kerf does.
+- **A 3D renderer** (`run vork render … --out {guide.mp4}`, or Blender the
+  same way): a blocked scene with real geometry and a camera, drawn fast and
+  rough. The renderer's own passes, such as depth, are files like any other
+  for a model that reads them.
+- **Footage**: a take of another shot, or something filmed, named as a file.
+
+Kerf does not draw depth, normals, or object ids of its own sequences as
+passes yet; a model that needs them takes them from a renderer.

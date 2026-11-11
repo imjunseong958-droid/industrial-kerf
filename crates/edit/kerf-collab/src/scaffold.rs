@@ -41,14 +41,20 @@ project.kerf.tmp
 
 /// `project.kerf` merges structurally, and the review log by keeping both
 /// sides' lines (it is only appended to); media goes through Git LFS when
-/// it was available when the project was made.
+/// it was available when the project was made, and so do the takes a
+/// recipe makes, in the folder beside it, with each take's record and
+/// request left as the text they are.
 pub fn gitattributes(lfs: bool) -> String {
     let mut text = String::from(
         "*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n\
-         review/*.jsonl merge=union\n",
+         *.kerfrecipe text eol=lf\nreview/*.jsonl merge=union\n",
     );
     if lfs {
-        text.push_str("media/** filter=lfs diff=lfs merge=lfs -text\n");
+        text.push_str(
+            "media/** filter=lfs diff=lfs merge=lfs -text\n\
+             **/*.takes/** filter=lfs diff=lfs merge=lfs -text\n\
+             **/*.takes/**/*.json !filter !diff !merge text\n",
+        );
     }
     text
 }

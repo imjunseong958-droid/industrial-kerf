@@ -221,10 +221,6 @@ effect	distort.offset	Distort	Offset	Shifts the picture with wraparound; seamles
 	number	shift_x	0.5	-10..10	picture widths	Shift Center To (0 left, 1 right)
 	number	shift_y	0.5	-10..10	picture heights	Shift Center To (0 top, 1 bottom)
 	number	blend	0	0..100	%	Blend With Original
-effect	distort.spherize	Distort	Spherize	Wraps an area onto a sphere; bulging, fisheye accents.	2
-	number	radius	0	0..2500		Radius
-	number	center_x	0.5	-10..10	picture widths	Center of Sphere (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center of Sphere (0 top, 1 bottom)
 effect	distort.transform	Distort	Transform	Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture.	2
 	number	anchor_x	0.5	-10..10	picture widths	Anchor Point (0 left, 1 right)
 	number	anchor_y	0.5	-10..10	picture heights	Anchor Point (0 top, 1 bottom)
@@ -239,24 +235,6 @@ effect	distort.transform	Distort	Transform	Position, scale, rotation, and skew w
 	number	opacity	100	0..100		Opacity
 	bool	shutter_override	false			Use Effect Shutter Angle
 	number	shutter_angle	180	0..360		Shutter Angle
-effect	distort.turbulentdisplace	Distort	Turbulent Displace	Organic noise displacement; heat haze, wobble, liquid.	2
-	enum	displacement	turbulent	turbulent|bulge|twist|turbulent-smoother|bulge-smoother|twist-smoother|vertical-displacement|horizontal-displacement|cross-displacement		Displacement
-	number	amount	50	-1000..1000		Amount
-	number	size	100	2..1000		Size
-	number	offset_x	0.5	-10..10	picture widths	Offset (Turbulence) (0 left, 1 right)
-	number	offset_y	0.5	-10..10	picture heights	Offset (Turbulence) (0 top, 1 bottom)
-	number	complexity	1	1..10		Complexity
-	number	evolution	0		degrees	Evolution
-	bool	cycle	false			Evolution Options: Cycle Evolution
-	number	cycle_revs	1	1..100		Evolution Options: Cycle (in Revolutions)
-	number	seed	0	0..10000		Evolution Options: Random Seed
-	enum	pinning	pin-all	none|pin-all|pin-horizontal|pin-vertical		Pinning
-	enum	antialias	low	low|high		Antialiasing for Best Quality
-effect	distort.twirl	Distort	Twirl	Swirls the picture around a center; dizziness and vortex moments.	2
-	number	angle	50		degrees	Angle
-	number	radius	30	0..100		Twirl Radius
-	number	center_x	0.5	-10..10	picture widths	Twirl Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Twirl Center (0 top, 1 bottom)
 effect	distort.warpstabilizer	Distort	Warp Stabilizer	Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage.	2
 	enum	result	smooth-motion	smooth-motion|no-motion		Stabilization: Result
 	number	smoothness	50	0..1000	%	Stabilization: Smoothness
@@ -273,17 +251,6 @@ effect	distort.wavewarp	Distort	Wave Warp	Moving waves across the picture; flags
 	number	width	40	1..4000		Wave Width
 	number	direction	90		degrees	Direction
 	number	speed	1	-100..100		Wave Speed
-effect	generate.cellpattern	Generate	Cell Pattern	Cellular patterns; organic textures and backgrounds.	2
-	enum	pattern	bubbles	bubbles|crystals|plates|static-plates|crystallize|pillow|mixed-crystals|tubular		Cell Pattern
-	bool	invert	false			Invert
-	number	contrast	100	0..10000		Contrast
-	enum	overflow	clip	clip|soft-clamp|wrap-back		Overflow
-	number	disperse	1	0..1.5		Disperse
-	number	size	60	0..2000		Size
-	number	offset_x	0	-100000..100000	pixels	Offset (across)
-	number	offset_y	0	-100000..100000	pixels	Offset (down)
-	number	evolution	0		degrees	Evolution
-	number	seed	0	0..10000		Random Seed
 effect	generate.checkerboard	Generate	Checkerboard	A checkerboard; backgrounds and patterns.	2
 	number	anchor_x	0	-10..10	picture widths	Anchor (0 left, 1 right)
 	number	anchor_y	0	-10..10	picture heights	Anchor (0 top, 1 bottom)
@@ -294,22 +261,6 @@ effect	generate.checkerboard	Generate	Checkerboard	A checkerboard; backgrounds a
 	color	color	#ffffff			Color
 	number	opacity	100	0..100	%	Opacity
 	enum	mode	none	none|normal|add|multiply|screen|overlay		Blending Mode
-effect	generate.circle	Generate	Circle	Draws a filled circle or ring; highlights and callouts.	2
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	number	radius	75	0..4000		Radius
-	color	color	#ffffff			Color
-	number	opacity	100	0..100	%	Opacity
-effect	generate.ellipse	Generate	Ellipse	Draws an ellipse outline; callouts and rings.	2
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	number	width	200	0..4000		Width
-	number	height	200	0..4000		Height
-	number	thickness	8	0..1000		Thickness
-	number	softness	15	0..100	%	Softness
-	color	inside	#ffffff			Inside Color
-	color	outside	#0080ff			Outside Color
-	bool	composite	false			Composite on Original
 effect	generate.fourcolor	Generate	4-Color Gradient	A gradient from four colored points; backgrounds and color washes.	2
 	color	c1	#ffff00			Color 1
 	color	c2	#00ff00			Color 2
@@ -342,32 +293,6 @@ effect	generate.grid	Generate	Grid	Draws a grid of lines; layouts, tech overlays
 	number	border	2	0..100		Border
 	color	color	#ffffff			Color
 	number	opacity	100	0..100	%	Opacity
-effect	generate.lensflare	Generate	Lens Flare	A lens flare; bright light hits and cinematic sun flares.	2
-	number	center_x	0.5	-10..10	picture widths	Flare Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Flare Center (0 top, 1 bottom)
-	number	brightness	100	0..300	%	Flare Brightness
-	number	blend	0	0..100	%	Blend With Original
-	enum	lens_type	50-300mm-zoom	50-300mm-zoom|35mm-prime|105mm-prime|anamorphic		Lens Type
-	color	color	#ffe6bf			Flare Color
-	number	size	100	10..400	%	Size
-	number	ghosts	3	0..8		Ghosts
-effect	generate.lightning	Generate	Lightning	Animated lightning bolts between two points; storms, electricity, magic.
-	number	start_x	0.1	-10..10	picture widths	Start Point (0 left, 1 right)
-	number	start_y	0.1	-10..10	picture heights	Start Point (0 top, 1 bottom)
-	number	end_x	0.9	-10..10	picture widths	End Point (0 left, 1 right)
-	number	end_y	0.9	-10..10	picture heights	End Point (0 top, 1 bottom)
-	number	segments	7	1..100		Segments
-	number	amplitude	10	0..100		Amplitude
-	number	detail	2	0..10		Detail Level
-	number	detail_amplitude	0.3	0..1		Detail Amplitude
-	number	branching	0.3	0..1		Branching
-	number	speed	10	0..100		Speed
-	number	width	10	0..200		Width
-	number	core	0.4	0..1		Core Width
-	color	outside	#594dff			Outside Color
-	color	inside	#ffffff			Inside Color
-	number	seed	0	0..10000		Random Seed
-	enum	mode	add	normal|add|screen|multiply|overlay		Blending Mode
 effect	generate.paintbucket	Generate	Paint Bucket	Fills a region from a point; recolor flat areas.	2
 	number	point_x	0.5	-10..10	picture widths	Fill Point (0 left, 1 right)
 	number	point_y	0.5	-10..10	picture heights	Fill Point (0 top, 1 bottom)
@@ -390,61 +315,11 @@ effect	generate.writeon	Generate	Write-on	Paints a stroke along the path its bru
 effect	vr.blur	Immersive Video	VR Blur	Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.	2
 	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
 	number	blurriness	0	0..1000		Blurriness
-effect	vr.chromaticaberrations	Immersive Video	VR Chromatic Aberrations	Splits color channels around a point on a 360° frame; lens-like fringing in VR.	2
-	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
-	number	red	0	-100..100		Chromatic Aberration (Red)
-	number	green	0	-100..100		Chromatic Aberration (Green)
-	number	blue	0	-100..100		Chromatic Aberration (Blue)
-	number	center_x	0	-180..180	degrees	Center Point (Longitude)
-	number	center_y	0	-90..90	degrees	Center Point (Latitude)
-	number	falloff	50	0..100	%	Falloff
-	bool	inverse	false			Inverse Falloff
-effect	vr.colorgradients	Immersive Video	VR Color Gradients	Lays soft color gradients over a 360° frame; tinting a whole VR sky or room.	2
-	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
-	color	c1	#ff4040			Point 1 Color
-	number	p1_lon	-120	-180..180	degrees	Point 1 Longitude
-	number	p1_lat	20	-90..90	degrees	Point 1 Latitude
-	color	c2	#40ff66			Point 2 Color
-	number	p2_lon	0	-180..180	degrees	Point 2 Longitude
-	number	p2_lat	-20	-90..90	degrees	Point 2 Latitude
-	color	c3	#4d66ff			Point 3 Color
-	number	p3_lon	120	-180..180	degrees	Point 3 Longitude
-	number	p3_lat	20	-90..90	degrees	Point 3 Latitude
-	number	blend	50	1..100		Blend
-	number	opacity	100	0..100	%	Opacity
-	enum	mode	normal	normal|add|screen|multiply|overlay		Blending Mode
 effect	vr.denoise	Immersive Video	VR De-Noise	Reduces noise on a 360° frame without seams; cleaning VR footage.	2
 	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
 	number	amount	0	0..100	%	Noise Level
 	enum	noise_type	fast	fast|slow		Noise Type
 	bool	show_noise	false			Show Only Noise
-effect	vr.digitalglitch	Immersive Video	VR Digital Glitch	Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR.	2
-	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
-	number	amplitude	0	0..100	%	Master Amplitude
-	number	distortion	20	1..100		Distortion Complexity
-	number	rate	10	0..60		Distortion Rate
-	number	color	50	0..100	%	Color Distortion
-	number	scanlines	0	0..100	%	Scan Lines
-	number	seed	0	0..10000		Random Seed
-effect	vr.fractalnoise	Immersive Video	VR Fractal Noise	Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR.	2
-	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
-	enum	fractal_type	basic	basic|turbulent-smooth|turbulent-sharp		Fractal Type
-	bool	invert	false			Invert
-	number	contrast	100	0..1000		Contrast
-	number	brightness	0	-200..200		Brightness
-	number	scale	100	10..10000		Scale
-	number	complexity	6	1..10		Complexity
-	number	evolution	0		degrees	Evolution
-	number	opacity	100	0..100	%	Opacity
-	enum	mode	normal	normal|add|screen|multiply|overlay		Blending Mode
-effect	vr.glow	Immersive Video	VR Glow	Makes highlights glow evenly across a 360° frame; dreamy VR light.	2
-	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
-	number	threshold	70	0..100	%	Luminance Threshold
-	number	radius	30	0..1000		Glow Radius
-	number	brightness	1	0..10		Glow Brightness
-	number	saturation	1	0..4		Glow Saturation
-	bool	use_tint	false			Use Tint Color
-	color	tint	#ffffff			Tint Color
 effect	vr.planetosphere	Immersive Video	VR Plane to Sphere	Places a flat picture onto a 360° frame; titles and graphics inside VR.	2
 	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
 	number	scale	60	1..180	degrees	Scale (Degrees)
@@ -516,28 +391,6 @@ effect	key.ultra	Keying	Ultra Key	A chroma key for green and blue screen with ma
 	number	cc_saturation	100	0..200		Color Correction: Saturation
 	number	cc_hue	0		degrees	Color Correction: Hue
 	number	cc_luminance	100	0..200		Color Correction: Luminance
-effect	light.alphaglow	Lights & Glows	Alpha Glow	Glows around the edges of the picture's alpha; neon text and logo outlines.
-	number	glow	30	0..100		Glow
-	number	brightness	252	0..255		Brightness
-	color	start_color	#ffffff			Start Color
-	color	end_color	#ffffff			End Color
-	bool	use_end	false			Use End Color
-	bool	fade_out	true			Fade Out
-effect	light.echoglow	Lights & Glows	Echo Glow	Highlights glow outward in repeating echoes; retro neon and dreamy halos.
-	number	threshold	60	0..100	%	Threshold
-	number	echoes	4	1..12		Echoes
-	number	radius	12	0..500		Radius
-	number	spread	1.8	1..4		Spread
-	number	intensity	100	0..1000	%	Intensity
-	number	decay	50	0..100	%	Decay
-	color	color	#ffd999			Glow Color
-effect	light.edgeglow	Lights & Glows	Edge Glow	Makes the picture's edges glow; neon outlines and electric looks.
-	number	threshold	20	0..100	%	Edge Threshold
-	number	width	2	0..50		Edge Width
-	number	radius	10	0..500		Glow Radius
-	number	intensity	150	0..1000	%	Intensity
-	color	color	#4dccff			Glow Color
-	bool	only	false			Glow Only
 effect	light.glint	Lights & Glows	Glint	Star-shaped glints on the brightest spots; sparkle, jewelry, sunlight on water.
 	number	threshold	75	0..100	%	Threshold
 	enum	rays	4	2|4|6|8		Rays
@@ -555,67 +408,6 @@ effect	light.leaks	Lights & Glows	Light Leaks	Animated warm light leaks washing 
 	number	speed	1	0..20		Speed
 	number	seed	0	0..10000		Random Seed
 	enum	mode	screen	screen|add|overlay		Blending Mode
-effect	light.lighting	Lights & Glows	Lighting Effects	Up to five spot, omni, or directional lights on the picture; relighting and moody pools of light.
-	enum	l1_type	spotlight	none|directional|omni|spotlight		Light 1: Light Type
-	color	l1_color	#ffffff			Light 1: Light Color
-	number	l1_center_x	0.5	-10..10	picture widths	Light 1: Center (0 left, 1 right)
-	number	l1_center_y	0.5	-10..10	picture heights	Light 1: Center (0 top, 1 bottom)
-	number	l1_major	20	0..100		Light 1: Major Radius
-	number	l1_minor	20	0..100		Light 1: Minor Radius
-	number	l1_angle	0		degrees	Light 1: Angle
-	number	l1_intensity	20	-100..100		Light 1: Intensity
-	number	l1_focus	50	0..100		Light 1: Focus
-	enum	l2_type	none	none|directional|omni|spotlight		Light 2: Light Type
-	color	l2_color	#ffffff			Light 2: Light Color
-	number	l2_center_x	0.5	-10..10	picture widths	Light 2: Center (0 left, 1 right)
-	number	l2_center_y	0.5	-10..10	picture heights	Light 2: Center (0 top, 1 bottom)
-	number	l2_major	20	0..100		Light 2: Major Radius
-	number	l2_minor	20	0..100		Light 2: Minor Radius
-	number	l2_angle	0		degrees	Light 2: Angle
-	number	l2_intensity	20	-100..100		Light 2: Intensity
-	number	l2_focus	50	0..100		Light 2: Focus
-	enum	l3_type	none	none|directional|omni|spotlight		Light 3: Light Type
-	color	l3_color	#ffffff			Light 3: Light Color
-	number	l3_center_x	0.5	-10..10	picture widths	Light 3: Center (0 left, 1 right)
-	number	l3_center_y	0.5	-10..10	picture heights	Light 3: Center (0 top, 1 bottom)
-	number	l3_major	20	0..100		Light 3: Major Radius
-	number	l3_minor	20	0..100		Light 3: Minor Radius
-	number	l3_angle	0		degrees	Light 3: Angle
-	number	l3_intensity	20	-100..100		Light 3: Intensity
-	number	l3_focus	50	0..100		Light 3: Focus
-	enum	l4_type	none	none|directional|omni|spotlight		Light 4: Light Type
-	color	l4_color	#ffffff			Light 4: Light Color
-	number	l4_center_x	0.5	-10..10	picture widths	Light 4: Center (0 left, 1 right)
-	number	l4_center_y	0.5	-10..10	picture heights	Light 4: Center (0 top, 1 bottom)
-	number	l4_major	20	0..100		Light 4: Major Radius
-	number	l4_minor	20	0..100		Light 4: Minor Radius
-	number	l4_angle	0		degrees	Light 4: Angle
-	number	l4_intensity	20	-100..100		Light 4: Intensity
-	number	l4_focus	50	0..100		Light 4: Focus
-	enum	l5_type	none	none|directional|omni|spotlight		Light 5: Light Type
-	color	l5_color	#ffffff			Light 5: Light Color
-	number	l5_center_x	0.5	-10..10	picture widths	Light 5: Center (0 left, 1 right)
-	number	l5_center_y	0.5	-10..10	picture heights	Light 5: Center (0 top, 1 bottom)
-	number	l5_major	20	0..100		Light 5: Major Radius
-	number	l5_minor	20	0..100		Light 5: Minor Radius
-	number	l5_angle	0		degrees	Light 5: Angle
-	number	l5_intensity	20	-100..100		Light 5: Intensity
-	number	l5_focus	50	0..100		Light 5: Focus
-	color	ambient_color	#ffffff			Ambience Light Color
-	number	ambient	20	-100..100		Ambience Intensity
-	number	gloss	0	-100..100		Surface Gloss
-	number	material	0	-100..100		Surface Material
-	number	exposure	0	-100..100		Exposure
-	number	bump_height	0	-100..100		Bump Height
-	bool	white_high	true			White Is High
-effect	light.rays	Lights & Glows	Volumetric Rays	Light rays streaming from the bright areas around a center; god rays and dramatic backlight.
-	number	center_x	0.5	-10..10	picture widths	Source Point (0 left, 1 right)
-	number	center_y	0.25	-10..10	picture heights	Source Point (0 top, 1 bottom)
-	number	threshold	60	0..100	%	Threshold
-	number	length	50	0..100	%	Ray Length
-	number	intensity	100	0..1000	%	Intensity
-	color	color	#fff2cc			Ray Color
-	bool	only	false			Rays Only
 effect	light.rgbsplit	Lights & Glows	RGB Split	Splits the red, green, and blue channels apart; glitch hits, chromatic aberration, music videos.
 	enum	mode	linear	linear|radial		Mode
 	number	amount	10	0..1000		Amount
@@ -638,15 +430,6 @@ effect	noise.noise	Noise & Grain	Noise	Adds random noise, in color or not; film 
 	bool	color	true			Use Color Noise
 	bool	clip	true			Clipping
 	number	grain_size	1	1..10		Grain Size
-effect	perspective.basic3d	Perspective	Basic 3D	Swivels and tilts the picture in 3D with distance; simple perspective moves.
-	number	swivel	0		degrees	Swivel
-	number	tilt	0		degrees	Tilt
-	number	distance	0	-10000..10000		Distance to Image
-effect	perspective.bevelalpha	Perspective	Bevel Alpha	A beveled edge on the picture's alpha; 3D-looking text and logos.	2
-	number	thickness	2	0..200		Edge Thickness
-	number	angle	-60		degrees	Light Angle
-	color	color	#ffffff			Light Color
-	number	intensity	40	0..100		Light Intensity
 effect	perspective.dropshadow	Perspective	Drop Shadow	A drop shadow; separates text and cutouts from the background.	2
 	color	color	#000000			Shadow Color
 	number	opacity	50	0..100	%	Opacity
@@ -654,34 +437,6 @@ effect	perspective.dropshadow	Perspective	Drop Shadow	A drop shadow; separates t
 	number	distance	5	0..4000		Distance
 	number	softness	0	0..1000		Softness
 	bool	only	false			Shadow Only
-effect	perspective.longshadow	Perspective	Long Shadow	A long, flat-design shadow trailing from the picture's alpha; bold titles and icons.
-	number	angle	135		degrees	Angle
-	number	length	100	0..4000		Length
-	color	color	#000000			Shadow Color
-	number	opacity	50	0..100	%	Opacity
-	bool	fade	true			Fade
-	bool	only	false			Shadow Only
-effect	stylize.brushstrokes	Stylize	Brush Strokes	Painterly brush strokes; painting looks.	2
-	number	angle	135		degrees	Stroke Angle
-	number	size	2	0..5		Brush Size
-	number	length	10	0..40		Stroke Length
-	number	density	1	0..2		Stroke Density
-	number	randomness	1	0..2		Stroke Randomness
-	enum	surface	paint-on-original-image	paint-on-original-image|paint-on-transparent|paint-on-white|paint-on-black		Paint Surface
-	number	blend	0	0..100	%	Blend With Original
-effect	stylize.coloremboss	Stylize	Color Emboss	An emboss that keeps color; relief textures.	2
-	number	direction	45		degrees	Direction
-	number	relief	1	0..10		Relief
-	number	contrast	100	0..500		Contrast
-	number	blend	0	0..100	%	Blend With Original
-effect	stylize.emboss	Stylize	Emboss	A gray relief from the picture's edges; stamped metal and paper textures.	2
-	number	direction	45		degrees	Direction
-	number	relief	1.8	0..10		Relief
-	number	contrast	100	0..500		Contrast
-	number	blend	0	0..100	%	Blend With Original
-effect	stylize.findedges	Stylize	Find Edges	Outlines edges; sketch and line-art looks.	2
-	bool	invert	false			Invert
-	number	blend	0	0..100	%	Blend With Original
 effect	stylize.mosaic	Stylize	Mosaic	Pixelates into blocks; censoring and retro 8-bit.	2
 	number	horizontal	10	1..4000		Horizontal Blocks
 	number	vertical	10	1..4000		Vertical Blocks
@@ -689,26 +444,6 @@ effect	stylize.mosaic	Stylize	Mosaic	Pixelates into blocks; censoring and retro 
 	number	softness	0	0..100	%	Softness
 effect	stylize.posterize	Stylize	Posterize	Reduces the color levels; poster and pop-art looks.	2
 	number	levels	7	2..255		Level
-effect	stylize.replicate	Stylize	Replicate	Tiles copies of the picture in a grid; video walls and kaleidoscopic beats.
-	number	count	2	2..16		Count
-effect	stylize.roughenedges	Stylize	Roughen Edges	Roughens the picture's edges; torn paper, grunge text.	2
-	enum	edge_type	roughen	roughen|roughen-color|cut|spiky|rusty|rusty-color|photocopy|photocopy-color		Edge Type
-	color	edge_color	#cc8033			Edge Color
-	number	border	8	0..500		Border
-	number	sharpness	1	0..10		Edge Sharpness
-	number	influence	1	0..1		Fractal Influence
-	number	scale	100	10..1000		Scale
-	number	stretch	0	-10..10		Stretch Width or Height
-	number	offset_x	0	-100000..100000	pixels	Offset (Turbulence) (across)
-	number	offset_y	0	-100000..100000	pixels	Offset (Turbulence) (down)
-	number	complexity	2	1..10		Complexity
-	number	evolution	0		degrees	Evolution
-	number	seed	0	0..10000		Evolution Options: Random Seed
-effect	stylize.strobe	Stylize	Strobe Light	Flashes the picture or a color on a rhythm; beat hits and strobe lights.	2
-	color	color	#ffffff			Strobe Color
-	number	blend	0	0..100	%	Blend With Original
-	number	duration	0.05	0..30		Strobe Duration (secs)
-	number	period	0.5	0..30		Strobe Period (secs)
 effect	stylize.vignette	Stylize	Vignette	Darkens or lightens the edges; draws the eye to the center, cinematic mood.	2
 	number	amount	-50	-100..100		Amount
 	number	midpoint	50	0..100	%	Midpoint
@@ -756,41 +491,7 @@ effect	transform.autoreframe	Transform	Auto Reframe	Keeps the moving subject in 
 	number	offset_y	0	-100000..100000	pixels	Reframe Offset (down)
 	number	zoom	100	100..400	%	Reframe Zoom
 	enum	aspect	sequence	sequence|vertical-9-16|square-1-1|vertical-4-5|horizontal-16-9		Target Aspect
-effect	transform.camerashake	Transform	Camera Shake	Handheld shake with rotation, zoom, and motion blur; impacts, earthquakes, and found-footage energy.
-	number	amount	20	0..1000		Position Amount
-	number	rotation	1	0..45	degrees	Rotation Amount
-	number	zoom	5	0..100	%	Zoom Amount
-	number	frequency	4	0.1..60	Hz	Frequency
-	number	complexity	3	1..6		Complexity
-	number	motion_blur	0	0..100	%	Motion Blur
-	number	seed	0	0..10000		Random Seed
-effect	transform.grow	Transform	Grow	Scales the picture up over the clip with easing; slow pushes in and punchy reveals.
-	number	from	100	1..1000	%	Scale From
-	number	to	120	1..1000	%	Scale To
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	enum	easing	linear	linear|ease-in|ease-out|ease-in-and-out		Easing
 effect	transform.hflip	Transform	Horizontal Flip	Mirrors the picture left to right; flipping a shot's direction.
-effect	transform.move	Transform	Move	Slides the picture from one offset to another over the clip with easing and motion blur; animated entrances.
-	number	from_x	-100	-100000..100000	pixels	Offset From (across)
-	number	from_y	0	-100000..100000	pixels	Offset From (down)
-	number	to_x	0	-100000..100000	pixels	Offset To (across)
-	number	to_y	0	-100000..100000	pixels	Offset To (down)
-	enum	easing	ease-in-and-out	linear|ease-in|ease-out|ease-in-and-out		Easing
-	number	motion_blur	0	0..100	%	Motion Blur
-effect	transform.rotate3d	Transform	3D Rotate	Rotates the picture about x, y, and z with perspective; card flips and 3D tilts.
-	number	rot_x	0		degrees	X Rotation
-	number	rot_y	0		degrees	Y Rotation
-	number	rot_z	0		degrees	Z Rotation
-	number	perspective	50	0..100		Perspective
-	number	z	0	-10000..10000		Z Position
-	bool	hide_back	false			Hide Back Face
-effect	transform.shrink	Transform	Shrink	Scales the picture down over the clip with easing; pulls out and exits.
-	number	from	120	1..1000	%	Scale From
-	number	to	100	1..1000	%	Scale To
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	enum	easing	linear	linear|ease-in|ease-out|ease-in-and-out		Easing
 effect	transform.spacer	Transform	Spacer	Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture.
 	number	left	40	0..4000		Left
 	number	top	40	0..4000		Top
@@ -800,20 +501,7 @@ effect	transform.spacer	Transform	Spacer	Pads the picture with a border of color
 	number	radius	0	0..2000		Corner Radius
 	bool	fill	false			Fill Background
 	color	color	#000000			Background Color
-effect	transform.spin	Transform	Spin	Spins the picture around a center over the clip with easing; playful spins in and out.
-	number	amount	360	-36000..36000	degrees	Rotation Amount
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	enum	easing	ease-in-and-out	linear|ease-in|ease-out|ease-in-and-out		Easing
-	number	scale	100	1..1000	%	Scale
 effect	transform.vflip	Transform	Vertical Flip	Turns the picture upside down; reflections and surreal flips.
-effect	transform.wiggle	Transform	Wiggle	Random wobble of position, rotation, and scale; hand-drawn jitter and nervous energy.
-	number	frequency	2	0..60	Hz	Frequency
-	number	amount	20	0..2000		Position Amount
-	number	rotation	0	0..180	degrees	Rotation Amount
-	number	scale	0	0..100	%	Scale Amount
-	enum	dimensions	horizontal-and-vertical	horizontal-and-vertical|horizontal|vertical		Dimensions
-	number	seed	0	0..10000		Random Seed
 effect	utility.autoalign	Utility	Auto Align	Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos.
 	enum	horizontal	center	none|left|center|right		Horizontal Alignment
 	enum	vertical	center	none|top|center|bottom		Vertical Alignment
@@ -827,11 +515,6 @@ effect	utility.cineon	Utility	Cineon Converter	Converts log Cineon footage to vi
 	number	white_internal	255	0..255		Internal White Point
 	number	gamma	1.7	0.1..5		Gamma
 	number	rolloff	20	0..255		Highlight Rolloff
-effect	utility.clone	Utility	Clone	Copies the picture into a grid with gaps and mirroring; split screens and pattern walls.
-	number	columns	2	1..16		Columns
-	number	rows	1	1..16		Rows
-	number	gap	0	0..1000		Gap
-	bool	mirror	false			Mirror Alternate
 effect	utility.edgefeather	Utility	Edge Feather	Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture.
 	number	amount	0	0..100		Amount
 effect	utility.roundedcrop	Utility	Rounded Crop	Crops with rounded corners, a feather, and a border; rounded picture-in-picture and cards.

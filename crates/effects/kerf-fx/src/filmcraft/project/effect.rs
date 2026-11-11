@@ -1104,59 +1104,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "find_edges",
-            "Find Edges",
-            STYLIZE,
-            vec![
-                b("invert", "Invert", false),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "emboss",
-            "Emboss",
-            vfx::OBSOLETE,
-            vec![
-                ang("direction", "Direction", 45.0),
-                fs("relief", "Relief", 1.8, (0.0, 10.0), (0.0, 10.0), "", 1),
-                f("contrast", "Contrast", 100.0, 0.0, 500.0, ""),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "replicate",
-            "Replicate",
-            vfx::LEGACY,
-            vec![fs("count", "Count", 2.0, (2.0, 16.0), (2.0, 16.0), "", 0)],
-        ),
-        video(
-            "strobe",
-            "Strobe Light",
-            STYLIZE,
-            vec![
-                col("color", "Strobe Color", [1.0, 1.0, 1.0, 1.0]),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
-                fs(
-                    "duration",
-                    "Strobe Duration (secs)",
-                    0.05,
-                    (0.0, 30.0),
-                    (0.0, 1.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "period",
-                    "Strobe Period (secs)",
-                    0.5,
-                    (0.0, 30.0),
-                    (0.0, 2.0),
-                    "",
-                    2,
-                ),
-            ],
-        ),
-        video(
             "noise",
             "Noise",
             NOISE,
@@ -1294,24 +1241,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "twirl",
-            "Twirl",
-            DISTORT,
-            vec![
-                ang("angle", "Angle", 50.0),
-                fs(
-                    "radius",
-                    "Twirl Radius",
-                    30.0,
-                    (0.0, 100.0),
-                    (0.0, 100.0),
-                    "",
-                    1,
-                ),
-                pt("center", "Twirl Center", f64::NAN, f64::NAN),
-            ],
-        ),
-        video(
             "wave_warp",
             "Wave Warp",
             DISTORT,
@@ -1347,24 +1276,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "basic_3d",
-            "Basic 3D",
-            PERSPECTIVE,
-            vec![
-                ang("swivel", "Swivel", 0.0),
-                ang("tilt", "Tilt", 0.0),
-                fs(
-                    "distance",
-                    "Distance to Image",
-                    0.0,
-                    (-10000.0, 10000.0),
-                    (-100.0, 100.0),
-                    "",
-                    1,
-                ),
-            ],
-        ),
-        video(
             "drop_shadow",
             "Drop Shadow",
             PERSPECTIVE,
@@ -1391,25 +1302,6 @@ fn build_effects() -> Vec<EffectDef> {
                     1,
                 ),
                 b("only", "Shadow Only", false),
-            ],
-        ),
-        video(
-            "bevel_alpha",
-            "Bevel Alpha",
-            vfx::OBSOLETE,
-            vec![
-                fs(
-                    "thickness",
-                    "Edge Thickness",
-                    2.0,
-                    (0.0, 200.0),
-                    (0.0, 10.0),
-                    "",
-                    1,
-                ),
-                ang("angle", "Light Angle", -60.0),
-                col("color", "Light Color", [1.0, 1.0, 1.0, 1.0]),
-                f("intensity", "Light Intensity", 40.0, 0.0, 100.0, ""),
             ],
         ),
         video(
@@ -1541,17 +1433,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "circle",
-            "Circle",
-            vfx::OBSOLETE,
-            vec![
-                pt("center", "Center", f64::NAN, f64::NAN),
-                fs("radius", "Radius", 75.0, (0.0, 4000.0), (0.0, 400.0), "", 1),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                f("opacity", "Opacity", 100.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
             "grid",
             "Grid",
             vfx::OBSOLETE,
@@ -1560,16 +1441,6 @@ fn build_effects() -> Vec<EffectDef> {
                 fs("border", "Border", 2.0, (0.0, 100.0), (0.0, 20.0), "", 1),
                 col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
                 f("opacity", "Opacity", 100.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "lens_flare",
-            "Lens Flare",
-            vfx::LIGHTS,
-            vec![
-                pt("center", "Flare Center", f64::NAN, f64::NAN),
-                f("brightness", "Flare Brightness", 100.0, 0.0, 300.0, "%"),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
             ],
         ),
         video(
@@ -1673,7 +1544,7 @@ mod tests {
             let inst = e.instance();
             assert_eq!(inst.params.len(), e.params.len());
         }
-        assert!(effect_defs().len() > 90);
+        assert!(effect_defs().len() > 60);
         assert!(effect_defs()
             .iter()
             .all(|e| e.kind != EffectKind::VideoTransition));

@@ -169,7 +169,6 @@ fn effects_written_for_0_to_1_keep_what_an_hdr_picture_holds() {
         "key.color",
         "stylize.vignette",
         "blur.radialzoom",
-        "distort.bulge",
         "distort.upscale",
     ] {
         let document = format!("{footage}      fx {fx}\n");
@@ -356,7 +355,6 @@ fn effects_written_for_0_to_1_keep_colors_past_bt709() {
         "stylize.vignette",
         "key.color",
         "blur.radialzoom",
-        "distort.bulge",
         "distort.upscale",
         "noise.removegrain",
         "blur.sharpen",
@@ -480,7 +478,6 @@ fn effects_written_for_0_to_1_keep_what_an_hlg_picture_holds() {
         "key.color",
         "stylize.vignette",
         "blur.radialzoom",
-        "distort.bulge",
         "distort.upscale",
     ] {
         for accel in [Accel::Never, Accel::Always] {
@@ -500,7 +497,6 @@ fn effects_written_for_0_to_1_keep_what_an_hlg_picture_holds() {
         "stylize.vignette",
         "key.color",
         "blur.radialzoom",
-        "distort.bulge",
         "distort.upscale",
         "noise.removegrain",
         "blur.sharpen",
@@ -620,7 +616,6 @@ fn glows_add_light_to_a_color_past_bt709_and_leave_what_it_is() {
     // White light adds alike to every channel, so green stands as far past the other two as it did,
     // or further where some of the light is its own.
     for fx in [
-        "light.echoglow intensity=10 color=#ffffff",
         "light.glint intensity=5 colorize=100 color=#ffffff",
         "light.glint intensity=5 colorize=50 color=#ffffff",
     ] {

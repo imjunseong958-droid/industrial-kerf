@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn points_are_written_across_the_picture() {
-        let spec = spec("distort.bulge").unwrap();
+        let spec = spec("blur.radialzoom").unwrap();
         let step = Step {
             spec,
             params: [("center_x".to_owned(), Param::Static(Value::Number(0.25)))]

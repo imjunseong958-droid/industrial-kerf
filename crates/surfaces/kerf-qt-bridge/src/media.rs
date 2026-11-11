@@ -54,11 +54,11 @@ pub(crate) fn copy_then(
     });
 }
 
-/// Make media `id`'s file from its recipe. Unconfirmed, say what would run
-/// (`media_make_plan`) and run nothing. Confirmed, run it on its own thread
-/// and then hand the runtime worker the replace that has the document take
-/// the new file's length and streams. What goes wrong is an `error`, with
-/// the media's file left as it was.
+/// Make a take of media `id` from its recipe. Unconfirmed, say what would
+/// run (`media_make_plan`) and run nothing. Confirmed, run it on its own
+/// thread and then hand the runtime worker the replace that has the media
+/// be the new take, the document taking its path, length and streams. What
+/// goes wrong is an `error`, with the media as it was.
 pub(crate) fn make(
     client: &kerf_runtime::RuntimeClient,
     directory: &Path,
@@ -67,15 +67,19 @@ pub(crate) fn make(
     commands: &SyncSender<Command>,
     tx: &SyncSender<Value>,
 ) {
-    let plan = client
+    let planned = client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
         .map_err(|error| error.message)
         .and_then(|project| {
-            kerf_engine::recipe::plan(&project, directory, id).map_err(|error| error.to_string())
+            let models =
+                kerf_engine::recipe::model::Models::load().map_err(|error| error.to_string())?;
+            let plan = kerf_engine::recipe::plan(&project, directory, id, &models)
+                .map_err(|error| error.to_string())?;
+            Ok((project, models, plan))
         });
-    let plan = match plan {
-        Ok(plan) => plan,
+    let (project, models, plan) = match planned {
+        Ok(planned) => planned,
         Err(error) => return crate::error(tx, format!("cannot make {id}: {error}")),
     };
     if !confirmed {
@@ -86,19 +90,30 @@ pub(crate) fn make(
                 "media": id,
                 "recipe": plan.recipe.to_string_lossy(),
                 "command": plan.command,
+                "steps": plan.steps,
+                "take": plan.take,
                 "file": plan.file.to_string_lossy(),
             }),
         );
     }
-    let (commands, tx, id) = (commands.clone(), tx.clone(), id.to_owned());
+    let (commands, tx, id, directory) = (
+        commands.clone(),
+        tx.clone(),
+        id.to_owned(),
+        directory.to_path_buf(),
+    );
     thread::spawn(move || {
         let cancellation = kerf_engine::CancellationToken::new();
-        match kerf_engine::recipe::make(&plan.recipe, &plan.file, &cancellation, |_| {}) {
-            Ok(()) => {
-                crate::emit(&tx, json!({"type": "media_made", "media": id}));
+        match kerf_engine::recipe::make(&project, &directory, &plan, &models, &cancellation, |_| {})
+        {
+            Ok(made) => {
+                crate::emit(
+                    &tx,
+                    json!({"type": "media_made", "media": id, "take": made.take}),
+                );
                 let _ = commands.send(Command::MediaReplace {
                     media: id,
-                    path: plan.stored,
+                    path: made.stored,
                 });
             }
             Err(error) => crate::error(&tx, format!("cannot make {id}: {error}")),

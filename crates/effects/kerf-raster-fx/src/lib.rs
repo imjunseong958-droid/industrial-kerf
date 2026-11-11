@@ -12,7 +12,6 @@ mod blur2;
 mod blur3;
 mod color2;
 mod color_fx;
-mod distort;
 mod distort2;
 mod distort3;
 mod distort4;
@@ -22,7 +21,6 @@ mod keying;
 mod keying2;
 mod matte;
 mod noise;
-mod stylize2;
 mod util;
 mod value;
 
@@ -290,12 +288,10 @@ pub fn registry() -> &'static [EffectSpec] {
     R.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(color_fx::specs());
-        v.extend(distort::specs());
         v.extend(keying::specs());
         v.extend(matte::specs());
         v.extend(blur2::specs());
         v.extend(color2::specs());
-        v.extend(stylize2::specs());
         v.extend(noise::specs());
         v.extend(distort2::specs());
         v.extend(distort3::specs());

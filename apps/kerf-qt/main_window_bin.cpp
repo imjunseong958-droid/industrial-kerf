@@ -336,8 +336,8 @@ void MainWindow::makeMedia(const QString &mediaId) {
 }
 
 QString MainWindow::makeQuestion(const QJsonObject &plan) {
-    // A recipe is a command someone wrote, perhaps someone else: show all of it.
-    return QStringLiteral("Making %1 runs this command on your computer:\n\n%2\n\nIt comes from the recipe %3, and what it writes replaces %4.\n\nRun it?")
+    // A recipe is commands someone wrote, perhaps someone else: show every step.
+    return QStringLiteral("Making %1 runs this on your computer:\n\n%2\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
         .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
              plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString());
 }

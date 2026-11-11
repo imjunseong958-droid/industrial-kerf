@@ -28,7 +28,6 @@ pub const KEPT: &[&str] = &[
     "color.photofilter",
     "color.selectivecolor",
     "color.shadowhighlight",
-    "distort.bulge",
     "distort.opticscompensation",
     "distort.rollingshutterrepair",
     "distort.upscale",
@@ -41,7 +40,6 @@ pub const KEPT: &[&str] = &[
     "noise.addgrain",
     "noise.dustscratches",
     "noise.removegrain",
-    "stylize.motiontile",
 ];
 
 /// Whether Kerf's renderer runs the raster effect `id`.
