@@ -62,7 +62,8 @@ view of it; the editor sends its edits back as typed operations.
 A shot a renderer or a video model makes comes in as media that names its
 recipe, the steps that make it; each making is a take, and the document says
 which one the media is ([shots another program makes](docs/shots.md)). Kerf
-ships no model: one is a program a person names in `~/.kerf/models.json`.
+ships no model: one is a program a person names in `~/.kerf/models.json`, and
+`tools/kerf-comfy` is such a program for a model on a ComfyUI server.
 
 Kerf draws with its own renderer (`kerf-draw`, drawn by `kerf-compose`): it
 draws Kerf's model directly in linear light, with drawing carried from

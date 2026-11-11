@@ -42,6 +42,7 @@ members = [
     "crates/surfaces/kerf-cloud",
     "crates/surfaces/kerf-fetcher",
     # tools
+    "tools/kerf-comfy",
     "tools/kerf-guide",
     "tools/kerf-layers",
     "tools/kerf-icon",

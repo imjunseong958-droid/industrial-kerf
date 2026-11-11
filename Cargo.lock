@@ -1720,6 +1720,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-comfy"
+version = "0.1.2"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "kerf-commands"
 version = "0.1.2"
 dependencies = [

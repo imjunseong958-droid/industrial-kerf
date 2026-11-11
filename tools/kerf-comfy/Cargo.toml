@@ -1,0 +1,26 @@
+[package]
+name = "kerf-comfy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Asks a ComfyUI server for a shot: a program a recipe's `generate` runs for a model kept there"
+publish = false
+
+[[bin]]
+name = "kerf-comfy"
+path = "src/main.rs"
+
+[dependencies]
+hex = "0.4"
+serde = { workspace = true }
+serde_json = "1"
+sha2 = "0.10"
+# The system's certificates, as the editor's update check takes them, so a
+# network that inspects TLS with its own CA still reaches the server.
+ureq = { version = "3", features = ["json", "platform-verifier"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

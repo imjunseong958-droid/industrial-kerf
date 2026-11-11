@@ -188,6 +188,37 @@ a model that reads them, which a 3D renderer gives today; a way to choose a
 take in the editor's own window, where `kerf takes` and the conversation do
 it; and a model reached without a program, such as Kerf Cloud hosting one.
 
+One model's program is in the repository, and the engine knows nothing of it:
+`tools/kerf-comfy`, for a model on a ComfyUI server
+([shots.md](shots.md#a-model-on-a-comfyui-server)). With it a recipe was made
+from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
+boat leaving, a sea and a pier tipped flat, a sun, a camera pushing in and
+turning), 96 frames at 1920x1080, then `generate` with Wan 2.1 VACE 1.3B, which
+gave 65 frames at 832x480 and 16 a second. On four cores with no GPU the guide
+took 87 s to draw, and the model, on its server, 79 s: there the guide was
+over half of a first making. What that showed of the guide:
+
+- *It is drawn larger and oftener than the model reads it.* A `render` step
+  names no size and no rate, so the guide is the sequence's, and the model's
+  program brings it down. The same sequence at 832x480 and 16 frames a second
+  draws in 11 s, an eighth of the time. A `render` that takes a size and a rate
+  is not built.
+- *Drawn again, it costs little.* A second making with the guide unchanged had
+  its frames from the disk (Kept frames) and the guide in a few seconds. A
+  `run` step, such as a 3D renderer's, has nothing of the kind and runs whole
+  for every take.
+- *It carries sound it has not got.* The guide's file has a silent stereo
+  track, mixed and encoded with it.
+- *From a terminal it is written once.* `project.kerf` edited by hand once
+  kerfd has kept its state is not what `kerf make` reads, and `kerf` has no
+  command that loads it, as the editor does. So a guide tried without the
+  editor or an agent wants a new project for each change.
+
+The shot kept the guide's layout, the boat's path, and the camera's move. It
+also kept the guide's flat shapes, a cabin that is a box staying one; whether
+depth would guide better than color was not settled, this model being a small
+one.
+
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
 color correction and Gaussian blur every Kerf has had, the EffectCraft effects
