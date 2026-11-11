@@ -77,10 +77,12 @@ Pin, Warp Stabilizer, Rolling Shutter Repair), lens correction, restoration
 (`image.*`), burn-ins and text, gradients and grids to put behind titles, the
 audio visualizers, Mosaic for what must not be seen, and time effects.
 
-Not decided here: the six 360° effects that are left (projection, rotation,
-placing, and seam-safe blur, denoise, and sharpen), which stand or fall with
-whether Kerf edits 360° video at all; and the CPU's code as a second way to
-draw every frame (What others do, vork).
+The six 360° effects that are left (projection, rotation, placing, and
+seam-safe blur, denoise, and sharpen) stay: they are how 360° footage is
+assembled, not how it is made to look, and Kerf keeps editing it.
+
+Not decided here: the CPU's code as a second way to draw every frame (What
+others do, vork).
 
 ## Where things live
 
