@@ -120,6 +120,11 @@ const SCENES: &[(&str, &str)] = &[
     ("bokeh 13", "      fx blur.bokeh@1 amount=13\n"),
     ("bokeh 60", "      fx blur.bokeh@1 amount=60\n"),
     ("remove grain", "      fx noise.removegrain@1\n"),
+    // As tracking a surface writes it, its corners moving.
+    (
+        "corner pin",
+        "      fx distort.cornerpin@2 upper_left_x={0f:0.1 48f:0.3} upper_left_y={0f:0.1 48f:0.2} upper_right_x={0f:0.9 48f:0.8} upper_right_y=0.15 lower_right_x={0f:0.85 48f:0.95} lower_right_y={0f:0.9 48f:0.75} lower_left_x=0.15 lower_left_y={0f:0.85 48f:0.95}\n",
+    ),
 ];
 
 /// A LUT as a look might load: 33 points to a side, S-curved.

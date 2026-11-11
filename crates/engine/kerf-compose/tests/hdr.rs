@@ -711,3 +711,75 @@ fn an_effect_reading_other_frames_reads_them_held_as_its_own() {
     assert!(in_sdr > 20.0, "it does nothing to this shot: {in_sdr}");
     assert!(in_hdr > in_sdr / 2.0, "{in_hdr} in HDR, {in_sdr} in SDR");
 }
+
+/// How far two frames of 16 bits are apart: the mean of their codes' differences, and the share of
+/// them further apart than 2 of an 8-bit frame's 255.
+fn codes_apart(a: &Frame, b: &Frame) -> (f64, f64) {
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let codes = |frame: &Frame| -> Vec<u16> {
+        let pairs = frame.rgba.as_chunks::<2>().0.iter();
+        pairs.map(|code| u16::from_le_bytes(*code)).collect()
+    };
+    let (a, b) = (codes(a), codes(b));
+    let apart = a.iter().zip(&b).map(|(a, b)| a.abs_diff(*b));
+    let sum: f64 = apart.clone().map(f64::from).sum();
+    let off = apart.filter(|apart| *apart > 514).count();
+    (sum / a.len() as f64, off as f64 / a.len() as f64)
+}
+
+/// Effects an editor needs exact and no look or grade reaches: what a document writes under a clip
+/// for each.
+const EXACT_EFFECTS: &[&str] = &[
+    "      fx distort.cornerpin upper_left_x=0.1 upper_left_y=0.15 upper_right_x=0.85 upper_right_y=0.05 lower_right_x=0.95 lower_right_y=0.9 lower_left_x=0.05 lower_left_y=0.8\n",
+];
+
+/// An HLG picture that moves, above SDR white in places and past BT.709 in others, through each of
+/// [`EXACT_EFFECTS`]: what the GPU makes of it is what the CPU does, held or not as
+/// `catalog::headroom` says of each.
+#[test]
+fn the_gpu_draws_an_hdr_picture_through_an_effect_as_the_cpu_does() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let hlg = moving_footage(dir.path(), true);
+    let at = Rate::FPS_24.time_of(11);
+    if !has_gpu_path(&hlg_document(&hlg, "blur.gaussian radius=2")) {
+        eprintln!("no GPU: nothing to compare");
+        return;
+    }
+    let plain = compositor(&hlg_document(&hlg, ""), Accel::Never).frame16(at, 1.0);
+    let over_white = plain.rgba.as_chunks::<8>().0.iter();
+    let over_white = over_white.filter(|pixel| u16::from_le_bytes([pixel[2], pixel[3]]) > 52000);
+    // SDR white is at 0.75 of the signal, 49151 of 65535.
+    assert!(over_white.count() > 200, "the footage should go over SDR white");
+    // What the two are apart before any effect, from decoding and finishing alone, which an effect
+    // carries along and may spread. With one it may be twice that and a little, where an effect that
+    // lost what the picture holds over 1 would be many times as far.
+    let alone = compositor(&hlg_document(&hlg, ""), Accel::Always).frame16(at, 1.0);
+    let (alone, alone_off) = codes_apart(&alone, &plain);
+    eprintln!("no effect: mean {alone:.1} of 65535, {:.3}% off", alone_off * 100.0);
+    for lines in EXACT_EFFECTS {
+        let fx = lines.lines().last().unwrap_or(lines).trim();
+        let document = format!("{}{lines}", hlg_document(&hlg, ""));
+        let gpu = compositor(&document, Accel::Always);
+        let cpu = compositor(&document, Accel::Never);
+        assert!(gpu.draws_on_gpu(at, 1.0), "{fx} goes to the CPU");
+        let (on_gpu, on_cpu) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
+        let (mean, off) = codes_apart(&on_gpu, &on_cpu);
+        eprintln!("{fx}: mean {mean:.1} of 65535, {:.3}% off", off * 100.0);
+        assert!(
+            mean < alone * 2.0 + 20.0 && off < alone_off + 0.002,
+            "{fx}: mean {mean:.1} of 65535, {:.3}% off by more than 514",
+            off * 100.0
+        );
+        // The same clip with its effect left out.
+        let without: String = lines
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("fx "))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let without = format!("{}{without}", hlg_document(&hlg, ""));
+        let (moved, _) = codes_apart(&on_cpu, &compositor(&without, Accel::Never).frame16(at, 1.0));
+        assert!(moved > 300.0, "{fx} does nothing to this picture: {moved}");
+        // A device that failed has the CPU draw, which would pass for a match.
+        assert!(gpu.draws_on_gpu(at, 1.0), "{fx} failed the device");
+    }
+}

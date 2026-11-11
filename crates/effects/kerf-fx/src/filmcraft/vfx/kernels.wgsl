@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
+// the keys, Radial Zoom Blur, Corner Pin), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
     a: vec4<u32>,
@@ -1098,4 +1098,27 @@ fn add_grain(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let o = grain_blend(c, g * u.p0.xyz * weight);
     textureStore(dst, at, vec4(o * px.a, px.a));
+}
+
+// ---------------------------------------------------------------------------------------------
+// What moves a picture's pixels: `distort.rs`.
+
+// `distort::corner_pin`. p0, p1, and p2.x: from a pixel to where it comes from across the picture,
+// 0 to 1, row by row; p2.yz: the picture's size.
+// By hand, not from `kerf_kernel`: the CPU maps each pixel in 64 bits, which WGSL has not got, so no
+// one source could draw what the reference draws; nor does `Num` read a picture yet.
+@compute @workgroup_size(16, 16)
+fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let xy = vec2<f32>(id.xy) + 0.5;
+    let w = u.p1.z * xy.x + u.p1.w * xy.y + u.p2.x;
+    var out = vec4(0.0);
+    if abs(w) >= 1e-12 {
+        let across = (u.p0.x * xy.x + u.p0.y * xy.y + u.p0.z) / w;
+        let down = (u.p0.w * xy.x + u.p1.x * xy.y + u.p1.y) / w;
+        if across >= -1e-3 && down >= -1e-3 && across <= 1.0 + 1e-3 && down <= 1.0 + 1e-3 {
+            out = sample(across * u.p2.y, down * u.p2.z);
+        }
+    }
+    textureStore(dst, vec2<i32>(id.xy), out);
 }

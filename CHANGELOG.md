@@ -105,6 +105,10 @@ on `main`; its section here becomes the release's notes on GitHub
     picture.
   - File ▸ Save Current as Preset… and Import Editing Preset… still save and
     apply a preset; the list of a project's presets is gone.
+- A clip with a Corner Pin on it, which is what tracking a surface writes, now
+  draws on the GPU with the rest of its frame, where one had sent every frame
+  it was in to the CPU. The picture is the same. How much faster such a shot
+  plays and renders has not been measured yet.
 
 ## 0.1.1
 
