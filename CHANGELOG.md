@@ -117,6 +117,9 @@ on `main`; its section here becomes the release's notes on GitHub
   Converter draw on the GPU too, in SDR and in HDR sequences, so a clip graded
   with one of them keeps its frames there. Curves with a point outside 0 to 1
   is still drawn on the CPU. Not timed yet.
+- Lens Distortion and Magnify draw on the GPU as well: straightening a wide
+  lens, or a loupe over a detail, no longer sends the frame to the CPU. Not
+  timed yet.
 
 ## 0.1.1
 

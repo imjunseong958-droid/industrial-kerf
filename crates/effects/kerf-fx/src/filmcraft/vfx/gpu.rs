@@ -131,6 +131,22 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    Lens {
+        center: [f32; 2],
+        /// Half of the picture's diagonal, which its curvature is measured by.
+        reach: f32,
+        curvature: f32,
+    },
+    Magnify {
+        center: [f32; 2],
+        magnification: f32,
+        /// How far from its center the glass reaches, and over how much of that it fades.
+        size: f32,
+        feather: f32,
+        opacity: f32,
+        square: bool,
+        mode: u32,
+    },
 }
 
 /// What [`Kernel::Kept`] does between the way there and the way back.
@@ -834,6 +850,34 @@ impl Kernel {
                     },
                 }
             }
+            "lens_distortion" => {
+                let (w, h) = (size.0 as f64, size.1 as f64);
+                let off = |id: &str, across: f64| {
+                    across / 2.0 + f64::from(f(e, id, cx)) / 100.0 * across / 2.0
+                };
+                Kernel::Lens {
+                    center: [off("h_decentering", w) as f32, off("v_decentering", h) as f32],
+                    reach: (w / 2.0).hypot(h / 2.0) as f32,
+                    curvature: (f64::from(f(e, "curvature", cx)) / 100.0) as f32,
+                }
+            }
+            "magnify" => {
+                let sized = Image {
+                    w: size.0,
+                    h: size.1,
+                    px: Vec::new(),
+                };
+                let center = pv(e, "center", cx, &sized);
+                Kernel::Magnify {
+                    center: [center.x as f32, center.y as f32],
+                    magnification: (fv(e, "magnification", cx) / 100.0).max(0.01),
+                    size: fv(e, "size", cx) * cx.px_scale,
+                    feather: fv(e, "feather", cx) * cx.px_scale,
+                    opacity: fv(e, "opacity", cx) / 100.0,
+                    square: chv(e, "shape") == 1,
+                    mode: chv(e, "mode"),
+                }
+            }
             "cineon_converter" => {
                 let black = fv(e, "black10", cx);
                 let white = fv(e, "white10", cx).max(black + 1.0);
@@ -1454,6 +1498,45 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::Lens {
+                center,
+                reach,
+                curvature,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.lens,
+                    &picture,
+                    None,
+                    &U::floats([center[0], center[1], *reach, *curvature]),
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Magnify {
+                center,
+                magnification,
+                size,
+                feather,
+                opacity,
+                square,
+                mode,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.magnify,
+                    &picture,
+                    None,
+                    &U {
+                        a: [u32::from(*square), *mode, 0, 0],
+                        p0: [center[0], center[1], *magnification, *size],
+                        p1: [*feather, *opacity, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
             Kernel::Cineon { way, told } => {
                 let out = stage.pass(
                     frame,
@@ -1598,6 +1681,8 @@ struct Stage {
     hue_saturation: wgpu::ComputePipeline,
     selective_color: wgpu::ComputePipeline,
     cineon: wgpu::ComputePipeline,
+    lens: wgpu::ComputePipeline,
+    magnify: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -1666,6 +1751,8 @@ impl Stage {
                 hue_saturation: kernel("hue_saturation"),
                 selective_color: kernel("selective_color"),
                 cineon: kernel("cineon"),
+                lens: kernel("lens"),
+                magnify: kernel("magnify"),
                 layout: layout.clone(),
             }
         });
@@ -2025,7 +2112,8 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
-    /// Drop Shadow, Rounded Crop, Spacer, and Mosaic, each way they can be set.
+    /// Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, and the Cineon Converter,
+    /// each way they can be set.
     fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
         let fl = ParamValue::Float;
         let on = ParamValue::Bool(true);
@@ -2127,6 +2215,51 @@ mod tests {
                     ("softness", fl(100.0)),
                 ],
             ),
+            // A lens that bulges, one that pinches, and one off its center.
+            ("lens_distortion", vec![("curvature", fl(40.0))]),
+            ("lens_distortion", vec![("curvature", fl(-60.0))]),
+            (
+                "lens_distortion",
+                vec![
+                    ("curvature", fl(25.0)),
+                    ("h_decentering", fl(30.0)),
+                    ("v_decentering", fl(-45.0)),
+                ],
+            ),
+            // A glass larger than this picture, then ones that fit in it.
+            ("magnify", vec![]),
+            ("magnify", vec![("size", fl(20.0))]),
+            (
+                "magnify",
+                vec![
+                    ("shape", ParamValue::Choice(1)),
+                    ("center", ParamValue::Vec2(Vec2::new(30.0, 20.0))),
+                    ("magnification", fl(350.0)),
+                    ("size", fl(14.0)),
+                    ("feather", fl(6.0)),
+                    ("opacity", fl(80.0)),
+                ],
+            ),
+            (
+                "magnify",
+                vec![
+                    ("center", ParamValue::Vec2(Vec2::new(70.0, 40.0))),
+                    ("size", fl(24.0)),
+                    ("mode", ParamValue::Choice(1)),
+                ],
+            ),
+            (
+                "magnify",
+                vec![("size", fl(22.0)), ("mode", ParamValue::Choice(2)), ("feather", fl(3.0))],
+            ),
+            (
+                "magnify",
+                vec![("size", fl(22.0)), ("mode", ParamValue::Choice(3))],
+            ),
+            (
+                "magnify",
+                vec![("size", fl(22.0)), ("mode", ParamValue::Choice(4)), ("opacity", fl(60.0))],
+            ),
             // The Cineon Converter, each way it goes.
             ("cineon_converter", vec![]),
             (
@@ -2210,7 +2343,8 @@ mod tests {
             let e = effect(id, &params);
             let kernel = Kernel::eval(&e, &cx, (image.w, image.h)).expect("a kernel");
             let Some(twin) = from_one_source(&kernel, &image) else {
-                assert_eq!(id, "mosaic", "{id} is written by hand");
+                let by_hand = ["mosaic", "lens_distortion", "magnify"];
+                assert!(by_hand.contains(&id), "{id} is written by hand");
                 continue;
             };
             let mut cpu = image.clone();
