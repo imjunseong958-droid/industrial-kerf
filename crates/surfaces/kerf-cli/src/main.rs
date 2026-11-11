@@ -709,6 +709,10 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
         println!("step {}  {step}", number + 1);
     }
     println!("makes   {} (take {})", plan.file.display(), plan.take);
+    // What its model has said it does not take: worth mending before it is paid for.
+    for note in &plan.notes {
+        println!("note    {note}");
+    }
     // A recipe is commands someone wrote, perhaps someone else.
     if !yes && !confirmed("Run it?") {
         bail!("not run; `kerf make {id} --yes` runs it without asking");

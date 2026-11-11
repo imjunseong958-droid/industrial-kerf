@@ -73,6 +73,18 @@ project, drawing it, and an agent's tools never run a recipe. A recipe that
 could not run is refused before anything does, with why: a model that is not
 set up, a sequence the project has not, a file it needs that is not there.
 
+What is shown with the steps, as `note` lines, is what a model has said it
+does not take ([What a model takes](#what-a-model-takes)) and the recipe asks
+of it all the same: a guide drawn at another size or rate than the model
+reads, or from a sequence of another shape, a shot longer than the model
+makes at once, a file it has no use for, a name it has not got. None of them
+stops a making; each is cheaper to mend before one than after.
+
+An agent is told the same without anything being run. A media that wants
+making is under `toMake` in `look`, and in what an `edit` that names a recipe
+answers, with what would refuse it (`cannot`) and those notes (`notes`), so a
+recipe is mended before a person is asked to make it.
+
 A step that fails, or a last step that writes nothing, leaves no take and the
 media as it was.
 
@@ -145,8 +157,11 @@ kerf takes m3            # the takes, a * on the one the media is
 kerf takes m3 --use 1    # have the media be take 1 again
 ```
 
-An agent sees the same with `look` and `media`, and proposes a take with
-`media replace m3 path="shots/open.takes/001.mp4"`.
+An agent sees the same with `look` and `media`, where each take the media is
+not has the line that has the media be it, as `use`:
+`media replace m3 path="shots/open.takes/001.mp4" rate=16 dur=65f video=832x480 recipe="shots/open.kerfrecipe"`.
+The line is whole, since a take need not be as long as the one before it, and
+a path alone is refused.
 
 In a shared project the takes travel with it: a project made with Git LFS
 stores `*.takes/` there, with each take's record and request left as text.

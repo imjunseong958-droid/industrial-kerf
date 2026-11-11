@@ -1,0 +1,42 @@
+---
+name: model-shot
+description: Block a shot in Kerf and have a video model film it, from a guide sequence and a recipe to a making a person approves and the takes it leaves.
+---
+
+# A shot a model films
+
+- Start from the model. `look` lists `models` with what each takes: make the
+  guide a sequence of its own, in the model's shape (`size`) and no longer
+  than its `seconds`, and write the `render` line `look` gives as `guide`, so
+  the guide is drawn at the model's size and rate and not the sequence's.
+- A guide is read for layout, motion, and camera, not for finish. Flat colors
+  and plain solids that differ clearly from each other guide better than
+  detail; what the picture should look like goes in the prompt.
+- Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
+  length of the shot. `insert` opens time, and puts each clip after the last.
+  The camera and the lights go on the top tracks.
+- In depth x runs right, y down, and z away from the viewer, in frame
+  heights (x in frame widths); `depth` gives a clip sides. Clips in depth
+  that do not cross draw in the order of how far away their middles are,
+  so a floor whose middle is nearer than what stands on it draws over it.
+  Make a floor a large clip tipped back and set far off, below the middle
+  (`rotate_x=-84 y=0.75 z=4 scale=16`), with all that stands on it nearer.
+- Leave a far backdrop, a sky, out of depth: a plain clip on the lowest
+  track draws flat behind the scene, unlit, and takes no shadow. In depth it
+  takes the shadow of whatever stands before it.
+- A camera's `z` moves it forward, `pan` turns it right, and `tilt` up. A
+  directional light's `x y z` is the way it shines. With a light that casts
+  a `shadow`, add an `ambient` one, or what faces away is black.
+- Look at the guide's first, middle, and last frame before writing the
+  recipe: every clip in frame, nothing crossing by accident, the move plain.
+- The recipe is the `render` line and a `generate` line: the prompt,
+  `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
+  again. The media's line names the file the shot will be, with the model's
+  rate and size; a making replaces them with what was made.
+- You do not make the shot. `toMake` says what a person is to make; mend
+  what its `cannot` and `notes` say before asking, then ask once.
+- After a making, look at the take (`media` with `sheet`), not at the guide,
+  and say what the model kept and what it lost. Change one thing for the
+  next take: the guide for layout and motion, the prompt for the look, the
+  seed for another roll of the same. A take that was better is chosen again
+  with its `use` line.

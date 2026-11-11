@@ -453,6 +453,130 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
     );
 }
 
+#[test]
+fn a_plan_says_how_a_file_that_is_not_found_was_named() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::create_dir_all(directory.join("refs")).unwrap();
+    std::fs::write(directory.join("refs/boat.png"), "a boat").unwrap();
+    let project = project(
+        "media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s1 rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n",
+    );
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["dawn-adapter", "{request}"]}}"#,
+    );
+    let refused = |steps: &str| {
+        std::fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            format!("kerf-recipe 1\n{steps}\n"),
+        )
+        .unwrap();
+        plan(&project, directory, "m1", &some)
+            .unwrap_err()
+            .to_string()
+    };
+    // A file a step makes, named without its braces.
+    assert_eq!(
+        refused("render s1 {guide.mp4}\ngenerate model=dawn guide=guide.mp4"),
+        "the recipe needs `shots/guide.mp4`, which is not there: `guide.mp4` is a file a step makes, which a later step names in braces, `{guide.mp4}`"
+    );
+    // A file of the project, named from the project's folder and not the recipe's.
+    assert_eq!(
+        refused("generate model=dawn first=refs/boat.png"),
+        "the recipe needs `shots/refs/boat.png`, which is not there: it names `refs/boat.png`, and a file is named from the recipe's own folder, `shots`"
+    );
+    // Named as it is to be, it is found.
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\ngenerate model=dawn first=../refs/boat.png\n",
+    )
+    .unwrap();
+    assert!(plan(&project, directory, "m1", &some).is_ok());
+    // A value with spaces and no quotes says how one is written.
+    let unquoted = Recipe::parse("kerf-recipe 1\ngenerate model=dawn prompt=a boat leaves")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unquoted.contains("`boat` is not `<name>=<value>`; a value that holds spaces is quoted"),
+        "{unquoted}"
+    );
+}
+
+#[test]
+fn a_plan_notes_what_a_model_has_said_it_does_not_take() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::write(directory.join("shots/boat.png"), "a boat").unwrap();
+    let project = project(
+        "media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track V1 video\n\
+         sequence s2 rate=24 size=832x480 audio=48000\n\
+         \x20 track V1 video\n",
+    );
+    let some = models(
+        directory,
+        r#"{
+            "vace": {"run": ["a", "{request}"], "takes": {
+                "size": [832, 480], "rate": 16, "seconds": 5.0625,
+                "reads": ["guide", "ref"], "more": {"steps": 20, "strength": 1.0}}},
+            "words": {"run": ["b", "{request}"], "takes": {"reads": []}},
+            "dawn": {"run": ["c", "{request}"]}
+        }"#,
+    );
+    let notes = |steps: &str| {
+        std::fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            format!("kerf-recipe 1\n{steps}\n"),
+        )
+        .unwrap();
+        plan(&project, directory, "m1", &some).unwrap().notes
+    };
+    // A recipe written for its model has nothing to note.
+    assert!(notes(
+        "render s2 {guide.mp4} size=832x480 rate=16\n\
+         generate model=vace prompt=\"a boat\" guide={guide.mp4} ref=boat.png seconds=4 seed=7 steps=30"
+    )
+    .is_empty());
+    // A guide drawn as its sequence is, for a model that reads it smaller and slower, and
+    // from a sequence of another shape.
+    assert_eq!(
+        notes("render s1 {guide.mp4}\ngenerate model=vace prompt=\"a boat\" guide={guide.mp4}"),
+        [
+            "the guide `{guide.mp4}` is not drawn as model `vace` reads it, 832x480 at 16 frames a second: `render s1 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time",
+            "sequence `s1` is 1920x1080, another shape than the 832x480 of its guide: the guide fills that size, and the sides of the sequence are cut off",
+        ]
+    );
+    // The rate alone, where the size is the model's.
+    assert_eq!(
+        notes("render s2 {guide.mp4} size=832x480\ngenerate model=vace guide={guide.mp4}"),
+        ["the guide `{guide.mp4}` is not drawn as model `vace` reads it, 832x480 at 16 frames a second: `render s2 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time"]
+    );
+    // A shot longer than it makes, a file it does not read, and a name it has not got.
+    assert_eq!(
+        notes("generate model=vace prompt=\"a boat\" first=boat.png seconds=9 duration=9"),
+        [
+            "`seconds=9` is more than model `vace` makes at once, 5.0625 s",
+            "model `vace` has no use for `first=`: of a line's files it reads guide, ref",
+            "model `vace` has nothing named `duration` to set: beside what every model is asked, a line sets its steps, strength",
+        ]
+    );
+    assert_eq!(
+        notes("generate model=words prompt=\"a boat\" ref=boat.png"),
+        ["model `words` has no use for `ref=`: it takes a prompt alone"]
+    );
+    // A model that has not said what it takes is asked nothing of.
+    assert!(notes(
+        "render s1 {guide.mp4}\ngenerate model=dawn guide={guide.mp4} first=boat.png seconds=90 anything=1"
+    )
+    .is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn each_making_is_a_take_and_a_failed_one_leaves_none() {

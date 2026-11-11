@@ -387,7 +387,14 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
                 Severity::Error,
                 "missing_media",
                 Some(media.id.as_str()),
-                format!("media `{}` is missing: {}", media.id, media.path),
+                // One a recipe makes is not lost: it has yet to be made.
+                match &media.recipe {
+                    Some(recipe) => format!(
+                        "media `{}` is not made yet: a person makes it from its recipe, `{recipe}`, with `kerf make {}`",
+                        media.id, media.id
+                    ),
+                    None => format!("media `{}` is missing: {}", media.id, media.path),
+                },
             ));
         }
     }

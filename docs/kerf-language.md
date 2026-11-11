@@ -159,7 +159,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   take, with the document taking its path, length and streams; `--yes` does
   not ask. Each making is a take, kept beside the ones before it
   (`shots/open.takes/002.mp4`), and the media line says which one it is, so
-  `media replace m3 path="shots/open.takes/001.mp4"` chooses another. A run
+  `media replace m3 path="shots/open.takes/001.mp4" …` with the rest of its
+  line chooses another; `look` with `media` gives the line whole. A run
   that fails or writes nothing leaves no take and the media as it was. A media
   wants making again when what its take was made from has changed (the recipe,
   a file it reads, a sequence it renders), and says which; no other edit asks

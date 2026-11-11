@@ -336,10 +336,14 @@ void MainWindow::makeMedia(const QString &mediaId) {
 }
 
 QString MainWindow::makeQuestion(const QJsonObject &plan) {
+    // What its model has said it does not take, each worth mending before it is paid for.
+    QString notes;
+    for (const QJsonValue note : plan.value(QStringLiteral("notes")).toArray()) notes += QStringLiteral("\n• %1").arg(note.toString());
+    if (!notes.isEmpty()) notes = QStringLiteral("\n\nBefore you run it:%1").arg(notes);
     // A recipe is commands someone wrote, perhaps someone else: show every step.
-    return QStringLiteral("Making %1 runs this on your computer:\n\n%2\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
+    return QStringLiteral("Making %1 runs this on your computer:\n\n%2%5\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
         .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
-             plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString());
+             plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString(), notes);
 }
 
 void MainWindow::runMake(const QString &mediaId) {

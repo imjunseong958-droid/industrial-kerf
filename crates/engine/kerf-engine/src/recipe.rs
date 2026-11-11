@@ -210,6 +210,27 @@ impl Recipe {
         files
     }
 
+    /// The files its steps make on the way, by the names they have in
+    /// braces, the media's own left out.
+    pub fn makes(&self) -> Vec<String> {
+        let mut made: Vec<String> = self
+            .steps
+            .iter()
+            .flat_map(|step| match step {
+                Step::Run { arguments, .. } => arguments
+                    .iter()
+                    .flat_map(|argument| stands_for(argument))
+                    .collect(),
+                Step::Render { to, .. } => vec![to.clone()],
+                Step::Generate(ask) => vec![ask.out.clone()],
+            })
+            .filter(|name| name != OUT)
+            .collect();
+        made.sort_unstable();
+        made.dedup();
+        made
+    }
+
     /// The recipe with no comments and no spare space, which is what a
     /// take is held to: a comment changed is not the recipe changed.
     pub fn essence(text: &str) -> String {
@@ -339,6 +360,11 @@ pub struct Plan {
     pub steps: Vec<String>,
     /// The steps, a line each.
     pub command: String,
+    /// What is worth knowing before it is run, where a model has said what
+    /// it takes and the recipe asks it for something else: a guide drawn at
+    /// another size, a shot longer than it makes, a file it does not read.
+    /// None of these stops a making.
+    pub notes: Vec<String>,
     /// The media made, and its recipe as the document names it.
     media: String,
     name: String,
@@ -443,11 +469,25 @@ pub fn plan(
             )));
         }
     }
+    let made = recipe.makes();
     for file in recipe.reads() {
         let inside = within(&folder, file, "file the recipe needs")?;
         if !directory.join(&inside).is_file() {
+            // The two ways a file that is there is named so that it is not found.
+            let why = if made.iter().any(|name| name == file) {
+                format!(
+                    ": `{file}` is a file a step makes, which a later step names in braces, `{{{file}}}`"
+                )
+            } else if stored(&inside) != file {
+                format!(
+                    ": it names `{file}`, and a file is named from the recipe's own folder, `{}`",
+                    stored(&folder)
+                )
+            } else {
+                String::new()
+            };
             return Err(EngineError::msg(format!(
-                "the recipe needs `{}`, which is not there",
+                "the recipe needs `{}`, which is not there{why}",
                 stored(&inside)
             )));
         }
@@ -515,10 +555,129 @@ pub fn plan(
         stored: place.stored(take),
         command: steps.join("\n"),
         steps,
+        notes: notes(project, &recipe, models),
         media: id.to_owned(),
         name,
         text,
     })
+}
+
+/// A number as a line writes it: whole where it is, else to four places,
+/// which holds 81 frames at 16 a second, 5.0625 s, as it is.
+fn plain(number: f64) -> String {
+    let text = format!("{number:.4}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// What `recipe` asks of its models that they have said they do not take,
+/// each as a line for whoever is about to make it. A model that has not
+/// said what it takes ([`model::Takes`]) is asked nothing of here.
+fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec<String> {
+    let mut notes = Vec::new();
+    for step in &recipe.steps {
+        let Step::Generate(ask) = step else {
+            continue;
+        };
+        let Some(takes) = models.takes(&ask.model) else {
+            continue;
+        };
+        let model = &ask.model;
+        // A guide Kerf draws, at another size or rate than the model reads it.
+        let guide = ask.guide.as_ref().and_then(|guide| match guide {
+            Source::Made(name) => recipe.steps.iter().find_map(|step| match step {
+                Step::Render {
+                    sequence,
+                    to,
+                    size,
+                    rate,
+                } if to == name => Some((sequence, to, size, rate)),
+                _ => None,
+            }),
+            Source::File(_) => None,
+        });
+        if let Some((sequence, to, size, rate)) = guide {
+            let other_size = takes.size.is_some_and(|wanted| *size != Some(wanted));
+            let other_rate = takes
+                .rate
+                .is_some_and(|wanted| rate.is_none_or(|rate| (rate.fps() - wanted).abs() > 1e-3));
+            if other_size || other_rate {
+                let mut line = format!("render {sequence} {{{to}}}");
+                let mut what = Vec::new();
+                if let Some((width, height)) = takes.size {
+                    line.push_str(&format!(" size={width}x{height}"));
+                    what.push(format!("{width}x{height}"));
+                }
+                if let Some(wanted) = takes.rate {
+                    line.push_str(&format!(" rate={}", plain(wanted)));
+                    what.push(format!("{} frames a second", plain(wanted)));
+                }
+                notes.push(format!(
+                    "the guide `{{{to}}}` is not drawn as model `{model}` reads it, {}: `{line}` draws only what it reads, in less time",
+                    what.join(" at ")
+                ));
+            }
+            // A sequence of another shape than the picture the model makes loses its edges.
+            let drawn = size.or(takes.size);
+            if let (Some((width, height)), Some(sequence)) = (drawn, project.sequence(sequence)) {
+                let (own, wanted) = (
+                    f64::from(sequence.width) / f64::from(sequence.height.max(1)),
+                    f64::from(width) / f64::from(height),
+                );
+                if (own / wanted - 1.0).abs() > 0.01 {
+                    notes.push(format!(
+                        "sequence `{}` is {}x{}, another shape than the {width}x{height} of its guide: the guide fills that size, and the {} of the sequence are cut off",
+                        sequence.id,
+                        sequence.width,
+                        sequence.height,
+                        if own > wanted { "sides" } else { "top and bottom" }
+                    ));
+                }
+            }
+        }
+        if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds) {
+            if asked > most + 1e-6 {
+                notes.push(format!(
+                    "`seconds={}` is more than model `{model}` makes at once, {} s",
+                    plain(asked),
+                    plain(most)
+                ));
+            }
+        }
+        if let Some(reads) = &takes.reads {
+            let given = [
+                ("guide", ask.guide.is_some()),
+                ("first", ask.first.is_some()),
+                ("last", ask.last.is_some()),
+                ("ref", !ask.references.is_empty()),
+            ];
+            for (name, _) in given
+                .iter()
+                .filter(|(name, given)| *given && !reads.iter().any(|read| read == name))
+            {
+                notes.push(format!(
+                    "model `{model}` has no use for `{name}=`: {}",
+                    if reads.is_empty() {
+                        "it takes a prompt alone".to_owned()
+                    } else {
+                        format!("of a line's files it reads {}", reads.join(", "))
+                    }
+                ));
+            }
+        }
+        if !takes.more.is_empty() {
+            for name in ask
+                .more
+                .keys()
+                .filter(|name| !takes.more.contains_key(*name))
+            {
+                notes.push(format!(
+                    "model `{model}` has nothing named `{name}` to set: beside what every model is asked, a line sets its {}",
+                    takes.more.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+    }
+    notes
 }
 
 /// What a making made.

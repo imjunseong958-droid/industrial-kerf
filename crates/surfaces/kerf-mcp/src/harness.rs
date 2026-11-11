@@ -66,7 +66,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, and how an edit has the media be another of them; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
@@ -907,23 +907,63 @@ impl KerfMcpRouter {
     }
 
     /// `look` with no arguments adds this: the media that name a recipe and want making, each with
-    /// why and who can. An agent's tools run no recipe.
+    /// why and who can. An agent's tools run no recipe. What would refuse the making is said here
+    /// (`cannot`), read as a person's plan is and with nothing run, and so is what a model has said
+    /// it does not take (`notes`): a recipe is mended before anyone is asked to make it.
     fn to_make(&self, project: &Project) -> Vec<Value> {
+        let models = kerf_engine::recipe::model::Models::load();
         project
             .media
             .iter()
             .filter_map(|media| {
                 let recipe = media.recipe.as_deref()?;
                 let why = kerf_engine::recipe::unmade(project, &self.dir, media)?;
-                Some(json!({
+                let mut entry = json!({
                     "media": media.id.as_str(),
                     "recipe": recipe,
                     "why": why.reason(),
-                    "make": format!(
-                        "a person runs `kerf make {}`, or Make from Recipe… in the editor's bin; ask them to",
-                        media.id
-                    ),
-                }))
+                });
+                let id = media.id.as_str();
+                let plan = models
+                    .as_ref()
+                    .map_err(ToString::to_string)
+                    .and_then(|models| {
+                        kerf_engine::recipe::plan(project, &self.dir, id, models)
+                            .map_err(|error| error.to_string())
+                    });
+                match plan {
+                    Ok(plan) => {
+                        if !plan.notes.is_empty() {
+                            entry["notes"] = json!(plan.notes);
+                        }
+                        entry["make"] = json!(format!(
+                            "a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin; ask them to"
+                        ));
+                    }
+                    Err(cannot) => {
+                        // Where a person's own models file is, is theirs to be told and not
+                        // an agent's: it is told which models there are.
+                        let cannot = match (cannot.split_once(" is set up: "), &models) {
+                            (Some((model, _)), Ok(models)) if cannot.starts_with("no model `") => {
+                                let have: Vec<&str> = models.names().collect();
+                                format!(
+                                    "{model} is set up: {}; a person sets one up in their own models file",
+                                    if have.is_empty() {
+                                        "none is".to_owned()
+                                    } else {
+                                        format!("the models set up are {}", have.join(", "))
+                                    }
+                                )
+                            }
+                            _ => cannot,
+                        };
+                        entry["cannot"] = json!(cannot);
+                        entry["make"] = json!(format!(
+                            "it cannot be made as it is: mend what `cannot` says first; then a person runs `kerf make {id}`"
+                        ));
+                    }
+                }
+                Some(entry)
             })
             .collect()
     }
@@ -931,7 +971,7 @@ impl KerfMcpRouter {
     /// `look` with `media` adds this for a media that names a recipe: the takes its recipe has
     /// made, which one the media is, and what has changed since each was made.
     fn takes(&self, project: &Project, media: &kerf_model::Media) -> Option<Value> {
-        media.recipe.as_ref()?;
+        let recipe = media.recipe.as_ref()?;
         let takes = kerf_engine::recipe::takes(project, &self.dir, media).ok()?;
         Some(json!({
             "made": takes
@@ -945,14 +985,46 @@ impl KerfMcpRouter {
                     if !take.changed.is_empty() {
                         entry["changedSince"] = json!(take.changed);
                     }
+                    // The whole line, since a take need not be as long as the one before it.
+                    if !take.chosen {
+                        if let Ok(fields) = self.media_fields(&take.stored) {
+                            entry["use"] = json!(format!(
+                                "media replace {} {fields} recipe={recipe:?}",
+                                media.id
+                            ));
+                        }
+                    }
                     entry
                 })
                 .collect::<Vec<_>>(),
             "choose": format!(
-                "`media replace {} path=\"<a take's path>\"` in an edit has the media be that take; a person makes a new one with `kerf make {}`",
-                media.id, media.id
+                "a take's `use` is the line that, in an edit, has the media be that take; a person makes a new one with `kerf make {}`",
+                media.id
             ),
         }))
+    }
+
+    /// What a media line says of the file `file` of the project after its id: its path, rate,
+    /// length in whole frames, and streams, as an import reads a file.
+    fn media_fields(&self, file: &str) -> Result<String, McpError> {
+        let path = self.dir.join(file);
+        let info = kerf_engine::info(&path.to_string_lossy())
+            .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
+        let fps = info.fps.unwrap_or(30.0);
+        let seconds = info.duration.unwrap_or(0.0);
+        // Whole frames and stereo at 48 kHz, as an import reads a file.
+        let mut fields = format!(
+            "path={file:?} rate={} dur={}f",
+            fps_text(fps),
+            (seconds * fps).floor() as i64
+        );
+        if let (Some(width), Some(height)) = (info.width, info.height) {
+            fields.push_str(&format!(" video={width}x{height}"));
+        }
+        if info.has_audio == Some(true) {
+            fields.push_str(" audio=2ch@48000");
+        }
+        Ok(fields)
     }
 
     /// What a file holds, and the `media add` line that puts it in the document.
@@ -964,6 +1036,7 @@ impl KerfMcpRouter {
                 format!("no file `{file}` in the project's folder"),
             ));
         }
+        let fields = self.media_fields(file)?;
         let info = kerf_engine::info(&path.to_string_lossy())
             .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
         let fps = info.fps.unwrap_or(30.0);
@@ -982,18 +1055,7 @@ impl KerfMcpRouter {
             })
             .collect();
         let seconds = info.duration.unwrap_or(0.0);
-        // Whole frames and stereo at 48 kHz, as an import reads a file.
-        let mut line = format!(
-            "media add {id} path={file:?} rate={} dur={}f",
-            fps_text(fps),
-            (seconds * fps).floor() as i64
-        );
-        if let (Some(width), Some(height)) = (info.width, info.height) {
-            line.push_str(&format!(" video={width}x{height}"));
-        }
-        if info.has_audio == Some(true) {
-            line.push_str(" audio=2ch@48000");
-        }
+        let line = format!("media add {id} {fields}");
         Ok(json!({
             "file": file,
             "seconds": seconds,
@@ -1445,6 +1507,13 @@ impl KerfMcpRouter {
                 } else {
                     result["onsets"] = json!(onsets);
                 }
+            }
+            // A media a recipe makes has no file until it is made, which is no fault of its line.
+            Err(_) if media.recipe.is_some() && !path.is_file() => {
+                result["analysis"] = json!(format!(
+                    "unavailable: `{}` is not made yet; a person makes it from its recipe with `kerf make {}`",
+                    media.path, media.id
+                ));
             }
             Err(error) => result["analysis"] = json!(format!("unavailable: {error}")),
         }
@@ -2577,13 +2646,16 @@ impl KerfMcpRouter {
         let mut before_program = before.clone();
         kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
         let check = crate::qc::check(&after_program, &self.dir).to_json();
+        // What a person would be asked to make once this is accepted, with what would refuse
+        // it: a recipe the edit names is mended here, not after someone has tried to run it.
+        let to_make = self.to_make(&applied.project);
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
                 .preview(&sequence, from, to, &before_program, &after_program)
                 .unwrap_or_else(|error| json!({"unavailable": error.message})),
         };
-        Ok(json!({
+        let mut result = json!({
             "proposal": proposal_id,
             "version": version,
             "supersedes": supersedes,
@@ -2594,7 +2666,11 @@ impl KerfMcpRouter {
             "diff": document_diff,
             "check": check,
             "preview": preview,
-        }))
+        });
+        if !to_make.is_empty() {
+            result["toMake"] = json!(to_make);
+        }
+        Ok(result)
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
