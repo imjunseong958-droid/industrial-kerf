@@ -226,6 +226,15 @@ pub struct RenderOptions {
     /// HDR10's content light levels when already known; otherwise they are measured from the frames
     /// before encoding.
     pub content_light: Option<ContentLight>,
+    /// The size of the file's picture when it is not the sequence's, as a guide drawn at a
+    /// model's size is. The picture fills it, keeping its shape, and what is over is cut off
+    /// evenly from both sides; it is drawn at that size, not drawn whole and brought down.
+    pub size: Option<(u32, u32)>,
+    /// The rate frames are drawn at when it is not the sequence's: each is the sequence at
+    /// that frame's time, so the file plays as long as the sequence does.
+    pub rate: Option<Rate>,
+    /// Whether the file carries the sequence's sound. A guide a model follows carries none.
+    pub sound: bool,
 }
 
 /// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
@@ -336,6 +345,9 @@ impl Default for RenderOptions {
             preset: RenderPreset::Standard,
             mastering: MasteringDisplay::P3_1000,
             content_light: None,
+            size: None,
+            rate: None,
+            sound: true,
         }
     }
 }
@@ -676,9 +688,40 @@ struct CompositedRender {
     deep: bool,
 }
 
+/// The share of a `canvas` to draw so that the picture fills `size`: the larger of the two
+/// sides' shares, within what the compositor draws. What is over on the other side is cut off,
+/// and a size larger than the canvas is scaled up to.
+fn filling(canvas: (u32, u32), size: (u32, u32)) -> f64 {
+    let share = |wanted: u32, have: u32| f64::from(wanted) / f64::from(have.max(1));
+    share(size.0, canvas.0)
+        .max(share(size.1, canvas.1))
+        .clamp(1.0 / 16.0, 1.0)
+}
+
+/// How long `[from, to)` of a sequence is (all of it when no range), and its rate, read
+/// without its sound.
+fn picture_span(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+) -> Result<(Time, Rate)> {
+    let top = kerf_core::program::program_sequence(project, sequence)?;
+    let (from, to) = range.unwrap_or((Time::ZERO, top.duration()));
+    if from.is_negative() || to <= from {
+        return Err(EngineError::msg(if range.is_some() {
+            "a render range needs 0 <= from < to".to_owned()
+        } else {
+            format!("sequence `{}` is empty", top.id)
+        }));
+    }
+    Ok((to - from, top.rate))
+}
+
 /// The frames of `[from, to)` of a sequence (all of it when no range) and
-/// the FFmpeg command encoding them with the sound. A draft is drawn 360
-/// pixels tall at 15 fps.
+/// the FFmpeg command encoding them, with the sound unless the options
+/// leave it out. A draft is drawn 360 pixels tall at 15 fps; a size and a
+/// rate the options name are drawn in place of the sequence's, or a
+/// draft's.
 fn composited_render(
     project: &kerf_model::Project,
     sequence: Option<&str>,
@@ -687,28 +730,36 @@ fn composited_render(
     canvas: (u32, u32),
 ) -> Result<CompositedRender> {
     // The graph mixes the sound; the picture comes from stdin.
-    let heard = crate::ramps::with_sound(project);
-    let sound = compile_program(
-        &heard,
-        kerf_model::Catalog::builtin(),
-        &ProgramOptions {
-            sequence: sequence.map(str::to_owned),
-            range,
-        },
-    )?;
-    let from = range.map_or(Time::ZERO, |(from, _)| from);
-    let (rate, scale) = if opts.draft {
-        let tall = f64::from(canvas.1.max(1));
-        (
-            Rate::new(15, 1).expect("15 fps is a rate"),
-            (360.0 / tall).min(1.0),
-        )
+    let (mut args, duration, own_rate) = if opts.sound {
+        let heard = crate::ramps::with_sound(project);
+        let sound = compile_program(
+            &heard,
+            kerf_model::Catalog::builtin(),
+            &ProgramOptions {
+                sequence: sequence.map(str::to_owned),
+                range,
+            },
+        )?;
+        let args: Vec<String> = sound.argv.iter().skip(1).cloned().collect();
+        (args, sound.duration, sound.rate)
     } else {
-        (sound.rate, 1.0)
+        let (duration, rate) = picture_span(project, sequence, range)?;
+        (vec!["-y".to_owned()], duration, rate)
+    };
+    let from = range.map_or(Time::ZERO, |(from, _)| from);
+    let rate = match opts.rate {
+        Some(rate) => rate,
+        None if opts.draft => Rate::new(15, 1).expect("15 fps is a rate"),
+        None => own_rate,
+    };
+    let scale = match opts.size {
+        Some(size) => filling(canvas, size),
+        None if opts.draft => (360.0 / f64::from(canvas.1.max(1))).min(1.0),
+        None => 1.0,
     };
     let frame = rate.frame_duration().flicks();
     let ceil = |time: Time| -(-time.flicks()).div_euclid(frame);
-    let count = ceil(sound.duration).max(1);
+    let count = ceil(duration).max(1);
     let first = ceil(from);
     let times = (first..first + count)
         .map(|index| rate.time_of(index))
@@ -722,7 +773,6 @@ fn composited_render(
     let encoding = encoding(opts, color)?;
     // A deeper file is worth deeper frames: 8 bits would only be stretched to fill it.
     let deep = encoding.pix_fmt != "yuv420p";
-    let mut args: Vec<String> = sound.argv.iter().skip(1).cloned().collect();
     let picture = args.iter().filter(|arg| *arg == "-i").count();
     let at = args
         .iter()
@@ -744,13 +794,26 @@ fn composited_render(
         ],
     );
     args.extend(["-map".to_owned(), format!("{picture}:v")]);
+    if !opts.sound {
+        args.push("-an".to_owned());
+    }
     args.extend(encoding.video);
     let mut filters = Vec::new();
-    if size.0 % 2 == 1 || size.1 % 2 == 1 {
+    // What was drawn fills the size asked for; what is over is cut off evenly.
+    let written = match opts.size.filter(|wanted| *wanted != size) {
+        Some((width, height)) => {
+            filters.push(format!(
+                "scale={width}:{height}:force_original_aspect_ratio=increase:flags=bicubic,crop={width}:{height},setsar=1"
+            ));
+            (width, height)
+        }
+        None => size,
+    };
+    if written.0 % 2 == 1 || written.1 % 2 == 1 {
         // 4:2:0 needs even sides.
-        filters.push("scale=trunc(iw/2)*2:trunc(ih/2)*2");
+        filters.push("scale=trunc(iw/2)*2:trunc(ih/2)*2".to_owned());
     }
-    filters.extend(encoding.convert);
+    filters.extend(encoding.convert.map(str::to_owned));
     if !filters.is_empty() {
         args.extend(["-vf".to_owned(), filters.join(",")]);
     }
@@ -760,7 +823,7 @@ fn composited_render(
         "-r".to_owned(),
         crate::program::rate_arg(rate),
         "-t".to_owned(),
-        crate::program::secs(sound.duration),
+        crate::program::secs(duration),
         opts.output.clone(),
     ]);
     Ok(CompositedRender {
@@ -1176,6 +1239,118 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| pair[0] == "-t" && pair[1] == "3"));
+    }
+
+    #[test]
+    fn a_guide_is_drawn_at_the_size_and_rate_asked_with_no_sound() {
+        let guide = |size, rate| RenderOptions {
+            output: "guide.mp4".into(),
+            force_software: true,
+            size,
+            rate,
+            sound: false,
+            ..RenderOptions::default()
+        };
+        let sixteen = Rate::new(16, 1).expect("a rate");
+        // A wider picture than the one asked for fills its height, and its sides are cut off.
+        let wide = composited_render(
+            &project(),
+            None,
+            None,
+            &guide(Some((832, 480)), Some(sixteen)),
+            (1920, 1080),
+        )
+        .expect("render");
+        assert_eq!(wide.times.len(), 160, "ten seconds at 16 a second");
+        assert_eq!(wide.times[1], sixteen.time_of(1));
+        assert_eq!(wide.size, (853, 480));
+        assert!((wide.scale - 480.0 / 1080.0).abs() < 1e-12);
+        let args = &wide.args;
+        assert_eq!(
+            flag(args, "-vf"),
+            Some("scale=832:480:force_original_aspect_ratio=increase:flags=bicubic,crop=832:480,setsar=1")
+        );
+        assert_eq!(flag(args, "-s"), Some("853x480"));
+        assert_eq!(flag(args, "-framerate"), Some("16/1"));
+        assert_eq!(flag(args, "-r"), Some("16/1"));
+        assert_eq!(flag(args, "-t"), Some("10"));
+        assert_eq!(flag(args, "-map"), Some("0:v"));
+        // No sound is read, mixed, or written.
+        assert!(args.iter().any(|arg| arg == "-an"));
+        assert!(!args.iter().any(|arg| arg == "-filter_complex"));
+        assert_eq!(args.iter().filter(|arg| *arg == "-i").count(), 1);
+        assert_eq!(args.last().map(String::as_str), Some("guide.mp4"));
+
+        // A taller one fills its width, and its top and bottom are cut off.
+        let tall = composited_render(
+            &project(),
+            None,
+            None,
+            &guide(Some((832, 480)), None),
+            (1080, 1920),
+        )
+        .expect("render");
+        assert_eq!(tall.size, (832, 1479));
+        assert_eq!(tall.times.len(), 240, "the sequence's own rate");
+        // The same shape is drawn at the size itself, with nothing to cut.
+        let same = composited_render(
+            &project(),
+            None,
+            None,
+            &guide(Some((1280, 720)), None),
+            (1920, 1080),
+        )
+        .expect("render");
+        assert_eq!(same.size, (1280, 720));
+        assert_eq!(flag(&same.args, "-vf"), None);
+        // A size larger than the sequence is the sequence's picture, scaled up.
+        let large = composited_render(
+            &project(),
+            None,
+            None,
+            &guide(Some((1920, 1080)), None),
+            (160, 120),
+        )
+        .expect("render");
+        assert_eq!((large.size, large.scale), ((160, 120), 1.0));
+        assert!(
+            flag(&large.args, "-vf").is_some_and(|filter| filter.starts_with("scale=1920:1080:"))
+        );
+        // A rate alone keeps the size, and the file still has no sound.
+        let slower = composited_render(
+            &project(),
+            None,
+            None,
+            &guide(None, Some(sixteen)),
+            (160, 120),
+        )
+        .expect("render");
+        assert_eq!((slower.size, slower.times.len()), ((160, 120), 160));
+        assert_eq!(flag(&slower.args, "-vf"), None);
+    }
+
+    #[test]
+    fn a_render_without_sound_still_says_what_cannot_be_rendered() {
+        let silent = RenderOptions {
+            output: "guide.mp4".into(),
+            sound: false,
+            ..RenderOptions::default()
+        };
+        let none = composited_render(&project(), Some("s9"), None, &silent, (160, 120))
+            .expect_err("no such sequence");
+        assert!(none.to_string().contains("no sequence `s9`"), "{none}");
+        let empty = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"render\"\nsequence s1 rate=24 size=160x120 audio=48000\n\x20 track V1 video\n",
+            kerf_model::Catalog::builtin(),
+        )
+        .expect("project")
+        .project;
+        let nothing =
+            composited_render(&empty, None, None, &silent, (160, 120)).expect_err("nothing in it");
+        assert!(
+            nothing.to_string().contains("sequence `s1` is empty"),
+            "{nothing}"
+        );
     }
 
     /// The value of the last `name` flag: output options follow the inputs'.

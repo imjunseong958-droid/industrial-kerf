@@ -153,7 +153,8 @@ text file with the steps that make the file, and `kerf make` runs them
 new renderer needs no code here: a recipe that runs it.
 
 A recipe's steps are `run`, a program; `render`, a sequence of the project
-drawn by the compositor, which is how Kerf's own clips in depth are a guide;
+drawn by the compositor, which is how Kerf's own clips in depth are a guide,
+at the sequence's size and rate or at the ones the step names, with no sound;
 and `generate`, a model asked for the file. `generate` says what is wanted in
 words any model takes (a prompt, a guide, first and last frames, references,
 length, size, seed), and Kerf writes that as a request, a JSON file, for the
@@ -198,17 +199,22 @@ gave 65 frames at 832x480 and 16 a second. On four cores with no GPU the guide
 took 87 s to draw, and the model, on its server, 79 s: there the guide was
 over half of a first making. What that showed of the guide:
 
-- *It is drawn larger and oftener than the model reads it.* A `render` step
-  names no size and no rate, so the guide is the sequence's, and the model's
-  program brings it down. The same sequence at 832x480 and 16 frames a second
-  draws in 11 s, an eighth of the time. A `render` that takes a size and a rate
-  is not built.
+- *It was drawn larger and oftener than the model reads it.* A `render` step
+  named no size and no rate, so the guide was the sequence's, and the model's
+  program brought it down. A step now names them
+  (`render s2 {guide.mp4} size=832x480 rate=16`) and the compositor draws the
+  frames at that size, one for each frame of that rate
+  (`render.rs`, `RenderOptions::size` and `rate`); a picture of another shape
+  fills the size with what is over cut off evenly, as the model's program fits
+  one. A like guide measured since on four cores with no GPU, 96 frames at
+  1920x1080, took 54.5 s as it is and 7.8 s at 832x480 and 16 a second.
 - *Drawn again, it costs little.* A second making with the guide unchanged had
   its frames from the disk (Kept frames) and the guide in a few seconds. A
   `run` step, such as a 3D renderer's, has nothing of the kind and runs whole
   for every take.
-- *It carries sound it has not got.* The guide's file has a silent stereo
-  track, mixed and encoded with it.
+- *It carried sound it had not got.* The guide's file had a silent stereo
+  track, mixed and encoded with it. What a `render` step draws now has no
+  sound track, and its sound is not compiled.
 - *From a terminal it is written once.* `project.kerf` edited by hand once
   kerfd has kept its state is not what `kerf make` reads, and `kerf` has no
   command that loads it, as the editor does. So a guide tried without the
