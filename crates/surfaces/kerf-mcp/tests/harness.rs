@@ -2677,7 +2677,7 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
         "    clip c1 media=m1 at=00:00:00:00 dur=00:00:02:00
       fx color.basic@1 exposure=0.2
     clip c2 media=m1 src=00:00:02:00 at=00:00:02:00 dur=00:00:02:00
-      fx stylize.mosaic@2
+      fx noise.median@2
 ",
     ) else {
         return;
@@ -2698,7 +2698,7 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
         assert_eq!(rows[1]["draws"], "cpu", "{}", rows[1]);
         let because = rows[1]["because"].to_string();
         assert!(
-            because.contains("c2") && because.contains("stylize.mosaic"),
+            because.contains("c2") && because.contains("noise.median"),
             "{because}"
         );
     } else {

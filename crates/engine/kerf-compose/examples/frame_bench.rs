@@ -114,6 +114,23 @@ const SCENES: &[(&str, &str)] = &[
     ("add grain", "      fx noise.addgrain@1\n"),
     ("leaks", "      fx light.leaks@1\n"),
     ("mosaic", "      fx stylize.mosaic@2 horizontal=60 vertical=34\n"),
+    (
+        "mosaic soft",
+        "      fx stylize.mosaic@2 horizontal=60 vertical=34 softness=50\n",
+    ),
+    // A cutout and its shadow, as a title or a picture in a picture has one.
+    (
+        "drop shadow",
+        "      set scale=0.7\n      mask k1 ellipse=0.5,0.5,0.4,0.45\n      fx perspective.dropshadow@2 distance=40 softness=30 opacity=70\n",
+    ),
+    (
+        "rounded crop",
+        "      fx utility.roundedcrop@1 left=8 top=5 right=8 bottom=5 radius=120 border=8\n",
+    ),
+    (
+        "spacer",
+        "      fx transform.spacer@1 left=120 radius=60 fill=true color=#203040\n",
+    ),
     ("bokeh", "      fx blur.bokeh@1\n"),
     // The widest iris that is gathered at full size, and the first gathered at half.
     ("bokeh 12", "      fx blur.bokeh@1 amount=12\n"),
