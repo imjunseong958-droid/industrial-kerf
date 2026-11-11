@@ -169,15 +169,19 @@ private slots:
         QVERIFY(!wiring->appMenuButton()->isVisible());
         const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
         QCOMPARE(inBar(window.m_sidebarButton).left(), tokens::layout::sidebar + 12);
-        // With it away, the bar's ⋯ button opens the same menu.
+        // With it away, the bar's ⋯ button opens the same menu. The sidebar's
+        // choice is kept, so it is put back whatever happens below.
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("layout")); });
         window.m_sidebarButton->click();
         QCoreApplication::processEvents();
         QCOMPARE(wiring->sidebarEdge(), 0);
         QVERIFY(wiring->appMenuButton()->isVisible());
         QCOMPARE(wiring->appMenuButton()->size(), QSize(28, 28));
-        QCOMPARE(inBar(window.m_sidebarButton).left(), ToolbarWiring::firstControlX(0, true));
+        // The first control starts where the window buttons leave it: 16 in
+        // without them, past them on macOS.
+        QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
+        QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(0, true));
         window.m_sidebarButton->click();
-        QSettings().remove(QStringLiteral("layout"));
         // The room before the first control: the window buttons', or the sidebar's.
         QCOMPARE(ToolbarWiring::leadingRoom(16, 0), 0);
         QCOMPARE(ToolbarWiring::leadingRoom(84, 0), 64);
