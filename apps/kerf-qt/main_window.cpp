@@ -79,6 +79,7 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -369,6 +370,27 @@ bool MainWindow::usesClaudeCode() const {
     return m_claudeCodeRadio && m_claudeCodeRadio->isChecked();
 }
 
+bool MainWindow::cloudSignedIn() const {
+    return !m_cloudAccount.value(QStringLiteral("email")).toString().isEmpty() && m_cloudAccess != QStringLiteral("signedOut") &&
+           !m_cloudAccess.isEmpty() && m_cloudAccess != QStringLiteral("unavailable");
+}
+
+void MainWindow::updateAccountRow() {
+    if (!m_sidebar) return;
+    // The account when there is one; else what chat runs on, and the way in.
+    const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
+    if (cloudSignedIn()) {
+        const QString plan = m_cloudAccount.value(QStringLiteral("plan")).toString();
+        m_sidebar->setAccount(email, plan.isEmpty() ? QStringLiteral("Kerf Cloud") : QStringLiteral("Kerf Cloud · %1 plan").arg(plan));
+    } else if (usesClaudeCode()) {
+        m_sidebar->setAccount(QStringLiteral("Claude Code"), QStringLiteral("Your Claude plan"));
+    } else if (usesCloud()) {
+        m_sidebar->setAccount(QStringLiteral("Kerf Cloud"), QStringLiteral("Not signed in"));
+    } else {
+        m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : m_agentModel);
+    }
+}
+
 bool MainWindow::sendCloud(const QJsonObject &command) {
     if (!m_bridge) {
         m_lastCommand = command;
@@ -390,15 +412,7 @@ QString MainWindow::aiAccess() const {
 
 void MainWindow::updateCloudStatus() {
     if (!m_cloudStatus) return;
-    if (usesClaudeCode()) {
-        // Nothing of Kerf Cloud's applies: Claude Code keeps its own sign-in.
-        m_cloudStatus->setText(QStringLiteral("Chat runs your installed Claude Code with only this project's Kerf tools, on the Claude plan it is signed in to. Sign in once by running claude in a terminal."));
-        m_cloudToken->hide();
-        m_cloudSignIn->hide();
-        m_cloudSignOut->hide();
-        updateCommandStates();
-        return;
-    }
+    // The account's own page says where Kerf Cloud stands, whatever chat runs on.
     const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
     const bool signedIn = !email.isEmpty() && m_cloudAccess != QStringLiteral("signedOut");
     QString text;
@@ -415,11 +429,17 @@ void MainWindow::updateCloudStatus() {
         if (m_cloudAccess == QStringLiteral("outOfCredits")) text += QStringLiteral("\nYou've used this period's requests.");
     }
     if (!m_cloudMessage.isEmpty()) text += QStringLiteral("\n") + m_cloudMessage;
-    m_cloudStatus->setText(text);
+    m_accountStatus->setText(text);
     const bool available = !m_cloudAccess.isEmpty() && m_cloudAccess != QStringLiteral("unavailable");
     m_cloudToken->setVisible(available && !signedIn);
     m_cloudSignIn->setVisible(available && !signedIn);
     m_cloudSignOut->setVisible(available && signedIn);
+    // Under the choice of connection: what the chosen one needs.
+    m_cloudStatus->setText(usesClaudeCode()
+        ? QStringLiteral("Chat runs your installed Claude Code with only this project's Kerf tools, on the Claude plan it is signed in to. Sign in once by running claude in a terminal.")
+        : usesCloud() ? text
+                      : QStringLiteral("Chat uses the key and model on the Advanced page."));
+    updateAccountRow();
     updateCommandStates();
 }
 
@@ -571,7 +591,6 @@ void MainWindow::saveAgentSettings() {
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
-    if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
     if (object == m_errorBanner && (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)) layoutProjectTitle();
     // The title stays centred as the toolbar, or a group beside it, changes.
     if ((object == m_toolbar || object == m_formatBank) &&
@@ -581,7 +600,9 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     // Dragging the toolbar's empty stretches (or its title, which takes no
     // clicks) moves the window, and a double click zooms it, as a title
     // bar's do. The press is kept so the moves after it come here.
-    if (object == m_toolbar && windowHandle()) {
+    const bool titleBar = object == m_toolbar || (m_projectTitle && (object == m_projectTitle || object == m_projectSubtitle ||
+                                                                      object == m_projectTitle->parentWidget()));
+    if (titleBar && windowHandle()) {
         if (event->type() == QEvent::MouseButtonPress) return static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton;
         if (event->type() == QEvent::MouseMove && (static_cast<QMouseEvent *>(event)->buttons() & Qt::LeftButton)) {
             windowHandle()->startSystemMove();
@@ -691,48 +712,113 @@ void MainWindow::buildUi() {
 }
 
 void MainWindow::buildPreferences() {
-    // Agent settings live in the Settings dialog, out of the editing surface.
-    m_preferences = new QDialog(this);
-    m_preferences->setObjectName(QStringLiteral("preferencesDialog"));
-    m_preferences->setWindowTitle(QStringLiteral("Settings"));
-    // A macOS Settings window: sized to what it shows, closed with its
-    // close button or Command-W, with no Close button of its own.
-    auto *closeShortcut = new QShortcut(QKeySequence::Close, m_preferences);
-    connect(closeShortcut, &QShortcut::activated, m_preferences, &QDialog::hide);
-    auto *settingsTabLayout = new QVBoxLayout(m_preferences);
-    settingsTabLayout->setContentsMargins(20, 12, 20, 20);
-    auto *settingsScroll = new QScrollArea;
-    settingsScroll->setWidgetResizable(true);
-    settingsScroll->setFrameShape(QFrame::NoFrame);
-    auto *settingsContent = new QWidget;
-    auto *settingsLayout = new QVBoxLayout(settingsContent);
-    settingsLayout->setContentsMargins(0, 0, 2, 0);
-    settingsLayout->setSpacing(10);
-    // Kerf Cloud, the hosted model, comes first. Keys of one's own and MCP
-    // live under Advanced.
-    auto *connectionGroup = new QGroupBox(QStringLiteral("AI"));
-    connectionGroup->setObjectName(QStringLiteral("aiConnection"));
-    auto *cloudLayout = new QVBoxLayout(connectionGroup);
-    cloudLayout->setContentsMargins(10, 10, 10, 10);
-    cloudLayout->setSpacing(6);
-    m_cloudRadio = new QRadioButton(QStringLiteral("Kerf Cloud"));
-    m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
-    m_ownKeyRadio = new QRadioButton(QStringLiteral("My own API key (set up under Advanced)"));
-    m_ownKeyRadio->setObjectName(QStringLiteral("agentConnectionOwnKey"));
-    m_claudeCodeRadio = new QRadioButton(QStringLiteral("Claude Code (signed in to your Claude account)"));
-    m_claudeCodeRadio->setObjectName(QStringLiteral("agentConnectionClaudeCode"));
-    m_claudeCodeRadio->setToolTip(QStringLiteral("Runs your installed Claude Code with only this project's Kerf tools. It uses your Claude plan; Kerf never sees its sign-in. Sign in once by running claude in a terminal."));
-    auto *connectionChoice = new QButtonGroup(connectionGroup);
-    connectionChoice->addButton(m_cloudRadio);
-    connectionChoice->addButton(m_ownKeyRadio);
-    connectionChoice->addButton(m_claudeCodeRadio);
-    cloudLayout->addWidget(m_cloudRadio);
-    cloudLayout->addWidget(m_ownKeyRadio);
-    cloudLayout->addWidget(m_claudeCodeRadio);
-    m_cloudStatus = new QLabel;
-    m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
-    m_cloudStatus->setWordWrap(true);
-    cloudLayout->addWidget(m_cloudStatus);
+    // Settings is a page in the room, over the conversation and the panel, not
+    // a window over the window: Back at its top, its pages named down its
+    // side, one of them showing.
+    m_preferences = new QWidget;
+    m_preferences->setObjectName(QStringLiteral("settingsPage"));
+    m_preferences->setAccessibleName(QStringLiteral("Settings"));
+    m_preferences->setAttribute(Qt::WA_StyledBackground);
+    m_preferences->setStyleSheet(QStringLiteral(
+        "QWidget#settingsPage { background: %1; }"
+        "QFrame#settingsCard { background: %2; border: 1px solid %3; border-radius: 12px; }"
+        "QLabel#settingsTitle { color: %4; font-size: 20px; font-weight: 500; }"
+        "QLabel#settingsHeading { color: %4; font-size: 13px; font-weight: 500; }")
+            .arg(tokens::color(tokens::chrome).name(), tokens::color(tokens::card).name(),
+                 tokens::color(tokens::line).name(QColor::HexArgb), tokens::color(tokens::ink).name()));
+    auto *pageLayout = new QVBoxLayout(m_preferences);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    pageLayout->setSpacing(0);
+    auto *topRow = new QHBoxLayout;
+    topRow->setContentsMargins(tokens::space::s12, tokens::space::s8, tokens::space::s12, 0);
+    auto *back = new ui::GhostButton(QStringLiteral("Back"));
+    back->setObjectName(QStringLiteral("settingsBack"));
+    back->setIconName(QStringLiteral("g-chevl"));
+    back->setControlHeight(tokens::height::h28);
+    back->setAccessibleName(QStringLiteral("Back to the conversation"));
+    ui::setTip(back, QStringLiteral("Back"), QStringLiteral("Esc"));
+    connect(back, &QAbstractButton::clicked, this, [this] { m_shell->setCovered(false); });
+    topRow->addWidget(back);
+    topRow->addStretch(1);
+    pageLayout->addLayout(topRow);
+
+    m_settingsBody = new QWidget;
+    m_settingsBody->setObjectName(QStringLiteral("settingsBody"));
+    auto *body = new QHBoxLayout(m_settingsBody);
+    body->setContentsMargins(tokens::space::s16 + tokens::space::s8, tokens::space::s16 + tokens::space::s8, tokens::space::s16 + tokens::space::s8, 0);
+    body->setSpacing(40);
+    body->addStretch(1);
+    auto *nav = new QVBoxLayout;
+    nav->setContentsMargins(0, 0, 0, 0);
+    nav->setSpacing(tokens::space::s2);
+    auto *settingsTitle = new QLabel(QStringLiteral("Settings"));
+    settingsTitle->setObjectName(QStringLiteral("settingsTitle"));
+    settingsTitle->setContentsMargins(tokens::space::s8, 0, 0, tokens::space::s12);
+    nav->addWidget(settingsTitle);
+    m_settingsPages = new QStackedWidget;
+    m_settingsPages->setObjectName(QStringLiteral("settingsPages"));
+    // A page: its name in the side's list, and a column that scrolls when it
+    // is taller than the room.
+    const auto addPage = [this, nav](const QString &id, const QString &name) {
+        auto *row = new SidebarRow(QString(), name);
+        row->setObjectName(QStringLiteral("settingsNav.%1").arg(id));
+        row->setFixedWidth(180);
+        nav->addWidget(row);
+        auto *scroll = new QScrollArea;
+        scroll->setObjectName(QStringLiteral("settingsScroll.%1").arg(id));
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: 0; }"));
+        scroll->viewport()->setAutoFillBackground(false);
+        auto *content = new QWidget;
+        content->setAttribute(Qt::WA_TranslucentBackground);
+        auto *column = new QVBoxLayout(content);
+        // Level with the first name in the list.
+        column->setContentsMargins(0, 40, tokens::space::s4, tokens::space::s16 + tokens::space::s8);
+        column->setSpacing(tokens::space::s12);
+        scroll->setWidget(content);
+        const int index = m_settingsPages->addWidget(scroll);
+        m_settingsIds << id;
+        m_settingsNav << row;
+        connect(row, &QAbstractButton::clicked, this, [this, id] { showSettings(id); });
+        row->setCurrent(index == 0);
+        return column;
+    };
+    // A card: what belongs together, on one raised surface.
+    const auto card = [](QVBoxLayout *column) {
+        auto *frame = new QFrame;
+        frame->setObjectName(QStringLiteral("settingsCard"));
+        auto *layout = new QVBoxLayout(frame);
+        layout->setContentsMargins(tokens::space::s16, tokens::space::s12, tokens::space::s16, tokens::space::s12);
+        layout->setSpacing(tokens::space::s8);
+        column->addWidget(frame);
+        return layout;
+    };
+    const auto heading = [](const QString &text) {
+        auto *label = new QLabel(text);
+        label->setObjectName(QStringLiteral("settingsHeading"));
+        return label;
+    };
+    QVBoxLayout *accountPage = addPage(QStringLiteral("account"), QStringLiteral("Account"));
+    QVBoxLayout *aiPage = addPage(QStringLiteral("ai"), QStringLiteral("AI connection"));
+    QVBoxLayout *generalPage = addPage(QStringLiteral("general"), QStringLiteral("General"));
+    QVBoxLayout *advancedPage = addPage(QStringLiteral("advanced"), QStringLiteral("Advanced"));
+    nav->addStretch(1);
+    body->addLayout(nav);
+    m_settingsPages->setMinimumWidth(360);
+    m_settingsPages->setMaximumWidth(560);
+    body->addWidget(m_settingsPages, 100);
+    body->addStretch(1);
+    pageLayout->addWidget(m_settingsBody, 1);
+
+    // Account: who is signed in to Kerf Cloud, and the way in or out.
+    QVBoxLayout *cloudLayout = card(accountPage);
+    cloudLayout->addWidget(heading(QStringLiteral("Kerf Cloud")));
+    m_accountStatus = new QLabel;
+    m_accountStatus->setObjectName(QStringLiteral("accountStatus"));
+    m_accountStatus->setWordWrap(true);
+    cloudLayout->addWidget(m_accountStatus);
     m_cloudToken = new QLineEdit;
     m_cloudToken->setObjectName(QStringLiteral("cloudToken"));
     m_cloudToken->setEchoMode(QLineEdit::Password);
@@ -760,18 +846,44 @@ void MainWindow::buildPreferences() {
     cloudButtons->addStretch(1);
     cloudButtons->addWidget(plans);
     cloudLayout->addLayout(cloudButtons);
-    settingsLayout->addWidget(connectionGroup);
-    // Whether Kerf asks GitHub once a day for a newer release (update_notice.h).
-    auto *updatesGroup = new QGroupBox(QStringLiteral("Updates"));
-    auto *updatesLayout = new QVBoxLayout(updatesGroup);
-    updatesLayout->setContentsMargins(10, 10, 10, 10);
+    accountPage->addStretch(1);
+
+    // AI connection: Kerf Cloud, the hosted model, comes first. Keys of one's
+    // own and MCP are on the Advanced page.
+    QVBoxLayout *connectionLayout = card(aiPage);
+    connectionLayout->parentWidget()->setProperty("section", QStringLiteral("aiConnection"));
+    connectionLayout->addWidget(heading(QStringLiteral("Chat runs on")));
+    auto *connectionGroup = connectionLayout->parentWidget();
+    m_cloudRadio = new QRadioButton(QStringLiteral("Kerf Cloud"));
+    m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
+    m_ownKeyRadio = new QRadioButton(QStringLiteral("My own API key (set up under Advanced)"));
+    m_ownKeyRadio->setObjectName(QStringLiteral("agentConnectionOwnKey"));
+    m_claudeCodeRadio = new QRadioButton(QStringLiteral("Claude Code (signed in to your Claude account)"));
+    m_claudeCodeRadio->setObjectName(QStringLiteral("agentConnectionClaudeCode"));
+    m_claudeCodeRadio->setToolTip(QStringLiteral("Runs your installed Claude Code with only this project's Kerf tools. It uses your Claude plan; Kerf never sees its sign-in. Sign in once by running claude in a terminal."));
+    auto *connectionChoice = new QButtonGroup(connectionGroup);
+    connectionChoice->addButton(m_cloudRadio);
+    connectionChoice->addButton(m_ownKeyRadio);
+    connectionChoice->addButton(m_claudeCodeRadio);
+    connectionLayout->addWidget(m_cloudRadio);
+    connectionLayout->addWidget(m_ownKeyRadio);
+    connectionLayout->addWidget(m_claudeCodeRadio);
+    m_cloudStatus = new QLabel;
+    m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
+    m_cloudStatus->setWordWrap(true);
+    connectionLayout->addWidget(m_cloudStatus);
+    aiPage->addStretch(1);
+
+    // General. Whether Kerf asks GitHub once a day for a newer release (update_notice.h).
+    QVBoxLayout *updatesLayout = card(generalPage);
+    updatesLayout->addWidget(heading(QStringLiteral("Updates")));
     auto *checkForUpdates = new QCheckBox(QStringLiteral("Tell me when a newer Kerf is released"));
     checkForUpdates->setObjectName(QStringLiteral("checkForUpdates"));
     checkForUpdates->setToolTip(QStringLiteral("Once a day, Kerf asks GitHub for its releases. It never downloads or installs anything itself."));
     checkForUpdates->setChecked(QSettings().value(QStringLiteral("updates/check"), true).toBool());
     connect(checkForUpdates, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue(QStringLiteral("updates/check"), on); });
     updatesLayout->addWidget(checkForUpdates);
-    settingsLayout->addWidget(updatesGroup);
+    generalPage->addStretch(1);
     const auto onConnectionChanged = [this](bool checked) {
         if (!checked) return;
         QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked()        ? QStringLiteral("cloud")
@@ -784,30 +896,14 @@ void MainWindow::buildPreferences() {
     connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
     connect(m_claudeCodeRadio, &QRadioButton::toggled, this, onConnectionChanged);
 
-    // A borderless disclosure, as the launcher's Details row.
-    auto *advancedToggle = new QToolButton;
-    advancedToggle->setObjectName(QStringLiteral("disclosure"));
-    advancedToggle->setAccessibleName(QStringLiteral("Advanced"));
-    advancedToggle->setText(QStringLiteral("Advanced"));
-    advancedToggle->setAutoRaise(true);
-    advancedToggle->setCheckable(true);
-    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    advancedToggle->setIconSize(QSize(11, 11));
-    advancedToggle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
-    m_disclosures.append(advancedToggle);
-    settingsLayout->addWidget(advancedToggle);
+    // Advanced: keys of one's own, and MCP in both directions.
     m_advancedSettings = new QWidget;
     m_advancedSettings->setObjectName(QStringLiteral("advancedSettings"));
     auto *advancedLayout = new QVBoxLayout(m_advancedSettings);
     advancedLayout->setContentsMargins(0, 0, 0, 0);
     advancedLayout->setSpacing(10);
-    settingsLayout->addWidget(m_advancedSettings);
-    m_advancedSettings->hide();
-    connect(advancedToggle, &QToolButton::toggled, this, [this, advancedToggle](bool show) {
-        m_advancedSettings->setVisible(show);
-        advancedToggle->setIcon(disclosureIcon(show, editorTheme().textSecondary));
-        fitPreferences();
-    });
+    advancedPage->addWidget(m_advancedSettings);
+    advancedPage->addStretch(1);
     auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
     settingsIntro->setObjectName(QStringLiteral("chatHint"));
     settingsIntro->setWordWrap(true);
@@ -960,11 +1056,6 @@ void MainWindow::buildPreferences() {
     mcpLayout->addWidget(copyMcp);
     mcpLayout->addWidget(mcpCopyStatus);
     advancedLayout->addWidget(mcpSection);
-    settingsLayout->addStretch(1);
-    settingsScroll->setWidget(settingsContent);
-    m_preferencesContent = settingsContent;
-    settingsTabLayout->addWidget(settingsScroll);
-    m_preferences->installEventFilter(this);
 
     loadAgentSettings();
     const auto onActiveConnectionChanged = [this](bool checked) {
@@ -988,6 +1079,7 @@ void MainWindow::buildShell() {
     buildSidebar();
     buildAgentViews();
     m_shell->setSheets(m_projectPanel);
+    m_shell->setCover(m_preferences);
     m_shell->setBanners({m_connectionBanner, m_errorBanner, m_divergedBanner});
     // Each sheet closes from the end of its strip.
     const auto closeButton = [this](StageShell::Sheet sheet) {
@@ -1041,11 +1133,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("playback.goToEnd"), [this] { seekToEnd(); }},
         {QStringLiteral("view.fitTracks"), [this] { m_timeline->fitTracksToView(); }},
         {QStringLiteral("view.resetTrackHeights"), [this] { m_timeline->resetTrackHeights(); }},
-        {QStringLiteral("app.preferences"), [this] {
-            m_preferences->show();
-            m_preferences->raise();
-            m_preferences->activateWindow();
-        }},
+        {QStringLiteral("app.preferences"), [this] { showSettings(); }},
         // The conversation is always open: its key puts the keys in its composer.
         {QStringLiteral("window.assistant"), [this] {
             uncoverComposer();
@@ -1918,26 +2006,24 @@ QSizeF MainWindow::pictureSizeOf(const QJsonObject &clip, const QString &trackTy
     return QSizeF(resolvedCanvasSize(m_project, sources));
 }
 
-void MainWindow::fitPreferences() {
-    if (!m_preferences || !m_preferencesContent) return;
-    m_preferences->ensurePolished();
-    constexpr int width = 520;
-    const QMargins margins = m_preferences->layout()->contentsMargins();
-    QLayout *content = m_preferencesContent->layout();
-    content->activate();
-    const int inner = width - margins.left() - margins.right();
-    const int height = content->hasHeightForWidth() ? content->totalHeightForWidth(inner) : content->totalSizeHint().height();
-    const QScreen *screen = m_preferences->screen();
-    const int limit = std::min(720, screen ? screen->availableGeometry().height() * 9 / 10 : 720);
-    m_preferences->resize(width, std::min(limit, height + margins.top() + margins.bottom()));
+void MainWindow::showSettings(const QString &page) {
+    const int index = int(m_settingsIds.indexOf(page));
+    if (index >= 0) {
+        m_settingsPages->setCurrentIndex(index);
+        for (int i = 0; i < m_settingsNav.size(); ++i) m_settingsNav.at(i)->setCurrent(i == index);
+        // The page that comes takes the place of the one that was.
+        if (m_shell->covered()) moves::fadeIn(m_settingsPages->currentWidget(), 0, tokens::motion::fade);
+    }
+    if (m_shell->covered()) return;
+    m_shell->setCovered(true);
+    // The room is there at once; what is in it comes up into place.
+    moves::rise(m_settingsBody, 0, tokens::motion::pageRise, tokens::motion::page);
 }
 
 void MainWindow::applyAppearance() {
     for (const auto &[action, glyph] : std::as_const(m_toolbarGlyphs)) action->setIcon(toolbarIcon(glyph));
     for (QAction *action : std::as_const(m_toolGlyphs)) action->setIcon(toolIcon(action->objectName()));
     if (m_divergedGlyph) m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
-    for (QToolButton *disclosure : std::as_const(m_disclosures))
-        disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
 }
 
@@ -2012,6 +2098,7 @@ void MainWindow::syncPanelCommands() {
         {QStringLiteral("view.timeline"), m_shell->panes().timeline},
         {QStringLiteral("view.followKerf"), m_followKerf},
     };
+    if (m_mediaButton) m_mediaButton->setOn(sheet == StageShell::Sheet::Media);
     for (const auto &[id, checked] : states)
         if (QAction *action = m_commands->action(id)) {
             const QSignalBlocker blocker(action);

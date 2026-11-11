@@ -1625,9 +1625,11 @@ QRect popoverPlacement(const QRectF &anchor, QSize size, const QRect &bounds, Si
     const qreal w = size.width(), h = size.height();
     const qreal right = anchor.left() + anchor.width(), bottom = anchor.top() + anchor.height();
     qreal l = side == Side::Right ? right + 8 : anchor.left();
-    qreal t = side == Side::Right ? anchor.top() : bottom + 4;
+    qreal t = side == Side::Right ? anchor.top() : side == Side::Above ? anchor.top() - h - 4 : bottom + 4;
     if (l + w > W - 8) l = right - w;
     if (l < minX) l = minX;
+    // Over the anchor when asked, under it when there is no room there.
+    if (side == Side::Above && t < minY) t = bottom + 4;
     if (t + h > H - 32) t = qMax(minY, anchor.top() - h - 4);
     if (side == Side::Right && l < right) t = bottom + 4;
     return QRect(QPoint(int(std::lround(l)), int(std::lround(t))), size);

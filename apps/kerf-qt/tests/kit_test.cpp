@@ -104,11 +104,11 @@ private slots:
 
     // ------------------------------------------------------------- icons
 
-    // The table is spec 16 without the device preview's glyphs, the panes' and
-    // folders' glyphs, and the two drawn outside the 16 set.
+    // The table is spec 16 without the device preview's glyphs, the panes',
+    // folders' and account's glyphs, and the two drawn outside the 16 set.
     void kitIconTableIsTheDesignsSet() {
         const QStringList names = icons::names();
-        QCOMPARE(names.size(), 80);
+        QCOMPARE(names.size(), 82);
         QCOMPARE(names.first(), QStringLiteral("g-169"));
         for (const char *name : {"g-169", "g-916", "g-comments", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
                                  "playhead-head", "checkbox-check"})

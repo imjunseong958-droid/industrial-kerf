@@ -5,7 +5,7 @@
 //
 //   - The agent HUD and the preview chip (built here), children of the picture.
 //   - The comments' drawings (view.annotations, remembered on this Mac), and
-//     the viewer's zoom (viewer.zoom: the ≡ menu's View ▸ Viewer zoom).
+//     the viewer's zoom (viewer.zoom: the account menu's View ▸ Viewer zoom).
 //   - The program's in and out marks and the loop (mark.in, mark.out,
 //     mark.clear, playback.loop): with the loop on, playback that reaches the out mark goes
 //     back to the in mark (or the start), and playback that ends at the
@@ -86,8 +86,8 @@ public:
     void setZoom(double zoom);
     double zoom() const;
     static QString zoomText(double zoom);
-    // The Fit menu (Fit, 50%, 100%, 200%), as the ≡ menu's
-    // Viewer zoom; viewer.zoom's key shows it under the ≡ button.
+    // The Fit menu (Fit, 50%, 100%, 200%), as the account menu's
+    // Viewer zoom; viewer.zoom's key shows it too.
     QMenu *zoomMenu();
     void showZoomMenu(QWidget *anchor = nullptr);
 

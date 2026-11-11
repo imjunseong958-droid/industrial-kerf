@@ -22,6 +22,8 @@
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
 #include "ui/stage_shell.h"
+#include "ui/project_sidebar.h"
+#include "ui/wiring/timeline_wiring.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -542,30 +544,37 @@ private slots:
             {
                 const QImage plate = toolbar->grab().toImage();
                 const qreal ratio = plate.devicePixelRatio();
-                // Its 1px edge along the foot, and the plate above it.
-                QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(),
-                         laidOn(tokens::color(tokens::chrome), tokens::color(tokens::line)).rgb());
-                const QColor middle = plate.pixelColor(QPoint(1, toolbar->height() / 2) * ratio);
+                // The top of the room: its colour down to the foot, with no line
+                // under it, and over the sidebar the sidebar's.
+                const int roomX = toolbar->width() - 2;
+                QCOMPARE(plate.pixelColor(QPoint(roomX, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::chrome).rgb());
+                const QColor middle = plate.pixelColor(QPoint(roomX, toolbar->height() / 2) * ratio);
                 QVERIFY2(nearColor(middle.rgb(), tokens::color(tokens::chrome).rgb()), qPrintable(middle.name()));
+                if (window.m_sidebar->isVisible())
+                    QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::well).rgb());
             }
             // The window is titled with the project, so the Window menu,
             // Mission Control and the Dock name it, and the toolbar shows the same.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
             QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
-            // The title is UI 13, centred on the window (the toolbar spans
-            // it), clear of the groups either side.
+            // The title is UI 13, at the leading end after the sidebar's
+            // button, clear of the trailing group.
             QLabel *title = window.m_projectTitle;
             QCOMPARE(title->font().pixelSize(), 13);
-            QVERIFY2(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1,
-                     qPrintable(QStringLiteral("%1 of %2").arg(title->geometry().center().x()).arg(toolbar->width())));
-            QVERIFY(title->geometry().right() < window.m_formatBank->geometry().left());
-            // The flat bar: the format bank, 12, Export as tall as the bank's
-            // keys, 12 in from the window's right edge.
             ExportButton *exportButton = window.m_exportButton;
             const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-            QCOMPARE(inBar(exportButton).left() - inBar(window.m_formatBank).right() - 1, 12);
-            QCOMPARE(exportButton->height(), window.m_formatBank->height());
-            QCOMPARE(toolbar->width() - inBar(exportButton).right() - 1, 12);
+            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QVERIFY(exportButton->isVisible());
+            QVERIFY(inBar(title).right() < inBar(exportButton).left());
+            // The trailing group: Export, 8, the panel's button, 12 in from
+            // the window's right edge, both 28 tall.
+            QCOMPARE(inBar(window.m_panelButton).left() - inBar(exportButton).right() - 1, 8);
+            QCOMPARE(exportButton->height(), window.m_panelButton->height());
+            QCOMPARE(toolbar->width() - inBar(window.m_panelButton).right() - 1, 12);
+            // The format is in the timeline's strip, with the Media sheet's
+            // button and Follow Kerf.
+            QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(window.m_formatBank));
+            QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(window.m_followButton));
             // The toolbar is chrome.
             QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
             // The tools live in the timeline bar's segmented control; the
@@ -716,28 +725,32 @@ private slots:
             }
 
             // Settings.
-            window.m_preferences->show();
-            QVERIFY(QTest::qWaitForWindowExposed(window.m_preferences));
+            // A page in the room, not a window over it: all of the content
+            // right of the sidebar, in the room's colour.
+            window.showSettings();
+            QVERIFY(window.m_preferences->isVisible());
+            QCOMPARE(window.m_preferences->window(), &window);
             QCoreApplication::processEvents();
+            // Under a bar that shows (this build has no runtime, and says so).
+            int bars = 0;
+            for (const QWidget *bar : {window.m_connectionBanner, window.m_errorBanner, window.m_divergedBanner})
+                if (!bar->isHidden()) bars += bar->height();
+            QCOMPARE(window.m_preferences->geometry(),
+                     QRect(window.m_shell->rects().sidebar.width(), bars,
+                           window.m_shell->width() - window.m_shell->rects().sidebar.width(), window.m_shell->height() - bars));
             const QImage settings = window.m_preferences->grab().toImage();
-            QCOMPARE(settings.pixelColor(QPoint(4, settings.height() - 4)).rgb(), theme.dialog.rgb());
-            // Sized to what it shows, with no Close button under empty space.
-            QVERIFY(window.m_preferences->height() < 400);
+            QCOMPARE(settings.pixelColor(QPoint(4, settings.height() - 4)).rgb(), tokens::color(tokens::chrome).rgb());
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
             save(settings, QStringLiteral("settings-%1").arg(name));
-            // Advanced opens below, and the window grows to show it.
-            auto *advanced = window.m_preferences->findChild<QToolButton *>(QStringLiteral("disclosure"));
-            QVERIFY(advanced);
-            // Its chevron, the only sign of whether it is open, reads on the
-            // dialog (3:1), closed and open.
-            QCOMPARE(ink(advanced->icon()), theme.textSecondary.rgb());
-            const int closedHeight = window.m_preferences->height();
-            advanced->click();
+            // Its pages are named down its side; each name shows its page.
+            QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("general"), QStringLiteral("advanced")}));
+            QVERIFY(!window.m_advancedSettings->isVisible());
+            window.m_preferences->findChild<SidebarRow *>(QStringLiteral("settingsNav.advanced"))->click();
             QVERIFY(window.m_advancedSettings->isVisible());
-            QCOMPARE(ink(advanced->icon()), theme.textSecondary.rgb());
-            QVERIFY(window.m_preferences->height() > closedHeight);
-            advanced->click();
-            window.m_preferences->hide();
+            QVERIFY(window.m_settingsNav.at(3)->isCurrent());
+            // Back, or Esc, gives the room back.
+            window.m_preferences->findChild<ui::GhostButton *>(QStringLiteral("settingsBack"))->click();
+            QVERIFY(!window.m_preferences->isVisible());
 
             // A representative dialog: the preset's media bindings.
             QTimer::singleShot(0, &window, [&] {
@@ -891,9 +904,6 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(surface(), editorTheme().chatSurface.rgb());
         QCOMPARE(nameInk(), editorTheme().chatText.rgb());
-        QVERIFY(!window.m_disclosures.isEmpty());
-        for (QToolButton *disclosure : std::as_const(window.m_disclosures))
-            QCOMPARE(ink(disclosure->icon()), editorTheme().textSecondary.rgb());
     }
 
     // Push buttons and pop-up buttons take focus from Tab alone, so a click

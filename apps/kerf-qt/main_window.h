@@ -63,6 +63,7 @@ class PreviewChip;
 class ChangeReel;
 class ChangeReelBar;
 class ProjectSidebar;
+class SidebarRow;
 class StageMotion;
 class StageShell;
 namespace ui {
@@ -71,6 +72,11 @@ class IconButton;
 class MediaArtwork;
 class TimelineWidget;
 class ViewerWidget;
+} // namespace kerf
+
+class QStackedWidget;
+
+namespace kerf {
 
 // The editor's window. Its content is a StageShell (ui/stage_shell.h): the
 // picture, the conversation and the timeline, the rest on demand. Its member
@@ -181,6 +187,12 @@ private slots:
     // Kerf Cloud, the hosted model, or a key of one's own (Advanced).
     bool usesCloud() const;
     bool usesClaudeCode() const;
+    // Signed in to Kerf Cloud, whichever connection chat uses.
+    bool cloudSignedIn() const;
+    // Who the sidebar's foot says is here: the account, or the connection.
+    void updateAccountRow();
+    // Settings, at `page` ("account", "ai", "general", "advanced"; empty: where it was).
+    void showSettings(const QString &page = QString());
     bool sendCloud(const QJsonObject &command);
     // What the registry needs to know about the agent's connection.
     QString aiAccess() const;
@@ -247,8 +259,6 @@ private:
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
-    // Size Settings to what it shows, up to the screen's height; it scrolls past that.
-    void fitPreferences();
     void syncCanvasPreset(const QSize &size);
     void setupActions();
     // Resolve a command in the current context and send its request.
@@ -380,8 +390,10 @@ private:
     QSet<QString> m_liveChanges;
     bool m_returnAfterPreview = false;
     ui::IconButton *m_sidebarButton = nullptr;
-    ui::IconButton *m_pictureButton = nullptr;
-    ui::IconButton *m_timelineButton = nullptr;
+    // The one button for the panel beside the conversation, and in the
+    // timeline's strip the way to the Media sheet.
+    ui::IconButton *m_panelButton = nullptr;
+    ui::IconButton *m_mediaButton = nullptr;
     bool m_panesFollowContent = true;
     QString m_startRequest;
     bool m_startImport = false;
@@ -404,6 +416,8 @@ private:
     void settleFocus();
     // The sidebar and the panel beside the conversation.
     void setPaneOpen(const QString &command, bool open);
+    // The picture and the timeline together, as the toolbar's button has them.
+    void setPanelOpen(bool open);
     void revealPanel(bool picture, bool timeline, const QRect &origin = QRect());
     void applyPanes();
     // The panel opens by itself once there is something to see, until one
@@ -468,8 +482,6 @@ private:
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
     // Tool palette actions, whose icons are redrawn when the appearance changes.
     QList<QAction *> m_toolGlyphs;
-    // Disclosure buttons (Settings' Advanced), whose chevrons are too.
-    QList<QToolButton *> m_disclosures;
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
     QJsonObject m_lastFocus;
@@ -505,12 +517,19 @@ private:
     QPushButton *m_cloudSignIn = nullptr;
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
-    QWidget *m_preferencesContent = nullptr;
+    // Where Kerf Cloud stands, on the Account page.
+    QLabel *m_accountStatus = nullptr;
     // The last account report from the bridge.
     QString m_cloudAccess;
     QJsonObject m_cloudAccount;
     QString m_cloudMessage;
-    QDialog *m_preferences = nullptr;
+    // Settings: a page the shell lays over the conversation and the panel. Its
+    // body is what comes up into place; its pages are named down its side.
+    QWidget *m_preferences = nullptr;
+    QWidget *m_settingsBody = nullptr;
+    QStackedWidget *m_settingsPages = nullptr;
+    QStringList m_settingsIds;
+    QList<SidebarRow *> m_settingsNav;
     quint64 m_revision = 0;
     int m_trackCount = 0;
     double m_duration = 0.0;
@@ -576,7 +595,7 @@ private:
     QPushButton *m_sendButton = nullptr;
     QPushButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
-    // The toolbar's right-hand group: the format bank, then Export (its
+    // The format bank, in the timeline's strip, and the toolbar's Export (its
     // menu holds the quality and Render Preview).
     FormatBank *m_formatBank = nullptr;
     ExportButton *m_exportButton = nullptr;

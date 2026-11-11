@@ -281,6 +281,15 @@ void MainWindow::setPaneOpen(const QString &command, bool open) {
     applyPanes();
 }
 
+void MainWindow::setPanelOpen(bool open) {
+    stage::Panes panes = m_shell->panes();
+    panes.picture = open;
+    panes.timeline = open;
+    m_panesFollowContent = false;
+    m_shell->setPanes(panes);
+    applyPanes();
+}
+
 void MainWindow::revealPanel(bool picture, bool timeline, const QRect &origin) {
     stage::Panes panes = m_shell->panes();
     panes.picture = panes.picture || picture;
@@ -294,8 +303,8 @@ void MainWindow::applyPanes() {
     syncPanelCommands();
     const stage::Panes &panes = m_shell->panes();
     for (const auto &[button, open] : {std::pair<ui::IconButton *, bool>{m_sidebarButton, panes.sidebar},
-                                       {m_pictureButton, panes.picture},
-                                       {m_timelineButton, panes.timeline},
+                                       {m_panelButton, panes.panelOpen()},
+                                       {m_mediaButton, m_shell->sheet() == StageShell::Sheet::Media},
                                        {m_followButton, m_followKerf}})
         if (button) button->setOn(open);
     // A note stamps and draws on the picture.
@@ -405,7 +414,7 @@ void MainWindow::runStart() {
 // The mask tools, and the edits the picture asks for.
 void MainWindow::buildMaskTools() {
     // Mask tools draw a new mask on the selected picture clip over the
-    // picture; the ≡ menu's View carries them.
+    // picture; the account menu's View carries them.
     auto *maskTools = new QActionGroup(this);
     maskTools->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
     struct MaskToolAction {

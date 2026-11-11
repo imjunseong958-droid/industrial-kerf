@@ -39,7 +39,7 @@ and `--remove` takes it away. Releases are not
 signed yet, so the first run asks: on Windows, More info ▸ Run anyway; on a Mac,
 right-click the app ▸ Open. Help ▸ About
 Kerf says which version you have. Once a day Kerf asks GitHub whether a newer one
-is out and offers its page; Edit ▸ Settings… ▸ Updates turns that off.
+is out and offers its page; Settings (⌘,) ▸ General turns that off.
 
 ## Start a project
 
@@ -64,7 +64,11 @@ Import media with File ▸ Import Media… (⌘O).
 - **Picture** and **timeline** at the right, once there is something to show.
   ⌥⌘P and ⌥⌘T open and close them.
 - **Media** (⌘1) opens over the conversation: the project's media, with Import.
-- The toolbar's format picker switches the sequence between 16:9 and 9:16.
+- The format picker in the timeline's strip switches the sequence between 16:9
+  and 9:16 (⌥1, ⌥2).
+- The **sidebar** (⌥⌘S) has New conversation, your project folders and their
+  conversations, and at its foot your account, which opens Settings and
+  everything else.
 
 ## Ask Kerf
 
@@ -75,7 +79,7 @@ Return sends; Shift+Return adds a line.
 
 While Kerf works, its steps fold under its reply, a blue cursor on the timeline
 shows where it is, and **Stop** ends the turn. With **Follow Kerf** on (⌥⌘F, the
-toolbar's eye) the picture follows it.
+eye in the timeline's strip) the picture follows it.
 
 Kerf answers with a **proposal**, a card in its thread:
 
@@ -91,7 +95,8 @@ accepted: ask Kerf to stage it again.
 
 ### Connecting Kerf
 
-Edit ▸ Settings… (⌘, ; on macOS in the Kerf menu) ▸ AI chooses how Kerf thinks:
+Settings (⌘, ; or the account at the sidebar's foot ▸ Settings…) ▸ AI connection
+chooses how Kerf thinks, and ▸ Account signs in to Kerf Cloud:
 
 - **Kerf Cloud**, the hosted model: sign in, and the account, plan and requests
   left show there. The sign-in is kept in your system's keychain, as keys are.

@@ -1,6 +1,7 @@
-// Tests for the toolbar (mockup-spec 1, 11, 14): the workspaces, the
-// centred title, the format segments, the sequence button, the Export split
-// button and its preflight.
+// Tests for what is left of the toolbar: the sidebar's button, the title and
+// what is going on, the Export split button and its preflight, the panel's
+// button; and for what moved out of it: the menu the account opens and the
+// format segments in the timeline's strip.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -19,6 +20,10 @@
 #include "toolbar_widgets.h"
 #include "wiring/toolbar_wiring.h"
 #include "ui/stage_shell.h"
+#include "ui/project_sidebar.h"
+#include "ui/wiring/timeline_wiring.h"
+
+#include <QStackedWidget>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -137,7 +142,7 @@ class ToolbarTest final : public QObject {
 private slots:
     void init() { QSettings().remove(QStringLiteral("viewer")); }
 
-    void toolbarHoldsOnlyTheMenuTheFormatsAndExport() {
+    void toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel() {
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
         window.show();
@@ -145,17 +150,44 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QToolBar *toolbar = window.m_toolbar;
         QCOMPARE(toolbar->height(), 40);
-        // One 28 pt ≡ button, then the two format icons and the Export split.
-        auto *menuButton = window.findChild<ui::IconButton *>(QStringLiteral("appMenu"));
-        QVERIFY(menuButton);
-        QCOMPARE(menuButton, wiring->appMenuButton());
-        QCOMPARE(menuButton->size(), QSize(28, 28));
-        QCOMPARE(window.m_formatBank->count(), 2);
+        // The sidebar's button at one end, the panel's at the other, 28 each.
+        QCOMPARE(window.m_sidebarButton->size(), QSize(28, 28));
+        QCOMPARE(window.m_panelButton->size(), QSize(28, 28));
+        // Export is there only once the program has a clip.
+        QVERIFY(!window.m_exportButton->isVisible());
+        QVERIFY(!wiring->hasCut());
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));
+        QVERIFY(wiring->hasCut());
+        QVERIFY(window.m_exportButton->isVisible());
+        // With the sidebar showing, the menu is at its foot, and the bar's own
+        // way to it is away; its leading stretch is the sidebar's top.
+        QVERIFY(window.m_sidebar->isVisible());
+        QVERIFY(window.m_sidebar->accountRow()->isVisible());
+        QCOMPARE(wiring->sidebarEdge(), tokens::layout::sidebar);
+        QCOMPARE(static_cast<FlatToolBar *>(toolbar)->sidebarEdge(), tokens::layout::sidebar);
+        QVERIFY(!wiring->appMenuButton()->isVisible());
+        const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
+        QCOMPARE(inBar(window.m_sidebarButton).left(), tokens::layout::sidebar + 12);
+        // With it away, the bar's ⋯ button opens the same menu.
+        window.m_sidebarButton->click();
+        QCoreApplication::processEvents();
+        QCOMPARE(wiring->sidebarEdge(), 0);
+        QVERIFY(wiring->appMenuButton()->isVisible());
+        QCOMPARE(wiring->appMenuButton()->size(), QSize(28, 28));
+        QCOMPARE(inBar(window.m_sidebarButton).left(), ToolbarWiring::firstControlX(0, true));
+        window.m_sidebarButton->click();
+        QSettings().remove(QStringLiteral("layout"));
+        // The room before the first control: the window buttons', or the sidebar's.
+        QCOMPARE(ToolbarWiring::leadingRoom(16, 0), 0);
+        QCOMPARE(ToolbarWiring::leadingRoom(84, 0), 64);
+        QCOMPARE(ToolbarWiring::leadingRoom(84, 240), 232);
         for (const char *gone : {"toolbar.file.import", "toolbar.edit.undo", "toolbar.edit.redo", "toolbar.clip.split", "toolbar.clip.delete",
-                                 "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu"})
+                                 "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu",
+                                 "panePicture", "paneTimeline"})
             QVERIFY2(!window.findChild<QWidget *>(QString::fromLatin1(gone)), gone);
         // Their commands, keys and native menu items stay.
-        for (const char *id : {"edit.undo", "edit.redo", "clip.split", "clip.delete", "file.import", "app.preferences"}) {
+        for (const char *id : {"edit.undo", "edit.redo", "clip.split", "clip.delete", "file.import", "app.preferences", "view.picture", "view.timeline"}) {
             QAction *action = window.m_commands->action(QString::fromLatin1(id));
             QVERIFY2(action, id);
             QVERIFY2(!action->shortcut().isEmpty(), id);
@@ -164,8 +196,9 @@ private slots:
         window.close();
     }
 
-    // The ≡ menu: the mockup's rows, the registry's commands behind each.
-    void theAppMenuReachesEverythingElse() {
+    // The menu the account opens: Settings and the account first, then what
+    // the toolbar no longer holds, the registry's commands behind each.
+    void theAccountMenuReachesEverythingElse() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));
@@ -174,21 +207,36 @@ private slots:
         QMenu *menu = wiring->appMenu();
         QStringList rows;
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
-        const QStringList expected{QStringLiteral("Media"), QStringLiteral("|"),
-                                   QStringLiteral("Sidebar"), QStringLiteral("Picture"), QStringLiteral("Timeline"), QStringLiteral("Follow Kerf"), QStringLiteral("|"),
-                                   QStringLiteral("Import…"), QStringLiteral("Settings…"), QStringLiteral("View")};
+        const QStringList expected{QStringLiteral("Settings…"), QStringLiteral("Account…"), QStringLiteral("User Guide"), QStringLiteral("|"),
+                                   QStringLiteral("Media"), QStringLiteral("Import…"), QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);
+        // Nobody is signed in to Kerf Cloud: there is no way out to offer.
+        QVERIFY(!findAction(menu, QStringLiteral("appMenu.signOut")));
         // Keys as the registry has them, never written here.
         const auto keyOf = [&window](const char *id) { return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText); };
         QCOMPARE(ui::menuKey(findAction(menu, QStringLiteral("appMenu.media"))), keyOf("window.project"));
+        QCOMPARE(ui::menuKey(findAction(menu, QStringLiteral("appMenu.settings"))), keyOf("app.preferences"));
         // Each row runs its command.
         findAction(menu, QStringLiteral("appMenu.media"))->trigger();
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Media);
+        QVERIFY(window.m_mediaButton->isOn());
         wiring->buildAppMenu();
         QVERIFY(findAction(menu, QStringLiteral("appMenu.media"))->isChecked());
         findAction(menu, QStringLiteral("appMenu.media"))->trigger();
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
-        // View: the masks, annotations, safe zones, zoom, keyboard and sync.
+        QVERIFY(!window.m_mediaButton->isOn());
+        // Settings takes the room, at the page asked for; Esc gives it back.
+        wiring->buildAppMenu();
+        findAction(menu, QStringLiteral("appMenu.account"))->trigger();
+        QVERIFY(window.m_shell->covered());
+        QCOMPARE(window.m_settingsPages->currentIndex(), 0);
+        QVERIFY(window.m_shell->dismiss());
+        QVERIFY(!window.m_shell->covered());
+        wiring->buildAppMenu();
+        findAction(menu, QStringLiteral("appMenu.settings"))->trigger();
+        QVERIFY(window.m_shell->covered());
+        window.m_shell->setCovered(false);
+        // View: the panes, the masks, annotations, safe zones, zoom, keyboard and sync.
         wiring->buildAppMenu();
         QMenu *view = findAction(menu, QStringLiteral("appMenu.view"))->menu();
         QVERIFY(view);
@@ -197,8 +245,15 @@ private slots:
             if (!action->isSeparator()) names << action->text();
         for (const QAction *tool : std::as_const(window.m_maskTools)) QVERIFY2(names.contains(tool->text()), qPrintable(tool->text()));
         QCOMPARE(window.m_maskTools.size(), 3);
-        for (const char *row : {"Annotations", "Safe Zones", "Viewer zoom", "Keyboard", "Sync"})
+        for (const char *row : {"Sidebar", "Picture", "Timeline", "Follow Kerf", "Annotations", "Safe Zones", "Viewer zoom", "Keyboard", "Sync"})
             QVERIFY2(names.contains(QString::fromLatin1(row)), row);
+        // A pane's row is its command: checked as it shows, and it closes it.
+        window.revealPanel(true, true);
+        wiring->buildAppMenu();
+        QVERIFY(findAction(view, QStringLiteral("appMenu.picture"))->isChecked());
+        findAction(view, QStringLiteral("appMenu.picture"))->trigger();
+        QVERIFY(!window.m_shell->panes().picture);
+        QVERIFY(window.m_shell->panes().timeline);
         // The keyboard's choice, and the sync's rows.
         QMenu *keymaps = view->findChild<QMenu *>(QStringLiteral("keymapMenu"));
         QVERIFY(keymaps);
@@ -210,6 +265,29 @@ private slots:
         QMenu *sync = view->findChild<QMenu *>(QStringLiteral("syncMenu"));
         QVERIFY(sync);
         QVERIFY(sync->actions().contains(window.m_commands->action(QStringLiteral("collab.publish"))));
+    }
+
+    // The account at the sidebar's foot says who is here: the Kerf Cloud
+    // account when one is signed in, else what chat runs on.
+    void theSidebarsFootNamesTheAccount() {
+        MainWindow window{QString(), QString()};
+        SidebarAccount *account = window.m_sidebar->accountRow();
+        window.m_claudeCodeRadio->setChecked(true);
+        QCOMPARE(account->title(), QStringLiteral("Claude Code"));
+        window.m_cloudRadio->setChecked(true);
+        QCOMPARE(account->title(), QStringLiteral("Kerf Cloud"));
+        QCOMPARE(account->subtitle(), QStringLiteral("Not signed in"));
+        QVERIFY(!window.cloudSignedIn());
+        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "ok"},
+                                       {"account", QJsonObject{{"email", "mina@example.com"}, {"plan", "Pro"}}}});
+        QVERIFY(window.cloudSignedIn());
+        QCOMPARE(account->title(), QStringLiteral("mina@example.com"));
+        QCOMPARE(account->subtitle(), QStringLiteral("Kerf Cloud · Pro plan"));
+        QCOMPARE(window.m_accountStatus->text().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
+        // Signed in, the menu offers the way out.
+        window.m_toolbarWiring->buildAppMenu();
+        QVERIFY(findAction(window.m_toolbarWiring->appMenu(), QStringLiteral("appMenu.signOut")));
+        QSettings().remove(QStringLiteral("agent/connection"));
     }
 
     // The format segments: one per preset, 28 wide icons; a click sends the
@@ -596,9 +674,9 @@ private slots:
         QSettings().remove(key);
     }
 
-    // The title: "Project · Sequence" over "Edited 2 min ago · rev 22",
-    // centred on the window at 1600 and 1366, clear of both groups.
-    void toolbarTitleIsCentredOnTheWindow() {
+    // The title: "Project · Sequence" at the bar's leading end, then what is
+    // going on, on one line; when it was edited is the title's tip.
+    void toolbarTitleLeadsTheBar() {
         const QDateTime now = QDateTime::fromString(QStringLiteral("2026-11-04T10:12:00Z"), Qt::ISODate);
         QCOMPARE(editedAgo(now.addSecs(-20), now), QStringLiteral("just now"));
         QCOMPARE(editedAgo(now.addSecs(-120), now), QStringLiteral("2 min ago"));
@@ -613,8 +691,10 @@ private slots:
         window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));
         window.m_errorBanner->hide();
         QCOMPARE(wiring->titleText(), QStringLiteral("Atlas · 30 s spot v7"));
-        QCOMPARE(wiring->subtitleText(), QStringLiteral("Edited 2 min ago · rev 22"));
+        QCOMPARE(wiring->normalSubtitle(), QStringLiteral("Edited 2 min ago · rev 22"));
+        QCOMPARE(wiring->subtitleText(), QString());
         QCOMPARE(window.windowTitle(), QStringLiteral("Atlas · 30 s spot v7"));
+        const auto inBar = [&window](const QWidget *item) { return QRect(item->mapTo(window.m_toolbar, QPoint(0, 0)), item->size()); };
         for (const int width : {1600, 1366}) {
             window.resize(width, width == 1600 ? 1000 : 768);
             window.show();
@@ -623,26 +703,28 @@ private slots:
             QLabel *title = window.m_projectTitle;
             QLabel *subtitle = window.m_projectSubtitle;
             QCOMPARE(title->text(), QStringLiteral("Atlas · 30 s spot v7"));
-            QCOMPARE(subtitle->text(), QStringLiteral("Edited 2 min ago · rev 22"));
-            const int centre = window.m_toolbar->width() / 2;
-            QVERIFY2(std::abs(title->geometry().center().x() - centre) <= 1,
-                     qPrintable(QStringLiteral("%1 at %2 vs %3").arg(width).arg(title->geometry().center().x()).arg(centre)));
-            QCOMPARE(subtitle->geometry().center().x(), title->geometry().center().x());
-            QCOMPARE(title->geometry().top(), 4);
-            QCOMPARE(subtitle->geometry().top(), 20);
-            QVERIFY(title->testAttribute(Qt::WA_TransparentForMouseEvents));
-            // UI 500 13 ink over UI 11 ink3.
+            QCOMPARE(ui::tipName(title), QStringLiteral("Edited 2 min ago · rev 22"));
+            QVERIFY(!subtitle->isVisible());
+            // After the sidebar's button, centred in the bar's height.
+            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QCOMPARE(inBar(title).center().y(), window.m_toolbar->height() / 2 - 1);
+            // UI 500 13 ink, then UI 11 ink3.
             QCOMPARE(title->palette().color(QPalette::WindowText), tokens::color(tokens::ink));
             QCOMPARE(subtitle->palette().color(QPalette::WindowText), tokens::color(tokens::ink3));
-            const int leftEnd = wiring->m_appButton->mapTo(window.m_toolbar, QPoint(wiring->m_appButton->width(), 0)).x();
-            QVERIFY(title->geometry().left() > leftEnd);
-            QVERIFY(title->geometry().right() < window.m_formatBank->mapTo(window.m_toolbar, QPoint()).x());
+            QVERIFY(inBar(title).right() < inBar(window.m_exportButton).left());
+            // Something to say follows the title on its line.
+            window.showStatus(QStringLiteral("Saved preset looks/dusk.preset"), 0);
+            QVERIFY(subtitle->isVisible());
+            QCOMPARE(subtitle->text(), QStringLiteral("Saved preset looks/dusk.preset"));
+            QCOMPARE(inBar(subtitle).left() - inBar(title).right() - 1, 12);
+            QVERIFY(inBar(subtitle).right() < inBar(window.m_exportButton).left());
+            window.showStatus(QString(), 0);
         }
         // Without a revision time, only the revision.
         QJsonObject snapshot = titledSnapshot(QString());
         snapshot.remove("revisionTime");
         window.applySnapshot(snapshot);
-        QCOMPARE(wiring->subtitleText(), QStringLiteral("rev 22"));
+        QCOMPARE(wiring->normalSubtitle(), QStringLiteral("rev 22"));
     }
 
     // At 1366 × 768 (and the window's least size) every control shows, 28
@@ -670,7 +752,7 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QCOMPARE(toolbar->height(), 40);
         QCOMPARE(wiring->m_content->geometry(), toolbar->rect());
-        QList<QWidget *> controls{wiring->m_appButton, window.m_formatBank, window.m_exportButton};
+        QList<QWidget *> controls{window.m_sidebarButton, window.m_exportButton, window.m_panelButton};
         const auto frame = [toolbar](QWidget *w) { return QRect(w->mapTo(toolbar, QPoint()), w->size()); };
         for (int size : {1366, 1080}) {
             window.resize(size, 768);
@@ -683,34 +765,35 @@ private slots:
                 QCOMPARE(frame(control).center().y(), toolbar->height() / 2 - 1);
                 if (i > 0) QVERIFY2(frame(controls.at(i - 1)).right() < frame(control).left(), qPrintable(control->objectName()));
             }
-            // Export ends 12 in from the window's right.
-            QCOMPARE(frame(window.m_exportButton).right() + 1, toolbar->width() - 12);
+            // The panel's button ends 12 in from the window's right.
+            QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 12);
+            // In a window too narrow for the sidebar, the bar has its menu.
+            QCOMPARE(wiring->appMenuButton()->isVisible(), size < tokens::layout::sidebarWindowLeast);
             // The title keeps between the groups, shortened when it must be.
             QLabel *title = window.m_projectTitle;
             QVERIFY(!title->text().isEmpty());
             QVERIFY2(title->text() != fullTitle, qPrintable(title->text()));
             QVERIFY(title->text().endsWith(QChar(0x2026)));
-            QCOMPARE(title->toolTip(), fullTitle);
+            QCOMPARE(ui::tipName(title), fullTitle);
             QVERIFY(QFontMetrics(title->font()).horizontalAdvance(title->text()) <= title->width());
-            QVERIFY(title->geometry().left() > frame(wiring->m_appButton).right());
-            QVERIFY(title->geometry().right() < frame(window.m_formatBank).left());
+            QVERIFY(frame(title).left() > frame(window.m_sidebarButton).right());
+            QVERIFY(frame(title).right() < frame(window.m_exportButton).left());
         }
-        // The right group's spacing, and the ≡ button's size.
+        // The trailing group's spacing.
         window.resize(1600, 1000);
         QCoreApplication::processEvents();
-        QCOMPARE(frame(window.m_exportButton).left() - frame(window.m_formatBank).right() - 1, 12);
-        QCOMPARE(controls.at(0)->width(), 28);
+        QCOMPARE(frame(window.m_panelButton).left() - frame(window.m_exportButton).right() - 1, 8);
         // No » extension: nothing is folded away.
         if (auto *more = toolbar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"))) QVERIFY(!more->isVisible());
         // The window buttons' room, past which the commands start.
         QCOMPARE(ToolbarWiring::firstControlX(0, false), 84);
         QCOMPARE(ToolbarWiring::firstControlX(70, false), 86);
         QCOMPARE(ToolbarWiring::firstControlX(70, true), 16);
-        // The toolbar is chrome with its hairline at the foot (sampled above
-        // the title's first line, which the long title fills here).
+        // The toolbar is the room's colour to its foot, with no line under it.
         const QImage image = toolbar->grab().toImage();
         const qreal ratio = image.devicePixelRatio();
         QCOMPARE(image.pixelColor(QPoint(toolbar->width() / 2 + 300, 2) * ratio).rgb(), tokens::chrome);
+        QCOMPARE(image.pixelColor(QPoint(toolbar->width() / 2 + 300, toolbar->height() - 1) * ratio).rgb(), tokens::chrome);
 
         // Renders for the eye: KERF_TOOLBAR_GALLERY=folder.
         if (const QString folder = qEnvironmentVariable("KERF_TOOLBAR_GALLERY"); !folder.isEmpty()) {
@@ -725,6 +808,17 @@ private slots:
             QTRY_VERIFY(window.m_exportButton->menu()->isVisible());
             window.m_exportButton->menu()->grab().save(QDir(folder).filePath(QStringLiteral("export-menu.png")));
             window.m_exportButton->menu()->hide();
+            window.m_toolbarWiring->buildAppMenu();
+            window.m_toolbarWiring->appMenu()->grab().save(QDir(folder).filePath(QStringLiteral("account-menu.png")));
+            window.showSettings(QStringLiteral("ai"));
+            QCoreApplication::processEvents();
+            window.grab().save(QDir(folder).filePath(QStringLiteral("settings-ai.png")));
+            window.showSettings(QStringLiteral("account"));
+            QCoreApplication::processEvents();
+            window.grab().save(QDir(folder).filePath(QStringLiteral("settings-account.png")));
+            window.m_shell->setCovered(false);
+            QCoreApplication::processEvents();
+            window.grab().save(QDir(folder).filePath(QStringLiteral("window.png")));
         }
     }
 };

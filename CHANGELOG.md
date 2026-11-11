@@ -56,6 +56,14 @@ on `main`; its section here becomes the release's notes on GitHub
   Deliver trays (scopes, the loudness meter, the QC pane, the render queue and
   the paperwork), the Inspector with its Source Monitor, the Effects, Titles and
   Presets browser, Sequence Settings, and "Try 3 versions at once".
+- The toolbar is cut down to the sidebar's button, the project's name, Export
+  (once there is a cut) and one button for the picture and timeline. The ≡ menu
+  is gone: your account sits at the foot of the sidebar and opens Settings,
+  Media, Import and View. The format picker, Follow Kerf and Media's button moved
+  to the timeline's strip. "Edited 2 min ago" is the title's tooltip; the bar
+  speaks only when something is going on.
+- Settings is a page in the window, not a dialog: Account, AI connection,
+  General and Advanced, with Esc or Back to leave.
   - Edit ▸ Keyboard Shortcuts still chooses between the Kerf, Premiere Pro and
     Final Cut Pro layouts; keys of your own no longer apply.
   - Keyframes and their curves are still the project's, for Kerf and `kerf` to

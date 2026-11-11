@@ -631,6 +631,9 @@ public:
     ~TimelineToolStrip() override;
     ui::SegmentedControl *tools() const { return m_tools; }
     ui::IconButton *snapButton() const { return m_snap; }
+    // What the window adds between the tools and the zoom (the Media sheet's
+    // button, Follow Kerf, the format), 12 from the zoom.
+    QBoxLayout *extras() const { return m_extras; }
     ui::IconButton *transportButton(Transport which) const { return m_transport[int(which)]; }
     // Moves the transport into `host` (under a vertical picture), or back to the
     // start of this strip with nullptr. It keeps its signals and tips.
@@ -680,6 +683,7 @@ private:
     ui::SegmentedControl *m_tools = nullptr;
     ui::IconButton *m_snap = nullptr;
     static constexpr int kTransportGap = 28; // from the transport to the tools
+    QBoxLayout *m_extras = nullptr;
     QWidget *m_transportGroup = nullptr;
     ui::IconButton *m_transport[kTransports] = {};
     bool m_playing = false;

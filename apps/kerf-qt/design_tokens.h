@@ -201,6 +201,7 @@ constexpr int flight = 720;       // a tile going to where it lands
 constexpr int flightLand = 240;   // its fade once landed, over what it became
 constexpr int flightStagger = 160;
 constexpr int standInRelease = 260; // what stood in for the picture, fading
+constexpr int page = 520;         // Settings' pages coming up into the room
 constexpr int handOver = 460;     // the start window fading over the editor
 constexpr int pop = 460;          // a footage tile appearing
 constexpr int popStagger = 70;
@@ -212,6 +213,7 @@ constexpr int compareSweep = 6800; // the before/after wipe, there and back
 constexpr int workPulseSteps = 24; // the dot's redraws in a pulse: it is slow, and need not be drawn every frame
 constexpr int posterMost = 1280;   // the widest a poster is kept while it moves about
 // How far things go.
+constexpr int pageRise = 16;          // points Settings' pages come up
 constexpr qreal compareFrom = 0.28;   // the wipe's line, across the picture
 constexpr qreal compareTo = 0.78;
 constexpr qreal chatBehind = 0.28;    // the conversation while the picture is watched
@@ -245,6 +247,7 @@ constexpr int strip = 28;       // the sheets' strips, the timeline's
 constexpr int bin = 272;        // the Media sheet's width
 // The minimal layout (ui/stage_shell.h).
 constexpr int sidebar = 240;            // the folders and conversations, at the left
+constexpr int sidebarFoot = 48;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
 constexpr int rail = 400;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width

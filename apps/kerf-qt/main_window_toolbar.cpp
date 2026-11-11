@@ -1,5 +1,5 @@
-// MainWindow's toolbar: the window buttons' room, the ≡ menu, the centred
-// title and subtitle, the format and Export. The region's state and its building live in
+// MainWindow's toolbar: the window buttons' room and the sidebar's top, the
+// title and what is going on, Export and the panel's button. The region's state and its building live in
 // ToolbarWiring (ui/wiring/toolbar_wiring.*); these are the window's own
 // entry points into it.
 
@@ -53,16 +53,13 @@ void MainWindow::syncCanvasPreset(const QSize &size) {
 
 void MainWindow::fitTitleBar() {
 #if KERF_EDITOR_OWN_TITLE_BAR
-    if (!m_toolbar || !m_windowButtons) return;
+    if (!m_toolbar || !m_toolbarWiring) return;
     // The safe area's top is the title bar the window buttons sit in. The
-    // ≡ button starts past them (52 + 16 reserved); in full screen there are
-    // no buttons beside it.
+    // first control starts past them (52 + 16 reserved); in full screen there
+    // are no buttons beside it.
     const QWindow *handle = windowHandle();
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
-    const int first = ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen());
-    // The row's 16 pt padding and its 4 pt gap come before the first control.
-    m_windowButtons->setFixedWidth(std::max(0, first - 16 - 4));
-    m_windowButtons->setVisible(!isFullScreen());
+    m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen()));
 #endif
 }
 
