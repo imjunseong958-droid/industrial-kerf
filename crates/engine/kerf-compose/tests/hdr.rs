@@ -736,6 +736,13 @@ const EXACT_EFFECTS: &[&str] = &[
     "      fx utility.roundedcrop left=6 right=10 radius=20 border=3 border_color=#ffffff\n",
     "      fx transform.spacer left=10 radius=8 fill=true color=#ffffff\n",
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",
+    // Written for 0 to 1, so each pixel is brought under 1 for them and put back.
+    "      fx color.curves rgb=\"0,0 0.5,0.6 1,1\"\n",
+    "      fx color.huesaturation hue=30 saturation=20\n",
+    "      fx color.selectivecolor details/reds/redsCyan=40 details/neutrals/neutralsYellow=30\n",
+    "      fx color.photofilter density=60\n",
+    "      fx key.unmult blackLevel=10 softness=60\n",
+    "      fx utility.cineon gamma=2 rolloff=30\n",
 ];
 
 /// An HLG picture that moves, above SDR white in places and past BT.709 in others, through each of

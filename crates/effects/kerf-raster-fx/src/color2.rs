@@ -128,6 +128,20 @@ impl Curve {
         let t = f - i as f32;
         self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t
     }
+
+    /// The table [`Curve::eval`] reads between 0 and 1, a value to each of its steps and one more.
+    pub fn table(&self) -> &[f32] {
+        &self.lut
+    }
+
+    /// Its first and its last point, each with the slope the curve goes on by past it: x, y, slope.
+    pub fn ends(&self) -> [[f32; 3]; 2] {
+        let last = self.xs.len() - 1;
+        [
+            [self.xs[0], self.ys[0], self.ms[0]],
+            [self.xs[last], self.ys[last], self.ms[last]],
+        ]
+    }
 }
 
 fn ev(c: &Option<Curve>, v: f32) -> f32 {
@@ -413,7 +427,7 @@ fn shadow_highlight(ctx: &EffectCtx, mut b: Buf) -> Buf {
 // ---------------------------------------------------------------------------------------------
 // Selective Color
 
-const SC_IDS: [[&str; 4]; 9] = [
+pub const SC_IDS: [[&str; 4]; 9] = [
     ["redsCyan", "redsMagenta", "redsYellow", "redsBlack"],
     ["yellowsCyan", "yellowsMagenta", "yellowsYellow", "yellowsBlack"],
     ["greensCyan", "greensMagenta", "greensYellow", "greensBlack"],
@@ -430,7 +444,7 @@ pub const SC_COLORS: [&str; 9] = ["Reds", "Yellows", "Greens", "Cyans", "Blues",
 pub const SC_GROUPS: [&str; 9] = ["reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks"];
 
 /// Spec id of range `r`'s control `leaf` (`details/reds/redsCyan`).
-fn sc_param_id(r: usize, leaf: &str) -> String {
+pub fn sc_param_id(r: usize, leaf: &str) -> String {
     format!("details/{}/{leaf}", SC_GROUPS[r])
 }
 

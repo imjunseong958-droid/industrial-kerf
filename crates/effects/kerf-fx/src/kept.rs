@@ -163,6 +163,122 @@ pub fn grain_kernel(
     })))
 }
 
+/// One of the kept color effects as a kernel (Curves, Hue/Saturation, Photo Filter, Selective Color,
+/// Unmult), with its parameters read as [`apply`] reads them, or `None` for what stays on the CPU: any
+/// other effect, and Curves with a point outside 0 to 1, where a curve is no line past its ends.
+pub fn color_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::{curves_table, KeptColor, Kernel};
+    let id = effect.fx.as_str();
+    let spec = spec(id)?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let flag = |on: bool| if on { 1.0 } else { 0.0 };
+    let kept = match id {
+        "color.photofilter" => {
+            let filter = values.e("filter");
+            let color = match kerf_raster_fx::PHOTO_FILTERS.get(filter as usize) {
+                Some((_, rgb)) if filter != kerf_raster_fx::PHOTO_FILTER_CUSTOM => {
+                    rgb.map(|value| f32::from(value) / 255.0)
+                }
+                _ => {
+                    let color = values.color("color");
+                    [color[0], color[1], color[2]]
+                }
+            };
+            KeptColor::PhotoFilter(kerf_kernel::PhotoFilter {
+                color,
+                density: values.f("density") as f32 / 100.0,
+                keep: flag(values.b("preserveLuminosity")),
+            })
+        }
+        "key.unmult" => {
+            let white = values.e("backgroundColor") == 1;
+            let level = if white {
+                values.f("whiteLevel")
+            } else {
+                values.f("blackLevel")
+            };
+            let level = level.clamp(0.0, 100.0) as f32 / 100.0;
+            let soft = values.f("softness").clamp(0.0, 100.0) as f32 / 100.0;
+            let start = if white { 1.0 - level } else { level };
+            KeptColor::Unmult(kerf_kernel::Unmult {
+                white: flag(white),
+                start,
+                width: soft * (1.0 - start),
+                decontaminate: flag(values.b("removeColorMatting")),
+                clip: flag(values.b("clipHdrResults")),
+            })
+        }
+        "color.curves" => {
+            let curves = ["rgb", "red", "green", "blue", "alpha"]
+                .map(|id| kerf_raster_fx::Curve::parse(values.s(id)));
+            let curved = (0u32..)
+                .zip(&curves)
+                .map(|(which, curve)| u32::from(curve.is_some()) << which)
+                .sum();
+            match curved {
+                0 => KeptColor::Through,
+                _ => KeptColor::Curves {
+                    curved,
+                    table: curves_table(&curves)?,
+                },
+            }
+        }
+        "color.huesaturation" => {
+            let ctx = EffectCtx {
+                params: &values,
+                time: at.seconds(),
+                layer_size,
+                seed: 0,
+                adjustment: false,
+                env: EffectEnv::default(),
+            };
+            let turn = |id: &str| values.f(id) as f32 / 360.0;
+            let share = |id: &str| values.f(id) as f32 / 100.0;
+            KeptColor::HueSaturation {
+                master: [turn("hue"), share("saturation"), share("lightness")],
+                colorize: values.b("colorize").then(|| {
+                    [
+                        turn("colorizeHue"),
+                        share("colorizeSaturation"),
+                        share("colorizeLightness"),
+                    ]
+                }),
+                ranges: kerf_raster_fx::huesat_ranges(&ctx),
+            }
+        }
+        "color.selectivecolor" => {
+            let take: [[f32; 4]; 9] = std::array::from_fn(|range| {
+                kerf_raster_fx::SC_IDS[range].map(|leaf| {
+                    values.f(&kerf_raster_fx::sc_param_id(range, leaf)) as f32 / 100.0
+                })
+            });
+            if take.iter().flatten().all(|value| *value == 0.0) {
+                KeptColor::Through
+            } else {
+                KeptColor::SelectiveColor {
+                    take,
+                    relative: values.e("method") == 0,
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(Kernel::Kept(Box::new(kept)))
+}
+
 /// Run the kept effect `effect` on `picture`, premultiplied linear light.
 pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
     let Some(spec) = spec(effect.fx.as_str()).filter(|_| kept(effect.fx.as_str())) else {
@@ -512,6 +628,260 @@ mod tests {
             assert!(worst < 2e-3, "{:?}: differs by {worst:.2e}", effect.params);
         }
         assert!(kerf_gpu::shared().is_some(), "the device failed");
+    }
+
+    /// A picture of hues, grays, the corners of the cube, and every kind of alpha.
+    fn colors(w: usize, h: usize) -> kerf_draw::Image {
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / (w - 1) as f32, y as f32 / (h - 1) as f32);
+                let c = match x % 7 {
+                    0 => [v, v, v],
+                    1 => [f32::from(y % 2 == 0), f32::from(y % 3 == 0), f32::from(y % 5 == 0)],
+                    2 => [u, u, 0.02],
+                    _ => kerf_color::hsl_to_rgb(u, 0.2 + 0.8 * v, 0.1 + 0.8 * ((y % 9) as f32 / 8.0))
+                        .map(kerf_color::srgb_to_linear),
+                };
+                let a = match y % 11 {
+                    0 => 0.0,
+                    1 | 2 => 0.35 + 0.5 * u,
+                    _ => 1.0,
+                };
+                px.extend_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
+            }
+        }
+        kerf_draw::Image { w, h, px }
+    }
+
+    /// The color effects with kernels, each way they can be set: an id and what a document says of it.
+    fn color_cases() -> Vec<(&'static str, Vec<(&'static str, Value)>)> {
+        let number = Value::Number;
+        let choice = |word: &str| Value::Enum(word.into());
+        let text = |text: &str| Value::Text(text.into());
+        let color = |r, g, b| Value::Color(kerf_model::Rgba { r, g, b, a: 255 });
+        vec![
+            ("color.photofilter", vec![]),
+            (
+                "color.photofilter",
+                vec![("filter", choice("cooling-filter-80")), ("density", number(80.0))],
+            ),
+            (
+                "color.photofilter",
+                vec![
+                    ("filter", choice("custom")),
+                    ("color", color(64, 192, 255)),
+                    ("density", number(100.0)),
+                    ("preserveLuminosity", Value::Bool(false)),
+                ],
+            ),
+            ("key.unmult", vec![]),
+            ("key.unmult", vec![("backgroundColor", choice("white"))]),
+            (
+                "key.unmult",
+                vec![("blackLevel", number(20.0)), ("softness", number(40.0))],
+            ),
+            (
+                "key.unmult",
+                vec![
+                    ("backgroundColor", choice("white")),
+                    ("whiteLevel", number(80.0)),
+                    ("softness", number(30.0)),
+                    ("removeColorMatting", Value::Bool(false)),
+                    ("clipHdrResults", Value::Bool(false)),
+                ],
+            ),
+            // No curve but the line it starts as: there and back, and nothing between.
+            ("color.curves", vec![]),
+            ("color.curves", vec![("rgb", text("0,0 0.5,0.7 1,1"))]),
+            (
+                "color.curves",
+                vec![
+                    ("red", text("0,0.1 0.4,0.3 1,0.9")),
+                    ("blue", text("0,0 0.6,0.4 1,1")),
+                ],
+            ),
+            // What has no alpha is given some.
+            ("color.curves", vec![("alpha", text("0,0.2 1,0.8"))]),
+            // The master goes below 0 and above 1, where the green curve is a line past its ends.
+            (
+                "color.curves",
+                vec![
+                    ("rgb", text("0.1,0 0.9,1")),
+                    ("green", text("0,0.05 0.5,0.4 1,0.95")),
+                ],
+            ),
+            ("color.huesaturation", vec![]),
+            (
+                "color.huesaturation",
+                vec![
+                    ("hue", number(40.0)),
+                    ("saturation", number(30.0)),
+                    ("lightness", number(-10.0)),
+                ],
+            ),
+            ("color.huesaturation", vec![("saturation", number(-100.0))]),
+            (
+                "color.huesaturation",
+                vec![
+                    ("redsHue", number(60.0)),
+                    ("redsSaturation", number(50.0)),
+                    ("bluesLightness", number(-40.0)),
+                    ("greensSaturation", number(-60.0)),
+                    ("greensRangeStart", number(80.0)),
+                    ("greensEndFalloff", number(0.0)),
+                ],
+            ),
+            (
+                "color.huesaturation",
+                vec![
+                    ("colorize", Value::Bool(true)),
+                    ("colorizeHue", number(200.0)),
+                    ("colorizeSaturation", number(60.0)),
+                    ("colorizeLightness", number(20.0)),
+                ],
+            ),
+            // A hue more than a turn back.
+            (
+                "color.huesaturation",
+                vec![
+                    ("colorize", Value::Bool(true)),
+                    ("colorizeHue", number(-460.0)),
+                    ("colorizeLightness", number(-30.0)),
+                ],
+            ),
+            ("color.selectivecolor", vec![]),
+            (
+                "color.selectivecolor",
+                vec![
+                    ("details/reds/redsCyan", number(40.0)),
+                    ("details/reds/redsBlack", number(-20.0)),
+                    ("details/neutrals/neutralsYellow", number(30.0)),
+                ],
+            ),
+            (
+                "color.selectivecolor",
+                vec![
+                    ("method", choice("absolute")),
+                    ("details/blues/bluesMagenta", number(50.0)),
+                    ("details/whites/whitesBlack", number(30.0)),
+                    ("details/blacks/blacksCyan", number(-40.0)),
+                    ("details/cyans/cyansYellow", number(25.0)),
+                    ("details/yellows/yellowsMagenta", number(-35.0)),
+                ],
+            ),
+        ]
+    }
+
+    fn set(id: &str, params: &[(&'static str, Value)]) -> Effect {
+        let params: Vec<(&str, Param)> = params
+            .iter()
+            .map(|(name, value)| (*name, Param::Static(value.clone())))
+            .collect();
+        effect(id, &params)
+    }
+
+    /// Curves, Hue/Saturation, Photo Filter, Selective Color, and Unmult, each kernel against the
+    /// effect. The CPU encodes a picture from a table and the kernel by the curve itself, which is
+    /// most of what there is between them.
+    #[test]
+    fn the_color_kernels_match_the_effects() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let image = colors(96, 54);
+        let mut failures = Vec::new();
+        for (id, params) in color_cases() {
+            let effect = set(id, &params);
+            let mut cpu = image.clone();
+            apply(&mut cpu, &effect, &run());
+            let kernel =
+                color_kernel(&effect, Time::ZERO, (image.w, image.h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            if worst > 2e-3 {
+                failures.push(format!("{id} {params:?}: differs by {worst:.2e}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(kerf_gpu::shared().is_some(), "the device failed");
+    }
+
+    /// Photo Filter and Unmult are written once in `kerf_kernel`; as `f32`, between the CPU's own way
+    /// there and back, they come to the very values the effects come to, with no GPU to say so.
+    #[test]
+    fn color_kernels_from_one_source_are_the_effects_to_the_bit() {
+        use crate::filmcraft::vfx::gpu::{KeptColor, Kernel};
+        let image = colors(96, 54);
+        let number = Value::Number;
+        // A hard edge too, which a kernel on a GPU may put a pixel either side of.
+        let hard = [
+            ("key.unmult", vec![("softness", number(0.0)), ("blackLevel", number(30.0))]),
+            (
+                "key.unmult",
+                vec![
+                    ("backgroundColor", Value::Enum("white".into())),
+                    ("softness", number(0.0)),
+                ],
+            ),
+        ];
+        let mut held = 0;
+        for (id, params) in color_cases().into_iter().chain(hard) {
+            let effect = set(id, &params);
+            let Some(Kernel::Kept(kept)) = color_kernel(&effect, Time::ZERO, (image.w, image.h), 1.0)
+            else {
+                panic!("{id} has no kernel");
+            };
+            let mut twin = encoded(&image);
+            match &*kept {
+                KeptColor::PhotoFilter(told) => {
+                    for px in &mut twin.data {
+                        *px = kerf_kernel::photo_filter(*px, told);
+                    }
+                }
+                KeptColor::Unmult(told) => {
+                    for px in &mut twin.data {
+                        *px = kerf_kernel::unmult(*px, told);
+                    }
+                }
+                // Nothing between there and back, and the rest are written by hand.
+                KeptColor::Through => {}
+                _ => continue,
+            }
+            let twin = Buf {
+                img: twin,
+                offset: [0.0; 2],
+                scale: 1.0,
+            };
+            let mut drawn = image.clone();
+            decode_into(&twin, &mut drawn, 1.0);
+            let mut cpu = image.clone();
+            apply(&mut cpu, &effect, &run());
+            // (equal rather than the same bits: a zero may come out with another sign)
+            assert!(drawn.px == cpu.px, "{id} {params:?}");
+            held += 1;
+        }
+        assert_eq!(held, 3 + 4 + 2 + 2);
+    }
+
+    #[test]
+    fn curves_past_0_and_1_stay_on_the_cpu() {
+        let curve = |points: &str| set("color.curves", &[("rgb", Value::Text(points.into()))]);
+        let kernel = |effect: &Effect| color_kernel(effect, Time::ZERO, (8, 8), 1.0);
+        assert!(kernel(&curve("0,0 0.5,0.6 1,1")).is_some());
+        // A curve is a line past its first and last point only when those are its ends.
+        assert!(kernel(&curve("-0.2,0 0.5,0.6 1,1")).is_none());
+        assert!(kernel(&curve("0,0 0.5,0.6 1.3,1")).is_none());
+        assert!(kernel(&set("blur.bilateral", &[])).is_none());
     }
 
     #[test]

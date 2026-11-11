@@ -131,6 +131,22 @@ const SCENES: &[(&str, &str)] = &[
         "spacer",
         "      fx transform.spacer@1 left=120 radius=60 fill=true color=#203040\n",
     ),
+    // The color effects kept from EffectCraft, and the Cineon Converter.
+    (
+        "curves",
+        "      fx color.curves@1 rgb=\"0,0 0.25,0.2 0.75,0.82 1,1\" red=\"0,0 0.5,0.55 1,1\"\n",
+    ),
+    (
+        "hue saturation",
+        "      fx color.huesaturation@1 hue=20 saturation=25 redsSaturation=-40\n",
+    ),
+    (
+        "selective color",
+        "      fx color.selectivecolor@1 details/reds/redsCyan=40 details/neutrals/neutralsYellow=30\n",
+    ),
+    ("photo filter", "      fx color.photofilter@1 density=50\n"),
+    ("unmult", "      fx key.unmult@1\n"),
+    ("cineon", "      fx utility.cineon@2\n"),
     ("bokeh", "      fx blur.bokeh@1\n"),
     // The widest iris that is gathered at full size, and the first gathered at half.
     ("bokeh 12", "      fx blur.bokeh@1 amount=12\n"),

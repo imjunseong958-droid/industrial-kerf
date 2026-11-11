@@ -517,6 +517,12 @@ impl Drawing {
                     )?;
                     ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
                 }
+                "color.curves" | "color.huesaturation" | "color.photofilter"
+                | "color.selectivecolor" | "key.unmult" => {
+                    let kernel =
+                        kerf_fx::kept::color_kernel(effect, time, shape.size, shape.per_source)?;
+                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
+                }
                 // Only FilmCraft's effects have kernels beyond those above.
                 id if filmcraft::catalog::carried(id).is_none() => return None,
                 _ => {

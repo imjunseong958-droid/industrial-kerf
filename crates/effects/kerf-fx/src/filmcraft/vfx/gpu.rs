@@ -123,6 +123,70 @@ pub enum Kernel {
         blocks: [u32; 2],
         soft: f32,
     },
+    /// A color effect kept from EffectCraft, on a pixel as `kept::encoded` makes one, which goes back
+    /// as `kept::decode_into` takes one, all in a pass.
+    Kept(Box<KeptColor>),
+    Cineon {
+        /// From log to linear (0), from linear to log (1), or from log to log.
+        way: u32,
+        told: kerf_kernel::Cineon<f32>,
+    },
+}
+
+/// What [`Kernel::Kept`] does between the way there and the way back.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeptColor {
+    /// Nothing, which an effect that changes nothing as set still goes there and back for.
+    Through,
+    PhotoFilter(kerf_kernel::PhotoFilter<f32>),
+    Unmult(kerf_kernel::Unmult<f32>),
+    Curves {
+        /// Which of the master, red, green, blue, and alpha have a curve, a bit to each.
+        curved: u32,
+        /// [`curves_table`].
+        table: Vec<f32>,
+    },
+    HueSaturation {
+        /// The master's hue, as a share of a turn, and its saturation and lightness.
+        master: [f32; 3],
+        /// The hue, saturation, and lightness it colorizes by, when it does.
+        colorize: Option<[f32; 3]>,
+        ranges: Vec<kerf_raster_fx::HueRange>,
+    },
+    SelectiveColor {
+        /// The cyan, magenta, yellow, and black taken from each of its nine ranges.
+        take: [[f32; 4]; 9],
+        relative: bool,
+    },
+}
+
+/// How many steps a curve of Curves is kept at between 0 and 1, as `Curve::eval` reads it.
+const KEPT_CURVE_STEPS: usize = 1024;
+
+/// The table `curves` reads: a row with a step of the master, red, green, and blue curves to a pixel,
+/// a row of alpha's, and two rows with each curve's first and last point and the slope it goes on by
+/// past it. `None` for a curve with a point outside 0 to 1, where it is not a line past its ends.
+pub fn curves_table(curves: &[Option<kerf_raster_fx::Curve>; 5]) -> Option<Vec<f32>> {
+    let w = KEPT_CURVE_STEPS + 1;
+    let mut px = vec![0.0; w * 4 * 4];
+    for (which, curve) in curves.iter().enumerate() {
+        let Some(curve) = curve else {
+            continue;
+        };
+        let [first, last] = curve.ends();
+        if first[0] < 0.0 || last[0] > 1.0 || curve.table().len() != w {
+            return None;
+        }
+        let (row, channel) = (which / 4, which % 4);
+        for (step, value) in curve.table().iter().enumerate() {
+            px[(row * w + step) * 4 + channel] = *value;
+        }
+        for (row, end) in [(2, first), (3, last)] {
+            let at = (row * w + which) * 4;
+            px[at..at + 3].copy_from_slice(&end);
+        }
+    }
+    Some(px)
 }
 
 /// What a Lumetri does that [`FxOp::Lumetri`] does not, in the order `lumetri` does it.
@@ -770,6 +834,22 @@ impl Kernel {
                     },
                 }
             }
+            "cineon_converter" => {
+                let black = fv(e, "black10", cx);
+                let white = fv(e, "white10", cx).max(black + 1.0);
+                Kernel::Cineon {
+                    way: chv(e, "conversion"),
+                    told: kerf_kernel::Cineon {
+                        black,
+                        white,
+                        black_inside: fv(e, "black_internal", cx) / 255.0,
+                        white_inside: fv(e, "white_internal", cx) / 255.0,
+                        gamma: fv(e, "gamma", cx).max(0.1),
+                        rolloff: fv(e, "rolloff", cx) / 255.0,
+                        offset: kerf_kernel::cineon_offset(black, white),
+                    },
+                }
+            }
             "mosaic" => {
                 let across = fv(e, "horizontal", cx).max(1.0) as usize;
                 let down = fv(e, "vertical", cx).max(1.0) as usize;
@@ -1293,6 +1373,108 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::Kept(kept) => {
+                let (pipeline, table, numbers) = match &**kept {
+                    KeptColor::Through => (&stage.kept_through, None, U::default()),
+                    KeptColor::PhotoFilter(told) => {
+                        let [r, g, b] = told.color;
+                        let numbers = U {
+                            p0: [r, g, b, told.density],
+                            p1: [told.keep, 0.0, 0.0, 0.0],
+                            ..U::default()
+                        };
+                        (&stage.photo_filter, None, numbers)
+                    }
+                    KeptColor::Unmult(told) => {
+                        let numbers = U {
+                            p0: [told.white, told.start, told.width, told.decontaminate],
+                            p1: [told.clip, 0.0, 0.0, 0.0],
+                            ..U::default()
+                        };
+                        (&stage.unmult, None, numbers)
+                    }
+                    KeptColor::Curves { curved, table } => {
+                        let table = Image {
+                            w: KEPT_CURVE_STEPS + 1,
+                            h: 4,
+                            px: table.clone(),
+                        };
+                        let numbers = U {
+                            a: [*curved, 0, 0, 0],
+                            ..U::default()
+                        };
+                        (&stage.curves, Some(table), numbers)
+                    }
+                    KeptColor::HueSaturation {
+                        master,
+                        colorize,
+                        ranges,
+                    } => {
+                        // A row to a range: where it is, then what it does.
+                        let mut table = Image::new(2, ranges.len().max(1));
+                        for (range, row) in ranges.iter().zip(table.px.as_chunks_mut::<8>().0) {
+                            *row = [
+                                range.start,
+                                range.end,
+                                range.fall_start,
+                                range.fall_end,
+                                range.hue,
+                                range.sat,
+                                range.light,
+                                0.0,
+                            ];
+                        }
+                        let [h, s, l] = colorize.unwrap_or_default();
+                        let numbers = U {
+                            a: [u32::from(colorize.is_some()), ranges.len() as u32, 0, 0],
+                            p0: [master[0], master[1], master[2], 0.0],
+                            p1: [h, s, l, 0.0],
+                            ..U::default()
+                        };
+                        (&stage.hue_saturation, Some(table), numbers)
+                    }
+                    KeptColor::SelectiveColor { take, relative } => {
+                        let table = Image {
+                            w: 9,
+                            h: 1,
+                            px: take.iter().flatten().copied().collect(),
+                        };
+                        let numbers = U {
+                            a: [u32::from(*relative), 0, 0, 0],
+                            ..U::default()
+                        };
+                        (&stage.selective_color, Some(table), numbers)
+                    }
+                };
+                let table = table.map(|table| frame.image(&table));
+                let out = stage.pass(frame, pipeline, &picture, table.as_ref(), &numbers);
+                if let Some(table) = table {
+                    frame.release(table);
+                }
+                frame.release(picture);
+                out
+            }
+            Kernel::Cineon { way, told } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.cineon,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*way, 0, 0, 0],
+                        p0: [
+                            told.black,
+                            told.white,
+                            told.black_inside,
+                            told.white_inside,
+                        ],
+                        p1: [told.gamma, told.rolloff, told.offset, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
         })
     }
 }
@@ -1365,9 +1547,10 @@ impl U {
 /// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
 fn source() -> String {
     format!(
-        "{}{}",
+        "{}{}{}",
         include_str!("kernels.wgsl"),
-        kerf_kernel::rounded_wgsl()
+        kerf_kernel::rounded_wgsl(),
+        kerf_kernel::color_wgsl()
     )
 }
 
@@ -1408,6 +1591,13 @@ struct Stage {
     spacer: wgpu::ComputePipeline,
     mosaic_blocks: wgpu::ComputePipeline,
     mosaic: wgpu::ComputePipeline,
+    kept_through: wgpu::ComputePipeline,
+    photo_filter: wgpu::ComputePipeline,
+    unmult: wgpu::ComputePipeline,
+    curves: wgpu::ComputePipeline,
+    hue_saturation: wgpu::ComputePipeline,
+    selective_color: wgpu::ComputePipeline,
+    cineon: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -1469,6 +1659,13 @@ impl Stage {
                 spacer: kernel("spacer"),
                 mosaic_blocks: kernel("mosaic_blocks"),
                 mosaic: kernel("mosaic"),
+                kept_through: kernel("kept_through"),
+                photo_filter: kernel("photo_filter"),
+                unmult: kernel("unmult"),
+                curves: kernel("curves"),
+                hue_saturation: kernel("hue_saturation"),
+                selective_color: kernel("selective_color"),
+                cineon: kernel("cineon"),
                 layout: layout.clone(),
             }
         });
@@ -1930,6 +2127,29 @@ mod tests {
                     ("softness", fl(100.0)),
                 ],
             ),
+            // The Cineon Converter, each way it goes.
+            ("cineon_converter", vec![]),
+            (
+                "cineon_converter",
+                vec![
+                    ("conversion", ParamValue::Choice(0)),
+                    ("gamma", fl(2.2)),
+                    ("rolloff", fl(40.0)),
+                    ("black_internal", fl(10.0)),
+                ],
+            ),
+            (
+                "cineon_converter",
+                vec![
+                    ("conversion", ParamValue::Choice(1)),
+                    ("white10", fl(700.0)),
+                    ("white_internal", fl(230.0)),
+                ],
+            ),
+            (
+                "cineon_converter",
+                vec![("conversion", ParamValue::Choice(2)), ("black10", fl(120.0))],
+            ),
         ]
     }
 
@@ -1972,6 +2192,9 @@ mod tests {
                 }
                 cast
             }
+            Kernel::Cineon { way, told } => {
+                each(image, &|p, _, _| kerf_kernel::cineon_px(p, *way, told))
+            }
             _ => return None,
         })
     }
@@ -1997,7 +2220,7 @@ mod tests {
             assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
             held += 1;
         }
-        assert_eq!(held, 12);
+        assert_eq!(held, 12 + 4);
     }
 
     /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes
