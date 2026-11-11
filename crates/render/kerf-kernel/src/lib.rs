@@ -25,6 +25,8 @@ pub trait Num:
     fn powf(self, power: Self) -> Self;
     fn exp(self) -> Self;
     fn log10(self) -> Self;
+    /// What is left of this once `by`, which is above 0, is taken from it as often as it goes.
+    fn rem_euclid(self, by: Self) -> Self;
     /// `yes` where this is at most `limit`, else `no`. The CPU works out the one it takes, and WGSL both.
     fn if_at_most<const N: usize>(
         self,
@@ -78,6 +80,10 @@ impl Num for f32 {
     #[inline(always)]
     fn log10(self) -> f32 {
         f32::log10(self)
+    }
+    #[inline(always)]
+    fn rem_euclid(self, by: f32) -> f32 {
+        f32::rem_euclid(self, by)
     }
     #[inline(always)]
     fn if_at_most<const N: usize>(
@@ -202,6 +208,10 @@ impl Num for Traced {
     fn log10(self) -> Traced {
         // WGSL has the logarithm to 2 and none to 10.
         Traced::of(&format!("log2({}) * {:?}", self.name(), std::f32::consts::LOG10_2))
+    }
+    fn rem_euclid(self, by: Traced) -> Traced {
+        let (a, b) = (self.name(), by.name());
+        Traced::of(&format!("{a} - {b} * floor({a} / {b})"))
     }
     fn if_at_most<const N: usize>(
         self,
@@ -623,6 +633,95 @@ pub fn shadow<N: Num>(p: [N; 4], color: [N; 3], opacity: N) -> [N; 4] {
     [color[0] * a, color[1] * a, color[2] * a, a]
 }
 
+// -------------------------------------------------------------------------------- What is generated
+//
+// On the GPU only, as the two sections above, and held to the CPU's code the same way.
+
+/// What a four-color gradient is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FourColors<N> {
+    /// Its colors, sRGB-encoded: upper left, upper right, lower left, lower right.
+    pub colors: [[N; 3]; 4],
+    /// The power of its distance each color's weight falls off by.
+    pub power: N,
+    pub opacity: N,
+    /// The picture's width and height, a quarter of which each color sits in from its corner.
+    pub size: [N; 2],
+}
+
+/// A four-color gradient over the premultiplied pixel whose middle is at `x`, `y`.
+#[inline(always)]
+pub fn four_colors<N: Num>(p: [N; 4], x: N, y: N, told: &FourColors<N>) -> [N; 4] {
+    let (zero, one) = (N::lit(0.0), N::lit(1.0));
+    let [w, h] = told.size;
+    let (near, far) = (N::lit(0.25), N::lit(0.75));
+    let points = [
+        [near * w, near * h],
+        [far * w, near * h],
+        [near * w, far * h],
+        [far * w, far * h],
+    ];
+    let mut sum = [zero; 3];
+    let mut weights = zero;
+    for (point, color) in points.iter().zip(&told.colors) {
+        let (dx, dy) = (x - point[0], y - point[1]);
+        let d = (dx * dx + dy * dy).sqrt().max(one);
+        let weight = one / d.powf(told.power);
+        for k in 0..3 {
+            sum[k] = sum[k] + color[k] * weight;
+        }
+        weights = weights + weight;
+    }
+    let c = sum.map(|value| srgb_to_linear((value / weights).clamp(zero, one)));
+    let (over, under) = (told.opacity, one - told.opacity);
+    [
+        c[0] * over + p[0] * under,
+        c[1] * over + p[1] * under,
+        c[2] * over + p[2] * under,
+        over + p[3] * under,
+    ]
+}
+
+/// What a grid is told, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grid<N> {
+    /// The middle of the picture, where a line goes each way.
+    pub middle: [N; 2],
+    /// How far its lines are apart, and how wide they are.
+    pub size: N,
+    pub border: N,
+    /// Its color in linear light.
+    pub color: [N; 3],
+    pub opacity: N,
+}
+
+/// A grid over the premultiplied pixel `x` across and `y` down, counted in whole pixels.
+#[inline(always)]
+pub fn grid<N: Num>(p: [N; 4], x: N, y: N, told: &Grid<N>) -> [N; 4] {
+    let (zero, half, one) = (N::lit(0.0), N::lit(0.5), N::lit(1.0));
+    // How far a place is from the nearest line.
+    let from_a_line = |at: N, middle: N| {
+        let past = (at - middle).rem_euclid(told.size);
+        past.min(told.size - past)
+    };
+    let (gx, gy) = (from_a_line(x, told.middle[0]), from_a_line(y, told.middle[1]));
+    let a = (told.border * half - gx.min(gy) + half).clamp(zero, one) * told.opacity;
+    a.if_at_most(
+        zero,
+        || p,
+        || {
+            let under = one - a;
+            let [r, g, b] = told.color;
+            [
+                r * a + p[0] * under,
+                g * a + p[1] * under,
+                b * a + p[2] * under,
+                a + p[3] * under,
+            ]
+        },
+    )
+}
+
 // ------------------------------------------------------------------------------------------- A blur
 
 /// A row or column of pixels, read and written by a kernel that goes along it.
@@ -1020,6 +1119,36 @@ pub fn color_wgsl() -> String {
     format!("{filter}{unmultiplied}{converted}")
 }
 
+/// `four_colors` and `grid` as `fn four_colors_px` and `fn grid_px`, for the effects'
+/// `vfx/kernels.wgsl`: each takes a premultiplied pixel and where it is. A four-color gradient's colors
+/// are in `u.p0` to `u.p3`, with its power, its opacity, and the picture's width and height in the
+/// fourth place of each; a grid's middle, size, and border are in `u.p0`, and its color in `u.p1` with
+/// its opacity.
+pub fn generated_wgsl() -> String {
+    let v = Traced::named;
+    let gradient = at_a_pixel("four_colors_px", |q, x, y| {
+        let color = |p: &str| [v(&format!("{p}.x")), v(&format!("{p}.y")), v(&format!("{p}.z"))];
+        let told = FourColors {
+            colors: [color("u.p0"), color("u.p1"), color("u.p2"), color("u.p3")],
+            power: v("u.p0.w"),
+            opacity: v("u.p1.w"),
+            size: [v("u.p2.w"), v("u.p3.w")],
+        };
+        four_colors(q, x, y, &told)
+    });
+    let lines = at_a_pixel("grid_px", |q, x, y| {
+        let told = Grid {
+            middle: [v("u.p0.x"), v("u.p0.y")],
+            size: v("u.p0.z"),
+            border: v("u.p0.w"),
+            color: [v("u.p1.x"), v("u.p1.y"), v("u.p1.z")],
+            opacity: v("u.p1.w"),
+        };
+        grid(q, x, y, &told)
+    });
+    format!("{gradient}{lines}")
+}
+
 /// `rounded_crop`, `spacer`, and `shadow` as `fn rounded_crop_px`, `fn spacer_px`, and `fn shadow_px`,
 /// for the effects' `vfx/kernels.wgsl`: each takes a premultiplied pixel and where its middle is. A
 /// rounded crop's edges are in `u.p0`, its radius, feather, and border in `u.p1`, and its border's color in
@@ -1310,6 +1439,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
         valid(&format!("{TRANSITIONS}{}", wipe_wgsl()));
         valid(&format!("{VFX}{}", rounded_wgsl()));
         valid(&format!("{VFX}{}", color_wgsl()));
+        valid(&format!("{VFX}{}", generated_wgsl()));
     }
 
     #[test]
@@ -1319,6 +1449,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
         assert_eq!(wipe_wgsl(), wipe_wgsl());
         assert_eq!(rounded_wgsl(), rounded_wgsl());
         assert_eq!(color_wgsl(), color_wgsl());
+        assert_eq!(generated_wgsl(), generated_wgsl());
     }
 
     /// A kernel's names may not be taken for WGSL's own, as `i32` once was.
@@ -1330,6 +1461,7 @@ fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
             wipe_wgsl(),
             rounded_wgsl(),
             color_wgsl(),
+            generated_wgsl(),
         ];
         for written in all {
             for shadowed in ["let i32", "let f32", "let u32", "var i32", "var f32"] {

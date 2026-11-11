@@ -120,6 +120,10 @@ on `main`; its section here becomes the release's notes on GitHub
 - Lens Distortion and Magnify draw on the GPU as well: straightening a wide
   lens, or a loupe over a detail, no longer sends the frame to the CPU. Not
   timed yet.
+- Gradient, Ramp, 4-Color Gradient, Checkerboard and Grid draw on the GPU: a
+  gradient behind a title or a grid over a frame keeps the frame there. Not
+  timed yet. With these, 45 of Kerf's effects and transitions still send a
+  frame to the CPU, where 63 did.
 
 ## 0.1.1
 

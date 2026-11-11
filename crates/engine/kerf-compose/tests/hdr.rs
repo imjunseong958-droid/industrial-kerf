@@ -738,6 +738,11 @@ const EXACT_EFFECTS: &[&str] = &[
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",
     "      fx distort.lens curvature=35 h_decentering=15\n",
     "      fx distort.magnify center_x=0.4 center_y=0.45 size=30 magnification=250 feather=6\n",
+    "      fx generate.fourcolor blend=200 opacity=50\n",
+    "      fx generate.grid size=20 border=2 opacity=80\n",
+    "      fx generate.gradientramp start_x=0.2 end_x=0.8 blend=50\n",
+    "      fx generate.gradient shape=radial end_x=0.9 scatter=40 blend=50\n",
+    "      fx generate.checkerboard width=16 mode=add opacity=60\n",
     // Written for 0 to 1, so each pixel is brought under 1 for them and put back.
     "      fx color.curves rgb=\"0,0 0.5,0.6 1,1\"\n",
     "      fx color.huesaturation hue=30 saturation=20\n",
