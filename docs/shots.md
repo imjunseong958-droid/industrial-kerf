@@ -184,6 +184,64 @@ no model `dawn` is set up: /home/you/.kerf/models.json names none. A model is
 a program named there, as {"dawn": {"run": ["<program>", "{request}"]}}
 ```
 
+### A model on a ComfyUI server
+
+`kerf-comfy` is such a program, for a model kept on a
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI) server. It is in this
+repository (`tools/kerf-comfy`, built with `cargo build --release -p
+kerf-comfy`); the packages do not carry it.
+
+```json
+{
+  "vace": { "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"] }
+}
+```
+
+The server is `COMFY_URL`, with `COMFY_API_KEY` if it asks for a key. The key
+goes in the header `X-API-Key` unless `COMFY_API_HEADER` names another, and
+`Authorization` sends it as a bearer token. An editor is not started from a
+shell, so the same can be kept in `~/.kerf/comfy.json` (`KERF_COMFY` names
+another file), which is yours and outside any project:
+
+```json
+{ "url": "https://comfy.example", "key": "…", "header": "X-API-Key" }
+```
+
+A workflow is a ComfyUI graph, as ComfyUI exports it for its API, with blanks
+in it, and what the model it runs makes: its rate, how many frames, how
+large. `wan-vace` comes with the program: Wan 2.1 VACE, which follows a guide
+video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
+takes a file too, and `tools/kerf-comfy/workflows/wan-vace.json` is the one to
+start from.
+
+| Blank | What fills it |
+|---|---|
+| `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
+| `{width}`, `{height}`, `{frames}`, `{fps}` | What `size=` and `seconds=` come to for this model. |
+| `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
+| any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
+
+What it does with a request:
+
+- It fits the guide to the model. A guide drawn at 1920x1080 and 24 frames a
+  second goes up at the model's 832x480 and 16, filling the picture with what
+  is over cut off evenly, and is kept as `guide.comfy.mp4` beside the request.
+- It asks for a length and a size the model takes. `seconds=4` is 65 frames of
+  a model that makes one frame and a multiple of four: never fewer than asked,
+  and never more than the model makes at once. A size with more area than the
+  model's own comes down to it, keeping its shape. It says so when what it asks
+  is not what the line said, and when the guide is shorter than the shot.
+- It queues the graph, kept as `workflow.comfy.json` beside the request, says
+  where the job is while it waits, and writes what the server saved as the
+  take. A job waited for past half an hour (`COMFY_TIMEOUT`, in seconds) is
+  taken back from the server.
+
+Its limits, as they are now: it learns how a job is doing by asking, so it
+says that one is running and for how long, not how far along it is; Kerf ends
+a program outright, so a making cancelled in Kerf leaves its job running on
+the server; and what it sends up and what the server saves stay on the
+server.
+
 ## Guides
 
 What a model is given to follow decides how much of a shot is directed and how

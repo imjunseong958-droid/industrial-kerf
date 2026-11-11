@@ -52,7 +52,11 @@ on `main`; its section here becomes the release's notes on GitHub
   prompt, a guide to follow, first and last frames, references, a seed. Kerf
   comes with no model. One is a program you name in `~/.kerf/models.json`,
   which is handed what was asked as a file; see
-  [docs/shots.md](docs/shots.md#models).
+  [docs/shots.md](docs/shots.md#models). The repository has such a program
+  for a model on a ComfyUI server, `kerf-comfy`, which the packages do not
+  carry yet: it fits the guide to the model's size and rate, asks the server,
+  and writes the take
+  ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,
