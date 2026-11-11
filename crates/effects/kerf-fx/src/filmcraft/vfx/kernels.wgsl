@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the Cineon Converter, and the
+// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid, the Cineon Converter, and the
 // color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
@@ -1487,4 +1487,125 @@ fn selective_color(@builtin(global_invocation_id) id: vec3<u32>) {
         o -= w[r] * delta;
     }
     textureStore(dst, p, kept_out(vec4(max(o, vec3(0.0)) * px.a, px.a)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// What generates a picture over the one it is given.
+
+// The four-color gradient and the grid in `effects`, whose arithmetic `four_colors_px` and `grid_px`
+// is written out from `kerf_kernel`. A gradient's four colors are in p0 to p3, with its power, its
+// opacity, and the picture's width and height in the fourth place of each.
+@compute @workgroup_size(16, 16)
+fn four_colors(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let xy = vec2<f32>(id.xy) + 0.5;
+    textureStore(dst, p, four_colors_px(textureLoad(src, p, 0), xy.x, xy.y));
+}
+
+// p0: the picture's middle, how far its lines are apart, and how wide they are; p1: its color, and
+// its opacity. It counts in whole pixels.
+@compute @workgroup_size(16, 16)
+fn grid(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    textureStore(dst, p, grid_px(textureLoad(src, p, 0), f32(id.x), f32(id.y)));
+}
+
+// The ramp in `effects`. a.x: radial; p0: its start, and from there to its end; p1: that length
+// squared, and how much of it shows; p2, p3: its two colors, encoded.
+// By hand, not from `kerf_kernel`, for `corner_pin`'s reason: the CPU works out in 64 bits how far along
+// a pixel is.
+@compute @workgroup_size(16, 16)
+fn ramp(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let d = vec2<f32>(id.xy) + 0.5 - u.p0.xy;
+    var t = dot(d, u.p0.zw) / u.p1.x;
+    if u.a.x != 0u {
+        t = length(d) / sqrt(u.p1.x);
+    }
+    let made = dec3(u.p2.rgb + (u.p3.rgb - u.p2.rgb) * clamp(t, 0.0, 1.0));
+    let op = u.p1.y;
+    textureStore(dst, p, vec4(made * op + c.rgb * (1.0 - op), op + c.a * (1.0 - op)));
+}
+
+// `stylize::gradient`. a.x: its shape; a.zw: the seed of what scatters it, by `hash_u`'s constant.
+// p0: its start, and from there to its end; p1: that length squared, that length, its scatter, and
+// the power that sets its midpoint; p2, p3: its two colors, encoded, with their alpha; p4.x: how much
+// of the picture stays.
+// By hand, not from `kerf_kernel`: it scatters by a hash of 64 bits of where a pixel is, and `Num` has
+// no whole numbers.
+@compute @workgroup_size(16, 16)
+fn gradient(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let d = vec2<f32>(id.xy) + 0.5 - u.p0.xy;
+    let v = u.p0.zw;
+    let along = (d.x * v.x + d.y * v.y) / u.p1.x;
+    let across = (-d.x * v.y + d.y * v.x) / u.p1.x;
+    var t = along;
+    switch u.a.x {
+        case 1u: {
+            t = sqrt(d.x * d.x + d.y * d.y) / u.p1.y;
+        }
+        case 2u: {
+            t = abs(along);
+        }
+        case 3u: {
+            t = abs(along) + abs(across);
+        }
+        default: {
+        }
+    }
+    if u.p1.z > 0.0 {
+        // `hash01`: the top 24 bits of the hash, as a share of them all.
+        let h = hash_u(p.x, p.y, 0, u.a.zw);
+        t += (f32(h.y >> 8u) / 16777216.0 - 0.5) * u.p1.z * 0.1;
+    }
+    t = pow(clamp(t, 0.0, 1.0), u.p1.w);
+    let a = u.p2.a + (u.p3.a - u.p2.a) * t;
+    let made = vec4(dec3(u.p2.rgb + (u.p3.rgb - u.p2.rgb) * t) * a, a);
+    textureStore(dst, p, made + (c - made) * u.p4.x);
+}
+
+// `stylize::checkerboard`. a.x: how it goes over the picture; p0: its anchor, and a square's width
+// and height; p1: its feather, and its opacity; p2: its color.
+// By hand, not from `kerf_kernel`: its squares go by whole numbers, odd and even, and it goes over the
+// picture in one of six ways the kernel is told, each of which `Num` would have to work out.
+@compute @workgroup_size(16, 16)
+fn checkerboard(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let c = textureLoad(src, p, 0);
+    let uv = (vec2<f32>(id.xy) + 0.5 - u.p0.xy) / u.p0.zw;
+    let square = vec2<i32>(floor(uv));
+    let odd = f32(((square.x + square.y) % 2 + 2) % 2);
+    var edge = 1.0;
+    if u.p1.x > 0.0 {
+        // How far it is to the nearest line between squares.
+        let to = abs(uv - floor(uv + 0.5)) * u.p0.zw;
+        let t = clamp(min(to.x, to.y) / max(u.p1.x, 1e-6), 0.0, 1.0);
+        edge = t * t * (3.0 - 2.0 * t);
+    }
+    let k = odd * edge * u.p1.y;
+    let color = u.p2.rgb;
+    var out = vec4(color * k, k);
+    switch u.a.x {
+        case 0u: {
+        }
+        case 1u: {
+            out += c * (1.0 - k);
+        }
+        default: {
+            // Add, multiply, screen, overlay, as `blend_simple` numbers them.
+            var modes = array<u32, 6>(0u, 0u, 1u, 3u, 2u, 4u);
+            let base = straight(c);
+            let o = base + (blend_simple(modes[min(u.a.x, 5u)], base, color) - base) * k;
+            out = vec4(o * c.a, c.a);
+        }
+    }
+    textureStore(dst, p, out);
 }

@@ -1,4 +1,5 @@
-//! The GPU's side of the effects Kerf's looks are made of (`kernels.wgsl`). The CPU code stays the
+//! The GPU's side of the effects Kerf's looks are made of, and of those an editor needs exact
+//! (`kernels.wgsl`, and what `kerf_kernel` writes out on the end of it). The CPU code stays the
 //! reference and is unchanged: [`Kernel::eval`] reads the same parameters the same way, and a test
 //! compares each kernel with [`effects::apply`](crate::filmcraft::effects::apply).
 
@@ -147,6 +148,46 @@ pub enum Kernel {
         square: bool,
         mode: u32,
     },
+    FourColors(kerf_kernel::FourColors<f32>),
+    Grid(kerf_kernel::Grid<f32>),
+    Ramp {
+        start: [f32; 2],
+        /// From its start to its end, and that length squared.
+        along: [f32; 2],
+        length2: f32,
+        /// Its two colors, sRGB-encoded.
+        colors: [[f32; 3]; 2],
+        radial: bool,
+        opacity: f32,
+    },
+    Gradient(Box<Gradient>),
+    Checkerboard {
+        anchor: [f32; 2],
+        /// A square's width and height.
+        cell: [f32; 2],
+        feather: f32,
+        /// Its color in linear light.
+        color: [f32; 3],
+        opacity: f32,
+        mode: u32,
+    },
+}
+
+/// `stylize::gradient`'s numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gradient {
+    start: [f32; 2],
+    /// From its start to its end, that length squared, and that length.
+    along: [f32; 2],
+    length2: f32,
+    length: f32,
+    /// Its two colors, sRGB-encoded, each with its alpha.
+    colors: [[f32; 4]; 2],
+    shape: u32,
+    scatter: f32,
+    /// The power that puts its midpoint where it is told.
+    gamma: f32,
+    blend: f32,
 }
 
 /// What [`Kernel::Kept`] does between the way there and the way back.
@@ -878,6 +919,94 @@ impl Kernel {
                     mode: chv(e, "mode"),
                 }
             }
+            "four_color_gradient" => {
+                let color = |id: &str| {
+                    let c = crate::filmcraft::effects::color(e, id, cx);
+                    [c[0], c[1], c[2]]
+                };
+                Kernel::FourColors(kerf_kernel::FourColors {
+                    colors: [color("c1"), color("c2"), color("c3"), color("c4")],
+                    power: 1.0 + f(e, "blend", cx) / 100.0,
+                    opacity: f(e, "opacity", cx) / 100.0,
+                    size: [size.0 as f32, size.1 as f32],
+                })
+            }
+            "grid" => {
+                let c = crate::filmcraft::effects::color(e, "color", cx);
+                Kernel::Grid(kerf_kernel::Grid {
+                    middle: [size.0 as f32 / 2.0, size.1 as f32 / 2.0],
+                    size: (f(e, "size", cx) * cx.px_scale).max(1.0),
+                    border: f(e, "border", cx) * cx.px_scale,
+                    color: dec([c[0], c[1], c[2]]),
+                    opacity: f(e, "opacity", cx) / 100.0,
+                })
+            }
+            "ramp" => {
+                let sized = Image {
+                    w: size.0,
+                    h: size.1,
+                    px: Vec::new(),
+                };
+                let start = crate::filmcraft::effects::point(e, "start", cx, &sized);
+                let end = crate::filmcraft::effects::point(e, "end", cx, &sized);
+                let (vx, vy) = (end.x - start.x, end.y - start.y);
+                let color = |id: &str| {
+                    let c = crate::filmcraft::effects::color(e, id, cx);
+                    [c[0], c[1], c[2]]
+                };
+                Kernel::Ramp {
+                    start: [start.x as f32, start.y as f32],
+                    along: [vx as f32, vy as f32],
+                    length2: (vx * vx + vy * vy).max(1e-9) as f32,
+                    colors: [color("start_color"), color("end_color")],
+                    radial: choice(e, "shape") == 1,
+                    opacity: 1.0 - f(e, "blend", cx) / 100.0,
+                }
+            }
+            "gradient" => {
+                let sized = Image {
+                    w: size.0,
+                    h: size.1,
+                    px: Vec::new(),
+                };
+                let (start, end) = (pv(e, "start", cx, &sized), pv(e, "end", cx, &sized));
+                let (vx, vy) = ((end.x - start.x) as f32, (end.y - start.y) as f32);
+                let length2 = (vx * vx + vy * vy).max(1e-6);
+                let mid = (fv(e, "midpoint", cx) / 100.0).clamp(0.01, 0.99);
+                Kernel::Gradient(Box::new(Gradient {
+                    start: [start.x as f32, start.y as f32],
+                    along: [vx, vy],
+                    length2,
+                    length: length2.sqrt(),
+                    colors: [cv(e, "start_color", cx), cv(e, "end_color", cx)],
+                    shape: chv(e, "shape"),
+                    scatter: fv(e, "scatter", cx) / 100.0,
+                    gamma: (0.5f32).ln() / mid.ln(),
+                    blend: fv(e, "blend", cx) / 100.0,
+                }))
+            }
+            "checkerboard" => {
+                let sized = Image {
+                    w: size.0,
+                    h: size.1,
+                    px: Vec::new(),
+                };
+                let anchor = pv(e, "anchor", cx, &sized);
+                let width = (fv(e, "width", cx) * cx.px_scale).max(1.0);
+                let height = if bv(e, "square") {
+                    width
+                } else {
+                    (fv(e, "height", cx) * cx.px_scale).max(1.0)
+                };
+                Kernel::Checkerboard {
+                    anchor: [anchor.x as f32, anchor.y as f32],
+                    cell: [width, height],
+                    feather: fv(e, "feather", cx) * cx.px_scale,
+                    color: lin(cv(e, "color", cx)),
+                    opacity: fv(e, "opacity", cx) / 100.0,
+                    mode: chv(e, "mode"),
+                }
+            }
             "cineon_converter" => {
                 let black = fv(e, "black10", cx);
                 let white = fv(e, "white10", cx).max(black + 1.0);
@@ -1537,6 +1666,111 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::FourColors(told) => {
+                let [a, b, c, d] = told.colors;
+                let out = stage.pass(
+                    frame,
+                    &stage.four_colors,
+                    &picture,
+                    None,
+                    &U {
+                        p0: [a[0], a[1], a[2], told.power],
+                        p1: [b[0], b[1], b[2], told.opacity],
+                        p2: [c[0], c[1], c[2], told.size[0]],
+                        p3: [d[0], d[1], d[2], told.size[1]],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Grid(told) => {
+                let [r, g, b] = told.color;
+                let out = stage.pass(
+                    frame,
+                    &stage.grid,
+                    &picture,
+                    None,
+                    &U {
+                        p0: [told.middle[0], told.middle[1], told.size, told.border],
+                        p1: [r, g, b, told.opacity],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Ramp {
+                start,
+                along,
+                length2,
+                colors,
+                radial,
+                opacity,
+            } => {
+                let [from, to] = colors;
+                let out = stage.pass(
+                    frame,
+                    &stage.ramp,
+                    &picture,
+                    None,
+                    &U {
+                        a: [u32::from(*radial), 0, 0, 0],
+                        p0: [start[0], start[1], along[0], along[1]],
+                        p1: [*length2, *opacity, 0.0, 0.0],
+                        p2: [from[0], from[1], from[2], 0.0],
+                        p3: [to[0], to[1], to[2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Gradient(told) => {
+                // What `hash01` scatters by: its seed of 13, by `hash_u`'s constant.
+                let seed = 13u64.wrapping_mul(HASH_SEED);
+                let out = stage.pass(
+                    frame,
+                    &stage.gradient,
+                    &picture,
+                    None,
+                    &U {
+                        a: [told.shape, 0, seed as u32, (seed >> 32) as u32],
+                        p0: [told.start[0], told.start[1], told.along[0], told.along[1]],
+                        p1: [told.length2, told.length, told.scatter, told.gamma],
+                        p2: told.colors[0],
+                        p3: told.colors[1],
+                        p4: [told.blend, 0.0, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::Checkerboard {
+                anchor,
+                cell,
+                feather,
+                color,
+                opacity,
+                mode,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.checkerboard,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*mode, 0, 0, 0],
+                        p0: [anchor[0], anchor[1], cell[0], cell[1]],
+                        p1: [*feather, *opacity, 0.0, 0.0],
+                        p2: [color[0], color[1], color[2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
             Kernel::Cineon { way, told } => {
                 let out = stage.pass(
                     frame,
@@ -1630,10 +1864,11 @@ impl U {
 /// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
 fn source() -> String {
     format!(
-        "{}{}{}",
+        "{}{}{}{}",
         include_str!("kernels.wgsl"),
         kerf_kernel::rounded_wgsl(),
-        kerf_kernel::color_wgsl()
+        kerf_kernel::color_wgsl(),
+        kerf_kernel::generated_wgsl()
     )
 }
 
@@ -1683,6 +1918,11 @@ struct Stage {
     cineon: wgpu::ComputePipeline,
     lens: wgpu::ComputePipeline,
     magnify: wgpu::ComputePipeline,
+    four_colors: wgpu::ComputePipeline,
+    grid: wgpu::ComputePipeline,
+    ramp: wgpu::ComputePipeline,
+    gradient: wgpu::ComputePipeline,
+    checkerboard: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -1753,6 +1993,11 @@ impl Stage {
                 cineon: kernel("cineon"),
                 lens: kernel("lens"),
                 magnify: kernel("magnify"),
+                four_colors: kernel("four_colors"),
+                grid: kernel("grid"),
+                ramp: kernel("ramp"),
+                gradient: kernel("gradient"),
+                checkerboard: kernel("checkerboard"),
                 layout: layout.clone(),
             }
         });
@@ -2112,8 +2357,8 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
-    /// Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, and the Cineon Converter,
-    /// each way they can be set.
+    /// Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the five that generate a
+    /// picture, and the Cineon Converter, each way they can be set.
     fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
         let fl = ParamValue::Float;
         let on = ParamValue::Bool(true);
@@ -2260,6 +2505,107 @@ mod tests {
                 "magnify",
                 vec![("size", fl(22.0)), ("mode", ParamValue::Choice(4)), ("opacity", fl(60.0))],
             ),
+            // What is generated: four colors, a grid, a ramp, a gradient, a checkerboard.
+            ("four_color_gradient", vec![]),
+            (
+                "four_color_gradient",
+                vec![
+                    ("blend", fl(300.0)),
+                    ("opacity", fl(70.0)),
+                    ("c2", color(0.9, 0.4, 0.1)),
+                ],
+            ),
+            ("grid", vec![]),
+            (
+                "grid",
+                vec![
+                    ("size", fl(13.0)),
+                    ("border", fl(4.0)),
+                    ("color", color(0.2, 0.8, 0.5)),
+                    ("opacity", fl(60.0)),
+                ],
+            ),
+            ("grid", vec![("size", fl(7.5)), ("border", fl(0.0))]),
+            ("ramp", vec![]),
+            (
+                "ramp",
+                vec![
+                    ("start", ParamValue::Vec2(Vec2::new(10.0, 5.0))),
+                    ("end", ParamValue::Vec2(Vec2::new(80.0, 45.0))),
+                    ("start_color", color(0.9, 0.2, 0.1)),
+                    ("end_color", color(0.1, 0.3, 0.9)),
+                    ("blend", fl(30.0)),
+                ],
+            ),
+            (
+                "ramp",
+                vec![
+                    ("shape", ParamValue::Choice(1)),
+                    ("start", ParamValue::Vec2(Vec2::new(40.0, 25.0))),
+                    ("end", ParamValue::Vec2(Vec2::new(70.0, 30.0))),
+                ],
+            ),
+            ("gradient", vec![]),
+            (
+                "gradient",
+                vec![
+                    ("shape", ParamValue::Choice(1)),
+                    ("start", ParamValue::Vec2(Vec2::new(40.0, 20.0))),
+                    ("end", ParamValue::Vec2(Vec2::new(75.0, 40.0))),
+                    ("midpoint", fl(30.0)),
+                    ("start_color", ParamValue::Color([0.9, 0.7, 0.1, 0.4])),
+                ],
+            ),
+            (
+                "gradient",
+                vec![
+                    ("shape", ParamValue::Choice(2)),
+                    ("start", ParamValue::Vec2(Vec2::new(48.0, 27.0))),
+                    ("end", ParamValue::Vec2(Vec2::new(90.0, 10.0))),
+                    ("scatter", fl(60.0)),
+                    ("blend", fl(25.0)),
+                ],
+            ),
+            (
+                "gradient",
+                vec![
+                    ("shape", ParamValue::Choice(3)),
+                    ("start", ParamValue::Vec2(Vec2::new(48.0, 27.0))),
+                    ("end", ParamValue::Vec2(Vec2::new(70.0, 44.0))),
+                    ("midpoint", fl(70.0)),
+                    ("scatter", fl(100.0)),
+                ],
+            ),
+            ("checkerboard", vec![("width", fl(12.0))]),
+            (
+                "checkerboard",
+                vec![
+                    ("width", fl(14.0)),
+                    ("height", fl(9.0)),
+                    ("square", ParamValue::Bool(false)),
+                    ("feather", fl(3.0)),
+                    ("anchor", ParamValue::Vec2(Vec2::new(5.0, 3.0))),
+                    ("mode", ParamValue::Choice(1)),
+                    ("opacity", fl(70.0)),
+                    ("color", color(0.9, 0.5, 0.1)),
+                ],
+            ),
+            (
+                "checkerboard",
+                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(2)), ("color", color(0.3, 0.2, 0.6))],
+            ),
+            (
+                "checkerboard",
+                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(3)), ("color", color(0.3, 0.2, 0.6))],
+            ),
+            (
+                "checkerboard",
+                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(4)), ("feather", fl(2.0))],
+            ),
+            (
+                "checkerboard",
+                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(5)), ("color", color(0.7, 0.6, 0.2))],
+            ),
             // The Cineon Converter, each way it goes.
             ("cineon_converter", vec![]),
             (
@@ -2328,6 +2674,13 @@ mod tests {
             Kernel::Cineon { way, told } => {
                 each(image, &|p, _, _| kerf_kernel::cineon_px(p, *way, told))
             }
+            Kernel::FourColors(told) => {
+                each(image, &|p, x, y| kerf_kernel::four_colors(p, x, y, told))
+            }
+            // A grid counts in whole pixels, where the others go by a pixel's middle.
+            Kernel::Grid(told) => {
+                each(image, &|p, x, y| kerf_kernel::grid(p, x - 0.5, y - 0.5, told))
+            }
             _ => return None,
         })
     }
@@ -2343,7 +2696,14 @@ mod tests {
             let e = effect(id, &params);
             let kernel = Kernel::eval(&e, &cx, (image.w, image.h)).expect("a kernel");
             let Some(twin) = from_one_source(&kernel, &image) else {
-                let by_hand = ["mosaic", "lens_distortion", "magnify"];
+                let by_hand = [
+                    "mosaic",
+                    "lens_distortion",
+                    "magnify",
+                    "ramp",
+                    "gradient",
+                    "checkerboard",
+                ];
                 assert!(by_hand.contains(&id), "{id} is written by hand");
                 continue;
             };
@@ -2354,7 +2714,7 @@ mod tests {
             assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
             held += 1;
         }
-        assert_eq!(held, 12 + 4);
+        assert_eq!(held, 12 + 4 + 5);
     }
 
     /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes
