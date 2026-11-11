@@ -94,7 +94,7 @@ fn keyframes_round_trip_through_typed_ops_and_the_timeline() {
     let state = ops(
         &mut runtime,
         json!([
-            {"op": "fx-add", "clip": "c1", "fx": "light.edgeglow",
+            {"op": "fx-add", "clip": "c1", "fx": "light.wonderglow",
              "params": {"radius": {"keys": [{"at": 0, "value": 10}, {"at": 12, "value": 40}]}}},
             {"op": "fx-set", "clip": "c1", "index": 0,
              "params": {"intensity": {"keys": [{"at": 6, "value": 0.2}, {"at": 18, "value": 0.8, "interp": "ease-out"}]}}},

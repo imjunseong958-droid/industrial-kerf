@@ -204,121 +204,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             let by = f(e, "vertical", cx).max(1.0) as usize;
             mosaic(img, bx, by);
         }
-        "find_edges" => {
-            let inv = b(e, "invert");
-            let blend = f(e, "blend", cx) / 100.0;
-            let src = img.clone();
-            let w = img.w;
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let l = |dx: isize, dy: isize| {
-                            let p = src.get_clamped(x as isize + dx, y as isize + dy);
-                            luma709(p[0], p[1], p[2])
-                        };
-                        let gx = l(1, -1) + 2.0 * l(1, 0) + l(1, 1)
-                            - l(-1, -1)
-                            - 2.0 * l(-1, 0)
-                            - l(-1, 1);
-                        let gy = l(-1, 1) + 2.0 * l(0, 1) + l(1, 1)
-                            - l(-1, -1)
-                            - 2.0 * l(0, -1)
-                            - l(1, -1);
-                        let mut m = (gx * gx + gy * gy).sqrt().min(1.0);
-                        if !inv {
-                            m = 1.0 - m;
-                        }
-                        let o = src.get(x, y);
-                        let a = o[3];
-                        for k in 0..3 {
-                            row[x * 4 + k] = m * a * (1.0 - blend) + o[k] * blend;
-                        }
-                    }
-                });
-        }
-        "emboss" => {
-            let dir = (f(e, "direction", cx) as f64).to_radians();
-            let relief = f(e, "relief", cx) * cx.px_scale.max(0.25);
-            let contrast = f(e, "contrast", cx) / 100.0;
-            let blend = f(e, "blend", cx) / 100.0;
-            let (dx, dy) = ((dir.cos() as f32) * relief, (-dir.sin() as f32) * relief);
-            let src = img.clone();
-            let w = img.w;
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let a =
-                            src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
-                        let bq =
-                            src.sample_bilinear_clamped(x as f32 + 0.5 - dx, y as f32 + 0.5 - dy);
-                        let v = srgb_to_linear(
-                            (0.5 + (luma709(a[0], a[1], a[2]) - luma709(bq[0], bq[1], bq[2]))
-                                * contrast
-                                * 2.0)
-                                .clamp(0.0, 1.0),
-                        );
-                        let o = src.get(x, y);
-                        for k in 0..3 {
-                            row[x * 4 + k] = v * o[3] * (1.0 - blend) + o[k] * blend;
-                        }
-                    }
-                });
-        }
-        "replicate" => {
-            let n = f(e, "count", cx).clamp(1.0, 16.0) as usize;
-            let src = img.clone();
-            let (w, h) = (img.w, img.h);
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let u = (x * n) % w;
-                        let v = (y * n) % h;
-                        let s = src.sample_bilinear_clamped(
-                            (u as f32 + 0.5) + (n as f32 - 1.0) * 0.5 / n as f32,
-                            v as f32 + 0.5,
-                        );
-                        row[x * 4..x * 4 + 4].copy_from_slice(&s);
-                    }
-                });
-        }
-        "strobe" => {
-            let period = f(e, "period", cx).max(0.001) as f64;
-            let dur = f(e, "duration", cx) as f64;
-            if (cx.seconds % period) < dur {
-                let c = color(e, "color", cx);
-                let blend = f(e, "blend", cx) / 100.0;
-                let lc = dec([c[0], c[1], c[2]]);
-                img.map_rgb(|o, _, _| {
-                    [
-                        lc[0] + (o[0] - lc[0]) * blend,
-                        lc[1] + (o[1] - lc[1]) * blend,
-                        lc[2] + (o[2] - lc[2]) * blend,
-                    ]
-                });
-            }
-        }
-        "twirl" => {
-            let c = point(e, "center", cx, img);
-            let ang = (f(e, "angle", cx) as f64).to_radians();
-            let rad = f(e, "radius", cx) as f64 / 100.0 * (img.w.min(img.h) as f64);
-            warp(img, |x, y| {
-                let (dx, dy) = (x - c.x, y - c.y);
-                let d = (dx * dx + dy * dy).sqrt();
-                if d >= rad {
-                    return (x, y);
-                }
-                let k = 1.0 - d / rad;
-                let a = ang * k * k;
-                let (s, co) = a.sin_cos();
-                (c.x + dx * co - dy * s, c.y + dx * s + dy * co)
-            });
-        }
         "wave_warp" => {
             let hgt = f(e, "height", cx) as f64 * cx.px_scale as f64;
             let wid = (f(e, "width", cx) as f64 * cx.px_scale as f64).max(1.0);
@@ -345,38 +230,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 (cxp + dx * s * norm, cyp + dy * s * norm)
             });
         }
-        "basic_3d" => {
-            let sw = (f(e, "swivel", cx) as f64).to_radians();
-            let tl = (f(e, "tilt", cx) as f64).to_radians();
-            // authored in full-resolution pixels; the focal length follows the working image (#1920)
-            let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
-            let (w, h) = (img.w as f64, img.h as f64);
-            let focal = w.max(h) * 1.2;
-            // inverse perspective mapping: ray through (x,y) intersected with rotated plane
-            warp_opt(img, |x, y| {
-                let (px, py) = (x - w / 2.0, y - h / 2.0);
-                let (ss, cs) = sw.sin_cos();
-                let (st, ct) = tl.sin_cos();
-                // plane normal after rotation (Ry(swivel) * Rx(tilt)) of (0,0,1)
-                let n = [ss * ct, -st, cs * ct];
-                let u = [cs, 0.0, -ss];
-                let v = [ss * st, ct, cs * st];
-                let z0 = focal + dist * 10.0;
-                let dir = [px, py, focal];
-                let denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
-                if denom.abs() < 1e-9 {
-                    return None;
-                }
-                let tt = (n[2] * z0) / denom;
-                if tt <= 0.0 {
-                    return None;
-                }
-                let hit = [dir[0] * tt, dir[1] * tt, dir[2] * tt - z0];
-                let su = hit[0] * u[0] + hit[1] * u[1] + hit[2] * u[2];
-                let sv = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];
-                Some((su + w / 2.0, sv + h / 2.0))
-            });
-        }
         "drop_shadow" => {
             let c = color(e, "color", cx);
             let op = f(e, "opacity", cx) / 100.0;
@@ -401,31 +254,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 kerf_draw::blend::composite(&mut sh, img, 1.0, kerf_draw::blend::Blend::Normal);
             }
             *img = sh;
-        }
-        "bevel_alpha" => {
-            let th = f(e, "thickness", cx) * cx.px_scale;
-            let ang = (f(e, "angle", cx) as f64).to_radians();
-            let inten = f(e, "intensity", cx) / 100.0;
-            let src = img.clone();
-            let (lx, ly) = (ang.cos() as f32, -ang.sin() as f32);
-            let w = img.w;
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let a = |dx: f32, dy: f32| {
-                            src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy)[3]
-                        };
-                        let gx = a(th, 0.0) - a(-th, 0.0);
-                        let gy = a(0.0, th) - a(0.0, -th);
-                        let shade = -(gx * lx + gy * ly) * inten;
-                        let p = &mut row[x * 4..x * 4 + 4];
-                        for k in 0..3 {
-                            p[k] = (p[k] + shade * p[3]).clamp(0.0, p[3]);
-                        }
-                    }
-                });
         }
         "ultra_key" | "color_key" => key(img, e, cx),
         "luma_key" => {
@@ -501,30 +329,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 ])
             });
         }
-        "circle" => {
-            let c = point(e, "center", cx, img);
-            let r = f(e, "radius", cx) * cx.px_scale;
-            let col = color(e, "color", cx);
-            let op = f(e, "opacity", cx) / 100.0;
-            let lc = dec([col[0], col[1], col[2]]);
-            let w = img.w;
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let d = ((x as f64 + 0.5 - c.x).hypot(y as f64 + 0.5 - c.y)) as f32;
-                        let a = (r - d + 0.5).clamp(0.0, 1.0) * op;
-                        if a > 0.0 {
-                            let p = &mut row[x * 4..x * 4 + 4];
-                            for k in 0..3 {
-                                p[k] = lc[k] * a + p[k] * (1.0 - a);
-                            }
-                            p[3] = a + p[3] * (1.0 - a);
-                        }
-                    }
-                });
-        }
         "grid" => {
             let size = (f(e, "size", cx) * cx.px_scale).max(1.0);
             let border = f(e, "border", cx) * cx.px_scale;
@@ -549,49 +353,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                                 p[k] = lc[k] * a + p[k] * (1.0 - a);
                             }
                             p[3] = a + p[3] * (1.0 - a);
-                        }
-                    }
-                });
-        }
-        "lens_flare" => {
-            let c = point(e, "center", cx, img);
-            let br = f(e, "brightness", cx) / 100.0;
-            let blend = f(e, "blend", cx) / 100.0;
-            let (w, h) = (img.w as f64, img.h as f64);
-            let (mx, my) = (w / 2.0, h / 2.0);
-            let scale = w.max(h);
-            let wi = img.w;
-            img.px
-                .par_chunks_mut(wi * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..wi {
-                        let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-                        let d = (px - c.x).hypot(py - c.y) / scale;
-                        let mut add = [1.0f32, 0.9, 0.7].map(|k| {
-                            k * (0.35 * (-d * 18.0).exp() + 0.08 * (-d * 3.0).exp()) as f32
-                        });
-                        for (i, (t, rad, tint)) in [
-                            (0.5, 0.05, [0.4f32, 0.6, 1.0]),
-                            (1.3, 0.03, [1.0, 0.5, 0.3]),
-                            (1.7, 0.08, [0.4, 1.0, 0.5]),
-                        ]
-                        .iter()
-                        .enumerate()
-                        {
-                            let gx = c.x + (mx - c.x) * 2.0 * t / 2.0 * 2.0;
-                            let gy = c.y + (my - c.y) * 2.0 * t / 2.0 * 2.0;
-                            let dd = (px - gx).hypot(py - gy) / scale;
-                            let ring = (1.0 - ((dd - rad) / 0.01).abs()).max(0.0) as f32 * 0.15
-                                + if dd < *rad { 0.06 } else { 0.0 };
-                            let _ = i;
-                            for k in 0..3 {
-                                add[k] += tint[k] * ring;
-                            }
-                        }
-                        let p = &mut row[x * 4..x * 4 + 4];
-                        for k in 0..3 {
-                            p[k] += add[k] * br * (1.0 - blend) * p[3].max(0.0);
                         }
                     }
                 });

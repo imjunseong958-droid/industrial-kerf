@@ -336,7 +336,7 @@ impl FxOp {
             "posterize" => FxOp::Posterize {
                 n: f(e, "levels", cx).max(2.0) - 1.0,
             },
-            "gaussian_blur" | "gaussian_blur_legacy" => {
+            "gaussian_blur" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
                 let dims = choice(e, "dimensions");
                 let (rx, ry) = gaussian_boxes(
@@ -360,7 +360,7 @@ impl FxOp {
                     repeat: true,
                 }
             }
-            "directional_blur" | "directional_blur_legacy" => {
+            "directional_blur" => {
                 let len = f(e, "length", cx) * cx.px_scale * 2.0;
                 let dir = (f(e, "direction", cx) as f64).to_radians();
                 if len < 0.5 {

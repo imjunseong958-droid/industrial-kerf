@@ -71,9 +71,11 @@ renders, previews, and live playback. A frame is drawn on the GPU (`kerf-gpu`, o
 has a kernel there, and otherwise on the CPU, which stays the reference;
 `KERF_GPU=0` keeps everything on the CPU. A video editor's
 transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
-and effects (Lumetri, blurs, keys and track mattes, glows, distortions, moves,
-burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`. Kerf also keeps
-24 effects from [EffectCraft](https://github.com/storytold/effectcraft)
+and effects (Lumetri, blurs, keys and track mattes, glows, distortions,
+burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`, less those that
+make a look a model makes better or do what a clip's own keyframes and depth
+already do ([what Kerf draws](docs/architecture.md#what-kerf-draws-and-what-it-leaves-to-others)). Kerf also keeps
+22 effects from [EffectCraft](https://github.com/storytold/effectcraft)
 (MIT/Apache, in `kerf-raster-fx`) that FilmCraft has nothing like: restoration, key and matte clean-up, curves and finer color, a few
 blurs and distortions, and the audio visualizers. An effect's parameters are
 written in the catalog's terms (a point as an `_x` and a `_y` across the

@@ -53,6 +53,19 @@ on `main`; its section here becomes the release's notes on GitHub
   comes with no model. One is a program you name in `~/.kerf/models.json`,
   which is handed what was asked as a file; see
   [docs/shots.md](docs/shots.md#models).
+- Kerf no longer has 38 effects, none of which a look, a grade or a preset
+  used. Gone are those that make a look a video model makes better: Brush
+  Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,
+  Replicate, Strobe Light, Alpha, Echo and Edge Glow, Lighting Effects,
+  Volumetric Rays, Lens Flare, Lightning, Cell Pattern, Bulge, Spherize, Twirl,
+  Turbulent Displace, Long Shadow, and five of the 360° effects (Chromatic
+  Aberrations, Color Gradients, Digital Glitch, Fractal Noise, Glow). And
+  those a clip does by itself: Move, Grow, Shrink, Spin, Wiggle and Camera
+  Shake (keyframes, an expression such as `x=(noise(t*3)*0.02)`, or a look),
+  3D Rotate and Basic 3D (`three_d=true` with `rotate_x`, `rotate_y`, `z`),
+  Bevel Alpha (`depth=` and `bevel=`), Circle and Ellipse (`gen=shape@1`), and
+  Clone. A project that uses one does not open until its line is changed: the
+  error names the line and what to use instead.
 - An effect's preview in the browser shows the clip's effects in the order they
   are in, where it had run some kinds before others, and a title or a nested
   sequence now has a preview of every effect.

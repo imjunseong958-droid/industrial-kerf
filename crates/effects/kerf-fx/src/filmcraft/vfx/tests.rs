@@ -79,7 +79,6 @@ fn max_diff(a: &Image, b: &Image) -> f32 {
 
 /// The ids this milestone added or rebuilt.
 const NEW_IDS: &[&str] = &[
-    "lighting_effects",
     "bokeh_blur",
     "channel_blur",
     "compound_blur",
@@ -90,72 +89,36 @@ const NEW_IDS: &[&str] = &[
     "vignette",
     "corner_pin",
     "magnify",
-    "spherize",
-    "turbulent_displace",
     "warp_stabilizer",
     "gradient",
     "channel_mix",
     "color_replace",
     "rounded_crop",
     "vr_blur",
-    "vr_chromatic_aberrations",
-    "vr_color_gradients",
     "vr_denoise",
-    "vr_digital_glitch",
-    "vr_fractal_noise",
-    "vr_glow",
     "vr_plane_to_sphere",
     "vr_projection",
     "vr_rotate_sphere",
     "vr_sharpen",
     "alpha_adjust",
     "logo_cutout",
-    "echo_glow",
-    "edge_glow",
     "glint",
     "light_leaks",
     "rgb_split",
-    "volumetric_rays",
     "wonder_glow",
-    "long_shadow",
-    "brush_strokes",
-    "color_emboss",
-    "roughen_edges",
     "posterize_time",
-    "rotate_3d",
     "auto_reframe",
-    "camera_shake",
-    "grow",
-    "shrink",
-    "move",
-    "spin",
     "spacer",
-    "wiggle",
     "auto_align",
     "cineon_converter",
-    "clone",
     "stroke",
     "metadata_burnin",
     "echo",
-    "lightning",
-    "cell_pattern",
     "checkerboard",
-    "ellipse",
     "paint_bucket",
     "write_on",
-    "alpha_glow",
-    "block_dissolve",
-    "directional_blur_legacy",
-    "gaussian_blur_legacy",
-    "gradient_wipe_legacy",
-    "linear_wipe_legacy",
-    "magnify_legacy",
-    "mosaic_legacy",
-    "noise_legacy",
-    "twirl_legacy",
     // rebuilt
     "ultra_key",
-    "lens_flare",
     "track_matte",
     "simple_text",
     "noise",
@@ -228,27 +191,14 @@ fn neutral_parameters_are_identity() {
         ("channel_mix", vec![]),
         ("vignette", vec![("amount", ParamValue::Float(0.0))]),
         ("corner_pin", vec![]),
-        ("spherize", vec![]),
-        (
-            "turbulent_displace",
-            vec![("amount", ParamValue::Float(0.0))],
-        ),
-        ("rotate_3d", vec![]),
-        ("grow", vec![]),
-        ("spin", vec![]),
         ("alpha_adjust", vec![]),
         ("rounded_crop", vec![("radius", ParamValue::Float(0.0))]),
-        ("block_dissolve", vec![]),
-        ("gradient_wipe_legacy", vec![]),
-        ("linear_wipe_legacy", vec![]),
         ("channel_blur", vec![]),
         ("bokeh_blur", vec![("amount", ParamValue::Float(0.0))]),
         ("reduce_interlace_flicker", vec![]),
         ("vr_blur", vec![]),
         ("vr_sharpen", vec![]),
         ("vr_denoise", vec![]),
-        ("vr_digital_glitch", vec![]),
-        ("vr_chromatic_aberrations", vec![]),
         ("vr_rotate_sphere", vec![]),
         ("vr_projection", vec![]),
         ("rgb_split", vec![("amount", ParamValue::Float(0.0))]),
@@ -259,7 +209,6 @@ fn neutral_parameters_are_identity() {
                 ("similarity", ParamValue::Float(0.0)),
             ],
         ),
-        ("clone", vec![("columns", ParamValue::Float(1.0))]),
         (
             "auto_align",
             vec![
@@ -270,16 +219,11 @@ fn neutral_parameters_are_identity() {
         ("auto_align", vec![]),
         ("magnify", vec![("magnification", ParamValue::Float(100.0))]),
         ("stroke", vec![("width", ParamValue::Float(0.0))]),
-        ("long_shadow", vec![("length", ParamValue::Float(0.0))]),
-        ("roughen_edges", vec![("border", ParamValue::Float(0.0))]),
         ("posterize_time", vec![]),
         ("echo", vec![]),
         ("warp_stabilizer", vec![]),
         ("track_matte", vec![]),
         ("noise", vec![]),
-        ("noise_legacy", vec![]),
-        ("gaussian_blur_legacy", vec![]),
-        ("directional_blur_legacy", vec![]),
         (
             "video_limiter",
             vec![("compression", ParamValue::Choice(0))],
@@ -293,7 +237,6 @@ fn neutral_parameters_are_identity() {
             ],
         ),
         ("light_leaks", vec![("intensity", ParamValue::Float(0.0))]),
-        ("lens_flare", vec![("brightness", ParamValue::Float(0.0))]),
         (
             "simple_text",
             vec![("text", ParamValue::Text(String::new()))],
@@ -430,7 +373,7 @@ fn corner_pin_maps_corners() {
 }
 
 #[test]
-fn magnify_and_spherize_enlarge_the_centre() {
+fn magnify_enlarges_the_centre() {
     let img = picture(60, 60);
     let o = run("magnify", &inst("magnify"), &img, &cx());
     // 200 %: the pixel 10 px right of centre shows the source 5 px right of centre
@@ -439,31 +382,6 @@ fn magnify_and_spherize_enlarge_the_centre() {
     for k in 0..3 {
         assert!(close(a[k], b[k], 0.02), "{a:?} {b:?}");
     }
-    let mut e = inst("spherize");
-    setf(&mut e, "radius", 25.0);
-    let o = run("spherize", &e, &img, &cx());
-    assert!(max_diff(&o, &img) > 0.01);
-    // outside the radius nothing moves
-    assert_eq!(o.get(1, 1), img.get(1, 1));
-}
-
-#[test]
-fn rotate_3d_z_matches_a_2d_rotation() {
-    let img = picture(41, 41);
-    let mut e = inst("rotate_3d");
-    setf(&mut e, "rot_z", 90.0);
-    let o = run("rotate_3d", &e, &img, &cx());
-    // rotating 90° clockwise about the centre: output (x,y) samples source (y, 41−x)
-    let a = o.get(30, 10);
-    let b = img.sample_bilinear(10.5, 41.0 - 30.5);
-    for k in 0..3 {
-        assert!(close(a[k], b[k], 0.02), "{a:?} {b:?}");
-    }
-    // a Y rotation past 90° shows the back face; Hide Back Face clears it
-    setf(&mut e, "rot_z", 0.0);
-    setf(&mut e, "rot_y", 180.0);
-    set(&mut e, "hide_back", ParamValue::Bool(true));
-    assert!(run("r", &e, &img, &cx()).px.iter().all(|v| *v == 0.0));
 }
 
 #[test]
@@ -632,11 +550,8 @@ fn lights_add_light_around_highlights() {
             .sum::<f64>()
     };
     for id in [
-        "echo_glow",
         "glint",
         "wonder_glow",
-        "volumetric_rays",
-        "edge_glow",
     ] {
         let o = run(id, &inst(id), &img, &cx());
         let added = total(&o) - total(&img);
@@ -671,7 +586,7 @@ fn lights_add_light_around_highlights() {
 }
 
 #[test]
-fn long_shadow_and_stroke_geometry() {
+fn stroke_geometry() {
     // a 4×4 opaque square at (4,4) on a transparent 24×24 layer
     let mut img = Image::new(24, 24);
     for y in 4..8 {
@@ -679,23 +594,6 @@ fn long_shadow_and_stroke_geometry() {
             img.px[(y * 24 + x) * 4..(y * 24 + x) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
         }
     }
-    let mut e = inst("long_shadow");
-    setf(&mut e, "angle", 90.0); // to the right
-    setf(&mut e, "length", 10.0);
-    set(&mut e, "fade", ParamValue::Bool(false));
-    setf(&mut e, "opacity", 100.0);
-    let o = run("long_shadow", &e, &img, &cx());
-    assert!(
-        o.get(14, 5)[3] > 0.8,
-        "shadow to the right {:?}",
-        o.get(14, 5)
-    );
-    assert!(
-        o.get(20, 5)[3] < 0.2,
-        "ends after Length {:?}",
-        o.get(20, 5)
-    );
-    assert!(o.get(5, 14)[3] < 0.05, "not below {:?}", o.get(5, 14));
     // Stroke outside 2 px
     let mut e = inst("stroke");
     setf(&mut e, "width", 2.0);
@@ -738,36 +636,6 @@ fn generators_known_values() {
     set(&mut e, "anchor", ParamValue::Vec2(Vec2::new(0.0, 0.0)));
     let o = run("checkerboard", &e, &img, &cx());
     assert!(o.get(5, 5)[3] < 0.01 && o.get(15, 5)[3] > 0.99 && o.get(15, 15)[3] < 0.01);
-    // Ellipse ring: on the ring opaque, at the centre clear
-    let mut e = inst("ellipse");
-    setf(&mut e, "width", 16.0);
-    setf(&mut e, "height", 16.0);
-    setf(&mut e, "thickness", 2.0);
-    let o = run("ellipse", &e, &img, &cx());
-    assert!(
-        o.get(28, 10)[3] > 0.8 && o.get(20, 10)[3] < 0.01,
-        "{:?} {:?}",
-        o.get(28, 10),
-        o.get(20, 10)
-    );
-    // Cell Pattern is opaque grey in 0..1
-    let o = run("cell_pattern", &inst("cell_pattern"), &img, &cx());
-    assert!(o
-        .px
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|p| p[3] == 1.0 && p[0] >= 0.0 && p[0] <= 1.0 && p[0] == p[1]));
-    // Lightning: deterministic per seed, different across seeds and strikes
-    let a = run("lightning", &inst("lightning"), &img, &cx());
-    let mut e = inst("lightning");
-    setf(&mut e, "seed", 5.0);
-    assert!(max_diff(&a, &run("lightning", &e, &img, &cx())) > 0.01);
-    let later = FxCtx {
-        seconds: 2.0,
-        ..cx()
-    };
-    assert!(max_diff(&a, &run("lightning", &inst("lightning"), &img, &later)) > 0.01);
 }
 
 #[test]
@@ -809,7 +677,7 @@ fn write_on_follows_the_animated_brush() {
 }
 
 #[test]
-fn transform_presets_animate_over_the_clip() {
+fn burn_ins_read_the_clip_and_its_media() {
     struct Env;
     impl FxEnv for Env {
         fn frame(&self, _: f64, _: &EffectInstance) -> Option<Image> {
@@ -853,30 +721,16 @@ fn transform_presets_animate_over_the_clip() {
         }
     }
     let env = Env;
-    let img = picture(40, 40);
     let end = FxCtx {
         seconds: 2.0,
         env: Some(&env),
         ..cx()
     };
-    // Grow ends at 120 %
-    let o = run("grow", &inst("grow"), &img, &end);
-    let a = o.get(30, 20);
-    let b = img.sample_bilinear(20.0 + 10.5 / 1.2, 20.0 + 0.5 / 1.2);
-    assert!((0..3).all(|k| close(a[k], b[k], 0.02)), "{a:?} {b:?}");
-    // Spin ends at 360° (identity again); half way it is upside down
-    let o = run("spin", &inst("spin"), &img, &end);
-    assert!(max_diff(&o, &img) < 0.02);
     let mid = FxCtx {
         seconds: 1.0,
         env: Some(&env),
         ..cx()
     };
-    let o = run("spin", &inst("spin"), &img, &mid);
-    let (a, b) = (o.get(10, 10), img.get(29, 29));
-    assert!((0..3).all(|k| close(a[k], b[k], 0.03)), "{a:?} {b:?}");
-    // Move from (−100, 0) to (0, 0): at the end identity, at the start shifted out
-    assert!(max_diff(&run("move", &inst("move"), &img, &end), &img) < 1e-4);
     // burn-in text sources
     let e = inst("metadata_burnin");
     assert_eq!(text::burnin_text(&e, &end), "01:00:00:00");
@@ -891,15 +745,7 @@ fn transform_presets_animate_over_the_clip() {
 }
 
 #[test]
-fn clone_auto_align_and_rounded_crop() {
-    let img = picture(40, 20);
-    let mut e = inst("clone");
-    setf(&mut e, "columns", 2.0);
-    let o = run("clone", &e, &img, &cx());
-    // two half-size copies side by side, letterboxed vertically
-    assert_eq!(o.get(10, 1)[3], 0.0);
-    let (a, b) = (o.get(10, 10), o.get(30, 10));
-    assert!((0..4).all(|k| close(a[k], b[k], 1e-5)));
+fn auto_align_and_rounded_crop() {
     // Auto Align left: content moves to x = 0
     let mut layer = Image::new(20, 10);
     for y in 3..6 {

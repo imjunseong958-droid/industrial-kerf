@@ -346,10 +346,13 @@ fn filmcraft_effects_run_on_kerfs_renderer() {
     // Red inverted is cyan.
     let inverted = solid("\x20     fx channel.invert\n");
     assert_eq!(at(&inverted, 160, 90), [0, 255, 255]);
-    // A point is a place across the picture.
-    let circled = solid("\x20     fx generate.circle center_x=0.25 radius=20 color=#00ff00\n");
-    assert_eq!(at(&circled, 80, 90), [0, 255, 0]);
-    assert_eq!(at(&circled, 240, 90), [255, 0, 0]);
+    // A point is a place across the picture: a ramp from a quarter of the way across to three
+    // quarters is its first color before the one and its last past the other.
+    let ramped = solid(
+        "\x20     fx generate.gradientramp start_x=0.25 start_y=0.5 end_x=0.75 end_y=0.5 start_color=#00ff00 end_color=#0000ff\n",
+    );
+    assert_eq!(at(&ramped, 40, 90), [0, 255, 0]);
+    assert_eq!(at(&ramped, 300, 90), [0, 0, 255]);
     // On an adjustment layer, the effect changes what is beneath it.
     let adjusted = solid(
         "\x20 track V2 video\n\

@@ -178,7 +178,8 @@ from, and a center is `center_x`/`center_y` in fractions of the frame.";
 const KERF_EFFECTS: &str = "## Effects from FilmCraft
 Run in stack order on a clip's picture after its
 masks: Lumetri grades and color correction, blurs, keys and track mattes,
-glows and light leaks, distortions, moves, burn-ins, and 360° effects.
+glows and light leaks, distortions, burn-ins, and 360° effects. A move is
+the clip's own: keyframes, an expression, or a look.
 Written like any effect (`fx c1 add color.lumetri@2 exposure=0.5`); `look`
 with `effect: \"<id>\"` lists the parameters of one, or of a transition. A
 point is `<name>_x`/`<name>_y` across the picture (0 to 1), an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT

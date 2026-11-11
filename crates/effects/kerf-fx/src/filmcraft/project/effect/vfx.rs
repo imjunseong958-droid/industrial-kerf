@@ -1,6 +1,8 @@
-//! The Premiere 26 video-effect catalogue beyond the original core set (M5.11): definitions for
-//! every current folder (Adjust … Video), the Immersive Video (VR) set, the Legacy bin and the
-//! obsolete effects old projects still reference, plus the Effects-panel badge table.
+//! What Kerf carries of the Premiere 26 video-effect catalogue beyond the original core set
+//! (M5.11): definitions in its folders (Adjust … Video), the Immersive Video (VR) set, the Legacy
+//! bin and the obsolete effects old projects still reference, plus the Effects-panel badge table.
+//! The effects that make a look a model makes better, and those a clip's own properties do, are
+//! not carried (`docs/architecture.md`).
 //!
 //! Names, folders and parameter names follow the public effect list; parameter ranges/defaults are
 //! our own where the reference does not pin them. Pixel implementations live in
@@ -40,7 +42,6 @@ pub const ECHO_OPERATORS: &[&str] = &[
 ];
 pub const SIMPLE_BLEND: &[&str] = &["Normal", "Add", "Screen", "Multiply", "Overlay"];
 
-const LIGHT_TYPES: &[&str] = &["None", "Directional", "Omni", "Spotlight"];
 /// Per-light parameter ids of Lighting Effects: (type, color, center, major, minor, angle, intensity, focus).
 pub const LIGHT_IDS: [[&str; 8]; 5] = [
     [
@@ -94,7 +95,6 @@ pub const LIGHT_IDS: [[&str; 8]; 5] = [
         "l5_focus",
     ],
 ];
-const LIGHT_GROUPS: [&str; 5] = ["Light 1", "Light 2", "Light 3", "Light 4", "Light 5"];
 
 fn pct(id: &'static str, label: &'static str, def: f64) -> ParamDef {
     f(id, label, def, 0.0, 100.0, "%")
@@ -130,121 +130,10 @@ pub fn auto_point(effect: &str, param: &str) -> Option<(f64, f64)> {
         ("corner_pin", "lower_right") => (1.0, 1.0),
         ("gradient", "start") => (0.5, 0.0),
         ("gradient", "end") => (0.5, 1.0),
-        ("lightning", "start") => (0.1, 0.1),
-        ("lightning", "end") => (0.9, 0.9),
         ("checkerboard", "anchor") => (0.0, 0.0),
         ("write_on", "brush") => (0.5, 0.5),
-        ("volumetric_rays", "center") => (0.5, 0.25),
         _ => return None,
     })
-}
-
-fn lighting_effects() -> EffectDef {
-    let mut ps = Vec::new();
-    for (i, ids) in LIGHT_IDS.iter().enumerate() {
-        let g = LIGHT_GROUPS[i];
-        ps.push(grp(
-            ch(
-                ids[0],
-                "Light Type",
-                LIGHT_TYPES,
-                if i == 0 { 3 } else { 0 },
-            ),
-            g,
-        ));
-        ps.push(grp(col(ids[1], "Light Color", [1.0, 1.0, 1.0, 1.0]), g));
-        ps.push(grp(pt(ids[2], "Center", f64::NAN, f64::NAN), g));
-        ps.push(grp(
-            fs(
-                ids[3],
-                "Major Radius",
-                20.0,
-                (0.0, 100.0),
-                (0.0, 100.0),
-                "",
-                1,
-            ),
-            g,
-        ));
-        ps.push(grp(
-            fs(
-                ids[4],
-                "Minor Radius",
-                20.0,
-                (0.0, 100.0),
-                (0.0, 100.0),
-                "",
-                1,
-            ),
-            g,
-        ));
-        ps.push(grp(ang(ids[5], "Angle", 0.0), g));
-        ps.push(grp(
-            fs(
-                ids[6],
-                "Intensity",
-                20.0,
-                (-100.0, 100.0),
-                (-100.0, 100.0),
-                "",
-                1,
-            ),
-            g,
-        ));
-        ps.push(grp(f(ids[7], "Focus", 50.0, 0.0, 100.0, ""), g));
-    }
-    ps.push(col(
-        "ambient_color",
-        "Ambience Light Color",
-        [1.0, 1.0, 1.0, 1.0],
-    ));
-    ps.push(fs(
-        "ambient",
-        "Ambience Intensity",
-        20.0,
-        (-100.0, 100.0),
-        (-100.0, 100.0),
-        "",
-        1,
-    ));
-    ps.push(fs(
-        "gloss",
-        "Surface Gloss",
-        0.0,
-        (-100.0, 100.0),
-        (-100.0, 100.0),
-        "",
-        1,
-    ));
-    ps.push(fs(
-        "material",
-        "Surface Material",
-        0.0,
-        (-100.0, 100.0),
-        (-100.0, 100.0),
-        "",
-        1,
-    ));
-    ps.push(fs(
-        "exposure",
-        "Exposure",
-        0.0,
-        (-100.0, 100.0),
-        (-100.0, 100.0),
-        "",
-        1,
-    ));
-    ps.push(fs(
-        "bump_height",
-        "Bump Height",
-        0.0,
-        (-100.0, 100.0),
-        (-100.0, 100.0),
-        "",
-        1,
-    ));
-    ps.push(b("white_high", "White Is High", true));
-    video("lighting_effects", "Lighting Effects", ADJUST, ps)
 }
 
 fn immersive() -> Vec<EffectDef> {
@@ -267,239 +156,12 @@ fn immersive() -> Vec<EffectDef> {
             )],
         ),
         vr(
-            "vr_chromatic_aberrations",
-            "VR Chromatic Aberrations",
-            vec![
-                fs(
-                    "red",
-                    "Chromatic Aberration (Red)",
-                    0.0,
-                    (-100.0, 100.0),
-                    (-50.0, 50.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "green",
-                    "Chromatic Aberration (Green)",
-                    0.0,
-                    (-100.0, 100.0),
-                    (-50.0, 50.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "blue",
-                    "Chromatic Aberration (Blue)",
-                    0.0,
-                    (-100.0, 100.0),
-                    (-50.0, 50.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "center_x",
-                    "Center Point (Longitude)",
-                    0.0,
-                    (-180.0, 180.0),
-                    (-180.0, 180.0),
-                    "°",
-                    1,
-                ),
-                fs(
-                    "center_y",
-                    "Center Point (Latitude)",
-                    0.0,
-                    (-90.0, 90.0),
-                    (-90.0, 90.0),
-                    "°",
-                    1,
-                ),
-                pct("falloff", "Falloff", 50.0),
-                b("inverse", "Inverse Falloff", false),
-            ],
-        ),
-        vr(
-            "vr_color_gradients",
-            "VR Color Gradients",
-            vec![
-                col("c1", "Point 1 Color", [1.0, 0.25, 0.25, 1.0]),
-                fs(
-                    "p1_lon",
-                    "Point 1 Longitude",
-                    -120.0,
-                    (-180.0, 180.0),
-                    (-180.0, 180.0),
-                    "°",
-                    1,
-                ),
-                fs(
-                    "p1_lat",
-                    "Point 1 Latitude",
-                    20.0,
-                    (-90.0, 90.0),
-                    (-90.0, 90.0),
-                    "°",
-                    1,
-                ),
-                col("c2", "Point 2 Color", [0.25, 1.0, 0.4, 1.0]),
-                fs(
-                    "p2_lon",
-                    "Point 2 Longitude",
-                    0.0,
-                    (-180.0, 180.0),
-                    (-180.0, 180.0),
-                    "°",
-                    1,
-                ),
-                fs(
-                    "p2_lat",
-                    "Point 2 Latitude",
-                    -20.0,
-                    (-90.0, 90.0),
-                    (-90.0, 90.0),
-                    "°",
-                    1,
-                ),
-                col("c3", "Point 3 Color", [0.3, 0.4, 1.0, 1.0]),
-                fs(
-                    "p3_lon",
-                    "Point 3 Longitude",
-                    120.0,
-                    (-180.0, 180.0),
-                    (-180.0, 180.0),
-                    "°",
-                    1,
-                ),
-                fs(
-                    "p3_lat",
-                    "Point 3 Latitude",
-                    20.0,
-                    (-90.0, 90.0),
-                    (-90.0, 90.0),
-                    "°",
-                    1,
-                ),
-                f("blend", "Blend", 50.0, 1.0, 100.0, ""),
-                pct("opacity", "Opacity", 100.0),
-                ch("mode", "Blending Mode", SIMPLE_BLEND, 0),
-            ],
-        ),
-        vr(
             "vr_denoise",
             "VR De-Noise",
             vec![
                 pct("amount", "Noise Level", 0.0),
                 ch("noise_type", "Noise Type", &["Fast", "Slow"], 0),
                 b("show_noise", "Show Only Noise", false),
-            ],
-        ),
-        vr(
-            "vr_digital_glitch",
-            "VR Digital Glitch",
-            vec![
-                pct("amplitude", "Master Amplitude", 0.0),
-                fs(
-                    "distortion",
-                    "Distortion Complexity",
-                    20.0,
-                    (1.0, 100.0),
-                    (1.0, 100.0),
-                    "",
-                    0,
-                ),
-                f("rate", "Distortion Rate", 10.0, 0.0, 60.0, ""),
-                pct("color", "Color Distortion", 50.0),
-                pct("scanlines", "Scan Lines", 0.0),
-                seed(),
-            ],
-        ),
-        vr(
-            "vr_fractal_noise",
-            "VR Fractal Noise",
-            vec![
-                ch(
-                    "fractal_type",
-                    "Fractal Type",
-                    &["Basic", "Turbulent Smooth", "Turbulent Sharp"],
-                    0,
-                ),
-                b("invert", "Invert", false),
-                fs(
-                    "contrast",
-                    "Contrast",
-                    100.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "brightness",
-                    "Brightness",
-                    0.0,
-                    (-200.0, 200.0),
-                    (-200.0, 200.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "scale",
-                    "Scale",
-                    100.0,
-                    (10.0, 10000.0),
-                    (20.0, 600.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "complexity",
-                    "Complexity",
-                    6.0,
-                    (1.0, 10.0),
-                    (1.0, 10.0),
-                    "",
-                    1,
-                ),
-                ang("evolution", "Evolution", 0.0),
-                pct("opacity", "Opacity", 100.0),
-                ch("mode", "Blending Mode", SIMPLE_BLEND, 0),
-            ],
-        ),
-        vr(
-            "vr_glow",
-            "VR Glow",
-            vec![
-                pct("threshold", "Luminance Threshold", 70.0),
-                fs(
-                    "radius",
-                    "Glow Radius",
-                    30.0,
-                    (0.0, 1000.0),
-                    (0.0, 200.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "brightness",
-                    "Glow Brightness",
-                    1.0,
-                    (0.0, 10.0),
-                    (0.0, 4.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "saturation",
-                    "Glow Saturation",
-                    1.0,
-                    (0.0, 4.0),
-                    (0.0, 4.0),
-                    "",
-                    2,
-                ),
-                b("use_tint", "Use Tint Color", false),
-                col("tint", "Tint Color", [1.0, 1.0, 1.0, 1.0]),
             ],
         ),
         vr(
@@ -568,7 +230,6 @@ fn immersive() -> Vec<EffectDef> {
 /// The new effect definitions (appended after the core set).
 pub(super) fn defs() -> Vec<EffectDef> {
     let mut v = vec![
-        lighting_effects(),
         // ---- Blur & Sharpen ----
         video(
             "bokeh_blur",
@@ -805,85 +466,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "spherize",
-            "Spherize",
-            DISTORT,
-            vec![
-                px("radius", "Radius", 0.0, 2500.0, 600.0),
-                pt("center", "Center of Sphere", f64::NAN, f64::NAN),
-            ],
-        ),
-        video(
-            "turbulent_displace",
-            "Turbulent Displace",
-            DISTORT,
-            vec![
-                ch(
-                    "displacement",
-                    "Displacement",
-                    &[
-                        "Turbulent",
-                        "Bulge",
-                        "Twist",
-                        "Turbulent Smoother",
-                        "Bulge Smoother",
-                        "Twist Smoother",
-                        "Vertical Displacement",
-                        "Horizontal Displacement",
-                        "Cross Displacement",
-                    ],
-                    0,
-                ),
-                fs(
-                    "amount",
-                    "Amount",
-                    50.0,
-                    (-1000.0, 1000.0),
-                    (-200.0, 200.0),
-                    "",
-                    1,
-                ),
-                fs("size", "Size", 100.0, (2.0, 1000.0), (2.0, 400.0), "", 1),
-                pt("offset", "Offset (Turbulence)", f64::NAN, f64::NAN),
-                fs(
-                    "complexity",
-                    "Complexity",
-                    1.0,
-                    (1.0, 10.0),
-                    (1.0, 10.0),
-                    "",
-                    1,
-                ),
-                ang("evolution", "Evolution", 0.0),
-                grp(b("cycle", "Cycle Evolution", false), "Evolution Options"),
-                grp(
-                    fs(
-                        "cycle_revs",
-                        "Cycle (in Revolutions)",
-                        1.0,
-                        (1.0, 100.0),
-                        (1.0, 20.0),
-                        "",
-                        0,
-                    ),
-                    "Evolution Options",
-                ),
-                grp(seed(), "Evolution Options"),
-                ch(
-                    "pinning",
-                    "Pinning",
-                    &["None", "Pin All", "Pin Horizontal", "Pin Vertical"],
-                    1,
-                ),
-                ch(
-                    "antialias",
-                    "Antialiasing for Best Quality",
-                    &["Low", "High"],
-                    0,
-                ),
-            ],
-        ),
-        video(
             "warp_stabilizer",
             "Warp Stabilizer",
             DISTORT,
@@ -1068,49 +650,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
         ),
         // ---- Lights & Glows ----
         video(
-            "echo_glow",
-            "Echo Glow",
-            LIGHTS,
-            vec![
-                pct("threshold", "Threshold", 60.0),
-                fs("echoes", "Echoes", 4.0, (1.0, 12.0), (1.0, 12.0), "", 0),
-                px("radius", "Radius", 12.0, 500.0, 100.0),
-                fs("spread", "Spread", 1.8, (1.0, 4.0), (1.0, 4.0), "", 2),
-                fs(
-                    "intensity",
-                    "Intensity",
-                    100.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "%",
-                    0,
-                ),
-                pct("decay", "Decay", 50.0),
-                col("color", "Glow Color", [1.0, 0.85, 0.6, 1.0]),
-            ],
-        ),
-        video(
-            "edge_glow",
-            "Edge Glow",
-            LIGHTS,
-            vec![
-                pct("threshold", "Edge Threshold", 20.0),
-                px("width", "Edge Width", 2.0, 50.0, 10.0),
-                px("radius", "Glow Radius", 10.0, 500.0, 100.0),
-                fs(
-                    "intensity",
-                    "Intensity",
-                    150.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "%",
-                    0,
-                ),
-                col("color", "Glow Color", [0.3, 0.8, 1.0, 1.0]),
-                b("only", "Glow Only", false),
-            ],
-        ),
-        video(
             "glint",
             "Glint",
             LIGHTS,
@@ -1168,35 +707,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "volumetric_rays",
-            "Volumetric Rays",
-            LIGHTS,
-            vec![
-                pt("center", "Source Point", f64::NAN, f64::NAN),
-                pct("threshold", "Threshold", 60.0),
-                fs(
-                    "length",
-                    "Ray Length",
-                    50.0,
-                    (0.0, 100.0),
-                    (0.0, 100.0),
-                    "%",
-                    0,
-                ),
-                fs(
-                    "intensity",
-                    "Intensity",
-                    100.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "%",
-                    0,
-                ),
-                col("color", "Ray Color", [1.0, 0.95, 0.8, 1.0]),
-                b("only", "Rays Only", false),
-            ],
-        ),
-        video(
             "wonder_glow",
             "Wonder Glow",
             LIGHTS,
@@ -1227,151 +737,7 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Perspective ----
-        video(
-            "long_shadow",
-            "Long Shadow",
-            PERSPECTIVE,
-            vec![
-                ang("angle", "Angle", 135.0),
-                px("length", "Length", 100.0, 4000.0, 600.0),
-                col("color", "Shadow Color", [0.0, 0.0, 0.0, 1.0]),
-                pct("opacity", "Opacity", 50.0),
-                b("fade", "Fade", true),
-                b("only", "Shadow Only", false),
-            ],
-        ),
         // ---- Stylize ----
-        video(
-            "brush_strokes",
-            "Brush Strokes",
-            STYLIZE,
-            vec![
-                ang("angle", "Stroke Angle", 135.0),
-                fs("size", "Brush Size", 2.0, (0.0, 5.0), (0.0, 5.0), "", 1),
-                fs(
-                    "length",
-                    "Stroke Length",
-                    10.0,
-                    (0.0, 40.0),
-                    (0.0, 40.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "density",
-                    "Stroke Density",
-                    1.0,
-                    (0.0, 2.0),
-                    (0.0, 2.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "randomness",
-                    "Stroke Randomness",
-                    1.0,
-                    (0.0, 2.0),
-                    (0.0, 2.0),
-                    "",
-                    2,
-                ),
-                ch(
-                    "surface",
-                    "Paint Surface",
-                    &[
-                        "Paint On Original Image",
-                        "Paint On Transparent",
-                        "Paint On White",
-                        "Paint On Black",
-                    ],
-                    0,
-                ),
-                blend_orig(),
-            ],
-        ),
-        video(
-            "color_emboss",
-            "Color Emboss",
-            STYLIZE,
-            vec![
-                ang("direction", "Direction", 45.0),
-                fs("relief", "Relief", 1.0, (0.0, 10.0), (0.0, 10.0), "", 2),
-                f("contrast", "Contrast", 100.0, 0.0, 500.0, ""),
-                blend_orig(),
-            ],
-        ),
-        video(
-            "roughen_edges",
-            "Roughen Edges",
-            STYLIZE,
-            vec![
-                ch(
-                    "edge_type",
-                    "Edge Type",
-                    &[
-                        "Roughen",
-                        "Roughen Color",
-                        "Cut",
-                        "Spiky",
-                        "Rusty",
-                        "Rusty Color",
-                        "Photocopy",
-                        "Photocopy Color",
-                    ],
-                    0,
-                ),
-                col("edge_color", "Edge Color", [0.8, 0.5, 0.2, 1.0]),
-                px("border", "Border", 8.0, 500.0, 100.0),
-                fs(
-                    "sharpness",
-                    "Edge Sharpness",
-                    1.0,
-                    (0.0, 10.0),
-                    (0.0, 10.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "influence",
-                    "Fractal Influence",
-                    1.0,
-                    (0.0, 1.0),
-                    (0.0, 1.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "scale",
-                    "Scale",
-                    100.0,
-                    (10.0, 1000.0),
-                    (10.0, 400.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "stretch",
-                    "Stretch Width or Height",
-                    0.0,
-                    (-10.0, 10.0),
-                    (-5.0, 5.0),
-                    "",
-                    2,
-                ),
-                pt("offset", "Offset (Turbulence)", 0.0, 0.0),
-                fs(
-                    "complexity",
-                    "Complexity",
-                    2.0,
-                    (1.0, 10.0),
-                    (1.0, 10.0),
-                    "",
-                    0,
-                ),
-                ang("evolution", "Evolution", 0.0),
-                grp(seed(), "Evolution Options"),
-            ],
-        ),
         // ---- Time ----
         video(
             "posterize_time",
@@ -1388,35 +754,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             )],
         ),
         // ---- Transform ----
-        video(
-            "rotate_3d",
-            "3D Rotate",
-            TRANSFORM,
-            vec![
-                ang("rot_x", "X Rotation", 0.0),
-                ang("rot_y", "Y Rotation", 0.0),
-                ang("rot_z", "Z Rotation", 0.0),
-                fs(
-                    "perspective",
-                    "Perspective",
-                    50.0,
-                    (0.0, 100.0),
-                    (0.0, 100.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "z",
-                    "Z Position",
-                    0.0,
-                    (-10000.0, 10000.0),
-                    (-2000.0, 2000.0),
-                    "",
-                    0,
-                ),
-                b("hide_back", "Hide Back Face", false),
-            ],
-        ),
         video(
             "auto_reframe",
             "Auto Reframe",
@@ -1453,136 +790,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "camera_shake",
-            "Camera Shake",
-            TRANSFORM,
-            vec![
-                px("amount", "Position Amount", 20.0, 1000.0, 200.0),
-                fs(
-                    "rotation",
-                    "Rotation Amount",
-                    1.0,
-                    (0.0, 45.0),
-                    (0.0, 10.0),
-                    "°",
-                    2,
-                ),
-                pct("zoom", "Zoom Amount", 5.0),
-                fs(
-                    "frequency",
-                    "Frequency",
-                    4.0,
-                    (0.1, 60.0),
-                    (0.1, 20.0),
-                    "Hz",
-                    2,
-                ),
-                fs(
-                    "complexity",
-                    "Complexity",
-                    3.0,
-                    (1.0, 6.0),
-                    (1.0, 6.0),
-                    "",
-                    0,
-                ),
-                pct("motion_blur", "Motion Blur", 0.0),
-                seed(),
-            ],
-        ),
-        video(
-            "grow",
-            "Grow",
-            TRANSFORM,
-            vec![
-                fs(
-                    "from",
-                    "Scale From",
-                    100.0,
-                    (1.0, 1000.0),
-                    (50.0, 200.0),
-                    "%",
-                    1,
-                ),
-                fs(
-                    "to",
-                    "Scale To",
-                    120.0,
-                    (1.0, 1000.0),
-                    (50.0, 200.0),
-                    "%",
-                    1,
-                ),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                ch("easing", "Easing", EASINGS, 0),
-            ],
-        ),
-        video(
-            "shrink",
-            "Shrink",
-            TRANSFORM,
-            vec![
-                fs(
-                    "from",
-                    "Scale From",
-                    120.0,
-                    (1.0, 1000.0),
-                    (50.0, 200.0),
-                    "%",
-                    1,
-                ),
-                fs(
-                    "to",
-                    "Scale To",
-                    100.0,
-                    (1.0, 1000.0),
-                    (50.0, 200.0),
-                    "%",
-                    1,
-                ),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                ch("easing", "Easing", EASINGS, 0),
-            ],
-        ),
-        video(
-            "move",
-            "Move",
-            TRANSFORM,
-            vec![
-                pt("from", "Offset From", -100.0, 0.0),
-                pt("to", "Offset To", 0.0, 0.0),
-                ch("easing", "Easing", EASINGS, 3),
-                pct("motion_blur", "Motion Blur", 0.0),
-            ],
-        ),
-        video(
-            "spin",
-            "Spin",
-            TRANSFORM,
-            vec![
-                fs(
-                    "amount",
-                    "Rotation Amount",
-                    360.0,
-                    (-36000.0, 36000.0),
-                    (-720.0, 720.0),
-                    "°",
-                    1,
-                ),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                ch("easing", "Easing", EASINGS, 3),
-                fs(
-                    "scale",
-                    "Scale",
-                    100.0,
-                    (1.0, 1000.0),
-                    (50.0, 200.0),
-                    "%",
-                    1,
-                ),
-            ],
-        ),
-        video(
             "spacer",
             "Spacer",
             TRANSFORM,
@@ -1595,40 +802,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 px("radius", "Corner Radius", 0.0, 2000.0, 200.0),
                 b("fill", "Fill Background", false),
                 col("color", "Background Color", [0.0, 0.0, 0.0, 1.0]),
-            ],
-        ),
-        video(
-            "wiggle",
-            "Wiggle",
-            TRANSFORM,
-            vec![
-                fs(
-                    "frequency",
-                    "Frequency",
-                    2.0,
-                    (0.0, 60.0),
-                    (0.0, 10.0),
-                    "Hz",
-                    2,
-                ),
-                px("amount", "Position Amount", 20.0, 2000.0, 200.0),
-                fs(
-                    "rotation",
-                    "Rotation Amount",
-                    0.0,
-                    (0.0, 180.0),
-                    (0.0, 45.0),
-                    "°",
-                    1,
-                ),
-                pct("scale", "Scale Amount", 0.0),
-                ch(
-                    "dimensions",
-                    "Dimensions",
-                    &["Horizontal and Vertical", "Horizontal", "Vertical"],
-                    0,
-                ),
-                seed(),
             ],
         ),
         // ---- Utility ----
@@ -1710,17 +883,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                     "",
                     0,
                 ),
-            ],
-        ),
-        video(
-            "clone",
-            "Clone",
-            UTILITY,
-            vec![
-                fs("columns", "Columns", 2.0, (1.0, 16.0), (1.0, 16.0), "", 0),
-                fs("rows", "Rows", 1.0, (1.0, 16.0), (1.0, 16.0), "", 0),
-                px("gap", "Gap", 0.0, 1000.0, 100.0),
-                b("mirror", "Mirror Alternate", false),
             ],
         ),
         video(
@@ -1813,102 +975,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "lightning",
-            "Lightning",
-            OBSOLETE,
-            vec![
-                pt("start", "Start Point", f64::NAN, f64::NAN),
-                pt("end", "End Point", f64::NAN, f64::NAN),
-                fs(
-                    "segments",
-                    "Segments",
-                    7.0,
-                    (1.0, 100.0),
-                    (1.0, 40.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "amplitude",
-                    "Amplitude",
-                    10.0,
-                    (0.0, 100.0),
-                    (0.0, 100.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "detail",
-                    "Detail Level",
-                    2.0,
-                    (0.0, 10.0),
-                    (0.0, 10.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "detail_amplitude",
-                    "Detail Amplitude",
-                    0.3,
-                    (0.0, 1.0),
-                    (0.0, 1.0),
-                    "",
-                    2,
-                ),
-                fs("branching", "Branching", 0.3, (0.0, 1.0), (0.0, 1.0), "", 2),
-                fs("speed", "Speed", 10.0, (0.0, 100.0), (0.0, 100.0), "", 0),
-                px("width", "Width", 10.0, 200.0, 60.0),
-                fs("core", "Core Width", 0.4, (0.0, 1.0), (0.0, 1.0), "", 2),
-                col("outside", "Outside Color", [0.35, 0.3, 1.0, 1.0]),
-                col("inside", "Inside Color", [1.0, 1.0, 1.0, 1.0]),
-                seed(),
-                ch("mode", "Blending Mode", SIMPLE_BLEND, 1),
-            ],
-        ),
-        video(
-            "cell_pattern",
-            "Cell Pattern",
-            OBSOLETE,
-            vec![
-                ch(
-                    "pattern",
-                    "Cell Pattern",
-                    &[
-                        "Bubbles",
-                        "Crystals",
-                        "Plates",
-                        "Static Plates",
-                        "Crystallize",
-                        "Pillow",
-                        "Mixed Crystals",
-                        "Tubular",
-                    ],
-                    0,
-                ),
-                b("invert", "Invert", false),
-                fs(
-                    "contrast",
-                    "Contrast",
-                    100.0,
-                    (0.0, 10000.0),
-                    (0.0, 400.0),
-                    "",
-                    1,
-                ),
-                ch(
-                    "overflow",
-                    "Overflow",
-                    &["Clip", "Soft Clamp", "Wrap Back"],
-                    0,
-                ),
-                fs("disperse", "Disperse", 1.0, (0.0, 1.5), (0.0, 1.5), "", 2),
-                px("size", "Size", 60.0, 2000.0, 200.0),
-                pt("offset", "Offset", 0.0, 0.0),
-                ang("evolution", "Evolution", 0.0),
-                seed(),
-            ],
-        ),
-        video(
             "checkerboard",
             "Checkerboard",
             OBSOLETE,
@@ -1926,21 +992,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                     &["None", "Normal", "Add", "Multiply", "Screen", "Overlay"],
                     0,
                 ),
-            ],
-        ),
-        video(
-            "ellipse",
-            "Ellipse",
-            OBSOLETE,
-            vec![
-                pt("center", "Center", f64::NAN, f64::NAN),
-                px("width", "Width", 200.0, 4000.0, 1000.0),
-                px("height", "Height", 200.0, 4000.0, 1000.0),
-                px("thickness", "Thickness", 8.0, 1000.0, 100.0),
-                pct("softness", "Softness", 15.0),
-                col("inside", "Inside Color", [1.0, 1.0, 1.0, 1.0]),
-                col("outside", "Outside Color", [0.0, 0.5, 1.0, 1.0]),
-                b("composite", "Composite on Original", false),
             ],
         ),
         video(
@@ -2016,185 +1067,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Legacy bin ----
-        video(
-            "alpha_glow",
-            "Alpha Glow",
-            LEGACY,
-            vec![
-                fs("glow", "Glow", 30.0, (0.0, 100.0), (0.0, 100.0), "", 0),
-                fs(
-                    "brightness",
-                    "Brightness",
-                    252.0,
-                    (0.0, 255.0),
-                    (0.0, 255.0),
-                    "",
-                    0,
-                ),
-                col("start_color", "Start Color", [1.0, 1.0, 1.0, 1.0]),
-                col("end_color", "End Color", [1.0, 1.0, 1.0, 1.0]),
-                b("use_end", "Use End Color", false),
-                b("fade_out", "Fade Out", true),
-            ],
-        ),
-        video(
-            "block_dissolve",
-            "Block Dissolve",
-            LEGACY,
-            vec![
-                pct("completion", "Transition Completion", 0.0),
-                px("block_w", "Block Width", 1.0, 4000.0, 200.0),
-                px("block_h", "Block Height", 1.0, 4000.0, 200.0),
-                px("feather", "Feather", 0.0, 100.0, 20.0),
-                b("soft", "Soft Edges (Best Quality)", true),
-            ],
-        ),
-        video(
-            "directional_blur_legacy",
-            "Directional Blur (Legacy)",
-            LEGACY,
-            vec![
-                ang("direction", "Direction", 0.0),
-                fs(
-                    "length",
-                    "Blur Length",
-                    0.0,
-                    (0.0, 1000.0),
-                    (0.0, 20.0),
-                    "",
-                    1,
-                ),
-            ],
-        ),
-        video(
-            "gaussian_blur_legacy",
-            "Gaussian Blur (Legacy)",
-            LEGACY,
-            vec![
-                fs(
-                    "blurriness",
-                    "Blurriness",
-                    0.0,
-                    (0.0, 3000.0),
-                    (0.0, 100.0),
-                    "",
-                    1,
-                ),
-                ch(
-                    "dimensions",
-                    "Blur Dimensions",
-                    &["Horizontal and Vertical", "Horizontal", "Vertical"],
-                    0,
-                ),
-            ],
-        ),
-        video(
-            "gradient_wipe_legacy",
-            "Gradient Wipe (Legacy)",
-            LEGACY,
-            vec![
-                pct("completion", "Transition Completion", 0.0),
-                pct("softness", "Transition Softness", 0.0),
-                ch("layer", "Gradient Layer", TRACK_CHOICES, 0),
-                ch(
-                    "placement",
-                    "Gradient Placement",
-                    &[
-                        "Tile Gradient",
-                        "Center Gradient",
-                        "Stretch Gradient to Fit",
-                    ],
-                    2,
-                ),
-                b("invert", "Invert Gradient", false),
-            ],
-        ),
-        video(
-            "linear_wipe_legacy",
-            "Linear Wipe (Legacy)",
-            LEGACY,
-            vec![
-                pct("completion", "Transition Completion", 0.0),
-                ang("angle", "Wipe Angle", 90.0),
-                px("feather", "Feather", 0.0, 4000.0, 400.0),
-            ],
-        ),
-        video(
-            "magnify_legacy",
-            "Magnify (Legacy)",
-            LEGACY,
-            vec![
-                ch("shape", "Shape", &["Circle", "Square"], 0),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                fs(
-                    "magnification",
-                    "Magnification",
-                    200.0,
-                    (100.0, 600.0),
-                    (100.0, 600.0),
-                    "",
-                    1,
-                ),
-                px("size", "Size", 100.0, 4000.0, 600.0),
-                px("feather", "Feather", 0.0, 1000.0, 200.0),
-                pct("opacity", "Opacity", 100.0),
-                ch("mode", "Blending Mode", SIMPLE_BLEND, 0),
-            ],
-        ),
-        video(
-            "mosaic_legacy",
-            "Mosaic (Legacy)",
-            LEGACY,
-            vec![
-                fs(
-                    "horizontal",
-                    "Horizontal Blocks",
-                    10.0,
-                    (1.0, 4000.0),
-                    (1.0, 200.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "vertical",
-                    "Vertical Blocks",
-                    10.0,
-                    (1.0, 4000.0),
-                    (1.0, 200.0),
-                    "",
-                    0,
-                ),
-                b("sharp", "Sharp Colors", false),
-            ],
-        ),
-        video(
-            "noise_legacy",
-            "Noise (Legacy)",
-            LEGACY,
-            vec![
-                pct("amount", "Amount of Noise", 0.0),
-                b("color", "Use Color Noise", true),
-                b("clip", "Clipping", true),
-            ],
-        ),
-        video(
-            "twirl_legacy",
-            "Twirl (Legacy)",
-            LEGACY,
-            vec![
-                ang("angle", "Angle", 50.0),
-                fs(
-                    "radius",
-                    "Twirl Radius",
-                    30.0,
-                    (0.0, 100.0),
-                    (0.0, 100.0),
-                    "",
-                    1,
-                ),
-                pt("center", "Twirl Center", f64::NAN, f64::NAN),
-            ],
-        ),
     ];
     v.extend(immersive());
     v
@@ -2306,17 +1178,6 @@ pub(super) fn extend_core(v: &mut [EffectDef]) {
                     "Color Correction",
                 ),
             ]),
-            "lens_flare" => e.params.extend([
-                ch(
-                    "lens_type",
-                    "Lens Type",
-                    &["50-300mm Zoom", "35mm Prime", "105mm Prime", "Anamorphic"],
-                    0,
-                ),
-                col("color", "Flare Color", [1.0, 0.9, 0.75, 1.0]),
-                fs("size", "Size", 100.0, (10.0, 400.0), (10.0, 300.0), "%", 0),
-                fs("ghosts", "Ghosts", 3.0, (0.0, 8.0), (0.0, 8.0), "", 0),
-            ]),
             "track_matte" => {
                 if let Some(p) = e.params.iter_mut().find(|p| p.id == "matte") {
                     p.kind = ParamKind::Choice(TRACK_CHOICES);
@@ -2370,7 +1231,6 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "video_limiter"
                 | "vignette"
                 | "magnify"
-                | "twirl"
                 | "gradient"
                 | "channel_mix"
                 | "rounded_crop"
@@ -2378,16 +1238,8 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "luma_key"
                 | "track_matte"
                 | "noise"
-                | "long_shadow"
                 | "mosaic"
-                | "rotate_3d"
-                | "camera_shake"
-                | "grow"
-                | "move"
-                | "shrink"
                 | "spacer"
-                | "spin"
-                | "wiggle"
                 | "proc_amp"
         ) || folder == "Lights & Glows";
         let yuv = matches!(
@@ -2419,7 +1271,7 @@ mod tests {
     const CATALOGUE: &[(&str, &[&str])] = &[
         (
             "Adjust",
-            &["Extract", "Levels", "Lighting Effects", "ProcAmp"],
+            &["Extract", "Levels", "ProcAmp"],
         ),
         (
             "Blur & Sharpen",
@@ -2453,9 +1305,6 @@ mod tests {
                 "Lens Distortion",
                 "Magnify",
                 "Mirror",
-                "Spherize",
-                "Turbulent Displace",
-                "Twirl",
                 "Warp Stabilizer",
                 "Wave Warp",
             ],
@@ -2477,12 +1326,7 @@ mod tests {
             "Immersive Video",
             &[
                 "VR Blur",
-                "VR Chromatic Aberrations",
-                "VR Color Gradients",
                 "VR De-Noise",
-                "VR Digital Glitch",
-                "VR Fractal Noise",
-                "VR Glow",
                 "VR Plane to Sphere",
                 "VR Projection",
                 "VR Rotate Sphere",
@@ -2503,47 +1347,31 @@ mod tests {
         (
             "Lights & Glows",
             &[
-                "Echo Glow",
-                "Edge Glow",
                 "Glint",
-                "Lens Flare",
                 "Light Leaks",
                 "RGB Split",
-                "Volumetric Rays",
                 "Wonder Glow",
             ],
         ),
         ("Noise & Grain", &["Noise"]),
-        ("Perspective", &["Basic 3D", "Drop Shadow", "Long Shadow"]),
+        ("Perspective", &["Drop Shadow"]),
         (
             "Stylize",
             &[
-                "Brush Strokes",
-                "Color Emboss",
-                "Find Edges",
                 "Mosaic",
                 "Posterize",
-                "Roughen Edges",
-                "Strobe Light",
             ],
         ),
         ("Time", &["Posterize Time"]),
         (
             "Transform",
             &[
-                "3D Rotate",
                 "Auto Reframe",
-                "Camera Shake",
-                "Grow",
                 "Horizontal Flip",
-                "Move",
                 "Offset",
-                "Shrink",
                 "Spacer",
-                "Spin",
                 "Transform",
                 "Vertical Flip",
-                "Wiggle",
             ],
         ),
         (
@@ -2551,7 +1379,6 @@ mod tests {
             &[
                 "Auto Align",
                 "Cineon Converter",
-                "Clone",
                 "Simple Text",
                 "Stroke",
             ],
@@ -2560,25 +1387,14 @@ mod tests {
     ];
 
     const LEGACY_NAMES: &[&str] = &[
-        "Alpha Glow",
-        "Block Dissolve",
         "Camera Blur",
         "Crop",
-        "Directional Blur (Legacy)",
         "Edge Feather",
-        "Gaussian Blur (Legacy)",
-        "Gradient Wipe (Legacy)",
-        "Linear Wipe (Legacy)",
-        "Magnify (Legacy)",
-        "Mosaic (Legacy)",
-        "Noise (Legacy)",
         "Ramp",
-        "Replicate",
-        "Twirl (Legacy)",
     ];
 
     #[test]
-    fn premiere_26_video_effects_catalogue() {
+    fn carried_effects_sit_in_premieres_folders() {
         let mut n = 0;
         for (folder, names) in CATALOGUE {
             for name in *names {
@@ -2587,13 +1403,13 @@ mod tests {
                 assert_eq!(d.category, &["Video Effects", *folder], "{name} folder");
                 assert_eq!(
                     d.accelerated,
-                    !matches!(d.id, "clone" | "stroke"),
+                    d.id != "stroke",
                     "{name} accelerated badge"
                 );
                 n += 1;
             }
         }
-        assert_eq!(n, 93);
+        assert_eq!(n, 65);
         assert_eq!(CATALOGUE.len(), 16);
         // nothing else sits in the current folders
         for d in effect_defs()

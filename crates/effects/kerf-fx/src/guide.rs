@@ -51,10 +51,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Straightens the skew and wobble a rolling shutter leaves, from the motion between frames; fast pans on phones and DSLRs.",
     ),
     (
-        "distort.bulge",
-        "Inflates or pinches a round area; comic face bulges, fisheye spots.",
-    ),
-    (
         "distort.upscale",
         "Enlarges while keeping detail; low-resolution footage.",
     ),
@@ -101,10 +97,5 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "noise.removegrain",
         "Removes grain and noise; low-light footage.",
-    ),
-    // Stylize
-    (
-        "stylize.motiontile",
-        "Tiles the picture with mirroring and offset; seamless pans, kaleidoscopes.",
     ),
 ];

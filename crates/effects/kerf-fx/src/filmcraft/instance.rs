@@ -485,24 +485,27 @@ mod tests {
                 .instance()
         );
         // A point across the picture is in source pixels: 64 × 36 at half the source.
-        let twirl = effect(
-            "distort.twirl",
-            &[("center_x", number(0.25)), ("angle", number(90.0))],
+        let lens = effect(
+            "distort.magnify",
+            &[("center_x", number(0.25)), ("magnification", number(300.0))],
         );
-        let twirl = instance(&twirl, Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(twirl.vec2_at("center", Tick(0)), Vec2::new(32.0, 36.0));
-        assert_eq!(twirl.f64_at("angle", Tick(0)), 90.0);
+        let lens = instance(&lens, Time::ZERO, PICTURE, &none).unwrap();
+        assert_eq!(lens.vec2_at("center", Tick(0)), Vec2::new(32.0, 36.0));
+        assert_eq!(lens.f64_at("magnification", Tick(0)), 300.0);
         // An offset is in pixels; a choice is its word's place.
-        let moved = effect(
-            "transform.move",
+        let framed = effect(
+            "transform.autoreframe",
             &[
-                ("from_x", number(-40.0)),
-                ("easing", Param::Static(Value::Enum("linear".into()))),
+                ("offset_x", number(-40.0)),
+                (
+                    "preset",
+                    Param::Static(Value::Enum("slower-motion".into())),
+                ),
             ],
         );
-        let moved = instance(&moved, Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(moved.vec2_at("from", Tick(0)), Vec2::new(-40.0, 0.0));
-        assert_eq!(moved.param("easing").unwrap().value, ParamValue::Choice(0));
+        let framed = instance(&framed, Time::ZERO, PICTURE, &none).unwrap();
+        assert_eq!(framed.vec2_at("offset", Tick(0)), Vec2::new(-40.0, 0.0));
+        assert_eq!(framed.param("preset").unwrap().value, ParamValue::Choice(0));
         // A track by id, and a curve.
         let matte = effect(
             "key.trackmatte",
@@ -541,12 +544,12 @@ mod tests {
             },
         ]);
         let half = Time::from_seconds(0.5).unwrap();
-        let swirl = effect("distort.twirl", &[("center_x", keys)]);
-        let swirl = instance(&swirl, half, PICTURE, &|_| None).unwrap();
+        let lens = effect("distort.magnify", &[("center_x", keys)]);
+        let lens = instance(&lens, half, PICTURE, &|_| None).unwrap();
         // Now, and around now as Transform's shutter reads it.
-        assert_eq!(swirl.vec2_at("center", tick(half)).x, 64.0);
-        assert_eq!(swirl.vec2_at("center", tick(second)).x, 128.0);
-        assert!(swirl.is_animated());
+        assert_eq!(lens.vec2_at("center", tick(half)).x, 64.0);
+        assert_eq!(lens.vec2_at("center", tick(second)).x, 128.0);
+        assert!(lens.is_animated());
         assert_eq!(time(tick(half)), half);
     }
 

@@ -16,7 +16,7 @@ on, and Kerf does not follow upstream.
 
 | Where | What it carries |
 |---|---|
-| `crates/effects/kerf-raster-fx` | The 24 EffectCraft effects Kerf keeps, with the tracking and plane code they run on; Add Grain's arithmetic is also in WGSL, in `crates/effects/kerf-fx/src/filmcraft/vfx/kernels.wgsl` |
+| `crates/effects/kerf-raster-fx` | The 22 EffectCraft effects Kerf keeps, with the tracking and plane code they run on; Add Grain's arithmetic is also in WGSL, in `crates/effects/kerf-fx/src/filmcraft/vfx/kernels.wgsl` |
 | `crates/render/kerf-raster` | EffectCraft's raster images, warps, and blurs, the feature tracker, and optical flow |
 | `crates/image/kerf-image/src/fill.rs` | EffectCraft's hole filling |
 | `crates/vfx/kerf-track/src/planar.rs` | EffectCraft's homography fit and RANSAC |

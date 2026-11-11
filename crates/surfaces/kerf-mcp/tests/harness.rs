@@ -1689,9 +1689,9 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
         "INVALID_ARGUMENTS"
     );
     // Effects are found by the look wanted, each saying when to use it.
-    let found = ok(&router, "look", json!({"effects": "neon glow"}));
+    let found = ok(&router, "look", json!({"effects": "cinematic glow"}));
     let doc = found["effects"][0]["doc"].as_str().unwrap();
-    assert!(doc.contains("Glow") && doc.contains("neon"), "{found}");
+    assert!(doc.contains("Glow") && doc.contains("cinematic"), "{found}");
     let retro = ok(&router, "look", json!({"effects": "retro tv transition"}));
     assert_eq!(retro["effects"][0]["id"], "tv-power", "{retro}");
     // An effect EffectCraft had says what replaced it.
@@ -1713,7 +1713,7 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     let proposal = ok(
         &router,
         "edit",
-        json!({"script": "fx c1 add stylize.findedges\n"}),
+        json!({"script": "fx c1 add stylize.mosaic\n"}),
     );
     assert_eq!(proposal["check"]["valid"], true, "{proposal}");
     assert!(
@@ -2677,7 +2677,7 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
         "    clip c1 media=m1 at=00:00:00:00 dur=00:00:02:00
       fx color.basic@1 exposure=0.2
     clip c2 media=m1 src=00:00:02:00 at=00:00:02:00 dur=00:00:02:00
-      fx stylize.emboss@2
+      fx stylize.mosaic@2
 ",
     ) else {
         return;
@@ -2698,7 +2698,7 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
         assert_eq!(rows[1]["draws"], "cpu", "{}", rows[1]);
         let because = rows[1]["because"].to_string();
         assert!(
-            because.contains("c2") && because.contains("stylize.emboss"),
+            because.contains("c2") && because.contains("stylize.mosaic"),
             "{because}"
         );
     } else {

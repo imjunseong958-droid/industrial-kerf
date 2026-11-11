@@ -50,33 +50,20 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("magnify", "distort.magnify", 2, "A magnifying circle or square; zoom in on a detail."),
     ("mirror", "distort.mirror", 2, "Mirrors the picture across a line; symmetric, surreal reflections."),
     ("offset", "distort.offset", 2, "Shifts the picture with wraparound; seamless scrolls and glitch slides."),
-    ("spherize", "distort.spherize", 2, "Wraps an area onto a sphere; bulging, fisheye accents."),
     ("transform", "distort.transform", 2, "Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture."),
-    ("turbulent_displace", "distort.turbulentdisplace", 2, "Organic noise displacement; heat haze, wobble, liquid."),
-    ("twirl", "distort.twirl", 2, "Swirls the picture around a center; dizziness and vortex moments."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
     ("wave_warp", "distort.wavewarp", 2, "Moving waves across the picture; flags, water, wobbling text."),
     // Generate
-    ("cell_pattern", "generate.cellpattern", 2, "Cellular patterns; organic textures and backgrounds."),
     ("checkerboard", "generate.checkerboard", 2, "A checkerboard; backgrounds and patterns."),
-    ("circle", "generate.circle", 2, "Draws a filled circle or ring; highlights and callouts."),
-    ("ellipse", "generate.ellipse", 2, "Draws an ellipse outline; callouts and rings."),
     ("four_color_gradient", "generate.fourcolor", 2, "A gradient from four colored points; backgrounds and color washes."),
     ("gradient", "generate.gradient", 1, "A smooth linear or radial gradient between two colors, dithered against banding; skies, backgrounds, shading."),
     ("ramp", "generate.gradientramp", 2, "A linear or radial ramp between two colors; skies, backgrounds, shading."),
     ("grid", "generate.grid", 2, "Draws a grid of lines; layouts, tech overlays, and backgrounds."),
-    ("lens_flare", "generate.lensflare", 2, "A lens flare; bright light hits and cinematic sun flares."),
-    ("lightning", "generate.lightning", 1, "Animated lightning bolts between two points; storms, electricity, magic."),
     ("paint_bucket", "generate.paintbucket", 2, "Fills a region from a point; recolor flat areas."),
     ("write_on", "generate.writeon", 2, "Paints a stroke along the path its brush point takes over the clip; underlines and doodles."),
     // Immersive Video
     ("vr_blur", "vr.blur", 2, "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds."),
-    ("vr_chromatic_aberrations", "vr.chromaticaberrations", 2, "Splits color channels around a point on a 360° frame; lens-like fringing in VR."),
-    ("vr_color_gradients", "vr.colorgradients", 2, "Lays soft color gradients over a 360° frame; tinting a whole VR sky or room."),
     ("vr_denoise", "vr.denoise", 2, "Reduces noise on a 360° frame without seams; cleaning VR footage."),
-    ("vr_digital_glitch", "vr.digitalglitch", 2, "Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR."),
-    ("vr_fractal_noise", "vr.fractalnoise", 2, "Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR."),
-    ("vr_glow", "vr.glow", 2, "Makes highlights glow evenly across a 360° frame; dreamy VR light."),
     ("vr_plane_to_sphere", "vr.planetosphere", 2, "Places a flat picture onto a 360° frame; titles and graphics inside VR."),
     ("vr_projection", "vr.projection", 1, "Changes the view of a 360° frame: field of view, pan, tilt, and roll; reframing VR shots."),
     ("vr_rotate_sphere", "vr.rotatesphere", 2, "Turns a 360° frame around its axes; leveling the horizon or choosing the front view."),
@@ -90,33 +77,18 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("track_matte", "key.trackmatte", 1, "Shows the picture through another track's alpha or brightness (matte=V2); text filled with video, shaped reveals."),
     ("ultra_key", "key.ultra", 1, "A chroma key for green and blue screen with matte, spill, and color controls; studio footage."),
     // Lights & Glows
-    ("alpha_glow", "light.alphaglow", 1, "Glows around the edges of the picture's alpha; neon text and logo outlines."),
-    ("echo_glow", "light.echoglow", 1, "Highlights glow outward in repeating echoes; retro neon and dreamy halos."),
-    ("edge_glow", "light.edgeglow", 1, "Makes the picture's edges glow; neon outlines and electric looks."),
     ("glint", "light.glint", 1, "Star-shaped glints on the brightest spots; sparkle, jewelry, sunlight on water."),
     ("light_leaks", "light.leaks", 1, "Animated warm light leaks washing over the picture; film, vlog, and nostalgic looks."),
-    ("lighting_effects", "light.lighting", 1, "Up to five spot, omni, or directional lights on the picture; relighting and moody pools of light."),
     ("rgb_split", "light.rgbsplit", 1, "Splits the red, green, and blue channels apart; glitch hits, chromatic aberration, music videos."),
-    ("volumetric_rays", "light.rays", 1, "Light rays streaming from the bright areas around a center; god rays and dramatic backlight."),
     ("wonder_glow", "light.wonderglow", 1, "A soft, rich glow from the highlights; dreamy, cinematic bloom."),
     // Noise & Grain
     ("median", "noise.median", 2, "A median filter; removes noise, painterly smoothing."),
     ("noise", "noise.noise", 2, "Adds random noise, in color or not; film texture and analog grit."),
     // Perspective
-    ("basic_3d", "perspective.basic3d", 1, "Swivels and tilts the picture in 3D with distance; simple perspective moves."),
-    ("bevel_alpha", "perspective.bevelalpha", 2, "A beveled edge on the picture's alpha; 3D-looking text and logos."),
     ("drop_shadow", "perspective.dropshadow", 2, "A drop shadow; separates text and cutouts from the background."),
-    ("long_shadow", "perspective.longshadow", 1, "A long, flat-design shadow trailing from the picture's alpha; bold titles and icons."),
     // Stylize
-    ("brush_strokes", "stylize.brushstrokes", 2, "Painterly brush strokes; painting looks."),
-    ("color_emboss", "stylize.coloremboss", 2, "An emboss that keeps color; relief textures."),
-    ("emboss", "stylize.emboss", 2, "A gray relief from the picture's edges; stamped metal and paper textures."),
-    ("find_edges", "stylize.findedges", 2, "Outlines edges; sketch and line-art looks."),
     ("mosaic", "stylize.mosaic", 2, "Pixelates into blocks; censoring and retro 8-bit."),
     ("posterize", "stylize.posterize", 2, "Reduces the color levels; poster and pop-art looks."),
-    ("replicate", "stylize.replicate", 1, "Tiles copies of the picture in a grid; video walls and kaleidoscopic beats."),
-    ("roughen_edges", "stylize.roughenedges", 2, "Roughens the picture's edges; torn paper, grunge text."),
-    ("strobe", "stylize.strobe", 2, "Flashes the picture or a color on a rhythm; beat hits and strobe lights."),
     // Text
     ("clip_name", "text.clipname", 1, "Burns the clip's name into the picture; review copies and versions."),
     ("metadata_burnin", "text.burnin", 1, "Burns timecode, the frame number, or the file name into the picture; review copies and slates."),
@@ -127,19 +99,11 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("posterize_time", "time.posterizetime", 2, "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement."),
     // Transform
     ("auto_reframe", "transform.autoreframe", 1, "Keeps the moving subject in frame when the sequence's aspect differs from the clip's; vertical and square versions."),
-    ("camera_shake", "transform.camerashake", 1, "Handheld shake with rotation, zoom, and motion blur; impacts, earthquakes, and found-footage energy."),
-    ("grow", "transform.grow", 1, "Scales the picture up over the clip with easing; slow pushes in and punchy reveals."),
     ("horizontal_flip", "transform.hflip", 1, "Mirrors the picture left to right; flipping a shot's direction."),
-    ("move", "transform.move", 1, "Slides the picture from one offset to another over the clip with easing and motion blur; animated entrances."),
-    ("rotate_3d", "transform.rotate3d", 1, "Rotates the picture about x, y, and z with perspective; card flips and 3D tilts."),
-    ("shrink", "transform.shrink", 1, "Scales the picture down over the clip with easing; pulls out and exits."),
     ("spacer", "transform.spacer", 1, "Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture."),
-    ("spin", "transform.spin", 1, "Spins the picture around a center over the clip with easing; playful spins in and out."),
     ("vertical_flip", "transform.vflip", 1, "Turns the picture upside down; reflections and surreal flips."),
-    ("wiggle", "transform.wiggle", 1, "Random wobble of position, rotation, and scale; hand-drawn jitter and nervous energy."),
     // Utility
     ("auto_align", "utility.autoalign", 1, "Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos."),
-    ("clone", "utility.clone", 1, "Copies the picture into a grid with gaps and mirroring; split screens and pattern walls."),
     ("edge_feather", "utility.edgefeather", 1, "Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture."),
     ("rounded_crop", "utility.roundedcrop", 1, "Crops with rounded corners, a feather, and a border; rounded picture-in-picture and cards."),
     ("stroke", "utility.stroke", 1, "An outline around the picture's alpha, inside, outside, or centered; stickers and outlined cutouts."),
@@ -148,10 +112,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
 /// Point parameters that are offsets in pixels rather than places across the picture.
 const OFFSETS: &[(&str, &str)] = &[
     ("auto_reframe", "offset"),
-    ("cell_pattern", "offset"),
-    ("move", "from"),
-    ("move", "to"),
-    ("roughen_edges", "offset"),
 ];
 
 /// Field names an effect line takes itself, which a parameter cannot be.
@@ -175,13 +135,13 @@ pub enum Headroom {
 /// each number moved a tenth of its range, on footage above SDR white and past BT.709.
 pub fn headroom(id: &str) -> Headroom {
     match id {
-        "blur.bilateral" | "blur.radialzoom" | "distort.bulge" | "distort.opticscompensation"
+        "blur.bilateral" | "blur.radialzoom" | "distort.opticscompensation"
         | "distort.rollingshutterrepair" | "distort.upscale" | "image.fill"
-        | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain"
-        | "perspective.bevelalpha" | "stylize.coloremboss" | "stylize.emboss"
-        | "stylize.findedges" | "stylize.motiontile" | "stylize.strobe" => Headroom::Whole,
-        "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "light.echoglow" | "light.glint"
-        | "light.lighting" | "light.wonderglow" | "vr.glow" | "vr.sharpen" => Headroom::Gamut,
+        | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain" => {
+            Headroom::Whole
+        }
+        "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "light.glint" | "light.wonderglow"
+        | "vr.sharpen" => Headroom::Gamut,
         "channel.invert" | "color.asccdl" | "color.autocolor" | "color.autocontrast" | "color.basic"
         | "color.autolevels" | "color.brightnesscontrast" | "color.changetocolor"
         | "color.channelmixer" | "color.colorbalance" | "color.curves" | "color.gamma"

@@ -516,7 +516,7 @@ mod tests {
     fn effects_are_ids_or_ids_with_parameters() {
         let crate::Command::EffectPreviews(request) = serde_json::from_value(json!({
             "type": "effect_previews", "clip": "c1", "at": 9.0, "width": 88, "key": "hover",
-            "effects": ["light.edgeglow", {"fx": "color.basic", "params": {"saturation": 0.8}, "key": "after"}],
+            "effects": ["light.wonderglow", {"fx": "color.basic", "params": {"saturation": 0.8}, "key": "after"}],
         }))
         .unwrap() else {
             panic!("expected effect_previews");
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(request.key.as_deref(), Some("hover"));
         assert_eq!(
             request.effects[0],
-            PreviewEffect::Id("light.edgeglow".into())
+            PreviewEffect::Id("light.wonderglow".into())
         );
         let PreviewEffect::Params { fx, params, key } = &request.effects[1] else {
             panic!("expected parameters");
