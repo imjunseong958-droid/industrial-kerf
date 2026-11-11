@@ -152,6 +152,10 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("leaks", clip("      fx light.leaks intensity=80\n")),
         ("grain", clip("      fx noise.addgrain tweaking/intensity=2\n")),
         ("look.film", clip("      fx look.film\n")),
+        // As tracking a surface writes it: each corner across the picture, and moving.
+        ("corner pin", clip("      fx distort.cornerpin upper_left_x=0.1 upper_left_y=0.15 upper_right_x=0.85 upper_right_y=0.05 lower_right_x=0.95 lower_right_y=0.9 lower_left_x=0.05 lower_left_y=0.8\n")),
+        ("corner pin tracked", clip("      set scale=0.9\n      fx distort.cornerpin upper_left_x={0f:0.1 24f:0.3} upper_left_y={0f:0.1 24f:0.2} upper_right_x={0f:0.9 24f:0.8} upper_right_y=0.15 lower_right_x={0f:0.85 24f:0.95} lower_right_y={0f:0.9 24f:0.75} lower_left_x=0.15 lower_left_y={0f:0.85 24f:0.95}\n")),
+        ("corner pin past the edges, then blurred", clip("      fx distort.cornerpin upper_left_x=-0.2 upper_left_y=-0.1 upper_right_x=1.1 upper_right_y=0.1 lower_right_x=0.9 lower_right_y=1.2 lower_left_x=0.1 lower_left_y=0.9\n      fx blur.gaussian radius=6\n")),
     ]);
     for look in [
         "look.dreamy",

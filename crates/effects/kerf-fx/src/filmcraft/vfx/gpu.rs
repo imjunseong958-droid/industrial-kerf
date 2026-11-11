@@ -94,6 +94,11 @@ pub enum Kernel {
     },
     /// Add Grain, whose picture is encoded and decoded as a kept effect's is.
     Grain(Box<Grain>),
+    CornerPin {
+        /// From a pixel to where it comes from across the picture, 0 to 1, row by row.
+        map: [f32; 9],
+        size: [f32; 2],
+    },
 }
 
 /// What a Lumetri does that [`FxOp::Lumetri`] does not, in the order `lumetri` does it.
@@ -640,6 +645,42 @@ impl Kernel {
                     mode: chv(e, "mode"),
                 }
             }
+            "corner_pin" => {
+                let (w, h) = (size.0 as f64, size.1 as f64);
+                let sized = Image {
+                    w: size.0,
+                    h: size.1,
+                    px: Vec::new(),
+                };
+                let q = [
+                    pv(e, "upper_left", cx, &sized),
+                    pv(e, "upper_right", cx, &sized),
+                    pv(e, "lower_right", cx, &sized),
+                    pv(e, "lower_left", cx, &sized),
+                ];
+                let ident = [
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(w, 0.0),
+                    Vec2::new(w, h),
+                    Vec2::new(0.0, h),
+                ];
+                // Corners left where they are change nothing, and neither does a map with no way back.
+                if q.iter().zip(&ident).all(|(a, b)| (*a - *b).length() < 1e-6) {
+                    return Some(Kernel::Nothing);
+                }
+                let Some(inverse) = distort::h_inverse(&distort::square_to_quad(q)) else {
+                    return Some(Kernel::Nothing);
+                };
+                let map = inverse.map(|value| value as f32);
+                // Corners in a line divide by nothing, and what comes of that is the CPU's to draw.
+                if map.iter().any(|value| !value.is_finite()) {
+                    return None;
+                }
+                Kernel::CornerPin {
+                    map,
+                    size: [w as f32, h as f32],
+                }
+            }
             _ => return None,
         })
     }
@@ -1043,6 +1084,22 @@ impl Kernel {
                 frame.release(grained);
                 out
             }
+            Kernel::CornerPin { map, size } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.corner_pin,
+                    &picture,
+                    None,
+                    &U {
+                        p0: [map[0], map[1], map[2], map[3]],
+                        p1: [map[4], map[5], map[6], map[7]],
+                        p2: [map[8], size[0], size[1], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
         })
     }
 }
@@ -1143,6 +1200,7 @@ struct Stage {
     from_unit: wgpu::ComputePipeline,
     to_gamut: wgpu::ComputePipeline,
     from_gamut: wgpu::ComputePipeline,
+    corner_pin: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -1198,6 +1256,7 @@ impl Stage {
                 from_unit: kernel("from_unit"),
                 to_gamut: kernel("to_gamut"),
                 from_gamut: kernel("from_gamut"),
+                corner_pin: kernel("corner_pin"),
                 layout: layout.clone(),
             }
         });
@@ -1361,6 +1420,16 @@ mod tests {
         let fl = ParamValue::Float;
         let on = ParamValue::Bool(true);
         let choice = ParamValue::Choice;
+        let pt = |x: f64, y: f64| ParamValue::Vec2(Vec2::new(x, y));
+        // A corner pin's four, clockwise from the upper left, in pixels.
+        let corners = |at: [(f64, f64); 4]| {
+            let names = ["upper_left", "upper_right", "lower_right", "lower_left"];
+            names
+                .into_iter()
+                .zip(at)
+                .map(|(name, (x, y))| (name, pt(x, y)))
+                .collect::<Vec<_>>()
+        };
         let cases: Vec<(&str, Vec<(&str, ParamValue)>)> = vec![
             ("wonder_glow", vec![]),
             (
@@ -1508,6 +1577,21 @@ mod tests {
                 "light_leaks",
                 vec![("mode", choice(2)), ("scale", fl(30.0)), ("speed", fl(3.0))],
             ),
+            // Corners left where they are.
+            ("corner_pin", vec![]),
+            // Seen from the side, as a tracked surface is.
+            ("corner_pin", corners([(10.0, 6.0), (80.0, 2.0), (90.0, 50.0), (4.0, 44.0)])),
+            // Small in the middle, where most of the picture is left clear.
+            ("corner_pin", corners([(30.0, 15.0), (60.0, 18.0), (58.0, 40.0), (28.0, 36.0)])),
+            // Past every edge.
+            (
+                "corner_pin",
+                corners([(-20.0, -10.0), (110.0, -5.0), (120.0, 60.0), (-10.0, 70.0)]),
+            ),
+            // Turned over, left for right.
+            ("corner_pin", corners([(90.0, 5.0), (5.0, 5.0), (5.0, 50.0), (90.0, 50.0)])),
+            // One corner alone, the others where the catalog starts them.
+            ("corner_pin", vec![("lower_right", pt(70.0, 30.0))]),
         ];
         let image = picture(96, 54);
         let mut failures = Vec::new();
@@ -1727,6 +1811,37 @@ mod tests {
             Kernel::eval(&e, &context(0.0), (8, 8)),
             Some(Kernel::Nothing)
         );
+    }
+
+    /// What a corner pin leaves alone on the CPU it leaves alone here, what it moves has a kernel, and
+    /// what it cannot say in numbers stays with the CPU.
+    #[test]
+    fn a_corner_pin_is_nothing_a_kernel_or_the_cpus() {
+        let pt = |x: f64, y: f64| ParamValue::Vec2(Vec2::new(x, y));
+        let cx = context(0.0);
+        let eval = |params: &[(&str, ParamValue)]| {
+            let e = effect("corner_pin", params);
+            let kernel = Kernel::eval(&e, &cx, (96, 54));
+            let mut cpu = picture(96, 54);
+            apply(&mut cpu, &e, &cx);
+            (kernel, cpu.px != picture(96, 54).px)
+        };
+        assert_eq!(eval(&[]), (Some(Kernel::Nothing), false));
+        // All four on one point: a map with no way back, which the CPU leaves the picture by.
+        let on = |x: f64, y: f64| {
+            ["upper_left", "upper_right", "lower_right", "lower_left"].map(|name| (name, pt(x, y)))
+        };
+        assert_eq!(eval(&on(30.0, 20.0)), (Some(Kernel::Nothing), false));
+        // In a line: the map divides by nothing, and the CPU draws what comes of that.
+        let flat = [
+            ("upper_left", pt(10.0, 10.0)),
+            ("upper_right", pt(40.0, 10.0)),
+            ("lower_right", pt(70.0, 10.0)),
+            ("lower_left", pt(90.0, 10.0)),
+        ];
+        assert_eq!(eval(&flat), (None, true));
+        let (kernel, changed) = eval(&[("upper_left", pt(12.0, 9.0))]);
+        assert!(matches!(kernel, Some(Kernel::CornerPin { .. })) && changed);
     }
 
     #[test]
