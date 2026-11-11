@@ -19,6 +19,10 @@ sha2 = "0.10"
 # network that inspects TLS with its own CA still reaches the server.
 ureq = { version = "3", features = ["json", "platform-verifier"] }
 
+[target.'cfg(unix)'.dependencies]
+# To take a job back from the server when asked to end.
+signal-hook = "0.3"
+
 [dev-dependencies]
 tempfile = "3"
 

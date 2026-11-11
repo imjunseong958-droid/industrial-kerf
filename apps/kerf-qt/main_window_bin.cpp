@@ -347,6 +347,18 @@ void MainWindow::runMake(const QString &mediaId) {
         addActivity(QStringLiteral("import"), QStringLiteral("Making %1 from %2").arg(mediaId, mediaRecipe(mediaId)));
 }
 
+void MainWindow::stopMake(const QString &mediaId) {
+    execute(QStringLiteral("media.makeCancel"), QJsonObject{{QStringLiteral("media"), mediaId}});
+}
+
+QString MainWindow::makingStatus(const QJsonObject &making) {
+    const QString media = making.value(QStringLiteral("media")).toString();
+    const QString line = making.value(QStringLiteral("line")).toString();
+    // Before any step has spoken, only that it began; then what the steps say.
+    return line.isEmpty() ? QStringLiteral("Making take %2 of %1 from its recipe…").arg(media).arg(making.value(QStringLiteral("take")).toInt())
+                          : QStringLiteral("Making %1: %2").arg(media, line);
+}
+
 void MainWindow::revealMedia(const QString &mediaId) {
     const QString path = mediaPath(mediaId);
     if (path.isEmpty()) return;
@@ -404,7 +416,15 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
         replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
                                                  : m_commands->reason(QStringLiteral("media.replace")));
         connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
-        if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
+        if (m_making.contains(mediaId)) {
+            // While it is being made, the menu stops it and does not start another.
+            QAction *stop = menu->addAction(QStringLiteral("Stop Making"));
+            stop->setObjectName(QStringLiteral("binMakeStop"));
+            stop->setEnabled(m_commands->isEnabled(QStringLiteral("media.makeCancel")));
+            stop->setToolTip(stop->isEnabled() ? QStringLiteral("Stop making %1: its step is asked to end, no take is kept, and %1 stays as it is").arg(mediaId)
+                                               : m_commands->reason(QStringLiteral("media.makeCancel")));
+            connect(stop, &QAction::triggered, this, [this, mediaId] { stopMake(mediaId); });
+        } else if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
             QAction *make = menu->addAction(QStringLiteral("Make from Recipe…"));
             make->setObjectName(QStringLiteral("binMake"));
             make->setEnabled(m_commands->isEnabled(QStringLiteral("media.make")));

@@ -215,6 +215,10 @@ pub enum Request {
         media: String,
         confirmed: bool,
     },
+    /// Stop the making of a media that is running.
+    MediaMakeCancel {
+        media: String,
+    },
     /// Save the program sequence as `presets/<name>.kerfpreset`.
     PresetSave {
         name: String,
@@ -887,6 +891,10 @@ pub static COMMANDS: &[Command] = &[
         command("media.make", "Make from Recipe…", connected),
         r#"{"media": string, "confirmed": bool}"#,
     ),
+    params(
+        command("media.makeCancel", "Stop Making", connected),
+        r#"{"media": string}"#,
+    ),
     command("projection.import", "Load from Disk", is_diverged),
     command("projection.repair", "Keep Editor Version", is_diverged),
     command("collab.status", "Refresh Sync Status", connected),
@@ -1457,6 +1465,9 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "media.make" => Request::MediaMake {
             media: params.require_string("media")?,
             confirmed: params.bool("confirmed")?.unwrap_or(false),
+        },
+        "media.makeCancel" => Request::MediaMakeCancel {
+            media: params.require_string("media")?,
         },
         "preset.save" => Request::PresetSave {
             name: params.require_trimmed("name")?,
@@ -2268,6 +2279,7 @@ mod tests {
         assert_eq!(menu_of("help.about"), "Help");
         assert_eq!(menu_of("media.replace"), Value::Null);
         assert_eq!(menu_of("media.make"), Value::Null);
+        assert_eq!(menu_of("media.makeCancel"), Value::Null);
         // Ctrl+O stays Import Media; opening a project takes its own key.
         assert_eq!(find("file.import").unwrap().keys, ["Ctrl+O"]);
         assert_eq!(find("file.openProject").unwrap().keys, ["Ctrl+Shift+O"]);
@@ -2437,6 +2449,12 @@ mod tests {
             ),
             json!({"type": "media_make", "media": "m1", "confirmed": true})
         );
+        // A making under way is stopped by the media it makes.
+        assert_eq!(
+            request("media.makeCancel", &context, json!({"media": "m1"})),
+            json!({"type": "media_make_cancel", "media": "m1"})
+        );
+        assert!(run("media.makeCancel", &context, &json!({})).is_err());
         assert_eq!(
             request("preset.save", &context, json!({"name": "Intro"})),
             json!({"type": "preset_save", "name": "Intro", "replace": false})
@@ -2465,6 +2483,7 @@ mod tests {
             ("file.refresh", Value::Null),
             ("media.replace", json!({"media": "m1", "path": "a.mov"})),
             ("media.make", json!({"media": "m1"})),
+            ("media.makeCancel", json!({"media": "m1"})),
             ("preset.save", json!({"name": "Intro"})),
             ("collab.status", Value::Null),
             ("collab.sync", Value::Null),

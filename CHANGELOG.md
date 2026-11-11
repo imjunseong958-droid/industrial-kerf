@@ -76,6 +76,12 @@ on `main`; its section here becomes the release's notes on GitHub
   and `kerf accept` and `kerf reject` answer it. `kerf make` and `kerf
   takes` now say so when the file is not what Kerf has, before anything
   runs.
+- While a shot is made from its recipe, the editor shows what its steps say
+  as they say it, and **Stop Making** on the media in the bin stops it. A
+  step that is stopped is asked to end before it is made to, on macOS and
+  Linux, so a model's program can take back the job it gave a server:
+  `kerf-comfy` does, in the editor and on Ctrl-C in a terminal, where before
+  the job ran on with nobody to fetch it.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

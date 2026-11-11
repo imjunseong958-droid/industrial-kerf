@@ -15,6 +15,10 @@
 //! the request says ([`server`]). What it sent is kept beside the request:
 //! the guide as the model was given it, and the graph with its blanks
 //! filled.
+//!
+//! Asked to end while it waits, as Kerf asks a making that is cancelled
+//! (SIGTERM, or a terminal's Ctrl-C), it takes its job back from the server
+//! before it does, so nothing goes on being made that nobody will fetch.
 
 pub mod guide;
 pub mod request;
@@ -27,6 +31,7 @@ use serde_json::json;
 use server::{Server, State};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workflow::{value_of, Values, Workflow};
 
@@ -86,9 +91,29 @@ fn any_seed() -> u64 {
     (now % (1 << 48)) as u64
 }
 
+/// How often a wait looks whether this program was asked to end.
+const STOP_CHECK: Duration = Duration::from_millis(50);
+
+/// Wait `pause`, or until `stop` is set: whether it was.
+fn stopped_within(stop: &AtomicBool, pause: Duration) -> bool {
+    let until = Instant::now() + pause;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(STOP_CHECK));
+    }
+}
+
 /// Make what `request` asks with `workflow` on `server`, writing the file
 /// the request names. `work` is the folder the request is in, where what is
-/// sent is kept. Each thing worth telling goes to `say` as a line.
+/// sent is kept. Each thing worth telling goes to `say` as a line. `stop`
+/// is set when this program is asked to end: a job queued by then is taken
+/// back from the server, and nothing is queued after.
 pub fn make(
     request: &Request,
     work: &Path,
@@ -96,6 +121,7 @@ pub fn make(
     server: &Server,
     tools: &Tools,
     patience: &Patience,
+    stop: &AtomicBool,
     say: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
     let blanks = workflow.blanks();
@@ -203,6 +229,9 @@ pub fn make(
     let kept = serde_json::to_vec_pretty(&graph).map_err(|error| error.to_string())?;
     std::fs::write(work.join(GRAPH_SENT), kept)
         .map_err(|error| format!("cannot write into {}: {error}", work.display()))?;
+    if stop.load(Ordering::SeqCst) {
+        return Err("asked to stop before the server was asked for anything".to_owned());
+    }
     let id = server.queue(&graph)?;
     say(&format!(
         "asked {} for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}",
@@ -213,7 +242,12 @@ pub fn make(
     let mut told = (String::new(), Instant::now());
     let (mut unanswered, mut unknown) = (0, 0);
     let made = loop {
-        std::thread::sleep(patience.pause);
+        if stopped_within(stop, patience.pause) {
+            server.cancel(&id);
+            let taken = format!("asked to stop: took job {id} back from the server");
+            say(&taken);
+            return Err(taken);
+        }
         let waited = started.elapsed();
         if waited > patience.most {
             server.cancel(&id);

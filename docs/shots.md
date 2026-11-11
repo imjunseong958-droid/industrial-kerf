@@ -76,6 +76,21 @@ set up, a sequence the project has not, a file it needs that is not there.
 A step that fails, or a last step that writes nothing, leaves no take and the
 media as it was.
 
+While a shot is made, each line its steps say is shown as it is said: how
+much of a sequence Kerf has drawn, and whatever a program writes to stderr,
+such as where a model's job is in its server's queue. `kerf make` prints
+them, and the editor shows the latest in its toolbar, under the project's
+name.
+
+A making can be stopped: **Stop Making** on the media in the editor's bin,
+which is there in place of Make from Recipe… for as long as it runs, or
+Ctrl-C in the terminal. The step that is running is asked to end before it is
+made to. On macOS and Linux its program gets SIGTERM, and five seconds to
+finish in, so that a program that has asked a server for a shot can take its
+job back; one still running after that is killed. On Windows there is nothing
+to ask with, and it is ended outright. A stopped making leaves no take and
+the media as it was.
+
 ### From a terminal alone
 
 Nothing here needs the editor open. A scene and its recipe written as files,
@@ -200,6 +215,13 @@ The program asks its model however that model is asked, writes the file at
 `out`, writes what it has to say to stderr a line at a time, and ends with
 success. It runs supervised, as a recipe's `run` does, and never through a
 shell. A hosted model's program holds its own key; Kerf passes none.
+
+When a making is stopped, the program is sent SIGTERM (a terminal's Ctrl-C
+reaches it as SIGINT) and has five seconds to end by itself. That is when it
+takes back what it asked a server for, so that nothing goes on being made,
+and billed, that nobody will fetch. A program that a script starts gets that
+time only if the script hands over to it (`exec program "$@"`): once the
+script itself has ended, what it started is ended with it.
 
 The request is the whole contract, so a model that takes only a prompt and a
 first frame, one that follows a guide video, and one that takes depth are the
@@ -352,11 +374,14 @@ What it does with a request:
   where the job is while it waits, and writes what the server saved as the
   take. A job waited for past half an hour (`COMFY_TIMEOUT`, in seconds) is
   taken back from the server.
+- It takes its job back when the making is stopped, in Kerf or with Ctrl-C:
+  out of the server's queue if it waits there, and interrupted if it is the
+  one running. It says so (`asked to stop: took job … back from the server`).
 
 Its limits, as they are now: it learns how a job is doing by asking, so it
-says that one is running and for how long, not how far along it is; Kerf ends
-a program outright, so a making cancelled in Kerf leaves its job running on
-the server; and what it sends up and what the server saves stay on the
+says that one is running and for how long, not how far along it is; on
+Windows a making that is stopped ends the program outright, so its job stays
+on the server; and what it sends up and what the server saves stay on the
 server.
 
 ## Guides

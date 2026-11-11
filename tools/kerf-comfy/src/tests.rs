@@ -6,6 +6,7 @@ use request::Request;
 use server::Address;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -188,6 +189,7 @@ fn a_request_becomes_a_job_and_the_job_the_shots_file() {
         &server,
         &Tools::find(),
         &patience(),
+        &AtomicBool::new(false),
         &mut |line| said.push(line.to_owned()),
     )
     .unwrap();
@@ -264,6 +266,7 @@ fn what_the_server_refuses_or_fails_is_said_and_leaves_no_file() {
             server,
             &Tools::find(),
             &patience(),
+            &AtomicBool::new(false),
             &mut |_| {},
         )
         .unwrap_err()
@@ -372,6 +375,7 @@ fn a_job_waited_for_too_long_is_taken_back() {
             most: Duration::from_millis(60),
             pause: Duration::from_millis(5),
         },
+        &AtomicBool::new(false),
         &mut |line| said.push(line.to_owned()),
     )
     .unwrap_err();
@@ -391,4 +395,87 @@ fn a_job_waited_for_too_long_is_taken_back() {
     // Out of the queue, and stopped only if it is the one running.
     assert_eq!(body("POST /queue"), json!({"delete": ["job-1"]}));
     assert_eq!(body("POST /interrupt"), json!({"prompt_id": "job-1"}));
+}
+
+#[test]
+fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
+    let folder = tempfile::tempdir().unwrap();
+    let request = request(folder.path(), "{}");
+    // A job that runs for as long as it is asked after.
+    let (server, kept) = serve(|asked, before| match asked.line.as_str() {
+        "GET /history/job-1" => json_answer(json!({})),
+        "POST /queue" | "POST /interrupt" => json_answer(json!({})),
+        _ => comfy(asked, before),
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let asking = stop.clone();
+    // Asked once the job is queued, as a making cancelled in Kerf asks.
+    let watching = kept.clone();
+    let asker = thread::spawn(move || {
+        while !watching
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|asked| asked.line == "POST /prompt")
+        {
+            thread::sleep(Duration::from_millis(2));
+        }
+        asking.store(true, Ordering::SeqCst);
+    });
+    let mut said = Vec::new();
+    let started = Instant::now();
+    let stopped = make(
+        &request,
+        folder.path(),
+        &Workflow::named("wan-vace").unwrap(),
+        &server,
+        &Tools::find(),
+        // A pause far longer than the test: the asking is what ends the wait.
+        &Patience {
+            most: Duration::from_secs(600),
+            pause: Duration::from_secs(60),
+        },
+        &stop,
+        &mut |line| said.push(line.to_owned()),
+    )
+    .unwrap_err();
+    asker.join().unwrap();
+    assert_eq!(
+        stopped,
+        "asked to stop: took job job-1 back from the server"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(said.last().map(String::as_str), Some(stopped.as_str()));
+    let kept = kept.lock().unwrap();
+    let body = |line: &str| -> serde_json::Value {
+        let asked = kept.iter().find(|asked| asked.line == line).unwrap();
+        serde_json::from_slice(&asked.body).unwrap()
+    };
+    assert_eq!(body("POST /queue"), json!({"delete": ["job-1"]}));
+    assert_eq!(body("POST /interrupt"), json!({"prompt_id": "job-1"}));
+    assert!(!request.out.exists());
+
+    // Asked before anything is queued, it queues nothing.
+    let (server, kept) = serve(comfy);
+    let early = make(
+        &request,
+        folder.path(),
+        &Workflow::named("wan-vace").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(true),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(early.contains("asked to stop before"), "{early}");
+    assert!(!kept
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|asked| asked.line == "POST /prompt"));
 }

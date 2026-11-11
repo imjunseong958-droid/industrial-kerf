@@ -363,6 +363,10 @@ private:
     static QString makeQuestion(const QJsonObject &plan);
     // Run the recipe of `mediaId`: only after a person's yes to its plan.
     void runMake(const QString &mediaId);
+    // Stop the making of `mediaId` that is running: its step is asked to end.
+    void stopMake(const QString &mediaId);
+    // What the toolbar says of a making under way, from a media_making event.
+    static QString makingStatus(const QJsonObject &making);
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
 
@@ -506,6 +510,9 @@ private:
     // What the last sync brought in, one line each.
     QStringList m_syncLines;
     QJsonObject m_mediaStatus;
+    // The media being made from their recipes, each with the line its steps
+    // last said: what the bin's menu offers to stop.
+    QHash<QString, QString> m_making;
     AskPrompt *m_askPrompt = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;

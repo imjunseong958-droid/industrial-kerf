@@ -6,13 +6,20 @@
 //! On Windows each runs in a job object of its own, which ends it and what
 //! it started when it is cancelled, when it exits, and when the process
 //! that ran it ends.
+//!
+//! A cancelled sidecar is asked to end before it is made to: on Unix its
+//! group gets SIGTERM and [`GRACE`] to end in, and only what is still
+//! there after that is killed. A program that has asked a server for
+//! something, as a model's does, has that long to take it back; FFmpeg
+//! ends at once on the signal. Windows has no such signal to send a job,
+//! so there a cancelled sidecar is ended outright.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::{EngineError, Result};
 
@@ -20,6 +27,9 @@ use crate::error::{EngineError, Result};
 mod job;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How long a cancelled sidecar has to end by itself once asked to, before
+/// it is killed.
+pub const GRACE: Duration = Duration::from_secs(5);
 const STDERR_QUEUE_CAPACITY: usize = 128;
 const MAX_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
@@ -35,8 +45,8 @@ impl CancellationToken {
         Self::default()
     }
 
-    /// Request cancellation. The active child is killed at its next
-    /// polling point.
+    /// Request cancellation. The active child is asked to end at its next
+    /// polling point, and killed if it has not by [`GRACE`] after.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
@@ -54,11 +64,23 @@ pub(crate) struct Finished {
 }
 
 /// Run `command` to completion with stdin and stdout closed, passing each
-/// stderr line to `on_line` as it arrives. The child is killed and
-/// `EngineError::Cancelled` returned when `cancellation` is requested.
+/// stderr line to `on_line` as it arrives. When `cancellation` is
+/// requested the child is asked to end, killed if it has not within
+/// [`GRACE`], and `EngineError::Cancelled` returned; what it says while it
+/// ends still goes to `on_line`.
 pub(crate) fn run(
+    command: Command,
+    cancellation: &CancellationToken,
+    on_line: impl FnMut(&str),
+) -> Result<Finished> {
+    run_within(command, cancellation, GRACE, on_line)
+}
+
+/// [`run`], with `grace` for a cancelled child to end in.
+fn run_within(
     mut command: Command,
     cancellation: &CancellationToken,
+    grace: Duration,
     mut on_line: impl FnMut(&str),
 ) -> Result<Finished> {
     if cancellation.is_cancelled() {
@@ -98,6 +120,15 @@ pub(crate) fn run(
     let outcome = loop {
         drain(&mut tail);
         if cancellation.is_cancelled() {
+            // Asked first, so that it can undo what it has under way and say so. It is
+            // not reaped while it is waited for: its group stays its own to signal.
+            let asked = Instant::now();
+            ask_to_end(&child);
+            while asked.elapsed() < grace && !has_ended(&child) {
+                drain(&mut tail);
+                thread::sleep(POLL_INTERVAL);
+            }
+            drain(&mut tail);
             kill(&mut child);
             break Err(EngineError::Cancelled);
         }
@@ -201,6 +232,46 @@ fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
     }
     #[cfg(not(any(unix, windows)))]
     child.try_wait()
+}
+
+/// Ask the sidecar and what it started to end: SIGTERM to its process
+/// group on Unix. Windows has nothing to ask a job with.
+fn ask_to_end(child: &Child) {
+    #[cfg(unix)]
+    {
+        let running = running();
+        if running.contains(&child.id()) {
+            signal_group(child.id(), libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
+/// Whether the sidecar has ended, without reaping it: it stays listed, and
+/// its group stays its own, until [`kill`] or [`try_wait`] takes it. Where
+/// nothing was asked of it there is nothing to wait for.
+fn has_ended(child: &Child) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: `info` is zeroed, which waitid reads as no child having changed, and is
+        // written only by waitid. WNOWAIT leaves the child to be reaped later.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let asked = libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            asked != 0 || info.si_pid() != 0
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child;
+        true
+    }
 }
 
 /// Kill the sidecar and everything left in its process group on Unix, or
@@ -350,6 +421,80 @@ mod tests {
         assert!(matches!(result, Err(EngineError::Cancelled)));
         assert!(start.elapsed() < Duration::from_secs(3));
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
+    }
+
+    /// Run a shell that says `ready`, and on SIGTERM says what `on_term` has it say and
+    /// does what else it holds. Returns the run and the lines it writes.
+    fn run_trapping(
+        cancellation: &CancellationToken,
+        on_term: &str,
+        grace: Duration,
+    ) -> (thread::JoinHandle<Result<Finished>>, mpsc::Receiver<String>) {
+        let (sender, lines) = mpsc::channel();
+        let cancellation = cancellation.clone();
+        let script = format!("trap '{on_term}' TERM; echo ready >&2; while :; do sleep 0.05; done");
+        let runner = thread::spawn(move || {
+            let mut command = Command::new("sh");
+            command.args(["-c", &script]);
+            run_within(command, &cancellation, grace, |line| {
+                let _ = sender.send(line.to_owned());
+            })
+        });
+        assert_eq!(
+            lines
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the shell says it is ready"),
+            "ready"
+        );
+        (runner, lines)
+    }
+
+    #[test]
+    fn a_cancelled_sidecar_is_asked_to_end_and_what_it_says_is_heard() {
+        // A program that takes its work back when asked, as a model's does a job on a server.
+        let token = CancellationToken::new();
+        let (runner, lines) = run_trapping(
+            &token,
+            "echo took the job back >&2; exit 0",
+            Duration::from_secs(5),
+        );
+        let start = Instant::now();
+        token.cancel();
+        let result = runner.join().expect("runner");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        // It ended by itself, well inside the time it was given.
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
+        // The shell may say that the `sleep` it waited on was ended too.
+        let said: Vec<String> = lines.try_iter().collect();
+        assert!(
+            said.iter().any(|line| line == "took the job back"),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_does_not_end_when_asked_is_killed() {
+        let token = CancellationToken::new();
+        let grace = Duration::from_millis(300);
+        let (runner, lines) = run_trapping(&token, "echo not yet >&2", grace);
+        let start = Instant::now();
+        token.cancel();
+        let result = runner.join().expect("runner");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        // It was given the whole of its time, and no more than a moment past it.
+        assert!(start.elapsed() >= grace, "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
+        // The shell may say that the `sleep` it waited on was ended too.
+        let said: Vec<String> = lines.try_iter().collect();
+        assert!(said.iter().any(|line| line == "not yet"), "{said:?}");
     }
 
     #[test]

@@ -18,6 +18,7 @@
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
 #include "ui/stage_shell.h"
+#include "ui/wiring/toolbar_wiring.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
 #include "ui/components.h"
@@ -696,6 +697,44 @@ private slots:
         window.runMake(QStringLiteral("m4"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;
+
+        // While it is made, what its steps say shows, and the menu stops it in place of
+        // starting another.
+        QCOMPARE(MainWindow::makingStatus(QJsonObject{{"media", "m4"}, {"take", 2}, {"line", ""}}),
+                 QStringLiteral("Making take 2 of m4 from its recipe…"));
+        QCOMPARE(MainWindow::makingStatus(QJsonObject{{"media", "m4"}, {"take", 2}, {"line", "rendering s2: 40%"}}),
+                 QStringLiteral("Making m4: rendering s2: 40%"));
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 2}, {"line", ""}});
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 2}, {"line", "waiting, 1 ahead, 4 s"}});
+        QCOMPARE(window.m_making.value(QStringLiteral("m4")), QStringLiteral("waiting, 1 ahead, 4 s"));
+        menu = window.binMenu(QStringLiteral("m4"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binMake")));
+        QAction *stop = menu->findChild<QAction *>(QStringLiteral("binMakeStop"));
+        QVERIFY(stop && stop->isEnabled());
+        QCOMPARE(stop->text(), QStringLiteral("Stop Making"));
+        stop->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make_cancel"}, {"media", "m4"}}));
+        delete menu;
+        // Another media's menu is as it was.
+        menu = window.binMenu(QStringLiteral("m1"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binMakeStop")));
+        delete menu;
+        // Stopped, made, or failed, it is no longer under way and can be made again.
+        window.handleEvent(QJsonObject{{"type", "media_make_cancelled"}, {"media", "m4"}});
+        QVERIFY(!window.m_making.contains(QStringLiteral("m4")));
+        menu = window.binMenu(QStringLiteral("m4"));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("binMake")) && !menu->findChild<QAction *>(QStringLiteral("binMakeStop")));
+        delete menu;
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 2}, {"line", ""}});
+        window.handleEvent(QJsonObject{{"type", "media_made"}, {"media", "m4"}, {"take", 2}});
+        QVERIFY(!window.m_making.contains(QStringLiteral("m4")));
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 3}, {"line", "asking the model"}});
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Making m4: asking the model"));
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", "cannot make m4: dawn-adapter failed"},
+                                       {"command", "media_make"}, {"media", "m4"}});
+        QVERIFY(!window.m_making.contains(QStringLiteral("m4")));
+        // What its steps last said does not stand once it has failed.
+        QCOMPARE(window.m_toolbarWiring->message(), QString());
 
         window.replaceMedia(QStringLiteral("m2"), QStringLiteral("/Volumes/Shoot/b-take2.mov"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_replace"}, {"media", "m2"}, {"path", "/Volumes/Shoot/b-take2.mov"}}));

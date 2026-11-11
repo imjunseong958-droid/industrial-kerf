@@ -16,6 +16,8 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use kerf_comfy::guide::Tools;
 use kerf_comfy::request::Request;
@@ -46,11 +48,41 @@ fn entry(named: &str, workflow: &Workflow) -> serde_json::Value {
     })
 }
 
+/// A flag set when this program is asked to end: SIGTERM, which Kerf sends a
+/// making that is cancelled, a terminal's Ctrl-C, or its hanging up. The
+/// first asking only sets it, so that a job can be taken back from the
+/// server; a second ends the program at once. Elsewhere than Unix nothing
+/// sets it, and the program is ended outright.
+fn asked_to_stop() -> Arc<AtomicBool> {
+    let stop = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    for signal in signal_hook::consts::TERM_SIGNALS {
+        // Registered in this order, the second asking finds the flag set and ends it.
+        let twice = signal_hook::flag::register_conditional_shutdown(*signal, 1, stop.clone());
+        let once = signal_hook::flag::register(*signal, stop.clone());
+        if let Err(error) = twice.and(once) {
+            say(&format!(
+                "kerf-comfy: a job will not be taken back when this is stopped: {error}"
+            ));
+        }
+    }
+    stop
+}
+
+/// Say `line` on stderr, where Kerf reads it. Whoever ran this may be gone
+/// by the time it is said, as a terminal's `kerf` is once Ctrl-C has reached
+/// it: there is then nobody to tell, and that is no failure of this
+/// program's.
+fn say(line: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("kerf-comfy: {message}");
+            say(&format!("kerf-comfy: {message}"));
             ExitCode::FAILURE
         }
     }
@@ -89,12 +121,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "{}",
             serde_json::to_string_pretty(&entry).map_err(|error| error.to_string())?
         );
-        eprintln!("kerf-comfy: that is a model's entry; put it under the model's name in ~/.kerf/models.json");
+        say("kerf-comfy: that is a model's entry; put it under the model's name in ~/.kerf/models.json");
         return Ok(());
     }
     let ([request], Some(workflow)) = (requests.as_slice(), workflow) else {
         return Err(USAGE.to_owned());
     };
+    let stop = asked_to_stop();
     let file = Path::new(request);
     let request = Request::read(file)?;
     let workflow = Workflow::named(&workflow)?;
@@ -111,6 +144,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         &server,
         &Tools::find(),
         &Patience::load(),
-        &mut |line| eprintln!("{line}"),
+        &stop,
+        &mut say,
     )
 }
