@@ -136,26 +136,35 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   A clip cut in two goes on as it was: its second half reads `t` that much on
   (`rotation=((t+2)*90)`). Sound takes none, nor does a title's text, and a
   look that animates a property cannot go on a clip whose property is one.
-- `recipe="shots/open.json"` on a media line names the text file its file was
-  made from, where another program made it: the scene a renderer drew, or what
-  a model was asked for and with which seed. It merges apart from the file, as
-  `reel=` does. A recipe says what to run:
+- `recipe="shots/open.kerfrecipe"` on a media line names the text file its file
+  is made from, where another program makes it: the scene a renderer draws, or
+  what a model is asked for and with which seed. It merges apart from the file,
+  as `reel=` does. A recipe is steps, and the last writes the file, `{out}`:
 
   ```
   kerf-recipe 1
-  # The opening shot, drawn from its scene.
-  run vork render open.scene.json --frame-end 95 --out {out}
+  # The opening shot: blocked in a renderer, then filmed by a model.
+  needs open.scene.json
+  run vork render open.scene.json --frame-end 95 --out {guide.mp4}
+  generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} seed=7
   ```
 
-  `run` is a program and its arguments, quoted where they hold spaces, and
-  `{out}` is the file to write. `kerf make m3` shows the command, asks, runs it
-  in the recipe's folder, and puts what it wrote in the media's place, with the
-  document taking the new file's length and streams; `--yes` does not ask. The
-  program is run as it is named, never through a shell, and a run that fails or
-  writes nothing leaves the media as it was. The recipe and the media's file
-  have to be inside the project. Only a person asking runs a recipe, with
-  `kerf make` or Make from Recipe… in the editor's bin, which shows the command
-  first: opening, drawing, and an agent's tools never do.
+  `needs` names the files it reads; `run` is a program and its arguments,
+  quoted where they hold spaces, run as it is named and never through a shell;
+  `render <sequence> {name}` has Kerf draw a sequence of the project; and
+  `generate` asks a model the person has set up. `kerf make m3` shows the
+  steps, asks, runs them in the recipe's folder, and has the media be the new
+  take, with the document taking its path, length and streams; `--yes` does
+  not ask. Each making is a take, kept beside the ones before it
+  (`shots/open.takes/002.mp4`), and the media line says which one it is, so
+  `media replace m3 path="shots/open.takes/001.mp4"` chooses another. A run
+  that fails or writes nothing leaves no take and the media as it was. A media
+  wants making again when what its take was made from has changed (the recipe,
+  a file it reads, a sequence it renders), and says which; no other edit asks
+  for it. The recipe and everything it names have to be inside the project.
+  Only a person asking runs a recipe, with `kerf make` or Make from Recipe… in
+  the editor's bin, which shows every step first: opening, drawing, and an
+  agent's tools never do. See [shots.md](shots.md).
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,

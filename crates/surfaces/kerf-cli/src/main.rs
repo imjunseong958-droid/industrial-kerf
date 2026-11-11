@@ -124,13 +124,21 @@ enum Command {
         #[arg(short = 'm', long)]
         message: Option<String>,
     },
-    /// Make a media's file again by running its recipe (`recipe=` on its media line).
+    /// Make a take of a media by running its recipe (`recipe=` on its media line).
     Make {
         /// The media's id, as its line in the document names it.
         media: String,
-        /// Run the recipe's command without asking first.
+        /// Run the recipe's steps without asking first.
         #[arg(long)]
         yes: bool,
+    },
+    /// List the takes a media's recipe has made, or have the media be another of them.
+    Takes {
+        /// The media's id, as its line in the document names it.
+        media: String,
+        /// The take the media is to be, by its number.
+        #[arg(long = "use", value_name = "TAKE")]
+        choose: Option<u32>,
     },
 }
 
@@ -246,6 +254,10 @@ fn run() -> Result<()> {
         Some(Command::Make { media, yes }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
             return run_make(&directory, args.kerfd.as_deref(), media, *yes);
+        }
+        Some(Command::Takes { media, choose }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_takes(&directory, args.kerfd.as_deref(), media, *choose);
         }
         Some(Command::Preset { action }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
@@ -603,42 +615,107 @@ fn confirmed(question: &str) -> bool {
         && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
 }
 
-fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Result<()> {
+/// A connection to the project's kerfd, started if it is not running.
+fn runtime_for(directory: &Path, kerfd: Option<&Path>) -> Result<RuntimeClient> {
     let kerfd = kerfd
         .map(Path::to_path_buf)
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
-    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd))
+    Ok(RuntimeClient::connect_or_spawn(directory, Some(&kerfd))
         .map_err(runtime_error)?
-        .with_request_timeout(Duration::from_secs(60));
+        .with_request_timeout(Duration::from_secs(60)))
+}
+
+fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
     let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
-    let plan =
-        kerf_engine::recipe::plan(&project, directory, id).map_err(|error| anyhow!(error))?;
+    let models = kerf_engine::recipe::model::Models::load().map_err(|error| anyhow!(error))?;
+    let plan = kerf_engine::recipe::plan(&project, directory, id, &models)
+        .map_err(|error| anyhow!(error))?;
     println!("recipe  {}", plan.recipe.display());
-    println!("runs    {}", plan.command);
-    println!("makes   {}", plan.file.display());
-    // A recipe is a command someone wrote, perhaps someone else.
+    for (number, step) in plan.steps.iter().enumerate() {
+        println!("step {}  {step}", number + 1);
+    }
+    println!("makes   {} (take {})", plan.file.display(), plan.take);
+    // A recipe is commands someone wrote, perhaps someone else.
     if !yes && !confirmed("Run it?") {
         bail!("not run; `kerf make {id} --yes` runs it without asking");
     }
     let cancellation = kerf_engine::CancellationToken::new();
-    kerf_engine::recipe::make(&plan.recipe, &plan.file, &cancellation, |line| {
-        eprintln!("{line}")
-    })
-    .map_err(|error| anyhow!(error))?;
-    // The document takes the new file's length and streams; clips keep their timing.
+    let made =
+        kerf_engine::recipe::make(&project, directory, &plan, &models, &cancellation, |line| {
+            eprintln!("{line}")
+        })
+        .map_err(|error| anyhow!(error))?;
+    // The media becomes the new take: the document takes its path, length and streams, and
+    // clips keep their timing.
     let state = runtime
         .replace_media_request(
             "ui",
             &operation_key("make"),
             id,
-            &plan.stored,
+            &made.stored,
             state.revision,
         )
         .map_err(runtime_error)?;
-    println!("made {id} (revision {})", state.revision);
+    println!(
+        "made take {} of {id} (revision {})",
+        made.take, state.revision
+    );
     Ok(())
+}
+
+fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u32>) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    let media = project
+        .media(id)
+        .ok_or_else(|| anyhow!("no media `{id}` in this project"))?;
+    if let Some(number) = choose {
+        let take = kerf_engine::recipe::take(&project, directory, media, number)
+            .map_err(|error| anyhow!(error))?;
+        if take.chosen {
+            println!("{id} is take {number} already");
+            return Ok(());
+        }
+        let state = runtime
+            .replace_media_request(
+                "ui",
+                &operation_key("take"),
+                id,
+                &take.stored,
+                state.revision,
+            )
+            .map_err(runtime_error)?;
+        println!("{id} is take {number} (revision {})", state.revision);
+        return Ok(());
+    }
+    let takes =
+        kerf_engine::recipe::takes(&project, directory, media).map_err(|error| anyhow!(error))?;
+    if takes.is_empty() {
+        println!("{id} has no takes yet; `kerf make {id}` makes one");
+    }
+    for take in takes {
+        println!("{}", take_line(&take));
+    }
+    Ok(())
+}
+
+/// A take as a line of `kerf takes`: its number, a mark on the one the media is, its file,
+/// and what has changed since it was made.
+fn take_line(take: &kerf_engine::recipe::Take) -> String {
+    let mut line = format!(
+        "{} take {}  {}",
+        if take.chosen { "*" } else { " " },
+        take.number,
+        take.stored
+    );
+    if !take.changed.is_empty() {
+        line.push_str(&format!("  ({} changed since)", take.changed.join(", ")));
+    }
+    line
 }
 
 /// What a sync did, as lines for the terminal: kerfd's `report` (the commit,
@@ -1156,8 +1233,8 @@ fn operation_key(kind: &str) -> String {
 mod tests {
     use super::{
         binary_name, create_project, editor_candidates, editor_command, editor_project, media_file,
-        preset_request, requested_project, run_sync, sync_report, uses_terminal, Args, Command,
-        PresetAction,
+        preset_request, requested_project, run_sync, sync_report, take_line, uses_terminal, Args,
+        Command, PresetAction,
     };
     use clap::Parser;
     use kerf_collab::git::Pushed;
@@ -1314,6 +1391,34 @@ mod tests {
             panic!("make command");
         };
         assert!(yes);
+    }
+
+    #[test]
+    fn takes_lists_a_medias_takes_or_names_the_one_to_use() {
+        let takes = |words: &[&str]| match Args::try_parse_from(words).unwrap().command {
+            Some(Command::Takes { media, choose }) => (media, choose),
+            _ => panic!("takes command"),
+        };
+        assert_eq!(takes(&["kerf", "takes", "m3"]), ("m3".to_owned(), None));
+        assert_eq!(
+            takes(&["kerf", "takes", "m3", "--use", "2"]),
+            ("m3".to_owned(), Some(2))
+        );
+        let take = |chosen, changed: &[&str]| kerf_engine::recipe::Take {
+            number: 2,
+            stored: "shots/open.takes/002.mp4".to_owned(),
+            made: None,
+            chosen,
+            changed: changed.iter().map(|what| (*what).to_owned()).collect(),
+        };
+        assert_eq!(
+            take_line(&take(true, &[])),
+            "* take 2  shots/open.takes/002.mp4"
+        );
+        assert_eq!(
+            take_line(&take(false, &["the recipe", "refs/boat.png"])),
+            "  take 2  shots/open.takes/002.mp4  (the recipe, refs/boat.png changed since)"
+        );
     }
 
     #[test]

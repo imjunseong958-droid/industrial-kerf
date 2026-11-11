@@ -1,39 +1,75 @@
-//! A recipe: the text file that says how another program makes a media
-//! file, and the making of it. A media line names its recipe
-//! (`recipe="shots/open.kerfrecipe"`); `kerf make` runs it.
+//! A recipe: the text file that says how what is outside Kerf, a renderer
+//! or a model, makes a media's file, and the making of it. A media line
+//! names its recipe (`recipe="shots/open.kerfrecipe"`); `kerf make` runs it.
 //!
 //! ```text
 //! kerf-recipe 1
-//! # The opening shot, drawn from its scene.
-//! run vork render open.scene.json --frame-end 95 --out {out}
+//! # The opening shot: blocked in a renderer, then filmed by a model.
+//! needs open.scene.json
+//! run vork render open.scene.json --profile std/previs --out {guide.mp4}
+//! generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} first=refs/boat.png seed=7
 //! ```
 //!
-//! `run` is a program and its arguments, quoted where they hold spaces.
-//! `{out}` stands for the file to write. The program runs in the recipe's
-//! folder, as a supervised sidecar and never through a shell, so nothing in
-//! an argument is expanded or run. It writes to a file beside the media's,
-//! which takes the media's place only when the program has ended well and
-//! left something there: a failed run leaves the media as it was.
+//! A recipe is steps, run in order, and the last one writes the media's
+//! file:
 //!
-//! A recipe is a command someone wrote. Kerf runs one only when a person
-//! asks for that media to be made, never on opening or drawing a project.
+//! - `run` is a program and its arguments, quoted where they hold spaces.
+//!   It runs in the recipe's folder, as a supervised sidecar and never
+//!   through a shell, so nothing in an argument is expanded or run.
+//! - `render <sequence> {name}` has Kerf draw a sequence of the project,
+//!   which is how a guide blocked with Kerf's own clips, cameras, and lights
+//!   reaches a model.
+//! - `generate` asks a model ([`model`]) for the file: what it should show
+//!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), and
+//!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
+//!
+//! `{out}` stands for the media's file, and `{name}` for a file a step
+//! makes on the way and a later one reads. `needs` names the files a recipe
+//! reads, so that a change to one is seen ([`takes`]).
+//!
+//! Each making is a take, kept beside the ones before it; the document
+//! says which one the media is. A recipe is a command someone wrote. Kerf
+//! runs one only when a person asks for that media to be made, never on
+//! opening or drawing a project.
+
+pub mod model;
+pub mod takes;
 
 use crate::error::{EngineError, Result};
+use crate::render::{render_program_with_cancellation, RenderOptions};
 use crate::sidecar::{self, CancellationToken};
-use std::path::{Path, PathBuf};
+use model::{Ask, Models, Source};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+
+pub use takes::{take, takes, unmade, Take, Unmade};
 
 /// The first line of a recipe.
 const HEADER: &str = "kerf-recipe 1";
 
-/// What stands for the file to write, in an argument.
-const OUT: &str = "{out}";
+/// What stands for the media's file, in an argument.
+const OUT: &str = "out";
 
-/// A program and its arguments.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One thing a recipe does on the way to the media's file.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    /// A program and its arguments.
+    Run {
+        program: String,
+        arguments: Vec<String>,
+    },
+    /// A sequence of the project, drawn by Kerf into the file `to` names.
+    Render { sequence: String, to: String },
+    /// A model asked for a file.
+    Generate(Box<Ask>),
+}
+
+/// A recipe as its file says it.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Recipe {
-    pub program: String,
-    pub arguments: Vec<String>,
+    /// The files it reads, as it names them: from its own folder.
+    pub needs: Vec<String>,
+    pub steps: Vec<Step>,
 }
 
 impl Recipe {
@@ -48,144 +84,534 @@ impl Recipe {
             Some((_, HEADER)) => {}
             _ => return Err(EngineError::msg(format!("a recipe starts with `{HEADER}`"))),
         }
-        let Some((number, line)) = lines.next() else {
-            return Err(EngineError::msg("the recipe has no `run` line"));
+        let mut recipe = Self {
+            needs: Vec::new(),
+            steps: Vec::new(),
         };
-        let mut words = words(line)
-            .map_err(|what| EngineError::msg(format!("line {number} of the recipe: {what}")))?;
-        if words.first().map(String::as_str) != Some("run") || words.len() < 2 {
+        // The files steps have made so far, which later steps may read.
+        let mut made: Vec<String> = Vec::new();
+        for (number, line) in lines {
+            let wrong =
+                |what: String| EngineError::msg(format!("line {number} of the recipe: {what}"));
+            let mut words = words(line).map_err(&wrong)?;
+            let verb = words.remove(0);
+            if verb != "needs" && recipe.writes_out() {
+                return Err(wrong(format!(
+                    "the step before it writes `{{{OUT}}}`, the media's file, so it is the last"
+                )));
+            }
+            match verb.as_str() {
+                "needs" if !words.is_empty() => recipe.needs.extend(words),
+                "run" if !words.is_empty() => {
+                    let program = words.remove(0);
+                    made.extend(words.iter().flat_map(|word| stands_for(word)));
+                    recipe.steps.push(Step::Run {
+                        program,
+                        arguments: words,
+                    });
+                }
+                "render" if words.len() == 2 => {
+                    let to = whole(&words[1]).ok_or_else(|| {
+                        wrong(format!(
+                            "`render <sequence> {{name}}` names the file it makes, such as `{{guide.mp4}}`, not `{}`",
+                            words[1]
+                        ))
+                    })?;
+                    made.push(to.clone());
+                    recipe.steps.push(Step::Render {
+                        sequence: words.swap_remove(0),
+                        to,
+                    });
+                }
+                "generate" if !words.is_empty() => {
+                    let ask = Ask::parse(&words, &made).map_err(&wrong)?;
+                    made.push(ask.out.clone());
+                    recipe.steps.push(Step::Generate(Box::new(ask)));
+                }
+                "needs" | "run" | "render" | "generate" => {
+                    return Err(wrong(format!(
+                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}}`, or `generate model=<name> prompt=\"…\" …`"
+                    )))
+                }
+                other => {
+                    return Err(wrong(format!(
+                        "`{other}` is not a recipe's word; it has `needs`, `run`, `render`, and `generate`"
+                    )))
+                }
+            }
+        }
+        if recipe.steps.is_empty() {
+            return Err(EngineError::msg(
+                "the recipe has no step: a `run`, a `render`, or a `generate` line",
+            ));
+        }
+        if !recipe.writes_out() {
             return Err(EngineError::msg(format!(
-                "line {number} of the recipe: expected `run <program> <arguments>`"
+                "the recipe's last step names no `{{{OUT}}}`, so nothing says where its file goes"
             )));
         }
-        if let Some((number, _)) = lines.next() {
-            return Err(EngineError::msg(format!(
-                "line {number} of the recipe: a recipe runs one program"
-            )));
+        Ok(recipe)
+    }
+
+    /// Whether the last step so far writes the media's file.
+    fn writes_out(&self) -> bool {
+        match self.steps.last() {
+            Some(Step::Run { arguments, .. }) => arguments
+                .iter()
+                .any(|argument| stands_for(argument).any(|name| name == OUT)),
+            Some(Step::Render { to, .. }) => to == OUT,
+            Some(Step::Generate(ask)) => ask.out == OUT,
+            None => false,
         }
-        let arguments = words.split_off(2);
-        if !arguments.iter().any(|argument| argument.contains(OUT)) {
-            return Err(EngineError::msg(format!(
-                "the recipe's `run` line names no `{OUT}`, so nothing says where its file goes"
-            )));
-        }
-        Ok(Self {
-            program: words.swap_remove(1),
-            arguments,
+    }
+
+    /// The models its steps ask.
+    pub fn models(&self) -> impl Iterator<Item = &str> {
+        self.steps.iter().filter_map(|step| match step {
+            Step::Generate(ask) => Some(ask.model.as_str()),
+            _ => None,
         })
     }
 
-    /// The arguments with `out` where `{out}` stands.
-    pub fn arguments_for(&self, out: &Path) -> Vec<String> {
-        let out = out.to_string_lossy();
-        self.arguments
-            .iter()
-            .map(|argument| argument.replace(OUT, &out))
-            .collect()
+    /// The sequences its steps have Kerf draw.
+    pub fn sequences(&self) -> impl Iterator<Item = &str> {
+        self.steps.iter().filter_map(|step| match step {
+            Step::Render { sequence, .. } => Some(sequence.as_str()),
+            _ => None,
+        })
     }
 
-    /// The command as a person reads it, with `out` where `{out}` stands.
-    pub fn shown(&self, out: &Path) -> String {
-        std::iter::once(self.program.clone())
-            .chain(self.arguments_for(out))
-            .map(|word| {
-                if word.is_empty() || word.contains(char::is_whitespace) {
-                    format!("\"{word}\"")
-                } else {
-                    word
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// Every file it reads, as it names them: what `needs` lists and what
+    /// a model is handed that no step made.
+    pub fn reads(&self) -> Vec<&str> {
+        let mut files: Vec<&str> = self.needs.iter().map(String::as_str).collect();
+        for step in &self.steps {
+            if let Step::Generate(ask) = step {
+                files.extend(ask.sources().filter_map(|source| match source {
+                    Source::File(file) => Some(file.as_str()),
+                    Source::Made(_) => None,
+                }));
+            }
+        }
+        files.sort_unstable();
+        files.dedup();
+        files
     }
+
+    /// The recipe with no comments and no spare space, which is what a
+    /// take is held to: a comment changed is not the recipe changed.
+    pub fn essence(text: &str) -> String {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// The names in braces an argument holds: `out` and `guide.mp4` of
+/// `--out={out}` and `{guide.mp4}`. Braces around anything but a file's
+/// name, such as a line of JSON, stand for themselves.
+fn stands_for(argument: &str) -> impl Iterator<Item = String> + '_ {
+    argument.split('{').skip(1).filter_map(|rest| {
+        let name = rest.split_once('}')?.0;
+        file_name(name).then(|| name.to_owned())
+    })
+}
+
+/// The name an argument that is nothing but `{name}` holds.
+pub(crate) fn whole(argument: &str) -> Option<String> {
+    let name = argument.strip_prefix('{')?.strip_suffix('}')?;
+    file_name(name).then(|| name.to_owned())
+}
+
+/// Whether `name` can be a file a step makes: letters, digits, and `. - _`.
+fn file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+}
+
+/// `argument` with each `{name}` it holds as the file `place` gives it.
+fn placed(argument: &str, place: &dyn Fn(&str) -> PathBuf) -> String {
+    let mut out = String::new();
+    let mut rest = argument;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.split_once('}') {
+            Some((name, tail)) if file_name(name) => {
+                out.push_str(&place(name).to_string_lossy());
+                rest = tail;
+            }
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out + rest
+}
+
+/// `words` as a person reads a command, quoted where one holds a space.
+fn shown(words: impl IntoIterator<Item = String>) -> String {
+    words
+        .into_iter()
+        .map(|word| {
+            if word.is_empty() || word.contains(char::is_whitespace) {
+                format!("\"{word}\"")
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What making a media runs and writes, for a person to see before it is
 /// run.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
     /// The recipe's file.
     pub recipe: PathBuf,
-    /// The media's file, which the run replaces.
+    /// The take this making would be.
+    pub take: u32,
+    /// The take's file, which the run writes.
     pub file: PathBuf,
-    /// The media's path as the document has it.
+    /// The take's path as the document will have it.
     pub stored: String,
-    /// The command, as [`Recipe::shown`] gives it.
+    /// Each step as a person reads it, in order.
+    pub steps: Vec<String>,
+    /// The steps, a line each.
     pub command: String,
+    /// The media made, and its recipe as the document names it.
+    media: String,
+    name: String,
+    /// The recipe as it was read for this plan, which is what runs.
+    text: String,
 }
 
 /// `path`, which a project names, as a file inside `directory`: a recipe is
 /// a command to run and a media's file is written over, so neither may be
 /// somewhere else.
 fn inside_project(directory: &Path, path: &str, what: &str) -> Result<PathBuf> {
-    let given = Path::new(path);
-    let escapes = given
-        .components()
-        .any(|part| matches!(part, std::path::Component::ParentDir));
-    if given.is_absolute() || escapes {
-        return Err(EngineError::msg(format!(
-            "the {what} `{path}` is not inside the project, so it is left alone"
-        )));
-    }
-    Ok(directory.join(given))
+    within(Path::new(""), path, what).map(|inside| directory.join(inside))
 }
 
-/// What making media `id` of `project`, kept in `directory`, would run:
-/// its recipe read, and nothing run.
-pub fn plan(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Plan> {
+/// `path`, as a file in `folder` of a project names it, from the project's
+/// folder: `../refs/boat.png` from `shots` is `refs/boat.png`. A path that
+/// leaves the project is refused.
+pub(crate) fn within(folder: &Path, path: &str, what: &str) -> Result<PathBuf> {
+    let outside = || {
+        EngineError::msg(format!(
+            "the {what} `{path}` is not inside the project, so it is left alone"
+        ))
+    };
+    let mut inside = PathBuf::new();
+    for part in folder.components().chain(Path::new(path).components()) {
+        match part {
+            Component::Normal(name) => inside.push(name),
+            Component::CurDir => {}
+            Component::ParentDir if inside.pop() => {}
+            _ => return Err(outside()),
+        }
+    }
+    Ok(inside)
+}
+
+/// A project's path with `/` between its parts, as documents write them.
+pub(crate) fn stored(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The folder of the project a recipe is in, from the project's folder.
+fn folder_of(recipe: &str) -> PathBuf {
+    Path::new(recipe)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+}
+
+/// A media's recipe, read: its name in the document, its text, and what
+/// the text says.
+pub(crate) struct Read {
+    pub name: String,
+    pub text: String,
+    pub recipe: Recipe,
+}
+
+/// Read the recipe media `id` of `project` names.
+pub(crate) fn read(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Read> {
     let media = project
         .media(id)
         .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let recipe = media.recipe.as_deref().ok_or_else(|| {
+    let name = media.recipe.as_deref().ok_or_else(|| {
         EngineError::msg(format!(
             "media `{id}` names no recipe; add `recipe=\"<file>\"` to its line with `media replace`"
         ))
     })?;
-    let recipe = inside_project(directory, recipe, "recipe")?;
-    let file = inside_project(directory, &media.path, "media file")?;
-    let text = std::fs::read_to_string(&recipe).map_err(|error| {
+    let file = inside_project(directory, name, "recipe")?;
+    let text = std::fs::read_to_string(&file).map_err(|error| {
         EngineError::msg(format!(
             "cannot read the recipe {}: {error}",
-            recipe.display()
+            file.display()
         ))
     })?;
-    let command = Recipe::parse(&text)?.shown(&making_path(&file));
-    Ok(Plan {
+    let recipe = Recipe::parse(&text)?;
+    Ok(Read {
+        name: name.to_owned(),
+        text,
         recipe,
-        file,
-        stored: media.path.clone(),
-        command,
     })
 }
 
-/// Why a media that names a recipe wants making.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unmade {
-    /// Its file is not there.
-    Missing,
-    /// Its recipe was changed after its file was written.
-    Stale,
-}
-
-impl Unmade {
-    /// The reason, as a person or an agent is told it.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::Missing => "its file is not there yet",
-            Self::Stale => "its recipe changed after its file was made",
+/// What making media `id` of `project`, kept in `directory`, would run:
+/// its recipe read, and nothing run. A recipe that could not run is
+/// refused here, with why: a model that is not set up, a sequence the
+/// project has not, a file it needs that is not there.
+pub fn plan(
+    project: &kerf_model::Project,
+    directory: &Path,
+    id: &str,
+    models: &Models,
+) -> Result<Plan> {
+    let Read { name, text, recipe } = read(project, directory, id)?;
+    let media = project.media(id).expect("read found it");
+    let folder = folder_of(&name);
+    for sequence in recipe.sequences() {
+        if project.sequence(sequence).is_none() {
+            return Err(EngineError::msg(format!(
+                "the recipe renders sequence `{sequence}`, which this project has not"
+            )));
         }
     }
+    for file in recipe.reads() {
+        let inside = within(&folder, file, "file the recipe needs")?;
+        if !directory.join(&inside).is_file() {
+            return Err(EngineError::msg(format!(
+                "the recipe needs `{}`, which is not there",
+                stored(&inside)
+            )));
+        }
+    }
+    for model in recipe.models() {
+        models.command(model)?;
+    }
+    let place = takes::Place::of(directory, &name, &media.path)?;
+    let take = place.next();
+    let working = place.working(take);
+    let steps = recipe
+        .steps
+        .iter()
+        .map(|step| match step {
+            Step::Run { program, arguments } => shown(
+                std::iter::once(program.clone()).chain(
+                    arguments
+                        .iter()
+                        .map(|argument| placed(argument, &|name| place.file_for(take, name))),
+                ),
+            ),
+            Step::Render { sequence, to } => format!(
+                "Kerf renders sequence {sequence} to {}",
+                place.file_for(take, to).display()
+            ),
+            Step::Generate(ask) => {
+                let request = working.join(model::REQUEST_FILE);
+                let command = models.command(&ask.model).expect("checked above");
+                format!(
+                    "{} asks model `{}` for {}",
+                    shown(
+                        command
+                            .iter()
+                            .map(|word| word.replace(model::REQUEST, &request.to_string_lossy()))
+                    ),
+                    ask.model,
+                    ask.shown()
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(Plan {
+        recipe: directory.join(&name),
+        take,
+        file: place.file(take),
+        stored: place.stored(take),
+        command: steps.join("\n"),
+        steps,
+        media: id.to_owned(),
+        name,
+        text,
+    })
 }
 
-/// Whether the file at `file` wants making from the recipe at `recipe`:
-/// it is missing, or older than the recipe. `None` when it is made, and
-/// when the recipe cannot be read, since then nothing could make it.
-pub fn unmade(recipe: &Path, file: &Path) -> Option<Unmade> {
-    let written = std::fs::metadata(recipe).ok()?.modified().ok()?;
-    match std::fs::metadata(file).and_then(|made| made.modified()) {
-        Err(_) => Some(Unmade::Missing),
-        Ok(made) if made < written => Some(Unmade::Stale),
-        Ok(_) => None,
+/// What a making made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Made {
+    /// The take it is.
+    pub take: u32,
+    /// The take's path as the document names it: what the media's line
+    /// takes for the media to be this take.
+    pub stored: String,
+}
+
+/// Run `plan`: each step of the recipe as it was read for the plan, in
+/// order. Each line a program writes to stderr goes to `on_line`. The take
+/// is there only when every step has ended well and the last has written
+/// something: a failed run leaves no take, and the media as it was.
+pub fn make(
+    project: &kerf_model::Project,
+    directory: &Path,
+    plan: &Plan,
+    models: &Models,
+    cancellation: &CancellationToken,
+    mut on_line: impl FnMut(&str),
+) -> Result<Made> {
+    let recipe = Recipe::parse(&plan.text)?;
+    let media = project
+        .media(&plan.media)
+        .ok_or_else(|| EngineError::msg(format!("no media `{}` in this project", plan.media)))?;
+    let folder = folder_of(&plan.name);
+    let place = takes::Place::of(directory, &plan.name, &media.path)?;
+    // What the take is made from, read before anything runs.
+    let from = takes::from(project, directory, &folder, &plan.text, &recipe)?;
+    for model in recipe.models() {
+        models.command(model)?;
+    }
+    // A take made since the plan was shown keeps its number.
+    let take = place.next().max(plan.take);
+    let working = place.working(take);
+    let making = place.making(take);
+    std::fs::create_dir_all(&working)?;
+    // What an earlier run left must not pass for this one's.
+    let _ = std::fs::remove_file(&making);
+    let making_it = Making {
+        project,
+        directory,
+        folder: &folder,
+        place: &place,
+        take,
+        models,
+        cancellation,
+    };
+    let ran =
+        making_it
+            .run(&recipe, &mut on_line)
+            .and_then(|()| match std::fs::metadata(&making) {
+                Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(()),
+                _ => Err(EngineError::msg(format!(
+                    "the recipe ended well and wrote nothing to {}",
+                    making.display()
+                ))),
+            });
+    if let Err(error) = ran {
+        let _ = std::fs::remove_file(&making);
+        let _ = std::fs::remove_dir_all(&working);
+        return Err(error);
+    }
+    std::fs::rename(&making, place.file(take))?;
+    takes::record(&place, take, from)?;
+    Ok(Made {
+        take,
+        stored: place.stored(take),
+    })
+}
+
+/// One making under way: what it reads, where it runs, and what it writes.
+struct Making<'a> {
+    project: &'a kerf_model::Project,
+    /// The project's folder, and the recipe's folder in it.
+    directory: &'a Path,
+    folder: &'a Path,
+    place: &'a takes::Place,
+    take: u32,
+    models: &'a Models,
+    cancellation: &'a CancellationToken,
+}
+
+impl Making<'_> {
+    /// Run `command` in the recipe's folder to its end; one that does not
+    /// end well is an error with what it said.
+    fn supervised(
+        &self,
+        mut command: Command,
+        program: &str,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<()> {
+        command.current_dir(self.directory.join(self.folder));
+        let finished = sidecar::run(command, self.cancellation, on_line)?;
+        if finished.status.success() {
+            Ok(())
+        } else {
+            Err(EngineError::msg(format!(
+                "{program} failed ({}): {}",
+                finished.status,
+                finished.stderr.trim()
+            )))
+        }
+    }
+
+    /// The file `{name}` stands for in this take's steps.
+    fn file_for(&self, name: &str) -> PathBuf {
+        self.place.file_for(self.take, name)
+    }
+
+    /// Run each step of `recipe`, in order, stopping at the first that fails.
+    fn run(&self, recipe: &Recipe, on_line: &mut dyn FnMut(&str)) -> Result<()> {
+        for step in &recipe.steps {
+            match step {
+                Step::Run { program, arguments } => {
+                    let mut command = Command::new(program);
+                    command.args(
+                        arguments
+                            .iter()
+                            .map(|argument| placed(argument, &|name| self.file_for(name))),
+                    );
+                    self.supervised(command, program, on_line)?;
+                }
+                Step::Render { sequence, to } => {
+                    let mut resolved = self.project.clone();
+                    resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
+                    render_program_with_cancellation(
+                        &resolved,
+                        Some(sequence),
+                        None,
+                        &RenderOptions {
+                            output: self.file_for(to).to_string_lossy().into_owned(),
+                            project_dir: Some(self.directory.to_path_buf()),
+                            ..RenderOptions::default()
+                        },
+                        self.cancellation,
+                        Some(|done: f64| {
+                            on_line(&format!("rendering {sequence}: {:.0}%", done * 100.0));
+                        }),
+                    )?;
+                }
+                Step::Generate(ask) => {
+                    let request = self.place.working(self.take).join(model::REQUEST_FILE);
+                    let asked = ask.request(
+                        &|file| {
+                            within(self.folder, file, "file the recipe needs")
+                                .map(|inside| self.directory.join(inside))
+                        },
+                        &|name| self.file_for(name),
+                    )?;
+                    std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
+                    let words = self.models.command(&ask.model)?;
+                    let mut command = Command::new(&words[0]);
+                    command.args(
+                        words[1..]
+                            .iter()
+                            .map(|word| word.replace(model::REQUEST, &request.to_string_lossy())),
+                    );
+                    self.supervised(command, &words[0], on_line)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -234,253 +660,5 @@ fn words(line: &str) -> std::result::Result<Vec<String>, String> {
     Ok(words)
 }
 
-/// Where a recipe's program writes before its file takes the media's
-/// place: beside it, with its extension, so the program can tell the format
-/// from the name.
-pub fn making_path(media: &Path) -> PathBuf {
-    let name = media
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    media.with_file_name(format!(".making-{name}"))
-}
-
-/// Run the recipe at `recipe` to make the file at `media`. Each line the
-/// program writes to stderr goes to `on_line`. The media's file is replaced
-/// only when the program ends well and has written something.
-pub fn make(
-    recipe: &Path,
-    media: &Path,
-    cancellation: &CancellationToken,
-    on_line: impl FnMut(&str),
-) -> Result<()> {
-    let text = std::fs::read_to_string(recipe).map_err(|error| {
-        EngineError::msg(format!(
-            "cannot read the recipe {}: {error}",
-            recipe.display()
-        ))
-    })?;
-    let parsed = Recipe::parse(&text)?;
-    let making = making_path(media);
-    if let Some(folder) = media
-        .parent()
-        .filter(|folder| !folder.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(folder)?;
-    }
-    // What an earlier run left must not pass for this one's.
-    let _ = std::fs::remove_file(&making);
-    let mut command = Command::new(&parsed.program);
-    command.args(parsed.arguments_for(&making));
-    if let Some(folder) = recipe
-        .parent()
-        .filter(|folder| !folder.as_os_str().is_empty())
-    {
-        command.current_dir(folder);
-    }
-    let finished = sidecar::run(command, cancellation, on_line);
-    let made = match finished {
-        Ok(finished) if finished.status.success() => match std::fs::metadata(&making) {
-            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(()),
-            _ => Err(EngineError::msg(format!(
-                "{} ended well and wrote nothing to {}",
-                parsed.program,
-                making.display()
-            ))),
-        },
-        Ok(finished) => Err(EngineError::msg(format!(
-            "{} failed ({}): {}",
-            parsed.program,
-            finished.status,
-            finished.stderr.trim()
-        ))),
-        Err(error) => Err(error),
-    };
-    if let Err(error) = made {
-        let _ = std::fs::remove_file(&making);
-        return Err(error);
-    }
-    std::fs::rename(&making, media)?;
-    Ok(())
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_recipe_is_a_program_and_its_arguments() {
-        let recipe = Recipe::parse(
-            "kerf-recipe 1\n\n# The opening shot.\nrun vork render \"open scene.json\" --out {out} --note \"a \\\"quoted\\\" word\"\n",
-        )
-        .unwrap();
-        assert_eq!(recipe.program, "vork");
-        assert_eq!(
-            recipe.arguments_for(Path::new("shots/open.mp4")),
-            [
-                "render",
-                "open scene.json",
-                "--out",
-                "shots/open.mp4",
-                "--note",
-                "a \"quoted\" word"
-            ]
-        );
-        assert_eq!(
-            recipe.shown(Path::new("o.mp4")),
-            "vork render \"open scene.json\" --out o.mp4 --note \"a \"quoted\" word\""
-        );
-        // Nothing is expanded: a shell's words are words.
-        let plain = Recipe::parse("kerf-recipe 1\nrun echo $HOME;ls {out}").unwrap();
-        assert_eq!(plain.arguments, ["$HOME;ls", "{out}"]);
-    }
-
-    #[test]
-    fn what_is_wrong_with_a_recipe_is_said() {
-        let wrong = |text: &str| Recipe::parse(text).unwrap_err().to_string();
-        assert!(wrong("run vork {out}").contains("starts with `kerf-recipe 1`"));
-        assert!(wrong("kerf-recipe 1\n# nothing\n").contains("no `run` line"));
-        assert!(wrong("kerf-recipe 1\nvork {out}").contains("line 2"));
-        assert!(wrong("kerf-recipe 1\nrun vork \"open {out}").contains("quote is not closed"));
-        assert!(wrong("kerf-recipe 1\nrun vork render").contains("names no `{out}`"));
-        assert!(wrong("kerf-recipe 1\nrun a {out}\nrun b {out}").contains("line 3"));
-    }
-
-    #[test]
-    fn a_file_wants_making_when_it_is_missing_or_older_than_its_recipe() {
-        let folder = tempfile::tempdir().unwrap();
-        let (recipe, file) = (
-            folder.path().join("r.kerfrecipe"),
-            folder.path().join("f.mp4"),
-        );
-        assert_eq!(
-            unmade(&recipe, &file),
-            None,
-            "no recipe, nothing to make it"
-        );
-        std::fs::write(&recipe, "kerf-recipe 1\nrun a {out}\n").unwrap();
-        assert_eq!(unmade(&recipe, &file), Some(Unmade::Missing));
-        std::fs::write(&file, "frames").unwrap();
-        let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        let set = |path: &Path, time| {
-            std::fs::File::options()
-                .write(true)
-                .open(path)
-                .unwrap()
-                .set_modified(time)
-                .unwrap()
-        };
-        set(&recipe, earlier);
-        assert_eq!(unmade(&recipe, &file), None);
-        set(&file, earlier - std::time::Duration::from_secs(3600));
-        assert_eq!(unmade(&recipe, &file), Some(Unmade::Stale));
-    }
-
-    #[test]
-    fn a_plan_is_only_of_a_recipe_and_a_file_inside_the_project() {
-        let folder = tempfile::tempdir().unwrap();
-        let directory = folder.path();
-        std::fs::create_dir(directory.join("shots")).unwrap();
-        std::fs::write(
-            directory.join("shots/open.kerfrecipe"),
-            "kerf-recipe 1\nrun vork render open.json --out {out}\n",
-        )
-        .unwrap();
-        let media = |id: &str, path: &str, recipe: Option<&str>| kerf_model::Media {
-            id: kerf_model::Id::new(id).unwrap(),
-            path: path.to_owned(),
-            rate: kerf_model::Rate::FPS_24,
-            drop_frame: false,
-            start: kerf_model::Time::ZERO,
-            duration: kerf_model::Time::from_seconds(1.0).unwrap(),
-            video: None,
-            audio: None,
-            reel: None,
-            recipe: recipe.map(str::to_owned),
-        };
-        let project = kerf_model::Project {
-            media: vec![
-                media("m1", "shots/open.mp4", Some("shots/open.kerfrecipe")),
-                media("m2", "a.mov", None),
-                media("m3", "shots/b.mp4", Some("../elsewhere/run.kerfrecipe")),
-                media("m4", "/tmp/c.mp4", Some("shots/open.kerfrecipe")),
-                media("m5", "shots/d.mp4", Some("shots/gone.kerfrecipe")),
-            ],
-            ..kerf_model::Project::default()
-        };
-        let made = plan(&project, directory, "m1").unwrap();
-        assert_eq!(made.recipe, directory.join("shots/open.kerfrecipe"));
-        assert_eq!(made.file, directory.join("shots/open.mp4"));
-        assert_eq!(made.stored, "shots/open.mp4");
-        assert_eq!(
-            made.command,
-            format!(
-                "vork render open.json --out {}",
-                directory.join("shots/.making-open.mp4").display()
-            )
-        );
-        let wrong = |id: &str| plan(&project, directory, id).unwrap_err().to_string();
-        assert!(wrong("m9").contains("no media `m9`"));
-        assert!(wrong("m2").contains("names no recipe"));
-        assert!(wrong("m3").contains("recipe `../elsewhere/run.kerfrecipe` is not inside"));
-        assert!(wrong("m4").contains("media file `/tmp/c.mp4` is not inside"));
-        assert!(wrong("m5").contains("cannot read the recipe"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn making_replaces_the_file_only_when_the_program_ends_well() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = |name: &str| folder.path().join(name);
-        std::fs::write(path("scene.txt"), "new").unwrap();
-        std::fs::create_dir(path("shots")).unwrap();
-        std::fs::write(path("shots/open.txt"), "old").unwrap();
-        let recipe = |name: &str, run: &str| {
-            std::fs::write(path(name), format!("kerf-recipe 1\nrun {run}\n")).unwrap();
-            path(name)
-        };
-        let token = CancellationToken::new();
-        let media = path("shots/open.txt");
-        // It runs in the recipe's folder, so `scene.txt` is found beside it.
-        make(
-            &recipe("good.kerfrecipe", "cp scene.txt {out}"),
-            &media,
-            &token,
-            |_| {},
-        )
-        .unwrap();
-        assert_eq!(std::fs::read_to_string(&media).unwrap(), "new");
-        assert!(!making_path(&media).exists());
-
-        std::fs::write(&media, "kept").unwrap();
-        let failed = make(
-            &recipe("bad.kerfrecipe", "cp missing.txt {out}"),
-            &media,
-            &token,
-            |_| {},
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(failed.contains("cp failed"), "{failed}");
-        let nothing = make(
-            &recipe("idle.kerfrecipe", "true {out}"),
-            &media,
-            &token,
-            |_| {},
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(nothing.contains("wrote nothing"), "{nothing}");
-        let absent = make(
-            &recipe("absent.kerfrecipe", "no-such-program-of-kerf {out}"),
-            &media,
-            &token,
-            |_| {},
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(absent.contains("could not start"), "{absent}");
-        assert_eq!(std::fs::read_to_string(&media).unwrap(), "kept");
-        assert!(!making_path(&media).exists());
-    }
-}
+mod tests;

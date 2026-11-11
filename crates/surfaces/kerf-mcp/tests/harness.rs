@@ -2349,6 +2349,85 @@ fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
     assert!(looked.get("toMake").is_none(), "{looked}");
 }
 
+/// A media a recipe made: an agent sees its takes and which one the media is, and is told what the
+/// recipe reads that has changed since, by name. A recipe that cannot run is said with why.
+#[cfg(unix)]
+#[test]
+fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    let dir = directory.path();
+    footage(dir);
+    std::fs::create_dir(dir.join("shots")).unwrap();
+    std::fs::write(dir.join("shots/scene.txt"), "a blocking").unwrap();
+    std::fs::write(
+        dir.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nneeds scene.txt\nrun cp ../shot.mp4 {out}\n",
+    )
+    .unwrap();
+    let document = |path: &str| {
+        format!(
+            "kerf 1\nproject name=\"Harness\"\nmedia m1 path=\"{path}\" rate=30 dur=00:00:04:00 video=320x180 audio=1ch@48000 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=30 size=320x180\n"
+        )
+    };
+    // A person makes it twice, and the media is the first take.
+    let unmade =
+        kerf_lang::parse_document(&document("shots/open.mp4"), kerf_model::Catalog::builtin())
+            .unwrap()
+            .project;
+    let models = kerf_engine::recipe::model::Models::default();
+    let token = kerf_engine::CancellationToken::new();
+    let make = || {
+        let plan = kerf_engine::recipe::plan(&unmade, dir, "m1", &models).unwrap();
+        kerf_engine::recipe::make(&unmade, dir, &plan, &models, &token, |_| {}).unwrap()
+    };
+    let (first, second) = (make(), make());
+    std::fs::write(dir.join("project.kerf"), document(&first.stored)).unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
+    assert!(ok(&router, "look", json!({})).get("toMake").is_none());
+    let looked = ok(&router, "look", json!({"media": "m1"}));
+    assert_eq!(looked["recipe"], json!("shots/open.kerfrecipe"));
+    assert_eq!(
+        looked["takes"]["made"],
+        json!([
+            {"take": 1, "path": first.stored, "chosen": true},
+            {"take": 2, "path": second.stored, "chosen": false},
+        ])
+    );
+    assert!(
+        looked["takes"]["choose"]
+            .as_str()
+            .is_some_and(|choose| choose.contains("media replace m1 path=")),
+        "{looked}"
+    );
+    // What the recipe reads changes: the media wants making, and says for what.
+    std::fs::write(dir.join("shots/scene.txt"), "another blocking").unwrap();
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(
+        looked["toMake"][0]["why"],
+        json!("shots/scene.txt changed after its file was made")
+    );
+    let looked = ok(&router, "look", json!({"media": "m1"}));
+    assert_eq!(
+        looked["takes"]["made"][0]["changedSince"],
+        json!(["shots/scene.txt"])
+    );
+    // A recipe that cannot run says why, since an agent may have written it.
+    std::fs::write(
+        dir.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrun cp ../shot.mp4\n",
+    )
+    .unwrap();
+    let why = ok(&router, "look", json!({}))["toMake"][0]["why"].to_string();
+    assert!(
+        why.contains("its recipe cannot run") && why.contains("names no `{out}`"),
+        "{why}"
+    );
+}
+
 /// A fresh folder: footage beside the document, and nothing in it yet.
 #[test]
 fn a_fresh_folder_says_what_footage_it_could_add_and_how() {

@@ -66,7 +66,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run or has changed: a recipe is a command, so a person runs it, not you. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, and how an edit has the media be another of them; with no arguments, `models` lists the models a recipe's `generate` can name, and none listed means none is set up. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
@@ -914,10 +914,7 @@ impl KerfMcpRouter {
             .iter()
             .filter_map(|media| {
                 let recipe = media.recipe.as_deref()?;
-                let why = kerf_engine::recipe::unmade(
-                    &self.dir.join(recipe),
-                    &self.dir.join(&media.path),
-                )?;
+                let why = kerf_engine::recipe::unmade(project, &self.dir, media)?;
                 Some(json!({
                     "media": media.id.as_str(),
                     "recipe": recipe,
@@ -929,6 +926,33 @@ impl KerfMcpRouter {
                 }))
             })
             .collect()
+    }
+
+    /// `look` with `media` adds this for a media that names a recipe: the takes its recipe has
+    /// made, which one the media is, and what has changed since each was made.
+    fn takes(&self, project: &Project, media: &kerf_model::Media) -> Option<Value> {
+        media.recipe.as_ref()?;
+        let takes = kerf_engine::recipe::takes(project, &self.dir, media).ok()?;
+        Some(json!({
+            "made": takes
+                .iter()
+                .map(|take| {
+                    let mut entry = json!({
+                        "take": take.number,
+                        "path": take.stored,
+                        "chosen": take.chosen,
+                    });
+                    if !take.changed.is_empty() {
+                        entry["changedSince"] = json!(take.changed);
+                    }
+                    entry
+                })
+                .collect::<Vec<_>>(),
+            "choose": format!(
+                "`media replace {} path=\"<a take's path>\"` in an edit has the media be that take; a person makes a new one with `kerf make {}`",
+                media.id, media.id
+            ),
+        }))
     }
 
     /// What a file holds, and the `media add` line that puts it in the document.
@@ -1261,9 +1285,17 @@ impl KerfMcpRouter {
                 "proposal": proposals_status(&state),
                 "unplaced": unplaced,
             });
-            let to_make = project.map_or_else(Vec::new, |project| self.to_make(&project));
-            if !to_make.is_empty() {
-                result["toMake"] = json!(to_make);
+            if let Some(project) = project {
+                let to_make = self.to_make(&project);
+                if !to_make.is_empty() {
+                    result["toMake"] = json!(to_make);
+                }
+            }
+            // The models a recipe's `generate` can name: those the person has set up.
+            if let Ok(models) = kerf_engine::recipe::model::Models::load() {
+                if models.names().next().is_some() {
+                    result["models"] = json!(models.names().collect::<Vec<_>>());
+                }
             }
             return Ok(result);
         }
@@ -1359,6 +1391,10 @@ impl KerfMcpRouter {
             "end": clock.print_position(media.duration),
             "uses": uses,
         });
+        if let Some(takes) = self.takes(project, media) {
+            result["recipe"] = json!(media.recipe);
+            result["takes"] = takes;
+        }
         let index = kerf_engine::media_index(
             &path,
             &DerivativeCache::new(&self.dir),

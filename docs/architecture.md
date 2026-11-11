@@ -11,6 +11,41 @@ So the product is one, and the code is not. Each area can be rewritten without
 touching the others, and this document says where the lines are and what is
 still to come.
 
+## What Kerf draws, and what it leaves to others
+
+A video model now draws pixels no compositor will: texture, light, and the
+look of a thing. So Kerf does not compete for them. Three jobs make a film
+this way, and each has its own owner:
+
+| Job | Who does it | What it has to be |
+|---|---|---|
+| The picture itself: texture, light, realism, style | A model, outside Kerf | Whatever the model is; Kerf draws none of it |
+| Where things are and how the camera moves: the guide a model follows | A guide renderer: a sequence of the project, or a 3D renderer such as vork or Blender | Fast and readable by a model. Not beautiful |
+| When things happen, and everything exact: cuts, sync, titles and logos, color, sound, delivery | Kerf's compositor | Deterministic, and playing in real time |
+
+What joins them is the fourth thing, and it is Kerf's alone: the document
+knows how each shot was made. A shot's recipe says what guided it, what was
+asked, and of which model; each making is a take, and the take says what it
+was made from ([shots.md](shots.md)). No model has that and no renderer does,
+and a text document with proposals and Git merging holds it naturally.
+
+Three rules follow, and the rest of this document should be read by them:
+
+- **The compositor assembles; it does not stylize.** An effect that makes a
+  look or an image a model would make better has no claim on a kernel, and
+  what Kerf's own model already does (keyframes, clips in depth, shapes) is
+  not done a second time as an effect. What an editor needs exact stays:
+  color correction, keys and mattes, tracking, restoration, retouching, text.
+- **Kerf builds no mesh renderer and no model.** A scene with geometry is a
+  renderer's, reached by a recipe's `run`; clips in depth, cameras, and
+  lights stay as the guide that needs nothing installed, and are not made
+  more exact than a guide needs.
+- **The speed that counts is from an intent to an accepted shot.** That is
+  how many makings a shot takes, times how long a model takes, which no
+  kernel shortens. What Kerf can do is make a guide show at once, say which
+  edits are free and which cost a making, and play what came back without a
+  stutter.
+
 ## Where things live
 
 `crates/<folder>/<crate>`. The folder is the rule: a crate may depend on its
@@ -70,20 +105,45 @@ with no code.
 
 A renderer or a model outside Kerf is not an effect or a generator: it makes a
 file, and the file is media. The media line names its recipe (`recipe=`), a
-text file with the one command that makes the file, and `kerf make` runs it
-(`kerf-engine/src/recipe.rs`) as a supervised sidecar, as FFmpeg is run. So a
-new engine needs no code here: a recipe that runs it. What it made is kept as
-the media's file, not as a cache, since a model does not give the same shot
-twice.
+text file with the steps that make the file, and `kerf make` runs them
+(`kerf-engine/src/recipe.rs`) as supervised sidecars, as FFmpeg is run. So a
+new renderer needs no code here: a recipe that runs it.
 
-The editor makes one from the bin's menu, and shows the command and asks
+A recipe's steps are `run`, a program; `render`, a sequence of the project
+drawn by the compositor, which is how Kerf's own clips in depth are a guide;
+and `generate`, a model asked for the file. `generate` says what is wanted in
+words any model takes (a prompt, a guide, first and last frames, references,
+length, size, seed), and Kerf writes that as a request, a JSON file, for the
+program the person's own `~/.kerf/models.json` names for that model
+(`recipe/model.rs`). Kerf knows no model by name and ships none: with none set
+up, a recipe that asks one is refused with how one is set up. A model with a
+different way of being asked needs a different program, and nothing here.
+
+What a recipe makes is kept as media, not as a cache, since a model does not
+give the same shot twice. Each making is a take, in a folder beside the recipe
+(`recipe/takes.rs`), and the media's line names the one it is, so choosing a
+take is an edit: undone, proposed, and merged as any other. A take records a
+hash of what it was made from, the recipe, the files it reads, and the
+sequences it renders (the sequence, what it nests, and the media lines it
+plays, printed as a document and hashed), and a media wants making when one
+of those has changed, and says which. Nothing else about the project is in
+the record: an edit that trims, moves, grades, or titles a made shot is free,
+and only a change to what guided it or what was asked costs a making.
+
+The editor makes one from the bin's menu, and shows every step and asks
 first: the bridge answers a plain `media_make` with the plan and runs nothing,
 and runs only one sent confirmed, which a person's yes to that plan sends.
 
 An agent's tools run no recipe. `look` tells it which media want making
-(`toMake`: a file that is not there, or a recipe changed since its file was
-written) and that a person makes them, so an agent writes the scene and the
-recipe, adds the media line, and asks.
+(`toMake`: a file that is not there, or something its take was made from
+changed, by name, or a recipe that cannot run, with why), a media's takes, and
+the models set up, and that a person makes them, so an agent writes the scene
+and the recipe, adds the media line, and asks.
+
+Not here yet: passes of Kerf's own sequences (depth, normals, object ids) for
+a model that reads them, which a 3D renderer gives today; a way to choose a
+take in the editor's own window, where `kerf takes` and the conversation do
+it; and a model reached without a program, such as Kerf Cloud hosting one.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -593,3 +653,29 @@ Since the survey: Export follows Deliver, the quality numbers are checked on rea
   license, FSL-1.1-ALv2, forbids a competing commercial product, and Kerf Cloud is a
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
   years after release. One idea of it was worth doing our own way, one kernel source for the CPU and WGSL, which is measured and begun under Kernels. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`.
+- **[vork](https://github.com/voyager-so/vork)** (reviewed at `3389022`, 0.5.0) is a headless 3D
+  renderer for agents: scene JSON in, a picture, a movie, or control passes (depth, normals, object
+  ids, motion, the camera) out, in Rust and Slang on wgpu, with no timeline and no editor. It is
+  what Kerf does not build, a guide renderer with real geometry, and a recipe's `run` reaches it
+  ([shots.md](shots.md#guides)). **Its license (vork Preview License) lets anyone use it, and
+  forbids distributing a modified version, selling it, and offering it as a hosted service that
+  renders what others submit, so none of its code comes here, Kerf does not bundle it, and Kerf
+  Cloud could not run it without its makers' leave;** it covers that version only, and it draws
+  only on Apple silicon and NVIDIA cards with ray tracing. So Kerf names no renderer: a recipe
+  runs whichever is installed. Four of its decisions bear on Kerf's own engine:
+  - *A scene and how well it is drawn are apart* (`std/previs`, `draft`, `final`, `path`). Kerf's
+    version of that is a shot's guide and its making: the same recipe, with a model as the last
+    and dearest way of drawing it.
+  - *One implementation.* Its CPU rendering is the same GPU code on Mesa's software Vulkan, not a
+    second renderer. Kerf writes each kernel twice, and one effect with no kernel sends a whole
+    frame to the CPU. `KERF_GPU=software` already passes 378 of 379 tests on llvmpipe, so the
+    CPU's code could become what tests hold kernels to and stop being a way to draw a frame; that
+    is not done, and is the largest thing left to decide about the engine.
+  - *Frames stay on the GPU*, encoded there where the platform can, with reading pixels back as
+    the fallback. Kerf reads every frame back, for a `QImage` the editor paints. Showing a frame
+    without that trip needs a surface made from the editor's window, in the bridge, which already
+    holds the unsafe code of its C interface (the workspace's `unsafe_code = "forbid"` is taken by
+    the 16 crates that ask for it, and neither the bridge nor `kerf-playback` is one). It has not
+    been built or measured.
+  - *What comes out is a contract*: channels by name, and a sidecar saying what each frame's
+    camera was. A request to a model is Kerf's (`recipe/model.rs`).
