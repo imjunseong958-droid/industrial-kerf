@@ -1682,6 +1682,7 @@ dependencies = [
  "kerf-collab",
  "kerf-engine",
  "kerf-fetcher",
+ "kerf-lang",
  "kerf-mcp",
  "kerf-model",
  "kerf-runtime",

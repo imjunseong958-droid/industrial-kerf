@@ -221,10 +221,15 @@ over half of a first making. What that showed of the guide:
 - *It carried sound it had not got.* The guide's file had a silent stereo
   track, mixed and encoded with it. What a `render` step draws now has no
   sound track, and its sound is not compiled.
-- *From a terminal it is written once.* `project.kerf` edited by hand once
-  kerfd has kept its state is not what `kerf make` reads, and `kerf` has no
-  command that loads it, as the editor does. So a guide tried without the
-  editor or an agent wants a new project for each change.
+- *From a terminal it was written once.* `project.kerf` edited by hand once
+  kerfd has kept its state is not what `kerf make` reads, and `kerf` had no
+  command that loads it, as the editor does, nor one that accepts what an
+  agent proposed. `kerf load` now takes the file as the project, through the
+  import kerfd already had for the editor's Load from Disk, and `kerf
+  proposals`, `kerf accept` and `kerf reject` answer a proposal
+  ([shots.md](shots.md#from-a-terminal-alone)). `kerf make` and `kerf takes`
+  refuse a project whose file is not what kerfd has, before a making is paid
+  for and its take then cannot be written to the document.
 
 The shot kept the guide's layout, the boat's path, and the camera's move. It
 also kept the guide's flat shapes, a cabin that is a box staying one; whether

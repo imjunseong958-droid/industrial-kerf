@@ -70,6 +70,12 @@ on `main`; its section here becomes the release's notes on GitHub
   written for the model it asks. `kerf-comfy --workflow wan-vace --describe`
   prints the entry for a workflow
   ([docs/shots.md](docs/shots.md#what-a-model-takes)).
+- A project can be worked on from a terminal with no editor open. `kerf load`
+  takes a `project.kerf` you changed by hand as the project, showing the
+  lines that change first; `kerf proposals` lists what an agent proposed,
+  and `kerf accept` and `kerf reject` answer it. `kerf make` and `kerf
+  takes` now say so when the file is not what Kerf has, before anything
+  runs.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

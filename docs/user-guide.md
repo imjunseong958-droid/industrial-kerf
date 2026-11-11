@@ -173,7 +173,9 @@ The Collaborate menu works on a project shared through Git and GitHub:
   outside the project into `media/` so collaborators have it.
 
 When `project.kerf` changes outside Kerf, a banner offers **Load from Disk** or
-**Keep Editor Version**.
+**Keep Editor Version**. From a terminal, `kerf load` is Load from Disk, and
+`kerf proposals`, `kerf accept` and `kerf reject` answer what an agent
+proposed, with no editor open.
 
 ## Check and export
 

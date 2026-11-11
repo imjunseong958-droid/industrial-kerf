@@ -181,7 +181,8 @@ They still arrive as commits: there is no shared cursor or playhead.
   file, such as a `git pull` in a terminal or a text editor. The editor
   shows a banner: **Load from Disk** loads the file as one revision (undo
   history clears), **Keep Editor Version** writes the editor's project over
-  it. Kerf refuses edits and syncs until you choose.
+  it. Kerf refuses edits and syncs until you choose. `kerf load` in a
+  terminal is Load from Disk: it shows the lines that change and asks.
 - **Both sides changed another file.** Git merges files other than
   `project.kerf` line by line. When two people changed the same lines of a
   look, a preset, or another text file, the merge is abandoned and the
@@ -289,7 +290,8 @@ git fetch
 git merge origin/main      # project.kerf merges structurally
 ```
 
-Then **Load from Disk** in the editor and sync.
+Then **Load from Disk** in the editor, or `kerf load` in a terminal, and
+sync.
 
 ## Shared presets and media slots
 
