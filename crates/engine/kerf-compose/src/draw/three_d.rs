@@ -701,12 +701,7 @@ impl Plane {
 
     /// Whether any edge of the rectangle `crop` of this plane goes through that of another.
     fn pierces(&self, crop: Rect, other: &Plane, other_crop: Rect) -> bool {
-        let corners = [
-            self.point(crop.x, crop.y),
-            self.point(crop.right(), crop.y),
-            self.point(crop.right(), crop.bottom()),
-            self.point(crop.x, crop.bottom()),
-        ];
+        let corners = self.corners(crop);
         (0..4).any(|index| {
             let (a, b) = (corners[index], corners[(index + 1) % 4]);
             let side = |point: Vector| dot(minus(point, other.origin), other.normal);
@@ -727,6 +722,50 @@ impl Plane {
     /// rectangles cross just where an edge of one goes through the other.
     pub fn crosses(&self, crop: Rect, other: &Plane, other_crop: Rect) -> bool {
         self.pierces(crop, other, other_crop) || other.pierces(other_crop, self, crop)
+    }
+
+    /// The corners of the rectangle `crop` of this plane, in the world.
+    fn corners(&self, crop: Rect) -> [Vector; 4] {
+        [
+            self.point(crop.x, crop.y),
+            self.point(crop.right(), crop.y),
+            self.point(crop.right(), crop.bottom()),
+            self.point(crop.x, crop.bottom()),
+        ]
+    }
+
+    /// How far `point` is from this plane, the way its normal goes.
+    fn off(&self, point: Vector) -> f64 {
+        dot(minus(point, self.origin), self.normal)
+    }
+
+    /// Whether the rectangle `crop` of this plane, drawn before `other_crop` of `other` since its
+    /// middle is the farther, is behind it wherever one is over the other as `scene` is seen: all of
+    /// it is past the other's plane, or all of the other is on the eye's side of this one. When
+    /// neither is so, their middles may have them the wrong way round, as a floor's middle is nearer
+    /// than what stands on its far half, though the floor is behind it there.
+    pub fn surely_behind(
+        &self,
+        crop: Rect,
+        other: &Plane,
+        other_crop: Rect,
+        scene: &Scene,
+    ) -> bool {
+        let slack = f64::from(SAME_DEPTH);
+        // Past a plane is the side of it the eye is not on. An eye in a plane sees it edge on.
+        let eye = other.off(scene.eye);
+        let past = self
+            .corners(crop)
+            .iter()
+            .all(|corner| other.off(*corner) * eye.signum() <= slack);
+        if past {
+            return true;
+        }
+        let eye = self.off(scene.eye);
+        other
+            .corners(other_crop)
+            .iter()
+            .all(|corner| self.off(*corner) * eye.signum() >= -slack)
     }
 }
 

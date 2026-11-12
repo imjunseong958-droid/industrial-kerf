@@ -793,10 +793,14 @@ impl Drawing {
                 (three_d::Plane::of(scene, clip, (w, h), &place, time), crop)
             })
             .collect();
+        // Two that cross are cut where they meet. Two that do not are one way round all over, but
+        // not always the way their middles have them: then they too are drawn by the pixel, so
+        // that a floor is not drawn over what stands on it for having its middle the nearer.
         let crosses = planes.iter().enumerate().any(|(index, (plane, crop))| {
-            planes[index + 1..]
-                .iter()
-                .any(|(other, other_crop)| plane.crosses(*crop, other, *other_crop))
+            planes[index + 1..].iter().any(|(other, other_crop)| {
+                plane.crosses(*crop, other, *other_crop)
+                    || !plane.surely_behind(*crop, other, *other_crop, scene)
+            })
         });
         if crosses {
             run
