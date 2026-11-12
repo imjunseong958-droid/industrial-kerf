@@ -59,7 +59,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             assert '# Kerf edit script' in system, system[:400]
             # The project document arrives as a message after the system prompt.
             assert any('```kerf' in str(m.get('content')) for m in request['messages'][1:]), request['messages'][1:]
-            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'note', 'render', 'suggest', 'session.read'], request['tools']
+            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'make', 'note', 'render', 'suggest', 'session.read'], request['tools']
             assert '`suggest`' in system, system[-600:]
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'edit-1', 'type': 'function', 'function': {

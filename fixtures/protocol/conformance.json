@@ -109,6 +109,6 @@
   },
   "mcp": {
     "protocol_version": "2024-11-05",
-    "tools": ["look", "edit", "render", "note"]
+    "tools": ["look", "edit", "render", "note", "make"]
   }
 }

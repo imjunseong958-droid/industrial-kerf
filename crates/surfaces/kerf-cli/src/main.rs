@@ -453,6 +453,18 @@ fn finish_renders(router: &KerfMcpRouter) {
         eprintln!("waiting for {running} render job(s) to finish; Ctrl-C to stop");
     }
     router.finish_renders(false);
+    // A making the agent started goes on until it is made; Ctrl-C stops it, and its model's
+    // program takes back what it asked a server for.
+    let making = router.running_makings();
+    if making > 0 {
+        eprintln!("waiting for {making} making(s) to finish; Ctrl-C to stop");
+        let stop = kerf_engine::CancellationToken::new();
+        let _held = kerf_engine::sidecar::stop_on_termination(&stop);
+        while router.running_makings() > 0 && !stop.is_cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        router.finish_makings(stop.is_cancelled());
+    }
 }
 
 /// The project `--dir` names, else the one `KERF_PROJECT_DIR` (`environment`)
@@ -749,6 +761,7 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
         "made take {} of {id} (revision {})",
         made.take, state.revision
     );
+    kerf_mcp::answer_make_requests(&runtime, id);
     Ok(())
 }
 
@@ -953,6 +966,13 @@ fn run_proposals(directory: &Path, kerfd: Option<&Path>, id: Option<&str>) -> Re
     }
     for proposal in waiting {
         println!("{}", proposal_line(proposal, state.revision));
+    }
+    // What an agent asked to have made, which only a person runs here.
+    for (media, comment) in kerf_mcp::make_requests(&runtime) {
+        println!(
+            "{media} to make, asked by {} in comment {}: `kerf make {media}` shows its plan",
+            comment.author.name, comment.id
+        );
     }
     Ok(())
 }
@@ -1867,6 +1887,7 @@ mod tests {
             made: None,
             chosen,
             changed: changed.iter().map(|what| (*what).to_owned()).collect(),
+            recipe: None,
         };
         assert_eq!(
             take_line(&take(true, &[])),

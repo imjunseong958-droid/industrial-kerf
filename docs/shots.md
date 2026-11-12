@@ -66,12 +66,14 @@ recipe names has to be inside the project.
 
 ## Making a shot
 
-Only a person asking makes a shot: `kerf make m3`, or Make from Recipe… on the
-media in the editor's bin. Both show every step as it would run and the take
-it would write, and ask first; `kerf make m3 --yes` does not ask. Opening a
-project, drawing it, and an agent's tools never run a recipe. A recipe that
-could not run is refused before anything does, with why: a model that is not
-set up, a sequence the project has not, a file it needs that is not there.
+A person makes a shot: `kerf make m3`, or Make from Recipe… on the media in
+the editor's bin. Both show every step as it would run and the take it would
+write, and ask first; `kerf make m3 --yes` does not ask. An agent asks for one
+with `make`, and its asking runs a recipe only where the person has let agents
+make on their own ([An agent's part](#an-agents-part)). Opening a project and
+drawing it never run one. A recipe that could not run is refused before
+anything does, with why: a model that is not set up, a sequence the project
+has not, a file it needs that is not there.
 
 What is shown with the steps, as `note` lines, is what a model has said it
 does not take ([What a model takes](#what-a-model-takes)) and the recipe asks
@@ -79,11 +81,6 @@ of it all the same: a guide drawn at another size or rate than the model
 reads, or from a sequence of another shape, a shot longer than the model
 makes at once, a file it has no use for, a name it has not got. None of them
 stops a making; each is cheaper to mend before one than after.
-
-An agent is told the same without anything being run. A media that wants
-making is under `toMake` in `look`, and in what an `edit` that names a recipe
-answers, with what would refuse it (`cannot`) and those notes (`notes`), so a
-recipe is mended before a person is asked to make it.
 
 A step that fails, or a last step that writes nothing, leaves no take and the
 media as it was.
@@ -97,10 +94,9 @@ name.
 A making can be stopped: **Stop Making** on the media in the editor's bin,
 which is there in place of Make from Recipe… for as long as it runs, or
 Ctrl-C in the terminal. The step that is running is asked to end before it is
-made to. On macOS and Linux its
-program gets SIGTERM, and five seconds to finish in, so that a program that
-has asked a server for a shot can take its job back and say so; one still
-running after that is killed. On Windows there is nothing to ask with, and it
+made to. On macOS and Linux its program gets SIGTERM, and five seconds to
+finish in, so that a program that has asked a server for a shot can take its
+job back and say so; one still running after that is killed. On Windows there is nothing to ask with, and it
 is ended outright. A stopped making leaves no take, nothing of one, and the
 media as it was. A second Ctrl-C ends `kerf` and its step at once, and what
 the step asked a server for goes on there.
@@ -114,7 +110,7 @@ changes the project:
 
 ```bash
 kerf load                # take project.kerf, as edited on disk, as the project
-kerf proposals           # the proposals an agent's `edit` left waiting
+kerf proposals           # the proposals an agent's `edit` left waiting, and what it asked to have made
 kerf proposals <id>      # what one would change: its script and the document's lines
 kerf accept [<id>]       # accept the one that waits, or the one named
 kerf reject [<id>]       # leave the project as it is
@@ -135,6 +131,53 @@ kerf takes m3            # its takes
   or by enough of its start or end to be one proposal's alone.
 - Each asks at the terminal, and `--yes` does not ask. With no terminal to
   ask at and no `--yes`, nothing is loaded or accepted.
+
+### An agent's part
+
+An agent writes the scene and the recipe, asks for the making, and looks at
+the take; the person says how much of that it does without asking them.
+
+- `edit` takes recipe files with its script (`recipes`, by the path a media
+  line's `recipe=` names, each with its text), and they are part of its
+  proposal: its script shows each recipe as comments, for the person to read
+  before they say yes. A recipe is never written over. A text that is not the
+  one there is kept beside it as its next version, `shots/open@2.kerfrecipe`,
+  and the proposal moves the media that name it there with `media replace`,
+  so undo has them made from the one before; a text a version holds already
+  is that version's. Every version of a recipe keeps its takes in one folder,
+  `shots/open.takes/`.
+- `look` lists what wants making under `toMake`, as an `edit` that names a
+  recipe answers it, with what would refuse it (`cannot`) and the notes a
+  person would be shown (`notes`), so a recipe is mended before anyone runs it.
+- `make` asks for a media to be made, and answers with the plan a person would
+  see. By default the person is asked: the plan is left in the review thread,
+  `kerf proposals` lists it, and `kerf make` or Make from Recipe… makes it and
+  answers the asking. Where the person lets an agent make on its own, the
+  making runs in the agent's session, as a job it reads, waits for, or stops,
+  as Stop Making stops one, and the media becomes the new take once it is made.
+  The agent then looks at the take, and changes one thing for the next.
+
+What an agent may do without asking is the person's to say, in their own
+`~/.kerf/agent.json` (`KERF_AGENT` names another file), outside any project,
+so that a project cannot let an agent run its recipes:
+
+```json
+{ "permissions": "auto", "makes": 5 }
+```
+
+| `permissions` | An agent's edit | A making it asks for |
+|---|---|---|
+| `ask`, the default | a proposal the person accepts | the person's to run |
+| `accept-edits` | accepted as it is made | the person's to run |
+| `auto` | accepted as it is made | runs, up to `makes` in one session (5 unless it says), and is asked for past them |
+
+An edit accepted this way is still one revision, which undo takes back, and a
+making still keeps every take beside the ones before, so what was let through
+is seen and undone as anything else. The file is read at each asking, so a
+change to it holds from the next; one that does not read lets nothing more
+through, and the agent is told so. A making an agent runs is shown in its own
+session, not in the editor's toolbar, and ends with the session: an MCP
+client that goes away stops it as Stop Making does.
 
 ## Takes
 
@@ -280,8 +323,7 @@ is kept as it is written. Kerf holds no making to it: the program still asks
 its model as it sees fit, and says so where that is not what the line asked.
 
 It is written in the file, and no program is asked for it, because `look`
-is an agent's tool and an agent's tools run nothing: reading it starts no
-program, cannot hang on one, and cannot be taken by a program that does not
+is an agent's tool and looking runs nothing: reading it starts no program, cannot hang on one, and cannot be taken by a program that does not
 know the question for a request to make something. A model's program can
 write the entry, though, for the person to put there: `kerf-comfy` does
 ([below](#a-model-on-a-comfyui-server)).

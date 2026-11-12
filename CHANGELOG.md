@@ -88,6 +88,16 @@ on `main`; its section here becomes the release's notes on GitHub
   agent is told the same, and what would refuse the making, as soon as it
   proposes the media or looks, and a new skill, `model-shot`, carries what
   it cannot see for itself of blocking a shot for a model.
+- An agent can go round the whole loop of a shot a model makes: it writes the
+  recipe as part of its proposal, where you read it before you accept, asks
+  for the making with its new `make` tool, and looks at the take. A recipe it
+  writes again is kept beside the one before (`open@2.kerfrecipe`), so undo
+  goes back, and choosing an earlier take brings back the recipe it was made
+  from. By default you are asked: `kerf proposals` lists what it wants made,
+  and `kerf make` makes it. In `~/.kerf/agent.json` you can let it do more on
+  its own, as a coding agent's permission modes do: `accept-edits` accepts its
+  edits as it makes them, and `auto` also runs the makings it asks for, up to
+  `makes` a session ([docs/shots.md](docs/shots.md#an-agents-part)).
 - A shot that does not fill the frame says the `scale` that does: a picture is
   fit inside the frame first, so it is seldom what the sizes alone say.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset

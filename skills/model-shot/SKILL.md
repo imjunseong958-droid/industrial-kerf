@@ -33,12 +33,15 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   recipe: every clip in frame, nothing crossing by accident, the move plain.
 - The recipe is the `render` line and a `generate` line: the prompt,
   `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
-  again. The media's line names the file the shot will be, with the model's
-  rate and size; a making replaces them with what was made. A picture is fit
-  inside the frame before its `scale`, so a shot of another shape leaves
-  edges: the check says the `scale` that fills it.
-- You do not make the shot. `toMake` says what a person is to make; mend
-  what its `cannot` and `notes` say before asking, then ask once.
+  again. Write it with the edit, in `recipes`, beside the script that adds
+  the media line; the media's line names the file the shot will be, with the
+  model's rate and size, and a making replaces them with what was made. A
+  picture is fit inside the frame before its `scale`, so a shot of another
+  shape leaves edges: the check says the `scale` that fills it.
+- Mend what `toMake`'s `cannot` and `notes` say, then ask for the making
+  once with `make`, with `why`. Asked, the person makes it; let through, it
+  runs as a job you `wait` for. A making costs minutes and money: never ask
+  for one to see the guide, which `look` shows.
 - After a making, look at the take (`media` with `sheet`), not at the guide,
   and say what the model kept and what it lost. Change one thing for the
   next take: the guide for layout and motion, the prompt for the look, the

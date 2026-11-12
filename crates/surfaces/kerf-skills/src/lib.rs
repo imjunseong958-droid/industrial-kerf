@@ -235,10 +235,10 @@ mod tests {
             .body
             .contains("Timing is the joke"));
         // What an agent cannot see for itself of a shot a model films: that stacking takes
-        // `overwrite`, and that it asks for a making and does not make.
+        // `overwrite`, and that it asks for a making once, with `make`.
         let shot = find_skill(&skills, "model-shot").unwrap();
         assert!(shot.body.contains("Stack the scene with `overwrite`"));
-        assert!(shot.body.contains("You do not make the shot"));
+        assert!(shot.body.contains("once with `make`"));
         assert!(shot.body.len() < 6 * 1024, "{}", shot.body.len());
         assert_eq!(
             find_skill(&skills, "shorts").unwrap().dir,

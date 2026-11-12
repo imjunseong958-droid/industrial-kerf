@@ -54,7 +54,11 @@ impl Place {
     /// The takes of the recipe named `recipe` in the project kept in
     /// `directory`, for a media whose file is at `media`.
     pub fn of(directory: &Path, recipe: &str, media: &str) -> Result<Self> {
-        let takes = within(Path::new(""), recipe, "recipe")?.with_extension("takes");
+        // Every version of a recipe, `open.kerfrecipe` and `open@2.kerfrecipe`, keeps its takes
+        // in one folder, so a take is never lost to the recipe being written again.
+        let recipe = within(Path::new(""), recipe, "recipe")?;
+        let (base, _) = super::versioned(&recipe);
+        let takes = recipe.with_file_name(format!("{base}.takes"));
         Ok(Self {
             directory: directory.to_path_buf(),
             takes,
@@ -382,6 +386,10 @@ pub struct Take {
     pub chosen: bool,
     /// What has changed since it was made, of what it was made from.
     pub changed: Vec<String>,
+    /// The version of the media's recipe it was made from, as a document names it, where one
+    /// of the versions there holds what its record says: the `recipe=` a media that is this
+    /// take again names, so that it is not asked for again.
+    pub recipe: Option<String>,
 }
 
 /// The takes of `media`, in the order they were made. A media that names
@@ -399,6 +407,17 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
             let recipe = Recipe::parse(&text).ok()?;
             from(project, directory, folder, &text, &recipe).ok()
         });
+    // Each version of the recipe, by the hash a take's record keeps of it.
+    let versions: HashMap<String, String> = within(Path::new(""), name, "recipe")
+        .map(|inside| super::versions(directory, &inside))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(path, _, text)| {
+            let mut hasher = Sha256::new();
+            hasher.update(Recipe::essence(&text));
+            (hex_of(hasher), stored(&path))
+        })
+        .collect();
     Ok(place
         .numbers()
         .into_iter()
@@ -414,6 +433,10 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
                     (Some(record), Some(now)) => changed(&record.from, now),
                     _ => Vec::new(),
                 },
+                recipe: record
+                    .as_ref()
+                    .and_then(|record| record.from.get(RECIPE))
+                    .and_then(|hash| versions.get(hash).cloned()),
                 stored,
             }
         })

@@ -36,7 +36,7 @@ static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// The tools every agent and MCP client uses.
-pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "note"];
+pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "note", "make"];
 
 /// As many frames as one tool result carries to a model.
 const MAX_LOOK_FRAMES: usize = kerf_agent::MAX_TOOL_RESULT_IMAGES;
@@ -66,7 +66,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
@@ -77,7 +77,17 @@ in place. The project does not change until the user accepts it. Several \
 proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
 becomes that proposal's next version (v2, v3), and the user can still see \
-the versions before it.
+the versions before it. `recipes` writes recipe files with it, by the path \
+a media's `recipe=` names: a file that holds another text is kept as it is, \
+with the new text beside it as its next version, and the media move to that \
+in the proposal. Where the person's own permissions accept an agent's edits, \
+the answer says `accepted`: it is in the project, one revision undo takes \
+back.
+- `make` asks for a media to be made from its recipe, and answers with what \
+would run. By default the person is asked (`asked`), in the review thread, \
+and makes it; where they let an agent make on its own it runs (`making`), as \
+a `job` to read, `wait` for, or `cancel`, and the media is the new take once \
+it is made. Then look at the take, and change one thing for the next.
 - `render` renders the sequence, or a range of it, to a file; with \
   `proposal`, what that proposal would make.
 - `note` leaves a comment in the project's review thread, where the people \
@@ -294,8 +304,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "edit" => (
             "Run an edit script. It becomes a proposal for the user, returned with the \
              document diff, check findings, and a before/after preview of the frames \
-             around each cut it changed. The project is unchanged until the user accepts it. `extend` builds \
-             on a pending proposal; `revise` replaces it. `savePreset` saves a portable \
+             around each cut it changed. The project is unchanged until the user accepts it, \
+             unless their own permissions accept an agent's edits (`status: accepted`). `extend` builds \
+             on a pending proposal; `revise` replaces it. `recipes` writes recipe files as part of it. `savePreset` saves a portable \
              .kerfpreset file without changing the project. `preset` with `bindings` \
              applies one as a proposal replacing the chosen sequence.",
             json!({
@@ -313,9 +324,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     }, "required": ["media"], "additionalProperties": false}},
                     "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Template caption/title clip id to replacement text."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
-                    "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."}
+                    "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
+                    "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
                 },
-                "oneOf": [{"required": ["script"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "oneOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -547,6 +559,9 @@ struct EditInput {
     texts: BTreeMap<String, String>,
     extend: Option<String>,
     revise: Option<String>,
+    /// Recipe files the edit writes, by the path a media line names, each with its text.
+    #[serde(default)]
+    recipes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -576,7 +591,7 @@ struct NoteInput {
     blocking: bool,
 }
 
-fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
+pub(crate) fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
     let arguments = if arguments.is_null() {
         json!({})
     } else {
@@ -823,7 +838,7 @@ impl KerfMcpRouter {
 
     /// The current revision and the project, or what the pending
     /// `proposal` would make of it.
-    fn project_at(&self, proposal: Option<&str>) -> Result<(u64, Project), McpError> {
+    pub(crate) fn project_at(&self, proposal: Option<&str>) -> Result<(u64, Project), McpError> {
         let (revision, document) = self.runtime.get_document(false)?;
         let project = parse(&document)?;
         let Some(id) = proposal else {
@@ -937,29 +952,13 @@ impl KerfMcpRouter {
                             entry["notes"] = json!(plan.notes);
                         }
                         entry["make"] = json!(format!(
-                            "a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin; ask them to"
+                            "ask for it with `make`: a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin, unless they let an agent make on its own"
                         ));
                     }
                     Err(cannot) => {
-                        // Where a person's own models file is, is theirs to be told and not
-                        // an agent's: it is told which models there are.
-                        let cannot = match (cannot.split_once(" is set up: "), &models) {
-                            (Some((model, _)), Ok(models)) if cannot.starts_with("no model `") => {
-                                let have: Vec<&str> = models.names().collect();
-                                format!(
-                                    "{model} is set up: {}; a person sets one up in their own models file",
-                                    if have.is_empty() {
-                                        "none is".to_owned()
-                                    } else {
-                                        format!("the models set up are {}", have.join(", "))
-                                    }
-                                )
-                            }
-                            _ => cannot,
-                        };
-                        entry["cannot"] = json!(cannot);
+                        entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
                         entry["make"] = json!(format!(
-                            "it cannot be made as it is: mend what `cannot` says first; then a person runs `kerf make {id}`"
+                            "it cannot be made as it is: mend what `cannot` says first; then ask for it with `make`"
                         ));
                     }
                 }
@@ -985,12 +984,14 @@ impl KerfMcpRouter {
                     if !take.changed.is_empty() {
                         entry["changedSince"] = json!(take.changed);
                     }
-                    // The whole line, since a take need not be as long as the one before it.
+                    // The whole line, since a take need not be as long as the one before it, and
+                    // with the version of the recipe it was made from.
                     if !take.chosen {
                         if let Ok(fields) = self.media_fields(&take.stored) {
                             entry["use"] = json!(format!(
-                                "media replace {} {fields} recipe={recipe:?}",
-                                media.id
+                                "media replace {} {fields} recipe={:?}",
+                                media.id,
+                                take.recipe.as_deref().unwrap_or(recipe)
                             ));
                         }
                     }
@@ -998,7 +999,7 @@ impl KerfMcpRouter {
                 })
                 .collect::<Vec<_>>(),
             "choose": format!(
-                "a take's `use` is the line that, in an edit, has the media be that take; a person makes a new one with `kerf make {}`",
+                "a take's `use` is the line that, in an edit, has the media be that take, made from the recipe it was made from; ask for a new one with `make`, which a person runs with `kerf make {}` unless they let an agent make on its own",
                 media.id
             ),
         }))
@@ -2496,7 +2497,7 @@ impl KerfMcpRouter {
     fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
         if [
-            input.script.is_some(),
+            input.script.is_some() || !input.recipes.is_empty(),
             input.preset.is_some(),
             input.save_preset.is_some(),
         ]
@@ -2507,7 +2508,7 @@ impl KerfMcpRouter {
         {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "pass exactly one of script, preset, or savePreset",
+                "pass exactly one of script (with or without recipes), recipes, preset, or savePreset",
             ));
         }
         if let Some(file) = &input.save_preset {
@@ -2562,15 +2563,49 @@ impl KerfMcpRouter {
                 &input.bindings,
                 &input.texts,
             )?,
-            None => input.script.expect("checked script input"),
+            None => input.script.clone().unwrap_or_default(),
         };
         let facts = CachedFacts::new(&self.dir);
-        let applied =
+        let mut applied =
             apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
+        // A recipe the edit writes is kept beside the one before it, and the media that name it
+        // are moved to it by lines added to the script, so that the proposal shows the move and
+        // undo takes it back. The recipe itself is shown in the script, as comments.
+        let recipes = self.recipe_versions(&input.recipes)?;
+        let mut source_script = source_script;
+        if !recipes.is_empty() {
+            let (shown, moves) = recipe_lines(&recipes, &applied.project)?;
+            source_script = format!("{shown}{}{moves}", with_newline(&source_script));
+            applied =
+                apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
+        }
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
         {
-            return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
+            // A new recipe a media names already, which was not there: nothing in the document
+            // changes, and nothing can be made of it until a person makes it.
+            let written: Vec<&RecipeVersion> =
+                recipes.iter().filter(|recipe| recipe.version.new).collect();
+            if written.is_empty() {
+                return Err(McpError::new(
+                    "NO_CHANGE",
+                    if recipes.is_empty() {
+                        "the script changes nothing"
+                    } else {
+                        "the script changes nothing, and each recipe is what its file holds"
+                    },
+                ));
+            }
+            for recipe in &written {
+                kerf_engine::recipe::write_version(&self.dir, &recipe.version, &recipe.text)
+                    .map_err(engine_error)?;
+            }
+            return Ok(json!({
+                "proposal": null,
+                "status": "written",
+                "recipes": recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>(),
+                "toMake": self.to_make(&applied.project),
+            }));
         }
         // An extension runs the operations of the proposal it extends, which
         // read nothing that could have changed since, and then this script;
@@ -2638,6 +2673,16 @@ impl KerfMcpRouter {
             ));
         };
         let proposal_id = staged.proposal_id.clone();
+        // Written once the proposal is staged, so that a refused edit leaves no file; the
+        // document names a new version only once the proposal is accepted.
+        for recipe in recipes.iter().filter(|recipe| recipe.version.new) {
+            if let Err(error) =
+                kerf_engine::recipe::write_version(&self.dir, &recipe.version, &recipe.text)
+            {
+                let _ = self.runtime.reject_proposal(&proposal_id);
+                return Err(engine_error(error));
+            }
+        }
         let script = staged.script.clone();
         let document_diff = staged.document_diff.clone();
         let (version, supersedes) = (staged.version, staged.supersedes.clone());
@@ -2670,7 +2715,60 @@ impl KerfMcpRouter {
         if !to_make.is_empty() {
             result["toMake"] = json!(to_make);
         }
+        if !recipes.is_empty() {
+            result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
+        }
+        // What the person lets an agent's edit be without their review.
+        match self.permissions() {
+            Ok(permissions) if permissions.accepts_edits() => {
+                let accepted = self.runtime.accept_proposal(
+                    &proposal_id,
+                    if author.kind == "mcp" { "mcp" } else { "agent" },
+                    &operation_key("agent-accept"),
+                    revision,
+                );
+                result["permissions"] = json!(permissions.mode.name());
+                match accepted {
+                    Ok(state) => {
+                        result["status"] = json!("accepted");
+                        result["revision"] = json!(state.revision);
+                    }
+                    Err(error) => {
+                        result["notAccepted"] = json!(format!(
+                            "{}; it waits for the person's review",
+                            error.message
+                        ));
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                result["permissionsError"] =
+                    json!(format!("{error}: so it waits for the person's review"));
+            }
+        }
         Ok(result)
+    }
+
+    /// Where each recipe an edit writes is kept, read as a recipe first.
+    fn recipe_versions(
+        &self,
+        recipes: &BTreeMap<String, String>,
+    ) -> Result<Vec<RecipeVersion>, McpError> {
+        recipes
+            .iter()
+            .map(|(asked, text)| {
+                // A file ends with a line, as an editor writes one.
+                let text = with_newline(text);
+                let version = kerf_engine::recipe::version(&self.dir, asked, &text)
+                    .map_err(|error| McpError::new("INVALID_RECIPE", error.to_string()))?;
+                Ok(RecipeVersion {
+                    asked: asked.clone(),
+                    text,
+                    version,
+                })
+            })
+            .collect()
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -3356,7 +3454,118 @@ fn not_pending(id: &str) -> McpError {
     )
 }
 
-fn operation_key(kind: &str) -> String {
+/// A recipe an edit writes: the file it was written as, its text, and where it is kept.
+struct RecipeVersion {
+    asked: String,
+    text: String,
+    version: kerf_engine::recipe::Version,
+}
+
+impl RecipeVersion {
+    fn json(&self) -> Value {
+        let mut value = json!({"recipe": self.asked, "keptAs": self.version.path});
+        value["written"] = json!(self.version.new);
+        if let Some(before) = &self.version.before {
+            value["diff"] = json!(kerf_lang::diff_text(before, &self.text));
+        }
+        value
+    }
+}
+
+/// The lines an edit's script gains for the recipes it writes: each recipe as comments, for the
+/// person reviewing it to read, and a `media replace` for each media that names a version of it
+/// other than the one that holds the text, which it moves to. A recipe written again that no media
+/// names is refused: it would be a file the project never uses.
+fn recipe_lines(
+    recipes: &[RecipeVersion],
+    project: &Project,
+) -> Result<(String, String), McpError> {
+    let (mut shown, mut moves) = (String::new(), String::new());
+    for recipe in recipes {
+        let path = &recipe.version.path;
+        let heading = match (&recipe.version.before, recipe.version.new) {
+            (None, true) => format!("# writes the recipe {path}:"),
+            (None, false) => format!("# the recipe {path}, as it is:"),
+            (Some(_), true) => format!("# writes the recipe {path}, after {}:", recipe.asked),
+            (Some(_), false) => format!(
+                "# the recipe {path}, as it was, in place of {}:",
+                recipe.asked
+            ),
+        };
+        shown.push_str(&heading);
+        shown.push('\n');
+        for line in recipe.text.lines() {
+            shown.push_str(&format!("#   {line}\n"));
+        }
+        let named: Vec<&Media> = project
+            .media
+            .iter()
+            .filter(|media| {
+                media
+                    .recipe
+                    .as_deref()
+                    .is_some_and(|named| kerf_engine::recipe::same_recipe(named, &recipe.asked))
+            })
+            .collect();
+        if named.is_empty() && (recipe.version.before.is_some() || !recipe.version.new) {
+            return Err(McpError::new(
+                "INVALID_RECIPE",
+                format!(
+                    "no media names `{}`, which holds another recipe: name a new file, or the \
+                     media whose recipe it is",
+                    recipe.asked
+                ),
+            ));
+        }
+        for media in named
+            .into_iter()
+            .filter(|media| media.recipe.as_deref() != Some(path.as_str()))
+        {
+            let mut moved = media.clone();
+            moved.recipe = Some(path.clone());
+            moves.push_str(&kerf_lang::print_op(
+                project,
+                catalog(),
+                &kerf_model::Op::ReplaceMedia(moved),
+            ));
+            moves.push('\n');
+        }
+    }
+    Ok((shown, moves))
+}
+
+/// `text` ending with a line break, unless it is empty.
+fn with_newline(text: &str) -> String {
+    if text.is_empty() || text.ends_with('\n') {
+        text.to_owned()
+    } else {
+        format!("{text}\n")
+    }
+}
+
+/// What would refuse a making, as an agent is told it: where a person's own models file is, is
+/// theirs to be told and not an agent's, which is told which models there are.
+pub(crate) fn cannot_said(
+    cannot: String,
+    models: Option<&kerf_engine::recipe::model::Models>,
+) -> String {
+    match (cannot.split_once(" is set up: "), models) {
+        (Some((model, _)), Some(models)) if cannot.starts_with("no model `") => {
+            let have: Vec<&str> = models.names().collect();
+            format!(
+                "{model} is set up: {}; a person sets one up in their own models file",
+                if have.is_empty() {
+                    "none is".to_owned()
+                } else {
+                    format!("the models set up are {}", have.join(", "))
+                }
+            )
+        }
+        _ => cannot,
+    }
+}
+
+pub(crate) fn operation_key(kind: &str) -> String {
     let sequence = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

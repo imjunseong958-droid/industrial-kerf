@@ -233,9 +233,10 @@ pub fn make(
         return Err("asked to stop before the server was asked for anything".to_owned());
     }
     let id = server.queue(&graph)?;
+    // Not where the server is: what is said here reaches whoever asked for the making, an agent
+    // among them, and the server is the person's to name.
     say(&format!(
-        "asked {} for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}",
-        server.url()
+        "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"
     ));
 
     let started = Instant::now();
