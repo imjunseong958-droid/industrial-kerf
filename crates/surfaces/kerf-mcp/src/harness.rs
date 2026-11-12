@@ -1017,7 +1017,7 @@ impl KerfMcpRouter {
         let mut fields = format!(
             "path={file:?} rate={} dur={}f",
             fps_text(fps),
-            (seconds * fps).floor() as i64
+            frames_of(seconds, fps)
         );
         if let (Some(width), Some(height)) = (info.width, info.height) {
             fields.push_str(&format!(" video={width}x{height}"));
@@ -3246,6 +3246,20 @@ fn is_footage(path: &std::path::Path) -> bool {
         .is_some_and(|extension| FOOTAGE.contains(&extension.to_lowercase().as_str()))
 }
 
+/// How many frames a file `seconds` long has at `fps`, as a making and an import count them
+/// (`kerf-runtime`'s `media_from_probe`): its length to the nearest frame of its rate, and
+/// never none. A container says a length a hair under its frames' as often as not, 4.062012 s
+/// for 65 frames at 16 a second, and counted down that is a frame short of the file.
+fn frames_of(seconds: f64, fps: f64) -> i64 {
+    let counted = kerf_model::Rate::from_fps(fps)
+        .ok()
+        .zip(Time::from_seconds(seconds))
+        .map(|(rate, length)| rate.frames_round(length));
+    counted
+        .unwrap_or_else(|| (seconds * fps).round() as i64)
+        .max(1)
+}
+
 /// A frame rate as a document writes it.
 fn fps_text(fps: f64) -> String {
     let whole = fps.round();
@@ -3636,6 +3650,20 @@ sequence s1 rate=24 size=1920x1080
                 {"name": "words", "size": "1024x1024", "reads": []},
             ])
         );
+    }
+
+    #[test]
+    fn a_files_frames_are_counted_as_a_making_counts_them() {
+        // A take a server made: 65 frames at 16 a second, its container saying 4.062012 s.
+        // Counted down, the line that chooses the take had it a frame short of the file.
+        assert_eq!(frames_of(4.062012, 16.0), 65);
+        assert_eq!(frames_of(4.0625, 16.0), 65);
+        // A whole length is what it was.
+        assert_eq!(frames_of(8.0, 30.0), 240);
+        // 300 frames of 29.97 said a hair short, by the rate a document keeps for it.
+        assert_eq!(frames_of(10.0099, 29.97), 300);
+        // A file whose length was not read is still a frame long, as an import has it.
+        assert_eq!(frames_of(0.0, 30.0), 1);
     }
 
     #[test]

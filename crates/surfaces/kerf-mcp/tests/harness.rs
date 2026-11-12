@@ -2564,6 +2564,8 @@ fn a_fresh_folder_says_what_footage_it_could_add_and_how() {
     assert!(line.contains("video=320x180"), "{line}");
     assert!(line.contains("audio="), "{line}");
     assert_eq!(file["seconds"], json!(4.0), "{file}");
+    // Every frame of it: four seconds at 30 a second.
+    assert!(line.contains(" dur=120f "), "{line}");
     // And it runs as it is.
     let staged = ok(&router, "edit", json!({"script": line}));
     assert!(staged["proposal"].is_string(), "{staged}");
