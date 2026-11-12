@@ -61,6 +61,15 @@ fn footage(directory: &Path) {
     assert!(status.success());
 }
 
+/// A router on `directory` for a test. What it lets an agent do is the default, every edit proposed
+/// and no making run, whatever the person running the tests lets their own agents do in their
+/// `~/.kerf/agent.json`: a test that wants another way says so with `set_permissions`.
+fn router_on(directory: &Path, kerfd: Option<&Path>) -> KerfMcpRouter {
+    let router = KerfMcpRouter::new(directory, kerfd).unwrap();
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    router
+}
+
 fn router() -> Option<(TempDir, KerfMcpRouter)> {
     if !ffmpeg_available() {
         eprintln!("skipping: ffmpeg is not installed");
@@ -82,9 +91,7 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
-    // Not what the person running the tests lets their own agents do.
-    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    let router = router_on(directory.path(), Some(&kerfd));
     Some((directory, router))
 }
 
@@ -250,7 +257,7 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
 #[test]
 fn lists_the_four_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
-    let router = KerfMcpRouter::new(directory.path(), None).unwrap();
+    let router = router_on(directory.path(), None);
     let names = router
         .list_tools()
         .into_iter()
@@ -1770,11 +1777,11 @@ fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
     let first_id = first["proposal"].as_str().unwrap().to_owned();
 
     // Kerf's own agent, or another client, proposes beside it.
-    let kerf = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let kerf = router_on(router.directory(), None);
     let beside = ok(&kerf, "edit", json!({"script": "trim c1 in +5f"}));
     assert_eq!(beside["author"], "Kerf");
     let beside_id = beside["proposal"].as_str().unwrap().to_owned();
-    let cursor = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let cursor = router_on(router.directory(), None);
     let cursor_server = served(&cursor, "cursor-vscode");
     let third = call(
         &cursor_server,
@@ -1910,7 +1917,7 @@ fn the_note_tool_writes_a_comment_by_the_client() {
     assert!(protocol.contains("## Proposals and notes"));
 
     // Kerf's own agent notes as Kerf.
-    let kerf = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let kerf = router_on(router.directory(), None);
     let own = ok(&kerf, "note", json!({"body": "Welcome"}));
     assert_eq!(own["comment"]["author"]["kind"], "kerf");
     assert_eq!(own["comment"]["at"], Value::Null);
@@ -1975,7 +1982,7 @@ fn filmed(
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     Some((directory, router))
 }
 
@@ -2309,7 +2316,7 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     Some((directory, router))
 }
 
@@ -2337,7 +2344,7 @@ fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     let looked = ok(&router, "look", json!({}));
     let to_make = &looked["toMake"];
     assert_eq!(to_make.as_array().map(Vec::len), Some(1), "{looked}");
@@ -2367,9 +2374,7 @@ fn a_waiting_proposal_says_what_it_would_have_made() {
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
-    // Every edit is proposed, whatever the person running the tests lets their own agents do.
-    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    let router = router_on(directory.path(), Some(&kerfd));
     let staged = ok(
         &router,
         "edit",
@@ -2445,7 +2450,7 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     let (first, second) = (make(), make());
     std::fs::write(dir.join("project.kerf"), document(&first.stored)).unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
+    let router = router_on(dir, Some(&kerfd));
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
     let looked = ok(&router, "look", json!({"media": "m1"}));
     assert_eq!(looked["recipe"], json!("shots/open.kerfrecipe"));
@@ -2607,7 +2612,7 @@ fn a_fresh_folder_says_what_footage_it_could_add_and_how() {
     let directory = TempDir::new().unwrap();
     footage(directory.path());
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     // What is there and not in the document.
     let looked = ok(&router, "look", json!({}));
     assert_eq!(looked["unplaced"], json!(["shot.mp4"]), "{looked}");
@@ -2730,7 +2735,7 @@ fn rendering_nothing_is_refused_and_says_where_the_cut_is() {
     let directory = TempDir::new().unwrap();
     footage(directory.path());
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     let empty = message(&error(&router, "render", json!({})));
     assert!(empty.contains("empty"), "{empty}");
     let staged = ok(

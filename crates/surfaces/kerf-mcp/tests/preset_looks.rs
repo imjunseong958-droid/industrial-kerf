@@ -17,6 +17,15 @@ look look.test.mine version=1 name="Mine" category="Test" on=clip
 "#;
 
 /// Four seconds of picture over beeps every half second.
+/// A router on `directory` for a test. What it lets an agent do is the default, every edit proposed
+/// and no making run, whatever the person running the tests lets their own agents do in their
+/// `~/.kerf/agent.json`: a test that wants another way says so with `set_permissions`.
+fn router_on(directory: &Path, kerfd: Option<&Path>) -> KerfMcpRouter {
+    let router = KerfMcpRouter::new(directory, kerfd).unwrap();
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    router
+}
+
 fn router() -> Option<(TempDir, KerfMcpRouter)> {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
         eprintln!("skipping: ffmpeg is not installed");
@@ -64,7 +73,7 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
-    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = router_on(directory.path(), Some(&kerfd));
     Some((directory, router))
 }
 
