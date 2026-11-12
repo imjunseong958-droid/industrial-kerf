@@ -814,6 +814,8 @@ most of the picture agrees on between small frames four times a second (`kerf_tr
 60 seconds of 1080p takes 7 s the first time, and it is kept with the media's other derivatives. It reads a push in as a zoom and a move sideways as a pan, and only `track` with `camera` tells those apart. It says in `notMeasured` what it
 leaves out, since silence would read as a finding: faces and the subject, which take a trained model, and on-screen text, which without one cannot be found reliably.
 
+That loudness is the media's own. `look` with `loudness` gives the sequence's, as it plays: its whole mix through the meter a delivery is checked with (`kerf_engine::measure_program`), as integrated loudness beside the target, loudness range, true peak beside its limit, and the loudest three seconds and 400 ms with where each ends. It is measured once for a revision, of the project or of a pending proposal, so a gain or a mix can be read back before it is accepted.
+
 ## Before shipping
 
 Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.

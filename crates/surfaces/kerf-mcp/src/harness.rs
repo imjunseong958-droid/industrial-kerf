@@ -259,7 +259,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              pauses, loudest moments, sound onsets, tempo, and with `transcript` what \
              is said (`words` times each word), and with `facts` what the camera does in \
              each shot and how loud it is. `contrast`: titles and captions too faint to read. \
-             `sheet`: a contact sheet of a range. \
+             `sheet`: a contact sheet of a range. `loudness`: how loud the sequence \
+             plays, by R128. \
              `at`: frames, as source frames of `media` or program frames of the \
              sequence. `transcript` without `media`: what the sequence says. \
              `track`: where a point, a surface, an object, or the camera goes, as keyframes. \
@@ -280,6 +281,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, the same `outline`, and with `clip` a mask line for that clip, with a third number on each corner where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
+                    "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
@@ -415,6 +417,8 @@ struct LookInput {
     facts: bool,
     #[serde(default)]
     contrast: bool,
+    #[serde(default)]
+    loudness: bool,
     track: Option<TrackInput>,
     #[serde(default)]
     sync: Vec<String>,
@@ -1359,6 +1363,7 @@ impl KerfMcpRouter {
             && input.at.is_empty()
             && !input.transcript
             && !input.contrast
+            && !input.loudness
             && input.track.is_none()
             && input.sheet.is_none()
             && input.sequence.is_none()
@@ -1403,6 +1408,10 @@ impl KerfMcpRouter {
             DEFAULT_FRAME_WIDTH
         };
         let width = input.width.unwrap_or(default_width).clamp(64, 1920);
+        if input.loudness {
+            // Of the sequence only, which it says of a look that asks more.
+            return self.program_loudness(&project, revision, &input);
+        }
         let mut result = match input.media.as_deref() {
             None if input.contrast => self.program_contrast(&project, revision, &input)?,
             None if input.track.is_some() => self.program_track(&project, revision, &input)?,
@@ -2345,6 +2354,86 @@ impl KerfMcpRouter {
         }))
     }
 
+    /// How loud the sequence is as it plays, by R128: its whole mix through
+    /// the meter a delivery is checked with, kept for the revision.
+    fn program_loudness(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+    ) -> Result<Value, McpError> {
+        if input.media.is_some()
+            || !input.at.is_empty()
+            || input.from.is_some()
+            || input.to.is_some()
+            || input.transcript
+            || input.sheet.is_some()
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`loudness` is of a whole sequence as it plays: use it with `sequence` or \
+                 `proposal` only; a media's own loudness is in its `facts`",
+            ));
+        }
+        let sequence = program(project, input.sequence.as_deref())?;
+        let clock = Clock::of_sequence(sequence);
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let entry = self.program_entry(
+            &resolved,
+            sequence.id.as_str(),
+            "program-loudness",
+            &json!({}),
+        )?;
+        let sound: kerf_engine::Loudness = if entry.is_complete(&["loudness.json"]) {
+            entry.read_json("loudness.json").map_err(engine_error)?
+        } else {
+            let sound = kerf_engine::measure_program(
+                &resolved,
+                Some(sequence.id.as_str()),
+                &self.dir,
+                &kerf_engine::CancellationToken::new(),
+            )
+            .map_err(engine_error)?;
+            entry
+                .write_json("loudness.json", &sound)
+                .map_err(engine_error)?;
+            entry
+                .mark_complete(&["loudness.json"])
+                .map_err(engine_error)?;
+            sound
+        };
+        // A measurement is made for each revision asked about.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_LOUDNESS);
+        // Two places, as a meter reads; silence has no level.
+        let level = |value: f64| {
+            if value.is_finite() && value > -120.0 {
+                json!((value * 100.0).round() / 100.0)
+            } else {
+                Value::Null
+            }
+        };
+        let ends = |seconds: Option<f64>| {
+            seconds
+                .and_then(Time::from_seconds)
+                .map(|time| clock.print_position(sequence.rate.round(time)))
+        };
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "loudness": {
+                "integrated": level(sound.integrated),
+                "target": kerf_engine::loudness::TARGET_LUFS,
+                "range": level(sound.lra),
+                "truePeak": level(sound.true_peak_max),
+                "limit": kerf_engine::loudness::TRUE_PEAK_LIMIT_DBTP,
+                "shortTermMax": {"lufs": level(sound.short_term_max), "ends": ends(sound.short_term_max_at())},
+                "momentaryMax": {"lufs": level(sound.momentary_max), "ends": ends(sound.momentary_max_at())},
+                "seconds": (sound.duration * 1000.0).round() / 1000.0,
+            },
+        }))
+    }
+
     /// What scopes read of the program at each of `at`.
     fn program_scopes(
         &self,
@@ -2990,6 +3079,9 @@ impl KerfMcpRouter {
 /// transcript) the cache keeps besides the one in use; older revisions'
 /// make way.
 const KEPT_PROGRAM_SOUNDS: usize = 4;
+/// How many measurements of a program's loudness the cache keeps besides
+/// the one in use.
+const KEPT_PROGRAM_LOUDNESS: usize = 16;
 /// How many captures of a program's frames the cache keeps besides the one
 /// in use.
 const KEPT_PROGRAM_FRAMES: usize = 32;
