@@ -85,20 +85,12 @@ jobs:
       - name: Build kerfd and the protocol tests
         run: |
           cargo build -p kerf-runtime --bin kerfd
-          cargo test -p kerf-qt-bridge --test protocol --no-run
-      - name: As CI runs them, no stats
-        run: python3 .github/diagnosis/meter.py plain 60
-      - name: As CI runs them, with stats
-        if: ${{ !cancelled() }}
-        run: python3 .github/diagnosis/meter.py side-by-side 30 stats
-      - name: The meter test alone, with stats
-        if: ${{ !cancelled() }}
-        run: python3 .github/diagnosis/meter.py alone 20 stats -- the_meter
-      - name: Results
-        if: ${{ !cancelled() }}
-        run: grep -h "^RESULT" logs/*.result || true
+      - name: The harness tests over and over, and where one hangs
+        run: |
+          cargo test -p kerf-mcp --test harness --no-run
+          python3 .github/diagnosis/hang.py 40 200
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: meter-logs
+          name: hang-logs
           path: logs
