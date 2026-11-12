@@ -166,7 +166,16 @@ pub fn cached_encoder_listing() -> Result<&'static str> {
 }
 
 pub fn run(bin: &str, args: &[String]) -> Result<CommandOutput> {
-    let output = hidden_command(bin)
+    run_in(bin, args, None)
+}
+
+/// [`run`] from the folder `dir`, for an argument that names a file by its place there.
+pub fn run_in(bin: &str, args: &[String], dir: Option<&Path>) -> Result<CommandOutput> {
+    let mut command = hidden_command(bin);
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let output = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
