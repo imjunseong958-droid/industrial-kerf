@@ -917,6 +917,52 @@ fn look_hears_what_the_sequence_says() {
     assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
 }
 
+#[test]
+fn look_says_how_loud_the_sequence_plays() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A 440 Hz tone an eighth of full scale high, for three of four seconds.
+    let heard = ok(&router, "look", json!({"loudness": true}));
+    assert_eq!(heard["sequence"], "s1");
+    let loudness = &heard["loudness"];
+    let integrated = loudness["integrated"].as_f64().unwrap();
+    assert!((-24.0..-18.0).contains(&integrated), "{heard}");
+    assert_eq!(loudness["target"], -23.0);
+    let peak = loudness["truePeak"].as_f64().unwrap();
+    assert!((-20.0..-17.0).contains(&peak), "{heard}");
+    assert_eq!(loudness["limit"], -1.0);
+    assert!(loudness["momentaryMax"]["lufs"].is_number(), "{heard}");
+    assert!(loudness["momentaryMax"]["ends"].is_string(), "{heard}");
+    assert_eq!(loudness["seconds"], 4.0);
+    // Asked again of the same revision, it is not measured again.
+    assert_eq!(ok(&router, "look", json!({"loudness": true})), heard);
+
+    // What a proposal would make of it: twelve decibels down, as it says.
+    let proposal = ok(&router, "edit", json!({"script": "set a1 gain=-12"}));
+    let quieter = ok(
+        &router,
+        "look",
+        json!({"loudness": true, "proposal": proposal["proposal"]}),
+    );
+    let down = quieter["loudness"]["integrated"].as_f64().unwrap();
+    assert!((down - (integrated - 12.0)).abs() < 0.3, "{quieter}");
+    assert!(
+        (quieter["loudness"]["truePeak"].as_f64().unwrap() - (peak - 12.0)).abs() < 0.3,
+        "{quieter}"
+    );
+
+    // It is of a whole sequence: a media's own is in its fact sheet.
+    for arguments in [
+        json!({"loudness": true, "media": "m1"}),
+        json!({"loudness": true, "at": ["1s"]}),
+        json!({"loudness": true, "from": "1s", "to": "2s"}),
+    ] {
+        let refused = error(&router, "look", arguments);
+        assert_eq!(refused["code"], "INVALID_ARGUMENTS", "{refused}");
+    }
+}
+
 fn finish(router: &KerfMcpRouter, job: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
