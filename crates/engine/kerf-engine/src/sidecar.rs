@@ -35,7 +35,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// it is killed.
 pub const GRACE: Duration = Duration::from_secs(5);
 /// How long what a cancelled sidecar said on its way out is read for, once it has ended.
-const LAST_WORDS: Duration = Duration::from_millis(250);
+const LAST_WORDS: Duration = Duration::from_millis(500);
 const STDERR_QUEUE_CAPACITY: usize = 128;
 const MAX_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
@@ -134,16 +134,23 @@ fn run_within(
                 drain(&mut tail);
                 thread::sleep(POLL_INTERVAL);
             }
-            drain(&mut tail);
-            kill(&mut child);
             // What it said on its way out may not have been read from its stderr yet: it is,
-            // to the end, unless something outside its group holds the pipe open.
-            let killed = Instant::now();
-            while !reader.is_finished() && killed.elapsed() < LAST_WORDS {
+            // to the end. Its stderr closes once nothing of its group is left writing to it:
+            // waited for before what is left of it is killed, when it ended by itself, and after.
+            // A moment each, in case something outside its group holds the pipe open.
+            let mut read_out = || {
+                let since = Instant::now();
+                while !reader.is_finished() && since.elapsed() < LAST_WORDS {
+                    drain(&mut tail);
+                    thread::sleep(POLL_INTERVAL);
+                }
                 drain(&mut tail);
-                thread::sleep(POLL_INTERVAL);
+            };
+            if has_ended(&child) {
+                read_out();
             }
-            drain(&mut tail);
+            kill(&mut child);
+            read_out();
             break Err(EngineError::Cancelled);
         }
         match try_wait(&mut child) {
@@ -591,7 +598,7 @@ mod tests {
 
     #[test]
     fn everything_a_cancelled_sidecar_says_on_its_way_out_is_heard() {
-        // Many lines, said as it ends: more than are read in the time it takes to end.
+        // Many lines, said at once as it ends: more than are read in the time it takes to end.
         let token = CancellationToken::new();
         let (sender, lines) = mpsc::channel();
         let runner = {
@@ -600,7 +607,7 @@ mod tests {
                 let mut command = Command::new("sh");
                 command.args([
                     "-c",
-                    "trap 'i=0; while [ $i -lt 500 ]; do echo \"line $i\" >&2; i=$((i+1)); done; echo done >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
+                    "trap 'printf \"line %s\\n\" $(seq 0 499) >&2; echo done >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
                 ]);
                 run(command, &token, |line| {
                     let _ = sender.send(line.to_owned());
