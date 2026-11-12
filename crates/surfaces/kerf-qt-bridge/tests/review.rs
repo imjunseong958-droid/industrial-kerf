@@ -52,8 +52,17 @@ struct Editor {
     events: Vec<Value>,
 }
 
+/// Has every editor these tests open ask for each edit, the default, whatever the person
+/// running them lets their own agents do: the bridge makes its own router and reads their
+/// `~/.kerf/agent.json`, so the tests name a file that is not there in its place.
+fn leave_out_the_persons_settings() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| std::env::set_var("KERF_AGENT", "/no-such-kerf-agent.json"));
+}
+
 impl Editor {
     fn open(directory: &Path) -> Self {
+        leave_out_the_persons_settings();
         let directory = CString::new(directory.to_string_lossy().as_ref()).unwrap();
         let binary = CString::new(kerfd().to_string_lossy().as_ref()).unwrap();
         // SAFETY: both strings live for the call.
