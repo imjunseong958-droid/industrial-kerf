@@ -93,14 +93,14 @@ jobs:
       # The daemon's command returns before the daemon is on the bus: it
       # wakes the command, and only then unlocks the keyring and takes
       # org.freedesktop.secrets. A test that calls before it has makes the
-      # bus start a second daemon from the name's service file, which
-      # cannot find the first (this shell has no XDG_RUNTIME_DIR, and the
-      # first one's GNOME_KEYRING_CONTROL goes to /dev/null), becomes the
-      # secret service itself, and has no password: its keyring is locked,
-      # the prompt it asks for has no display, and the write fails with
-      # IsLocked or NoReply. With the tests already built they start 0.3 s
-      # after the daemon, which was sometimes too soon. So the tests wait
-      # for the name to have an owner; asking who owns a name starts nothing.
+      # bus start a second daemon from the name's service file. Where that
+      # one cannot find the first (no XDG_RUNTIME_DIR, and the first one's
+      # GNOME_KEYRING_CONTROL goes to /dev/null) it becomes the secret
+      # service itself, and has no password: its keyring is locked, the
+      # prompt it asks for has no display, and the write fails. With the
+      # tests already built they start 0.3 s after the daemon, which was
+      # once too soon (NoReply, 10 Nov). So the tests wait for the name to
+      # have an owner; asking who owns a name starts nothing.
       - name: Test the system keychain
         run: |
           dbus-run-session -- sh -e -c '
