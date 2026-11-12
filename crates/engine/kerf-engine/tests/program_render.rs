@@ -185,6 +185,80 @@ fn cuts_transitions_and_ranges_render_frame_exact() {
     assert!(heard > 0.05 && heard < 0.1, "after the crossfade: {heard}");
 }
 
+/// The streams of a file, each as `type,codec,sample rate,channels`.
+fn streams(path: &Path) -> Vec<String> {
+    let listed = run(Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries"])
+        .args(["stream=codec_type,codec_name,sample_rate,channels"])
+        .args(["-of", "csv=p=0"])
+        .arg(path));
+    String::from_utf8_lossy(&listed)
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_sound_alone_is_what_a_draft_of_the_range_carries() {
+    let dir = tempfile::tempdir().unwrap();
+    // A tone from one second to three, under a picture that runs all four.
+    let project = project(
+        dir.path(),
+        "sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=red src=0f at=0f dur=96f\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=blue src=12f at=24f dur=48f\n",
+    );
+    let range = (Rate::FPS_24.time_of(12), Rate::FPS_24.time_of(84));
+    let draft = dir.path().join("draft.mp4");
+    render_program::<fn(f64)>(
+        &project,
+        None,
+        Some(range),
+        &RenderOptions {
+            output: draft.to_string_lossy().into_owned(),
+            draft: true,
+            force_software: true,
+            ..RenderOptions::default()
+        },
+        None,
+    )
+    .expect("renders");
+    let sound = dir.path().join("sound.wav");
+    kerf_engine::render::render_sound(
+        &project,
+        None,
+        Some(range),
+        16_000,
+        &sound,
+        &kerf_engine::CancellationToken::new(),
+    )
+    .expect("mixes");
+
+    // One stream, the sound, as a transcriber reads it: no picture.
+    assert_eq!(streams(&sound), ["pcm_s16le,audio,16000,1"]);
+    let bytes = std::fs::metadata(&sound).unwrap().len();
+    assert!(
+        (96_000..96_200).contains(&bytes),
+        "three seconds of 16-bit mono at 16 kHz, and a header: {bytes}"
+    );
+    // The tone starts and stops where the draft's does, as loud.
+    for (from, to) in [(0.0, 0.45), (0.55, 2.45), (2.55, 3.0)] {
+        let (mixed, drafted) = (loudness(&sound, from, to), loudness(&draft, from, to));
+        assert!(
+            (mixed - drafted).abs() < 0.005,
+            "{from}..{to}: {mixed} alone, {drafted} in the draft"
+        );
+        assert_eq!(
+            mixed > 0.05,
+            from > 0.5 && to < 2.5,
+            "{from}..{to}: {mixed}"
+        );
+    }
+}
+
 /// Titles and captions need FFmpeg built with libfreetype.
 fn has_drawtext() -> bool {
     Command::new(resolve_ffmpeg_bin())

@@ -1733,7 +1733,8 @@ impl KerfMcpRouter {
     }
 
     /// What the sequence says from `from` to `to`, as it plays: its sound
-    /// is rendered and transcribed. Times are sequence positions.
+    /// is mixed, with no picture drawn, and transcribed. Times are sequence
+    /// positions.
     fn program_transcript(
         &self,
         project: &Project,
@@ -1772,25 +1773,20 @@ impl KerfMcpRouter {
             "program-sound",
             &json!({"from": from.flicks(), "to": to.flicks()}),
         )?;
-        let sound = entry.path("sound.mp4");
-        if !entry.is_complete(&["sound.mp4"]) {
-            render_program::<fn(f64)>(
+        let sound = entry.path("sound.wav");
+        if !entry.is_complete(&["sound.wav"]) {
+            kerf_engine::render::render_sound(
                 &resolved,
                 Some(sequence.id.as_str()),
                 Some((from, to)),
-                &RenderOptions {
-                    output: sound.to_string_lossy().into_owned(),
-                    draft: true,
-                    force_software: true,
-                    project_dir: Some(self.dir.clone()),
-                    ..RenderOptions::default()
-                },
-                None,
+                kerf_engine::TRANSCRIPTION_SAMPLE_RATE,
+                &sound,
+                &kerf_engine::CancellationToken::new(),
             )
             .map_err(engine_error)?;
-            entry.mark_complete(&["sound.mp4"]).map_err(engine_error)?;
+            entry.mark_complete(&["sound.wav"]).map_err(engine_error)?;
         }
-        // A program's sound is rendered for each revision listened to.
+        // A program's sound is mixed for each revision listened to.
         let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS);
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
@@ -2953,7 +2949,7 @@ impl KerfMcpRouter {
     }
 }
 
-/// How many renders of a program's sound (each up to 15 minutes, with its
+/// How many mixes of a program's sound (each up to 15 minutes, with its
 /// transcript) the cache keeps besides the one in use; older revisions'
 /// make way.
 const KEPT_PROGRAM_SOUNDS: usize = 4;
