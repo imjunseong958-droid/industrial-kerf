@@ -173,6 +173,15 @@ jobs:
           $env:TEMP = $hangul
           cargo test -q -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|d3d11va|drawtext|fontfile|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(1500, $l.Length)) }
           exit $LASTEXITCODE
+      - name: The engine's own test of a font in an odd folder
+        id: engine
+        continue-on-error: true
+        shell: pwsh
+        env:
+          KERF_HWACCEL: none
+        run: |
+          cargo test -q -p kerf-engine --lib a_sheets_labels 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|labels|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(1500, $l.Length)) }
+          exit $LASTEXITCODE
       - name: The filter as Kerf builds it, given to ffmpeg by hand
         shell: pwsh
         run: |
@@ -217,3 +226,4 @@ jobs:
           Write-Host "OUTCOME software decode: ${{ steps.soft.outcome }}"
           Write-Host "OUTCOME software, apostrophe temp: ${{ steps.quoted.outcome }}"
           Write-Host "OUTCOME software, hangul temp: ${{ steps.hangul.outcome }}"
+          Write-Host "OUTCOME engine test: ${{ steps.engine.outcome }}"
