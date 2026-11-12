@@ -13,6 +13,10 @@
 //! something, as a model's does, has that long to take it back; FFmpeg
 //! ends at once on the signal. Windows has no such signal to send a job,
 //! so there a cancelled sidecar is ended outright.
+//!
+//! A terminal's Ctrl-C ends the binary that runs sidecars, and what they
+//! started with it, unless the binary holds [`stop_on_termination`]: then
+//! the first one cancels that work, and so stops its sidecar as above.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -322,6 +326,9 @@ pub fn forward_termination_signals() {
                     .name("kerf-sidecar-signals".into())
                     .spawn(move || {
                         for signal in signals.forever() {
+                            if stopped_instead(signal) {
+                                continue;
+                            }
                             for &leader in running().iter() {
                                 signal_group(leader, signal);
                             }
@@ -331,6 +338,63 @@ pub fn forward_termination_signals() {
             });
         if let Err(error) = forwarding {
             eprintln!("sidecars will not receive Ctrl-C or termination signals: {error}");
+        }
+    }
+}
+
+/// The work that the first termination signal stops in place of ending this
+/// process, while a [`StopOnTermination`] holds it.
+#[cfg(unix)]
+static STOPPABLE: std::sync::Mutex<Option<CancellationToken>> = std::sync::Mutex::new(None);
+
+#[cfg(unix)]
+fn stoppable() -> std::sync::MutexGuard<'static, Option<CancellationToken>> {
+    STOPPABLE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether `signal` cancelled the work [`stop_on_termination`] named, which
+/// it does once, and not SIGQUIT, which is asked for to end at once.
+#[cfg(unix)]
+fn stopped_instead(signal: libc::c_int) -> bool {
+    if signal == libc::SIGQUIT {
+        return false;
+    }
+    match stoppable().as_ref() {
+        Some(token) if !token.is_cancelled() => {
+            token.cancel();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// While this is held, the first Ctrl-C, SIGTERM, or hangup cancels the
+/// token it was made with in place of ending the process: the sidecar
+/// running is asked to end and has [`GRACE`] to, as a cancelled one does,
+/// and what it says on the way out is heard. A second ends the process as
+/// [`forward_termination_signals`] does. It has an effect only in a binary
+/// that called that, on Unix.
+#[must_use = "the first signal stops the work only while this is held"]
+pub struct StopOnTermination(());
+
+/// Have the first termination signal cancel `token`; see [`StopOnTermination`].
+pub fn stop_on_termination(token: &CancellationToken) -> StopOnTermination {
+    #[cfg(unix)]
+    {
+        *stoppable() = Some(token.clone());
+    }
+    #[cfg(not(unix))]
+    let _ = token;
+    StopOnTermination(())
+}
+
+impl Drop for StopOnTermination {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            *stoppable() = None;
         }
     }
 }
@@ -513,6 +577,22 @@ mod tests {
         assert!(!finished.status.success());
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
         assert!(!running().contains(&shell));
+    }
+
+    #[test]
+    fn the_first_signal_stops_the_work_held_and_a_second_ends_the_process() {
+        let token = CancellationToken::new();
+        {
+            let _held = stop_on_termination(&token);
+            assert!(!stopped_instead(libc::SIGQUIT));
+            assert!(!token.is_cancelled());
+            assert!(stopped_instead(libc::SIGINT));
+            assert!(token.is_cancelled());
+            // Already stopping: this one ends the process.
+            assert!(!stopped_instead(libc::SIGINT));
+        }
+        // Nothing held: every signal ends it.
+        assert!(!stopped_instead(libc::SIGTERM));
     }
 }
 
