@@ -4,7 +4,10 @@
 //! or, without one, on its project launcher. `--terminal` keeps the
 //! project-scoped terminal agent available for scripts and interactive
 //! shells. `kerf new` makes a project folder and `kerf sync` shares a
-//! project's edits through Git.
+//! project's edits through Git. `kerf load` takes a `project.kerf` changed
+//! outside Kerf as the project, and `kerf proposals`, `kerf accept` and
+//! `kerf reject` answer what an agent proposed, so a project is worked on
+//! from a terminal with no editor open.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -140,6 +143,30 @@ enum Command {
         #[arg(long = "use", value_name = "TAKE")]
         choose: Option<u32>,
     },
+    /// Take `project.kerf` as it is on disk, changed by hand or by another program, as the project.
+    Load {
+        /// Load it without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List the proposals waiting for an answer, or show what one would change.
+    Proposals {
+        /// A waiting proposal's id.
+        proposal: Option<String>,
+    },
+    /// Accept a proposal: the one waiting, or the one named. The project becomes what it proposed.
+    Accept {
+        /// The proposal's id, where more than one waits.
+        proposal: Option<String>,
+        /// Accept it without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reject a proposal: the one waiting, or the one named. The project stays as it is.
+    Reject {
+        /// The proposal's id, where more than one waits.
+        proposal: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -211,7 +238,7 @@ enum PresetAction {
     },
     /// Inspect the pattern, minimum source lengths, and text slots.
     Show { file: String },
-    /// Stage a proposal replacing a sequence; accept it in the editor.
+    /// Stage a proposal replacing a sequence; accept it with `kerf accept` or in the editor.
     Apply {
         file: String,
         /// SLOT=MEDIA or SLOT=MEDIA@FROM (e.g. slot1=m2@1.5s).
@@ -258,6 +285,37 @@ fn run() -> Result<()> {
         Some(Command::Takes { media, choose }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
             return run_takes(&directory, args.kerfd.as_deref(), media, *choose);
+        }
+        Some(Command::Load { yes }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_load(&directory, args.kerfd.as_deref(), *yes);
+        }
+        Some(Command::Proposals { proposal }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_proposals(&directory, args.kerfd.as_deref(), proposal.as_deref());
+        }
+        Some(Command::Accept { proposal, yes }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            let answer = if *yes {
+                Answer::Accept
+            } else {
+                Answer::AcceptAsked
+            };
+            return run_answer(
+                &directory,
+                args.kerfd.as_deref(),
+                proposal.as_deref(),
+                answer,
+            );
+        }
+        Some(Command::Reject { proposal }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_answer(
+                &directory,
+                args.kerfd.as_deref(),
+                proposal.as_deref(),
+                Answer::Reject,
+            );
         }
         Some(Command::Preset { action }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
@@ -587,7 +645,7 @@ fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Re
         .collab_integrate("ui", &operation_key("sync"), message)
         .map_err(|error| match error.code.as_str() {
             "PROJECTION_DIVERGED" => anyhow!(
-                "project.kerf was changed outside Kerf; open the project in the editor and choose Load from Disk or Keep Editor Version, then sync"
+                "project.kerf was changed outside Kerf; `kerf load` takes it as the project, or open the project in the editor and choose Load from Disk or Keep Editor Version, then sync"
             ),
             _ => runtime_error(error),
         })?;
@@ -626,9 +684,22 @@ fn runtime_for(directory: &Path, kerfd: Option<&Path>) -> Result<RuntimeClient> 
         .with_request_timeout(Duration::from_secs(60)))
 }
 
+/// Refuse to go on while `project.kerf` is not what Kerf has: Kerf reads its own state, not
+/// the file, and writes nothing to the document until one of the two is chosen. Said before
+/// anything runs, so a making is not paid for and then lost.
+fn in_step(state: &kerf_runtime::StateSnapshot) -> Result<()> {
+    if state.projection_status == "diverged" {
+        bail!(
+            "project.kerf was changed outside Kerf, so the project Kerf has is not the one the file says; `kerf load` takes the file as the project (the editor's Load from Disk), and Keep Editor Version there puts back what Kerf has"
+        );
+    }
+    Ok(())
+}
+
 fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
+    in_step(&state)?;
     let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     let models = kerf_engine::recipe::model::Models::load().map_err(|error| anyhow!(error))?;
     let plan = kerf_engine::recipe::plan(&project, directory, id, &models)
@@ -669,6 +740,7 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
 fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u32>) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
+    in_step(&state)?;
     let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     let media = project
         .media(id)
@@ -700,6 +772,223 @@ fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u3
     for take in takes {
         println!("{}", take_line(&take));
     }
+    Ok(())
+}
+
+/// Take `project.kerf` as it is on disk as the project, as the editor's Load from Disk does:
+/// what would change is shown first, and a person says yes. It becomes one revision that undo
+/// does not go back past, and the proposals waiting, made for the project before it, are
+/// dropped.
+fn run_load(directory: &Path, kerfd: Option<&Path>, yes: bool) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    let file = directory.join("project.kerf");
+    let text =
+        fs::read_to_string(&file).with_context(|| format!("cannot read {}", file.display()))?;
+    // Read here first, so what is wrong with it is said with its lines and nothing is asked.
+    let project = kerf_runtime::parse_document(&text)
+        .map_err(|error| anyhow!("{} does not read: {}", file.display(), error.message))?;
+    let printed = kerf_lang::print_document(
+        &project,
+        Catalog::builtin(),
+        kerf_lang::PrintOptions::default(),
+    );
+    let changes = kerf_lang::diff_text(&state.document, &printed);
+    if changes.is_empty() && state.projection_status == "current" {
+        println!(
+            "project.kerf is the project as Kerf has it (revision {}); nothing to load",
+            state.revision
+        );
+        return Ok(());
+    }
+    if changes.is_empty() {
+        println!(
+            "project.kerf says what Kerf has, in other words; loading it writes it as Kerf does"
+        );
+    } else {
+        print!("{changes}");
+        let waiting = waiting(&state).len();
+        println!(
+            "loading it makes this the project, as one revision that undo does not go back past{}",
+            match waiting {
+                0 => String::new(),
+                1 => ", and drops the proposal that waits".to_owned(),
+                several => format!(", and drops the {several} proposals that wait"),
+            }
+        );
+    }
+    if !yes && !confirmed("Load it?") {
+        bail!("not loaded; `kerf load --yes` loads it without asking");
+    }
+    let loaded = runtime
+        .import_projection_request("ui", &operation_key("load"), state.revision)
+        .map_err(runtime_error)?;
+    println!("loaded project.kerf (revision {})", loaded.revision);
+    Ok(())
+}
+
+/// The proposals of `state` that wait for an answer, oldest first.
+fn waiting(state: &kerf_runtime::StateSnapshot) -> Vec<&kerf_runtime::ProposalEntry> {
+    let mut waiting: Vec<_> = state
+        .proposals
+        .iter()
+        .filter(|proposal| proposal.status == "pending")
+        .collect();
+    // A snapshot lists the newest first.
+    waiting.reverse();
+    waiting
+}
+
+/// A waiting proposal as a line of `kerf proposals`: its id and version, who made it and
+/// when, and whether the project has changed since it was made.
+fn proposal_line(proposal: &kerf_runtime::ProposalEntry, revision: u64) -> String {
+    let mut line = format!(
+        "{}  v{}  by {}",
+        proposal.proposal_id, proposal.version, proposal.author.name
+    );
+    if let Some(staged) = &proposal.staged {
+        line.push_str(&format!("  {staged}"));
+    }
+    if proposal.base_revision != revision {
+        line.push_str(&format!(
+            "  (made for revision {}; the project is at {revision})",
+            proposal.base_revision
+        ));
+    }
+    line
+}
+
+/// What a proposal would change, as a person reads it before answering: its line, the
+/// script it runs, and the document's lines before and after.
+fn proposal_shown(proposal: &kerf_runtime::ProposalEntry, revision: u64) -> String {
+    let script = if proposal.source.is_empty() {
+        &proposal.script
+    } else {
+        &proposal.source
+    };
+    format!(
+        "{}\n\n{}\n\n{}",
+        proposal_line(proposal, revision),
+        script.trim_end(),
+        proposal.document_diff.trim_end()
+    )
+}
+
+/// The proposal `id` names among those `waiting`, or the one that waits when none is named.
+/// An id is long, so enough of its start or its end to be one proposal's alone names it
+/// too. What is said otherwise ends with how to `verb` one.
+fn chosen<'a>(
+    waiting: &[&'a kerf_runtime::ProposalEntry],
+    id: Option<&str>,
+    revision: u64,
+    verb: &str,
+) -> Result<&'a kerf_runtime::ProposalEntry> {
+    let listed = || {
+        waiting
+            .iter()
+            .map(|proposal| proposal_line(proposal, revision))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    match (id, waiting) {
+        (_, []) => bail!("no proposal is waiting"),
+        (None, [only]) => Ok(only),
+        (None, _) => bail!(
+            "{} proposals wait; name one, as `kerf {verb} {}`:\n{}",
+            waiting.len(),
+            waiting[0].proposal_id,
+            listed()
+        ),
+        (Some(id), _) => {
+            let exact = waiting
+                .iter()
+                .copied()
+                .find(|proposal| proposal.proposal_id == id);
+            let part: Vec<_> = waiting
+                .iter()
+                .copied()
+                .filter(|proposal| {
+                    proposal.proposal_id.starts_with(id) || proposal.proposal_id.ends_with(id)
+                })
+                .collect();
+            match (exact, part.as_slice()) {
+                (Some(proposal), _) | (None, &[proposal]) => Ok(proposal),
+                (None, []) => bail!("no proposal `{id}` is waiting; these are:\n{}", listed()),
+                (None, _) => bail!(
+                    "`{id}` is part of {} proposals' ids; these wait:\n{}",
+                    part.len(),
+                    listed()
+                ),
+            }
+        }
+    }
+}
+
+fn run_proposals(directory: &Path, kerfd: Option<&Path>, id: Option<&str>) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    let waiting = waiting(&state);
+    if let Some(id) = id {
+        let proposal = chosen(&waiting, Some(id), state.revision, "proposals")?;
+        println!("{}", proposal_shown(proposal, state.revision));
+        return Ok(());
+    }
+    if waiting.is_empty() {
+        println!("no proposal is waiting");
+    }
+    for proposal in waiting {
+        println!("{}", proposal_line(proposal, state.revision));
+    }
+    Ok(())
+}
+
+/// What a person says to a proposal from a terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answer {
+    /// Accept it, once the person has seen it and said yes.
+    AcceptAsked,
+    /// Accept it without asking.
+    Accept,
+    Reject,
+}
+
+/// Answer a waiting proposal as the editor's Accept and Reject do. An accept shows what the
+/// proposal would change and asks first.
+fn run_answer(
+    directory: &Path,
+    kerfd: Option<&Path>,
+    id: Option<&str>,
+    answer: Answer,
+) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    let verb = if answer == Answer::Reject {
+        "reject"
+    } else {
+        "accept"
+    };
+    in_step(&state)?;
+    let waiting = waiting(&state);
+    let proposal = chosen(&waiting, id, state.revision, verb)?;
+    let id = proposal.proposal_id.clone();
+    if answer == Answer::Reject {
+        runtime
+            .reject_proposal_request(&id, "ui", &operation_key("reject"), state.revision)
+            .map_err(runtime_error)?;
+        println!(
+            "rejected {id}; the project is as it was (revision {})",
+            state.revision
+        );
+        return Ok(());
+    }
+    println!("{}", proposal_shown(proposal, state.revision));
+    if answer == Answer::AcceptAsked && !confirmed("Accept it?") {
+        bail!("not accepted; `kerf accept {id} --yes` accepts it without asking");
+    }
+    let accepted = runtime
+        .accept_proposal(&id, "ui", &operation_key("accept"), state.revision)
+        .map_err(runtime_error)?;
+    println!("accepted {id} (revision {})", accepted.revision);
     Ok(())
 }
 
@@ -1232,9 +1521,9 @@ fn operation_key(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_name, create_project, editor_candidates, editor_command, editor_project, media_file,
-        preset_request, requested_project, run_sync, sync_report, take_line, uses_terminal, Args,
-        Command, PresetAction,
+        binary_name, chosen, create_project, editor_candidates, editor_command, editor_project,
+        in_step, media_file, preset_request, proposal_line, proposal_shown, requested_project,
+        run_sync, sync_report, take_line, uses_terminal, waiting, Args, Command, PresetAction,
     };
     use clap::Parser;
     use kerf_collab::git::Pushed;
@@ -1391,6 +1680,159 @@ mod tests {
             panic!("make command");
         };
         assert!(yes);
+    }
+
+    #[test]
+    fn a_project_is_loaded_and_proposals_answered_from_a_terminal() {
+        let command = |words: &[&str]| Args::try_parse_from(words).unwrap().command;
+        assert!(matches!(
+            command(&["kerf", "load"]),
+            Some(Command::Load { yes: false })
+        ));
+        assert!(matches!(
+            command(&["kerf", "load", "--yes", "--dir", "p"]),
+            Some(Command::Load { yes: true })
+        ));
+        assert!(matches!(
+            command(&["kerf", "proposals"]),
+            Some(Command::Proposals { proposal: None })
+        ));
+        let Some(Command::Proposals { proposal }) = command(&["kerf", "proposals", "p-2"]) else {
+            panic!("proposals command");
+        };
+        assert_eq!(proposal.as_deref(), Some("p-2"));
+        // An accept asks unless told not to, as a making does.
+        let Some(Command::Accept { proposal, yes }) = command(&["kerf", "accept"]) else {
+            panic!("accept command");
+        };
+        assert_eq!((proposal, yes), (None, false));
+        let Some(Command::Accept { proposal, yes }) = command(&["kerf", "accept", "p-2", "--yes"])
+        else {
+            panic!("accept command");
+        };
+        assert_eq!((proposal.as_deref(), yes), (Some("p-2"), true));
+        let Some(Command::Reject { proposal }) = command(&["kerf", "reject", "p-2"]) else {
+            panic!("reject command");
+        };
+        assert_eq!(proposal.as_deref(), Some("p-2"));
+        assert!(Args::try_parse_from(["kerf", "reject", "p-2", "--yes"]).is_err());
+    }
+
+    /// A snapshot at `revision` whose proposals are `proposals`, newest first as kerfd lists
+    /// them: each an id, its status, and the revision it was made for.
+    fn snapshot(
+        revision: u64,
+        status: &str,
+        proposals: &[(&str, &str, u64)],
+    ) -> kerf_runtime::StateSnapshot {
+        serde_json::from_value(json!({
+            "document": "kerf 1\n",
+            "timeline": {},
+            "revision": revision,
+            "canUndo": false,
+            "canRedo": false,
+            "duration": 0.0,
+            "pendingProposal": null,
+            "projectionStatus": status,
+            "proposals": proposals.iter().map(|(id, status, base)| json!({
+                "proposalId": id,
+                "status": status,
+                "freshness": "current",
+                "baseRevision": base,
+                "script": "set c1 opacity=0.5\n",
+                "source": "",
+                "documentDiff": "--- before\n+++ after\n+      set opacity=0.5\n",
+                "author": {"kind": "agent", "name": "Claude"},
+                "version": 2,
+                "staged": "2026-11-11T15:12:56Z",
+            })).collect::<Vec<_>>(),
+        }))
+        .expect("a snapshot as kerfd sends one")
+    }
+
+    #[test]
+    fn the_proposals_that_wait_are_listed_oldest_first_and_named_by_part_of_an_id() {
+        let state = snapshot(
+            4,
+            "current",
+            &[
+                ("proposal-b2-3", "pending", 4),
+                ("proposal-a1-2", "rejected", 3),
+                ("proposal-a1-1", "pending", 3),
+            ],
+        );
+        let waiting = waiting(&state);
+        let ids = |proposals: &[&kerf_runtime::ProposalEntry]| {
+            proposals
+                .iter()
+                .map(|proposal| proposal.proposal_id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&waiting), ["proposal-a1-1", "proposal-b2-3"]);
+        assert_eq!(
+            proposal_line(waiting[1], 4),
+            "proposal-b2-3  v2  by Claude  2026-11-11T15:12:56Z"
+        );
+        // One made for a project that has changed since says so.
+        assert_eq!(
+            proposal_line(waiting[0], 4),
+            "proposal-a1-1  v2  by Claude  2026-11-11T15:12:56Z  (made for revision 3; the project is at 4)"
+        );
+        assert_eq!(
+            proposal_shown(waiting[1], 4),
+            "proposal-b2-3  v2  by Claude  2026-11-11T15:12:56Z\n\nset c1 opacity=0.5\n\n--- before\n+++ after\n+      set opacity=0.5"
+        );
+
+        let named = |id: Option<&str>| {
+            chosen(&waiting, id, 4, "accept").map(|proposal| proposal.proposal_id.clone())
+        };
+        assert_eq!(named(Some("proposal-b2-3")).unwrap(), "proposal-b2-3");
+        assert_eq!(named(Some("-3")).unwrap(), "proposal-b2-3");
+        assert_eq!(named(Some("proposal-a")).unwrap(), "proposal-a1-1");
+        let several = named(None).unwrap_err().to_string();
+        assert!(
+            several.starts_with("2 proposals wait; name one, as `kerf accept proposal-a1-1`:"),
+            "{several}"
+        );
+        let both = named(Some("proposal-")).unwrap_err().to_string();
+        assert!(
+            both.starts_with("`proposal-` is part of 2 proposals' ids"),
+            "{both}"
+        );
+        // One that was answered does not wait.
+        let gone = named(Some("proposal-a1-2")).unwrap_err().to_string();
+        assert!(
+            gone.starts_with("no proposal `proposal-a1-2` is waiting; these are:"),
+            "{gone}"
+        );
+
+        // The one that waits needs no name, and none waiting is said.
+        let one = snapshot(4, "current", &[("proposal-b2-3", "pending", 4)]);
+        assert_eq!(
+            chosen(&super::waiting(&one), None, 4, "accept")
+                .unwrap()
+                .proposal_id,
+            "proposal-b2-3"
+        );
+        let none = snapshot(4, "current", &[("proposal-a1-2", "accepted", 3)]);
+        assert_eq!(
+            chosen(&super::waiting(&none), None, 4, "accept")
+                .unwrap_err()
+                .to_string(),
+            "no proposal is waiting"
+        );
+    }
+
+    #[test]
+    fn nothing_is_made_or_answered_while_the_file_is_not_what_kerf_has() {
+        assert!(in_step(&snapshot(1, "current", &[])).is_ok());
+        let refused = in_step(&snapshot(1, "diverged", &[]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("`kerf load` takes the file as the project"),
+            "{refused}"
+        );
     }
 
     #[test]

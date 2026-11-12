@@ -16,6 +16,7 @@ kerf-agent = { path = "../../surfaces/kerf-agent" }
 kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-fetcher = { path = "../../surfaces/kerf-fetcher" }
+kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-mcp = { path = "../../surfaces/kerf-mcp" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }

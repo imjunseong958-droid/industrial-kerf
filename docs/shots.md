@@ -76,6 +76,37 @@ set up, a sequence the project has not, a file it needs that is not there.
 A step that fails, or a last step that writes nothing, leaves no take and the
 media as it was.
 
+### From a terminal alone
+
+Nothing here needs the editor open. A scene and its recipe written as files,
+by hand or by an agent that has only a shell and file tools, are taken into
+the project and made with `kerf`, a person saying yes at each step that
+changes the project:
+
+```bash
+kerf load                # take project.kerf, as edited on disk, as the project
+kerf proposals           # the proposals an agent's `edit` left waiting
+kerf proposals <id>      # what one would change: its script and the document's lines
+kerf accept [<id>]       # accept the one that waits, or the one named
+kerf reject [<id>]       # leave the project as it is
+kerf make m3             # run its recipe
+kerf takes m3            # its takes
+```
+
+- `kerf load` is the editor's Load from Disk. Kerf reads its own state of a
+  project, not the file, so a `project.kerf` changed by hand is not the
+  project until it is loaded: `kerf make`, `kerf takes`, `kerf accept` and
+  `kerf reject` refuse, with that said, before anything runs. Loading shows
+  the lines that change and asks. It becomes one revision that undo does not
+  go back past, and proposals that wait, made for the project as it was, are
+  dropped. A file that does not read is refused with its line, and Kerf keeps
+  what it has.
+- `kerf accept` shows what the proposal would change and asks, as the editor's
+  Accept does. Where more than one waits it wants the one named: by its id,
+  or by enough of its start or end to be one proposal's alone.
+- Each asks at the terminal, and `--yes` does not ask. With no terminal to
+  ask at and no `--yes`, nothing is loaded or accepted.
+
 ## Takes
 
 A model does not give the same shot twice, so a making never writes over the
