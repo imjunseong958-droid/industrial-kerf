@@ -288,7 +288,8 @@ model that answers with its guide. Where it stopped, and what was done:
   to the pixel. On a GPU it was not measured.
 - *A shadow fell on the sky.* A backdrop in depth takes the shadow of what
   stands before it, and no clip can refuse one. The skill leaves a backdrop
-  out of depth.
+  out of depth. A take made of a guide with such a shadow was none the
+  worse for it (below), so no clip is given a way to refuse one.
 
 A new project's empty first sequence made every proposal's check not valid,
 for no fault of the edit, and most of all here, where the guide is a sequence
@@ -297,12 +298,56 @@ information (`sequence.empty`) and blocks nothing: rendering it is still
 refused where that is asked for, and the full check fails the rows it cannot
 measure of it.
 
-Left as they are: `x` is in frame widths
-where `y` and `z` are in frame heights, so a directional light's `x` weighs
-more in a wide frame; and what `kerf-comfy --describe` lists under `more`
+How fine a guide has to be was then asked of the model's takes and not of
+the guide's frames, on 2026-11-12: one scene, one prompt and one seed, with
+one thing of the guide changed at a time, each made by Wan 2.1 VACE 1.3B as
+65 frames at 832x480. The same guide, prompt and seed gave the same take to
+the pixel, in two projects an hour apart, so what differs between two takes
+here is the guide's doing. A making took 88 to 97 s, 83 to 91 of them the
+server's, whatever the guide; the guide's drawing is the time beside it.
+
+| The guide | Drawn in | What its take kept |
+|---|---|---|
+| As the skill lays it out: a sky out of depth, a far floor, a body with a cabin crossing it, a light with a shadow | 3.5 s | the car in its place, on its path, at its size |
+| One box for the car | | place, path and size; a van, not a car |
+| The floor drawn over the car, its shadow left: the fault mended above | 3.4 s | the path alone; a small flat car where the shadow was |
+| A floor truly higher than the car's foot | 3.6 s | place and path; a car as tall as what showed of it |
+| A backdrop in depth, the car's shadow on it | 6.1 s | place, path and size; the horizon where the backdrop meets the floor |
+| The same, the light casting no shadow | 2.4 s | the same, to the tree beside the car |
+| The light's `x` 0.288 for 0.5, its share of the frame's height for its width | 3.7 s | place, path and size |
+| No lights | 2.0 s | place, path, size and kind |
+| Drawn at 416x240 | 1.1 s | place, path, size and kind |
+
+What was decided of it:
+
+- *A guide is drawn right, and no finer.* The one thing that changed what
+  the model made was a guide that showed the wrong thing: the floor over
+  the car. That is mended. A model draws what a guide shows of a thing, and
+  leaves out what it hides.
+- *No plainer render for guides.* With no lights a guide was drawn 1.5 s
+  sooner, and at half the size 2.4 s sooner, of a making of 90, where the
+  server alone differs by 8 s from one making to the next. Neither take was
+  the worse, so a guide may go without lights; nothing is built to draw one
+  plainer.
+- *No clip refuses a shadow, and `x` stays in frame widths.* A shadow on a
+  backdrop and a light turned by the frame's shape each made other scenery
+  and the same car. A backdrop is still left out of depth: in depth it took
+  6.1 s to draw for 3.5, and where it meets the floor is the horizon.
+- *A thing wants its outline, and that is all.* One box was a van, and a
+  body with a cabin a car, on the same path. Flat colours did as well as
+  lit ones.
+- *A guide that is touched makes another take.* Two guides 41 dB apart,
+  which the eye does not tell, gave takes 23 dB apart: the same car, another
+  road and field. A take is judged for place, path and size, and one that
+  is wanted is kept by leaving its guide as it is.
+
+This is one scene, one seed and a small model. What a larger one keeps of a
+guide is not known from it, and depth or normal passes wait on that.
+
+Left as it is: what `kerf-comfy --describe` lists under `more`
 includes the server's file names, which a person may want out of what an
-agent reads. The agent still asks for a making in words, and looks again to
-learn that it was made.
+agent reads. Where the person is asked for a making, the agent looks again
+to learn that it was made.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the

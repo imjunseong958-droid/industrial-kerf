@@ -12,8 +12,10 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
 - A guide is read for layout, motion, and camera, not for finish. Flat colors
   and plain solids that differ clearly from each other guide better than
   detail; what the picture should look like goes in the prompt. A model keeps
-  where things are and how they move, and takes their color and kind from the
-  prompt alone: a white box is a dark boat until the prompt says a white hull.
+  where things are and how they move, and takes their color from the prompt
+  alone: a white box is a dark boat until the prompt says a white hull. What
+  kind of thing it is comes from the prompt and its outline: one box for a
+  car was a van, and a low body with a cabin on it was a car.
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
   length of the shot. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
@@ -25,11 +27,12 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   1.0 where z is 1.6. A clip stands on it with its foot there. What of a
   clip is under the floor is hidden, and a model leaves out what is hidden.
 - Leave a far backdrop, a sky, out of depth: a plain clip on the lowest
-  track draws flat behind the scene, unlit, and takes no shadow. In depth it
-  takes the shadow of whatever stands before it.
+  track draws flat behind the scene, unlit. In depth it takes longer to
+  draw, and where it meets the floor is the take's horizon.
 - A camera's `z` moves it forward, `pan` turns it right, and `tilt` up. A
   directional light's `x y z` is the way it shines. With a light that casts
-  a `shadow`, add an `ambient` one, or what faces away is black.
+  a `shadow`, add an `ambient` one, or what faces away is black. A guide may
+  go without lights: a model lights the shot itself, and made as good a take.
 - Look at the guide's first, middle, and last frame before writing the
   recipe: every clip in frame, nothing crossing by accident, the move plain.
 - The recipe is the `render` line and a `generate` line: the prompt,
@@ -46,5 +49,8 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
 - After a making, look at the take (`media` with `sheet`), not at the guide,
   and say what the model kept and what it lost. Change one thing for the
   next take: the guide for layout and motion, the prompt for the look, the
-  seed for another roll of the same. A take that was better is chosen again
-  with its `use` line.
+  seed for another roll of the same. Any change to the guide, one too small
+  to see among them, brings other scenery with it: judge a take against the
+  one before for place, path, and size, and keep a take that is wanted by
+  leaving its guide as it is. A take that was better is chosen again with
+  its `use` line.
