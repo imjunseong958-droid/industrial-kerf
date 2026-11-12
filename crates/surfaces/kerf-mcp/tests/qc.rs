@@ -390,3 +390,34 @@ fn missing_media_blocks_and_is_counted() {
         )
     );
 }
+
+#[test]
+fn cuts_nothing_has_heard_are_said_not_to_be_checked() {
+    // A sound clip cut out of the middle of its media, which nothing has transcribed.
+    let cut = project(
+        "media add m1 path=\"talk.wav\" rate=24 dur=00:01:00:00 audio=2ch@48000\n\
+         track add A1 audio\n\
+         overwrite media=m1 src=00:00:10:00 at=00:00:00:00 dur=00:00:04:00 on=A1 as=a1",
+    );
+    let report = run(&cut);
+    let unheard = with(&report, "cut.unheard");
+    assert_eq!(unheard.len(), 1, "{:#?}", report.findings);
+    assert_eq!(unheard[0].severity, Severity::Info);
+    assert_eq!(unheard[0].entity.as_deref(), Some("m1"));
+    assert_eq!(unheard[0].value, Some(2.0));
+    assert!(
+        unheard[0]
+            .message
+            .starts_with("2 cuts of `m1` were not checked for words"),
+        "{}",
+        unheard[0].message
+    );
+    // The row does not read as though it had looked and found none.
+    let words = row(&report, "cut.in_word");
+    assert!(words.passed);
+    assert_eq!(words.value, "0 in words · 2 not checked");
+    assert_eq!(words.count, 0);
+    // With no sound cut there is nothing to say.
+    let clean = run(&project(""));
+    assert_eq!(row(&clean, "cut.in_word").value, "0 in words");
+}

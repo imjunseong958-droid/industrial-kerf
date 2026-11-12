@@ -191,6 +191,20 @@ impl CheckReport {
             rows: rows.iter().map(|def| def.row(&findings, rows)).collect(),
             ..Summary::default()
         };
+        // A check that could not look at every cut says so beside what it found: `0 in words`
+        // of cuts nothing heard would read as none.
+        let unheard: f64 = findings
+            .iter()
+            .filter(|finding| finding.code == crate::lint::CUT_UNHEARD)
+            .filter_map(|finding| finding.value)
+            .sum();
+        if unheard > 0.0 {
+            for row in &mut summary.rows {
+                if row.code == CUTS_IN_WORDS.code {
+                    row.value = format!("{} · {unheard} not checked", row.value);
+                }
+            }
+        }
         summary.recount();
         let valid = !findings
             .iter()
