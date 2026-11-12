@@ -968,6 +968,34 @@ fn look_hears_what_the_sequence_says() {
 }
 
 #[test]
+fn a_transcript_nothing_here_can_make_is_refused_before_any_work() {
+    // With a model set, the test above hears the sequence.
+    if std::env::var_os("KERF_WHISPER_MODEL").is_some() {
+        return;
+    }
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    for arguments in [
+        json!({"transcript": true}),
+        json!({"media": "m1", "transcript": true}),
+    ] {
+        let refused = error(&router, "look", arguments);
+        assert_eq!(refused["code"], "CAPABILITY_UNAVAILABLE", "{refused}");
+        assert_eq!(refused["details"]["capability"], "transcription");
+    }
+    // The program's sound was not rendered for a transcript nobody could make of it.
+    let rendered: Vec<String> = std::fs::read_dir(directory.path().join(".kerf/cache/derived"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("program-sound"))
+        .collect();
+    assert!(rendered.is_empty(), "{rendered:?}");
+}
+
+#[test]
 fn look_says_how_loud_the_sequence_plays() {
     let Some((_directory, router)) = router() else {
         return;

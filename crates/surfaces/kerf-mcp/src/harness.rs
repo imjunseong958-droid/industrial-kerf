@@ -1359,6 +1359,11 @@ impl KerfMcpRouter {
                 format!("look shows at most {MAX_LOOK_FRAMES} frames at a time"),
             ));
         }
+        // A transcript nothing here can make is refused now, not after the media is indexed
+        // or the program's sound rendered for it.
+        if input.transcript {
+            kerf_engine::transcription_available().map_err(engine_error)?;
+        }
         if input.media.is_none()
             && input.at.is_empty()
             && !input.transcript

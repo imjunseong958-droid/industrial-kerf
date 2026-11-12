@@ -288,6 +288,15 @@ pub fn cached_transcripts(src: &str, cache: &DerivativeCache) -> Result<Vec<Tran
     Ok(transcripts)
 }
 
+/// Whether a transcript can be made here: whisper.cpp and a model are found.
+/// What is missing is the error, as transcribing would give it; asked first,
+/// it is said before a media is indexed or a program's sound is rendered for
+/// a transcript nothing can make.
+pub fn transcription_available() -> Result<()> {
+    let range = TimeRange::new(0.0, 1.0)?;
+    resolve_whisper_config(&TranscriptionOptions::new(range)).map(drop)
+}
+
 /// The options a transcript was made with, but for its range.
 fn options_but_range(options: &Value) -> Value {
     let mut options = options.clone();
@@ -1159,7 +1168,7 @@ fn resolve_whisper_config(options: &TranscriptionOptions) -> Result<WhisperConfi
         .ok_or_else(|| {
             EngineError::capability_unavailable(
                 "transcription",
-                "whisper.cpp model is not configured; set KERF_WHISPER_MODEL or pass a model",
+                "whisper.cpp has no model to transcribe with; set KERF_WHISPER_MODEL to a ggml model file",
             )
         })?;
     let model_identity = SourceIdentity::from_path(&model).map_err(|error| {
