@@ -66,7 +66,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, and how an edit has the media be another of them; with no arguments, `models` lists the models a recipe's `generate` can name, and none listed means none is set up. \
+With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so a person runs it, not you. With `media`, a media that names a recipe lists its `takes`, each making kept, and how an edit has the media be another of them; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
@@ -1291,11 +1291,17 @@ impl KerfMcpRouter {
                     result["toMake"] = json!(to_make);
                 }
             }
-            // The models a recipe's `generate` can name: those the person has set up.
-            if let Ok(models) = kerf_engine::recipe::model::Models::load() {
-                if models.names().next().is_some() {
-                    result["models"] = json!(models.names().collect::<Vec<_>>());
+            // The models a recipe's `generate` can name: those the person has set up, each
+            // with what their file says it takes. Nothing is run to learn it.
+            match kerf_engine::recipe::model::Models::load() {
+                Ok(models) => {
+                    let listed = models_listed(&models);
+                    if !listed.is_empty() {
+                        result["models"] = json!(listed);
+                    }
                 }
+                // A file that cannot be read would refuse a making too: the person mends it.
+                Err(error) => result["modelsError"] = json!(error.to_string()),
             }
             return Ok(result);
         }
@@ -3001,6 +3007,60 @@ fn find_properties(words: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The models set up, as `look` lists them: each by the name a `generate` line gives it,
+/// with what the person's models file says it takes. `size` is written as a line writes it,
+/// and `guide` is the `render` line that draws a guide for it, with no more than it reads.
+fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
+    models
+        .names()
+        .map(|name| {
+            let mut listed = json!({"name": name});
+            let Some(takes) = models.takes(name) else {
+                return listed;
+            };
+            if let Some(about) = &takes.about {
+                listed["about"] = json!(about);
+            }
+            let size = takes
+                .size
+                .map(|(width, height)| format!("{width}x{height}"));
+            let rate = takes.rate.map(fps_text);
+            if let Some(size) = &size {
+                listed["size"] = json!(size);
+            }
+            if let Some(rate) = takes.rate {
+                listed["rate"] = json!(rate);
+            }
+            if let Some(seconds) = takes.seconds {
+                listed["seconds"] = json!(seconds);
+            }
+            if let Some(reads) = &takes.reads {
+                listed["reads"] = json!(reads);
+            }
+            if !takes.more.is_empty() {
+                listed["more"] = json!(takes.more);
+            }
+            for (name, value) in &takes.other {
+                // What the file says under a name of its own never replaces one of these.
+                if listed.get(name).is_none() && name != "guide" {
+                    listed[name] = value.clone();
+                }
+            }
+            if takes.follows_a_guide() == Some(true) && (size.is_some() || rate.is_some()) {
+                let mut line = "render <sequence> {guide.mp4}".to_owned();
+                if let Some(size) = size {
+                    line.push_str(&format!(" size={size}"));
+                }
+                if let Some(rate) = rate {
+                    line.push_str(&format!(" rate={rate}"));
+                }
+                listed["guide"] = json!(line);
+            }
+            listed
+        })
+        .collect()
+}
+
 /// Whether a file's extension says it is footage: what an import takes.
 fn is_footage(path: &std::path::Path) -> bool {
     const FOOTAGE: [&str; 16] = [
@@ -3246,6 +3306,52 @@ sequence s1 rate=24 size=1920x1080
     clip c2 media=m1 src=00:00:10:00 at=00:00:04:00 dur=00:00:04:00
   track A1 audio
 ";
+
+    #[test]
+    fn models_are_listed_with_what_each_takes() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("models.json");
+        std::fs::write(
+            &file,
+            r#"{
+                "vace": {
+                    "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"],
+                    "takes": {
+                        "about": "follows a guide",
+                        "size": [832, 480],
+                        "rate": 16,
+                        "seconds": 5.0625,
+                        "reads": ["guide", "ref"],
+                        "more": {"steps": 20},
+                        "frames": {"most": 81, "step": 4},
+                        "name": "another",
+                        "guide": "run anything"
+                    }
+                },
+                "ntsc": {"run": ["a", "{request}"], "takes": {"rate": 23.976, "reads": ["guide"]}},
+                "words": {"run": ["b", "{request}"], "takes": {"size": [1024, 1024], "reads": []}},
+                "dawn": {"run": ["c", "{request}"]}
+            }"#,
+        )
+        .unwrap();
+        let models = kerf_engine::recipe::model::Models::read(&file).unwrap();
+        assert_eq!(
+            json!(models_listed(&models)),
+            json!([
+                // One that has not said is its name alone.
+                {"name": "dawn"},
+                // A rate that is not whole is written as a line writes it.
+                {"name": "ntsc", "rate": 23.976, "reads": ["guide"],
+                 "guide": "render <sequence> {guide.mp4} rate=23.976"},
+                {"name": "vace", "about": "follows a guide", "size": "832x480", "rate": 16.0,
+                 "seconds": 5.0625, "reads": ["guide", "ref"], "more": {"steps": 20},
+                 "frames": {"most": 81, "step": 4},
+                 "guide": "render <sequence> {guide.mp4} size=832x480 rate=16"},
+                // One that follows no guide is given no line to draw one.
+                {"name": "words", "size": "1024x1024", "reads": []},
+            ])
+        );
+    }
 
     #[test]
     fn changed_range_covers_old_and_new_positions() {

@@ -182,7 +182,13 @@ An agent's tools run no recipe. `look` tells it which media want making
 (`toMake`: a file that is not there, or something its take was made from
 changed, by name, or a recipe that cannot run, with why), a media's takes, and
 the models set up, and that a person makes them, so an agent writes the scene
-and the recipe, adds the media line, and asks.
+and the recipe, adds the media line, and asks. What a model takes (the size
+and the rate a guide for it is drawn at, the longest shot, whether it follows
+a guide) is said beside its program in the person's models file, under
+`takes`, and `look` lists it with the model. Nothing is run to learn it: a
+model's program can write its own entry for the person to keep, as
+`kerf-comfy --describe` does from its workflow, and no tool of an agent's
+starts one.
 
 Not here yet: passes of Kerf's own sequences (depth, normals, object ids) for
 a model that reads them, which a 3D renderer gives today; a way to choose a

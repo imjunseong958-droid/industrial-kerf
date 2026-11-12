@@ -172,9 +172,70 @@ shell. A hosted model's program holds its own key; Kerf passes none.
 
 The request is the whole contract, so a model that takes only a prompt and a
 first frame, one that follows a guide video, and one that takes depth are the
-same to Kerf: each program reads the fields its model has a use for. `look`
-with no arguments lists the models set up, as `models`, so an agent writes
-`generate model=` with a name that exists.
+same to Kerf: each program reads the fields its model has a use for.
+
+### What a model takes
+
+A recipe written for a model wants to know the model: how large a picture it
+makes, at what rate, for how long, and whether it follows a guide at all.
+Beside `run`, a model's entry can say so under `takes`:
+
+```json
+{
+  "dawn": {
+    "run": ["dawn-adapter", "--request", "{request}"],
+    "takes": {
+      "about": "follows a guide video, a reference picture, or the prompt alone",
+      "size": [832, 480],
+      "rate": 16,
+      "seconds": 5,
+      "reads": ["guide", "ref"],
+      "more": { "steps": 20, "strength": 1.0 }
+    }
+  }
+}
+```
+
+| | |
+|---|---|
+| `about` | What it makes, in a line. |
+| `size` | The picture it makes, width and height: the size a guide for it is drawn at, and the most a `size=` asks of it. |
+| `rate` | The frames a second it makes: the rate a guide for it is drawn at. |
+| `seconds` | The longest shot it makes at once. |
+| `reads` | The files of a `generate` line it has a use for, of `guide`, `first`, `last` and `ref`. An empty list is a model that takes a prompt alone. |
+| `more` | The other names a line can set for it, each with the value it has when the line does not. |
+
+Each is there only where the person says it, and anything else under `takes`
+is kept as it is written. Kerf holds no making to it: the program still asks
+its model as it sees fit, and says so where that is not what the line asked.
+
+It is written in the file, and no program is asked for it, because `look`
+is an agent's tool and an agent's tools run nothing: reading it starts no
+program, cannot hang on one, and cannot be taken by a program that does not
+know the question for a request to make something. A model's program can
+write the entry, though, for the person to put there: `kerf-comfy` does
+([below](#a-model-on-a-comfyui-server)).
+
+`look` with no arguments lists the models set up, as `models`, each with what
+its entry says it takes and, for one that follows a guide, the `render` line
+that draws a guide for it, so an agent writes `generate model=` with a name
+that exists and a guide of the model's own size and rate:
+
+```json
+"models": [
+  {
+    "name": "dawn",
+    "about": "follows a guide video, a reference picture, or the prompt alone",
+    "size": "832x480", "rate": 16, "seconds": 5,
+    "reads": ["guide", "ref"],
+    "more": { "steps": 20, "strength": 1.0 },
+    "guide": "render <sequence> {guide.mp4} size=832x480 rate=16"
+  }
+]
+```
+
+A model with a name and nothing else has not said what it takes. A models
+file that cannot be read is `modelsError`, with what is wrong in it.
 
 With no model set up, a recipe that asks one is refused when a person tries
 to make it:
@@ -196,6 +257,28 @@ kerf-comfy`); the packages do not carry it.
   "vace": { "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"] }
 }
 ```
+
+`kerf-comfy --workflow wan-vace --describe` prints that entry whole, with
+[what the model takes](#what-a-model-takes) as its workflow has it, to put
+under the model's name. It reads the workflow and asks no server:
+
+```json
+{
+  "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"],
+  "takes": {
+    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone.",
+    "size": [832, 480],
+    "rate": 16,
+    "seconds": 5.0625,
+    "frames": { "most": 81, "step": 4 },
+    "reads": ["guide", "ref"],
+    "more": { "steps": 20, "cfg": 6.0, "strength": 1.0, "…": "…" }
+  }
+}
+```
+
+`more` is each value the workflow sets that a `generate` line can replace.
+Print it again when the workflow changes.
 
 The server is `COMFY_URL`, with `COMFY_API_KEY` if it asks for a key. The key
 goes in the header `X-API-Key` unless `COMFY_API_HEADER` names another, and

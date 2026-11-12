@@ -63,6 +63,13 @@ on `main`; its section here becomes the release's notes on GitHub
   took 54 s to draw took 8. A picture of another shape fills the size, with
   what is over cut off evenly. What `render` draws no longer has a sound
   track.
+- A model's entry in `~/.kerf/models.json` can say what the model takes,
+  under `takes`: the picture it makes, its rate, its longest shot, and the
+  files it reads. An agent's `look` lists it with the model, with the
+  `render` line that draws a guide at that size and rate, so a recipe is
+  written for the model it asks. `kerf-comfy --workflow wan-vace --describe`
+  prints the entry for a workflow
+  ([docs/shots.md](docs/shots.md#what-a-model-takes)).
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

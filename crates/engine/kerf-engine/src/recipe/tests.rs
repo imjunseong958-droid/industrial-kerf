@@ -245,6 +245,75 @@ fn the_models_are_the_persons_own_file() {
 }
 
 #[test]
+fn a_models_entry_can_say_what_the_model_takes() {
+    let folder = tempfile::tempdir().unwrap();
+    let some = models(
+        folder.path(),
+        r#"{
+            "vace": {
+                "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"],
+                "takes": {
+                    "about": "follows a guide",
+                    "size": [832, 480],
+                    "rate": 16,
+                    "seconds": 5.0625,
+                    "reads": ["guide", "ref"],
+                    "more": {"steps": 20, "strength": 1.0},
+                    "frames": {"most": 81, "step": 4}
+                }
+            },
+            "words": {"run": ["words", "{request}"], "takes": {"reads": []}},
+            "dawn": {"run": ["dawn-adapter", "{request}"]}
+        }"#,
+    );
+    let vace = some.takes("vace").unwrap();
+    assert_eq!(vace.about.as_deref(), Some("follows a guide"));
+    assert_eq!(
+        (vace.size, vace.rate, vace.seconds),
+        (Some((832, 480)), Some(16.0), Some(5.0625))
+    );
+    assert_eq!(
+        vace.reads.as_deref(),
+        Some(&["guide".to_owned(), "ref".to_owned()][..])
+    );
+    assert_eq!(vace.follows_a_guide(), Some(true));
+    assert_eq!(vace.more["steps"], 20);
+    // What Kerf has no name for is kept as it is written.
+    assert_eq!(vace.other["frames"]["most"], 81);
+    // A model that reads no file takes a prompt alone; one that does not say is not known.
+    assert_eq!(some.takes("words").unwrap().follows_a_guide(), Some(false));
+    assert_eq!(some.takes("dawn"), None);
+    assert_eq!(some.takes("dusk"), None);
+    // Saying what it takes changes nothing of how it is run.
+    assert_eq!(
+        some.command("vace").unwrap(),
+        ["kerf-comfy", "--workflow", "wan-vace", "{request}"]
+    );
+    let wrong = |takes: &str| {
+        let file = folder.path().join("wrong.json");
+        std::fs::write(
+            &file,
+            format!(r#"{{"vace": {{"run": ["a", "{{request}}"], "takes": {takes}}}}}"#),
+        )
+        .unwrap();
+        Models::read(&file).unwrap_err().to_string()
+    };
+    assert!(wrong("16").contains("model `vace`: `takes` is not an object"));
+    assert!(
+        wrong(r#"{"size": "832x480"}"#).contains("`size` in `takes` is not a width and a height")
+    );
+    assert!(wrong(r#"{"size": [832, 0]}"#).contains("`size` in `takes`"));
+    assert!(wrong(r#"{"rate": 0}"#).contains("`rate` in `takes` is not a number above 0"));
+    assert!(
+        wrong(r#"{"seconds": "five"}"#).contains("`seconds` in `takes` is not a number above 0")
+    );
+    assert!(wrong(r#"{"reads": ["guide", "depth"]}"#)
+        .contains("not a list of the files a `generate` line gives: guide, first, last, ref"));
+    assert!(wrong(r#"{"about": 3}"#).contains("`about` in `takes` is not text"));
+    assert!(wrong(r#"{"more": ["steps"]}"#).contains("`more` in `takes` is not an object"));
+}
+
+#[test]
 fn a_request_says_where_every_file_is() {
     let made = ["guide.mp4".to_owned()];
     let words = [

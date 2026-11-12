@@ -9,6 +9,10 @@
 //! ```json
 //! { "vace": { "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"] } }
 //! ```
+//!
+//! `kerf-comfy --workflow NAME|FILE --describe` prints that entry for a
+//! workflow, with what its model takes beside how it is run, and asks no
+//! server.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -19,7 +23,28 @@ use kerf_comfy::server::{Address, Server};
 use kerf_comfy::workflow::{Workflow, BUNDLED};
 use kerf_comfy::{make, Patience};
 
-const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, or kerf-comfy --list";
+const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, kerf-comfy --workflow NAME|FILE --describe, or kerf-comfy --list";
+
+/// A model's entry in a person's models file for the workflow `named`: how
+/// this program is run for it, and what its model takes. A workflow in a
+/// file is named by where the file is, so the entry holds from any folder.
+fn entry(named: &str, workflow: &Workflow) -> serde_json::Value {
+    let program = std::env::current_exe()
+        .map(|program| program.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "kerf-comfy".to_owned());
+    let file = Path::new(named);
+    let named = if file.is_file() {
+        std::path::absolute(file)
+            .map(|file| file.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| named.to_owned())
+    } else {
+        named.to_owned()
+    };
+    serde_json::json!({
+        "run": [program, "--workflow", named, "{request}"],
+        "takes": workflow.takes(),
+    })
+}
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -33,6 +58,7 @@ fn main() -> ExitCode {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut workflow = None;
+    let mut describe = false;
     let mut requests = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -46,12 +72,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 }
                 return Ok(());
             }
+            "--describe" => describe = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return Ok(());
             }
             _ => requests.push(arg),
         }
+    }
+    if describe {
+        let (true, Some(named)) = (requests.is_empty(), workflow) else {
+            return Err(USAGE.to_owned());
+        };
+        let entry = entry(&named, &Workflow::named(&named)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&entry).map_err(|error| error.to_string())?
+        );
+        eprintln!("kerf-comfy: that is a model's entry; put it under the model's name in ~/.kerf/models.json");
+        return Ok(());
     }
     let ([request], Some(workflow)) = (requests.as_slice(), workflow) else {
         return Err(USAGE.to_owned());

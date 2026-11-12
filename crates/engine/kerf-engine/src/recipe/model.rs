@@ -32,6 +32,17 @@
 //! a shell, writes what it has to say to stderr, and ends well once the
 //! file at `out` is written. A project cannot name a model's program: that
 //! file is the person's, outside any project.
+//!
+//! Beside `run`, a model's entry can say what the model takes ([`Takes`]):
+//! the picture it makes, its rate, the longest shot, the files it reads.
+//! Kerf asks no program for it, so whoever writes a recipe, an agent
+//! included, learns it without anything being run:
+//!
+//! ```json
+//! { "dawn": { "run": ["dawn-adapter", "--request", "{request}"],
+//!             "takes": { "size": [832, 480], "rate": 16, "seconds": 5,
+//!                        "reads": ["guide", "ref"] } } }
+//! ```
 
 use crate::error::{EngineError, Result};
 use serde_json::{json, Value};
@@ -241,12 +252,111 @@ impl Ask {
     }
 }
 
+/// The files a `generate` line hands a model, by the names it gives them.
+pub const FILES: [&str; 4] = ["guide", "first", "last", "ref"];
+
+/// What a model takes, as the person's models file says it under `takes`.
+/// Each part is there only where the file says it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Takes {
+    /// What it makes, in a line.
+    pub about: Option<String>,
+    /// The picture it makes: the size a guide for it is drawn at, and the
+    /// most a `size=` asks of it.
+    pub size: Option<(u32, u32)>,
+    /// The frames a second it makes.
+    pub rate: Option<f64>,
+    /// The longest shot it makes at once, in seconds.
+    pub seconds: Option<f64>,
+    /// The files it has a use for, of [`FILES`]: none is a model that takes
+    /// a prompt alone.
+    pub reads: Option<Vec<String>>,
+    /// The other names a `generate` line can set for it, each with the
+    /// value it has when the line does not.
+    pub more: serde_json::Map<String, Value>,
+    /// Whatever else the file says of it, as it is written.
+    pub other: serde_json::Map<String, Value>,
+}
+
+impl Takes {
+    /// Read a model's `takes`. What is wrong is said by its name.
+    fn parse(value: &Value) -> std::result::Result<Self, String> {
+        let fields = value
+            .as_object()
+            .ok_or("`takes` is not an object, such as {\"size\": [832, 480], \"rate\": 16}")?;
+        let mut takes = Self::default();
+        let positive = |name: &str, value: &Value| {
+            value
+                .as_f64()
+                .filter(|number| number.is_finite() && *number > 0.0)
+                .ok_or_else(|| format!("`{name}` in `takes` is not a number above 0"))
+        };
+        for (name, value) in fields {
+            match name.as_str() {
+                "about" => {
+                    takes.about = Some(
+                        value
+                            .as_str()
+                            .ok_or("`about` in `takes` is not text")?
+                            .to_owned(),
+                    );
+                }
+                "size" => {
+                    takes.size = Some(
+                        serde_json::from_value::<(u32, u32)>(value.clone())
+                            .ok()
+                            .filter(|(width, height)| *width > 0 && *height > 0)
+                            .ok_or(
+                                "`size` in `takes` is not a width and a height, such as [832, 480]",
+                            )?,
+                    );
+                }
+                "rate" => takes.rate = Some(positive(name, value)?),
+                "seconds" => takes.seconds = Some(positive(name, value)?),
+                "reads" => {
+                    let reads: Vec<String> = serde_json::from_value(value.clone())
+                        .ok()
+                        .filter(|reads: &Vec<String>| {
+                            reads.iter().all(|read| FILES.contains(&read.as_str()))
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "`reads` in `takes` is not a list of the files a `generate` line gives: {}",
+                                FILES.join(", ")
+                            )
+                        })?;
+                    takes.reads = Some(reads);
+                }
+                "more" => {
+                    takes.more = value
+                        .as_object()
+                        .ok_or("`more` in `takes` is not an object of names and their values")?
+                        .clone();
+                }
+                _ => {
+                    takes.other.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        Ok(takes)
+    }
+
+    /// Whether it follows a guide, where the file says what it reads.
+    pub fn follows_a_guide(&self) -> Option<bool> {
+        self.reads
+            .as_ref()
+            .map(|reads| reads.iter().any(|read| read == "guide"))
+    }
+}
+
 /// The models a person has set up, each a program that is handed a request.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Models {
     /// The file that names them, there or not.
     file: PathBuf,
     commands: BTreeMap<String, Vec<String>>,
+    /// What each takes, for those the file says it of.
+    takes: BTreeMap<String, Takes>,
 }
 
 impl Models {
@@ -272,6 +382,7 @@ impl Models {
         let none = Self {
             file: file.to_path_buf(),
             commands: BTreeMap::new(),
+            takes: BTreeMap::new(),
         };
         let text = match std::fs::read_to_string(file) {
             Ok(text) => text,
@@ -288,6 +399,7 @@ impl Models {
         let named: BTreeMap<String, Value> =
             serde_json::from_str(&text).map_err(|error| wrong(error.to_string()))?;
         let mut commands = BTreeMap::new();
+        let mut takes = BTreeMap::new();
         for (name, model) in named {
             let command: Vec<String> = model
                 .get("run")
@@ -303,9 +415,28 @@ impl Models {
                     "model `{name}`'s `run` names no `{REQUEST}`, so its program is never told what is asked"
                 )));
             }
+            if let Some(said) = model.get("takes") {
+                let said =
+                    Takes::parse(said).map_err(|what| wrong(format!("model `{name}`: {what}")))?;
+                takes.insert(name.clone(), said);
+            }
             commands.insert(name, command);
         }
-        Ok(Self { commands, ..none })
+        Ok(Self {
+            commands,
+            takes,
+            ..none
+        })
+    }
+
+    /// The file that names them, there or not.
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
+
+    /// What model `name` takes, where the file says.
+    pub fn takes(&self, name: &str) -> Option<&Takes> {
+        self.takes.get(name)
     }
 
     /// The names of the models set up.
