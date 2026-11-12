@@ -860,9 +860,32 @@ impl Script<'_> {
                     accepted = true;
                 }
             }
-            if !accepted {
-                return Err(fields.error(arg, format!("no target track takes `{key}`")));
+            if accepted {
+                continue;
             }
+            // A track that is not there takes nothing, and that is what is
+            // wrong with the line: placing the clip says so, with the tracks
+            // there are and the line that adds this one.
+            if tracks
+                .iter()
+                .any(|track| sequence.track(track.as_str()).is_none())
+            {
+                continue;
+            }
+            // What `set` writes on a clip that is there, not a property a
+            // track takes.
+            if matches!(key, "parent" | "enabled" | "caption" | "retime" | "angle") {
+                let clip = names.first().map_or("<clip>", |id| id.as_str());
+                return Err(fields.error(
+                    arg,
+                    format!(
+                        "`{key}=` is set on a clip once it is placed, not where it is placed: \
+                         after this line, `set {clip} {key}={}`",
+                        fields.text(arg).unwrap_or_default()
+                    ),
+                ));
+            }
+            return Err(fields.error(arg, format!("no target track takes `{key}`")));
         }
         fields.finish(1)?;
         let targets = tracks
