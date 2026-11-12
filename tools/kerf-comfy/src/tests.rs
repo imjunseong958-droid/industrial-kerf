@@ -449,7 +449,8 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
         "{:?}",
         started.elapsed()
     );
-    assert_eq!(said.last().map(String::as_str), Some(stopped.as_str()));
+    // It is the error the program ends with, said once as its last line, and not said before.
+    assert!(!said.contains(&stopped), "{said:?}");
     let kept = kept.lock().unwrap();
     let body = |line: &str| -> serde_json::Value {
         let asked = kept.iter().find(|asked| asked.line == line).unwrap();

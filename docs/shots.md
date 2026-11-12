@@ -85,11 +85,13 @@ name.
 A making can be stopped: **Stop Making** on the media in the editor's bin,
 which is there in place of Make from Recipe… for as long as it runs, or
 Ctrl-C in the terminal. The step that is running is asked to end before it is
-made to. On macOS and Linux its program gets SIGTERM, and five seconds to
-finish in, so that a program that has asked a server for a shot can take its
-job back; one still running after that is killed. On Windows there is nothing
-to ask with, and it is ended outright. A stopped making leaves no take and
-the media as it was.
+made to. On macOS and Linux its
+program gets SIGTERM, and five seconds to finish in, so that a program that
+has asked a server for a shot can take its job back and say so; one still
+running after that is killed. On Windows there is nothing to ask with, and it
+is ended outright. A stopped making leaves no take, nothing of one, and the
+media as it was. A second Ctrl-C ends `kerf` and its step at once, and what
+the step asked a server for goes on there.
 
 ### From a terminal alone
 
@@ -216,8 +218,8 @@ The program asks its model however that model is asked, writes the file at
 success. It runs supervised, as a recipe's `run` does, and never through a
 shell. A hosted model's program holds its own key; Kerf passes none.
 
-When a making is stopped, the program is sent SIGTERM (a terminal's Ctrl-C
-reaches it as SIGINT) and has five seconds to end by itself. That is when it
+When a making is stopped, the program is sent SIGTERM and has five seconds to
+end by itself. That is when it
 takes back what it asked a server for, so that nothing goes on being made,
 and billed, that nobody will fetch. A program that a script starts gets that
 time only if the script hands over to it (`exec program "$@"`): once the

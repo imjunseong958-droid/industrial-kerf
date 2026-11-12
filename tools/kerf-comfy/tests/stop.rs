@@ -146,8 +146,11 @@ fn the_program_takes_its_job_back_on_sigterm() {
     );
     assert!(!output.status.success());
     let said = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        said.contains("asked to stop: took job job-1 back from the server"),
+    // Once: a making's progress shows each line the program says.
+    assert_eq!(
+        said.matches("asked to stop: took job job-1 back from the server")
+            .count(),
+        1,
         "{said}"
     );
 

@@ -244,9 +244,8 @@ pub fn make(
     let made = loop {
         if stopped_within(stop, patience.pause) {
             server.cancel(&id);
-            let taken = format!("asked to stop: took job {id} back from the server");
-            say(&taken);
-            return Err(taken);
+            // Said once, as the program's last line, like any end that is not a take.
+            return Err(format!("asked to stop: took job {id} back from the server"));
         }
         let waited = started.elapsed();
         if waited > patience.most {

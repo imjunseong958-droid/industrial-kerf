@@ -70,9 +70,8 @@ fn asked_to_stop() -> Arc<AtomicBool> {
 }
 
 /// Say `line` on stderr, where Kerf reads it. Whoever ran this may be gone
-/// by the time it is said, as a terminal's `kerf` is once Ctrl-C has reached
-/// it: there is then nobody to tell, and that is no failure of this
-/// program's.
+/// by the time it is said, as a terminal's `kerf` is after a second Ctrl-C:
+/// there is then nobody to tell, and that is no failure of this program's.
 fn say(line: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr(), "{line}");
