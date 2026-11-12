@@ -62,6 +62,11 @@ pub struct ComposeOptions {
     pub frame_folder: Option<std::path::PathBuf>,
 }
 
+/// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn
+/// again, given the same [`Compositor::frame_key`]. Anything kept by frame keys outside this crate
+/// is kept under it.
+pub const DRAW_STAMP: &str = env!("KERF_DRAW_STAMP");
+
 pub use alone::{draws_effect, effects_on_picture, Alone};
 pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
 

@@ -6,7 +6,9 @@
 //! `kerf_engine::qc`, and titles and captions are read against what is
 //! behind them from frames drawn for it. That takes about as long as a draft
 //! render, so MCP tools keep using the fast [`check`] and the editor's QC
-//! runs this one.
+//! runs this one. What it measures of the sound and of each frame is kept
+//! in the project (`.kerf/cache/qc`), so the next run measures only what an
+//! edit changed, and finds what measuring all of it would.
 //!
 //! Each measured finding sits at its worst sample: the loudest short-term
 //! window of a programme that is too loud, the stretch over the true-peak

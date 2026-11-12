@@ -176,6 +176,168 @@ fn strobing_is_flashing_and_a_black_segment_is_found() {
     assert!(high > 900.0 && high <= 940.0, "white is near 940: {high}");
 }
 
+/// A pass after an edit draws and measures the frames the edit changed,
+/// takes the rest from what the pass before kept in the project, and finds
+/// what a pass that measures every frame finds.
+#[test]
+fn a_later_pass_measures_only_what_changed_and_finds_the_same() {
+    use kerf_engine::qc::picture_qc_with_progress;
+    if !ffmpeg_present() {
+        return;
+    }
+    let media = tempfile::tempdir().expect("temp directory");
+    let path = media.path().join("ramp.mp4");
+    // Four seconds getting lighter, then one of black.
+    generate(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x90:r=24:d=5,format=yuv420p,\
+             geq=lum='if(lt(T,4),40+N*2,16)':cb=128:cr=128",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+        ],
+        &path,
+    );
+    let document = |second: &str| {
+        project(&format!(
+            "kerf 1\nproject name=\"qc\"\n\
+             media s path=\"{}\" rate=24 dur=120f video=160x90\n\
+             sequence s1 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip a media=s src=0f at=0f dur=48f\n\
+             {second}\
+             \x20   clip c media=s src=96f at=96f dur=24f\n",
+            path.display()
+        ))
+    };
+    let before = document("\x20   clip b media=s src=48f at=48f dur=48f\n");
+    // The second clip plays the black instead: two seconds of the program change.
+    let after = document("\x20   clip b media=s src=96f at=48f dur=24f\n");
+    let pass = |project: &Project, dir: &Path| {
+        let mut progress = Vec::new();
+        let qc = picture_qc_with_progress(project, None, dir, &CancellationToken::new(), |done| {
+            progress.push(done)
+        })
+        .expect("measures");
+        (qc, progress)
+    };
+
+    let kept = tempfile::tempdir().expect("temp directory");
+    let (first, progress) = pass(&before, kept.path());
+    assert_eq!(first.frames, 120);
+    assert!(progress[0] < 0.05, "every frame is measured: {progress:?}");
+    assert_eq!(first.black.ranges.len(), 1, "{:?}", first.black);
+
+    // Nothing has changed: nothing is drawn, and the findings are the same.
+    let (again, progress) = pass(&before, kept.path());
+    assert_eq!(again, first);
+    assert_eq!(progress, [1.0], "no frame is measured again");
+
+    // After the edit, the two seconds it changed are measured: 48 frames of 120.
+    let (edited, progress) = pass(&after, kept.path());
+    assert!(
+        (progress[0] - 73.0 / 120.0).abs() < 1e-9,
+        "72 frames are known: {progress:?}"
+    );
+    assert_eq!(progress.len(), 49, "{progress:?}");
+    let fresh = tempfile::tempdir().expect("temp directory");
+    let (measured, _) = pass(&after, fresh.path());
+    assert_eq!(edited, measured, "as a pass that measures every frame finds");
+    assert_ne!(edited, first);
+    // The black now runs from where the second clip starts.
+    assert_eq!(first.black.ranges[0].start, 4.0, "{:?}", first.black);
+    assert_eq!(edited.black.ranges[0].start, 2.0, "{:?}", edited.black);
+
+    // And back: the frames of the first pass are still kept.
+    let (back, progress) = pass(&before, kept.path());
+    assert_eq!(back, first);
+    assert_eq!(progress, [1.0]);
+
+    // A footage file that changes is not what was measured, though the
+    // document is the same.
+    generate(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:s=160x90:r=24:d=5",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+        ],
+        &path,
+    );
+    let (replaced, progress) = pass(&before, kept.path());
+    assert!(progress[0] < 0.05, "every frame is measured: {progress:?}");
+    assert!(replaced.black.passed, "{:?}", replaced.black);
+}
+
+/// The sound a programme's pass heard is kept with the project and given
+/// again while the programme and its files are the same.
+#[test]
+fn a_sound_measurement_is_kept_until_the_programme_or_its_files_change() {
+    if !ffmpeg_present() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("temp directory");
+    let path = tone(dir.path());
+    let document = |gain: &str| {
+        project(&format!(
+            "kerf 1\nproject name=\"loud\"\n\
+             media t path=\"{path}\" rate=24 dur=144f audio=2ch@48000\n\
+             sequence s1 rate=24 size=160x90 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip a media=t src=0f at=0f dur=144f\n{gain}"
+        ))
+    };
+    let hear = |project: &Project| {
+        let mut progress = Vec::new();
+        let loudness = kerf_engine::loudness::measure_program_with_progress(
+            project,
+            None,
+            dir.path(),
+            &CancellationToken::new(),
+            |done| progress.push(done),
+        )
+        .expect("measures");
+        (loudness, progress)
+    };
+    let (first, progress) = hear(&document(""));
+    assert!(progress.len() > 1, "measured: {progress:?}");
+    let (again, progress) = hear(&document(""));
+    assert_eq!(again, first);
+    assert_eq!(progress, [1.0], "kept, not measured");
+    // Six decibels down is another programme.
+    let (quiet, progress) = hear(&document("\x20     set gain=-6\n"));
+    assert!(progress.len() > 1, "measured: {progress:?}");
+    assert!((quiet.integrated - (first.integrated - 6.0)).abs() < 0.2);
+    // And the same programme over another file is not the one kept.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let amplitude = 10_f64.powf(-33.0 / 20.0);
+    let channel = format!("{amplitude}*sin(2*PI*1000*t)");
+    generate(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("aevalsrc={channel}|{channel}:s=48000:d=6"),
+            "-c:a",
+            "pcm_s16le",
+        ],
+        Path::new(&path),
+    );
+    let (replaced, progress) = hear(&document(""));
+    assert!(progress.len() > 1, "measured: {progress:?}");
+    assert!((replaced.integrated - -33.0).abs() <= 0.5, "{replaced:?}");
+}
+
 #[test]
 fn a_prores_master_probes_back_as_prores_hq_with_24_bit_pcm() {
     if !ffmpeg_present() {
