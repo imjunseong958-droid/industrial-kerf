@@ -111,6 +111,49 @@ fn insert_gives_each_target_the_properties_of_its_kind() {
         "insert media=m1 dur=24f at=01:00:07:00 on=V1 gain=-6",
     );
     assert!(error.message.contains("no target track takes `gain`"));
+
+    // A track that is not there takes nothing: the line is refused for the
+    // track, with the tracks there are and the line that adds it, whatever
+    // else it sets.
+    let error = fails(
+        &base(),
+        "overwrite media=m1 dur=24f at=01:00:07:00 on=V2 as=c9 y=120",
+    );
+    assert_eq!(error.code, "ref.missing", "{error:?}");
+    assert!(
+        error.message.contains(
+            "sequence `s1` has no track `V2` (it has V1, A1); `track add V2 video` adds one"
+        ),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.span.map(|span| span.line), Some(1), "{error:?}");
+
+    // What `set` writes on a clip that is there is said to be that, with
+    // the line to write.
+    let error = fails(
+        &base(),
+        "overwrite media=m1 dur=24f at=01:00:07:00 on=V1 as=c9 parent=c1",
+    );
+    assert!(
+        error.message.contains(
+            "`parent=` is set on a clip once it is placed, not where it is placed: \
+             after this line, `set c9 parent=c1`"
+        ),
+        "{}",
+        error.message
+    );
+    let error = fails(
+        &base(),
+        "insert media=m1 dur=24f at=01:00:07:00 on=V1 enabled=false",
+    );
+    assert!(
+        error
+            .message
+            .contains("after this line, `set <clip> enabled=false`"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
