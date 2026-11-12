@@ -266,6 +266,44 @@ fn three_clips_cross_in_the_order_of_each_pixel() {
     assert_eq!(pixel(&frame, 186, 90), [255, 0, 0]);
 }
 
+/// A floor tipped back 84 degrees, with a square 1.6 frame heights away standing over it. The
+/// floor's middle is at `floor`, `y` and `z` in frame heights. Tipped so, the floor is 0.105 lower
+/// for every frame height nearer (tan 6 degrees), so the middles (0.75, 4) and (1.065, 1) are of
+/// one plane, which is 0.15 below the square's foot where the square is.
+fn standing(floor: (&str, &str)) -> String {
+    let (y, z) = floor;
+    format!(
+        "  track V1 video\n    clip floor gen=solid@1 at=0f dur=24f\n      set color=#00ff00 three_d=true rotate_x=-84 y={y} z={z} scale=16\n  track V2 video\n    clip box gen=solid@1 at=0f dur=24f\n      set color=#ff0000 three_d=true scale=0.3 y=0.7 z=1.6\n"
+    )
+}
+
+/// The rows of column `x` that are red.
+fn red_rows(frame: &Frame, x: u32) -> Vec<u32> {
+    (0..frame.height)
+        .filter(|y| {
+            let [r, g, _] = pixel(frame, x, *y);
+            r > 200 && g < 60
+        })
+        .collect()
+}
+
+#[test]
+fn a_floor_whose_middle_is_nearer_does_not_draw_over_what_stands_on_it() {
+    // With the floor's middle far off, it is behind the square by its middle as by every pixel,
+    // and the two draw one after the other: all of the square shows.
+    let far = red_rows(&frame(&standing(("0.75", "4")), 0), 160);
+    assert!(far.len() > 20, "{far:?}");
+    // The same plane with its middle nearer than the square: by their middles the floor is in
+    // front. They do not cross, and the square is over the floor all the way: it shows as it did.
+    let near = red_rows(&frame(&standing(("1.065", "1")), 0), 160);
+    assert_eq!(near, far);
+    // A floor that is truly higher than the square's foot hides what of the square is under it,
+    // as it did: this one cuts the square 0.137 above its middle... so most of it is under.
+    let sunk = red_rows(&frame(&standing(("0.75", "1")), 0), 160);
+    assert!(!sunk.is_empty() && sunk.len() < far.len(), "{sunk:?}");
+    assert_eq!(sunk.first(), far.first());
+}
+
 /// A wall filling the frame at z = 0, a small square in front of it, and a light. As `CASTER` has it,
 /// the square is 32 by 18 pixels, from x = -80 to -48 about the middle of the frame and y = -9 to 9,
 /// and 45 pixels nearer.

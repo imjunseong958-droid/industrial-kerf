@@ -275,10 +275,17 @@ model that answers with its guide. Where it stopped, and what was done:
   a media line. Each take now carries its whole line.
 - *A media not made yet read as a file system error.* It says that it is not
   made, and who makes it.
-- *A floor drew over the boat on it.* Clips in depth that do not cross draw
-  in the order of how far their middles are, and a floor's middle is nearer
-  than what stands on its far half. The skill says how to place one; drawing
-  every clip in depth by the pixel would end it, and is not built.
+- *A floor drew over the boat on it.* Clips in depth that did not cross drew
+  in the order of how far their middles are, and a floor's middle can be
+  nearer than what stands on its far half. Clips that cross were already
+  drawn by the pixel, the nearest last (`three_d::composite_by_depth`). So
+  are two now whose middles may have them the wrong way round: neither is
+  all on the far side of the other's plane (`Plane::surely_behind`). A
+  floor whose middle was nearer than a car on it hid the whole car and left
+  its shadow, and the model drew a small flat car where the shadow was.
+  Drawn by the pixel a frame of that guide costs what it did, 69 ms at
+  832x480 on four cores, and a scene whose middles had it right is the same
+  to the pixel. On a GPU it was not measured.
 - *A shadow fell on the sky.* A backdrop in depth takes the shadow of what
   stands before it, and no clip can refuse one. The skill leaves a backdrop
   out of depth.

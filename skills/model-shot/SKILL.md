@@ -18,11 +18,12 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   length of the shot. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
 - In depth x runs right, y down, and z away from the viewer, in frame
-  heights (x in frame widths); `depth` gives a clip sides. Clips in depth
-  that do not cross draw in the order of how far away their middles are,
-  so a floor whose middle is nearer than what stands on it draws over it.
-  Make a floor a large clip tipped back and set far off, below the middle
-  (`rotate_x=-84 y=0.75 z=4 scale=16`), with all that stands on it nearer.
+  heights (x in frame widths); `depth` gives a clip sides. What is nearer
+  at a place in the picture is drawn over what is farther there. Make a
+  floor a large clip tipped back, below the middle (`rotate_x=-84 y=0.75
+  z=4 scale=16`). Tipped so, it is 0.1 lower for each frame height nearer:
+  1.0 where z is 1.6. A clip stands on it with its foot there. What of a
+  clip is under the floor is hidden, and a model leaves out what is hidden.
 - Leave a far backdrop, a sky, out of depth: a plain clip on the lowest
   track draws flat behind the scene, unlit, and takes no shadow. In depth it
   takes the shadow of whatever stands before it.
