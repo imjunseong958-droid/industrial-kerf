@@ -7,7 +7,7 @@ use kerf_model::Id;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,58 @@ const LEVEL_QUEUE_CAPACITY: usize = 64;
 /// more on a busy machine. One that never opens must not hold playback up for
 /// good, so the clock then runs without it.
 const DEVICE_OPEN_WAIT: Duration = Duration::from_secs(60);
+/// How long a device may go without asking for sound, while the program
+/// plays, before the clock stops waiting for it. A device asks every few
+/// milliseconds; one that has not for this long is not playing, whatever it
+/// says, and the clock its frames advance would hold the picture and the
+/// meter still with it.
+const DEVICE_QUIET_AFTER: Duration = Duration::from_millis(400);
+/// How long a device that went quiet has to take sound at its own rate
+/// before it keeps the time again: long enough that one that only stutters
+/// is left alone.
+const DEVICE_STEADY_FOR: Duration = Duration::from_secs(1);
+/// The share of its own rate a device has to take sound at to count as
+/// steady.
+const DEVICE_STEADY_SHARE: f64 = 0.9;
+
+/// How often a playing output says what it is doing, with `KERF_PLAYBACK_STATS`
+/// set.
+const STATS_PERIOD: Duration = Duration::from_millis(250);
+
+/// With `KERF_PLAYBACK_STATS` set, each output says on stderr which device it
+/// opened and how long that took, what it was told to do, and four times a
+/// second while playing where its clock is, what keeps it, and how often the
+/// device has asked for sound.
+fn stats_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("KERF_PLAYBACK_STATS").is_some())
+}
+
+/// The time since this process first asked, which every stats line carries
+/// so the lines of outputs open side by side can be put in order.
+fn since_start() -> Duration {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
+}
+
+/// Which output a stats line is about: outputs are numbered as they open.
+fn next_output_number() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+macro_rules! stats {
+    ($number:expr, $($line:tt)*) => {
+        if stats_on() {
+            eprintln!(
+                "playback audio[{}] +{:.3}s: {}",
+                $number,
+                since_start().as_secs_f64(),
+                format_args!($($line)*)
+            );
+        }
+    };
+}
 
 #[derive(Clone)]
 pub(crate) struct AudioRuntime {
@@ -51,17 +103,27 @@ impl AudioRuntime {
         thread::Builder::new()
             .name("kerf-audio".into())
             .spawn(move || {
+                let number = next_output_number();
+                stats!(number, "opening (enabled {enabled})");
+                let asked = Instant::now();
                 let output = make_audio_output(worker_clock.clone(), enabled);
+                stats!(
+                    number,
+                    "opened in {:.3}s: {}",
+                    asked.elapsed().as_secs_f64(),
+                    output.describe()
+                );
                 worker_clock.opened();
-                AudioWorker::new(
+                let mut worker = AudioWorker::new(
                     timeline,
                     receiver,
                     worker_clock,
                     output,
                     worker_levels,
                     enabled,
-                )
-                .run();
+                );
+                worker.number = number;
+                worker.run();
             })
             .map_err(|error| {
                 PlaybackError::Audio(format!("failed to start audio worker: {error}"))
@@ -150,6 +212,12 @@ struct AudioClockState {
     /// The output is still opening, so nothing can be heard or metered yet:
     /// time waits, and playing starts where it was asked to, with its sound.
     opening: AtomicBool,
+    /// How often the device has asked for sound, playing or not, and when it
+    /// last did, in nanoseconds of [`since_start`] (0 before the first).
+    device_calls: AtomicU64,
+    last_device_call: AtomicU64,
+    /// The frames the device has asked for, playing or not.
+    device_frames: AtomicU64,
     anchor: Mutex<ClockAnchor>,
 }
 
@@ -169,6 +237,9 @@ impl AudioClock {
                 playing: AtomicBool::new(false),
                 source: AtomicU8::new(ClockSource::MonotonicFallback as u8),
                 opening: AtomicBool::new(false),
+                device_calls: AtomicU64::new(0),
+                last_device_call: AtomicU64::new(0),
+                device_frames: AtomicU64::new(0),
                 anchor: Mutex::new(ClockAnchor {
                     position: 0.0,
                     started: None,
@@ -288,6 +359,37 @@ impl AudioClock {
 
     fn is_playing(&self) -> bool {
         self.inner.playing.load(Ordering::Acquire)
+    }
+
+    /// The device asked for `frames` of sound.
+    #[cfg(feature = "native-audio")]
+    fn record_device_call(&self, frames: u64) {
+        self.inner.device_calls.fetch_add(1, Ordering::Release);
+        self.inner
+            .device_frames
+            .fetch_add(frames, Ordering::Release);
+        self.device_heard_from();
+    }
+
+    /// The device opened or asked for sound just now.
+    #[cfg(feature = "native-audio")]
+    fn device_heard_from(&self) {
+        let now = since_start().as_nanos().max(1) as u64;
+        self.inner.last_device_call.store(now, Ordering::Release);
+    }
+
+    /// How often the device has asked for sound, and how long ago it last
+    /// did (or opened, before it has).
+    fn device_calls(&self) -> (u64, Option<Duration>) {
+        let calls = self.inner.device_calls.load(Ordering::Acquire);
+        let last = self.inner.last_device_call.load(Ordering::Acquire);
+        let ago = (last > 0).then(|| since_start().saturating_sub(Duration::from_nanos(last)));
+        (calls, ago)
+    }
+
+    /// The frames the device has asked for, playing or not.
+    fn device_frames(&self) -> u64 {
+        self.inner.device_frames.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "native-audio")]
@@ -486,6 +588,12 @@ trait AudioOutput {
     fn is_alive(&self) -> bool {
         true
     }
+    /// Whether a device takes the sound, and its frames advance the clock.
+    fn is_device(&self) -> bool {
+        false
+    }
+    /// What the sound goes to, for the stats.
+    fn describe(&self) -> String;
 }
 
 struct AudioWorker {
@@ -508,6 +616,16 @@ struct AudioWorker {
     /// The program's level and loudness, measured as it is mixed.
     levels: LevelTap,
     loudness: Option<LoudnessMeter>,
+    /// The device, set aside while it is quiet: the clock runs without it
+    /// and `output` only paces the mix, until the device takes sound
+    /// steadily again.
+    quiet_device: Option<Box<dyn AudioOutput>>,
+    /// Since when the quiet device has been asking for sound again, and the
+    /// frames it had asked for by then.
+    asking_since: Option<(Instant, u64)>,
+    /// Which output the stats lines name, and when the last one was written.
+    number: u32,
+    stats_written: Instant,
 }
 
 impl AudioWorker {
@@ -536,7 +654,115 @@ impl AudioWorker {
             sounds,
             levels,
             loudness: None,
+            quiet_device: None,
+            asking_since: None,
+            number: 0,
+            stats_written: Instant::now(),
         }
+    }
+
+    /// A device that stops asking for sound, and says nothing of it, would
+    /// stop the clock its frames advance, and with it the picture and the
+    /// meter. Once it has been quiet for [`DEVICE_QUIET_AFTER`] while the
+    /// program plays, the clock keeps monotonic time from where the device
+    /// left it and the mix is paced by that clock; the device stays open,
+    /// playing nothing, and keeps the time again once it has taken sound at
+    /// its own rate for [`DEVICE_STEADY_FOR`].
+    fn watch_device(&mut self) {
+        let (_, ago) = self.clock.device_calls();
+        let Some(ago) = ago else {
+            return;
+        };
+        if self.quiet_device.is_none() {
+            if self.playing
+                && self.output.is_device()
+                && self.clock.source() == ClockSource::AudioDevice
+                && ago > DEVICE_QUIET_AFTER
+            {
+                self.set_device_aside(ago);
+            }
+            return;
+        }
+        let frames = self.clock.device_frames();
+        match self.asking_since {
+            _ if ago > DEVICE_QUIET_AFTER => self.asking_since = None,
+            None => self.asking_since = Some((Instant::now(), frames)),
+            Some((since, before)) if since.elapsed() >= DEVICE_STEADY_FOR => {
+                let wanted = since.elapsed().as_secs_f64()
+                    * f64::from(self.output.sample_rate())
+                    * DEVICE_STEADY_SHARE;
+                if frames.saturating_sub(before) as f64 >= wanted {
+                    self.take_device_back();
+                } else {
+                    self.asking_since = Some((Instant::now(), frames));
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Carry on from where the quiet device left the clock, without it.
+    fn set_device_aside(&mut self, quiet_for: Duration) {
+        eprintln!(
+            "kerf playback: the sound device has not asked for sound for {} ms; keeping time without it",
+            quiet_for.as_millis()
+        );
+        let pacer = NullAudioOutput::new(
+            self.output.sample_rate(),
+            self.output.channels(),
+            self.clock.clone(),
+        )
+        .because("the device went quiet".into());
+        let device = std::mem::replace(&mut self.output, Box::new(pacer));
+        self.clock.set_monotonic_clock();
+        self.position = self.clock.now();
+        self.stop_decoder();
+        // What it did not take is not played late when it asks again.
+        device.clear();
+        self.quiet_device = Some(device);
+        self.asking_since = None;
+        stats!(self.number, "device set aside at {:.4}", self.position);
+    }
+
+    /// The device takes sound again: play through it from where the clock
+    /// is, and let its frames advance the clock.
+    fn take_device_back(&mut self) {
+        let Some(device) = self.quiet_device.take() else {
+            return;
+        };
+        eprintln!("kerf playback: the sound device asks for sound again; keeping time by it");
+        self.asking_since = None;
+        self.position = self.clock.now();
+        self.stop_decoder();
+        device.clear();
+        device.set_volume(self.volume);
+        device.set_muted(self.muted);
+        self.output = device;
+        #[cfg(feature = "native-audio")]
+        self.clock.set_device_clock(self.output.sample_rate());
+        stats!(self.number, "device taken back at {:.4}", self.position);
+    }
+
+    /// Where the clock is and what the device has done, a few times a second
+    /// while playing.
+    fn write_stats(&mut self) {
+        if !stats_on() || self.stats_written.elapsed() < STATS_PERIOD {
+            return;
+        }
+        self.stats_written = Instant::now();
+        let (calls, ago) = self.clock.device_calls();
+        stats!(
+            self.number,
+            "playing at {:.4} by {:?}, device calls {calls}, last {}, frames played {}, queued {}",
+            self.clock.now(),
+            self.clock.source(),
+            ago.map_or("never".into(), |ago| format!(
+                "{:.3}s ago",
+                ago.as_secs_f64()
+            )),
+            self.clock.inner.played_frames.load(Ordering::Acquire),
+            self.output.queued_frames(),
+        );
     }
 
     fn run(mut self) {
@@ -561,12 +787,28 @@ impl AudioWorker {
             if !self.output.is_alive() {
                 self.replace_lost_output();
             }
+            if self
+                .quiet_device
+                .as_ref()
+                .is_some_and(|device| !device.is_alive())
+            {
+                // Gone while it was set aside: try the default device now.
+                self.quiet_device = None;
+                self.replace_lost_output();
+            }
+            self.watch_device();
             if self.playing {
                 self.decode_until_buffered();
+                self.write_stats();
                 thread::sleep(AUDIO_TICK);
             }
         }
         self.stop_decoder();
+        stats!(
+            self.number,
+            "closing, device calls {}",
+            self.clock.device_calls().0
+        );
     }
 
     /// The device stopped calling back, so its frames no longer advance the
@@ -574,15 +816,29 @@ impl AudioWorker {
     /// on the monotonic clock when there is none, so playback still reaches
     /// its end.
     fn replace_lost_output(&mut self) {
+        stats!(
+            self.number,
+            "the device is gone, at {:.4}",
+            self.clock.now()
+        );
         self.clock.set_monotonic_clock();
         self.position = self.clock.now();
         self.stop_decoder();
         self.output = make_audio_output(self.clock.clone(), self.enabled);
         self.output.set_volume(self.volume);
         self.output.set_muted(self.muted);
+        stats!(self.number, "carrying on with {}", self.output.describe());
     }
 
     fn handle_command(&mut self, command: AudioCommand) -> bool {
+        match &command {
+            AudioCommand::Open(_) => stats!(self.number, "open"),
+            AudioCommand::Play(position) => stats!(self.number, "play from {position:.4}"),
+            AudioCommand::Pause => stats!(self.number, "pause at {:.4}", self.clock.now()),
+            AudioCommand::Seek(position) => stats!(self.number, "seek to {position:.4}"),
+            AudioCommand::SetSolo(tracks) => stats!(self.number, "solo {}", tracks.len()),
+            AudioCommand::SetVolume(_) | AudioCommand::SetMuted(_) | AudioCommand::Shutdown => {}
+        }
         match command {
             AudioCommand::Open(timeline) => {
                 self.stop_decoder();
@@ -767,6 +1023,8 @@ struct NullAudioOutput {
     channels: usize,
     clock: AudioClock,
     pace: Mutex<NullPace>,
+    /// Why there is no device, for the stats.
+    why: String,
 }
 
 #[derive(Default)]
@@ -785,7 +1043,13 @@ impl NullAudioOutput {
             channels,
             clock,
             pace: Mutex::new(NullPace::default()),
+            why: "none asked for".into(),
         }
+    }
+
+    fn because(mut self, why: String) -> Self {
+        self.why = why;
+        self
     }
 
     fn pace(&self) -> std::sync::MutexGuard<'_, NullPace> {
@@ -833,11 +1097,17 @@ impl AudioOutput for NullAudioOutput {
     fn set_volume(&self, _volume: f32) {}
 
     fn set_muted(&self, _muted: bool) {}
+
+    fn describe(&self) -> String {
+        format!("no device ({})", self.why)
+    }
 }
 
 #[cfg(feature = "native-audio")]
 struct CpalAudioOutput {
     buffer: Arc<AudioBuffer>,
+    /// The device's name and the format it is given.
+    opened: String,
     sample_rate: u32,
     channels: usize,
     /// Set when the stream reports its device gone.
@@ -880,31 +1150,53 @@ impl AudioOutput for CpalAudioOutput {
     fn is_alive(&self) -> bool {
         !self.lost.load(Ordering::Acquire)
     }
+
+    fn is_device(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> String {
+        self.opened.clone()
+    }
 }
 
 fn make_audio_output(_clock: AudioClock, _enabled: bool) -> Box<dyn AudioOutput> {
+    let output = NullAudioOutput::new(48_000, 2, _clock.clone());
     #[cfg(feature = "native-audio")]
     if _enabled {
-        if let Some(output) = CpalAudioOutput::try_new(_clock.clone()) {
-            return Box::new(output);
-        }
+        return match CpalAudioOutput::try_new(_clock) {
+            Ok(output) => Box::new(output),
+            Err(why) => Box::new(output.because(why)),
+        };
     }
-    Box::new(NullAudioOutput::new(48_000, 2, _clock))
+    Box::new(output)
 }
 
 #[cfg(feature = "native-audio")]
 impl CpalAudioOutput {
-    fn try_new(clock: AudioClock) -> Option<Self> {
+    /// The default device playing the queue, or why there is none.
+    fn try_new(clock: AudioClock) -> Result<Self, String> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
         #[cfg(windows)]
         keep_com_loaded();
         let host = cpal::default_host();
-        let device = host.default_output_device()?;
-        let supported = device.default_output_config().ok()?;
+        let device = host
+            .default_output_device()
+            .ok_or("no default output device")?;
+        let supported = device
+            .default_output_config()
+            .map_err(|error| format!("no output format: {error}"))?;
         let sample_rate = supported.sample_rate().0.max(1);
         let channels = supported.channels().max(1) as usize;
         let config = supported.config();
+        let opened = format!(
+            "device {:?} of {:?}, {:?} {sample_rate} Hz {channels} ch, buffer {:?}",
+            device.name().unwrap_or_default(),
+            host.id(),
+            supported.sample_format(),
+            supported.buffer_size(),
+        );
         let buffer = Arc::new(AudioBuffer::new(sample_rate, channels));
         let callback_buffer = Arc::clone(&buffer);
         let callback_clock = clock.clone();
@@ -926,7 +1218,7 @@ impl CpalAudioOutput {
                     error_callback,
                     None,
                 )
-                .ok()?,
+                .map_err(|error| format!("{opened} did not open: {error}"))?,
             cpal::SampleFormat::I16 => device
                 .build_output_stream(
                     &config,
@@ -936,7 +1228,7 @@ impl CpalAudioOutput {
                     error_callback,
                     None,
                 )
-                .ok()?,
+                .map_err(|error| format!("{opened} did not open: {error}"))?,
             cpal::SampleFormat::U16 => device
                 .build_output_stream(
                     &config,
@@ -946,13 +1238,17 @@ impl CpalAudioOutput {
                     error_callback,
                     None,
                 )
-                .ok()?,
-            _ => return None,
+                .map_err(|error| format!("{opened} did not open: {error}"))?,
+            format => return Err(format!("{opened}: no output in {format:?}")),
         };
-        stream.play().ok()?;
+        stream
+            .play()
+            .map_err(|error| format!("{opened} did not start: {error}"))?;
+        clock.device_heard_from();
         clock.set_device_clock(sample_rate);
-        Some(Self {
+        Ok(Self {
             buffer,
+            opened,
             sample_rate,
             channels,
             lost,
@@ -983,6 +1279,7 @@ fn write_output<T>(data: &mut [T], channels: usize, buffer: &AudioBuffer, clock:
 where
     T: cpal::Sample + cpal::FromSample<f32>,
 {
+    clock.record_device_call((data.len() / channels.max(1)) as u64);
     if !clock.is_playing() {
         for sample in data {
             *sample = T::from_sample(0.0);
@@ -1080,6 +1377,10 @@ mod tests {
         fn is_alive(&self) -> bool {
             false
         }
+
+        fn describe(&self) -> String {
+            "a device that went away".into()
+        }
     }
 
     #[cfg(feature = "native-audio")]
@@ -1127,6 +1428,142 @@ mod tests {
             .send(AudioCommand::Shutdown)
             .expect("worker running");
         thread.join().expect("worker exits");
+    }
+
+    /// A device that takes what it is given and plays none of it, unless
+    /// the test asks for sound in its place.
+    #[cfg(feature = "native-audio")]
+    struct SilentDevice;
+
+    #[cfg(feature = "native-audio")]
+    impl super::AudioOutput for SilentDevice {
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+
+        fn channels(&self) -> usize {
+            2
+        }
+
+        fn push(&self, _samples: &[f32]) {}
+
+        fn queued_frames(&self) -> usize {
+            usize::MAX
+        }
+
+        fn clear(&self) {}
+
+        fn set_volume(&self, _volume: f32) {}
+
+        fn set_muted(&self, _muted: bool) {}
+
+        fn is_device(&self) -> bool {
+            true
+        }
+
+        fn describe(&self) -> String {
+            "a device that plays nothing".into()
+        }
+    }
+
+    #[cfg(feature = "native-audio")]
+    #[test]
+    fn a_device_that_goes_quiet_stops_keeping_the_time_until_it_asks_steadily_again() {
+        use super::{AudioCommand, AudioWorker, DEVICE_QUIET_AFTER, DEVICE_STEADY_FOR};
+        use crate::PlaybackTimeline;
+        use std::sync::mpsc;
+
+        let clock = AudioClock::new();
+        clock.device_heard_from();
+        clock.set_device_clock(48_000);
+        clock.play_at(1.0);
+        let (commands, receiver) = mpsc::sync_channel(4);
+        let timeline =
+            PlaybackTimeline::from_project(&kerf_model::Project::default()).expect("timeline");
+        let worker_clock = clock.clone();
+        let levels = super::LevelTap::new(clock.clone());
+        let worker = thread::spawn(move || {
+            let mut worker = AudioWorker::new(
+                timeline,
+                receiver,
+                worker_clock,
+                Box::new(SilentDevice),
+                levels,
+                false,
+            );
+            worker.playing = true;
+            worker.position = 1.0;
+            worker.run()
+        });
+        let wait_for = |source: ClockSource, within: Duration| {
+            let deadline = Instant::now() + within;
+            while clock.source() != source && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            clock.source()
+        };
+
+        // The device asks for nothing: its clock stands still, then the
+        // monotonic one carries on from there.
+        thread::sleep(DEVICE_QUIET_AFTER / 4);
+        assert_eq!(clock.source(), ClockSource::AudioDevice, "not that soon");
+        assert_eq!(clock.now(), 1.0);
+        assert_eq!(
+            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
+            ClockSource::MonotonicFallback
+        );
+        let carried_on = clock.now();
+        assert!((1.0..1.2).contains(&carried_on), "{carried_on}");
+        thread::sleep(Duration::from_millis(20));
+        assert!(clock.now() > carried_on, "time runs without the device");
+
+        // It asks a few times and stops: a stutter does not bring it back.
+        for _ in 0..10 {
+            clock.record_device_call(480);
+            thread::sleep(Duration::from_millis(10));
+        }
+        thread::sleep(DEVICE_QUIET_AFTER * 2);
+        assert_eq!(clock.source(), ClockSource::MonotonicFallback);
+
+        // It takes sound at its own rate: after a second of that it keeps
+        // the time again, from where the clock is.
+        let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (device_clock, still_asking) = (clock.clone(), std::sync::Arc::clone(&asking));
+        let device = thread::spawn(move || {
+            let started = Instant::now();
+            let mut asked = 0;
+            while still_asking.load(std::sync::atomic::Ordering::Acquire) {
+                let due = (started.elapsed().as_secs_f64() * 48_000.0) as u64;
+                while asked + 480 <= due {
+                    device_clock.record_device_call(480);
+                    if device_clock.is_playing() {
+                        device_clock.record_frames(480);
+                    }
+                    asked += 480;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        assert_eq!(
+            wait_for(ClockSource::AudioDevice, DEVICE_STEADY_FOR * 4),
+            ClockSource::AudioDevice
+        );
+        let resumed = clock.now();
+        assert!(resumed > carried_on, "{resumed}");
+        thread::sleep(Duration::from_millis(60));
+        assert!(clock.now() > resumed, "its frames advance the clock again");
+
+        // And goes quiet once more.
+        asking.store(false, std::sync::atomic::Ordering::Release);
+        device.join().expect("device");
+        assert_eq!(
+            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
+            ClockSource::MonotonicFallback
+        );
+        commands
+            .send(AudioCommand::Shutdown)
+            .expect("worker running");
+        worker.join().expect("worker exits");
     }
 
     #[test]

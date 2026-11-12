@@ -1608,6 +1608,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
 }
 
 fn new_agent(
+    shared: &Arc<Shared>,
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
@@ -1617,10 +1618,12 @@ fn new_agent(
         return claude_code::ClaudeCodeSession::new(directory, binary, settings.model.clone())
             .map(Agent::ClaudeCode);
     }
-    native_agent(directory, binary, settings, tx).map(|session| Agent::Native(Box::new(session)))
+    native_agent(shared, directory, binary, settings, tx)
+        .map(|session| Agent::Native(Box::new(session)))
 }
 
 fn native_agent(
+    shared: &Arc<Shared>,
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
@@ -1686,6 +1689,8 @@ fn native_agent(
     // The editor's own lease covers it too, but an agent session holds
     // kerfd for as long as it lives wherever it runs.
     let router = KerfMcpRouter::new(directory, Some(binary))?.held();
+    // What it makes on its own, where its person lets it, shows as their own making does.
+    router.watch_makings(media::agent_makings(shared.clone(), tx.clone()));
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
         // Connection errors may contain command arguments or server responses.
@@ -1977,7 +1982,7 @@ fn run_version(
     let mut proposal: Option<String> = None;
     let mut stopped = false;
     let result = (|| {
-        let mut session = new_agent(directory, binary, &request.settings, tx)?;
+        let mut session = new_agent(shared, directory, binary, &request.settings, tx)?;
         if let Ok(mut aborts) = shared.version_aborts.lock() {
             aborts.push(session.abort_handle());
         }
@@ -2094,7 +2099,7 @@ fn agent_worker(
             {
                 session = Some((
                     request.settings.clone(),
-                    new_agent(&directory, &binary, &request.settings, &tx)?,
+                    new_agent(&shared, &directory, &binary, &request.settings, &tx)?,
                 ));
             }
             let current = &mut session.as_mut().ok_or("Agent session unavailable")?.1;

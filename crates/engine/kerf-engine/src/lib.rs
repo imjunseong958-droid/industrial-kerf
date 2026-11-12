@@ -44,5 +44,5 @@ pub use transcription::{
     transcription_available, TimeRange, Transcript, TranscriptCue, TranscriptWord,
     TranscriptionBackend, TranscriptionOptions, TranscriptionProgress, TranscriptionResult,
     TranscriptionStage, MAX_LISTEN_RANGE_SECONDS, MAX_TRANSCRIPTION_RANGE_SECONDS,
-    TRANSCRIPTION_SCHEMA_VERSION,
+    TRANSCRIPTION_SAMPLE_RATE, TRANSCRIPTION_SCHEMA_VERSION,
 };

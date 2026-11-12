@@ -6,8 +6,8 @@
 use crate::catalog::{Catalog, Domain, FxKind, ParamType};
 use crate::diag::Diagnostic;
 use crate::id::Id;
-use crate::model::{Clip, Content, Params, Project, Sequence, Track, TrackKind};
-use crate::time::Time;
+use crate::model::{Align, Clip, Content, Params, Project, Sequence, Track, TrackKind, Transition};
+use crate::time::{Rate, Time};
 use crate::value::{Param, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -886,19 +886,106 @@ impl Validator<'_> {
                     format!("transition `{id}` is longer than the clips it joins"),
                 );
             }
-            if self.head_handle(to).is_some_and(|handle| handle < before)
-                || self.tail_handle(from).is_some_and(|handle| handle < after)
+            let (head, tail) = (self.head_handle(to), self.tail_handle(from));
+            if head.is_some_and(|handle| handle < before)
+                || tail.is_some_and(|handle| handle < after)
             {
-                self.error(
-                    "transition.handles",
-                    id,
-                    format!(
-                        "transition `{id}` needs {before} of media before `{}` and {after} after `{}`",
-                        to.id, from.id
-                    ),
-                );
+                let message = self.short_handles(sequence.rate, transition, from, to, head, tail);
+                self.error("transition.handles", id, message);
             }
         }
+    }
+
+    /// What to say of a transition that plays media its clips do not have:
+    /// which side is short and by how much, in frames, and the lines that
+    /// would give it what it needs. `head` is the media `to` has before its
+    /// first frame and `tail` what `from` has after its last, where they are
+    /// media at all.
+    fn short_handles(
+        &self,
+        rate: Rate,
+        transition: &Transition,
+        from: &Clip,
+        to: &Clip,
+        head: Option<Time>,
+        tail: Option<Time>,
+    ) -> String {
+        let id = &transition.id;
+        let frames = |time: Time| rate.frames_floor(time).max(0);
+        let count = |frames: i64| match frames {
+            1 => "1 frame".to_owned(),
+            frames => format!("{frames} frames"),
+        };
+        let (before, after) = transition.split_at_cut(rate);
+        let (before, after, whole) = (frames(before), frames(after), frames(transition.duration));
+        // A clip that is not media has all it could be asked for.
+        let (head, tail) = (head.map(frames), tail.map(frames));
+        let mut short = Vec::new();
+        let mut fixes = Vec::new();
+        if let Some(head) = head.filter(|head| *head < before) {
+            short.push(format!(
+                "plays {} of `{}` from before its first, where its media has {head}",
+                count(before),
+                to.id
+            ));
+            // Later frames of the same media, in the same place.
+            let more = before - head;
+            if self.tail_handle(to).is_none_or(|room| frames(room) >= more) {
+                fixes.push(format!(
+                    "`slip {} +{more}f` first, to play it from later in its media",
+                    to.id
+                ));
+            }
+        }
+        if let Some(tail) = tail.filter(|tail| *tail < after) {
+            short.push(format!(
+                "plays {} of `{}` from after its last, where its media has {tail}",
+                count(after),
+                from.id
+            ));
+            let more = after - tail;
+            if self
+                .head_handle(from)
+                .is_none_or(|room| frames(room) >= more)
+            {
+                fixes.push(format!(
+                    "`slip {} -{more}f` first, to play it from earlier in its media",
+                    from.id
+                ));
+            }
+        }
+        let (head, tail) = (head.unwrap_or(i64::MAX), tail.unwrap_or(i64::MAX));
+        // The longest it can be where it is, and the ends that have room
+        // for all of it.
+        let fits = match transition.align {
+            Align::Start => tail,
+            Align::End => head,
+            Align::Center => head
+                .saturating_mul(2)
+                .saturating_add(1)
+                .min(tail.saturating_mul(2)),
+        };
+        // Said of the transition, not as a line: one refused as it was added
+        // is not there to be set.
+        if (2..whole).contains(&fits) {
+            fixes.push(format!("give it `dur={fits}f`, which is what there is"));
+        }
+        if transition.align != Align::Start && tail >= whole {
+            fixes.push("give it `align=start`, to play all of it after the cut".to_owned());
+        }
+        if transition.align != Align::End && head >= whole {
+            fixes.push("give it `align=end`, to play all of it before the cut".to_owned());
+        }
+        let fixes = match fixes.as_slice() {
+            [] => "shorten it, or trim the clips so their media has more".to_owned(),
+            fixes => fixes.join("; or "),
+        };
+        format!(
+            "transition `{id}` from `{}` to `{}` {}: {fixes}",
+            from.id,
+            to.id,
+            short.join(" and ")
+        )
     }
 
     fn source_length(&self, clip: &Clip) -> Option<Time> {
