@@ -33,6 +33,12 @@ impl Line {
     pub fn error(&self, column: usize, message: impl Into<String>) -> Diagnostic {
         Diagnostic::error("syntax", message).at(self.number, column)
     }
+
+    /// The line is written as it should be and names something that is not
+    /// there: the code the model gives the same, `ref.missing`.
+    pub fn missing(&self, column: usize, message: impl Into<String>) -> Diagnostic {
+        Diagnostic::error("ref.missing", message).at(self.number, column)
+    }
 }
 
 /// Lex every non-blank, non-comment line.

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Condvar, Mutex, PoisonError};
@@ -671,6 +671,66 @@ where
     render_program_with_cancellation(project, sequence, range, opts, &cancellation, on_progress)
 }
 
+/// The FFmpeg arguments (without the binary) that mix the sound of `[from, to)` of a sequence
+/// (all of it when no range) to `output` as mono 16-bit PCM in a WAV file at `sample_rate`,
+/// with no picture read, drawn or written.
+fn sound_args(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+    sample_rate: u32,
+    output: &Path,
+) -> Result<Vec<String>> {
+    let heard = crate::ramps::with_sound(project);
+    let sound = compile_program(
+        &heard,
+        kerf_model::Catalog::builtin(),
+        &ProgramOptions {
+            sequence: sequence.map(str::to_owned),
+            range,
+        },
+    )?;
+    let mut args = vec!["-hide_banner".to_owned(), "-nostats".to_owned()];
+    args.extend(sound.argv.iter().skip(1).cloned());
+    args.extend(
+        ["-ac", "1", "-ar"]
+            .map(String::from)
+            .into_iter()
+            .chain([sample_rate.to_string()])
+            .chain(["-c:a", "pcm_s16le", "-t"].map(String::from))
+            .chain([crate::program::secs(sound.duration)])
+            .chain(["-f", "wav"].map(String::from))
+            .chain([output.to_string_lossy().into_owned()]),
+    );
+    Ok(args)
+}
+
+/// Mix the sound of `[from, to)` of a sequence (all of it when no range) to `output` alone:
+/// mono 16-bit PCM in a WAV file at `sample_rate`, which is what a transcriber reads. No frame
+/// is drawn, so it takes the time the sound takes to decode and mix, not the picture's.
+pub fn render_sound(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+    sample_rate: u32,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
+    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+    command.args(sound_args(project, sequence, range, sample_rate, output)?);
+    let finished = sidecar::run(command, cancellation, |_| {})?;
+    if !finished.status.success() {
+        return Err(EngineError::Ffmpeg {
+            code: finished.status.code().unwrap_or(-1),
+            stderr: tail(finished.stderr.trim(), 2000).to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Frames drawn at once for a render.
 const RENDER_DRAWERS: usize = 3;
 
@@ -1215,6 +1275,68 @@ mod tests {
             .windows(2)
             .any(|pair| pair[0] == "-c:v" && pair[1] == "libx264"));
         assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
+    }
+
+    #[test]
+    fn the_sound_alone_reads_no_picture_and_writes_none() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"render\"\n\
+             media s path=\"/tmp/s.mp4\" rate=24 dur=30s video=160x120 audio=2ch@48000\n\
+             sequence s1 rate=24 size=160x120 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip v media=s src=10s at=0f dur=10s\n\
+             \x20 track A1 audio\n\
+             \x20   clip a media=s src=10s at=0f dur=10s\n",
+            kerf_model::Catalog::builtin(),
+        )
+        .expect("project")
+        .project;
+        let second = |seconds| Time::from_seconds(seconds).expect("time");
+        let args = sound_args(
+            &project,
+            None,
+            Some((second(2.0), second(5.0))),
+            16_000,
+            Path::new("sound.wav"),
+        )
+        .expect("args");
+        // The clip's file is the only input, and its sound the only thing mapped.
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "-i").count(),
+            1,
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "pipe:0"), "{args:?}");
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "-map").count(),
+            1,
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "-c:v"), "{args:?}");
+        assert_eq!(
+            args[args.len() - 11..],
+            [
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                "-t",
+                "3",
+                "-f",
+                "wav",
+                "sound.wav"
+            ]
+        );
+        // What cannot be mixed is still said before anything runs.
+        let empty = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"render\"\nsequence s1 rate=24 size=160x120 audio=48000\n",
+            kerf_model::Catalog::builtin(),
+        )
+        .expect("project")
+        .project;
+        assert!(sound_args(&empty, None, None, 16_000, Path::new("sound.wav")).is_err());
     }
 
     #[test]

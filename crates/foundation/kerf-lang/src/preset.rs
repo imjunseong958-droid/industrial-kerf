@@ -430,6 +430,23 @@ pub fn instantiate(
     bindings: &BTreeMap<String, Binding>,
     texts: &BTreeMap<String, String>,
 ) -> Result<String, String> {
+    instantiate_with_ids(project, catalog, document, target, bindings, texts)
+        .map(|(script, _)| script)
+}
+
+/// [`instantiate`], with the id each of the pattern's sequences, clips,
+/// markers, transitions and links was given in the project, by the id the
+/// pattern has for it: what was `sa` in the preset may be `p9` here, and
+/// whoever applied it goes on by that name. A slot is given the media it
+/// was bound to, and the pattern's first sequence the target's id.
+pub fn instantiate_with_ids(
+    project: &Project,
+    catalog: &Catalog,
+    document: &str,
+    target: &Id,
+    bindings: &BTreeMap<String, Binding>,
+    texts: &BTreeMap<String, String>,
+) -> Result<(String, BTreeMap<String, String>), String> {
     let Preset {
         mut pattern,
         catalog: carried,
@@ -592,7 +609,17 @@ pub fn instantiate(
     }
     let script = print_ops(project, catalog, &ops);
     apply_script(project, catalog, &script).map_err(diagnostics)?;
-    Ok(script)
+    // A slot became the media it was bound to.
+    let ids = ids
+        .into_iter()
+        .map(|(pattern, placed)| {
+            let placed = bindings
+                .get(pattern.as_str())
+                .map_or(placed, |binding| binding.media.clone());
+            (pattern.to_string(), placed.to_string())
+        })
+        .collect();
+    Ok((script, ids))
 }
 
 /// Move each of `sequence`'s markers over a clip in `beats` to the onset of

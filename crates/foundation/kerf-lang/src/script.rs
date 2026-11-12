@@ -268,7 +268,7 @@ impl Script<'_> {
                 let id = fields.id(1, "a sequence id")?;
                 if self.project.sequence(id.as_str()).is_none() {
                     return Err(
-                        line.error(fields.positional()[1].column, format!("no sequence `{id}`"))
+                        line.missing(fields.positional()[1].column, format!("no sequence `{id}`"))
                     );
                 }
                 fields.finish(2)?;
@@ -444,7 +444,7 @@ impl Script<'_> {
         let at = self
             .project
             .locate(id.as_str())
-            .ok_or_else(|| line.error(1, self.project.no_clip(id.as_str())))?;
+            .ok_or_else(|| line.missing(1, self.project.no_clip(id.as_str())))?;
         Ok((
             self.project.clip_at(at),
             Positions::of(&self.project, at.sequence),
@@ -500,7 +500,7 @@ impl Script<'_> {
                 let existing = self
                     .project
                     .sequence(id.as_str())
-                    .ok_or_else(|| line.error(1, format!("no sequence `{id}`")))?;
+                    .ok_or_else(|| line.missing(1, format!("no sequence `{id}`")))?;
                 let rate =
                     fields.take_with("rate", |t| Rate::parse(t).map_err(|e| e.to_string()))?;
                 let start_rate = rate.unwrap_or(existing.rate);
@@ -629,7 +629,7 @@ impl Script<'_> {
                     })
                     .filter(|index| *index < found.effects.len())
                     .ok_or_else(|| {
-                        line.error(column, format!("`{bus}` has no effect `{target}`"))
+                        line.missing(column, format!("`{bus}` has no effect `{target}`"))
                     })?;
                 if action == "remove" {
                     kerf_model::BusFx::Remove { index }
@@ -691,7 +691,7 @@ impl Script<'_> {
                         .iter()
                         .position(|t| t.id == anchor)
                         .map(|i| i + offset)
-                        .ok_or_else(|| line.error(1, format!("no track `{anchor}`")))
+                        .ok_or_else(|| line.missing(1, format!("no track `{anchor}`")))
                 };
                 let index = match (fields.take_id("before")?, fields.take_id("after")?) {
                     (Some(_), Some(_)) => {
@@ -860,9 +860,32 @@ impl Script<'_> {
                     accepted = true;
                 }
             }
-            if !accepted {
-                return Err(fields.error(arg, format!("no target track takes `{key}`")));
+            if accepted {
+                continue;
             }
+            // A track that is not there takes nothing, and that is what is
+            // wrong with the line: placing the clip says so, with the tracks
+            // there are and the line that adds this one.
+            if tracks
+                .iter()
+                .any(|track| sequence.track(track.as_str()).is_none())
+            {
+                continue;
+            }
+            // What `set` writes on a clip that is there, not a property a
+            // track takes.
+            if matches!(key, "parent" | "enabled" | "caption" | "retime" | "angle") {
+                let clip = names.first().map_or("<clip>", |id| id.as_str());
+                return Err(fields.error(
+                    arg,
+                    format!(
+                        "`{key}=` is set on a clip once it is placed, not where it is placed: \
+                         after this line, `set {clip} {key}={}`",
+                        fields.text(arg).unwrap_or_default()
+                    ),
+                ));
+            }
+            return Err(fields.error(arg, format!("no target track takes `{key}`")));
         }
         fields.finish(1)?;
         let targets = tracks
@@ -1443,7 +1466,7 @@ impl Script<'_> {
                             .find_map(|t| t.transition(id.as_str()))
                             .map(|tr| (s, tr))
                     })
-                    .ok_or_else(|| line.error(1, format!("no transition `{id}`")))?;
+                    .ok_or_else(|| line.missing(1, format!("no transition `{id}`")))?;
                 if action == "remove" {
                     Op::RemoveTransition { id }
                 } else {
@@ -1510,7 +1533,7 @@ impl Script<'_> {
                     .sequences
                     .iter()
                     .position(|seq| seq.marker(id.as_str()).is_some())
-                    .ok_or_else(|| line.error(1, format!("no marker `{id}`")))?;
+                    .ok_or_else(|| line.missing(1, format!("no marker `{id}`")))?;
                 if action == "remove" {
                     (Op::RemoveMarker { id }, 3)
                 } else {
@@ -1563,7 +1586,7 @@ impl Script<'_> {
             Content::Media { media, .. } => Some((found, self.project.media(media.as_str())?)),
             _ => None,
         }) else {
-            return Err(line.error(1, format!("no media clip `{clip}`")));
+            return Err(line.missing(1, format!("no media clip `{clip}`")));
         };
         let speech = self.facts.speech(media);
         let (source_in, source_out) = found.source_range().unwrap_or_default();

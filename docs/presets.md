@@ -101,6 +101,14 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
   existing media remain in the project. A repeated application may allocate
   different IDs; for the same preset, bindings and target state the emitted
   edit is deterministic.
+- So a clip the preset calls `sa` is not `sa` in the project: it may be `p9`.
+  `texts` and `bindings` are given by the preset's own IDs, since that is
+  what inspecting the preset shows; everything after is by the project's.
+  Applying a preset through `edit` answers with `ids`, each of the preset's
+  IDs with the one it became (`{"sa": "p9", "t1": "p12"}`), so the clips,
+  markers and transitions it placed can be named in the edits that follow.
+  A slot is listed with the media it was bound to, and the preset's first
+  sequence with the target sequence, which keeps its own ID.
 
 ## Looks and beats
 
@@ -190,4 +198,5 @@ looks the preset carries (`looks`) and, for each
 slot, the clips that use it and the project's imported media that can fill it
 (`fits`), each with the latest start frame (`latestFrame`, usable as
 `"from": "<n>f"`). Application uses the same
-proposal diff, checks, and before/after preview as other edits.
+proposal diff, checks, and before/after preview as other edits, and adds
+`ids` (see above).

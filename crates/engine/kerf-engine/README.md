@@ -22,10 +22,11 @@ Default resource limits:
 - hardware encode by default when VideoToolbox/NVENC/QSV/AMF is listed (`--software` or `KERF_ENCODER=software` to force libx264; `--prefer-hardware` to force a hardware attempt)
 - libx264 `veryfast`/`faster` on small machines instead of `medium`
 - frame extraction parallelism is capped
+- a transcription runs on half the CPUs, four at most (whisper.cpp alone takes four whatever the machine has)
 - decode hwaccel: VideoToolbox on macOS (not in a virtual machine, where it can stop answering), D3D11VA on Windows (`KERF_HWACCEL=none` disables; `KERF_HWACCEL=cuda` forces another backend)
 
 `kerf-engine resources` prints the resolved budget. Other knobs: `KERF_FFMPEG_THREADS`,
-`KERF_EXTRACT_JOBS`, `KERF_PRESET`, `KERF_CRF`.
+`KERF_WHISPER_THREADS`, `KERF_EXTRACT_JOBS`, `KERF_PRESET`, `KERF_CRF`.
 
 ffmpeg/ffprobe paths, encoder listings, and hwaccel flags are resolved once per
 process. Multi-frame `probe frames` seeks in bounded parallel. Exact frame,

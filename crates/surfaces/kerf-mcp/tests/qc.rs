@@ -364,4 +364,60 @@ fn missing_media_blocks_and_is_counted() {
             .sum::<usize>()
     );
     assert!(report.summary.blocking >= 1);
+    assert_eq!(
+        with(&report, "missing_media")[0].message,
+        "media `m1` is missing: no file at `/nowhere/shot.mov`"
+    );
+
+    // A file of the project is named as the document names it, not by
+    // where the project folder is on this computer.
+    let directory = TempDir::new().unwrap();
+    let mut inside = project(script);
+    let gone = directory.path().join("media").join("gone.mov");
+    for media in inside
+        .media
+        .iter_mut()
+        .filter(|media| media.id.as_str() == "m1")
+    {
+        media.path = gone.to_string_lossy().into_owned();
+    }
+    let report = check(&inside, directory.path());
+    assert_eq!(
+        with(&report, "missing_media")[0].message,
+        format!(
+            "media `m1` is missing: no file at `{}`",
+            std::path::Path::new("media").join("gone.mov").display()
+        )
+    );
+}
+
+#[test]
+fn cuts_nothing_has_heard_are_said_not_to_be_checked() {
+    // A sound clip cut out of the middle of its media, which nothing has transcribed.
+    let cut = project(
+        "media add m1 path=\"talk.wav\" rate=24 dur=00:01:00:00 audio=2ch@48000\n\
+         track add A1 audio\n\
+         overwrite media=m1 src=00:00:10:00 at=00:00:00:00 dur=00:00:04:00 on=A1 as=a1",
+    );
+    let report = run(&cut);
+    let unheard = with(&report, "cut.unheard");
+    assert_eq!(unheard.len(), 1, "{:#?}", report.findings);
+    assert_eq!(unheard[0].severity, Severity::Info);
+    assert_eq!(unheard[0].entity.as_deref(), Some("m1"));
+    assert_eq!(unheard[0].value, Some(2.0));
+    assert!(
+        unheard[0]
+            .message
+            .starts_with("2 cuts of `m1` were not checked for words"),
+        "{}",
+        unheard[0].message
+    );
+    // The row does not read as though it had looked and found none.
+    let words = row(&report, "cut.in_word");
+    assert!(words.passed);
+    assert_eq!(words.value, "0 in words · 2 not checked");
+    assert_eq!(words.count, 0);
+    // With no sound cut there is nothing to say.
+    let clean = run(&project(""));
+    assert_eq!(row(&clean, "cut.in_word").value, "0 in words");
 }

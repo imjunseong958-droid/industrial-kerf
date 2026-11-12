@@ -1114,5 +1114,115 @@ pub fn simplified_object(followed: &FollowedObject, tolerance: f64) -> Vec<usize
     kept.into_iter().collect()
 }
 
+/// The corners of a followed outline that shape it, the same ones in every frame: a mask's corners
+/// move one for one between its keyframes, so a corner any frame needs is kept in all of them.
+///
+/// One is left out when, in every frame, it lies within `tolerance` of the frame's width of the edge
+/// between the two kept beside it, and its edge is as soft there as that edge is, which has four times
+/// the room (as in [`simplified_object`]). A square followed by forty corners keeps the ones at its
+/// corners.
+pub fn simplified_corners(followed: &FollowedObject, tolerance: f64) -> Vec<usize> {
+    let count = followed.outlines.first().map_or(0, Vec::len);
+    if count <= 3 {
+        return (0..count).collect();
+    }
+    // How far corner `at` is from the edge between corners `from` and `to`, in place or in softness,
+    // in the frame it is farthest in.
+    let off = |from: usize, to: usize, at: usize| {
+        followed
+            .outlines
+            .iter()
+            .enumerate()
+            .map(|(frame, outline)| {
+                let (a, b, p) = (outline[from], outline[to], outline[at]);
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let length = dx * dx + dy * dy;
+                let along = if length > 0.0 {
+                    (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let place = (a[0] + dx * along - p[0]).hypot(a[1] + dy * along - p[1]);
+                let soft = followed.soft.get(frame).map_or(0.0, |soft| {
+                    (soft[from] + (soft[to] - soft[from]) * along - soft[at]).abs()
+                });
+                place.max(soft / 4.0)
+            })
+            .fold(0.0, f64::max)
+    };
+    // The worst of the corners strictly between `low` and `high`, where `count` is corner 0 again.
+    let worst = |low: usize, high: usize| {
+        (low + 1..high)
+            .map(|at| (off(low, high % count, at), at))
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+    };
+    // Around from the first corner and the one farthest from it (Ramer-Douglas-Peucker on a closed
+    // outline, by the frame a corner is farthest out in).
+    let apart = |a: usize, b: usize| {
+        followed
+            .outlines
+            .iter()
+            .map(|outline| (outline[a][0] - outline[b][0]).hypot(outline[a][1] - outline[b][1]))
+            .fold(0.0, f64::max)
+    };
+    let far = (1..count)
+        .max_by(|a, b| apart(0, *a).total_cmp(&apart(0, *b)))
+        .unwrap_or(count / 2);
+    let mut keep = vec![false; count];
+    keep[0] = true;
+    keep[far] = true;
+    let mut spans = vec![(0, far), (far, count)];
+    while let Some((low, high)) = spans.pop() {
+        if let Some((off, at)) = worst(low, high) {
+            if off > tolerance {
+                keep[at] = true;
+                spans.push((low, at));
+                spans.push((at, high));
+            }
+        }
+    }
+    // The two it started from were only somewhere to start: each goes if the outline holds without it.
+    for start in [0, far] {
+        let kept: Vec<usize> = (0..count).filter(|index| keep[*index]).collect();
+        if kept.len() <= 3 {
+            break;
+        }
+        let place = kept.iter().position(|index| *index == start).unwrap_or(0);
+        let before = kept[(place + kept.len() - 1) % kept.len()];
+        let after = kept[(place + 1) % kept.len()];
+        // From the one before to the one after, going around through `start`.
+        let steps = (after + count - before) % count;
+        let holds = (1..steps).all(|step| {
+            let at = (before + step) % count;
+            off(before, after, at) <= tolerance
+        });
+        if holds {
+            keep[start] = false;
+        }
+    }
+    (0..count).filter(|index| keep[*index]).collect()
+}
+
+impl FollowedObject {
+    /// The object followed by `corners` of its outline alone.
+    pub fn with_corners(&self, corners: &[usize]) -> Self {
+        let only = |all: &Vec<Vec<[f64; 2]>>| -> Vec<Vec<[f64; 2]>> {
+            all.iter()
+                .map(|outline| corners.iter().map(|corner| outline[*corner]).collect())
+                .collect()
+        };
+        Self {
+            outlines: only(&self.outlines),
+            soft: self
+                .soft
+                .iter()
+                .map(|soft| corners.iter().map(|corner| soft[*corner]).collect())
+                .collect(),
+            areas: self.areas.clone(),
+            lost_at: self.lost_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

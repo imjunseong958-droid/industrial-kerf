@@ -18,7 +18,7 @@ pub mod qc;
 mod qc_full;
 mod text_lint;
 
-pub use making::{answer_make_requests, make_requests};
+pub use making::{answer_make_requests, make_requests, MakingEvent, MakingWatcher};
 pub use presets::{keep_looks, PRESET_FOLDERS};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
 pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
@@ -469,13 +469,25 @@ impl McpServer {
                     .unwrap_or_else(|| json!({}));
                 let mut structured = self.router.call(name, arguments);
                 let is_error = structured.get("ok").and_then(Value::as_bool) == Some(false);
-                let mut images = Vec::new();
-                take_images(&mut structured, &mut images);
+                // Images travel as image content, the index of each left
+                // where its data was; each comes after a line that says
+                // which it is, a preview's before ahead of its after.
+                let images = match structured.get_mut("result") {
+                    Some(result) => kerf_agent::take_inline_images(result, "image"),
+                    None => kerf_agent::take_inline_images(&mut structured, "image"),
+                };
                 let text = serde_json::to_string(&structured).unwrap_or_else(|_| {
                     "{\"ok\":false,\"error\":{\"code\":\"SERIALIZATION_FAILED\",\"message\":\"result could not be serialized\"}}".into()
                 });
                 let mut content = vec![json!({"type": "text", "text": text})];
-                content.extend(images);
+                for image in images {
+                    content.push(json!({"type": "text", "text": image.label}));
+                    content.push(json!({
+                        "type": "image",
+                        "data": image.data,
+                        "mimeType": image.media_type,
+                    }));
+                }
                 Some(json_rpc_result(
                     id,
                     json!({
@@ -558,32 +570,6 @@ impl McpServer {
     }
 }
 
-/// Move inline `imageBase64` data into MCP image content, leaving the index
-/// of each image where its data was.
-fn take_images(value: &mut Value, images: &mut Vec<Value>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(Value::String(data)) = object.remove("imageBase64") {
-                let mime_type = object.get("mediaType").cloned();
-                object.insert("image".into(), json!(images.len()));
-                images.push(json!({
-                    "type": "image",
-                    "data": data,
-                    "mimeType": mime_type.unwrap_or_else(|| json!("image/png")),
-                }));
-            }
-            for nested in object.values_mut() {
-                take_images(nested, images);
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                take_images(nested, images);
-            }
-        }
-        _ => {}
-    }
-}
 /// Bundled skills, then the user's (`~/.kerf/skills`), then the project's.
 pub fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
     let mut directories = Vec::new();
