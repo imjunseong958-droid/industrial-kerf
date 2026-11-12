@@ -88,7 +88,8 @@ jobs:
       - name: The harness tests over and over, and where one hangs
         run: |
           cargo test -p kerf-mcp --test harness --no-run
-          python3 .github/diagnosis/hang.py 40 200
+          echo "kern.hv_vmm_present = $(sysctl -n kern.hv_vmm_present)"
+          python3 .github/diagnosis/hang.py 22 200
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
