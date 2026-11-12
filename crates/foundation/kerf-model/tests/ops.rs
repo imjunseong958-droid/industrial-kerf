@@ -509,6 +509,76 @@ fn extract_cuts_every_track_and_closes_the_range() {
     assert_eq!(source_in(&project, "c3"), 48);
 }
 
+/// The clip after `clip` on `track`: what a cut through `clip` left on its far side.
+fn tail_of(project: &Project, track: &str, clip: &str) -> Id {
+    let clips = &project.sequences[0].track(track).unwrap().clips;
+    let at = clips.iter().position(|c| c.id.as_str() == clip).unwrap();
+    clips[at + 1].id.clone()
+}
+
+#[test]
+fn a_range_cut_out_of_linked_clips_leaves_their_far_parts_linked() {
+    // 12–36 is inside c1 and its sound a1, so each is cut in two.
+    for close in [false, true] {
+        let (sequence, from, to, tracks) = (id("s1"), f(12), f(36), None);
+        let op = if close {
+            Op::Extract {
+                sequence,
+                from,
+                to,
+                tracks,
+            }
+        } else {
+            Op::Lift {
+                sequence,
+                from,
+                to,
+                tracks,
+            }
+        };
+        let project = run(&scene(), vec![op]);
+        let picture = tail_of(&project, "V1", "c1");
+        let sound = tail_of(&project, "A1", "a1");
+        let link = project.clip(picture.as_str()).unwrap().link.clone();
+        assert!(link.is_some(), "close={close}: the picture's far part");
+        assert_eq!(
+            project.clip(sound.as_str()).unwrap().link,
+            link,
+            "close={close}: its sound moves with it"
+        );
+        // The near parts keep the link they had, and the far ones have one of their own.
+        assert_eq!(project.clip("c1").unwrap().link, Some(id("L1")));
+        assert_eq!(project.clip("a1").unwrap().link, Some(id("L1")));
+        assert_ne!(link, Some(id("L1")));
+        // A clip that was linked to nothing still is.
+        let bed = tail_of(&project, "A2", "music");
+        assert_eq!(project.clip(bed.as_str()).unwrap().link, None);
+        assert_eq!(validate(&project, Catalog::builtin()), vec![]);
+    }
+}
+
+#[test]
+fn an_overwrite_through_linked_clips_leaves_their_far_parts_linked() {
+    // A picture and its sound laid over the middle of c1 and a1.
+    let project = run(
+        &scene(),
+        vec![Op::Overwrite {
+            sequence: id("s1"),
+            at: f(12),
+            duration: f(24),
+            targets: vec![(id("V1"), new_media(1000)), (id("A1"), new_media(1000))],
+        }],
+    );
+    // c1 [0,12), the new clip [12,36), then what is left of c1 [36,48).
+    let picture = &project.sequences[0].track("V1").unwrap().clips[2];
+    let sound = &project.sequences[0].track("A1").unwrap().clips[2];
+    assert_eq!((picture.start, picture.end()), (f(36), f(48)));
+    assert!(picture.link.is_some());
+    assert_eq!(sound.link, picture.link);
+    assert_ne!(picture.link, Some(id("L1")));
+    assert_eq!(validate(&project, Catalog::builtin()), vec![]);
+}
+
 #[test]
 fn trims_follow_links_and_respect_neighbors() {
     let scene = scene();

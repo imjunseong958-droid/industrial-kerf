@@ -1513,36 +1513,42 @@ impl Editor<'_> {
         Ok(())
     }
 
-    /// Remove `[from, to)` from one track, trimming or splitting clips at
-    /// the edges.
-    fn clear_track(&mut self, s: usize, t: usize, from: Time, to: Time) {
-        let overlapping: Vec<Id> = self.project.sequences[s].tracks[t]
-            .clips
-            .iter()
-            .filter(|c| c.start < to && c.end() > from)
-            .map(|c| c.id.clone())
-            .collect();
-        for id in overlapping {
-            let (start, end) = {
-                let clip = self.project.sequences[s].tracks[t]
-                    .clip(id.as_str())
-                    .expect("exists");
-                (clip.start, clip.end())
-            };
-            if end > to && start < from {
-                self.split_all(s, &[(t, id.clone())], to, None);
+    /// Remove `[from, to)` from `tracks`, trimming or splitting clips at
+    /// the edges. A clip the range falls inside is cut in two, and the far
+    /// parts of clips that were linked together are linked together, as a
+    /// blade's are: so they are cut on every track at once, and not a
+    /// track at a time, which would leave each far part with nothing to be
+    /// linked to.
+    fn clear_tracks(&mut self, s: usize, tracks: &[usize], from: Time, to: Time) {
+        let mut inside = Vec::new();
+        for &t in tracks {
+            for clip in &self.project.sequences[s].tracks[t].clips {
+                if clip.start < from && clip.end() > to {
+                    inside.push((t, clip.id.clone()));
+                }
             }
-            let track = &mut self.project.sequences[s].tracks[t];
-            let c = track.clip_index(id.as_str()).expect("exists");
-            let clip = &mut track.clips[c];
-            if clip.start >= from && clip.end() <= to {
-                track.clips.remove(c);
-            } else if clip.start < from {
-                let end = clip.end();
-                clip.move_tail(from - end);
-            } else {
-                let start = clip.start;
-                clip.move_head(to - start);
+        }
+        self.split_all(s, &inside, to, None);
+        for &t in tracks {
+            let overlapping: Vec<Id> = self.project.sequences[s].tracks[t]
+                .clips
+                .iter()
+                .filter(|c| c.start < to && c.end() > from)
+                .map(|c| c.id.clone())
+                .collect();
+            for id in overlapping {
+                let track = &mut self.project.sequences[s].tracks[t];
+                let c = track.clip_index(id.as_str()).expect("exists");
+                let clip = &mut track.clips[c];
+                if clip.start >= from && clip.end() <= to {
+                    track.clips.remove(c);
+                } else if clip.start < from {
+                    let end = clip.end();
+                    clip.move_tail(from - end);
+                } else {
+                    let start = clip.start;
+                    clip.move_head(to - start);
+                }
             }
         }
     }
@@ -1589,13 +1595,11 @@ impl Editor<'_> {
             };
             placed.push((t, id));
         }
+        let edited: Vec<usize> = placed.iter().map(|(t, _)| *t).collect();
         if ripple {
-            let edited: Vec<usize> = placed.iter().map(|(t, _)| *t).collect();
             self.open_time(s, &edited, at, duration, &HashSet::new());
         } else {
-            for (t, _) in &placed {
-                self.clear_track(s, *t, at, at + duration);
-            }
+            self.clear_tracks(s, &edited, at, at + duration);
         }
         let link = (placed.len() > 1).then(|| self.ids.next("L"));
         for ((t, id), (_, spec)) in placed.into_iter().zip(targets) {
@@ -1679,9 +1683,7 @@ impl Editor<'_> {
             ));
         }
         let tracks = self.track_set(s, tracks)?;
-        for &t in &tracks {
-            self.clear_track(s, t, from, to);
-        }
+        self.clear_tracks(s, &tracks, from, to);
         if close {
             for t in tracks {
                 for clip in &mut self.project.sequences[s].tracks[t].clips {
