@@ -1,8 +1,8 @@
 name: Package
 
-# Diagnosis only, on a branch that is never merged: how big whisper.cpp's
-# whisper-cli is on each system as one program, what it links, and how fast it
-# runs there. It packages and publishes nothing.
+# Diagnosis only, on a branch that is never merged: how long the compositor
+# takes to draw a frame on a Mac's GPU and without it. It packages and
+# publishes nothing.
 on:
   workflow_dispatch:
 
@@ -10,59 +10,36 @@ permissions:
   contents: read
 
 jobs:
-  whisper-size:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+  gpu-frames:
+    runs-on: macos-latest
+    timeout-minutes: 70
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
-      - name: Build whisper-cli 1.9.5 as one program
-        shell: bash
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native media dependencies
         run: |
-          git clone --quiet --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp
-          cd whisper.cpp
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF > cmake.log 2>&1 || { tail -40 cmake.log; exit 1; }
-          cmake --build build --config Release -j 4 --target whisper-cli > build.log 2>&1 || { tail -60 build.log; exit 1; }
-          find build -name 'whisper-cli*' -type f -exec ls -l {} \;
-      - name: Without the GPU (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
+          brew install ffmpeg pkg-config
+          ffmpeg_prefix="$(brew --prefix ffmpeg)"
+          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
+          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: What draws here
         run: |
-          cd whisper.cpp
-          cmake -B build-cpu -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=OFF \
-            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF > cmake-cpu.log 2>&1 || { tail -40 cmake-cpu.log; exit 1; }
-          cmake --build build-cpu --config Release -j 4 --target whisper-cli > build-cpu.log 2>&1 || { tail -60 build-cpu.log; exit 1; }
-          ls -l build-cpu/bin/whisper-cli
-          echo "--- with Metal links:"; otool -L build/bin/whisper-cli
-          echo "--- without:"; otool -L build-cpu/bin/whisper-cli
-          strip -o stripped build/bin/whisper-cli && ls -l stripped
-      - name: What it links (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize kern.hv_vmm_present
+          system_profiler SPDisplaysDataType || true
+      - name: Build the frame bench
+        run: cargo build --release -p kerf-compose --example frame_bench
+      - name: Frames on the GPU
         run: |
-          cd whisper.cpp
-          ldd build/bin/whisper-cli
-          strip -o stripped build/bin/whisper-cli && ls -l stripped
-      - name: What it links (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=s=1920x1080:r=24:d=4 -pix_fmt yuv420p clip.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=s=1920x1080:r=24:d=4 -vf hue=h=90 -pix_fmt yuv420p second.mp4
+          time ./target/release/examples/frame_bench clip.mp4 2>&1 | tail -90
+      - name: Frames without it
+        env:
+          KERF_GPU: "0"
         run: |
-          cd whisper.cpp
-          find build -name '*.dll' -exec ls -l {} \; || true
-          ls -l build/bin/Release || true
-      - name: How fast it is here
-        shell: bash
-        run: |
-          cd whisper.cpp
-          cli="$(find build -name 'whisper-cli' -type f -o -name 'whisper-cli.exe' -type f | head -n 1)"
-          python3 -c "import os; print('cpus', os.cpu_count())"
-          for model in base-q5_1 small-q5_1; do
-            curl -fsSL --retry 5 -o "ggml-$model.bin" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin"
-            for flags in "" "-ng"; do
-              echo "=== $model $flags"
-              "$cli" -m "ggml-$model.bin" -f samples/jfk.wav -t 4 $flags 2>&1 | grep -E "total time|encode time|use gpu|Metal|backend|load time" | head -8
-            done
-          done
+          time ./target/release/examples/frame_bench clip.mp4 2>&1 | tail -90
