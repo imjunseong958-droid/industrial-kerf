@@ -149,6 +149,9 @@ the take; the person says how much of that it does without asking them.
 - `look` lists what wants making under `toMake`, as an `edit` that names a
   recipe answers it, with what would refuse it (`cannot`) and the notes a
   person would be shown (`notes`), so a recipe is mended before anyone runs it.
+  `look` with a proposal lists what that proposal would have made. A making is
+  of the project: of a media a waiting proposal adds, `make` says which
+  proposal, and that it comes first.
 - `make` asks for a media to be made, and answers with the plan a person would
   see. By default the person is asked: the plan is left in the review thread,
   `kerf proposals` lists it, and `kerf make` or Make from Recipe… makes it and
