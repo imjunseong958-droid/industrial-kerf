@@ -463,6 +463,24 @@ marker add at=c2@00:01:01:00+2f as=mk1",
         .contains("no clip `c9`"));
 }
 
+#[test]
+fn a_line_that_names_what_is_not_there_is_not_a_syntax_error() {
+    // The line is written as it should be: what it names is missing, as
+    // the model says of an operation that names it.
+    for (script, says) in [
+        ("trim c9 in +1f", "no clip `c9`"),
+        ("use s9", "no sequence `s9`"),
+        ("transition set t9 dur=6f", "no transition `t9`"),
+        ("marker remove m9", "no marker `m9`"),
+    ] {
+        let error = fails(&base(), script);
+        assert!(error.message.contains(says), "{script}: {}", error.message);
+        assert_eq!(error.code, "ref.missing", "{script}: {}", error.message);
+    }
+    // A line that cannot be read is still one.
+    assert_eq!(fails(&base(), "trim c1 sideways +1f").code, "syntax");
+}
+
 /// What analysis knows of m1: a few words, a pause, and a cut.
 struct Known;
 
