@@ -27,6 +27,7 @@ if stats:
 command = ["cargo", "test", "-q", "-p", "kerf-qt-bridge", "--test", "protocol", "--", "--nocapture", *extra]
 failed = []
 took = []
+aside = back = 0
 for run in range(1, runs + 1):
     started = time.time()
     result = subprocess.run(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -34,6 +35,8 @@ for run in range(1, runs + 1):
     path = f"logs/{name}-{run}.log"
     with open(path, "w") as log:
         log.write(result.stdout)
+    aside += "keeping time without it" in result.stdout
+    back += "keeping time by it" in result.stdout
     if result.returncode == 0:
         continue
     failed.append(run)
@@ -47,15 +50,17 @@ for run in range(1, runs + 1):
         for line in kept[:140]:
             print("  | " + line[:260])
     sys.stdout.flush()
-if runs and not failed and stats:
+if runs and stats:
     # What a run that passes looks like, to compare.
-    with open(f"logs/{name}-1.log") as log:
-        kept = [line for line in log.read().splitlines() if line.startswith("playback audio")]
-    print(f"=== {name} run 1 passed; its first audio lines")
-    for line in kept[:45]:
+    passed = next(run for run in range(1, runs + 1) if run not in failed)
+    with open(f"logs/{name}-{passed}.log") as log:
+        kept = [line for line in log.read().splitlines() if re.match(r"playback audio|kerf playback", line)]
+    print(f"=== {name} run {passed} passed; its first audio lines")
+    for line in kept[:70]:
         print("  | " + line[:260])
 mean = sum(took) / max(len(took), 1)
-summary = f"RESULT {name}: {len(failed)} of {runs} failed (runs {failed}), {mean:.1f}s a run, args {extra}, stats {stats}"
+summary = (f"RESULT {name}: {len(failed)} of {runs} failed (runs {failed}), {mean:.1f}s a run, args {extra}, "
+           f"stats {stats}; the device was set aside in {aside} runs and taken back in {back}")
 with open(f"logs/{name}.result", "w") as result:
     result.write(summary + "\n")
 print(summary)
