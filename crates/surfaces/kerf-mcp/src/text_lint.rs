@@ -18,13 +18,9 @@ use kerf_model::{
 use kerf_text::fonts::{self, Axis, Feature};
 use kerf_text::{layout, Align, ParagraphStyle, TextStyle};
 
-/// The most characters a viewer reads in a second (Netflix's limit for
-/// adult programmes).
-pub const READING_SPEED: f64 = 17.0;
-/// The least time a caption may stay up, in sixths of a second (5/6 s).
-pub const SHORT_CAPTION_SIXTHS: i64 = 5;
-/// The least gap between two captions, in frames; back to back is fine.
-pub const CAPTION_GAP_FRAMES: i64 = 2;
+// What a caption is held to, which `captions` goes by as it makes them.
+use kerf_lang::caption_characters as characters;
+pub use kerf_lang::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS};
 /// The part of the frame titles and captions stay inside.
 pub const TITLE_SAFE: f64 = 0.90;
 
@@ -953,15 +949,6 @@ pub(crate) fn text(sequence: &Sequence, findings: &mut Vec<Finding>) {
             );
         }
     }
-}
-
-/// What a viewer reads of a caption: its characters, with each run of
-/// spaces and line breaks one space.
-fn characters(text: &str) -> usize {
-    text.split_whitespace()
-        .map(|word| word.chars().count())
-        .sum::<usize>()
-        + text.split_whitespace().count().saturating_sub(1)
 }
 
 /// Captions that go by faster than a viewer reads, stay up less than 5/6

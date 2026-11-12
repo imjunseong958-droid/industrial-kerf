@@ -5,7 +5,7 @@
 
 use crate::text::{quote, Clock};
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Content, Id, Project, Sequence, Time, TrackKind};
+use kerf_model::{Content, Id, Project, Rate, Sequence, Time, TrackKind};
 
 /// A spoken word, timed in seconds of its media.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,12 +18,99 @@ pub struct Word {
 /// A pause longer than this starts a new caption.
 const PAUSE_SECONDS: f64 = 0.5;
 
+/// The most characters a viewer reads in a second (Netflix's limit for
+/// adult programmes). `captions` keeps what it makes to it where the speech
+/// leaves room, and a check warns of a caption that asks for more.
+pub const READING_SPEED: f64 = 17.0;
+/// The least time a caption may stay up, in sixths of a second (5/6 s).
+pub const SHORT_CAPTION_SIXTHS: i64 = 5;
+/// The least gap between two captions, in frames; back to back is fine.
+pub const CAPTION_GAP_FRAMES: i64 = 2;
+/// The most lines `captions` gives a caption.
+const CAPTION_LINES: usize = 2;
+
+/// What a viewer reads of a caption: its characters, with each run of
+/// spaces and line breaks one space.
+pub fn caption_characters(text: &str) -> usize {
+    text.split_whitespace()
+        .map(|word| word.chars().count())
+        .sum::<usize>()
+        + text.split_whitespace().count().saturating_sub(1)
+}
+
+/// The frames a caption of `characters` has to stay up at `rate` to be
+/// read: no faster than [`READING_SPEED`], and 5/6 of a second at least.
+fn reading_frames(rate: Rate, characters: usize) -> i64 {
+    let frame = rate.frame_duration().flicks();
+    let shortest = FLICKS_PER_SECOND * SHORT_CAPTION_SIXTHS / 6;
+    let read = (characters as f64 / READING_SPEED * FLICKS_PER_SECOND as f64).ceil() as i64;
+    // Up to the next whole frame.
+    (shortest.max(read) + frame - 1) / frame
+}
+
+/// A caption on its way to the track: its lines, each the words of one
+/// run of speech, where it starts, and where what it says ends.
+struct Made<'w> {
+    lines: Vec<Vec<&'w Word>>,
+    start: Time,
+    spoken: Time,
+}
+
+impl Made<'_> {
+    fn text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|word| word.text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Whether it can be read in the time up to `until`.
+    fn fits(&self, rate: Rate, until: Time) -> bool {
+        rate.frames_round(until - self.start)
+            >= reading_frames(rate, caption_characters(&self.text()))
+    }
+
+    fn ends_a_sentence(&self) -> bool {
+        self.lines
+            .last()
+            .and_then(|line| line.last())
+            .is_some_and(|word| ends_a_sentence(&word.text))
+    }
+}
+
+fn ends_a_sentence(text: &str) -> bool {
+    text.trim_end()
+        .ends_with(['.', '?', '!', '。', '？', '！'])
+}
+
+/// Whether `text` is a transcriber's note of a sound, such as whisper's
+/// `[BLANK_AUDIO]` or `[MUSIC]`, and not something said.
+fn is_a_sound_note(text: &str) -> bool {
+    let text = text.trim();
+    text.len() > 2 && text.starts_with('[') && text.ends_with(']')
+}
+
 /// Words a caption holds unless `captions … words=<n>` says otherwise.
 pub(crate) const DEFAULT_CAPTION_WORDS: usize = 4;
 
 /// Script lines that caption what `clip` says onto the subtitle `track`
-/// of its sequence, from `words` timed on its media. A caption holds at
-/// most `max_words` words and ends at a pause or the end of a sentence.
+/// of its sequence, from `words` timed on its media. A line of a caption
+/// holds at most `max_words` words and ends at a pause or the end of a
+/// sentence.
+///
+/// A caption stays up past its last word for as long as it takes to read
+/// ([`READING_SPEED`], and 5/6 of a second at least), where the next one
+/// leaves the time. One that still cannot be read in its time becomes the
+/// second line of the caption before it, or takes the next as its second
+/// line, where the two together can be and no pause parts them. What is
+/// left too fast is speech faster than a viewer reads, which a check says.
+///
 /// The lines overwrite what the track has there and begin with `use` when
 /// the project has several sequences.
 pub fn caption_script(
@@ -60,6 +147,7 @@ pub fn caption_script(
         // A word the clip cuts belongs to whichever side has most of it.
         .filter(|word| (from..to).contains(&((word.start + word.end) / 2.0)))
         .filter(|word| !word.text.trim().is_empty())
+        .filter(|word| !is_a_sound_note(&word.text))
         .collect();
     spoken.sort_by(|a, b| a.start.total_cmp(&b.start));
     // Transcripts of overlapping ranges repeat words; keep the first.
@@ -80,10 +168,7 @@ pub fn caption_script(
                 let last = group.last().expect("groups are never empty");
                 group.len() >= max_words.max(1)
                     || word.start - last.end > PAUSE_SECONDS
-                    || last
-                        .text
-                        .trim_end()
-                        .ends_with(['.', '?', '!', '。', '？', '！'])
+                    || ends_a_sentence(&last.text)
             }
         };
         if starts_new {
@@ -114,23 +199,81 @@ pub fn caption_script(
             _ => placed.push((start, group)),
         }
     }
-    let (starts, groups): (Vec<Time>, Vec<Vec<&Word>>) = placed.into_iter().unzip();
-    for (index, group) in groups.iter().enumerate() {
-        let start = starts[index];
-        let mut end = place(group.last().expect("groups are never empty").end);
-        if let Some(next) = starts.get(index + 1) {
-            end = end.min(*next);
+    let mut made: Vec<Made> = placed
+        .into_iter()
+        .map(|(start, group)| Made {
+            start,
+            spoken: place(group.last().expect("groups are never empty").end),
+            lines: vec![group],
+        })
+        .collect();
+    // No caption outlasts the clip whose speech it is.
+    let last_frame = rate.round(found.end());
+    let until = |made: &[Made], index: usize| made.get(index + 1).map_or(last_frame, |next| next.start);
+    // Two that follow each other in one breath can be one caption of two
+    // lines.
+    let joins = |made: &[Made], first: usize| {
+        let (a, b) = (&made[first], &made[first + 1]);
+        a.lines.len() + b.lines.len() <= CAPTION_LINES
+            && (b.start - a.spoken).seconds() <= PAUSE_SECONDS
+    };
+    let join = |made: &mut Vec<Made>, first: usize| {
+        let second = made.remove(first + 1);
+        made[first].lines.extend(second.lines);
+        made[first].spoken = second.spoken;
+    };
+    let mut index = 0;
+    while index < made.len() {
+        if made[index].fits(rate, until(&made, index)) {
+            index += 1;
+            continue;
         }
-        let frames = rate.frames_round(end - start).max(1);
-        let text = group
-            .iter()
-            .map(|word| word.text.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
+        // With the one after it, or the one before: whichever can be read
+        // in the time the two have, and first the one in its own sentence.
+        let after = (index + 1 < made.len() && joins(&made, index)).then_some(index);
+        let before = (index > 0 && joins(&made, index - 1)).then(|| index - 1);
+        let order = if made[index].ends_a_sentence() {
+            [before, after]
+        } else {
+            [after, before]
+        };
+        let joined = order.into_iter().flatten().find(|first| {
+            let both = Made {
+                lines: made[*first..=*first + 1]
+                    .iter()
+                    .flat_map(|made| made.lines.clone())
+                    .collect(),
+                start: made[*first].start,
+                spoken: made[*first + 1].spoken,
+            };
+            both.fits(rate, until(&made, *first + 1))
+        });
+        match joined {
+            Some(first) => {
+                join(&mut made, first);
+                index = first + 1;
+            }
+            None => index += 1,
+        }
+    }
+    for (index, caption) in made.iter().enumerate() {
+        let text = caption.text();
+        let next = until(&made, index);
+        // It stays for as long as it takes to read, the next one allowing.
+        let read = caption.start + rate.time_of(reading_frames(rate, caption_characters(&text)));
+        let mut end = caption.spoken.max(read).min(next);
+        // Back to back with the next rather than a frame short of it.
+        if index + 1 < made.len() {
+            let gap = rate.frames_round(next - end);
+            if gap > 0 && gap < CAPTION_GAP_FRAMES {
+                end = next;
+            }
+        }
+        let frames = rate.frames_round(end - caption.start).max(1);
         lines.push(format!(
             "overwrite caption={} at={} dur={frames}f on={track}",
             quote(&text),
-            clock.print_position(start),
+            clock.print_position(caption.start),
         ));
     }
     Ok(lines.join("\n"))
@@ -275,15 +418,17 @@ sequence s1 rate=24 size=1920x1080
             word(13.6, 14.4, "line"),
         ];
         let script = caption_script(&project, "c1", "S1", &words, 3).unwrap();
+        // "are." is said in half a second with "Next" straight after it,
+        // too short to read on its own: it is the second line of the
+        // caption before it. "Next" stays its 5/6 of a second.
         assert_eq!(
             script,
-            "overwrite caption=\"So here we\" at=00:00:02:06 dur=30f on=S1
-overwrite caption=\"are.\" at=00:00:03:12 dur=12f on=S1
-overwrite caption=\"Next\" at=00:00:04:00 dur=12f on=S1"
+            "overwrite caption=\"So here we\\nare.\" at=00:00:02:06 dur=42f on=S1
+overwrite caption=\"Next\" at=00:00:04:00 dur=20f on=S1"
         );
         let captioned = apply_script(&project, catalog, &script).unwrap().project;
         // "line" is cut in half at the clip's out point and left out.
-        assert_eq!(captioned.sequences[0].tracks[1].clips.len(), 3);
+        assert_eq!(captioned.sequences[0].tracks[1].clips.len(), 2);
 
         // At double speed the same words take half the time.
         let fast = apply_script(&project, catalog, "speed c1 2")
@@ -292,8 +437,129 @@ overwrite caption=\"Next\" at=00:00:04:00 dur=12f on=S1"
         let script = caption_script(&fast, "c1", "S1", &words[..3], 3).unwrap();
         assert_eq!(
             script,
-            "overwrite caption=\"So\" at=00:00:02:03 dur=3f on=S1"
+            "overwrite caption=\"So\" at=00:00:02:03 dur=20f on=S1"
         );
+    }
+
+    /// What `captions` makes is held to what a check holds a caption to.
+    fn flagged(script: &str, fps: f64) -> Vec<String> {
+        let mut flagged = Vec::new();
+        let mut before: Option<i64> = None;
+        for line in script.lines() {
+            let text = line.split('"').nth(1).unwrap().replace("\\n", "\n");
+            let field = |key: &str| line.split(key).nth(1).unwrap().split(' ').next().unwrap();
+            let at = field(" at=");
+            let parts: Vec<i64> = at.split(':').map(|part| part.parse().unwrap()).collect();
+            let start = ((parts[0] * 60 + parts[1]) * 60 + parts[2]) * fps as i64 + parts[3];
+            let frames: i64 = field(" dur=").trim_end_matches('f').parse().unwrap();
+            let seconds = frames as f64 / fps;
+            if caption_characters(&text) as f64 / seconds > READING_SPEED + 1e-9 {
+                flagged.push(format!("fast: {line}"));
+            }
+            if seconds < SHORT_CAPTION_SIXTHS as f64 / 6.0 - 1e-9 {
+                flagged.push(format!("short: {line}"));
+            }
+            if let Some(end) = before {
+                if start > end && start - end < CAPTION_GAP_FRAMES {
+                    flagged.push(format!("gap: {line}"));
+                }
+                assert!(start >= end, "captions overlap: {line}");
+            }
+            before = Some(start + frames);
+        }
+        flagged
+    }
+
+    #[test]
+    fn captions_stay_up_long_enough_to_read_where_the_speech_leaves_room() {
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        // A sentence said quickly, four words to a caption: 19 characters a
+        // second in the middle of it, a one-word end, then a pause.
+        let words = [
+            word(10.0, 10.3, "Some"),
+            word(10.3, 10.7, "animals"),
+            word(10.7, 10.9, "such"),
+            word(10.9, 11.3, "as"),
+            word(11.3, 11.8, "elephants"),
+            word(11.8, 12.0, "and"),
+            word(12.0, 12.4, "giraffes"),
+            word(12.4, 12.6, "come"),
+            word(12.6, 12.8, "near."),
+            word(13.3, 13.5, "Yes."),
+        ];
+        let before = "overwrite caption=\"Some animals such as\" at=00:00:02:00 dur=31f on=S1
+overwrite caption=\"elephants and giraffes come\" at=00:00:03:07 dur=31f on=S1
+overwrite caption=\"near.\" at=00:00:04:14 dur=5f on=S1
+overwrite caption=\"Yes.\" at=00:00:05:07 dur=5f on=S1";
+        assert_eq!(flagged(before, 24.0).len(), 5, "as it was made before");
+        let script = caption_script(&project, "c1", "S1", &words, 4).unwrap();
+        assert_eq!(
+            script,
+            "overwrite caption=\"Some animals such as\" at=00:00:02:00 dur=31f on=S1
+overwrite caption=\"elephants and giraffes come\\nnear.\" at=00:00:03:07 dur=48f on=S1
+overwrite caption=\"Yes.\" at=00:00:05:07 dur=17f on=S1"
+        );
+        // "Yes." has 17 frames before the clip ends, which no caption
+        // outlasts: the one thing left to say of it.
+        assert_eq!(flagged(&script, 24.0), ["short: overwrite caption=\"Yes.\" at=00:00:05:07 dur=17f on=S1"]);
+        let captioned = apply_script(&project, catalog, &script).unwrap().project;
+        assert_eq!(captioned.sequences[0].tracks[1].clips.len(), 3);
+    }
+
+    #[test]
+    fn a_caption_meets_the_next_rather_than_stop_a_frame_short_of_it() {
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        // The first is read in 20 frames and the second starts on the 21st.
+        let words = [
+            word(10.0, 10.4, "One"),
+            word(10.4, 10.8, "two."),
+            word(10.875, 11.3, "Three"),
+            word(11.3, 12.0, "four."),
+        ];
+        let script = caption_script(&project, "c1", "S1", &words, 4).unwrap();
+        assert_eq!(
+            script,
+            "overwrite caption=\"One two.\" at=00:00:02:00 dur=21f on=S1
+overwrite caption=\"Three four.\" at=00:00:02:21 dur=27f on=S1"
+        );
+        assert!(flagged(&script, 24.0).is_empty());
+    }
+
+    #[test]
+    fn speech_faster_than_a_viewer_reads_is_left_to_a_check_to_say() {
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        // Twenty characters a second with no pause anywhere: no timing of
+        // these words can be read, and none is said twice or left out.
+        let words: Vec<Word> = (0..12)
+            .map(|index| {
+                let start = 10.0 + f64::from(index) * 0.25;
+                word(start, start + 0.25, "word")
+            })
+            .collect();
+        let script = caption_script(&project, "c1", "S1", &words, 4).unwrap();
+        assert_eq!(script.matches("word").count(), 12);
+        assert!(flagged(&script, 24.0).iter().any(|line| line.starts_with("fast")));
+    }
+
+    #[test]
+    fn a_transcribers_note_of_a_sound_is_not_captioned() {
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        let words = [
+            word(10.0, 10.5, "Good"),
+            word(10.5, 11.0, "night."),
+            word(12.0, 12.0, "[BLANK_AUDIO]"),
+            word(12.5, 13.0, "[MUSIC]"),
+        ];
+        let script = caption_script(&project, "c1", "S1", &words, 4).unwrap();
+        assert_eq!(
+            script,
+            "overwrite caption=\"Good night.\" at=00:00:02:00 dur=24f on=S1"
+        );
+        assert!(caption_script(&project, "c1", "S1", &words[2..], 4).is_err());
     }
 
     #[test]
@@ -315,13 +581,19 @@ overwrite caption=\"Next\" at=00:00:04:00 dur=12f on=S1"
             word(11.0, 11.5, "here."),
         ];
         let script = caption_script(&project, "c1", "S1", &words, 3).unwrap();
+        // Half a second is not time to read the first, so the two are one
+        // caption of two lines, up for as long as it takes to read.
         assert_eq!(
             script,
-            "overwrite caption=\"The term bug is used by\" at=00:00:02:00 dur=12f on=S1
-overwrite caption=\"people here.\" at=00:00:02:12 dur=24f on=S1"
+            "overwrite caption=\"The term bug is used by\\npeople here.\" at=00:00:02:00 dur=51f on=S1"
         );
         let captioned = apply_script(&project, catalog, &script).unwrap().project;
-        assert_eq!(captioned.sequences[0].tracks[1].clips.len(), 2);
+        let captions = &captioned.sequences[0].tracks[1].clips;
+        assert_eq!(captions.len(), 1);
+        assert!(
+            matches!(&captions[0].content, Content::Caption { text } if text == "The term bug is used by\npeople here."),
+            "{captions:?}"
+        );
         assert!(captioned.retired.is_empty());
     }
 
@@ -354,7 +626,7 @@ overwrite caption=\"people here.\" at=00:00:02:12 dur=24f on=S1"
         assert_eq!(
             crate::print_ops(&project, catalog, &applied.ops),
             "overwrite caption=\"So here we\" at=00:00:02:06 dur=00:00:01:06 on=S1
-overwrite caption=\"are.\" at=00:00:03:12 dur=00:00:00:12 on=S1
+overwrite caption=\"are.\" at=00:00:03:12 dur=00:00:00:20 on=S1
 marker add as=done at=00:00:06:00
 "
         );

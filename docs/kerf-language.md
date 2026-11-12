@@ -370,7 +370,12 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `captions c3 on=S1 [words=<n>]` captions what clip `c3` says, timed to its
   speech, from transcripts of its media made earlier; without a transcript
   covering the clip the line is refused. It runs as the caption lines it
-  becomes.
+  becomes. A line of a caption holds at most `words` words (four), and a
+  caption stays up past its last word for as long as it takes to read (17
+  characters a second, 5/6 of a second at least) where the next one leaves
+  the time; one that still cannot be read becomes the second line of its
+  neighbour where the two together can be. What is left for a check to
+  warn of is speech faster than a viewer reads.
 - Quoted phrases, `snap=`, and `captions` read analysis. Whoever runs the
   script says where it comes from (`kerfd` reads its media cache), and a
   line that needs what is not there is refused.

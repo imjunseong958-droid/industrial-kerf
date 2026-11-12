@@ -75,7 +75,8 @@ transition set <id> [dur=…] [align=…] [<param>=<value> …]  ·  transition 
 marker add at=<pos> [dur=<dur>] [name="…"] [color=<color>] [note="…"] [as=<id>]
 marker set <id> …  ·  marker remove <id>
 captions <clip> on=<subtitle track> [words=<n>]
-    caption what the clip says, timed to its speech, from its media's transcript
+    caption what the clip says, timed to its speech, from its media's transcript;
+    up to <n> words a line (4), two lines where one alone goes by too fast to read
 link <clip> <clip> … [as=<group>]  ·  unlink <clip> …
 track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] [locked=true]
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
