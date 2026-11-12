@@ -2096,17 +2096,16 @@ impl KerfMcpRouter {
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
         let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
         let id = sequence.id.as_str();
-        let failure = std::cell::RefCell::new(None);
+        // One drawer for the run: its frames are decoded once through. One made for each
+        // frame decoded each from its media's last keyframe again, and following a point for
+        // five seconds of a clip with one keyframe took 70 s.
+        let drawer = kerf_engine::still::drawer(&resolved, Some(id))
+            .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
         let read = |index: usize| {
             let at = rate.time_of(first + index as i64);
             let at = if at >= duration { to } else { at };
-            match kerf_engine::still::draw_frame(&resolved, Some(id), at, scale) {
-                Ok(frame) => Some((frame.width as usize, frame.height as usize, frame.rgba)),
-                Err(error) => {
-                    *failure.borrow_mut() = Some(error.to_string());
-                    None
-                }
-            }
+            let frame = drawer.frame(at, scale);
+            Some((frame.width as usize, frame.height as usize, frame.rgba))
         };
         let drawn_width = f64::from(sequence.width.max(1)) * scale;
         // Times on the clip that will follow, or from `from` without one.
@@ -2115,9 +2114,6 @@ impl KerfMcpRouter {
             // Up to `to`, and up to the last frame there is when that is the end of the sequence.
             let frames = if to >= duration { count } else { count + 1 } as usize;
             let solved = kerf_track::camera::solve(frames, track.fov, read);
-            if let Some(failure) = failure.into_inner() {
-                return Err(McpError::new("RENDER_FAILED", failure));
-            }
             let mut result = json!({
                 "sequence": sequence.id.to_string(),
                 "revision": revision,
@@ -2146,9 +2142,6 @@ impl KerfMcpRouter {
             };
             let followed =
                 kerf_track::follow_object(count as usize + 1, &hints, model.as_deref(), read);
-            if let Some(failure) = failure.into_inner() {
-                return Err(McpError::new("RENDER_FAILED", failure));
-            }
             let kept =
                 kerf_track::simplified_object(&followed, TRACK_TOLERANCE_PIXELS / drawn_width);
             let rounded = |value: f64| (value * 10_000.0).round() / 10_000.0;
@@ -2198,9 +2191,6 @@ impl KerfMcpRouter {
         }
         if let Some(corners) = track.corners {
             let followed = kerf_track::follow_plane(count as usize + 1, corners, read);
-            if let Some(failure) = failure.into_inner() {
-                return Err(McpError::new("RENDER_FAILED", failure));
-            }
             let kept =
                 kerf_track::simplified_quads(&followed.quads, TRACK_TOLERANCE_PIXELS / drawn_width);
             let rounded = |value: f64| (value * 100_000.0).round() / 100_000.0;
@@ -2268,9 +2258,6 @@ impl KerfMcpRouter {
         }
         let point = point.ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "nothing to follow"))?;
         let followed = kerf_track::follow(count as usize + 1, point, read);
-        if let Some(failure) = failure.into_inner() {
-            return Err(McpError::new("RENDER_FAILED", failure));
-        }
         let kept = kerf_track::simplified(&followed.points, TRACK_TOLERANCE_PIXELS / drawn_width);
         let keys = |value: &dyn Fn(usize) -> f64| {
             let words: Vec<String> = kept

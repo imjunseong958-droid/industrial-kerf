@@ -40,6 +40,25 @@ pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What draws the frames of `sequence` (the first when `None`) as [`draw_frame`] draws one,
+/// for a run of them. Frames asked of it in order are decoded once through. Asked of
+/// [`draw_frame`] one by one, each is decoded again from its media's last keyframe, so that a
+/// run of them costs the more the further it is from one: thirty frames four seconds into a
+/// clip with one keyframe took 22 s that way, and 2.6 s where every frame was one.
+pub fn drawer(project: &Project, sequence: Option<&str>) -> Result<Compositor> {
+    Ok(Compositor::new(
+        project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: sequence.map(str::to_owned),
+            captions: true,
+            keep_frames: true,
+            frame_folder: kerf_compose::default_frame_folder(),
+            ..Default::default()
+        },
+    )?)
+}
+
 /// The picture of `sequence` (the first when `None`) at sequence time `at`
 /// as a render draws it, captions burned in, at `scale` of its canvas (1
 /// is full size). Generators, titles among them, draw on their own; clips
@@ -50,18 +69,7 @@ pub fn draw_frame(
     at: Time,
     scale: f64,
 ) -> Result<Frame> {
-    let compositor = Compositor::new(
-        project,
-        Catalog::builtin(),
-        &ComposeOptions {
-            sequence: sequence.map(str::to_owned),
-            captions: true,
-            keep_frames: true,
-            frame_folder: kerf_compose::default_frame_folder(),
-            ..Default::default()
-        },
-    )?;
-    Ok(compositor.frame(at, scale))
+    Ok(drawer(project, sequence)?.frame(at, scale))
 }
 
 /// [`draw_frame`], of an HDR sequence, as the 16-bit signal its master gets rather than what a monitor
@@ -72,18 +80,7 @@ pub fn draw_signal(
     at: Time,
     scale: f64,
 ) -> Result<Frame> {
-    let compositor = Compositor::new(
-        project,
-        Catalog::builtin(),
-        &ComposeOptions {
-            sequence: sequence.map(str::to_owned),
-            captions: true,
-            keep_frames: true,
-            frame_folder: kerf_compose::default_frame_folder(),
-            ..Default::default()
-        },
-    )?;
-    Ok(compositor.frame16(at, scale))
+    Ok(drawer(project, sequence)?.frame16(at, scale))
 }
 
 #[cfg(test)]
@@ -117,5 +114,15 @@ mod tests {
         let before = draw_frame(&project, Some("s1"), Rate::FPS_24.time_of(12), 1.0).unwrap();
         assert_eq!(lit(&before), 0, "black before the title");
         assert!(draw_frame(&project, Some("missing"), Time::ZERO, 1.0).is_err());
+        // A run of frames drawn by one drawer is the frames drawn one by one, in any order.
+        let run = drawer(&project, None).unwrap();
+        for frame in [36, 12, 37, 36] {
+            let at = Rate::FPS_24.time_of(frame);
+            let one = draw_frame(&project, None, at, 1.0).unwrap();
+            let of_run = run.frame(at, 1.0);
+            assert_eq!((of_run.width, of_run.height), (one.width, one.height));
+            assert!(of_run.rgba == one.rgba, "frame {frame}");
+        }
+        assert!(drawer(&project, Some("missing")).is_err());
     }
 }
