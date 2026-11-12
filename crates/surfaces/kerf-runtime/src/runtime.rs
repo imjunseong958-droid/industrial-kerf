@@ -202,7 +202,21 @@ impl Runtime {
                 ));
                 None
             }
-            Loaded::None => None,
+            Loaded::None => {
+                // A journal says what was done since a checkpoint. Left with
+                // none, there is nothing to do it to: the project file holds
+                // what its records made, and run on that again they are
+                // refused (an id already used), or done twice. Keep it aside,
+                // as an older kerfd's is kept, and open the project file.
+                if fs::metadata(&journal_path).is_ok_and(|journal| journal.len() > 0) {
+                    preserve_previous_state(directory)?;
+                    notes.push(format!(
+                        "a journal with no checkpoint was set aside as \
+                         {PREVIOUS_STATE_PREFIX}.journal; the project is as {PROJECT_FILE} has it"
+                    ));
+                }
+                None
+            }
         };
         let checkpoint_project = checkpoint.as_ref().map(|value| value.project.clone());
         let mut runtime = if let Some(checkpoint) = checkpoint {
@@ -4596,6 +4610,51 @@ mod tests {
         assert!(!receipts.contains_key("ui:1"));
         assert!(!receipts.contains_key("ui:2"));
         assert!(receipts.contains_key("ui:3"));
+    }
+
+    #[test]
+    fn a_journal_left_without_its_checkpoint_is_set_aside_and_the_project_opens() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-journal-alone-{}", unique_id()));
+        let document = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            runtime
+                .apply_script_request("ui", "one", "marker add at=0f as=first", 0)
+                .unwrap();
+            runtime
+                .apply_script_request("ui", "two", "marker add at=0f as=second", 1)
+                .unwrap()
+                .document
+        };
+        // The checkpoint goes, as when a folder is copied without it: the
+        // journal's records were run on a state that is no longer kept, and
+        // the project file already holds what they made.
+        let journal_path = directory.join(JOURNAL_FILE);
+        assert_eq!(load_journal(&journal_path, 0).unwrap().len(), 2);
+        fs::remove_file(directory.join(CHECKPOINT_FILE)).unwrap();
+
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let reopened = runtime.snapshot();
+        assert_eq!(reopened.document, document, "as the project file has it");
+        assert_eq!(reopened.revision, 0);
+        assert!(
+            reopened
+                .import_warnings
+                .iter()
+                .any(|note| note.contains("journal") && note.contains(PREVIOUS_STATE_PREFIX)),
+            "{:?}",
+            reopened.import_warnings
+        );
+        // Kept, not run a second time and not thrown away.
+        let kept = directory.join(format!("{PREVIOUS_STATE_PREFIX}.journal"));
+        assert_eq!(load_journal(&kept, 0).unwrap().len(), 2);
+        assert!(load_journal(&journal_path, 0).unwrap().is_empty());
+        // And the project can be edited again.
+        let edited = runtime
+            .apply_script_request("ui", "three", "marker add at=0f as=third", 0)
+            .unwrap();
+        assert_eq!(edited.revision, 1);
+        assert!(edited.document.contains("third"), "{}", edited.document);
     }
 
     #[test]
