@@ -18,7 +18,7 @@ pub mod qc;
 mod qc_full;
 mod text_lint;
 
-pub use making::{answer_make_requests, make_requests};
+pub use making::{answer_make_requests, make_requests, MakingEvent, MakingWatcher};
 pub use presets::{keep_looks, PRESET_FOLDERS};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
 pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
