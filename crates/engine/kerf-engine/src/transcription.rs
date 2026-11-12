@@ -25,6 +25,23 @@ pub const MAX_TRANSCRIPTION_RANGE_SECONDS: f64 = 15.0 * 60.0;
 pub const MAX_LISTEN_RANGE_SECONDS: f64 = 2.0 * 60.0;
 
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
+/// How far a part transcribed beside one already heard is heard into it,
+/// so that a word across their edge is heard whole by one of them and the
+/// two can be joined where nobody is speaking.
+const SEAM_OVERLAP_SECONDS: f64 = 5.0;
+/// Two transcripts are joined in the middle of the quietest stretch this
+/// long of what both heard, measured in windows of [`SEAM_WINDOW_SECONDS`].
+const SEAM_QUIET_SECONDS: f64 = 0.2;
+const SEAM_WINDOW_SECONDS: f64 = 0.02;
+/// Ranges closer than this meet.
+const RANGE_EPSILON: f64 = 1e-6;
+/// How much quieter than the sound around it a moment has to be to be a
+/// pause in the speech, as a share of that sound's energy: 25 dB down.
+const PAUSE_ENERGY_SHARE: f64 = 0.003;
+/// How far out a word's time may be: whisper times a word to within a
+/// second or so, so the words two transcripts both heard are looked for
+/// this far either side of what both were given.
+const WORD_TIME_SLACK_SECONDS: f64 = 1.5;
 const DEFAULT_WHISPER_BACKEND_VERSION: &str = "whisper.cpp/unknown";
 
 /// A bounded project-time range used by transcription and listening.
@@ -192,21 +209,71 @@ where
     transcribe_cached_inner(src, cache, options, cancellation, on_progress, false)
 }
 
-/// The transcripts already made of `src` as it is now, of any range, by
-/// any model. Nothing is transcribed.
+/// What the transcripts already made of `src` as it is now heard, by any
+/// model. Nothing is transcribed.
+///
+/// Transcripts made the same way that overlap or meet come as one, joined
+/// as a request across them would be: a moment heard twice is given once,
+/// so whoever reads the words (a check for cuts in words, captions made of
+/// a clip's speech) finds each of them once.
 pub fn cached_transcripts(src: &str, cache: &DerivativeCache) -> Result<Vec<Transcript>> {
-    let mut transcripts = Vec::new();
+    // Made the same way: the same options, whatever the range.
+    let mut groups: Vec<(Value, Vec<Piece>)> = Vec::new();
     for entry in cache.source_entries(Path::new(src), "transcription")? {
         if !entry.is_complete(&["transcript.json"]) {
             continue;
         }
-        if let Ok(transcript) = entry.read_json::<Transcript>("transcript.json") {
-            if transcript.schema_version == TRANSCRIPTION_SCHEMA_VERSION {
-                transcripts.push(transcript);
-            }
+        let Ok(transcript) = entry.read_json::<Transcript>("transcript.json") else {
+            continue;
+        };
+        if transcript.schema_version != TRANSCRIPTION_SCHEMA_VERSION {
+            continue;
+        }
+        let piece = Piece {
+            transcript,
+            audio: entry.path("audio.wav"),
+            edges: entry.read_json("edges.json").unwrap_or_default(),
+        };
+        let made = options_but_range(entry.options());
+        match groups.iter_mut().find(|(options, _)| *options == made) {
+            Some((_, pieces)) => pieces.push(piece),
+            None => groups.push((made, vec![piece])),
         }
     }
+    let mut transcripts = Vec::new();
+    for (_, mut pieces) in groups {
+        pieces.sort_by(|a, b| {
+            a.transcript
+                .range
+                .start
+                .total_cmp(&b.transcript.range.start)
+        });
+        // Each stretch the pieces cover without a break.
+        let mut stretches: Vec<TimeRange> = Vec::new();
+        for range in ranges(&pieces) {
+            match stretches.last_mut() {
+                Some(stretch) if range.start <= stretch.end + RANGE_EPSILON => {
+                    stretch.end = stretch.end.max(range.end);
+                }
+                _ => stretches.push(range),
+            }
+        }
+        transcripts.extend(
+            stretches
+                .into_iter()
+                .filter_map(|stretch| stitched(stretch, &pieces)),
+        );
+    }
     Ok(transcripts)
+}
+
+/// The options a transcript was made with, but for its range.
+fn options_but_range(options: &Value) -> Value {
+    let mut options = options.clone();
+    if let Some(options) = options.as_object_mut() {
+        options.remove("range");
+    }
+    options
 }
 
 /// Prepare and transcribe a bounded range for a listening observation.
@@ -278,19 +345,100 @@ where
         ));
     }
 
+    // What was heard before answers what it covers: only the parts no
+    // transcript of this file by this model covers are transcribed now. A
+    // listening observation also wants the range's own sound, so it is made
+    // whole.
+    if !include_audio {
+        let source_end = metadata.duration.filter(|duration| duration.is_finite());
+        let mut pieces = cached_pieces(src, cache, entry.options())?;
+        let missing = uncovered(options.range, &ranges(&pieces));
+        let cached = missing.is_empty();
+        for gap in missing {
+            let (range, edges) = heard_beside(gap, &pieces, source_end);
+            let piece_options = TranscriptionOptions {
+                range,
+                ..options.clone()
+            };
+            let piece_entry = cache.source_entry(
+                Path::new(src),
+                "transcription",
+                &cache_options(&piece_options, &config)?,
+            )?;
+            if edges != Edges::default() {
+                piece_entry.write_json("edges.json", &edges)?;
+            }
+            let transcript = transcribe_piece(
+                src,
+                &piece_entry,
+                range,
+                options.language.as_deref(),
+                &config,
+                cancellation,
+                &mut on_progress,
+            )?;
+            pieces.push(Piece {
+                audio: piece_entry.path("audio.wav"),
+                transcript,
+                edges,
+            });
+        }
+        if cached {
+            on_progress(TranscriptionProgress {
+                stage: TranscriptionStage::Transcribe,
+                progress: 1.0,
+            });
+        }
+        let transcript = stitched(options.range, &pieces).ok_or_else(|| {
+            EngineError::msg("the transcripts made do not cover the range asked for")
+        })?;
+        // Nothing was made for this very range: leave no empty entry behind
+        // for each range asked for.
+        let _ = fs::remove_dir(&entry.directory);
+        return Ok(result_from_cache(
+            &entry, transcript, &config, false, cached,
+        ));
+    }
+
+    let transcript = transcribe_piece(
+        src,
+        &entry,
+        options.range,
+        options.language.as_deref(),
+        &config,
+        cancellation,
+        &mut on_progress,
+    )?;
+    Ok(result_from_cache(
+        &entry,
+        transcript,
+        &config,
+        include_audio,
+        false,
+    ))
+}
+
+/// Transcribe `range` of `src` into `entry`, whose key names that range:
+/// its sound, then what whisper hears in it. What the entry already has is
+/// kept.
+fn transcribe_piece(
+    src: &str,
+    entry: &CacheEntry,
+    range: TimeRange,
+    language: Option<&str>,
+    config: &WhisperConfig,
+    cancellation: &CancellationToken,
+    on_progress: &mut impl FnMut(TranscriptionProgress),
+) -> Result<Transcript> {
+    let transcript_complete = entry.is_complete(&["transcript.json"]);
+    let audio_complete = entry.is_complete(&["transcript.json", "audio.wav"]);
     let audio_path = entry.path("audio.wav");
     if !audio_complete {
         on_progress(TranscriptionProgress {
             stage: TranscriptionStage::PrepareAudio,
             progress: 0.0,
         });
-        extract_audio_range(
-            src,
-            options.range,
-            &audio_path,
-            cancellation,
-            &mut on_progress,
-        )?;
+        extract_audio_range(src, range, &audio_path, cancellation, on_progress)?;
         ensure_not_cancelled(cancellation)?;
         on_progress(TranscriptionProgress {
             stage: TranscriptionStage::PrepareAudio,
@@ -299,30 +447,25 @@ where
     }
 
     let transcript = if transcript_complete {
-        read_cached_transcript(&entry, options.range)?
+        read_cached_transcript(entry, range)?
     } else {
         on_progress(TranscriptionProgress {
             stage: TranscriptionStage::Transcribe,
             progress: 0.0,
         });
         let output_base = entry.path("transcript");
-        let args = whisper_args(
-            &config,
-            &audio_path,
-            &output_base,
-            options.language.as_deref(),
-        );
+        let args = whisper_args(config, &audio_path, &output_base, language);
         run_sidecar(
             &config.binary,
             &args,
             cancellation,
             TranscriptionStage::Transcribe,
-            &mut on_progress,
+            on_progress,
         )?;
         ensure_not_cancelled(cancellation)?;
         let output_path = output_base.with_extension("json");
         let output = read_bounded_text(&output_path, MAX_TRANSCRIPT_BYTES)?;
-        let transcript = parse_whisper_json(&output, options.range)?;
+        let transcript = parse_whisper_json(&output, range)?;
         ensure_not_cancelled(cancellation)?;
         entry.write_json("transcript.json", &transcript)?;
         transcript
@@ -331,13 +474,475 @@ where
     ensure_not_cancelled(cancellation)?;
     let required = vec!["transcript.json", "audio.wav"];
     entry.mark_complete(&required)?;
-    Ok(result_from_cache(
-        &entry,
-        transcript,
-        &config,
-        include_audio,
-        false,
+    Ok(transcript)
+}
+
+/// A transcript in the cache, and where the sound it was made from is kept.
+struct Piece {
+    transcript: Transcript,
+    audio: PathBuf,
+    edges: Edges,
+}
+
+/// Whether a transcript's range was made to start or end in a pause of the
+/// speech, so that no word is cut there: kept beside it as `edges.json`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Edges {
+    starts_in_pause: bool,
+    ends_in_pause: bool,
+}
+
+fn ranges(pieces: &[Piece]) -> Vec<TimeRange> {
+    pieces.iter().map(|piece| piece.transcript.range).collect()
+}
+
+/// The transcripts of `src` as it is now that were made as `key_options`
+/// asks, of whatever range.
+fn cached_pieces(src: &str, cache: &DerivativeCache, key_options: &Value) -> Result<Vec<Piece>> {
+    let wanted = options_but_range(key_options);
+    let mut pieces = Vec::new();
+    for entry in cache.source_entries(Path::new(src), "transcription")? {
+        if options_but_range(entry.options()) != wanted || !entry.is_complete(&["transcript.json"])
+        {
+            continue;
+        }
+        let Ok(transcript) = entry.read_json::<Transcript>("transcript.json") else {
+            continue;
+        };
+        if transcript.schema_version == TRANSCRIPTION_SCHEMA_VERSION {
+            pieces.push(Piece {
+                transcript,
+                audio: entry.path("audio.wav"),
+                edges: entry.read_json("edges.json").unwrap_or_default(),
+            });
+        }
+    }
+    Ok(pieces)
+}
+
+/// The parts of `range` that none of `heard` covers, in order.
+fn uncovered(range: TimeRange, heard: &[TimeRange]) -> Vec<TimeRange> {
+    let mut heard: Vec<TimeRange> = heard.to_vec();
+    heard.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut gaps = Vec::new();
+    let mut at = range.start;
+    for piece in heard {
+        if piece.end <= at + RANGE_EPSILON {
+            continue;
+        }
+        if piece.start >= range.end - RANGE_EPSILON {
+            break;
+        }
+        if piece.start > at + RANGE_EPSILON {
+            gaps.push(TimeRange {
+                start: at,
+                end: piece.start,
+            });
+        }
+        at = piece.end;
+    }
+    if at < range.end - RANGE_EPSILON {
+        gaps.push(TimeRange {
+            start: at,
+            end: range.end,
+        });
+    }
+    gaps
+}
+
+/// The range to transcribe for `gap`, a part nothing has heard, and how it
+/// meets what `heard` covers on either side of it.
+///
+/// A range that stopped at the gap's own edge would cut the word spoken
+/// across it. So the gap is taken into the [`SEAM_OVERLAP_SECONDS`] its
+/// neighbour heard, as far as the pause nearest the gap in that sound: the
+/// new transcript starts (or ends) where nobody is speaking, and the two
+/// meet there. Where the neighbour's sound has no pause, or is not kept,
+/// the gap is taken the whole way in and the two are joined by what both
+/// heard (see [`join`]). Where nothing was heard beside it, the gap is
+/// transcribed as it is.
+fn heard_beside(gap: TimeRange, heard: &[Piece], source_end: Option<f64>) -> (TimeRange, Edges) {
+    let mut range = gap;
+    let mut edges = Edges::default();
+    let before = heard
+        .iter()
+        .filter(|piece| {
+            let piece = piece.transcript.range;
+            piece.start < gap.start - RANGE_EPSILON && piece.end >= gap.start - RANGE_EPSILON
+        })
+        .min_by(|a, b| {
+            a.transcript
+                .range
+                .start
+                .total_cmp(&b.transcript.range.start)
+        });
+    if let Some(piece) = before {
+        let start = piece.transcript.range.start;
+        let from = (gap.start - SEAM_OVERLAP_SECONDS).max(start);
+        range.start = from;
+        // The last pause before the gap, if there is one.
+        if let Some((at, true)) = quietest(&piece.audio, from - start, gap.start - start, true) {
+            range.start = from + at;
+            edges.starts_in_pause = true;
+        }
+    }
+    let after = heard
+        .iter()
+        .filter(|piece| {
+            let piece = piece.transcript.range;
+            piece.start <= gap.end + RANGE_EPSILON && piece.end > gap.end + RANGE_EPSILON
+        })
+        .max_by(|a, b| a.transcript.range.end.total_cmp(&b.transcript.range.end));
+    if let Some(piece) = after {
+        let (start, end) = (piece.transcript.range.start, piece.transcript.range.end);
+        let to = (gap.end + SEAM_OVERLAP_SECONDS)
+            .min(end)
+            .min(source_end.unwrap_or(f64::INFINITY))
+            .max(gap.end);
+        range.end = to;
+        // The first pause after the gap.
+        if let Some((at, true)) = quietest(&piece.audio, gap.end - start, to - start, false) {
+            range.end = gap.end + at;
+            edges.ends_in_pause = true;
+        }
+    }
+    (range, edges)
+}
+
+/// The transcript of `range` made of `pieces`. At the range's own edges a
+/// word belongs to the range its middle is in; where two pieces overlap
+/// they are joined at a word both heard (see [`join`]). `None` when the
+/// pieces leave part of the range unheard.
+fn stitched(range: TimeRange, pieces: &[Piece]) -> Option<Transcript> {
+    // From where the range starts, the piece that has been hearing longest
+    // there; then the next to start, where it overlaps the end of that one
+    // or takes over where it stops; and so on. A moment is then taken from
+    // a piece it is well inside of, not from the edge of one that happens
+    // to reach it.
+    let covers = |piece: &&Piece, at: f64| {
+        piece.transcript.range.start <= at + RANGE_EPSILON
+            && piece.transcript.range.end > at + RANGE_EPSILON
+    };
+    let earliest = |a: &&Piece, b: &&Piece| {
+        let (a, b) = (a.transcript.range, b.transcript.range);
+        a.start.total_cmp(&b.start).then(b.end.total_cmp(&a.end))
+    };
+    let mut chain: Vec<&Piece> = vec![pieces
+        .iter()
+        .filter(|piece| covers(piece, range.start))
+        .min_by(earliest)?];
+    loop {
+        let current = chain[chain.len() - 1].transcript.range;
+        let next = pieces
+            .iter()
+            .filter(|piece| {
+                let next = piece.transcript.range;
+                next.start > current.start
+                    && next.start <= current.end + RANGE_EPSILON
+                    && next.end > current.end + RANGE_EPSILON
+                    && next.start < range.end - RANGE_EPSILON
+            })
+            .min_by(earliest);
+        match next {
+            Some(next) => chain.push(next),
+            None if current.end >= range.end - RANGE_EPSILON => break,
+            None => return None,
+        }
+    }
+    // Each piece's share, as the words it gives, counted through its cues:
+    // from the range's start, between joins, to the range's end.
+    let middle = |word: &TranscriptWord| (word.start + word.end) / 2.0;
+    let words: Vec<Vec<&TranscriptWord>> = chain
+        .iter()
+        .map(|piece| {
+            piece
+                .transcript
+                .cues
+                .iter()
+                .flat_map(|cue| &cue.words)
+                .collect()
+        })
+        .collect();
+    let mut shares: Vec<(usize, usize)> = words.iter().map(|words| (0, words.len())).collect();
+    shares[0].0 = words[0]
+        .iter()
+        .position(|word| middle(word) >= range.start)
+        .unwrap_or(words[0].len());
+    let last = chain.len() - 1;
+    shares[last].1 = words[last]
+        .iter()
+        .rposition(|word| middle(word) <= range.end)
+        .map_or(0, |index| index + 1);
+    for index in 0..last {
+        let (end, first) = join(
+            chain[index],
+            chain[index + 1],
+            &words[index],
+            &words[index + 1],
+        );
+        shares[index].1 = shares[index].1.min(end);
+        shares[index + 1].0 = shares[index + 1].0.max(first);
+    }
+    // A join puts the words of one piece before those of the next, and
+    // their times follow: whisper draws the last word before a pause out
+    // across it, past where the next piece's first word starts.
+    let upto = |index: usize| {
+        (index + 1..chain.len())
+            .find(|next| shares[*next].0 < shares[*next].1)
+            .map_or(range.end, |next| {
+                words[next][shares[next].0]
+                    .start
+                    .clamp(range.start, range.end)
+            })
+    };
+    let mut cues = Vec::new();
+    for (at, (piece, (first, end))) in chain.iter().zip(&shares).enumerate() {
+        let upto = upto(at);
+        let mut index = 0;
+        for cue in &piece.transcript.cues {
+            let own = index..index + cue.words.len();
+            index = own.end;
+            let kept: Vec<TranscriptWord> = cue
+                .words
+                .iter()
+                .zip(own)
+                .filter(|(_, index)| (*first..*end).contains(index))
+                .map(|(word, _)| TranscriptWord {
+                    start: word.start.clamp(range.start, upto),
+                    end: word.end.clamp(range.start, upto),
+                    ..word.clone()
+                })
+                .collect();
+            let (Some(first_word), Some(last_word)) = (kept.first(), kept.last()) else {
+                continue;
+            };
+            let text = if kept.len() == cue.words.len() {
+                cue.text.clone()
+            } else {
+                kept.iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            cues.push(TranscriptCue {
+                start: cue.start.clamp(range.start, upto).min(first_word.start),
+                end: cue.end.clamp(range.start, upto).max(last_word.end),
+                text,
+                words: kept,
+            });
+        }
+    }
+    // Whisper's times are loose enough for two pieces' cues to cross.
+    cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let text = cues
+        .iter()
+        .map(|cue| cue.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(Transcript {
+        schema_version: TRANSCRIPTION_SCHEMA_VERSION,
+        range,
+        language: chain
+            .iter()
+            .find_map(|piece| piece.transcript.language.clone()),
+        text,
+        cues,
+    })
+}
+
+/// A word as two transcripts are compared by: its letters and digits.
+fn spoken(word: &TranscriptWord) -> String {
+    word.text
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Where `earlier` stops giving words and `later` starts, as how many of
+/// its words `earlier` gives and which word of `later` comes next.
+///
+/// The two heard the same sound where they overlap, and said the same
+/// words of it; the times they gave those words may be a second apart. So
+/// they are joined at a word both have, the one nearest the quietest
+/// moment of that sound: `earlier` gives up to it and `later` goes on
+/// after it, and no word is lost or said twice. Where they share no word,
+/// each gives the words on its side of that moment.
+fn join(
+    earlier: &Piece,
+    later: &Piece,
+    earlier_words: &[&TranscriptWord],
+    later_words: &[&TranscriptWord],
+) -> (usize, usize) {
+    let (from, to) = (later.transcript.range.start, earlier.transcript.range.end);
+    let middle = |word: &TranscriptWord| (word.start + word.end) / 2.0;
+    // One that was made to start or end in a pause is whole from there:
+    // the other gives what was said on its side of the pause.
+    if later.edges.starts_in_pause {
+        let kept = earlier_words
+            .iter()
+            .position(|word| word.start >= from)
+            .unwrap_or(earlier_words.len());
+        return (kept, 0);
+    }
+    if earlier.edges.ends_in_pause {
+        let next = later_words
+            .iter()
+            .position(|word| middle(word) >= to)
+            .unwrap_or(later_words.len());
+        return (earlier_words.len(), next);
+    }
+    let quiet = seam(earlier, later);
+    // The end of the one and the start of the other, where both listened.
+    let tail = earlier_words
+        .iter()
+        .position(|word| word.end >= from - WORD_TIME_SLACK_SECONDS)
+        .unwrap_or(earlier_words.len());
+    let head = later_words
+        .iter()
+        .rposition(|word| word.start <= to + WORD_TIME_SLACK_SECONDS)
+        .map_or(0, |index| index + 1);
+    let (a, b) = (&earlier_words[tail..], &later_words[..head]);
+    let (said_a, said_b): (Vec<String>, Vec<String>) = (
+        a.iter().map(|word| spoken(word)).collect(),
+        b.iter().map(|word| spoken(word)).collect(),
+    );
+    // The longest run of words both said, in order.
+    let mut longest = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            longest[i][j] = if !said_a[i].is_empty() && said_a[i] == said_b[j] {
+                longest[i + 1][j + 1] + 1
+            } else {
+                longest[i + 1][j].max(longest[i][j + 1])
+            };
+        }
+    }
+    let mut shared = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if !said_a[i].is_empty() && said_a[i] == said_b[j] {
+            shared.push((i, j));
+            i += 1;
+            j += 1;
+        } else if longest[i + 1][j] >= longest[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    let nearest = shared
+        .iter()
+        .min_by(|x, y| {
+            (middle(a[x.0]) - quiet)
+                .abs()
+                .total_cmp(&(middle(a[y.0]) - quiet).abs())
+        })
+        .copied();
+    match nearest {
+        Some((i, j)) => (tail + i + 1, j + 1),
+        None => (
+            earlier_words
+                .iter()
+                .position(|word| middle(word) >= quiet)
+                .unwrap_or(earlier_words.len()),
+            later_words
+                .iter()
+                .position(|word| middle(word) >= quiet)
+                .unwrap_or(later_words.len()),
+        ),
+    }
+}
+
+/// Where the transcript of `earlier` gives way to that of `later`, which
+/// starts before `earlier` ends: the quietest moment of the sound both
+/// heard, or the middle of that sound when it is too short to tell or is
+/// not kept.
+fn seam(earlier: &Piece, later: &Piece) -> f64 {
+    let (from, to) = (later.transcript.range.start, earlier.transcript.range.end);
+    [later, earlier]
+        .into_iter()
+        .find_map(|piece| {
+            let start = piece.transcript.range.start;
+            quietest(&piece.audio, from - start, to - start, false)
+        })
+        .map_or((from + to) / 2.0, |(at, _)| from + at)
+}
+
+/// The middle of the quietest [`SEAM_QUIET_SECONDS`] of `[from, to)`
+/// seconds of the sound kept at `path`, in seconds after `from`, and
+/// whether it is a pause: quieter than the sound around it by
+/// [`PAUSE_ENERGY_SHARE`]. Of stretches as quiet, the `last` or the first.
+/// `None` when the sound is not kept or is shorter than that.
+fn quietest(path: &Path, from: f64, to: f64, last: bool) -> Option<(f64, bool)> {
+    let samples = wav_samples(path, from, to)?;
+    let window = (SEAM_WINDOW_SECONDS * f64::from(TRANSCRIPTION_SAMPLE_RATE)) as usize;
+    let energy: Vec<f64> = samples
+        .chunks(window)
+        .filter(|chunk| chunk.len() == window)
+        .map(|chunk| chunk.iter().map(|sample| f64::from(*sample).powi(2)).sum())
+        .collect();
+    let run = (SEAM_QUIET_SECONDS / SEAM_WINDOW_SECONDS).round() as usize;
+    if energy.len() < run {
+        return None;
+    }
+    let runs: Vec<f64> = (0..=energy.len() - run)
+        .map(|first| energy[first..first + run].iter().sum())
+        .collect();
+    let least = runs.iter().copied().fold(f64::INFINITY, f64::min);
+    // As quiet as the quietest, to the ear: within a decibel of it, or
+    // silent as it is.
+    let as_quiet = |sum: &f64| *sum <= least * 1.25 + 1.0;
+    let first = if last {
+        runs.iter().rposition(as_quiet)?
+    } else {
+        runs.iter().position(as_quiet)?
+    };
+    let around = energy.iter().sum::<f64>() / energy.len() as f64 * run as f64;
+    let pause = runs[first] <= around * PAUSE_ENERGY_SHARE;
+    Some((
+        (first as f64 + run as f64 / 2.0) * SEAM_WINDOW_SECONDS,
+        pause,
     ))
+}
+
+/// The samples of `[from, to)` seconds of a 16-bit mono WAV file at the
+/// transcription rate, as the cache keeps a transcript's sound.
+fn wav_samples(path: &Path, from: f64, to: f64) -> Option<Vec<i16>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if &header[..4] != b"RIFF" || &header[8..] != b"WAVE" {
+        return None;
+    }
+    // The chunks before the samples: the format, and whatever else was
+    // written.
+    let (data, length) = loop {
+        let mut chunk = [0u8; 8];
+        file.read_exact(&mut chunk).ok()?;
+        let length = u64::from(u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]));
+        if &chunk[..4] == b"data" {
+            break (file.stream_position().ok()?, length);
+        }
+        file.seek(SeekFrom::Current((length + length % 2) as i64))
+            .ok()?;
+    };
+    let rate = f64::from(TRANSCRIPTION_SAMPLE_RATE);
+    let first = ((from.max(0.0) * rate) as u64).min(length / 2);
+    let last = ((to.max(0.0) * rate) as u64).min(length / 2);
+    file.seek(SeekFrom::Start(data + first * 2)).ok()?;
+    let mut bytes = vec![0u8; ((last.saturating_sub(first)) * 2) as usize];
+    file.read_exact(&mut bytes).ok()?;
+    Some(
+        bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair))
+            .collect(),
+    )
 }
 
 fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<()> {
@@ -1111,6 +1716,253 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(3));
     }
 
+    fn range(start: f64, end: f64) -> TimeRange {
+        TimeRange::new(start, end).expect("range")
+    }
+
+    #[test]
+    fn only_what_no_transcript_covers_is_left_to_transcribe() {
+        let heard = [range(10.0, 60.0), range(60.0, 90.0), range(120.0, 150.0)];
+        // Covered whole, by two transcripts that meet.
+        assert_eq!(uncovered(range(20.0, 80.0), &heard), []);
+        // Before, between and after.
+        assert_eq!(
+            uncovered(range(0.0, 200.0), &heard),
+            [range(0.0, 10.0), range(90.0, 120.0), range(150.0, 200.0)]
+        );
+        assert_eq!(uncovered(range(95.0, 100.0), &heard), [range(95.0, 100.0)]);
+        assert_eq!(uncovered(range(0.0, 5.0), &[]), [range(0.0, 5.0)]);
+    }
+
+    /// A transcript of `range` whose cue holds `words`, each with its start.
+    fn piece(directory: &Path, name: &str, range: TimeRange, words: &[(f64, &str)]) -> Piece {
+        let words: Vec<TranscriptWord> = words
+            .iter()
+            .map(|(start, text)| TranscriptWord {
+                start: *start,
+                end: start + 0.4,
+                text: (*text).into(),
+                confidence: None,
+            })
+            .collect();
+        let text = words
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Piece {
+            audio: directory.join(name),
+            edges: Edges::default(),
+            transcript: Transcript {
+                schema_version: TRANSCRIPTION_SCHEMA_VERSION,
+                range,
+                language: Some("en".into()),
+                text: text.clone(),
+                cues: vec![TranscriptCue {
+                    start: range.start,
+                    end: range.end,
+                    text,
+                    words,
+                }],
+            },
+        }
+    }
+
+    /// A WAV as the cache keeps one: a tone for `seconds`, silent for a
+    /// quarter of a second from `quiet`.
+    fn tone_with_a_pause(path: &Path, seconds: f64, quiet: f64) {
+        let rate = f64::from(TRANSCRIPTION_SAMPLE_RATE);
+        let samples: Vec<i16> = (0..(seconds * rate) as usize)
+            .map(|index| {
+                let at = index as f64 / rate;
+                if (quiet..quiet + 0.25).contains(&at) {
+                    0
+                } else {
+                    ((at * 440.0 * std::f64::consts::TAU).sin() * 8000.0) as i16
+                }
+            })
+            .collect();
+        let mut bytes = Vec::new();
+        bytes.extend(b"RIFF");
+        bytes.extend((36 + samples.len() as u32 * 2).to_le_bytes());
+        bytes.extend(b"WAVEfmt ");
+        bytes.extend(16u32.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(TRANSCRIPTION_SAMPLE_RATE.to_le_bytes());
+        bytes.extend((TRANSCRIPTION_SAMPLE_RATE * 2).to_le_bytes());
+        bytes.extend(2u16.to_le_bytes());
+        bytes.extend(16u16.to_le_bytes());
+        bytes.extend(b"data");
+        bytes.extend((samples.len() as u32 * 2).to_le_bytes());
+        for sample in samples {
+            bytes.extend(sample.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("wav");
+    }
+
+    #[test]
+    fn a_part_nothing_heard_is_taken_to_the_pause_nearest_it_in_what_was_heard_beside_it() {
+        let folder = tempdir().expect("folder");
+        // What was heard before the gap pauses from 57.6 to 57.85, and what
+        // was heard after it from 92.0 to 92.25.
+        let before = piece(folder.path(), "before.wav", range(10.0, 60.0), &[]);
+        tone_with_a_pause(&before.audio, 50.0, 47.6);
+        let after = piece(folder.path(), "after.wav", range(90.0, 150.0), &[]);
+        tone_with_a_pause(&after.audio, 60.0, 2.0);
+        let heard = [before, after];
+        let (taken, edges) = heard_beside(range(60.0, 90.0), &heard, Some(300.0));
+        assert!((57.6..57.85).contains(&taken.start), "{taken:?}");
+        assert!((92.0..92.25).contains(&taken.end), "{taken:?}");
+        assert!(edges.starts_in_pause && edges.ends_in_pause);
+
+        // Where that sound has no pause, or is not kept, the gap is taken
+        // five seconds in, or as far as there is of it or of the file.
+        fs::write(&heard[1].audio, b"").expect("empty");
+        tone_with_a_pause(&heard[0].audio, 50.0, 10.0);
+        assert_eq!(
+            heard_beside(range(60.0, 90.0), &heard, Some(300.0)),
+            (range(55.0, 95.0), Edges::default())
+        );
+        assert_eq!(
+            heard_beside(range(60.0, 90.0), &heard, Some(92.5)).0,
+            range(55.0, 92.5)
+        );
+        let short = piece(folder.path(), "short.wav", range(10.0, 12.0), &[]);
+        assert_eq!(
+            heard_beside(range(0.0, 10.0), &[short], Some(300.0)).0,
+            range(0.0, 12.0)
+        );
+        // With nothing heard beside it, it is transcribed as asked.
+        assert_eq!(
+            heard_beside(range(30.0, 40.0), &[], Some(300.0)),
+            (range(30.0, 40.0), Edges::default())
+        );
+    }
+
+    #[test]
+    fn two_transcripts_are_joined_where_it_is_quiet_and_cut_by_the_middle_of_a_word() {
+        let folder = tempdir().expect("folder");
+        // The first hears 0 to 60; the second 55 to 120, where it is quiet
+        // from 57.6 to 57.85 by its own sound.
+        let earlier = piece(
+            folder.path(),
+            "earlier.wav",
+            range(0.0, 60.0),
+            &[
+                (10.0, "one"),
+                (56.0, "two"),
+                (57.3, "thr"),
+                (58.0, "CUT"),
+                (59.7, "OFF"),
+            ],
+        );
+        let later = piece(
+            folder.path(),
+            "later.wav",
+            range(55.0, 120.0),
+            &[
+                (55.2, "LATE"),
+                (57.25, "three"),
+                (58.0, "four"),
+                (59.7, "five"),
+                (90.0, "six"),
+            ],
+        );
+        tone_with_a_pause(&later.audio, 65.0, 2.6);
+        let at = seam(&earlier, &later);
+        assert!((57.6..57.85).contains(&at), "joined at {at}");
+
+        let pieces = [earlier, later];
+        let whole = stitched(range(0.0, 120.0), &pieces).expect("covered");
+        // Before the seam the first transcript's words, after it the
+        // second's: a word is whole in the one that gives it.
+        assert_eq!(whole.text, "one two thr four five six");
+        assert_eq!(whole.range, range(0.0, 120.0));
+        assert_eq!(whole.language.as_deref(), Some("en"));
+
+        // A range inside what was heard is cut out of it: a word belongs
+        // to the range its middle is in, and its times stay inside.
+        let inside = stitched(range(56.1, 59.8), &pieces).expect("covered");
+        assert_eq!(inside.text, "two thr four");
+        let words: Vec<&TranscriptWord> = inside.cues.iter().flat_map(|cue| &cue.words).collect();
+        assert_eq!((words[0].start, words[0].end), (56.1, 56.4));
+        assert!(inside
+            .cues
+            .iter()
+            .all(|cue| cue.start >= 56.1 && cue.end <= 59.8));
+
+        // Whisper's times are out by a second as often as not. Where the
+        // two said the same words of what both heard, they are joined at
+        // one of those words, whatever times each gave: here the second
+        // puts "for example" before the quiet moment, where by its times
+        // it would be lost, and the first ends on a word cut short.
+        let before = piece(
+            folder.path(),
+            "before.wav",
+            range(0.0, 60.0),
+            &[
+                (50.0, "they"),
+                (56.0, "kept"),
+                (56.6, "the"),
+                (57.1, "majority."),
+                (59.7, "fo"),
+            ],
+        );
+        let after = piece(
+            folder.path(),
+            "later.wav",
+            range(55.0, 120.0),
+            &[
+                (55.0, "ept"),
+                (55.3, "the"),
+                (55.8, "Majority"),
+                (56.3, "For"),
+                (56.8, "example,"),
+                (61.0, "most"),
+            ],
+        );
+        let joined = stitched(range(0.0, 120.0), &[before, after]).expect("covered");
+        assert_eq!(joined.text, "they kept the majority. For example, most");
+
+        // One made to start in a pause is whole from there, whatever times
+        // its first words were given: the other gives what starts before.
+        let mut from_a_pause = piece(
+            folder.path(),
+            "pause.wav",
+            range(57.7, 120.0),
+            &[(57.7, "For"), (57.9, "example,"), (61.0, "most")],
+        );
+        from_a_pause.edges.starts_in_pause = true;
+        let to_the_pause = piece(
+            folder.path(),
+            "before.wav",
+            range(0.0, 60.0),
+            &[(50.0, "they"), (56.0, "kept"), (57.1, "it."), (59.6, "Fo")],
+        );
+        let mut to_the_pause = to_the_pause;
+        // Whisper draws the last word before a pause out across it.
+        to_the_pause.transcript.cues[0].words[2].end = 59.9;
+        let met = stitched(range(0.0, 120.0), &[to_the_pause, from_a_pause]).expect("covered");
+        assert_eq!(met.text, "they kept it. For example, most");
+        // Their times follow the order they were put in: the last word
+        // of the one ends where the first of the other starts.
+        let words: Vec<&TranscriptWord> = met.cues.iter().flat_map(|cue| &cue.words).collect();
+        assert_eq!((words[2].start, words[2].end), (57.1, 57.7));
+        assert_eq!(words[3].start, 57.7);
+        assert!(
+            met.cues.windows(2).all(|pair| pair[0].end <= pair[1].start),
+            "{:?}",
+            met.cues
+        );
+
+        // Without the sound, or with too little heard twice, the middle.
+        fs::remove_file(&pieces[1].audio).expect("remove");
+        assert_eq!(seam(&pieces[0], &pieces[1]), 57.5);
+        // What nothing heard cannot be answered.
+        assert!(stitched(range(0.0, 130.0), &pieces).is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn local_sidecar_result_and_listen_audio_reuse_the_derived_cache() {
@@ -1165,6 +2017,7 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s' '{"result":{"language":"en"},"transcription":[{"timestamps":{"from":"00:00:00,000","to":"00:00:00,500"},"text":" hello"}]}' > "${out}.json"
 printf '%s\n' 'progress = 50%' >&2
+printf 'run\n' >> "$(dirname "$0")/runs"
 "##,
         )
         .expect("whisper script");
@@ -1199,5 +2052,55 @@ printf '%s\n' 'progress = 50%' >&2
             .audio_path
             .as_deref()
             .is_some_and(|path| Path::new(path).is_file()));
+
+        let runs = || {
+            fs::read_to_string(root.path().join("runs"))
+                .expect("runs")
+                .lines()
+                .count()
+        };
+        assert_eq!(runs(), 1, "whisper ran once for all of the above");
+        // A range inside the one heard is cut out of it, with no whisper.
+        let mut inside = options.clone();
+        inside.range = TimeRange::new(0.25, 0.6).expect("range");
+        let cut = transcribe_cached(&source.to_string_lossy(), &cache, &inside, &token, |_| {})
+            .expect("inside");
+        assert!(cut.cached);
+        assert_eq!(cut.transcript.text, "hello");
+        assert_eq!(cut.transcript.range, inside.range);
+        assert_eq!(runs(), 1);
+        // One that reaches past it has only what is past it transcribed,
+        // and that is kept for the next to ask.
+        let mut past = options.clone();
+        past.range = TimeRange::new(0.5, 1.5).expect("range");
+        let more = transcribe_cached(&source.to_string_lossy(), &cache, &past, &token, |_| {})
+            .expect("past");
+        assert!(!more.cached);
+        assert_eq!(runs(), 2);
+        // What was missing, 1.25 to 1.5, was heard from 0.25, where the
+        // transcript beside it starts: less than five seconds in.
+        let pieces = ranges(
+            &cached_pieces(
+                &source.to_string_lossy(),
+                &cache,
+                &cache_options(&options, &resolve_whisper_config(&options).expect("config"))
+                    .expect("options"),
+            )
+            .expect("pieces"),
+        );
+        assert!(
+            pieces.contains(&TimeRange::new(0.25, 1.5).expect("range")),
+            "{pieces:?}"
+        );
+        // To whoever reads what was heard of the file, the two are one
+        // transcript, with each word once.
+        let heard = cached_transcripts(&source.to_string_lossy(), &cache).expect("cached");
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].range, TimeRange::new(0.25, 1.5).expect("range"));
+        assert_eq!(heard[0].text, "hello");
+        let again = transcribe_cached(&source.to_string_lossy(), &cache, &past, &token, |_| {})
+            .expect("again");
+        assert!(again.cached);
+        assert_eq!(runs(), 2);
     }
 }
