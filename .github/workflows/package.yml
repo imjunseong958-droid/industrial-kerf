@@ -1,442 +1,68 @@
 name: Package
 
-# Kerf for Windows, macOS and Linux, each as something that runs on its own, and the
-# complete source of each, kept as this run's artifacts: the Windows zip and installer
-# (scripts/package-kerf-windows.ps1) and their source (collect-kerf-windows-sources.sh),
-# the macOS app (package-kerf-macos.sh) and its source (collect-kerf-macos-sources.sh),
-# and the Linux tar.xz and .deb (package-kerf-linux.sh, package-kerf-linux-deb.sh) and
-# their source (collect-kerf-linux-sources.sh). All carry a GPL build of FFmpeg: publish
-# each with its source. By hand (Actions > Package > Run workflow), and when what makes them
-# changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
-# release, with that version's section of CHANGELOG.md as its notes; none is signed.
-# Then verify-release.yml downloads the release onto fresh runners and runs it.
+# Diagnosis only, on a branch that is never merged: how big whisper.cpp's
+# whisper-cli is on each system as one program, what it links, and how fast it
+# runs there. It packages and publishes nothing.
 on:
   workflow_dispatch:
-    inputs:
-      release:
-        description: "Publish a release of main as v<version> (the tag is made for it)"
-        type: boolean
-        default: false
-  pull_request:
-    paths:
-      - "scripts/package-kerf-windows.ps1"
-      - "scripts/package-kerf-macos.sh"
-      - "scripts/collect-kerf-macos-sources.sh"
-      - "scripts/collect-kerf-windows-sources.sh"
-      - "scripts/check-kerf-windows.ps1"
-      - "scripts/check-kerf-windows-installer.ps1"
-      - "scripts/kerf-windows-icon.ps1"
-      - "scripts/check-kerf-macos.sh"
-      - "scripts/package-kerf-linux.sh"
-      - "scripts/check-kerf-linux.sh"
-      - "scripts/package-kerf-linux-deb.sh"
-      - "scripts/check-kerf-linux-deb.sh"
-      - "scripts/kerf-linux-desktop.sh"
-      - "scripts/collect-kerf-linux-sources.sh"
-      - "tools/kerf-guide/**"
-      - "apps/kerf-qt/packaging/**"
-      - "apps/kerf-qt/resources/icon/**"
-      - "apps/kerf-qt/Info.plist.in"
-      - "apps/kerf-qt/CMakeLists.txt"
-      - ".github/workflows/package.yml"
-  push:
-    tags: ["v*"]
-    branches: [main]
-    paths:
-      - "scripts/package-kerf-windows.ps1"
-      - "scripts/package-kerf-macos.sh"
-      - "scripts/collect-kerf-macos-sources.sh"
-      - "scripts/collect-kerf-windows-sources.sh"
-      - "scripts/check-kerf-windows.ps1"
-      - "scripts/check-kerf-windows-installer.ps1"
-      - "scripts/kerf-windows-icon.ps1"
-      - "scripts/check-kerf-macos.sh"
-      - "scripts/package-kerf-linux.sh"
-      - "scripts/check-kerf-linux.sh"
-      - "scripts/package-kerf-linux-deb.sh"
-      - "scripts/check-kerf-linux-deb.sh"
-      - "scripts/kerf-linux-desktop.sh"
-      - "scripts/collect-kerf-linux-sources.sh"
-      - "tools/kerf-guide/**"
-      - "apps/kerf-qt/packaging/**"
-      - "apps/kerf-qt/resources/icon/**"
-      - "apps/kerf-qt/Info.plist.in"
-      - "apps/kerf-qt/CMakeLists.txt"
-      - ".github/workflows/package.yml"
-
-# A newer push supersedes the builds still running for the one before it, on a
-# pull request and on main alike. A release, from a v<version> tag or run by
-# hand with release checked, has a group of its own and is never cancelled: one
-# cut short could leave a draft release behind.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ (startsWith(github.ref, 'refs/tags/') || inputs.release) && 'release' || 'build' }}
-  cancel-in-progress: ${{ !(startsWith(github.ref, 'refs/tags/') || inputs.release) }}
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  # The FFmpeg and Qt in the package. BtbN's builds, as they pin the commit of each
-  # library they build, which its source needs; see rust-runtime.yml.
-  FFMPEG_BUILDS_TAG: autobuild-2026-09-30-13-08
-  FFMPEG_BUILDS_COMMIT: 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
-  FFMPEG_NAME: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
-  FFMPEG_SHA256: 3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696
-  FFMPEG_COMMIT: 2a571b606854520cf89804d8030c8b328e621689
-  # The same FFmpeg, built for Linux.
-  LINUX_FFMPEG_NAME: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
-  LINUX_FFMPEG_SHA256: 01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
-  QT_VERSION: 6.10.3
-
 jobs:
-  package:
-    runs-on: windows-latest
-    timeout-minutes: 90
+  whisper-size:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # GitHub's release downloads have answered 504 for an hour at a time, so the
-      # pinned archive is kept in the Actions cache and fetched, with retries over
-      # several minutes, only when it is not there.
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ffmpeg-archive
-          key: ${{ env.FFMPEG_NAME }}
-      - name: Install FFmpeg
-        shell: pwsh
+      - name: Build whisper-cli 1.9.5 as one program
+        shell: bash
         run: |
-          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'ffmpeg-archive')
-          $archive = Join-Path $folder "$env:FFMPEG_NAME.zip"
-          if (-not (Test-Path $archive)) {
-            Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_BUILDS_TAG/$env:FFMPEG_NAME.zip" -OutFile $archive -MaximumRetryCount 8 -RetryIntervalSec 30
-          }
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg archive does not match its checksum" }
-          7z x $archive "-o$env:RUNNER_TEMP" | Out-Null
-          "FFMPEG_DIR=$(Join-Path $env:RUNNER_TEMP $env:FFMPEG_NAME)" >> $env:GITHUB_ENV
-          $llvm = 'C:\Program Files\LLVM\bin'
-          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
-          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          arch: win64_msvc2022_64
-          cache: true
-      - name: Install Inno Setup
-        shell: pwsh
+          git clone --quiet --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp
+          cd whisper.cpp
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF > cmake.log 2>&1 || { tail -40 cmake.log; exit 1; }
+          cmake --build build --config Release -j 4 --target whisper-cli > build.log 2>&1 || { tail -60 build.log; exit 1; }
+          find build -name 'whisper-cli*' -type f -exec ls -l {} \;
+      - name: Without the GPU (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
         run: |
-          # 6.3 or newer, for x64compatible: installed if missing, brought up to date if older.
-          choco upgrade innosetup --no-progress -y
-          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup" }
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package, and install and uninstall the installer
-        shell: pwsh
-        run: scripts/package-kerf-windows.ps1
-      # The installer check is not satisfied by any installer: one that registers no
-      # kerf:// links fails it.
-      - name: The installer check fails an installer without links
-        shell: pwsh
+          cd whisper.cpp
+          cmake -B build-cpu -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF > cmake-cpu.log 2>&1 || { tail -40 cmake-cpu.log; exit 1; }
+          cmake --build build-cpu --config Release -j 4 --target whisper-cli > build-cpu.log 2>&1 || { tail -60 build-cpu.log; exit 1; }
+          ls -l build-cpu/bin/whisper-cli
+          echo "--- with Metal links:"; otool -L build/bin/whisper-cli
+          echo "--- without:"; otool -L build-cpu/bin/whisper-cli
+          strip -o stripped build/bin/whisper-cli && ls -l stripped
+      - name: What it links (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          # This version's folder: the build cache can bring back an older one beside it, as it
-          # brought 0.1.0's, with its folders and none of its files, on #214.
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          $stage = (Resolve-Path "target/package/Industrial-Kerf-$version-windows-x64").Path
-          $out = Join-Path $env:RUNNER_TEMP 'without-links'
-          # Compiled as the real one is, but for the links.
-          $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-qt/packaging/windows/kerf.iss
-          if ($LASTEXITCODE -ne 0) { $compiled | Write-Host; throw "ISCC failed with exit code $LASTEXITCODE" }
-          $files = @($compiled | Where-Object { $_ -match 'Compressing' }).Count
-          if ($files -eq 0) { $compiled | Write-Host; throw "ISCC put no files from $stage in the installer" }
-          Write-Host "ISCC compressed $files files from $stage"
-          # It has to fail where the links are checked, not before.
-          $failure = $null
-          try { & ./scripts/check-kerf-windows-installer.ps1 -Installer (Join-Path $out 'without-links.exe') } catch { $failure = "$_" }
-          if (-not $failure) { throw 'The installer check passed an installer that registers no kerf:// links' }
-          if ($failure -notmatch 'kerf:// opens with') { throw "The installer check failed before it reached the links: $failure" }
-          Write-Host "Failed, as it should: $failure"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-windows-x64
-          path: |
-            target/package/*.zip
-            target/package/*.zip.sha256
-            target/package/*-setup.exe
-            target/package/*-setup.exe.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-
-  sources:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Collect the source of the package
-        run: scripts/collect-kerf-windows-sources.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-windows-x64-source
-          path: |
-            target/package-source/*.tar
-            target/package-source/*.tar.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-
-  # The app and its source on one Mac, since the source is that of the Homebrew
-  # formulae this app was built from.
-  macos:
-    runs-on: macos-latest
-    timeout-minutes: 120
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Qt, FFmpeg and the build tools
+          cd whisper.cpp
+          ldd build/bin/whisper-cli
+          strip -o stripped build/bin/whisper-cli && ls -l stripped
+      - name: What it links (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
-          brew install ffmpeg qt pkg-config cmake
-          ffmpeg_prefix="$(brew --prefix ffmpeg)"
-          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, bundle and run the app
-        run: scripts/package-kerf-macos.sh
-      # The check holds the app to the macOS its Info.plist names: a copy that says macOS
-      # 11, older than its Qt and Homebrew libraries need, has to fail it, and for that.
-      - name: The check fails an app that needs a newer macOS than it says
+          cd whisper.cpp
+          find build -name '*.dll' -exec ls -l {} \; || true
+          ls -l build/bin/Release || true
+      - name: How fast it is here
+        shell: bash
         run: |
-          older="$RUNNER_TEMP/older/Industrial Kerf.app"
-          mkdir -p "$(dirname "$older")"
-          cp -R "target/package-macos/Industrial Kerf.app" "$older"
-          plutil -replace LSMinimumSystemVersion -string 11.0 "$older/Contents/Info.plist"
-          if scripts/check-kerf-macos.sh "$older" 2> "$RUNNER_TEMP/older.log"; then
-            echo "The check passed an app that says macOS 11 with libraries that need more" >&2
-            exit 1
-          fi
-          grep -q 'need a newer one' "$RUNNER_TEMP/older.log" || { cat "$RUNNER_TEMP/older.log" >&2; exit 1; }
-          echo "Failed, as it should"
-      # Nor is the check satisfied by an app without its icon: Info.plist names one, and
-      # Resources has to hold it.
-      - name: The check fails an app without its icon
-        run: |
-          bare="$RUNNER_TEMP/bare/Industrial Kerf.app"
-          mkdir -p "$(dirname "$bare")"
-          cp -R "target/package-macos/Industrial Kerf.app" "$bare"
-          rm "$bare/Contents/Resources/industrial-kerf.icns"
-          if scripts/check-kerf-macos.sh "$bare" 2> "$RUNNER_TEMP/bare.log"; then
-            echo "The check passed an app with no icon in its Resources" >&2
-            exit 1
-          fi
-          grep -q 'Contents/Resources has none' "$RUNNER_TEMP/bare.log" || { cat "$RUNNER_TEMP/bare.log" >&2; exit 1; }
-          echo "Failed, as it should"
-      - name: Collect the source of the app
-        run: scripts/collect-kerf-macos-sources.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-macos
-          path: |
-            target/package-macos/*.zip
-            target/package-macos/*.zip.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-macos-source
-          path: |
-            target/package-macos-source/*.tar
-            target/package-macos-source/*.tar.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-
-  # The Linux package and its source on one machine, since the source holds that of the
-  # Ubuntu packages it carries libraries of. Built on the oldest Ubuntu it should run on.
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ffmpeg-archive
-          key: ${{ env.LINUX_FFMPEG_NAME }}
-      - name: Install FFmpeg
-        run: |
-          mkdir -p "$RUNNER_TEMP/ffmpeg-archive"
-          archive="$RUNNER_TEMP/ffmpeg-archive/$LINUX_FFMPEG_NAME.tar.xz"
-          [ -s "$archive" ] || curl -fsSL --retry 8 --retry-all-errors --retry-delay 30 -o "$archive" \
-            "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_BUILDS_TAG/$LINUX_FFMPEG_NAME.tar.xz"
-          echo "$LINUX_FFMPEG_SHA256  $archive" | sha256sum -c -
-          tar -xJf "$archive" -C "$RUNNER_TEMP"
-          echo "FFMPEG_DIR=$RUNNER_TEMP/$LINUX_FFMPEG_NAME" >> "$GITHUB_ENV"
-      # The build's tools; what Qt's xcb plugin loads, which the package carries; Xvfb
-      # to run it; GLib's gio and desktop-file-validate, to check its desktop entry and
-      # follow a kerf:// link; and apt's source lines, for the source of what it carries.
-      - name: Install the build tools and Qt's X11 libraries
-        run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libclang-dev libasound2-dev pkg-config patchelf xvfb xauth dpkg-dev \
-            libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
-            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-xinput0 \
-            libxcb-sync1 libxcb-xfixes0 libxcb-shm0 libxcb-render0 libxcb-glx0 libxcb-util1 \
-            libfontconfig1 libdbus-1-3 fonts-dejavu-core libglib2.0-bin desktop-file-utils
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: desktop
-          arch: linux_gcc_64
-          cache: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package, and make the .deb
-        run: scripts/package-kerf-linux.sh
-      # The .deb where nothing of a desktop is installed yet, on each distribution it is
-      # for: apt has to bring all it needs from its Depends alone, and then it runs,
-      # takes a kerf:// link, and is removed with nothing left.
-      - name: Install the .deb on Ubuntu and Debian, follow a link and remove it
-        run: |
-          deb="$(readlink -f target/package-linux/*.deb)"
-          for image in ubuntu:24.04 debian:trixie; do
-            echo "::group::$image"
-            docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$deb:/industrial-kerf.deb:ro" "$image" \
-              /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb
-            echo "::endgroup::"
+          cd whisper.cpp
+          cli="$(find build -name 'whisper-cli' -type f -o -name 'whisper-cli.exe' -type f | head -n 1)"
+          python3 -c "import os; print('cpus', os.cpu_count())"
+          for model in base-q5_1 small-q5_1; do
+            curl -fsSL --retry 5 -o "ggml-$model.bin" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin"
+            for flags in "" "-ng"; do
+              echo "=== $model $flags"
+              "$cli" -m "ggml-$model.bin" -f samples/jfk.wav -t 4 $flags 2>&1 | grep -E "total time|encode time|use gpu|Metal|backend|load time" | head -8
+            done
           done
-      # Nor is that check satisfied by any .deb: one whose Depends leave out a library
-      # the editor names installs, and has to fail it, and for that.
-      - name: The .deb check fails a package whose Depends leave a library out
-        run: |
-          deb="$(readlink -f target/package-linux/*.deb)"
-          short="$RUNNER_TEMP/short"
-          dpkg-deb -R "$deb" "$short"
-          sed -i '/^Depends:/ s/libopengl0, //' "$short/DEBIAN/control"
-          if grep -q '^Depends:.*libopengl0' "$short/DEBIAN/control"; then
-            echo "libopengl0 is still in the Depends" >&2
-            exit 1
-          fi
-          # Packed fast: it is installed once and thrown away.
-          dpkg-deb --root-owner-group -Zxz -z1 --build "$short" "$RUNNER_TEMP/short.deb" > /dev/null
-          if docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$RUNNER_TEMP/short.deb:/industrial-kerf.deb:ro" debian:trixie \
-            /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb 2> "$RUNNER_TEMP/short.log"; then
-            echo "The check passed a .deb that does not depend on libopengl0" >&2
-            exit 1
-          fi
-          grep -q 'libOpenGL.so.0' "$RUNNER_TEMP/short.log" || { cat "$RUNNER_TEMP/short.log" >&2; exit 1; }
-          echo "Failed, as it should: $(tail -n 1 "$RUNNER_TEMP/short.log")"
-          rm -rf "$short" "$RUNNER_TEMP/short.deb"
-      # The source takes several GB; the build's own are no longer needed.
-      - name: Free the build's space
-        run: rm -rf target/release target/qt-linux
-      - name: Collect the source of the package
-        run: scripts/collect-kerf-linux-sources.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-linux-x64
-          path: |
-            target/package-linux/*.tar.xz
-            target/package-linux/*.tar.xz.sha256
-            target/package-linux/*.deb
-            target/package-linux/*.deb.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        with:
-          name: industrial-kerf-linux-x64-source
-          path: |
-            target/package-linux-source/*.tar
-            target/package-linux-source/*.tar.sha256
-          compression-level: 0
-          retention-days: 90
-          if-no-files-found: error
-
-  # A v<version> tag: every package and its source as a release anyone can download.
-  release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main')
-    needs: [package, sources, macos, linux]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check the tag is the workspace's version, and has notes
-        id: version
-        run: |
-          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
-          # Run by hand on main, the release makes the tag v<version> at this commit.
-          tag="$GITHUB_REF_NAME"
-          [ "$GITHUB_REF_TYPE" = tag ] || tag="v$version"
-          if [ "$tag" != "v$version" ]; then
-            echo "The tag $tag is not v$version, the version in Cargo.toml" >&2
-            exit 1
-          fi
-          echo "TAG=$tag" >> "$GITHUB_ENV"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          awk -v heading="## $version" '$0 == heading {found = 1; next} /^## / && found {exit} found' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "CHANGELOG.md has no section \"## $version\"" >&2
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ls -l dist
-          # GitHub takes no release file of 2 GiB or more, and the Windows source is
-          # over 3: such a file goes up in parts, with the whole one's sha256 and how
-          # to join them in the notes.
-          for file in dist/*; do
-            [ "$(stat -c %s "$file")" -ge 2000000000 ] || continue
-            name="$(basename "$file")"
-            split -b 1900m -d -a 2 "$file" "$file.part-"
-            rm "$file"
-            {
-              echo
-              echo "$name is in parts. Join them, then check it against $name.sha256:"
-              echo
-              echo '```sh'
-              echo "cat $name.part-* > $name && shasum -a 256 -c $name.sha256"
-              echo '```'
-            } >> notes.md
-          done
-          ls -l dist
-          # A run that failed partway can leave a draft behind; a published release
-          # is never replaced.
-          if [ "$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
-            gh release delete "$TAG" --yes
-          fi
-          # 0.x is a pre-release: GitHub does not offer it as the latest stable one.
-          prerelease=""
-          case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
-
-  # The release as someone gets it: downloaded onto fresh runners, with no FFmpeg or
-  # Qt there, unpacked and run.
-  verify:
-    needs: release
-    uses: ./.github/workflows/verify-release.yml
-    with:
-      tag: ${{ needs.release.outputs.tag }}
