@@ -210,6 +210,22 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
     assert_eq!(proposed["check"]["valid"], true, "{proposed}");
     assert!(has_image(&proposed["preview"]["after"]));
     assert_eq!(destination.runtime().get_document(false).unwrap(), before);
+    // What the preset calls `c1` and `a1` are clips of this project under
+    // ids of its own. The answer says which each became, and those are the
+    // names the script places them by; the target sequence keeps its own.
+    let ids = proposed["ids"].as_object().unwrap();
+    let script = proposed["script"].as_str().unwrap();
+    for template in ["c1", "a1"] {
+        let placed = ids[template].as_str().unwrap();
+        assert_ne!(placed, template, "{ids:?}");
+        assert!(
+            script.contains(&format!("as={placed}")),
+            "{template} became {placed}: {script}"
+        );
+    }
+    assert_eq!(ids["s1"], "s1", "{ids:?}");
+    // A slot became the media it was bound to.
+    assert_eq!(ids["slot1"], "m1", "{ids:?}");
     let frame = ok(
         &destination,
         "look",

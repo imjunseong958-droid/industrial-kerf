@@ -196,6 +196,8 @@ impl KerfMcpRouter {
             "slots": preset.pattern.media.len(), "looks": looks}))
     }
 
+    /// The script that applies a preset, and the id each thing of its
+    /// pattern is given in the project, by the id the pattern has for it.
     pub(super) fn preset_script(
         &self,
         project: &Project,
@@ -203,7 +205,7 @@ impl KerfMcpRouter {
         sequence: Option<&str>,
         inputs: &BTreeMap<String, BindingInput>,
         texts: &BTreeMap<String, String>,
-    ) -> Result<String, McpError> {
+    ) -> Result<(String, BTreeMap<String, String>), McpError> {
         let (document, preset) = self.read_preset(file)?;
         let pattern = &preset.pattern;
         let mut bindings = BTreeMap::new();
@@ -288,7 +290,7 @@ impl KerfMcpRouter {
             None => project.sequences.first(),
         }
         .ok_or_else(|| invalid("no target sequence"))?;
-        let script = preset::instantiate(
+        let (script, ids) = preset::instantiate_with_ids(
             project,
             Catalog::builtin(),
             &document,
@@ -298,7 +300,7 @@ impl KerfMcpRouter {
         )
         .map_err(invalid)?;
         self.keep_looks(&preset.looks)?;
-        Ok(script)
+        Ok((script, ids))
     }
 }
 

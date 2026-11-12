@@ -321,14 +321,14 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "script": {"type": "string", "minLength": 1, "description": "One operation per line, applied in order and atomically."},
                     "savePreset": {"type": "string", "description": "Save the accepted sequence to a new .kerfpreset file inside the project. Existing files are never overwritten."},
                     "name": {"type": "string", "description": "Name for savePreset."},
-                    "preset": {"type": "string", "description": "A .kerfpreset file to apply. Inspect it with look first."},
+                    "preset": {"type": "string", "description": "A .kerfpreset file to apply. Inspect it with look first. Its clips, markers and transitions are given ids of the project's own, not the ones the preset has: the answer's `ids` says which each became (`{\"sa\": \"p9\"}`), and later edits name them by the new ones."},
                     "sequence": {"type": "string", "description": "Sequence to save or replace with a preset; first by default."},
                     "bindings": {"type": "object", "additionalProperties": {"type": "object", "properties": {
                         "media": {"type": "string", "description": "Imported replacement media id."},
                         "from": {"type": "string", "description": "Source start, including handles; default 0f."},
                         "beats": {"type": "boolean", "description": "Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats."}
                     }, "required": ["media"], "additionalProperties": false}},
-                    "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Template caption/title clip id to replacement text."},
+                    "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Replacement text for a caption or title of the preset, by the clip id the preset has for it (as `look` with `preset` lists them), not an id of the project."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
@@ -2691,14 +2691,21 @@ impl KerfMcpRouter {
         // `extend` runs the script on what the proposal makes; `revise` on
         // the project.
         let (revision, before) = self.project_at(input.extend.as_deref())?;
+        // A preset's clips, markers and transitions are given ids of the
+        // project's own: the answer says which, by the ids its pattern has.
+        let mut preset_ids = None;
         let source_script = match input.preset {
-            Some(file) => self.preset_script(
-                &before,
-                &file,
-                input.sequence.as_deref(),
-                &input.bindings,
-                &input.texts,
-            )?,
+            Some(file) => {
+                let (script, ids) = self.preset_script(
+                    &before,
+                    &file,
+                    input.sequence.as_deref(),
+                    &input.bindings,
+                    &input.texts,
+                )?;
+                preset_ids = Some(ids);
+                script
+            }
             None => input.script.clone().unwrap_or_default(),
         };
         let facts = CachedFacts::new(&self.dir);
@@ -2847,6 +2854,9 @@ impl KerfMcpRouter {
         });
         if !recipes.is_empty() {
             result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
+        }
+        if let Some(ids) = preset_ids {
+            result["ids"] = json!(ids);
         }
         // What the person lets an agent's edit be without their review.
         match self.permissions() {
