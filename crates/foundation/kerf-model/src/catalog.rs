@@ -833,7 +833,7 @@ fn builtin_catalog() -> Catalog {
         P::number("scale", 1.0)
             .range(0.0, 100.0)
             .unit("×")
-            .doc("Uniform scale."),
+            .doc("Uniform scale, of a picture already fit inside the frame: at 1 all of it shows, and one of another shape than the frame fills it only above 1."),
         P::number("scale_x", 1.0)
             .range(-100.0, 100.0)
             .unit("×")

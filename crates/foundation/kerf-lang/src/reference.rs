@@ -30,11 +30,12 @@ line, applied in order and atomically.
 - Keyframes, clip time: `opacity={0f:0 12f:1:ease}`; linear, hold, ease-in,
   ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
   Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
-- `parent=c1` on a clip moves it with `c1`, which `gen=null@1` is for.
+- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. It is written with `set`, not where a clip is placed.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
-- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it.
+- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
+  track, the highest over the rest: each part of a multicam wants its own.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
@@ -129,7 +130,7 @@ pub fn reference(catalog: &Catalog) -> String {
         for fx in catalog.all().filter(|fx| {
             fx.kind == kind && fx.engine == Engine::Graph && fx.id != kerf_model::SHAPE_OUTLINE
         }) {
-            out.push_str(&fx_reference(fx));
+            out.push_str(&fx_listed(fx));
         }
     }
     for (kind, text) in [
@@ -221,21 +222,88 @@ parameter names one of the clip's masks (`path=k1`). `look` with
 `effect: \"<id>\"` lists one's parameters. An id EffectCraft had that Kerf no longer does is an error
 that names what to use instead.";
 
+/// The generators with the most parameters, each with the ones the reference keeps: those a
+/// first line of one is written with. `look` with `effect` lists them all, as it does for
+/// every effect, so the reference has room for what every edit is written by. A reference
+/// with no room left could not say what an agent was found to guess at.
+const BRIEF: &[(&str, &[&str])] = &[
+    (
+        "particles",
+        &[
+            "rate",
+            "life",
+            "velocity",
+            "direction",
+            "gravity",
+            "size",
+            "color",
+        ],
+    ),
+    (
+        "shape",
+        &[
+            "kind",
+            "width",
+            "height",
+            "fill",
+            "stroke",
+            "stroke_width",
+            "trim_end",
+        ],
+    ),
+    (
+        "title",
+        &[
+            "text",
+            "size",
+            "color",
+            "font",
+            "align",
+            "reveal",
+            "reveal_by",
+        ],
+    ),
+];
+
+/// One effect, transition, or generator as the reference lists it: all of it, or for one in
+/// [`BRIEF`] the parameters kept there and where the others are.
+fn fx_listed(fx: &FxDef) -> String {
+    let Some((_, kept)) = BRIEF.iter().find(|(id, _)| *id == fx.id.as_str()) else {
+        return fx_reference(fx);
+    };
+    let mut out = fx_heading(fx);
+    let mut left = 0;
+    for param in &fx.params {
+        if kept.contains(&param.name.as_str()) {
+            writeln!(out, "  - {}", describe(param)).unwrap();
+        } else {
+            left += 1;
+        }
+    }
+    writeln!(out, "  - {left} more: `look` with `effect: \"{}\"`", fx.id).unwrap();
+    out
+}
+
 /// One catalog definition as the reference lists it: its id, domain, and
 /// doc, then a line per parameter.
 pub fn property_reference(param: &ParamDef) -> String {
     format!("- {}\n", describe(param))
 }
 
-/// One effect, transition, or generator as the reference lists it.
-pub fn fx_reference(fx: &FxDef) -> String {
-    let mut out = format!(
+/// The line an effect, transition, or generator starts with: its id, domain, and doc.
+fn fx_heading(fx: &FxDef) -> String {
+    format!(
         "- `{}@{}` ({}): {}\n",
         fx.id,
         fx.version,
         fx.domain.name(),
         fx.doc
-    );
+    )
+}
+
+/// One effect, transition, or generator with every parameter, as `look` with `effect` lists it.
+pub fn fx_reference(fx: &FxDef) -> String {
+    let mut out = fx_heading(fx);
     for param in &fx.params {
         writeln!(out, "  - {}", describe(param)).unwrap();
     }
@@ -316,5 +384,53 @@ mod tests {
         assert!(text.contains("- Blur & Sharpen: `blur.bilateral`"));
         assert!(!text.contains("Blend With Original"));
         assert!(text.len() < 24 * 1024, "{}", text.len());
+    }
+
+    #[test]
+    fn the_generators_with_most_parameters_keep_a_few_and_say_where_the_rest_are() {
+        let catalog = Catalog::builtin();
+        let text = reference(catalog);
+        for (id, kept) in BRIEF {
+            let fx = catalog
+                .fx(id)
+                .unwrap_or_else(|| panic!("no generator {id}"));
+            // Each name kept is one it has, so a parameter renamed is not kept by its old name.
+            for name in *kept {
+                assert!(
+                    fx.params.iter().any(|param| param.name == *name),
+                    "{id} has no {name}"
+                );
+            }
+            let listed = fx_listed(fx);
+            assert!(text.contains(&listed), "{id}");
+            assert_eq!(listed.lines().count(), kept.len() + 2, "{listed}");
+            let left = fx.params.len() - kept.len();
+            assert!(
+                listed.ends_with(&format!(
+                    "  - {left} more: `look` with `effect: \"{id}\"`\n"
+                )),
+                "{listed}"
+            );
+            // What `look` with `effect` gives is all of them.
+            assert_eq!(fx_reference(fx).lines().count(), fx.params.len() + 1);
+        }
+        // The ones a first line of each is written with are there to be read.
+        assert!(text.contains("  - `text=\"\"` (text)"));
+        assert!(text.contains("  - `trim_end=1` (0..1, animatable)"));
+        assert!(text.contains("  - `rate=50` (0..100000, a second, animatable)"));
+        // Any other generator, and every effect and transition, is listed whole.
+        let camera = catalog.fx("camera").unwrap();
+        assert!(text.contains(&fx_reference(camera)));
+    }
+
+    #[test]
+    fn it_says_what_an_agent_was_found_to_guess_at() {
+        let text = reference(Catalog::builtin());
+        // A picture is fit inside the frame before its scale.
+        assert!(text.contains("`scale=1` (0..100, ×, animatable) Uniform scale, of a picture already fit inside the frame"));
+        // `parent` is refused where a clip is placed.
+        assert!(text.contains("`set c2 parent=c1` moves `c2` with `c1`"));
+        // A multicam part with no angle shows the highest track.
+        assert!(text.contains("With none it shows every\n  track, the highest over the rest"));
     }
 }
