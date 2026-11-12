@@ -957,9 +957,9 @@ impl KerfMcpRouter {
                     }
                     Err(cannot) => {
                         entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
-                        entry["make"] = json!(format!(
+                        entry["make"] = json!(
                             "it cannot be made as it is: mend what `cannot` says first; then ask for it with `make`"
-                        ));
+                        );
                     }
                 }
                 Some(entry)
