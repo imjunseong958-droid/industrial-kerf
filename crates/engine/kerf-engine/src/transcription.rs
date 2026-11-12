@@ -42,6 +42,14 @@ const PAUSE_ENERGY_SHARE: f64 = 0.003;
 /// second or so, so the words two transcripts both heard are looked for
 /// this far either side of what both were given.
 const WORD_TIME_SLACK_SECONDS: f64 = 1.5;
+/// How long the sound between two words stays quiet for it to be a pause
+/// between them, and how quiet beside the loudest of them: a hundredth of
+/// its energy, 20 dB down. The gap a stopped consonant leaves inside a word
+/// is shorter.
+const WORD_PAUSE_SECONDS: f64 = 0.16;
+const WORD_PAUSE_SHARE: f64 = 0.01;
+/// How long a word's sound may trail on past where alignment ends it.
+const WORD_TAIL_SECONDS: f64 = 0.5;
 const DEFAULT_WHISPER_BACKEND_VERSION: &str = "whisper.cpp/unknown";
 
 /// A bounded project-time range used by transcription and listening.
@@ -183,6 +191,19 @@ struct WhisperConfig {
     binary_identity: Value,
     backend_version: String,
     model_version: String,
+    /// The alignment heads whisper.cpp has for the model, when it and the
+    /// model are known to take them: words are then timed by them.
+    alignment: Option<Alignment>,
+}
+
+/// How whisper.cpp is asked to time words by where the model attended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Alignment {
+    /// The model's alignment heads, as `-dtw` names them.
+    preset: &'static str,
+    /// Whether flash attention, which it cannot run with, is there to turn
+    /// off.
+    without_flash_attention: bool,
 }
 
 /// Extract and parse a whisper.cpp JSON result without running a sidecar.
@@ -465,7 +486,10 @@ fn transcribe_piece(
         ensure_not_cancelled(cancellation)?;
         let output_path = output_base.with_extension("json");
         let output = read_bounded_text(&output_path, MAX_TRANSCRIPT_BYTES)?;
-        let transcript = parse_whisper_json(&output, range)?;
+        let mut transcript = parse_whisper_json(&output, range)?;
+        if config.alignment.is_some() {
+            settle_words(&mut transcript, &audio_path);
+        }
         ensure_not_cancelled(cancellation)?;
         entry.write_json("transcript.json", &transcript)?;
         transcript
@@ -907,6 +931,109 @@ fn quietest(path: &Path, from: f64, to: f64, last: bool) -> Option<(f64, bool)> 
     ))
 }
 
+/// Take the pauses out of words timed by alignment, by the sound whisper
+/// was given (`audio`, which starts where the transcript's range does).
+///
+/// Alignment says where each word ends, and a word is taken to start where
+/// the one before it ended, so a pause between two words is inside the
+/// second. Where the sound between them falls quiet, the first goes on
+/// until it does, the second starts when it stops being quiet, and a cut in
+/// the pause is in neither. Cues take the times of their first and last
+/// words. Without the sound nothing changes.
+fn settle_words(transcript: &mut Transcript, audio: &Path) {
+    let origin = transcript.range.start;
+    let Some(samples) = wav_samples(audio, 0.0, transcript.range.end - origin) else {
+        return;
+    };
+    let window = (SEAM_WINDOW_SECONDS * f64::from(TRANSCRIPTION_SAMPLE_RATE)) as usize;
+    let energy: Vec<f64> = samples
+        .chunks(window)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>()
+                / chunk.len() as f64
+        })
+        .collect();
+    let window_of = |seconds: f64| {
+        (((seconds - origin) / SEAM_WINDOW_SECONDS).max(0.0) as usize).min(energy.len())
+    };
+    let time_of = |window: usize| origin + window as f64 * SEAM_WINDOW_SECONDS;
+    let run = (WORD_PAUSE_SECONDS / SEAM_WINDOW_SECONDS).round() as usize;
+    // The quiet stretches of windows `from..to`, each as its first window
+    // and the one after its last: quiet beside the loudest of `heard..to`.
+    let pauses = |heard: usize, from: usize, to: usize| {
+        let mut found: Vec<(usize, usize)> = Vec::new();
+        if to <= from {
+            return found;
+        }
+        let loudest = energy[heard.min(from)..to]
+            .iter()
+            .copied()
+            .fold(0.0, f64::max);
+        let mut first = None;
+        // The window past the last ends a stretch that reaches it.
+        let quiet = energy[from..to]
+            .iter()
+            .map(|energy| *energy <= loudest * WORD_PAUSE_SHARE)
+            .chain(std::iter::once(false));
+        for (at, quiet) in (from..).zip(quiet) {
+            match (quiet, first) {
+                (true, None) => first = Some(at),
+                (false, Some(start)) => {
+                    if at - start >= run {
+                        found.push((start, at));
+                    }
+                    first = None;
+                }
+                _ => {}
+            }
+        }
+        found
+    };
+    let mut words: Vec<&mut TranscriptWord> = transcript
+        .cues
+        .iter_mut()
+        .flat_map(|cue| cue.words.iter_mut())
+        .collect();
+    for index in 0..words.len() {
+        let (before, heard) = match index.checked_sub(1) {
+            Some(last) => (words[last].end, window_of(words[last].start)),
+            None => (origin, 0),
+        };
+        let end = words[index].end;
+        let found = pauses(heard, window_of(before), window_of(end));
+        match (found.first(), found.last()) {
+            (Some(first), Some(last)) => {
+                if index > 0 {
+                    let tail = time_of(first.0).min(before + WORD_TAIL_SECONDS);
+                    words[index - 1].end = tail.max(before);
+                }
+                words[index].start = time_of(last.1).min(end);
+            }
+            _ => words[index].start = before.min(end),
+        }
+    }
+    // The last word trails on until the sound after it falls quiet.
+    if let Some(last) = words.last_mut() {
+        let (from, to) = (
+            window_of(last.end),
+            window_of(last.end + WORD_TAIL_SECONDS + WORD_PAUSE_SECONDS),
+        );
+        if let Some(pause) = pauses(window_of(last.start), from, to).first() {
+            last.end = time_of(pause.0).max(last.end);
+        }
+    }
+    drop(words);
+    for cue in &mut transcript.cues {
+        if let (Some(first), Some(last)) = (cue.words.first(), cue.words.last()) {
+            cue.start = first.start;
+            cue.end = last.end.max(first.start);
+        }
+    }
+}
+
 /// The samples of `[from, to)` seconds of a 16-bit mono WAV file at the
 /// transcription rate, as the cache keeps a transcript's sound.
 fn wav_samples(path: &Path, from: f64, to: f64) -> Option<Vec<i16>> {
@@ -1060,6 +1187,7 @@ fn resolve_whisper_config(options: &TranscriptionOptions) -> Result<WhisperConfi
         "KERF_WHISPER_MODEL_VERSION",
         &fallback_model_version,
     );
+    let alignment = alignment_preset(&model).and_then(|preset| alignment_of(&binary, preset));
     Ok(WhisperConfig {
         binary,
         model,
@@ -1067,6 +1195,64 @@ fn resolve_whisper_config(options: &TranscriptionOptions) -> Result<WhisperConfi
         binary_identity,
         backend_version,
         model_version,
+        alignment,
+    })
+}
+
+/// The alignment heads whisper.cpp has for the model in `path`, as its
+/// `-dtw` names them, going by what the file's header says the model is.
+///
+/// With them whisper times each token by where the model attended, a tenth
+/// of a second or two out. Without, by the timestamps the model writes
+/// between words, which put the first dozen tokens of a sentence at one
+/// moment and the ones after up to two seconds early. `None` for a file it
+/// cannot tell: not a ggml model, a distilled one, or a large model older
+/// than v3, whose two versions read alike.
+fn alignment_preset(model: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut header = [0u8; 48];
+    fs::File::open(model).ok()?.read_exact(&mut header).ok()?;
+    let field = |index: usize| {
+        let at = index * 4;
+        u32::from_le_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
+    };
+    // "ggml", then the vocabulary and the shape of the encoder and decoder.
+    if field(0) != 0x6767_6d6c {
+        return None;
+    }
+    let (vocabulary, audio_layers, text_layers) = (field(1), field(5), field(9));
+    let english = vocabulary == 51_864;
+    Some(match (audio_layers, text_layers, english) {
+        (4, 4, false) => "tiny",
+        (4, 4, true) => "tiny.en",
+        (6, 6, false) => "base",
+        (6, 6, true) => "base.en",
+        (12, 12, false) => "small",
+        (12, 12, true) => "small.en",
+        (24, 24, false) => "medium",
+        (24, 24, true) => "medium.en",
+        (32, 32, false) if vocabulary == 51_866 => "large.v3",
+        (32, 4, false) if vocabulary == 51_866 => "large.v3.turbo",
+        _ => return None,
+    })
+}
+
+/// How the whisper at `binary` is asked for alignment by `preset`, going
+/// by the options its help lists; `None` for one that has no `-dtw`.
+fn alignment_of(binary: &Path, preset: &'static str) -> Option<Alignment> {
+    let help = Command::new(binary)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let lists = |option: &str| {
+        [&help.stdout, &help.stderr]
+            .into_iter()
+            .any(|text| String::from_utf8_lossy(text).contains(option))
+    };
+    lists("--dtw").then(|| Alignment {
+        preset,
+        without_flash_attention: lists("--no-flash-attn"),
     })
 }
 
@@ -1085,6 +1271,16 @@ fn configured_value(explicit: Option<&str>, variable: &str, fallback: &str) -> S
 }
 
 fn cache_options(options: &TranscriptionOptions, config: &WhisperConfig) -> Result<Value> {
+    let mut key = cache_key(options, config)?;
+    // Words timed by alignment are not the words timed without: a
+    // transcript made before is not one of these.
+    if let Some(alignment) = config.alignment {
+        key["wordTimes"] = json!({ "alignment": alignment.preset });
+    }
+    Ok(key)
+}
+
+fn cache_key(options: &TranscriptionOptions, config: &WhisperConfig) -> Result<Value> {
     Ok(json!({
         "schemaVersion": TRANSCRIPTION_SCHEMA_VERSION,
         "backend": "whisper.cpp",
@@ -1165,6 +1361,12 @@ fn whisper_args(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("auto");
     args.extend(["-l".into(), language.trim().into()]);
+    if let Some(alignment) = config.alignment {
+        args.extend(["-dtw".into(), alignment.preset.into()]);
+        if alignment.without_flash_attention {
+            args.push("-nfa".into());
+        }
+    }
     args
 }
 
@@ -1417,10 +1619,35 @@ fn parse_token_words(
     fallback: (f64, f64),
     range: TimeRange,
 ) -> Vec<TranscriptWord> {
-    let mut words = Vec::new();
-    let mut current: Option<TranscriptWord> = None;
-    let mut confidence_sum = 0.0;
-    let mut confidence_count = 0usize;
+    /// A word as its tokens are read.
+    struct Reading {
+        word: TranscriptWord,
+        /// Where alignment ends its last token that is said, and its last
+        /// token of any kind: a full stop's place drifts into the silence
+        /// after it.
+        said: Option<f64>,
+        marked: Option<f64>,
+        confidence_sum: f64,
+        confidence_count: usize,
+    }
+    let mut words: Vec<TranscriptWord> = Vec::new();
+    let mut aligned = false;
+    let mut finish = |reading: Reading, words: &mut Vec<TranscriptWord>| {
+        let mut word = reading.word;
+        if reading.confidence_count > 0 {
+            word.confidence = Some(reading.confidence_sum / reading.confidence_count as f64);
+        }
+        // Timed by alignment, a word ends where its last token does and
+        // starts where the word before it ended, the cue's start for the
+        // first: `settle_words` then takes the pauses out.
+        if let Some(end) = reading.said.or(reading.marked) {
+            aligned = true;
+            word.start = words.last().map_or(fallback.0, |before| before.end);
+            word.end = end.max(word.start);
+        }
+        words.push(word);
+    };
+    let mut current: Option<Reading> = None;
     for value in values {
         let Some(object) = value.as_object() else {
             continue;
@@ -1447,45 +1674,89 @@ fn parse_token_words(
                     .map(|at| (at, at))
             })
             .unwrap_or(fallback);
+        // Where alignment ends the token, in hundredths of a second of the
+        // sound whisper was given: -1 without it.
+        let ends = object
+            .get("t_dtw")
+            .and_then(Value::as_f64)
+            .filter(|at| *at >= 0.0)
+            .map(|at| (at / 100.0 + range.start).clamp(range.start, range.end));
         let starts_new = current.is_some()
             && (raw_text.starts_with(char::is_whitespace) || raw_text.starts_with('▁'));
         if starts_new {
-            if let Some(mut word) = current.take() {
-                if confidence_count > 0 {
-                    word.confidence = Some(confidence_sum / confidence_count as f64);
-                }
-                words.push(word);
+            if let Some(reading) = current.take() {
+                finish(reading, &mut words);
             }
-            confidence_sum = 0.0;
-            confidence_count = 0;
         }
         let text = raw_text.trim().trim_start_matches('▁');
         if text.is_empty() {
             continue;
         }
-        if let Some(word) = current.as_mut() {
-            word.text.push_str(text);
-            word.end = end.max(word.end);
-        } else {
-            current = Some(TranscriptWord {
+        let reading = current.get_or_insert_with(|| Reading {
+            word: TranscriptWord {
                 start,
                 end,
-                text: text.into(),
+                text: String::new(),
                 confidence: None,
-            });
+            },
+            said: None,
+            marked: None,
+            confidence_sum: 0.0,
+            confidence_count: 0,
+        });
+        reading.word.text.push_str(text);
+        reading.word.end = end.max(reading.word.end);
+        if text.chars().any(char::is_alphanumeric) {
+            reading.said = ends.or(reading.said);
         }
+        reading.marked = ends.or(reading.marked);
         if let Some(value) = confidence(object) {
-            confidence_sum += value;
-            confidence_count += 1;
+            reading.confidence_sum += value;
+            reading.confidence_count += 1;
         }
     }
-    if let Some(mut word) = current {
-        if confidence_count > 0 {
-            word.confidence = Some(confidence_sum / confidence_count as f64);
-        }
-        words.push(word);
+    if let Some(reading) = current {
+        finish(reading, &mut words);
+    }
+    if !aligned {
+        spread_instants(&mut words, fallback.1);
     }
     words
+}
+
+/// Whisper's own timestamps put the first words of a sentence at one
+/// moment, each with no length. So that each has a time of its own, in the
+/// order they were said, such words share out the time up to the word after
+/// them: to its end when it starts at that moment too, or else to its
+/// start, or to the cue's end after the last. The times are no truer for
+/// it, but captions made of them do not land on one frame and replace each
+/// other.
+fn spread_instants(words: &mut [TranscriptWord], cue_end: f64) {
+    let mut first = 0;
+    while first < words.len() {
+        let at = words[first].start;
+        if words[first].end > at {
+            first += 1;
+            continue;
+        }
+        let mut after = first;
+        while after < words.len() && words[after].start == at && words[after].end == at {
+            after += 1;
+        }
+        let (until, count) = match words.get(after) {
+            Some(next) if next.start <= at => (next.end, after - first + 1),
+            Some(next) => (next.start, after - first),
+            None => (cue_end, after - first),
+        };
+        if until > at {
+            let step = (until - at) / count as f64;
+            for (index, word) in words[first..first + count].iter_mut().enumerate() {
+                word.start = at + step * index as f64;
+                word.end = at + step * (index + 1) as f64;
+            }
+        }
+        first += count;
+    }
 }
 
 fn is_special_token(text: &str) -> bool {
@@ -1615,9 +1886,172 @@ mod tests {
             range,
         )
         .expect("transcript");
+        // It starts where the token is, and lasts until the next word.
         let words = &transcript.cues[0].words;
-        assert_eq!((words[0].start, words[0].end), (0.32, 0.32));
+        assert_eq!((words[0].start, words[0].end), (0.32, 0.33));
         assert_eq!((words[1].start, words[1].end), (0.33, 0.53));
+    }
+
+    #[test]
+    fn words_whisper_puts_at_one_moment_share_the_time_to_the_next() {
+        // As whisper times a Korean sentence: its first words at the
+        // cue's start, with no length, and the one after them from there.
+        let transcript = parse_whisper_json(
+            &json!({
+                "transcription": [{
+                    "offsets": {"from": 17000, "to": 27000},
+                    "text": " a b c d e",
+                    "tokens": [
+                        {"text": " a", "offsets": {"from": 17000, "to": 17000}},
+                        {"text": " b", "offsets": {"from": 17000, "to": 17000}},
+                        {"text": " c", "offsets": {"from": 17000, "to": 17400}},
+                        {"text": " d", "offsets": {"from": 17400, "to": 18000}},
+                        {"text": " e", "offsets": {"from": 26000, "to": 26000}}
+                    ]
+                }]
+            })
+            .to_string(),
+            TimeRange::new(0.0, 30.0).expect("range"),
+        )
+        .expect("transcript");
+        let times: Vec<(f64, f64)> = transcript.cues[0]
+            .words
+            .iter()
+            .map(|word| ((word.start * 1000.0).round(), (word.end * 1000.0).round()))
+            .collect();
+        assert_eq!(
+            times,
+            [
+                (17000.0, 17133.0),
+                (17133.0, 17267.0),
+                (17267.0, 17400.0),
+                (17400.0, 18000.0),
+                // The last has until the cue ends.
+                (26000.0, 27000.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn words_are_timed_by_alignment_where_whisper_gives_it() {
+        // `t_dtw` is where a token ends, in hundredths of a second: the
+        // times whisper wrote between the words are not used.
+        let range = TimeRange::new(100.0, 130.0).expect("range");
+        let mut transcript = parse_whisper_json(
+            &json!({
+                "transcription": [{
+                    "offsets": {"from": 1000, "to": 5000},
+                    "text": " So we closed.",
+                    "tokens": [
+                        {"text": "[_BEG_]", "offsets": {"from": 1000, "to": 1000}, "t_dtw": -1},
+                        {"text": " So", "offsets": {"from": 1000, "to": 1000}, "t_dtw": 160},
+                        {"text": " we", "offsets": {"from": 1000, "to": 1000}, "t_dtw": 190},
+                        {"text": " clo", "offsets": {"from": 1000, "to": 1200}, "t_dtw": 320},
+                        {"text": "sed", "offsets": {"from": 1200, "to": 1400}, "t_dtw": 350},
+                        {"text": ".", "offsets": {"from": 1400, "to": 5000}, "t_dtw": 480}
+                    ]
+                }]
+            })
+            .to_string(),
+            range,
+        )
+        .expect("transcript");
+        let times = |transcript: &Transcript| -> Vec<(String, f64, f64)> {
+            transcript.cues[0]
+                .words
+                .iter()
+                .map(|word| {
+                    (
+                        word.text.clone(),
+                        (word.start * 100.0).round() / 100.0,
+                        (word.end * 100.0).round() / 100.0,
+                    )
+                })
+                .collect()
+        };
+        // Each ends where its last said token does, the full stop's place
+        // aside, and starts where the one before ended: the cue's start
+        // for the first.
+        assert_eq!(
+            times(&transcript),
+            [
+                ("So".to_owned(), 101.0, 101.6),
+                ("we".to_owned(), 101.6, 101.9),
+                ("closed.".to_owned(), 101.9, 103.5),
+            ]
+        );
+
+        // The sound: "So we" from 1.3 to 1.9 seconds, a pause, "closed"
+        // from 2.9 to 3.62, and silence after.
+        let folder = tempdir().expect("folder");
+        let audio = folder.path().join("audio.wav");
+        tone_where(&audio, 30.0, |at| {
+            (1.3..1.9).contains(&at) || (2.9..3.62).contains(&at)
+        });
+        settle_words(&mut transcript, &audio);
+        assert_eq!(
+            times(&transcript),
+            [
+                // It starts when the silence before it ends.
+                ("So".to_owned(), 101.3, 101.6),
+                ("we".to_owned(), 101.6, 101.9),
+                // The pause is in neither word, and the last trails on
+                // until its sound stops.
+                ("closed.".to_owned(), 102.9, 103.62),
+            ]
+        );
+        let cue = &transcript.cues[0];
+        assert_eq!(
+            ((cue.start * 100.0).round(), (cue.end * 100.0).round()),
+            (10130.0, 10362.0)
+        );
+        // Without the sound they stay as alignment timed them.
+        let mut alone = transcript.clone();
+        settle_words(&mut alone, &folder.path().join("missing.wav"));
+        assert_eq!(alone, transcript);
+    }
+
+    #[test]
+    fn a_models_alignment_heads_are_told_from_its_header() {
+        let folder = tempdir().expect("folder");
+        let model = |name: &str, fields: [u32; 11]| {
+            let path = folder.path().join(name);
+            let mut bytes = 0x6767_6d6cu32.to_le_bytes().to_vec();
+            for field in fields {
+                bytes.extend(field.to_le_bytes());
+            }
+            fs::write(&path, bytes).expect("model");
+            path
+        };
+        // The vocabulary, then the encoder's and the decoder's shape.
+        let small = model(
+            "small",
+            [51865, 1500, 768, 12, 12, 448, 768, 12, 12, 80, 1009],
+        );
+        assert_eq!(alignment_preset(&small), Some("small"));
+        let english = model("base.en", [51864, 1500, 512, 8, 6, 448, 512, 8, 6, 80, 1]);
+        assert_eq!(alignment_preset(&english), Some("base.en"));
+        let turbo = model(
+            "turbo",
+            [51866, 1500, 1280, 20, 32, 448, 1280, 20, 4, 128, 2008],
+        );
+        assert_eq!(alignment_preset(&turbo), Some("large.v3.turbo"));
+        let third = model("v3", [51866, 1500, 1280, 20, 32, 448, 1280, 20, 32, 128, 1]);
+        assert_eq!(alignment_preset(&third), Some("large.v3"));
+        // The first two large models read alike, and a distilled one has
+        // fewer layers than its heads are named for.
+        let second = model("v2", [51865, 1500, 1280, 20, 32, 448, 1280, 20, 32, 80, 1]);
+        assert_eq!(alignment_preset(&second), None);
+        let distilled = model("distil", [51864, 1500, 768, 12, 12, 448, 768, 12, 4, 80, 1]);
+        assert_eq!(alignment_preset(&distilled), None);
+        let other = folder.path().join("other.bin");
+        fs::write(
+            &other,
+            b"test model, and enough of it to read a header from",
+        )
+        .expect("other");
+        assert_eq!(alignment_preset(&other), None);
+        assert_eq!(alignment_preset(&folder.path().join("missing")), None);
     }
 
     #[test]
@@ -1653,6 +2087,7 @@ mod tests {
             binary_identity: json!({"path":"whisper-cli","size":1}),
             backend_version: "whisper.cpp/1".into(),
             model_version: "base-v1".into(),
+            alignment: None,
         };
         let options = TranscriptionOptions::new(TimeRange::new(0.0, 2.0).expect("range"));
         let first = cache_options(&options, &config).expect("options");
@@ -1771,14 +2206,20 @@ mod tests {
     /// A WAV as the cache keeps one: a tone for `seconds`, silent for a
     /// quarter of a second from `quiet`.
     fn tone_with_a_pause(path: &Path, seconds: f64, quiet: f64) {
+        tone_where(path, seconds, |at| !(quiet..quiet + 0.25).contains(&at));
+    }
+
+    /// A WAV as the cache keeps one: `seconds` long, a tone where `sounds`
+    /// says and silent elsewhere.
+    fn tone_where(path: &Path, seconds: f64, sounds: impl Fn(f64) -> bool) {
         let rate = f64::from(TRANSCRIPTION_SAMPLE_RATE);
         let samples: Vec<i16> = (0..(seconds * rate) as usize)
             .map(|index| {
                 let at = index as f64 / rate;
-                if (quiet..quiet + 0.25).contains(&at) {
-                    0
-                } else {
+                if sounds(at) {
                     ((at * 440.0 * std::f64::consts::TAU).sin() * 8000.0) as i16
+                } else {
+                    0
                 }
             })
             .collect();

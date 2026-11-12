@@ -103,7 +103,18 @@ pub fn caption_script(
     if project.sequences.len() > 1 {
         lines.push(format!("use {}", sequence.id));
     }
-    let starts: Vec<Time> = groups.iter().map(|group| place(group[0].start)).collect();
+    // Two captions cannot start on one frame: the second would replace the
+    // first, and what it said would be gone. Words timed too closely to
+    // tell apart stay in one caption, however many it then holds.
+    let mut placed: Vec<(Time, Vec<&Word>)> = Vec::new();
+    for group in groups {
+        let start = place(group[0].start);
+        match placed.last_mut() {
+            Some((before, words)) if start <= *before => words.extend(group),
+            _ => placed.push((start, group)),
+        }
+    }
+    let (starts, groups): (Vec<Time>, Vec<Vec<&Word>>) = placed.into_iter().unzip();
     for (index, group) in groups.iter().enumerate() {
         let start = starts[index];
         let mut end = place(group.last().expect("groups are never empty").end);
@@ -283,6 +294,35 @@ overwrite caption=\"Next\" at=00:00:04:00 dur=12f on=S1"
             script,
             "overwrite caption=\"So\" at=00:00:02:03 dur=3f on=S1"
         );
+    }
+
+    #[test]
+    fn words_at_one_moment_stay_in_one_caption() {
+        // The first six words were timed at the same moment, as whisper
+        // times the start of a sentence. Three to a caption, the first two
+        // captions would start on one frame and the second replace the
+        // first: they are one caption, and nothing said is lost.
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        let words = [
+            word(10.0, 10.0, "The"),
+            word(10.0, 10.0, "term"),
+            word(10.0, 10.0, "bug"),
+            word(10.0, 10.0, "is"),
+            word(10.0, 10.0, "used"),
+            word(10.0, 10.5, "by"),
+            word(10.5, 11.0, "people"),
+            word(11.0, 11.5, "here."),
+        ];
+        let script = caption_script(&project, "c1", "S1", &words, 3).unwrap();
+        assert_eq!(
+            script,
+            "overwrite caption=\"The term bug is used by\" at=00:00:02:00 dur=12f on=S1
+overwrite caption=\"people here.\" at=00:00:02:12 dur=24f on=S1"
+        );
+        let captioned = apply_script(&project, catalog, &script).unwrap().project;
+        assert_eq!(captioned.sequences[0].tracks[1].clips.len(), 2);
+        assert!(captioned.retired.is_empty());
     }
 
     /// Facts that heard `words` over the whole of every media.
