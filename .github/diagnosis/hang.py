@@ -11,7 +11,7 @@ import os, re, subprocess, sys, time, glob
 runs, limit = int(sys.argv[1]), float(sys.argv[2])
 os.makedirs("logs", exist_ok=True)
 binary = sorted(glob.glob("target/debug/deps/harness-*"), key=os.path.getmtime)
-binary = [b for b in binary if not b.endswith(".d") and os.access(b, os.X_OK)][-1]
+binary = os.path.abspath([b for b in binary if not b.endswith(".d") and os.access(b, os.X_OK)][-1])
 print("test binary", binary, flush=True)
 hung = 0
 for run in range(1, runs + 1):
