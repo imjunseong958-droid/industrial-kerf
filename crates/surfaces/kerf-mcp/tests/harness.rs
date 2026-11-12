@@ -474,6 +474,63 @@ fn look_shows_the_document_media_index_and_frames() {
     assert_eq!(content[4]["type"], "image");
 }
 
+/// `look` reads a position of the sequence as `edit` does: a clip's or a
+/// marker's edge, the end of the sequence, where a clip plays a moment of its
+/// media, each with an amount.
+#[test]
+fn look_takes_the_anchors_edit_takes_for_a_position_of_the_sequence() {
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00\n  marker beat1 at=00:00:01:00 name=\"beat\"\n",
+    ) else {
+        return;
+    };
+    let frames = ok(
+        &router,
+        "look",
+        json!({"at": ["c1.end-1f", "c1.start+15f", "beat1", "end-2f", "c1@00:00:02:00"], "width": 160}),
+    );
+    let frames = frames["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 5);
+    assert!(frames.iter().all(has_image), "{frames:?}");
+    assert_eq!(frames[0]["at"], "c1.end-1f");
+
+    // The last frame of the clip is blue and its first second red: the
+    // anchors land where they say.
+    let scopes = ok(
+        &router,
+        "look",
+        json!({"scopes": true, "at": ["c1.end-1f", "c1.start+15f"]}),
+    );
+    let readings = scopes["readings"].as_array().unwrap();
+    assert_eq!(readings.len(), 2, "{scopes}");
+    assert_ne!(readings[0]["scopes"], readings[1]["scopes"], "{scopes}");
+
+    let sheet = ok(
+        &router,
+        "look",
+        json!({"sheet": 2, "from": "c1.start+1s", "to": "c1.end-1s", "width": 160}),
+    );
+    assert_eq!(
+        sheet["frames"],
+        json!(["00:00:01:15", "00:00:02:15"]),
+        "{sheet}"
+    );
+
+    // The end of the sequence is past its last frame, and an anchor that
+    // names nothing says what it looked for.
+    let past = error(&router, "look", json!({"at": ["c1.end"]}));
+    assert_eq!(past["code"], "INVALID_ARGUMENTS");
+    let unknown = error(&router, "look", json!({"at": ["c9.end-1f"]}));
+    assert_eq!(unknown["code"], "INVALID_ARGUMENTS");
+    assert!(
+        unknown["message"].as_str().unwrap().contains("c9"),
+        "{unknown}"
+    );
+    // A media's own positions take no anchors of the sequence.
+    let source = error(&router, "look", json!({"media": "m1", "at": ["c1.end-1f"]}));
+    assert_eq!(source["code"], "INVALID_ARGUMENTS");
+}
+
 #[test]
 fn edit_stages_a_checked_proposal_with_a_preview() {
     let Some((_directory, router)) = router() else {

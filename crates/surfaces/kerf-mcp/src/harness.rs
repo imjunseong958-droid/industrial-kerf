@@ -252,6 +252,8 @@ fn bounded_lines(text: &str, max: usize, note: &str) -> String {
 
 pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotations)> {
     let time = "Timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`).";
+    // What a position of the sequence takes besides.
+    let anchors = "A sequence position may also be an anchor, as in `edit`: `c3.end-1f`, `c3.start`, a marker's id, `end`, or `c3@<media timecode>`.";
     let proposal = "The id of the pending proposal to see: what it would make of the project.";
     let sequence = "A sequence id from the document; the first sequence when absent.";
     Some(match name {
@@ -276,7 +278,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "items": {"type": "string"},
                         "minItems": 1,
                         "maxItems": MAX_LOOK_FRAMES,
-                        "description": format!("Frames to see: media positions with `media`, otherwise sequence positions. {time}")
+                        "description": format!("Frames to see: media positions with `media`, otherwise sequence positions. {time} {anchors}")
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
@@ -287,7 +289,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row, each with its time in its corner (`frames` lists them in order): of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
-                    "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
+                    "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time} {anchors}")},
                     "to": {"type": "string", "description": "The end of that range."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
@@ -353,7 +355,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                 "type": "object",
                 "properties": {
                     "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery, refused while a blocking note is open (a person resolves it in the review)."},
-                    "from": {"type": "string", "description": format!("Sequence position. {time}")},
+                    "from": {"type": "string", "description": format!("Sequence position. {time} {anchors}")},
                     "to": {"type": "string", "description": "Sequence position."},
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
@@ -377,7 +379,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                 "type": "object",
                 "properties": {
                     "body": {"type": "string", "minLength": 1, "description": "What the note says."},
-                    "at": {"type": "string", "description": format!("Where on the program sequence (the first). {time}")},
+                    "at": {"type": "string", "description": format!("Where on the program sequence (the first). {time} {anchors}")},
                     "duration": {"type": "string", "description": "How long a range it is about, from `at`: frames (`60f`), seconds (`2.5s`), or a timecode length (`00:00:02:12`)."},
                     "parent": {"type": "string", "description": "The id of the comment this replies to; a reply to a reply joins its thread."},
                     "proposal": {"type": "string", "description": "The id of a proposal (any version) the note is about."},
@@ -684,6 +686,17 @@ fn position(clock: &Clock, text: &str) -> Result<Time, McpError> {
         .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))
 }
 
+/// A position of `sequence`, read as `edit` reads one: timecode, frames or
+/// seconds, or an anchor such as `c3.end-1f`, `beat1` or `end`.
+fn program_position(
+    project: &Project,
+    sequence: &Sequence,
+    text: &str,
+) -> Result<Time, McpError> {
+    kerf_lang::sequence_position(project, sequence, text)
+        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))
+}
+
 /// `seconds` from the clock's origin, on the nearest frame.
 fn print_seconds(clock: &Clock, seconds: f64) -> String {
     let time = Time::from_seconds(seconds).unwrap_or(Time::ZERO);
@@ -789,7 +802,7 @@ impl KerfMcpRouter {
             let (_, project) = self.project_at(None)?;
             let sequence = program(&project, None)?;
             let clock = Clock::of_sequence(sequence);
-            let start = position(&clock, text)?;
+            let start = program_position(&project, sequence, text)?;
             if start.is_negative() || start > sequence.duration() {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
@@ -1202,7 +1215,6 @@ impl KerfMcpRouter {
         at: &[String],
     ) -> Result<Value, McpError> {
         let sequence = program(project, sequence)?;
-        let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let mut resolved = project.clone();
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
@@ -1231,7 +1243,7 @@ impl KerfMcpRouter {
         };
         let mut costs = Vec::with_capacity(at.len());
         for text in at {
-            let time = position(&clock, text)?;
+            let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
@@ -1788,11 +1800,11 @@ impl KerfMcpRouter {
         let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let from = match &input.from {
-            Some(text) => position(&clock, text)?,
+            Some(text) => program_position(project, sequence, text)?,
             None => Time::ZERO,
         };
         let to = match &input.to {
-            Some(text) => position(&clock, text)?.min(duration),
+            Some(text) => program_position(project, sequence, text)?.min(duration),
             None => duration,
         };
         if from.is_negative() || to <= from {
@@ -1897,11 +1909,11 @@ impl KerfMcpRouter {
         let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let from = match &input.from {
-            Some(text) => position(&clock, text)?,
+            Some(text) => program_position(project, sequence, text)?,
             None => Time::ZERO,
         };
         let to = match &input.to {
-            Some(text) => position(&clock, text)?.min(duration),
+            Some(text) => program_position(project, sequence, text)?.min(duration),
             None => duration,
         };
         if from.is_negative() || to <= from {
@@ -2036,12 +2048,11 @@ impl KerfMcpRouter {
         width: u32,
     ) -> Result<Value, McpError> {
         let sequence = program(project, sequence)?;
-        let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let times = at
             .iter()
             .map(|text| {
-                let time = position(&clock, text)?;
+                let time = program_position(project, sequence, text)?;
                 if time.is_negative() || time >= duration {
                     return Err(McpError::new(
                         "INVALID_ARGUMENTS",
@@ -2157,14 +2168,14 @@ impl KerfMcpRouter {
             return Err(McpError::new("INVALID_ARGUMENTS", "nothing to track"));
         };
         let sequence = program(project, input.sequence.as_deref())?;
-        let clock = Clock::of_sequence(sequence);
         let (Some(from), Some(to)) = (&input.from, &input.to) else {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
                 "track needs `from` and `to`",
             ));
         };
-        let (from, to) = (position(&clock, from)?, position(&clock, to)?);
+        let from = program_position(project, sequence, from)?;
+        let to = program_position(project, sequence, to)?;
         let duration = sequence.duration();
         if from.is_negative() || to > duration || to <= from {
             return Err(McpError::new(
@@ -2458,10 +2469,9 @@ impl KerfMcpRouter {
         input: &LookInput,
     ) -> Result<Value, McpError> {
         let sequence = program(project, input.sequence.as_deref())?;
-        let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let moment = |text: &Option<String>, otherwise: Time| match text {
-            Some(text) => position(&clock, text),
+            Some(text) => program_position(project, sequence, text),
             None => Ok(otherwise),
         };
         let (from, to) = (
@@ -2580,7 +2590,6 @@ impl KerfMcpRouter {
         at: &[String],
     ) -> Result<Value, McpError> {
         let sequence = program(project, sequence)?;
-        let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         // What scopes read of `sequence` of `project` at `time`.
         let read = |project: &Project, sequence: &Sequence, time: Time| {
@@ -2613,7 +2622,7 @@ impl KerfMcpRouter {
             before.and_then(|project| Some((project, project.sequence(sequence.id.as_str())?)));
         let mut readings = Vec::new();
         for text in at {
-            let time = position(&clock, text)?;
+            let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
@@ -3226,13 +3235,12 @@ impl KerfMcpRouter {
         }
         let mut range = None;
         if input.from.is_some() || input.to.is_some() {
-            let clock = Clock::of_sequence(sequence);
             let from = match &input.from {
-                Some(text) => position(&clock, text)?,
+                Some(text) => program_position(&project, sequence, text)?,
                 None => Time::ZERO,
             };
             let to = match &input.to {
-                Some(text) => position(&clock, text)?,
+                Some(text) => program_position(&project, sequence, text)?,
                 None => sequence.duration(),
             };
             range = Some(kerf_runtime::RenderRange::new(
