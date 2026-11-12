@@ -2390,19 +2390,43 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
     let looked = ok(&router, "look", json!({"media": "m1"}));
     assert_eq!(looked["recipe"], json!("shots/open.kerfrecipe"));
+    // The take the media is not has the line that has the media be it, whole: its path alone
+    // is not a line, since a take need not be as long as the one before it.
+    let line = format!(
+        "media replace m1 path={:?} rate=30 dur=120f video=320x180 audio=2ch@48000 recipe=\"shots/open.kerfrecipe\"",
+        second.stored
+    );
     assert_eq!(
         looked["takes"]["made"],
         json!([
             {"take": 1, "path": first.stored, "chosen": true},
-            {"take": 2, "path": second.stored, "chosen": false},
+            {"take": 2, "path": second.stored, "chosen": false, "use": line},
         ])
     );
     assert!(
         looked["takes"]["choose"]
             .as_str()
-            .is_some_and(|choose| choose.contains("media replace m1 path=")),
+            .is_some_and(|choose| choose.contains("a take's `use`")),
         "{looked}"
     );
+    // And it runs as it is, where the path alone is refused.
+    let staged = ok(&router, "edit", json!({"script": line}));
+    assert!(
+        staged["diff"]
+            .as_str()
+            .is_some_and(|diff| diff.contains(&format!("+media m1 path={:?}", second.stored))),
+        "{staged}"
+    );
+    router
+        .runtime()
+        .reject_proposal(staged["proposal"].as_str().unwrap())
+        .unwrap();
+    let short = error(
+        &router,
+        "edit",
+        json!({"script": format!("media replace m1 path={:?}", second.stored)}),
+    );
+    assert!(message(&short).contains("missing `rate=`"), "{short}");
     // What the recipe reads changes: the media wants making, and says for what.
     std::fs::write(dir.join("shots/scene.txt"), "another blocking").unwrap();
     let looked = ok(&router, "look", json!({}));
@@ -2425,6 +2449,93 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     assert!(
         why.contains("its recipe cannot run") && why.contains("names no `{out}`"),
         "{why}"
+    );
+}
+
+/// A recipe that reads, and that a person could still not run: an agent is told what would refuse
+/// it when it looks, and when it proposes the media, not after someone has tried to make it.
+#[cfg(unix)]
+#[test]
+fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
+    if !ffmpeg_available() {
+        return;
+    }
+    // No models a person has set up are read.
+    std::env::set_var("KERF_MODELS", "/no-such-kerf-models.json");
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let dir = directory.path();
+    std::fs::create_dir(dir.join("shots")).unwrap();
+    let recipe = |steps: &str| {
+        std::fs::write(
+            dir.join("shots/open.kerfrecipe"),
+            format!("kerf-recipe 1\n{steps}\n"),
+        )
+        .unwrap();
+    };
+    // Proposed with a recipe that draws a guide and names it without its braces: the edit is
+    // staged, and says what a making of it would be refused for.
+    recipe("render s1 {guide.mp4}\nrun cp guide.mp4 {out}\nneeds guide.mp4");
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\""}),
+    );
+    let to_make = &staged["toMake"][0];
+    assert_eq!(to_make["media"], "m9", "{staged}");
+    assert_eq!(to_make["why"], "its file is not there yet");
+    assert_eq!(
+        to_make["cannot"],
+        "the recipe needs `shots/guide.mp4`, which is not there: `guide.mp4` is a file a step makes, which a later step names in braces, `{guide.mp4}`"
+    );
+    assert!(
+        to_make["make"]
+            .as_str()
+            .is_some_and(|make| make.starts_with("it cannot be made as it is")),
+        "{to_make}"
+    );
+    let revision = router.runtime().get_state().unwrap().revision;
+    router
+        .runtime()
+        .accept_proposal(
+            staged["proposal"].as_str().unwrap(),
+            "ui",
+            "accept-m9",
+            revision,
+        )
+        .unwrap();
+
+    // The same when it looks. A sequence the project has not:
+    recipe("render s7 {out}");
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(
+        looked["toMake"][0]["cannot"],
+        "the recipe renders sequence `s7`, which this project has not"
+    );
+    // A model that is not set up, without where the person keeps their models.
+    recipe("generate model=dawn prompt=\"a boat\"");
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(
+        looked["toMake"][0]["cannot"],
+        "no model `dawn` is set up: none is; a person sets one up in their own models file"
+    );
+    // Mended, it can be made, and a person is asked to.
+    recipe("render s1 {out}");
+    let looked = ok(&router, "look", json!({}));
+    let to_make = &looked["toMake"][0];
+    assert!(to_make.get("cannot").is_none(), "{to_make}");
+    assert!(
+        to_make["make"]
+            .as_str()
+            .is_some_and(|make| make.contains("a person runs `kerf make m9`")),
+        "{to_make}"
+    );
+    // A media that is not made yet says so, not what the file system said.
+    let unmade = ok(&router, "look", json!({"media": "m9"}));
+    assert_eq!(
+        unmade["analysis"],
+        "unavailable: `shots/open.mp4` is not made yet; a person makes it from its recipe with `kerf make m9`"
     );
 }
 

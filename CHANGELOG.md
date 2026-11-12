@@ -82,6 +82,14 @@ on `main`; its section here becomes the release's notes on GitHub
   Linux, so a model's program can take back the job it gave a server:
   `kerf-comfy` does, in the editor and on Ctrl-C in a terminal, where before
   the job ran on with nobody to fetch it.
+- Before a shot is made, `kerf make` and the editor note what its recipe asks
+  that its model has said it does not take: a guide drawn larger than the
+  model reads, a shot longer than it makes, a file it has no use for. An
+  agent is told the same, and what would refuse the making, as soon as it
+  proposes the media or looks, and a new skill, `model-shot`, carries what
+  it cannot see for itself of blocking a shot for a model.
+- A shot that does not fill the frame says the `scale` that does: a picture is
+  fit inside the frame first, so it is seldom what the sizes alone say.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

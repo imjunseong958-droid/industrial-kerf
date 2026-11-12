@@ -123,9 +123,11 @@ impl Ask {
             None => Ok(Source::File(value.to_owned())),
         };
         for word in words {
-            let (key, value) = word
-                .split_once('=')
-                .ok_or_else(|| format!("`{word}` is not `<name>=<value>`"))?;
+            let (key, value) = word.split_once('=').ok_or_else(|| {
+                format!(
+                    "`{word}` is not `<name>=<value>`; a value that holds spaces is quoted, as `prompt=\"a boat leaves\"`"
+                )
+            })?;
             match key {
                 "model" => ask.model = value.to_owned(),
                 "prompt" => ask.prompt = value.to_owned(),

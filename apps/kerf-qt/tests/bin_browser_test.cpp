@@ -694,6 +694,12 @@ private slots:
         QVERIFY(question.contains(steps));
         QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.takes/002.mp4")));
         QVERIFY(question.contains(QStringLiteral("m4 then is")) && question.contains(QStringLiteral("are kept")));
+        QVERIFY(!question.contains(QStringLiteral("Before you run it")));
+        // What its model has said it does not take is shown before the question.
+        const QString noted = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+                                                                  {"command", steps}, {"take", 2}, {"file", "/p/shots/open.takes/002.mp4"},
+                                                                  {"notes", QJsonArray{"`seconds=9` is more than model `dawn` makes at once, 5 s"}}});
+        QVERIFY(noted.contains(QStringLiteral("Before you run it:\n• `seconds=9` is more than model `dawn` makes at once, 5 s\n\nIt comes from")));
         window.runMake(QStringLiteral("m4"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;

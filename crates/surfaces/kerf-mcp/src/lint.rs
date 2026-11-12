@@ -252,11 +252,24 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
             .filter(|clip| !covers(project, sequence, clip))
             .map(|clip| clip.id.as_str())
             .collect();
+        // A picture is fit inside the frame before its `scale`, so what fills the frame is
+        // seldom what the sizes alone say: the scale that does is said with one clip.
+        let fills = match short.as_slice() {
+            [id] => shown
+                .iter()
+                .find(|clip| clip.id.as_str() == *id)
+                .and_then(|clip| fill_scale(project, sequence, clip))
+                .map(|scale| {
+                    format!("; `set {id} scale={scale}` fills it, cutting off what is over evenly")
+                })
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         findings.push(finding(
             "picture.edges",
             short.first().copied().unwrap_or(sequence.id.as_str()),
             format!(
-                "the frame's edges are black in `{}` from {} to {}: {} does not fill the {}x{} frame",
+                "the frame's edges are black in `{}` from {} to {}: {} does not fill the {}x{} frame{fills}",
                 sequence.id,
                 clock.print_position(from),
                 clock.print_position(to),
@@ -271,6 +284,33 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
         )
         .during(sequence, from, to));
     }
+}
+
+/// The `scale`, to two places and no less, at which `clip`, centered and not turned, cropped,
+/// or stretched, fills the frame: none for a clip that is placed otherwise, or whose picture's
+/// size is not known.
+fn fill_scale(project: &Project, sequence: &Sequence, clip: &Clip) -> Option<f64> {
+    let (width, height) = match &clip.content {
+        Content::Media { media, .. } => project
+            .media(media.as_str())
+            .and_then(|media| media.video)
+            .map(|video| (video.width, video.height))?,
+        Content::Sequence { sequence, .. } => project
+            .sequence(sequence.as_str())
+            .map(|nested| (nested.width, nested.height))?,
+        Content::Generator { .. } | Content::Caption { .. } => return None,
+    };
+    let placed = [
+        "x", "y", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t", "crop_b",
+    ];
+    if placed.iter().any(|name| clip.props.contains_key(*name)) || width == 0 || height == 0 {
+        return None;
+    }
+    let (frame_width, frame_height) = (f64::from(sequence.width), f64::from(sequence.height));
+    let (width, height) = (f64::from(width), f64::from(height));
+    let fit = (frame_width / width).min(frame_height / height);
+    let fills = (frame_width / (width * fit)).max(frame_height / (height * fit));
+    Some((fills * 100.0).ceil() / 100.0)
 }
 
 /// Whether `clip` covers the whole frame. Pictures whose placement
@@ -623,6 +663,35 @@ sequence s1 rate=24 size=1920x1080
             &[],
         );
         assert!(filled.is_empty(), "{filled:?}");
+    }
+
+    #[test]
+    fn the_scale_that_fills_the_frame_is_said_with_one_clip() {
+        let found = codes("sequence set s1 size=1080x1920\nset c2 scale=3.17", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let (_, scale) = found[0]
+            .1
+            .split_once("`set c1 scale=")
+            .unwrap_or_else(|| panic!("{found:?}"));
+        let scale = scale.split_once('`').unwrap().0;
+        assert!(
+            found[0]
+                .1
+                .ends_with("fills it, cutting off what is over evenly"),
+            "{found:?}"
+        );
+        // What it says fills it.
+        let filled = codes(
+            &format!("sequence set s1 size=1080x1920\nset c2 scale=3.17\nset c1 scale={scale}"),
+            &[],
+        );
+        assert!(filled.is_empty(), "{filled:?}");
+        // One placed otherwise is told no number.
+        let placed = codes(
+            "sequence set s1 size=1080x1920\nset c2 scale=3.17\nset c1 x=0.1",
+            &[],
+        );
+        assert!(!placed[0].1.contains("scale="), "{placed:?}");
     }
 
     #[test]

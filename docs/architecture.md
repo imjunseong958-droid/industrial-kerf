@@ -188,7 +188,10 @@ An agent's tools run no recipe. `look` tells it which media want making
 (`toMake`: a file that is not there, or something its take was made from
 changed, by name, or a recipe that cannot run, with why), a media's takes, and
 the models set up, and that a person makes them, so an agent writes the scene
-and the recipe, adds the media line, and asks. What a model takes (the size
+and the recipe, adds the media line, and asks. What would refuse a making is read as a person's plan is, with
+nothing run, and said with the media (`cannot`), and so is what the recipe
+asks that its model has said it does not take (`notes`, which a person sees
+as the plan's notes). What a model takes (the size
 and the rate a guide for it is drawn at, the longest shot, whether it follows
 a guide) is said beside its program in the person's models file, under
 `takes`, and `look` lists it with the model. Nothing is run to learn it: a
@@ -241,6 +244,37 @@ The shot kept the guide's layout, the boat's path, and the camera's move. It
 also kept the guide's flat shapes, a cabin that is a box staying one; whether
 depth would guide better than color was not settled, this model being a small
 one.
+
+The same shot was then written by an agent with `kerf-mcp`'s tools and file
+tools alone, from an empty project to a second take, with a stand-in for the
+model that answers with its guide. Where it stopped, and what was done:
+
+- *It stacked the scene with `insert`*, which opens time, and got nine clips
+  one after another. The reference says so of `insert`; nothing said that a
+  scene is stacked. The `model-shot` skill does.
+- *Its recipe's mistakes showed only when a person ran it*: a file a step
+  makes named without its braces, a sequence the project has not, a model
+  that is not set up. `look` and the `edit` that names the recipe now say
+  what would refuse the making, and what the model does not take.
+- *The line it was told chooses a take was refused*, a path alone not being
+  a media line. Each take now carries its whole line.
+- *A media not made yet read as a file system error.* It says that it is not
+  made, and who makes it.
+- *A floor drew over the boat on it.* Clips in depth that do not cross draw
+  in the order of how far their middles are, and a floor's middle is nearer
+  than what stands on its far half. The skill says how to place one; drawing
+  every clip in depth by the pixel would end it, and is not built.
+- *A shadow fell on the sky.* A backdrop in depth takes the shadow of what
+  stands before it, and no clip can refuse one. The skill leaves a backdrop
+  out of depth.
+
+Left as they are: a new project's empty first sequence makes every
+proposal's check not valid, for no fault of the edit; `x` is in frame widths
+where `y` and `z` are in frame heights, so a directional light's `x` weighs
+more in a wide frame; and what `kerf-comfy --describe` lists under `more`
+includes the server's file names, which a person may want out of what an
+agent reads. The agent still asks for a making in words, and looks again to
+learn that it was made.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the

@@ -94,6 +94,7 @@ pub(crate) fn make(
                 "recipe": plan.recipe.to_string_lossy(),
                 "command": plan.command,
                 "steps": plan.steps,
+                "notes": plan.notes,
                 "take": plan.take,
                 "file": plan.file.to_string_lossy(),
             }),
