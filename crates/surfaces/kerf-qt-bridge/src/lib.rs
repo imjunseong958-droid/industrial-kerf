@@ -268,6 +268,10 @@ enum Command {
         #[serde(default)]
         confirmed: bool,
     },
+    /// Stop the making of a media that is running: `media_make_cancelled`.
+    MediaMakeCancel {
+        media: String,
+    },
     /// Load a `project.kerf` changed outside Kerf as one revision.
     ProjectionImport,
     /// Write the editor's project over a `project.kerf` changed outside Kerf.
@@ -422,6 +426,8 @@ struct Shared {
     check_busy: AtomicBool,
     /// Cancels the QC check running, so closing the bridge stops it.
     check_cancel: Mutex<Option<kerf_engine::CancellationToken>>,
+    /// The makings running, by the media each makes: what cancels it.
+    makings: Mutex<std::collections::BTreeMap<String, kerf_engine::CancellationToken>>,
     /// The render queue the export thread works through.
     renders: queue::Queue,
     /// Loudness, media info and media index work.
@@ -782,7 +788,7 @@ fn runtime_worker(
                 continue;
             }
             Command::MediaMake { media, confirmed } => {
-                media::make(&active_client, &directory, &media, confirmed, &commands, &tx);
+                media::make(&shared, &active_client, &media, confirmed, &commands, &tx);
                 continue;
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {
@@ -2239,6 +2245,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         review_seen: Mutex::new(None),
         check_busy: AtomicBool::new(false),
         check_cancel: Mutex::new(None),
+        makings: Mutex::new(std::collections::BTreeMap::new()),
         renders: queue::Queue::default(),
         analysis: analysis::Analysis::default(),
     });
@@ -2310,6 +2317,8 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
     cancel_preview(&bridge.shared);
     discard_previews(&bridge.shared);
     qc::cancel(&bridge.shared);
+    // A making nobody would see the end of: its program is asked to end.
+    media::cancel_makings(&bridge.shared);
     bridge.shared.renders.close(&bridge.shared.directory);
     bridge.shared.analysis.close();
     if let Ok(abort) = bridge.shared.abort.lock() {
@@ -2391,6 +2400,11 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
         }
         Command::Check { sequence } => {
             qc::spawn(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        // Not queued behind the runtime worker: a making is stopped when it is asked.
+        Command::MediaMakeCancel { media } => {
+            media::cancel_make(&bridge.shared, &media, &bridge.events_tx);
             true
         }
         Command::Loudness { sequence } => {

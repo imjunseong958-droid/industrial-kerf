@@ -56,17 +56,20 @@ pub(crate) fn copy_then(
 
 /// Make a take of media `id` from its recipe. Unconfirmed, say what would
 /// run (`media_make_plan`) and run nothing. Confirmed, run it on its own
-/// thread and then hand the runtime worker the replace that has the media
-/// be the new take, the document taking its path, length and streams. What
-/// goes wrong is an `error`, with the media as it was.
+/// thread, saying each line its steps say as `media_making`, and then hand
+/// the runtime worker the replace that has the media be the new take, the
+/// document taking its path, length and streams. One that `media_make_cancel`
+/// stops ends as `media_make_cancelled`; what goes wrong is an `error` that
+/// names the media. Either way the media is as it was.
 pub(crate) fn make(
+    shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
-    directory: &Path,
     id: &str,
     confirmed: bool,
     commands: &SyncSender<Command>,
     tx: &SyncSender<Value>,
 ) {
+    let directory = shared.directory.as_path();
     let planned = client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
@@ -80,7 +83,7 @@ pub(crate) fn make(
         });
     let (project, models, plan) = match planned {
         Ok(planned) => planned,
-        Err(error) => return crate::error(tx, format!("cannot make {id}: {error}")),
+        Err(error) => return make_failed(tx, id, error),
     };
     if !confirmed {
         return crate::emit(
@@ -96,16 +99,42 @@ pub(crate) fn make(
             }),
         );
     }
-    let (commands, tx, id, directory) = (
-        commands.clone(),
-        tx.clone(),
-        id.to_owned(),
-        directory.to_path_buf(),
-    );
+    // One making of a media at a time: a second would write the same take.
+    let cancellation = kerf_engine::CancellationToken::new();
+    let started = shared.makings.lock().is_ok_and(|mut makings| {
+        if makings.contains_key(id) {
+            return false;
+        }
+        makings.insert(id.to_owned(), cancellation.clone());
+        true
+    });
+    if !started {
+        return make_failed(tx, id, "it is being made already");
+    }
+    crate::emit(tx, making(id, plan.take, ""));
+    let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
     thread::spawn(move || {
-        let cancellation = kerf_engine::CancellationToken::new();
-        match kerf_engine::recipe::make(&project, &directory, &plan, &models, &cancellation, |_| {})
-        {
+        let take = plan.take;
+        // A step says the same line again and again while nothing changes: once is enough.
+        let mut last = String::new();
+        let made = kerf_engine::recipe::make(
+            &project,
+            &shared.directory,
+            &plan,
+            &models,
+            &cancellation,
+            |line| {
+                let line = line.trim();
+                if !line.is_empty() && line != last {
+                    crate::emit(&tx, making(&id, take, line));
+                    last = line.to_owned();
+                }
+            },
+        );
+        if let Ok(mut makings) = shared.makings.lock() {
+            makings.remove(&id);
+        }
+        match made {
             Ok(made) => {
                 crate::emit(
                     &tx,
@@ -116,9 +145,51 @@ pub(crate) fn make(
                     path: made.stored,
                 });
             }
-            Err(error) => crate::error(&tx, format!("cannot make {id}: {error}")),
+            Err(kerf_engine::EngineError::Cancelled) => {
+                crate::emit(&tx, json!({"type": "media_make_cancelled", "media": id}));
+            }
+            Err(error) => make_failed(&tx, &id, error),
         }
     });
+}
+
+/// A making of media `id` under way: the take it is making, and the line its steps last
+/// said, empty when it has only begun.
+fn making(id: &str, take: u32, line: &str) -> Value {
+    json!({"type": "media_making", "media": id, "take": take, "line": line})
+}
+
+/// A making of media `id` that did not end with a take: an `error` that names the media,
+/// so that what shows it being made stops.
+fn make_failed(tx: &SyncSender<Value>, id: &str, why: impl std::fmt::Display) {
+    crate::emit(
+        tx,
+        json!({"type": "error", "message": format!("cannot make {id}: {why}"),
+            "command": "media_make", "media": id}),
+    );
+}
+
+/// Stop the making of media `id`: its step is asked to end, and it answers
+/// `media_make_cancelled` once it has. One that is not being made is an `error`.
+pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &SyncSender<Value>) {
+    let running = shared
+        .makings
+        .lock()
+        .ok()
+        .and_then(|makings| makings.get(id).cloned());
+    match running {
+        Some(cancellation) => cancellation.cancel(),
+        None => crate::error(tx, format!("{id} is not being made")),
+    }
+}
+
+/// Stop every making that is running, as closing the bridge does.
+pub(crate) fn cancel_makings(shared: &Shared) {
+    if let Ok(makings) = shared.makings.lock() {
+        for cancellation in makings.values() {
+            cancellation.cancel();
+        }
+    }
 }
 
 /// Whether `file` reads as media, as an import reads it.
@@ -354,6 +425,14 @@ mod tests {
                 ..
             }
         ));
+        // A making that is running is stopped by the media it makes.
+        let Command::MediaMakeCancel { media } =
+            read(json!({"type": "media_make_cancel", "media": "m2"})).unwrap()
+        else {
+            panic!("expected media_make_cancel");
+        };
+        assert_eq!(media, "m2");
+        assert!(read(json!({"type": "media_make_cancel"})).is_err());
         assert!(matches!(
             read(json!({"type": "projection_import"})).unwrap(),
             Command::ProjectionImport

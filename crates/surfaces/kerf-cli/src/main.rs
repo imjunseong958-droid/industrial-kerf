@@ -713,12 +713,23 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
     if !yes && !confirmed("Run it?") {
         bail!("not run; `kerf make {id} --yes` runs it without asking");
     }
+    // Ctrl-C stops it as the editor's Stop Making does: its step is asked to end, a model's
+    // program takes back what it asked a server for and says so, and nothing of the take is
+    // left. A second Ctrl-C ends it at once.
     let cancellation = kerf_engine::CancellationToken::new();
+    let stop = kerf_engine::sidecar::stop_on_termination(&cancellation);
     let made =
         kerf_engine::recipe::make(&project, directory, &plan, &models, &cancellation, |line| {
             eprintln!("{line}")
-        })
-        .map_err(|error| anyhow!(error))?;
+        });
+    drop(stop);
+    let made = match made {
+        Ok(made) => made,
+        Err(kerf_engine::EngineError::Cancelled) => {
+            bail!("stopped: no take was made, and {id} is as it was")
+        }
+        Err(error) => return Err(anyhow!(error)),
+    };
     // The media becomes the new take: the document takes its path, length and streams, and
     // clips keep their timing.
     let state = runtime

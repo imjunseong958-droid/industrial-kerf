@@ -1749,6 +1749,11 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {
         const QString message = event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error"));
+        // A making that did not end with a take is no longer under way, and what its
+        // steps last said is not left standing as if it were.
+        if (event.value(QStringLiteral("command")).toString() == QStringLiteral("media_make") &&
+            m_making.remove(event.value(QStringLiteral("media")).toString()))
+            showStatus(QString());
         // How preset_save refuses a file that exists, after its path.
         static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
         if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
@@ -1766,11 +1771,21 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         if (QMessageBox::question(this, QStringLiteral("Make from Recipe"), makeQuestion(event), QMessageBox::Yes | QMessageBox::No,
                                   QMessageBox::No) == QMessageBox::Yes)
             runMake(event.value(QStringLiteral("media")).toString());
+    } else if (type == QStringLiteral("media_making")) {
+        // Each line a step says, as it says it: a rendering's share done, a model's
+        // program's words. It stays until the next, or until the making ends.
+        m_making.insert(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("line")).toString());
+        showStatus(makingStatus(event));
     } else if (type == QStringLiteral("media_made")) {
+        m_making.remove(event.value(QStringLiteral("media")).toString());
         showStatus(QStringLiteral("Made take %2 of %1 from its recipe")
                        .arg(event.value(QStringLiteral("media")).toString())
                        .arg(event.value(QStringLiteral("take")).toInt()),
                    6000);
+    } else if (type == QStringLiteral("media_make_cancelled")) {
+        const QString media = event.value(QStringLiteral("media")).toString();
+        m_making.remove(media);
+        showStatus(QStringLiteral("Stopped making %1; it is as it was").arg(media), 6000);
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
         const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();
