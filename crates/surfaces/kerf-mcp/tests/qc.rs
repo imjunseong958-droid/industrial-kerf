@@ -364,4 +364,29 @@ fn missing_media_blocks_and_is_counted() {
             .sum::<usize>()
     );
     assert!(report.summary.blocking >= 1);
+    assert_eq!(
+        with(&report, "missing_media")[0].message,
+        "media `m1` is missing: no file at `/nowhere/shot.mov`"
+    );
+
+    // A file of the project is named as the document names it, not by
+    // where the project folder is on this computer.
+    let directory = TempDir::new().unwrap();
+    let mut inside = project(script);
+    let gone = directory.path().join("media").join("gone.mov");
+    for media in inside
+        .media
+        .iter_mut()
+        .filter(|media| media.id.as_str() == "m1")
+    {
+        media.path = gone.to_string_lossy().into_owned();
+    }
+    let report = check(&inside, directory.path());
+    assert_eq!(
+        with(&report, "missing_media")[0].message,
+        format!(
+            "media `m1` is missing: no file at `{}`",
+            std::path::Path::new("media").join("gone.mov").display()
+        )
+    );
 }

@@ -397,7 +397,15 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
                         "media `{}` is not made yet: a person makes it from its recipe, `{recipe}`, with `kerf make {}`",
                         media.id, media.id
                     ),
-                    None => format!("media `{}` is missing: {}", media.id, media.path),
+                    // As the document writes it: where the project folder
+                    // is on this computer says nothing of what is missing.
+                    None => format!(
+                        "media `{}` is missing: no file at `{}`",
+                        media.id,
+                        Path::new(&media.path)
+                            .strip_prefix(dir)
+                            .map_or(media.path.as_str().into(), Path::to_string_lossy)
+                    ),
                 },
             ));
         }
