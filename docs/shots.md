@@ -178,9 +178,12 @@ An edit accepted this way is still one revision, which undo takes back, and a
 making still keeps every take beside the ones before, so what was let through
 is seen and undone as anything else. The file is read at each asking, so a
 change to it holds from the next; one that does not read lets nothing more
-through, and the agent is told so. A making an agent runs is shown in its own
-session, not in the editor's toolbar, and ends with the session: an MCP
-client that goes away stops it as Stop Making does.
+through, and the agent is told so. A making the editor's own assistant runs is
+shown in the editor's toolbar as the person's own is, each line its steps say,
+and Stop Making in the bin stops it. One that an MCP client runs, or a Claude
+Code session, which is another program, is shown in its own session only.
+Either ends with its session: an MCP client that goes away stops it as Stop
+Making does.
 
 ## Takes
 

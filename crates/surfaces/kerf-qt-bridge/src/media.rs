@@ -157,6 +157,42 @@ pub(crate) fn make(
     });
 }
 
+/// Who shows the makings an agent's session runs on its own, where the person lets it: the
+/// events a person's making sends, so the toolbar says what is being made and the bin can
+/// stop it. The session's router places the take itself, so nothing is replaced here.
+pub(crate) fn agent_makings(shared: Arc<Shared>, tx: SyncSender<Value>) -> kerf_mcp::MakingWatcher {
+    use kerf_mcp::MakingEvent;
+    let ended = |shared: &Shared, media: &str| {
+        if let Ok(mut makings) = shared.makings.lock() {
+            makings.remove(media);
+        }
+    };
+    Arc::new(move |event| match event {
+        MakingEvent::Began { media, take, stop } => {
+            if let Ok(mut makings) = shared.makings.lock() {
+                makings.entry(media.clone()).or_insert(stop);
+            }
+            crate::emit(&tx, making(&media, take, ""));
+        }
+        MakingEvent::Said { media, take, line } => crate::emit(&tx, making(&media, take, &line)),
+        MakingEvent::Made { media, take } => {
+            ended(&shared, &media);
+            crate::emit(
+                &tx,
+                json!({"type": "media_made", "media": media, "take": take}),
+            );
+        }
+        MakingEvent::Stopped { media } => {
+            ended(&shared, &media);
+            crate::emit(&tx, json!({"type": "media_make_cancelled", "media": media}));
+        }
+        MakingEvent::Failed { media, why } => {
+            ended(&shared, &media);
+            make_failed(&tx, &media, why);
+        }
+    })
+}
+
 /// A making of media `id` under way: the take it is making, and the line its steps last
 /// said, empty when it has only begun.
 fn making(id: &str, take: u32, line: &str) -> Value {
@@ -403,6 +439,75 @@ mod tests {
         fs::create_dir_all(directory.join("media")).unwrap();
         kerf_collab::scaffold::prepare_repository_files(directory, false).unwrap();
         sh(directory, &["init", "-q", "-b", "main"]);
+    }
+
+    #[test]
+    fn an_agents_own_making_shows_and_stops_as_a_persons_does() {
+        use kerf_mcp::MakingEvent;
+        let directory = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(directory.path()));
+        let (tx, events) = mpsc::sync_channel(16);
+        let told = agent_makings(shared.clone(), tx.clone());
+        let next = || events.try_recv().expect("an event");
+
+        // It shows from its start, and each line its steps say.
+        let stop = kerf_engine::CancellationToken::new();
+        told(MakingEvent::Began {
+            media: "m9".into(),
+            take: 2,
+            stop: stop.clone(),
+        });
+        assert_eq!(
+            next(),
+            json!({"type": "media_making", "media": "m9", "take": 2, "line": ""})
+        );
+        told(MakingEvent::Said {
+            media: "m9".into(),
+            take: 2,
+            line: "rendering: 40%".into(),
+        });
+        assert_eq!(next()["line"], "rendering: 40%");
+
+        // Stopping it from the bin reaches the session's making, which then says it stopped.
+        cancel_make(&shared, "m9", &tx);
+        assert!(stop.is_cancelled());
+        assert!(events.try_recv().is_err());
+        told(MakingEvent::Stopped { media: "m9".into() });
+        assert_eq!(
+            next(),
+            json!({"type": "media_make_cancelled", "media": "m9"})
+        );
+        assert!(shared.makings.lock().unwrap().is_empty());
+
+        // One that makes its take, and one that fails, end what was shown of them.
+        let began = |take: u32| MakingEvent::Began {
+            media: "m9".into(),
+            take,
+            stop: kerf_engine::CancellationToken::new(),
+        };
+        told(began(2));
+        next();
+        told(MakingEvent::Made {
+            media: "m9".into(),
+            take: 2,
+        });
+        assert_eq!(
+            next(),
+            json!({"type": "media_made", "media": "m9", "take": 2})
+        );
+        told(began(3));
+        next();
+        told(MakingEvent::Failed {
+            media: "m9".into(),
+            why: "the model said no".into(),
+        });
+        let failed = next();
+        assert_eq!(
+            (failed["type"].as_str(), failed["command"].as_str()),
+            (Some("error"), Some("media_make"))
+        );
+        assert_eq!(failed["media"], "m9");
+        assert!(shared.makings.lock().unwrap().is_empty());
     }
 
     #[test]

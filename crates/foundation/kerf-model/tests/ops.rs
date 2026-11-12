@@ -859,6 +859,15 @@ fn transitions_need_handles_and_drop_when_their_cut_opens() {
     short.sequences[0].tracks[1].clips[1] = media_clip("a2", "m1", 0, 48, 48, Some("L2"));
     let rejected = apply(&short, Catalog::builtin(), &[dissolve("c1", "c2")]).unwrap_err();
     assert_eq!(rejected.diagnostics[0].code, "transition.handles");
+    // Only the side that is short is named, in frames, with the lines that
+    // would give the transition what it plays.
+    let message = &rejected.diagnostics[0].message;
+    assert_eq!(
+        message,
+        "transition `t1` from `c1` to `c2` plays 6 frames of `c2` from before its first, \
+         where its media has 0: `slip c2 +6f` first, to play it from later in its media; \
+         or give it `align=start`, to play all of it after the cut"
+    );
 
     let (opened, report) = apply(
         &project,

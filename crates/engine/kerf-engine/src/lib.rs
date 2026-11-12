@@ -43,5 +43,5 @@ pub use transcription::{
     cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached, TimeRange,
     Transcript, TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,
     TranscriptionProgress, TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
-    MAX_TRANSCRIPTION_RANGE_SECONDS, TRANSCRIPTION_SCHEMA_VERSION,
+    MAX_TRANSCRIPTION_RANGE_SECONDS, TRANSCRIPTION_SAMPLE_RATE, TRANSCRIPTION_SCHEMA_VERSION,
 };

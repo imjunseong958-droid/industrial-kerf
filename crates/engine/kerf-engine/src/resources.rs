@@ -13,6 +13,9 @@ pub enum HardwareEncodePolicy {
 pub struct ResourceBudget {
     pub logical_cpus: usize,
     pub ffmpeg_threads: usize,
+    /// Threads a transcription runs on. whisper.cpp takes four whatever the
+    /// machine has, which is all of a four-core laptop for minutes.
+    pub whisper_threads: usize,
     pub extract_parallelism: usize,
     pub software_preset: &'static str,
     pub software_crf: u8,
@@ -59,6 +62,14 @@ pub fn budget_for_cpus(cpus: usize) -> ResourceBudget {
         5..=8 => 4,
         _ => 8.min(cpus.saturating_sub(1)),
     });
+    // Half the machine, and no more than whisper.cpp's own four. Measured
+    // on four cores with the small model: two threads transcribe at 1.2
+    // times real time on half the CPU, a proxy made beside them takes 23%
+    // longer and an index 12%, and a composited program keeps a picture 750
+    // to 940 wide; four threads transcribe at 2.2 times real time on all of
+    // it, a proxy takes 42% longer, an index 64%, and the picture is drawn
+    // 600 to 750 wide.
+    let whisper_threads = env_usize("KERF_WHISPER_THREADS").unwrap_or((cpus / 2).clamp(1, 4));
     let extract_parallelism = env_usize("KERF_EXTRACT_JOBS").unwrap_or(match cpus {
         1..=2 => 1,
         3..=4 => 2,
@@ -85,6 +96,7 @@ pub fn budget_for_cpus(cpus: usize) -> ResourceBudget {
     ResourceBudget {
         logical_cpus: cpus,
         ffmpeg_threads: ffmpeg_threads.max(1),
+        whisper_threads: whisper_threads.max(1),
         extract_parallelism: extract_parallelism.max(1),
         software_preset,
         software_crf,
@@ -104,6 +116,10 @@ pub fn budget() -> &'static ResourceBudget {
 
 pub fn ffmpeg_thread_count() -> usize {
     budget().ffmpeg_threads
+}
+
+pub fn whisper_thread_count() -> usize {
+    budget().whisper_threads
 }
 
 pub fn extract_job_count() -> usize {

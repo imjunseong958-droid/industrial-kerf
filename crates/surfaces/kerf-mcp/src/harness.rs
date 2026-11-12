@@ -72,12 +72,16 @@ With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview: the frames \
-either side of each cut it made or moved, and the middle of a clip it changed \
-in place. The project does not change until the user accepts it. Several \
+either side of each cut it made or moved, the middle of a clip it changed \
+in place (with its first and last frame when the clip moves), and three \
+frames through a transition it added or changed. Each sheet is an image \
+after a line that says which it is and its frames in reading order, the \
+one before the edit first. The project does not change until the user accepts it. Several \
 proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
-becomes that proposal's next version (v2, v3), and the user can still see \
-the versions before it. `recipes` writes recipe files with it, by the path \
+becomes that proposal's next version (v2, v3) under a new id, and the user \
+can still see the versions before it. `extend` takes the newest version's \
+id, the one the last `edit` returned. `recipes` writes recipe files with it, by the path \
 a media's `recipe=` names: a file that holds another text is kept as it is, \
 with the new text beside it as its next version, and the media move to that \
 in the proposal. Where the person's own permissions accept an agent's edits, \
@@ -255,7 +259,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              pauses, loudest moments, sound onsets, tempo, and with `transcript` what \
              is said (`words` times each word), and with `facts` what the camera does in \
              each shot and how loud it is. `contrast`: titles and captions too faint to read. \
-             `sheet`: a contact sheet of a range. \
+             `sheet`: a contact sheet of a range. `loudness`: how loud the sequence \
+             plays, by R128. \
              `at`: frames, as source frames of `media` or program frames of the \
              sequence. `transcript` without `media`: what the sequence says. \
              `track`: where a point, a surface, an object, or the camera goes, as keyframes. \
@@ -274,8 +279,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
                     "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
-                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, the same `outline`, and with `clip` a mask line for that clip, with a third number on each corner where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
+                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
+                    "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
@@ -323,7 +329,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "beats": {"type": "boolean", "description": "Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats."}
                     }, "required": ["media"], "additionalProperties": false}},
                     "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Replacement text for a caption or title of the preset, by the clip id the preset has for it (as `look` with `preset` lists them), not an id of the project."},
-                    "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
+                    "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
                 },
@@ -411,6 +417,8 @@ struct LookInput {
     facts: bool,
     #[serde(default)]
     contrast: bool,
+    #[serde(default)]
+    loudness: bool,
     track: Option<TrackInput>,
     #[serde(default)]
     sync: Vec<String>,
@@ -679,6 +687,23 @@ fn print_seconds(clock: &Clock, seconds: f64) -> String {
 impl KerfMcpRouter {
     /// The proposal `id` waiting for review: the operations it runs, the
     /// script as it was written, and its base revision.
+    /// When `id` is an earlier version of an open proposal: its version,
+    /// and the newest version and its id.
+    fn newer_version(&self, id: &str) -> Result<Option<(u32, u32, String)>, McpError> {
+        let state = self.runtime.get_state()?;
+        Ok(state
+            .proposals
+            .iter()
+            .filter(|entry| entry.status == "pending" && entry.proposal_id != id)
+            .find_map(|entry| {
+                let version = entry
+                    .versions
+                    .iter()
+                    .find(|version| version.proposal_id == id)?;
+                Some((version.version, entry.version, entry.proposal_id.clone()))
+            }))
+    }
+
     fn pending(&self, id: &str) -> Result<(String, String, u64), McpError> {
         let state = self.runtime.get_state()?;
         // Proposals staged before they kept their source wrote none.
@@ -1338,6 +1363,7 @@ impl KerfMcpRouter {
             && input.at.is_empty()
             && !input.transcript
             && !input.contrast
+            && !input.loudness
             && input.track.is_none()
             && input.sheet.is_none()
             && input.sequence.is_none()
@@ -1382,6 +1408,10 @@ impl KerfMcpRouter {
             DEFAULT_FRAME_WIDTH
         };
         let width = input.width.unwrap_or(default_width).clamp(64, 1920);
+        if input.loudness {
+            // Of the sequence only, which it says of a look that asks more.
+            return self.program_loudness(&project, revision, &input);
+        }
         let mut result = match input.media.as_deref() {
             None if input.contrast => self.program_contrast(&project, revision, &input)?,
             None if input.track.is_some() => self.program_track(&project, revision, &input)?,
@@ -1733,7 +1763,8 @@ impl KerfMcpRouter {
     }
 
     /// What the sequence says from `from` to `to`, as it plays: its sound
-    /// is rendered and transcribed. Times are sequence positions.
+    /// is mixed, with no picture drawn, and transcribed. Times are sequence
+    /// positions.
     fn program_transcript(
         &self,
         project: &Project,
@@ -1772,25 +1803,20 @@ impl KerfMcpRouter {
             "program-sound",
             &json!({"from": from.flicks(), "to": to.flicks()}),
         )?;
-        let sound = entry.path("sound.mp4");
-        if !entry.is_complete(&["sound.mp4"]) {
-            render_program::<fn(f64)>(
+        let sound = entry.path("sound.wav");
+        if !entry.is_complete(&["sound.wav"]) {
+            kerf_engine::render::render_sound(
                 &resolved,
                 Some(sequence.id.as_str()),
                 Some((from, to)),
-                &RenderOptions {
-                    output: sound.to_string_lossy().into_owned(),
-                    draft: true,
-                    force_software: true,
-                    project_dir: Some(self.dir.clone()),
-                    ..RenderOptions::default()
-                },
-                None,
+                kerf_engine::TRANSCRIPTION_SAMPLE_RATE,
+                &sound,
+                &kerf_engine::CancellationToken::new(),
             )
             .map_err(engine_error)?;
-            entry.mark_complete(&["sound.mp4"]).map_err(engine_error)?;
+            entry.mark_complete(&["sound.wav"]).map_err(engine_error)?;
         }
-        // A program's sound is rendered for each revision listened to.
+        // A program's sound is mixed for each revision listened to.
         let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS);
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
@@ -2142,8 +2168,14 @@ impl KerfMcpRouter {
             };
             let followed =
                 kerf_track::follow_object(count as usize + 1, &hints, model.as_deref(), read);
+            // The corners that shape it, the same ones in every keyframe as a mask's must be,
+            // and then the frames those corners need: a square followed by forty corners through
+            // four seconds was 95 keyframes of forty, 48 KB of outline.
+            let tolerance = TRACK_TOLERANCE_PIXELS / drawn_width;
+            let followed =
+                followed.with_corners(&kerf_track::simplified_corners(&followed, tolerance));
             let kept =
-                kerf_track::simplified_object(&followed, TRACK_TOLERANCE_PIXELS / drawn_width);
+                kerf_track::simplified_object(&followed, OUTLINE_TOLERANCE_PIXELS / drawn_width);
             let rounded = |value: f64| (value * 10_000.0).round() / 10_000.0;
             // How soft its edge is, in the pixels of what the mask goes on, and said only of an
             // object that has one.
@@ -2181,11 +2213,16 @@ impl KerfMcpRouter {
                 "frames": followed.outlines.len(),
                 "lostAt": followed.lost_at.map(|index| format!("{}f", first + index as i64)),
                 "keyframes": kept.len(),
+                "corners": followed.outlines.first().map_or(0, Vec::len),
                 "area": followed.areas.last().map(|area| rounded(*area)),
-                "outline": outline,
             });
-            if let Some(clip) = target {
-                result["script"] = json!(format!("mask {} add object points={outline}", clip.id));
+            // The outline once: in the line that masks the clip, or by itself without one.
+            match target {
+                Some(clip) => {
+                    result["script"] =
+                        json!(format!("mask {} add object points={outline}", clip.id));
+                }
+                None => result["outline"] = json!(outline),
             }
             return Ok(result);
         }
@@ -2325,6 +2362,86 @@ impl KerfMcpRouter {
             "of": of,
             "clipped": clipped,
             "contrast": findings,
+        }))
+    }
+
+    /// How loud the sequence is as it plays, by R128: its whole mix through
+    /// the meter a delivery is checked with, kept for the revision.
+    fn program_loudness(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+    ) -> Result<Value, McpError> {
+        if input.media.is_some()
+            || !input.at.is_empty()
+            || input.from.is_some()
+            || input.to.is_some()
+            || input.transcript
+            || input.sheet.is_some()
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`loudness` is of a whole sequence as it plays: use it with `sequence` or \
+                 `proposal` only; a media's own loudness is in its `facts`",
+            ));
+        }
+        let sequence = program(project, input.sequence.as_deref())?;
+        let clock = Clock::of_sequence(sequence);
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let entry = self.program_entry(
+            &resolved,
+            sequence.id.as_str(),
+            "program-loudness",
+            &json!({}),
+        )?;
+        let sound: kerf_engine::Loudness = if entry.is_complete(&["loudness.json"]) {
+            entry.read_json("loudness.json").map_err(engine_error)?
+        } else {
+            let sound = kerf_engine::measure_program(
+                &resolved,
+                Some(sequence.id.as_str()),
+                &self.dir,
+                &kerf_engine::CancellationToken::new(),
+            )
+            .map_err(engine_error)?;
+            entry
+                .write_json("loudness.json", &sound)
+                .map_err(engine_error)?;
+            entry
+                .mark_complete(&["loudness.json"])
+                .map_err(engine_error)?;
+            sound
+        };
+        // A measurement is made for each revision asked about.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_LOUDNESS);
+        // Two places, as a meter reads; silence has no level.
+        let level = |value: f64| {
+            if value.is_finite() && value > -120.0 {
+                json!((value * 100.0).round() / 100.0)
+            } else {
+                Value::Null
+            }
+        };
+        let ends = |seconds: Option<f64>| {
+            seconds
+                .and_then(Time::from_seconds)
+                .map(|time| clock.print_position(sequence.rate.round(time)))
+        };
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "loudness": {
+                "integrated": level(sound.integrated),
+                "target": kerf_engine::loudness::TARGET_LUFS,
+                "range": level(sound.lra),
+                "truePeak": level(sound.true_peak_max),
+                "limit": kerf_engine::loudness::TRUE_PEAK_LIMIT_DBTP,
+                "shortTermMax": {"lufs": level(sound.short_term_max), "ends": ends(sound.short_term_max_at())},
+                "momentaryMax": {"lufs": level(sound.momentary_max), "ends": ends(sound.momentary_max_at())},
+                "seconds": (sound.duration * 1000.0).round() / 1000.0,
+            },
         }))
     }
 
@@ -2555,6 +2672,22 @@ impl KerfMcpRouter {
             Some(id) => Some(self.pending(id)?),
             None => None,
         };
+        // An extension runs on what the version named makes. Named by the id
+        // of a version since replaced, it would leave out what the versions
+        // after it added, and become the newest all the same.
+        if let Some(id) = input.extend.as_deref() {
+            if let Some((version, newest, newest_id)) = self.newer_version(id)? {
+                return Err(McpError::new(
+                    "PROPOSAL_SUPERSEDED",
+                    format!(
+                        "proposal {id} is version {version} of a proposal now at version \
+                         {newest}: built on it, this script would leave out what the versions \
+                         since added. To build on all of it, pass the newest, {newest_id}, as \
+                         `extend`; to start again from the project, pass `revise`"
+                    ),
+                ));
+            }
+        }
         // `extend` runs the script on what the proposal makes; `revise` on
         // the project.
         let (revision, before) = self.project_at(input.extend.as_deref())?;
@@ -2963,10 +3096,13 @@ impl KerfMcpRouter {
     }
 }
 
-/// How many renders of a program's sound (each up to 15 minutes, with its
+/// How many mixes of a program's sound (each up to 15 minutes, with its
 /// transcript) the cache keeps besides the one in use; older revisions'
 /// make way.
 const KEPT_PROGRAM_SOUNDS: usize = 4;
+/// How many measurements of a program's loudness the cache keeps besides
+/// the one in use.
+const KEPT_PROGRAM_LOUDNESS: usize = 16;
 /// How many captures of a program's frames the cache keeps besides the one
 /// in use.
 const KEPT_PROGRAM_FRAMES: usize = 32;
@@ -3098,6 +3234,11 @@ fn picture_width(project: &kerf_model::Project, clip: Option<&kerf_model::Clip>)
 }
 
 const TRACK_TOLERANCE_PIXELS: f64 = 0.5;
+/// How far an object's outline may leave a straight way between two keyframes, in pixels of the
+/// frame it was cut in. A cut is of whole pixels, so its edge is known to half a pixel either way:
+/// one that goes 3.2 pixels a frame is cut 3, 3, 3, 3 and 4 pixels on, 0.8 off a straight way, and
+/// at half a pixel four frames of every five were keyframes.
+const OUTLINE_TOLERANCE_PIXELS: f64 = 1.0;
 
 /// The width frames are drawn at for scopes to read.
 const SCOPE_WIDTH: f64 = 960.0;
@@ -3373,10 +3514,25 @@ fn changed_span(sequence: &Sequence, old: Option<&Sequence>) -> Option<(Time, Ti
     (to > from).then_some((from, to))
 }
 
+/// Whether something of `clip` changes as it plays: a property, an effect's
+/// parameter or its generator's keyed or worked out from its time.
+fn moves(clip: &Clip) -> bool {
+    let animated = |params: &kerf_model::Params| {
+        params
+            .values()
+            .any(|param| !matches!(param, kerf_model::Param::Static(_)))
+    };
+    animated(&clip.props)
+        || clip.effects.iter().any(|effect| animated(&effect.params))
+        || matches!(&clip.content, Content::Generator { params, .. } if animated(params))
+}
+
 /// The positions in `sequence` that show what an edit changed on `side`, the
 /// project before or after it, compared with `other`: the last frame
-/// before and the first frame of every cut it made or moved, and the middle
-/// frame of a clip it changed in place. The earliest come first.
+/// before and the first frame of every cut it made or moved; the middle
+/// frame of a clip it changed in place, with its first and last when the
+/// clip moves; and a quarter, half and three quarters of the way through a
+/// transition it added or changed. The earliest come first.
 fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
     let Some(sequence) = side.sequence(sequence) else {
         return Vec::new();
@@ -3395,6 +3551,11 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
                     let (first, last) =
                         (rate.frames_floor(clip.start), rate.frames_floor(clip.end()));
                     middles.push(rate.time_of(first + (last - first) / 2));
+                    // One frame says nothing of a move: where it starts and
+                    // where it ends, either side of the middle.
+                    if moves(clip) || moves(was) {
+                        middles.extend([rate.time_of(first), rate.time_of(last - 1)]);
+                    }
                 }
                 _ => {
                     cut(clip.start);
@@ -3413,7 +3574,14 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
         for transition in &track.transitions {
             if previous.transition(transition.id.as_str()) != Some(transition) {
                 if let Some(clip) = track.clip(transition.from.as_str()) {
-                    cut(clip.end());
+                    // The two frames at its cut are both its middle: three
+                    // through it show what it does.
+                    let (before, _) = transition.split_at_cut(rate);
+                    let first = rate.frames_floor(clip.end() - before);
+                    let frames = rate.frames_floor(transition.duration).max(1);
+                    middles.extend(
+                        [1, 2, 3].map(|quarter| rate.time_of(first + frames * quarter / 4)),
+                    );
                 }
             }
         }
@@ -3745,6 +3913,34 @@ sequence s1 rate=24 size=1920x1080
         assert_eq!(
             print(&faded, preview_times(&faded, &before, "s1")),
             ["00:00:06:00"]
+        );
+
+        // A move shows where it starts and ends as well.
+        let moved = apply_script(&before, catalog(), "set c2 x={0f:0 95f:0.5}")
+            .unwrap()
+            .project;
+        assert_eq!(
+            print(&moved, preview_times(&moved, &before, "s1")),
+            ["00:00:04:00", "00:00:06:00", "00:00:07:23"]
+        );
+        // And so does taking one away, of what there was.
+        assert_eq!(
+            print(&before, preview_times(&before, &moved, "s1")).len(),
+            3
+        );
+
+        // A transition shows three frames through it, not the two at its
+        // cut, which are both its middle.
+        let dissolved = apply_script(
+            &before,
+            catalog(),
+            "transition add from=c1 to=c2 fx=dissolve@1 dur=24f as=t1",
+        )
+        .unwrap()
+        .project;
+        assert_eq!(
+            print(&dissolved, preview_times(&dissolved, &before, "s1")),
+            ["00:00:03:18", "00:00:04:00", "00:00:04:06"]
         );
     }
 

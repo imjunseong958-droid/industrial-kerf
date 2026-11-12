@@ -111,6 +111,49 @@ fn insert_gives_each_target_the_properties_of_its_kind() {
         "insert media=m1 dur=24f at=01:00:07:00 on=V1 gain=-6",
     );
     assert!(error.message.contains("no target track takes `gain`"));
+
+    // A track that is not there takes nothing: the line is refused for the
+    // track, with the tracks there are and the line that adds it, whatever
+    // else it sets.
+    let error = fails(
+        &base(),
+        "overwrite media=m1 dur=24f at=01:00:07:00 on=V2 as=c9 y=120",
+    );
+    assert_eq!(error.code, "ref.missing", "{error:?}");
+    assert!(
+        error.message.contains(
+            "sequence `s1` has no track `V2` (it has V1, A1); `track add V2 video` adds one"
+        ),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.span.map(|span| span.line), Some(1), "{error:?}");
+
+    // What `set` writes on a clip that is there is said to be that, with
+    // the line to write.
+    let error = fails(
+        &base(),
+        "overwrite media=m1 dur=24f at=01:00:07:00 on=V1 as=c9 parent=c1",
+    );
+    assert!(
+        error.message.contains(
+            "`parent=` is set on a clip once it is placed, not where it is placed: \
+             after this line, `set c9 parent=c1`"
+        ),
+        "{}",
+        error.message
+    );
+    let error = fails(
+        &base(),
+        "insert media=m1 dur=24f at=01:00:07:00 on=V1 enabled=false",
+    );
+    assert!(
+        error
+            .message
+            .contains("after this line, `set <clip> enabled=false`"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -418,6 +461,24 @@ marker add at=c2@00:01:01:00+2f as=mk1",
     assert!(fails(&project, "split c1 at=c9@00:00:11:00")
         .message
         .contains("no clip `c9`"));
+}
+
+#[test]
+fn a_line_that_names_what_is_not_there_is_not_a_syntax_error() {
+    // The line is written as it should be: what it names is missing, as
+    // the model says of an operation that names it.
+    for (script, says) in [
+        ("trim c9 in +1f", "no clip `c9`"),
+        ("use s9", "no sequence `s9`"),
+        ("transition set t9 dur=6f", "no transition `t9`"),
+        ("marker remove m9", "no marker `m9`"),
+    ] {
+        let error = fails(&base(), script);
+        assert!(error.message.contains(says), "{script}: {}", error.message);
+        assert_eq!(error.code, "ref.missing", "{script}: {}", error.message);
+    }
+    // A line that cannot be read is still one.
+    assert_eq!(fails(&base(), "trim c1 sideways +1f").code, "syntax");
 }
 
 /// What analysis knows of m1: a few words, a pause, and a cut.
