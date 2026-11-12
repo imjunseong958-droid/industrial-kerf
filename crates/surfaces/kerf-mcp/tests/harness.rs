@@ -416,12 +416,46 @@ fn look_shows_the_document_media_index_and_frames() {
             "params": {"name": "look", "arguments": {"media": "m1", "at": ["1s"], "width": 160}}}))
         .unwrap();
     let content = response["result"]["content"].as_array().unwrap();
-    assert_eq!(content.len(), 2, "{response}");
-    assert_eq!(content[1]["type"], "image");
-    assert_eq!(content[1]["mimeType"], "image/jpeg");
+    assert_eq!(content.len(), 3, "{response}");
+    // Each image comes after a line that says which it is.
+    assert_eq!(content[1]["text"], "image 0: frames[0] at 1s");
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[2]["mimeType"], "image/jpeg");
     let frame = &response["result"]["structuredContent"]["result"]["frames"][0];
     assert!(frame.get("imageBase64").is_none());
     assert_eq!(frame["image"], 0);
+
+    // An edit's sheets come the one before the edit first, each named with
+    // the frames it shows.
+    let response = server
+        .handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "edit", "arguments": {"script": "trim c1 out -30f ripple"}}}))
+        .unwrap();
+    let preview = &response["result"]["structuredContent"]["result"]["preview"];
+    assert_eq!(preview["before"]["image"], 0, "{preview}");
+    assert_eq!(preview["after"]["image"], 1, "{preview}");
+    let content = response["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 5, "{response}");
+    let label = |index: usize| content[index]["text"].as_str().unwrap();
+    let frames = |side: &str| {
+        preview[side]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|frame| frame.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    assert_eq!(
+        label(1),
+        format!("image 0: preview.before, frames {}", frames("before"))
+    );
+    assert_eq!(
+        label(3),
+        format!("image 1: preview.after, frames {}", frames("after"))
+    );
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[4]["type"], "image");
 }
 
 #[test]
