@@ -76,8 +76,9 @@ either side of each cut it made or moved, and the middle of a clip it changed \
 in place. The project does not change until the user accepts it. Several \
 proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
-becomes that proposal's next version (v2, v3), and the user can still see \
-the versions before it. `recipes` writes recipe files with it, by the path \
+becomes that proposal's next version (v2, v3) under a new id, and the user \
+can still see the versions before it. `extend` takes the newest version's \
+id, the one the last `edit` returned. `recipes` writes recipe files with it, by the path \
 a media's `recipe=` names: a file that holds another text is kept as it is, \
 with the new text beside it as its next version, and the media move to that \
 in the proposal. Where the person's own permissions accept an agent's edits, \
@@ -323,7 +324,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "beats": {"type": "boolean", "description": "Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats."}
                     }, "required": ["media"], "additionalProperties": false}},
                     "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Template caption/title clip id to replacement text."},
-                    "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
+                    "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
                 },
@@ -679,6 +680,23 @@ fn print_seconds(clock: &Clock, seconds: f64) -> String {
 impl KerfMcpRouter {
     /// The proposal `id` waiting for review: the operations it runs, the
     /// script as it was written, and its base revision.
+    /// When `id` is an earlier version of an open proposal: its version,
+    /// and the newest version and its id.
+    fn newer_version(&self, id: &str) -> Result<Option<(u32, u32, String)>, McpError> {
+        let state = self.runtime.get_state()?;
+        Ok(state
+            .proposals
+            .iter()
+            .filter(|entry| entry.status == "pending" && entry.proposal_id != id)
+            .find_map(|entry| {
+                let version = entry
+                    .versions
+                    .iter()
+                    .find(|version| version.proposal_id == id)?;
+                Some((version.version, entry.version, entry.proposal_id.clone()))
+            }))
+    }
+
     fn pending(&self, id: &str) -> Result<(String, String, u64), McpError> {
         let state = self.runtime.get_state()?;
         // Proposals staged before they kept their source wrote none.
@@ -2555,6 +2573,22 @@ impl KerfMcpRouter {
             Some(id) => Some(self.pending(id)?),
             None => None,
         };
+        // An extension runs on what the version named makes. Named by the id
+        // of a version since replaced, it would leave out what the versions
+        // after it added, and become the newest all the same.
+        if let Some(id) = input.extend.as_deref() {
+            if let Some((version, newest, newest_id)) = self.newer_version(id)? {
+                return Err(McpError::new(
+                    "PROPOSAL_SUPERSEDED",
+                    format!(
+                        "proposal {id} is version {version} of a proposal now at version \
+                         {newest}: built on it, this script would leave out what the versions \
+                         since added. To build on all of it, pass the newest, {newest_id}, as \
+                         `extend`; to start again from the project, pass `revise`"
+                    ),
+                ));
+            }
+        }
         // `extend` runs the script on what the proposal makes; `revise` on
         // the project.
         let (revision, before) = self.project_at(input.extend.as_deref())?;

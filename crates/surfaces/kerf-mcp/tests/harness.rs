@@ -1015,6 +1015,29 @@ fn a_proposal_can_be_seen_extended_and_rendered() {
         json!({"script": "trim c1 in +1f", "extend": id, "revise": id}),
     );
     assert_eq!(both["code"], "INVALID_ARGUMENTS");
+    // Built on the first version again, a script would leave out what the
+    // second added and become the newest all the same: it is refused, and
+    // told which to build on. Nothing is staged.
+    let superseded = error(
+        &router,
+        "edit",
+        json!({"script": "trim c1 in +1f", "extend": first_id}),
+    );
+    assert_eq!(superseded["code"], "PROPOSAL_SUPERSEDED", "{superseded}");
+    let message = superseded["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(&format!(
+            "proposal {first_id} is version 1 of a proposal now at version 2"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("pass the newest, {id}, as `extend`")),
+        "{message}"
+    );
+    let open = router.runtime().get_state().unwrap().proposals;
+    assert_eq!(open[0].proposal_id, id, "{open:#?}");
+    assert_eq!(open[0].versions.len(), 2, "{open:#?}");
 
     // `render` with the proposal renders what it would make.
     let started = ok(
