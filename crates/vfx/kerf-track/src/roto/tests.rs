@@ -1791,3 +1791,88 @@ fn real_footage_roto_under_a_shutter() {
     assert!(found.is_none(), "{found:?}");
     assert!((0.5..1.0).contains(&open), "{open}");
 }
+
+/// A hard-edged textured rectangle `size` wide and high whose upper left is at `left`, turned by
+/// `turn` radians about its middle, over the textured background.
+fn box_scene((w, h): (usize, usize), left: [f64; 2], size: [f64; 2], turn: f64) -> (usize, usize, Vec<u8>) {
+    let middle = [left[0] + size[0] / 2.0, left[1] + size[1] / 2.0];
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let (dx, dy) = (px - middle[0], py - middle[1]);
+            let (rx, ry) = (dx * turn.cos() + dy * turn.sin(), dy * turn.cos() - dx * turn.sin());
+            let color = if rx.abs() < size[0] / 2.0 && ry.abs() < size[1] / 2.0 {
+                let n = noise(rx + 500.0, ry + 500.0, 11);
+                [0.75 + 0.25 * n, 0.35 + 0.3 * n, 0.1 + 0.15 * n]
+            } else {
+                let (n, m) = (noise(px, py, 5), noise(px * 1.7, py * 1.7, 9));
+                [0.05 + 0.25 * m, 0.3 + 0.4 * n, 0.45 + 0.4 * m]
+            };
+            for value in color {
+                rgba.push((value * 255.0) as u8);
+            }
+            rgba.push(255);
+        }
+    }
+    (w, h, rgba)
+}
+
+/// The corners of that rectangle, in pixels.
+fn box_corners(left: [f64; 2], size: [f64; 2], turn: f64) -> [[f64; 2]; 4] {
+    let middle = [left[0] + size[0] / 2.0, left[1] + size[1] / 2.0];
+    [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]].map(|[sx, sy]| {
+        let (rx, ry) = (sx * size[0] / 2.0, sy * size[1] / 2.0);
+        [
+            middle[0] + rx * turn.cos() - ry * turn.sin(),
+            middle[1] + rx * turn.sin() + ry * turn.cos(),
+        ]
+    })
+}
+
+/// How far the outlines of a rectangle followed through `frames` leave its corners, at worst, in
+/// pixels of the frame: the rectangle goes `step` a frame, turned by `turn`.
+fn corners_cut((w, h): (usize, usize), frames: usize, step: [f64; 2], turn: f64) -> (f64, FollowedObject) {
+    let size = [w as f64 * 0.42, h as f64 * 0.44];
+    let left = |frame: usize| [w as f64 * 0.2 + step[0] * frame as f64, h as f64 * 0.25 + step[1] * frame as f64];
+    let hints = Hints {
+        inside: vec![[(left(0)[0] + size[0] / 2.0) / w as f64, (left(0)[1] + size[1] / 2.0) / h as f64]],
+        ..Hints::default()
+    };
+    let followed = follow_object(frames, &hints, None, |n| Some(box_scene((w, h), left(n), size, turn)));
+    assert_eq!(followed.lost_at, None);
+    assert_eq!(followed.outlines.len(), frames);
+    let mut worst = 0.0f64;
+    for (frame, outline) in followed.outlines.iter().enumerate() {
+        let pixels: Vec<[f64; 2]> = outline.iter().map(|c| [c[0] * w as f64, c[1] * h as f64]).collect();
+        for corner in box_corners(left(frame), size, turn) {
+            worst = worst.max(off_outline(corner, &pixels));
+        }
+    }
+    (worst, followed)
+}
+
+#[test]
+fn a_rectangles_outline_reaches_its_corners() {
+    let size = (480, 270);
+    let mut cuts = Vec::new();
+    for (name, step, turn) in [
+        ("still", [0.0, 0.0], 0.0),
+        ("going right", [2.3, 0.7], 0.0),
+        ("turned and going", [1.5, -0.6], 0.3),
+    ] {
+        let (cut, followed) = corners_cut(size, 5, step, turn);
+        // The corners that shape it are its own four, with nothing beside one to make up for it.
+        let kept = simplified_corners(&followed, 0.75 / size.0 as f64);
+        eprintln!(
+            "roto: a rectangle {name} is cut short of its corners by {cut:.2} px of {}, and keeps {} corners",
+            size.0,
+            kept.len()
+        );
+        cuts.push((name, cut, kept.len()));
+    }
+    for (name, cut, kept) in cuts {
+        assert!(cut <= 1.5, "{name}: {cut}");
+        assert!(kept <= 8, "{name}: {kept}");
+    }
+}
