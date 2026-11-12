@@ -54,191 +54,11 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  linux:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 60
-    env:
-      # The runner has no GPU. Limiting wgpu to Vulkan, which has no driver
-      # here, keeps it off Mesa's software GL, so the GPU tests skip
-      # themselves rather than compare against a software rasterizer.
-      WGPU_BACKEND: vulkan
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/linux-setup
-      # Caches the registry and dependency builds, keyed on Cargo.lock.
-      # Workspace crates, the EffectCraft ones included, rebuild each run.
-      # Only main saves: a pull request's own cache would serve only that
-      # pull request, so pull requests restore main's. The editor job of a
-      # system builds a part of what its test job builds, so it restores
-      # that job's cache and saves none.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Built in a step of its own, so the run's page says how long the
-      # build took and how long the tests did.
-      - name: Build workspace tests
-        run: cargo test --workspace --no-run
-      - name: Test workspace
-        run: cargo test --workspace
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here the Secret Service,
-      # gnome-keyring on a session bus of its own, its login keyring unlocked
-      # with a throwaway password. Locked, it refuses every write.
-      # Asked of the whole workspace, here and in the step after, so the tests
-      # built above are the ones run: asked of one package, cargo builds its
-      # dependencies again with that package's features alone.
-      - name: Test the system keychain
-        run: |
-          dbus-run-session -- sh -c 'printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test --workspace --lib real_keychain -- --ignored'
-      # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
-      # of a GPU: looks, grades and transitions stay on the GPU. Only this
-      # runs on llvmpipe; its pow and exp are a byte off color.basic's.
-      - name: Test what the catalog sends to the CPU
-        env:
-          KERF_GPU: software
-        run: cargo test --workspace --test catalog_cost -- --nocapture
-
-  # The rest of the gate README.md's Verification names. Clippy checks
-  # rather than builds, so it shares nothing with the tests' build and
-  # waits on none of it.
-  linux-lint:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: ./.github/actions/linux-setup
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-
-  # The Qt editor, its UI tests, and the bridge workflow against a real
-  # kerfd. They need the bridge and the daemon built, not the tests.
-  linux-editor:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 45
-    env:
-      WGPU_BACKEND: vulkan
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/linux-setup
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux
-          save-if: false
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel "$(nproc)"
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
-
-  windows-runtime:
-    runs-on: windows-latest
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # kerf-runtime reaches libav through kerf-engine and kerf-compose
-      # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
-      # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
-      # a pinned shared build; its DLLs go on PATH for the tests. The build the
-      # Windows package carries (package.yml), so that is what is tested.
-      # Kept in the Actions cache, as on Linux, and fetched with retries over
-      # several minutes only when it is not there.
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ffmpeg-archive
-          key: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
-      - name: Install FFmpeg
-        shell: pwsh
-        run: |
-          $build = 'autobuild-2026-09-30-13-08'
-          $name = 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0'
-          $sha256 = '3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696'
-          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'ffmpeg-archive')
-          $archive = Join-Path $folder "$name.zip"
-          $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
-          if (-not (Test-Path $archive)) {
-            Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive -MaximumRetryCount 8 -RetryIntervalSec 30
-          }
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $name archive does not match its checksum" }
-          7z x $archive "-o$target" | Out-Null
-          $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
-          "FFMPEG_DIR=$root" >> $env:GITHUB_ENV
-          "$root\bin" >> $env:GITHUB_PATH
-          $llvm = 'C:\Program Files\LLVM\bin'
-          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
-          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      # Qt for MSVC, with its bin folder on PATH so the editor and its
-      # tests find Qt's DLLs and plugins.
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: "6.10.*"
-          arch: win64_msvc2022_64
-          cache: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The kernel and the durable runtime against Windows paths, line
-      # endings, and processes. The runtime's integration tests start real
-      # kerfd daemons and reach them over the named pipe.
-      - name: Test kernel and interchange
-        run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
-      - name: Test durable runtime
-        run: cargo test -p kerf-runtime --all-targets
-      # Sidecars run in job objects, which end them with kerfd.
-      - name: Test sidecar supervision
-        run: cargo test -p kerf-engine --lib "sidecar::"
-      # The editor steps run even when a test above failed, so the bridge
-      # they link is built regardless.
-      - name: Build native bridge and daemon
-        if: ${{ !cancelled() }}
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here Credential Manager, which
-      # also refuses a value over 1280 UTF-16 units.
-      - name: Test the system keychain
-        if: ${{ !cancelled() }}
-        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored
-      # The editor's C ABI starts kerfd and edits through the pipe beside
-      # another client. On Windows it also fails on any access violation,
-      # handled or not; it runs a few times, since a crash once came and
-      # went.
-      - name: Test editor connection to kerfd
-        if: ${{ !cancelled() }}
-        timeout-minutes: 10
-        run: |
-          for ($run = 1; $run -le 5; $run++) {
-            cargo test -q -p kerf-qt-bridge --test connection -- --nocapture
-            if ($LASTEXITCODE -ne 0) { "failed on run $run"; exit 1 }
-          }
-      - name: Build Qt editor and UI tests
-        if: ${{ !cancelled() }}
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --config Release --parallel 4
-      # Qt logs to the debugger on Windows unless told otherwise.
-      - name: Test Qt UI
-        if: ${{ !cancelled() }}
-        env:
-          QT_FORCE_STDERR_LOGGING: "1"
-        run: ctest --test-dir target/qt -C Release --output-on-failure
-
-  macos-editor:
+  # Diagnosis only, on a branch that is never merged: the editor protocol
+  # tests over and over on macOS, with the sound output saying what it does.
+  macos-meter:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 80
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -246,45 +66,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
-      # build against; ffmpeg-next 9 binds it.
-      - name: Install native media and Qt dependencies
-        run: |
-          brew install ffmpeg qt pkg-config cmake
-          ffmpeg_prefix="$(brew --prefix ffmpeg)"
-          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
-          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos
-          save-if: false
-      # Only what Linux cannot show: the editor's dylib against Homebrew's
-      # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
-      # and sockets, which the bridge workflow below goes through.
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel 3
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
-
-  macos-workspace:
-    runs-on: macos-latest
-    timeout-minutes: 90
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
-      # build against; ffmpeg-next 9 binds it.
       - name: Install native media dependencies
         run: |
           brew install ffmpeg pkg-config
@@ -295,18 +76,66 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: macos
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The whole workspace on macOS, beside the editor's job: its paths,
-      # sockets, and VideoToolbox, and the runner's Metal GPU, so the GPU
-      # parity tests run somewhere other than a developer's Mac. "kerf-gpu: no
-      # usable GPU" in this step's log means they skipped.
-      - name: Build workspace tests
-        run: cargo test --workspace --no-run
-      - name: Test workspace
-        run: cargo test --workspace
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here the login keychain.
-      # Asked of the whole workspace, so the tests built above are the ones
-      # run and nothing is built again.
-      - name: Test the system keychain
-        run: cargo test --workspace --lib real_keychain -- --ignored
+          save-if: false
+      - name: What the runner has for sound
+        run: |
+          sw_vers
+          sysctl -n hw.ncpu hw.memsize
+          system_profiler SPAudioDataType || true
+      - name: Build kerfd and the protocol tests
+        run: |
+          cargo build -p kerf-runtime --bin kerfd
+          cargo test -p kerf-qt-bridge --test protocol --no-run
+      - name: As CI runs them, no stats
+        run: python3 .github/diagnosis/meter.py plain 30
+      - name: As CI runs them, with stats
+        if: ${{ !cancelled() }}
+        run: python3 .github/diagnosis/meter.py side-by-side 30 stats
+      - name: One test at a time, with stats
+        if: ${{ !cancelled() }}
+        run: python3 .github/diagnosis/meter.py one-at-a-time 30 stats -- --test-threads=1
+      - name: The meter test alone, with stats
+        if: ${{ !cancelled() }}
+        run: python3 .github/diagnosis/meter.py alone 30 stats -- the_meter
+      - name: Results
+        if: ${{ !cancelled() }}
+        run: grep -h "^RESULT" logs/*.result || true
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: meter-logs
+          path: logs
+
+  # The same tests as they were before #256-#268, to compare how often
+  # they fail.
+  macos-meter-before:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native media dependencies
+        run: |
+          brew install ffmpeg pkg-config
+          ffmpeg_prefix="$(brew --prefix ffmpeg)"
+          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
+          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+          save-if: false
+      - name: Build kerfd and the protocol tests as of c3614ab
+        run: |
+          cp .github/diagnosis/meter.py "$RUNNER_TEMP/meter.py"
+          git checkout -q c3614ab
+          cargo build -p kerf-runtime --bin kerfd
+          cargo test -p kerf-qt-bridge --test protocol --no-run
+      - name: As CI ran them at c3614ab
+        run: python3 "$RUNNER_TEMP/meter.py" before 60
