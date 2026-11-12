@@ -53,6 +53,8 @@ const MAX_CONTEXT_DIFF_BYTES: usize = 8 * 1024;
 const MAX_INDEX_ONSETS: usize = 100;
 const DEFAULT_SHEET_TILE_WIDTH: u32 = 320;
 const SHEET_COLUMNS: usize = 4;
+/// The most files of a folder one `look` reads.
+const MAX_FOLDER_FILES: usize = 100;
 const MAX_SHEET_FRAMES: usize = 16;
 
 const GUIDE: &str = "You edit video in Kerf. The project is a `.kerf` text \
@@ -66,7 +68,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
@@ -283,8 +285,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
-                    "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers: levels of luma and each channel in percent, the share of samples clipped by channel, in shadows, midtones, and highlights, and in 16 bands of luma; the color cast, saturation, the share of colored samples on the skin tone line, and the densest colors. Grade by these: compare `proposal` with the project, shots with each other, and the result with where it should land. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
-                    "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
+                    "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
+                    "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row, each with its time in its corner (`frames` lists them in order): of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
                     "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
                     "to": {"type": "string", "description": "The end of that range."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
@@ -293,7 +295,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
                     "effect": {"type": "string", "description": "An effect, transition, generator, or clip property: every parameter of it, where the reference keeps a few of a generator that has many. Raster effects are listed by id only. Use alone."},
-                    "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. With no arguments `look` gives in `unplaced` the footage there not yet in the document. Use alone."},
+                    "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. Or a folder of it, such as `media` (`.` for the project's own): each footage file there the same way, in `files`, and in `script` the lines for those not in the document, to run as one edit. With no arguments `look` gives in `unplaced` the footage in the project's folder and in `media` not yet in the document. Use alone."},
                     "cost": {"type": "boolean", "description": "With `at`, program positions: who draws each frame and what it costs. `draws` is `gpu` or `cpu`, `because` says what sends it to the CPU, one line a cause, `ms` is a frame at full size and `msHalf` at half, against `frameMs`, a frame's share of the time. Playing, the editor draws smaller until frames keep up, and a frame the CPU draws takes every core."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, guidance, or parameters match, best first, each with when to use it, and in `properties` the clip properties that do. Use alone, or with `area`."},
@@ -329,6 +331,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "beats": {"type": "boolean", "description": "Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats."}
                     }, "required": ["media"], "additionalProperties": false}},
                     "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Replacement text for a caption or title of the preset, by the clip id the preset has for it (as `look` with `preset` lists them), not an id of the project."},
+                    "scopes": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_LOOK_FRAMES, "description": "Sequence positions to read scopes at once the edit is made, as `look` with `scopes` reads them: the answer's `scopes` has a reading for each, with `before`, what was read there before the edit. A grade and its numbers in one call."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
@@ -570,6 +573,9 @@ struct EditInput {
     /// Recipe files the edit writes, by the path a media line names, each with its text.
     #[serde(default)]
     recipes: BTreeMap<String, String>,
+    /// Positions to read scopes at once the edit is made.
+    #[serde(default)]
+    scopes: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -934,15 +940,24 @@ impl KerfMcpRouter {
             .iter()
             .map(|media| std::path::PathBuf::from(&media.path))
             .collect();
-        let mut files: Vec<String> = std::fs::read_dir(&self.dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|entry| entry.path().is_file() && is_footage(&entry.path()))
-            .filter(|entry| !known.contains(&entry.path()))
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .collect();
-        files.sort();
+        // The project's own folder, and `media` in it, where imports and presets put footage.
+        let mut files: Vec<String> = Vec::new();
+        for folder in ["", "media"] {
+            let mut found: Vec<String> = std::fs::read_dir(self.dir.join(folder))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| entry.path().is_file() && is_footage(&entry.path()))
+                .filter(|entry| !known.contains(&entry.path()))
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .map(|name| match folder {
+                    "" => name,
+                    folder => format!("{folder}/{name}"),
+                })
+                .collect();
+            found.sort();
+            files.extend(found);
+        }
         files
     }
 
@@ -1060,15 +1075,88 @@ impl KerfMcpRouter {
         Ok(fields)
     }
 
+    /// What each footage file of a folder holds, as `look_at_file` says it of one, and in
+    /// `script` the lines that add those not yet in the document: a folder of twenty files is
+    /// one look and one edit, not twenty of each. A file the document has names its media.
+    fn look_at_folder(&self, folder: &str) -> Result<Value, McpError> {
+        let project = self.project_at(None).ok().map(|(_, project)| project);
+        let mut placed: Vec<(PathBuf, String)> = Vec::new();
+        let mut taken: Vec<String> = Vec::new();
+        if let Some(project) = &project {
+            let mut resolved = project.clone();
+            kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+            placed = resolved
+                .media
+                .iter()
+                .map(|media| (PathBuf::from(&media.path), media.id.to_string()))
+                .collect();
+            taken = project.ids().map(ToString::to_string).collect();
+        }
+        let inside = folder.trim_end_matches('/');
+        let mut names: Vec<String> = std::fs::read_dir(self.dir.join(inside))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_file() && is_footage(&entry.path()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        let more = names.len().saturating_sub(MAX_FOLDER_FILES);
+        names.truncate(MAX_FOLDER_FILES);
+        let mut files = Vec::new();
+        let mut lines = Vec::new();
+        for name in names {
+            let file = match inside {
+                "" | "." => name,
+                inside => format!("{inside}/{name}"),
+            };
+            let path = self.dir.join(&file);
+            if let Some((_, id)) = placed.iter().find(|(known, _)| *known == path) {
+                files.push(json!({"file": file, "media": id}));
+                continue;
+            }
+            match self.file_facts(&file, &taken) {
+                Ok((id, facts)) => {
+                    lines.push(facts["add"].as_str().unwrap_or_default().to_owned());
+                    taken.push(id);
+                    files.push(facts);
+                }
+                Err(error) => files.push(json!({"file": file, "unreadable": error.message})),
+            }
+        }
+        let mut result = json!({"folder": folder, "files": files});
+        if !lines.is_empty() {
+            result["script"] = json!(lines.join("\n"));
+        }
+        if more > 0 {
+            result["more"] = json!(more);
+        }
+        Ok(result)
+    }
+
     /// What a file holds, and the `media add` line that puts it in the document.
     fn look_at_file(&self, file: &str) -> Result<Value, McpError> {
         let path = self.dir.join(file);
+        if path.is_dir() {
+            return self.look_at_folder(file);
+        }
         if !path.is_file() {
             return Err(McpError::new(
                 "UNKNOWN_FILE",
                 format!("no file `{file}` in the project's folder"),
             ));
         }
+        let taken: Vec<String> = self
+            .project_at(None)
+            .map(|(_, project)| project.ids().map(ToString::to_string).collect())
+            .unwrap_or_default();
+        self.file_facts(file, &taken).map(|(_, facts)| facts)
+    }
+
+    /// What the file `file` of the project holds, with the line that adds it under an id
+    /// made of its name that none of `taken` has, and that id.
+    fn file_facts(&self, file: &str, taken: &[String]) -> Result<(String, Value), McpError> {
+        let path = self.dir.join(file);
         let fields = self.media_fields(file)?;
         let info = kerf_engine::info(&path.to_string_lossy())
             .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
@@ -1077,7 +1165,7 @@ impl KerfMcpRouter {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("media");
-        let id: String = stem
+        let named: String = stem
             .chars()
             .map(|c| {
                 if c.is_alphanumeric() || c == '_' {
@@ -1087,16 +1175,22 @@ impl KerfMcpRouter {
                 }
             })
             .collect();
+        // `shot`, or `shot_2` where the document or the folder has a `shot` already.
+        let id = std::iter::once(named.clone())
+            .chain((2..).map(|count| format!("{named}_{count}")))
+            .find(|id| !taken.contains(id))
+            .unwrap_or(named);
         let seconds = info.duration.unwrap_or(0.0);
         let line = format!("media add {id} {fields}");
-        Ok(json!({
+        let facts = json!({
             "file": file,
             "seconds": seconds,
             "fps": fps,
             "width": info.width,
             "height": info.height,
             "add": line,
-        }))
+        });
+        Ok((id, facts))
     }
 
     /// Who draws each frame at `at`, why, and what it costs.
@@ -1438,7 +1532,18 @@ impl KerfMcpRouter {
                 shown
             }
             None if input.scopes => {
-                self.program_scopes(&project, input.sequence.as_deref(), revision, &input.at)?
+                // Of a proposal, with what the project reads there beside it.
+                let before = match &input.proposal {
+                    Some(_) => self.project_at(None).ok().map(|(_, project)| project),
+                    None => None,
+                };
+                self.program_scopes(
+                    &project,
+                    before.as_ref(),
+                    input.sequence.as_deref(),
+                    revision,
+                    &input.at,
+                )?
             }
             None => self.program_frames(
                 &project,
@@ -1644,14 +1749,26 @@ impl KerfMcpRouter {
             .iter()
             .map(|frame| frame.path.clone())
             .collect();
-        let sheet = Path::new(&paths[0]).with_file_name("sheet.jpg");
+        let labels: Vec<String> = times
+            .iter()
+            .map(|time| print_seconds(&clock, *time))
+            .collect();
+        // Each frame with its time on it. The frames are kept by what they are of; the sheet
+        // beside them by what it says on them.
+        let sheet = Path::new(&paths[0]).with_file_name("sheet-timed.jpg");
         if !sheet.is_file() {
-            kerf_engine::create_contact_sheet(&paths, &sheet, SHEET_COLUMNS.min(count))
-                .map_err(engine_error)?;
+            kerf_engine::create_labelled_contact_sheet(
+                &paths,
+                &sheet,
+                SHEET_COLUMNS.min(count),
+                &labels,
+                &sheet_font(),
+            )
+            .map_err(engine_error)?;
         }
         let mut result = json!({
             "media": media.id.to_string(),
-            "frames": times.iter().map(|time| print_seconds(&clock, *time)).collect::<Vec<_>>(),
+            "frames": labels,
             "path": sheet,
         });
         inline_image(&mut result)?;
@@ -2451,9 +2568,13 @@ impl KerfMcpRouter {
     }
 
     /// What scopes read of the program at each of `at`.
+    /// What scopes read of the sequence at each of `at`. `before` is the project when
+    /// `project` is what a proposal would make of it: each reading then also says what the
+    /// project reads at that position, where it has one, so a grade is compared in one look.
     fn program_scopes(
         &self,
         project: &Project,
+        before: Option<&Project>,
         sequence: Option<&str>,
         revision: u64,
         at: &[String],
@@ -2461,16 +2582,35 @@ impl KerfMcpRouter {
         let sequence = program(project, sequence)?;
         let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
-        let mut resolved = project.clone();
-        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
-        // Scopes read a few hundred samples across, so a smaller frame reads the same.
-        let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
-        // An HDR sequence is read by the signal it masters to, and not what a monitor shows of it.
-        let hdr = match sequence.color.curve() {
-            kerf_color::Curve::Pq => Some(kerf_scopes::SignalCurve::Pq),
-            kerf_color::Curve::Hlg => Some(kerf_scopes::SignalCurve::Hlg),
-            _ => None,
+        // What scopes read of `sequence` of `project` at `time`.
+        let read = |project: &Project, sequence: &Sequence, time: Time| {
+            let mut resolved = project.clone();
+            kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+            // Scopes read a few hundred samples across, so a smaller frame reads the same.
+            let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
+            // An HDR sequence is read by the signal it masters to, and not what a monitor
+            // shows of it.
+            let hdr = match sequence.color.curve() {
+                kerf_color::Curve::Pq => Some(kerf_scopes::SignalCurve::Pq),
+                kerf_color::Curve::Hlg => Some(kerf_scopes::SignalCurve::Hlg),
+                _ => None,
+            };
+            let id = Some(sequence.id.as_str());
+            let drawn = match hdr {
+                Some(_) => kerf_engine::still::draw_signal(&resolved, id, time, scale),
+                None => kerf_engine::still::draw_frame(&resolved, id, time, scale),
+            };
+            let frame = drawn.map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            let (w, h) = (frame.width as usize, frame.height as usize);
+            match hdr {
+                Some(curve) => kerf_scopes::read_signal(&frame.rgba, w, h, curve),
+                None => kerf_scopes::read(&frame.rgba, w, h),
+            }
+            .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))
         };
+        // The same sequence as the project has it, when it has it.
+        let before =
+            before.and_then(|project| Some((project, project.sequence(sequence.id.as_str())?)));
         let mut readings = Vec::new();
         for text in at {
             let time = position(&clock, text)?;
@@ -2480,19 +2620,13 @@ impl KerfMcpRouter {
                     format!("`{text}` is outside sequence `{}`", sequence.id),
                 ));
             }
-            let id = Some(sequence.id.as_str());
-            let drawn = match hdr {
-                Some(_) => kerf_engine::still::draw_signal(&resolved, id, time, scale),
-                None => kerf_engine::still::draw_frame(&resolved, id, time, scale),
-            };
-            let frame = drawn.map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
-            let (w, h) = (frame.width as usize, frame.height as usize);
-            let reading = match hdr {
-                Some(curve) => kerf_scopes::read_signal(&frame.rgba, w, h, curve),
-                None => kerf_scopes::read(&frame.rgba, w, h),
+            let mut reading = json!({"at": text, "scopes": read(project, sequence, time)?});
+            if let Some((project, sequence)) = before {
+                if time < sequence.duration() {
+                    reading["before"] = json!(read(project, sequence, time)?);
+                }
             }
-            .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))?;
-            readings.push(json!({"at": text, "scopes": reading}));
+            readings.push(reading);
         }
         Ok(json!({
             "sequence": sequence.id.to_string(),
@@ -2578,10 +2712,18 @@ impl KerfMcpRouter {
                     .iter()
                     .map(|name| entry.path(name).to_string_lossy().into_owned())
                     .collect();
-                kerf_engine::probe::create_contact_sheet(
+                // Each frame with its time on it, as the sequence counts time.
+                let clock = Clock::of_sequence(sequence);
+                let labels: Vec<String> = times
+                    .iter()
+                    .map(|time| clock.print_position(*time))
+                    .collect();
+                kerf_engine::create_labelled_contact_sheet(
                     &paths,
                     &entry.path("sheet.jpg"),
                     columns.min(times.len()),
+                    &labels,
+                    &sheet_font(),
                 )
                 .map_err(engine_error)?;
             }
@@ -2859,6 +3001,23 @@ impl KerfMcpRouter {
         });
         if !recipes.is_empty() {
             result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
+        }
+        // What scopes read of it, each beside what they read before: a grade and its numbers
+        // in one call, where an edit and then a look took two.
+        if !input.scopes.is_empty() {
+            let changed = changed_range(&before, &applied.project)
+                .map(|(sequence, ..)| sequence.id.to_string());
+            let read = self.program_scopes(
+                &applied.project,
+                Some(&before),
+                changed.as_deref(),
+                revision,
+                &input.scopes,
+            );
+            result["scopes"] = match read {
+                Ok(mut read) => read["readings"].take(),
+                Err(error) => json!({"unavailable": error.message}),
+            };
         }
         if let Some(ids) = preset_ids {
             result["ids"] = json!(ids);
@@ -3397,6 +3556,25 @@ fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
 }
 
 /// Whether a file's extension says it is footage: what an import takes.
+/// The font file a sheet's times are drawn in: Kerf's own Inter, written out once where
+/// ffmpeg can read it.
+fn sheet_font() -> PathBuf {
+    static FONT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let font = kerf_text::fonts::INTER_MEDIUM;
+        let path = std::env::temp_dir().join(format!("kerf-inter-medium-{}.ttf", font.len()));
+        if fs::metadata(&path).map_or(true, |found| found.len() != font.len() as u64) {
+            // Beside it first, so that no reader finds half a font.
+            let partial = path.with_extension(format!("{}.part", std::process::id()));
+            if fs::write(&partial, font).is_ok() && fs::rename(&partial, &path).is_err() {
+                let _ = fs::remove_file(&partial);
+            }
+        }
+        path
+    })
+    .clone()
+}
+
 fn is_footage(path: &std::path::Path) -> bool {
     const FOOTAGE: [&str; 16] = [
         "mp4", "mov", "m4v", "mkv", "webm", "avi", "mxf", "mts", "wav", "mp3", "m4a", "aac",

@@ -148,14 +148,14 @@ effect	color.lumetri	Color Correction	Lumetri Color	A full grade in one effect: 
 	text	sat_vs_sat				Curves: Sat vs Sat (x,y points from 0 to 1, 0.5 neutral; empty for none)
 	number	curves_hdr_range	1000	100..10000	nits	Curves: HDR Range
 	bool	wheels_on	true			Color Wheels & Match
-	number	wheel_shadows_x	0	-1..1		Color Wheels & Match: Shadows (across)
-	number	wheel_shadows_y	0	-1..1		Color Wheels & Match: Shadows (down)
+	number	wheel_shadows_x	0	-1..1		Color Wheels & Match: Shadows wheel, across: 1 toward red, -1 toward cyan
+	number	wheel_shadows_y	0	-1..1		Color Wheels & Match: Shadows wheel, down: 1 toward green and yellow, -1 toward blue and magenta; with the one before, red is 1,0, green -0.5,0.87, blue -0.5,-0.87, and how far from 0,0 is how much
 	number	wheel_shadows_l	0	-100..100		Color Wheels & Match: Shadows Lightness
-	number	wheel_midtones_x	0	-1..1		Color Wheels & Match: Midtones (across)
-	number	wheel_midtones_y	0	-1..1		Color Wheels & Match: Midtones (down)
+	number	wheel_midtones_x	0	-1..1		Color Wheels & Match: Midtones wheel, across: 1 toward red, -1 toward cyan
+	number	wheel_midtones_y	0	-1..1		Color Wheels & Match: Midtones wheel, down: 1 toward green and yellow, -1 toward blue and magenta; with the one before, red is 1,0, green -0.5,0.87, blue -0.5,-0.87, and how far from 0,0 is how much
 	number	wheel_midtones_l	0	-100..100		Color Wheels & Match: Midtones Lightness
-	number	wheel_highlights_x	0	-1..1		Color Wheels & Match: Highlights (across)
-	number	wheel_highlights_y	0	-1..1		Color Wheels & Match: Highlights (down)
+	number	wheel_highlights_x	0	-1..1		Color Wheels & Match: Highlights wheel, across: 1 toward red, -1 toward cyan
+	number	wheel_highlights_y	0	-1..1		Color Wheels & Match: Highlights wheel, down: 1 toward green and yellow, -1 toward blue and magenta; with the one before, red is 1,0, green -0.5,0.87, blue -0.5,-0.87, and how far from 0,0 is how much
 	number	wheel_highlights_l	0	-100..100		Color Wheels & Match: Highlights Lightness
 	bool	hsl_on	false			HSL Secondary: Enable HSL Secondary
 	number	hsl_hue	0	0..360	degrees	HSL Secondary: Hue Center

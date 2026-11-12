@@ -13,7 +13,9 @@ use std::time::SystemTime;
 
 use crate::derivatives::DerivativeCache;
 use crate::error::{EngineError, Result};
-use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, video_decode_prefix};
+use crate::ffmpeg::{
+    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, video_decode_prefix,
+};
 use crate::resources::extract_job_count;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -929,6 +931,40 @@ pub fn cached_exact_frames(
 
 /// Build a JPEG contact sheet from exact frames named by `frame_file_name`.
 pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usize) -> Result<()> {
+    create_labelled_contact_sheet(frame_paths, output, columns, &[], Path::new(""))
+}
+
+/// Whether this ffmpeg has `drawtext`, which wants a build with FreeType.
+fn draws_text() -> bool {
+    static DRAWS: OnceLock<bool> = OnceLock::new();
+    *DRAWS.get_or_init(|| {
+        run_allow_failure(
+            resolve_ffmpeg_bin(),
+            &["-hide_banner".into(), "-filters".into()],
+        )
+        .is_ok_and(|output| output.stdout.contains(" drawtext "))
+    })
+}
+
+/// Text as a quoted option of an ffmpeg filter takes it.
+fn filter_text(text: &str) -> String {
+    text.replace('\\', "/")
+        .replace('\'', "\u{2019}")
+        .replace(':', "\\:")
+        .replace('%', "\\%")
+}
+
+/// [`create_contact_sheet`] with a label in the corner of each frame, one for each in
+/// order: its time, so that whoever reads the sheet sees which moment a tile is without
+/// counting tiles. Drawn in the font file `font`; left off where this ffmpeg has no
+/// `drawtext`, or the labels are not one a frame.
+pub fn create_labelled_contact_sheet(
+    frame_paths: &[String],
+    output: &Path,
+    columns: usize,
+    labels: &[String],
+    font: &Path,
+) -> Result<()> {
     if frame_paths.is_empty() {
         return Err(EngineError::msg(
             "contact sheet requires at least one frame",
@@ -953,6 +989,19 @@ pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usiz
     }
     let rows = frame_paths.len().div_ceil(columns);
     let pattern = parent.join("frame-%03d.jpg");
+    // Each label on its own frame, before they are laid out: white on a dark box, an
+    // eleventh of the frame high.
+    let mut labelled = String::new();
+    if labels.len() == frame_paths.len() && font.is_file() && draws_text() {
+        let font = filter_text(&font.to_string_lossy());
+        for (index, label) in labels.iter().enumerate() {
+            labelled.push_str(&format!(
+                "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:y=w/40:\
+                 fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6,",
+                filter_text(label)
+            ));
+        }
+    }
     let args = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
@@ -964,7 +1013,7 @@ pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usiz
         "-i".into(),
         pattern.to_string_lossy().into_owned(),
         "-vf".into(),
-        format!("tile={columns}x{rows}:padding=0:margin=0"),
+        format!("{labelled}tile={columns}x{rows}:padding=0:margin=0"),
         "-frames:v".into(),
         "1".into(),
         "-q:v".into(),

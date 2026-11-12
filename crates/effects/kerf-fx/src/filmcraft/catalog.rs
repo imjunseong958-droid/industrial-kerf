@@ -421,13 +421,15 @@ fn lines(def: &EffectDef, param: &ParamDef, label: &str) -> Vec<String> {
         (Written::Wheel, _, ParamValue::Vec2(v)) => {
             let [x, y] = axes(id);
             vec![
+                // Which way is which color: the two are a direction on the wheel, and how far
+                // from 0,0 is how much (`wheel_rgb`).
                 line(
                     "number",
                     &x,
                     &v.x.to_string(),
                     "-1..1",
                     "",
-                    &format!("{label} (across)"),
+                    &format!("{label} wheel, across: 1 toward red, -1 toward cyan"),
                 ),
                 line(
                     "number",
@@ -435,7 +437,11 @@ fn lines(def: &EffectDef, param: &ParamDef, label: &str) -> Vec<String> {
                     &v.y.to_string(),
                     "-1..1",
                     "",
-                    &format!("{label} (down)"),
+                    &format!(
+                        "{label} wheel, down: 1 toward green and yellow, -1 toward blue and \
+                         magenta; with the one before, red is 1,0, green -0.5,0.87, blue \
+                         -0.5,-0.87, and how far from 0,0 is how much"
+                    ),
                 ),
             ]
         }

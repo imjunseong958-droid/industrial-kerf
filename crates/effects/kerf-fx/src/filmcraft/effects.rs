@@ -1564,6 +1564,30 @@ mod lumetri_cpu_parity_tests {
         ParamValue::Color([r, g, b, 1.0])
     }
 
+    #[test]
+    fn a_wheel_points_at_the_color_its_parameters_say() {
+        // As the catalog describes `wheel_*_x` and `wheel_*_y`: red at 1,0, green at
+        // -0.5,0.87, blue at -0.5,-0.87, and the opposite of each across the wheel.
+        let most = |x: f64, y: f64| {
+            let rgb = wheel_rgb(Vec2::new(x, y));
+            (0..3)
+                .max_by(|a, b| rgb[*a].total_cmp(&rgb[*b]))
+                .expect("three channels")
+        };
+        assert_eq!(most(1.0, 0.0), 0);
+        assert_eq!(most(-0.5, 0.87), 1);
+        assert_eq!(most(-0.5, -0.87), 2);
+        // Cyan takes red away, and how far out is how much.
+        let cyan = wheel_rgb(Vec2::new(-1.0, 0.0));
+        assert!(
+            cyan[0] < -0.99 && cyan[1] > 0.49 && cyan[2] > 0.49,
+            "{cyan:?}"
+        );
+        let half = wheel_rgb(Vec2::new(0.5, 0.0));
+        assert!((half[0] - 0.5).abs() < 1e-6, "{half:?}");
+        assert_eq!(wheel_rgb(Vec2::new(0.0, 0.0)), [0.0; 3]);
+    }
+
     fn vec2(x: f64, y: f64) -> ParamValue {
         ParamValue::Vec2(Vec2::new(x, y))
     }
