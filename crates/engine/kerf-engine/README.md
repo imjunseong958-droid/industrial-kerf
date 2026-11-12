@@ -22,7 +22,7 @@ Default resource limits:
 - hardware encode by default when VideoToolbox/NVENC/QSV/AMF is listed (`--software` or `KERF_ENCODER=software` to force libx264; `--prefer-hardware` to force a hardware attempt)
 - libx264 `veryfast`/`faster` on small machines instead of `medium`
 - frame extraction parallelism is capped
-- decode hwaccel: VideoToolbox on macOS, D3D11VA on Windows (`KERF_HWACCEL=none` disables; `KERF_HWACCEL=cuda` forces another backend)
+- decode hwaccel: VideoToolbox on macOS (not in a virtual machine, where it can stop answering), D3D11VA on Windows (`KERF_HWACCEL=none` disables; `KERF_HWACCEL=cuda` forces another backend)
 
 `kerf-engine resources` prints the resolved budget. Other knobs: `KERF_FFMPEG_THREADS`,
 `KERF_EXTRACT_JOBS`, `KERF_PRESET`, `KERF_CRF`.
