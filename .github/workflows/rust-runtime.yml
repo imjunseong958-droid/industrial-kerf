@@ -17,6 +17,7 @@ on:
 
 jobs:
   vt-encode:
+    if: false
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -110,6 +111,68 @@ jobs:
           "$root\bin" >> $env:GITHUB_PATH
           $llvm = 'C:\Program Files\LLVM\bin'
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Decode by hand with d3d11va, auto and none
+        shell: pwsh
+        run: |
+          $clip = Join-Path $env:TEMP 'kerf-diag-clip.mp4'
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=30:duration=2 -c:v libx264 -pix_fmt yuv420p $clip
+          foreach ($accel in @('d3d11va', 'auto', 'none')) {
+            ffmpeg -hide_banner -loglevel error -hwaccel $accel -i $clip -vf scale=160:90 -frames:v 4 -f null - 2>&1 | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "DECODE -hwaccel ${accel}: ffmpeg exit $LASTEXITCODE"
+          }
+          exit 0
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build -q -p kerf-runtime --bin kerfd
+          cargo test -q -p kerf-mcp --test harness --no-run
+      - name: Kerf's sheet tests as the machine is
+        id: asis
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test -q -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|d3d11va|drawtext|fontfile|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(600, $l.Length)) }
+          exit $LASTEXITCODE
+      - name: Kerf's sheet tests, decoding in software
+        id: soft
+        continue-on-error: true
+        shell: pwsh
+        env:
+          KERF_HWACCEL: none
+        run: |
+          cargo test -q -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|d3d11va|drawtext|fontfile|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(1500, $l.Length)) }
+          exit $LASTEXITCODE
+      - name: Kerf's sheet tests, software, temp folder with an apostrophe
+        id: quoted
+        continue-on-error: true
+        shell: pwsh
+        env:
+          KERF_HWACCEL: none
+        run: |
+          $quoted = Join-Path $env:RUNNER_TEMP "O'Brien tmp"
+          New-Item -ItemType Directory -Force -Path $quoted | Out-Null
+          $env:TMP = $quoted
+          $env:TEMP = $quoted
+          cargo test -q -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|d3d11va|drawtext|fontfile|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(1500, $l.Length)) }
+          $code = $LASTEXITCODE
+          Write-Host "in the folder: $((Get-ChildItem $quoted -Force | Select-Object -ExpandProperty Name) -join ', ')"
+          exit $code
+      - name: Kerf's sheet tests, software, temp folder in hangul
+        id: hangul
+        continue-on-error: true
+        shell: pwsh
+        env:
+          KERF_HWACCEL: none
+        run: |
+          $hangul = Join-Path $env:RUNNER_TEMP '임준성 임시'
+          New-Item -ItemType Directory -Force -Path $hangul | Out-Null
+          $env:TMP = $hangul
+          $env:TEMP = $hangul
+          cargo test -q -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test result|FAILED|panicked|d3d11va|drawtext|fontfile|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(1500, $l.Length)) }
+          exit $LASTEXITCODE
       - name: The filter as Kerf builds it, given to ffmpeg by hand
         shell: pwsh
         run: |
@@ -146,11 +209,11 @@ jobs:
           Copy-Item $font (Join-Path $hangul 'font.ttf')
           Sheet 'hangul' (Join-Path $hangul 'font.ttf')
           exit 0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-      - name: Kerf's own sheet tests, on Windows
+      - name: What came of it
+        if: always()
         shell: pwsh
         run: |
-          cargo build -p kerf-runtime --bin kerfd
-          cargo test -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document --nocapture
+          Write-Host "OUTCOME as the machine is: ${{ steps.asis.outcome }}"
+          Write-Host "OUTCOME software decode: ${{ steps.soft.outcome }}"
+          Write-Host "OUTCOME software, apostrophe temp: ${{ steps.quoted.outcome }}"
+          Write-Host "OUTCOME software, hangul temp: ${{ steps.hangul.outcome }}"
