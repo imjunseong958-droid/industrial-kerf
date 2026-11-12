@@ -608,6 +608,26 @@ fn look_scans_with_sheets_and_indexes_sound() {
         "{sheet}"
     );
     assert!(is_jpeg(&sheet), "{sheet}");
+    // Each frame has its time in its corner, white on a dark box over the red picture, where
+    // this ffmpeg can draw text.
+    let filters = Command::new("ffmpeg")
+        .args(["-hide_banner", "-filters"])
+        .output()
+        .unwrap();
+    if String::from_utf8_lossy(&filters.stdout).contains(" drawtext ") {
+        let red_of = |crop: &str| {
+            let pixel = Command::new("ffmpeg")
+                .args(["-hide_banner", "-loglevel", "error", "-i"])
+                .arg(sheet["path"].as_str().unwrap())
+                .args(["-vf", &format!("crop={crop},scale=1:1")])
+                .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                .output()
+                .unwrap();
+            i32::from(pixel.stdout[0])
+        };
+        let (corner, middle) = (red_of("40:8:12:12"), red_of("40:8:140:100"));
+        assert!(corner + 40 < middle, "corner {corner}, middle {middle}");
+    }
     let program = ok(
         &router,
         "look",
@@ -1109,6 +1129,38 @@ fn scopes_read_the_program_and_what_a_proposal_would_make_of_it() {
         saturation(&after) < saturation(&before) - 50.0,
         "{before} {after}"
     );
+    // Of a proposal, each reading has what the project reads there beside it: a grade is
+    // compared in one look. Of the project there is nothing to put beside it.
+    let both = ok(
+        &router,
+        "look",
+        json!({"at": ["1s"], "scopes": true, "proposal": proposal}),
+    );
+    assert_eq!(both["readings"][0]["before"], before, "{both}");
+    let alone = ok(&router, "look", json!({"at": ["1s"], "scopes": true}));
+    assert!(alone["readings"][0].get("before").is_none(), "{alone}");
+    // An edit reads them itself where it is asked to: the grade and its numbers in one call.
+    let graded = ok(
+        &router,
+        "edit",
+        json!({"revise": proposal, "script": "fx c1 add color.basic saturation=0", "scopes": ["1s"]}),
+    );
+    assert_eq!(graded["scopes"][0]["at"], "1s", "{graded}");
+    assert_eq!(graded["scopes"][0]["scopes"], after, "{graded}");
+    assert_eq!(graded["scopes"][0]["before"], before, "{graded}");
+    // A position that is not on the sequence is said, and the edit still stands.
+    let off = ok(
+        &router,
+        "edit",
+        json!({"revise": graded["proposal"], "script": "fx c1 add color.basic saturation=0", "scopes": ["99s"]}),
+    );
+    assert!(
+        off["scopes"]["unavailable"]
+            .as_str()
+            .is_some_and(|why| why.contains("outside sequence")),
+        "{off}"
+    );
+    assert_eq!(off["status"], "awaiting_review", "{off}");
 
     for refused in [
         json!({"scopes": true}),
@@ -2634,6 +2686,50 @@ fn a_fresh_folder_says_what_footage_it_could_add_and_how() {
     // A file that is not there says so.
     let missing = error(&router, "look", json!({"file": "nothing.mp4"}));
     assert!(message(&missing).contains("nothing.mp4"), "{missing}");
+    // Footage in `media` is listed too, and a folder is looked at in one go: each file with
+    // its line, under an id no other has, and the lines together as a script that runs.
+    let media = directory.path().join("media");
+    std::fs::create_dir(&media).unwrap();
+    std::fs::copy(directory.path().join("shot.mp4"), media.join("shot.mp4")).unwrap();
+    std::fs::copy(
+        directory.path().join("shot.mp4"),
+        media.join("wide shot.mp4"),
+    )
+    .unwrap();
+    std::fs::write(media.join("notes.txt"), "not footage").unwrap();
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(
+        looked["unplaced"],
+        json!(["shot.mp4", "media/shot.mp4", "media/wide shot.mp4"]),
+        "{looked}"
+    );
+    let folder = ok(&router, "look", json!({"file": "media"}));
+    let files = folder["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{folder}");
+    assert_eq!(files[0]["file"], "media/shot.mp4");
+    assert_eq!(files[0]["seconds"], json!(4.0), "{folder}");
+    let script = folder["script"].as_str().unwrap();
+    let lines: Vec<&str> = script.lines().collect();
+    assert_eq!(lines.len(), 2, "{script}");
+    assert!(
+        lines[0].starts_with("media add shot path=\"media/shot.mp4\" rate=30 dur=120f"),
+        "{script}"
+    );
+    assert!(
+        lines[1].starts_with("media add wide_shot path=\"media/wide shot.mp4\""),
+        "{script}"
+    );
+    let staged = ok(&router, "edit", json!({"script": script}));
+    assert!(staged["proposal"].is_string(), "{staged}");
+    // The project's own folder is `.`, and two files of one name get two ids.
+    std::fs::create_dir(directory.path().join("more")).unwrap();
+    std::fs::copy(
+        directory.path().join("shot.mp4"),
+        directory.path().join("more/shot.mp4"),
+    )
+    .unwrap();
+    let own = ok(&router, "look", json!({"file": "."}));
+    assert_eq!(own["files"][0]["file"], "shot.mp4", "{own}");
     // With the line left short, the refusal says where the rest comes from.
     let short = error(
         &router,
