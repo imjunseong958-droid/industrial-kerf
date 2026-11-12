@@ -2166,6 +2166,7 @@ mod tests {
             binary_identity: json!({"path":"whisper-cli","size":1}),
             backend_version: "whisper.cpp/1".into(),
             model_version: "base-v1".into(),
+            alignment: None,
         };
         let args = whisper_args(&config, Path::new("a.wav"), Path::new("out"), None);
         let threads = args.iter().position(|arg| arg == "-t").expect("-t");
