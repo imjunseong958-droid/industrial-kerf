@@ -84,6 +84,49 @@ pub fn signed_distance(m: &[u8], w: usize, h: usize) -> Vec<f32> {
     m.iter().enumerate().map(|(i, v)| if *v != 0 { din[i] - 0.5 } else { 0.5 - dout[i] }).collect()
 }
 
+/// What [`signed_distance_near`] says of a pixel it does not measure: outside, and far.
+pub const FAR_OUTSIDE: f32 = -1.0e6;
+
+/// The box around what is set in a matte, as `(left, top, right, bottom)` with the far sides past
+/// the last pixel, or `None` for an empty matte.
+pub fn box_of(m: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+    let rows: Vec<Option<(usize, usize)>> = m
+        .par_chunks(w.max(1))
+        .map(|row| Some((row.iter().position(|v| *v != 0)?, row.iter().rposition(|v| *v != 0)?)))
+        .collect();
+    let top = rows.iter().position(Option::is_some)?;
+    let bottom = rows.iter().rposition(Option::is_some)?;
+    let (left, right) = rows[top..=bottom]
+        .iter()
+        .flatten()
+        .fold((w, 0), |(left, right), (first, last)| (left.min(*first), right.max(*last)));
+    Some((left, top, right + 1, (bottom + 1).min(h)))
+}
+
+/// [`signed_distance`] for every pixel within `reach` of the box around the matte, and
+/// [`FAR_OUTSIDE`] for the rest, which are outside it and further than `reach` from it. The same
+/// numbers as measuring the whole frame gives, for the cost of the box: a pixel of the matte is
+/// nearest to one outside it that is in the box or just past it, and a pixel outside to one in it.
+pub fn signed_distance_near(m: &[u8], w: usize, h: usize, reach: f64) -> Vec<f32> {
+    let mut out = vec![FAR_OUTSIDE; w * h];
+    let Some((left, top, right, bottom)) = box_of(m, w, h) else {
+        return out;
+    };
+    let margin = reach.max(0.0).ceil() as usize + 2;
+    let (x0, y0) = (left.saturating_sub(margin), top.saturating_sub(margin));
+    let (x1, y1) = ((right + margin).min(w), (bottom + margin).min(h));
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let mut cropped = Vec::with_capacity(cw * ch);
+    for y in y0..y1 {
+        cropped.extend_from_slice(&m[y * w + x0..y * w + x1]);
+    }
+    let signed = signed_distance(&cropped, cw, ch);
+    for (row, y) in signed.chunks_exact(cw).zip(y0..y1) {
+        out[y * w + x0..y * w + x1].copy_from_slice(row);
+    }
+    out
+}
+
 /// Mean over the (2r+1)² window (clamped at the edges: averages only the pixels inside).
 pub fn box_mean(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     if w == 0 || h == 0 {

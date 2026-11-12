@@ -42,6 +42,33 @@ pub(super) fn linear(code: f32) -> f32 {
     }
 }
 
+/// One channel of a picture in light, within `reach` of the box around `matte`, which is as far as an
+/// edge is read; nothing is worked out of the rest, which is left at 0. A picture read from bytes
+/// holds 256 values, so each is worked out once; any other value is worked out as it comes.
+fn in_light(picture: &Picture, matte: &[u8], reach: f64, channel: usize) -> Vec<f32> {
+    let (w, h) = (picture.width, picture.height);
+    let mut out = vec![0.0f32; w * h];
+    let Some((left, top, right, bottom)) = matting::box_of(matte, w, h) else {
+        return out;
+    };
+    let margin = reach.ceil() as usize + 4;
+    let (x0, x1) = (left.saturating_sub(margin), (right + margin).min(w));
+    let (y0, y1) = (top.saturating_sub(margin), (bottom + margin).min(h));
+    let of_byte: [f32; 256] = std::array::from_fn(|byte| linear(byte as f32 / 255.0));
+    out.par_chunks_mut(w.max(1)).enumerate().skip(y0).take(y1 - y0).for_each(|(y, row)| {
+        for (x, value) in row.iter_mut().enumerate().skip(x0).take(x1 - x0) {
+            let code = picture.rgb[y * w + x][channel];
+            let byte = (code * 255.0).round();
+            *value = if (0.0..=255.0).contains(&byte) && byte / 255.0 == code {
+                of_byte[byte as usize]
+            } else {
+                linear(code)
+            };
+        }
+    });
+    out
+}
+
 fn mean(colors: &[[f32; 3]]) -> Option<[f32; 3]> {
     if colors.is_empty() {
         return None;
@@ -142,10 +169,35 @@ pub(super) fn normals(corners: &[[f64; 2]]) -> Vec<[f64; 2]> {
 /// What the edge is at each of `corners`, in the pixels of `picture`, around the cut `matte`.
 pub(super) fn measured(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) -> Vec<Across> {
     let (w, h) = (picture.width, picture.height);
+    let reach = (w.max(h) as f64 / 8.0).clamp(16.0, 120.0);
+    // The distance is read up to `reach` from a corner, which is on the matte's edge.
+    let signed = matting::signed_distance_near(matte, w, h, reach + 2.0);
+    let channel: [Vec<f32>; 3] = std::array::from_fn(|at| in_light(picture, matte, reach, at));
+    across(picture, corners, reach, &signed, &channel)
+}
+
+/// [`measured`] as it was worked out before: the distance over the whole frame, and every pixel put in
+/// light by itself. What [`measured`] is held against.
+#[cfg(test)]
+pub(super) fn measured_everywhere(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) -> Vec<Across> {
+    let (w, h) = (picture.width, picture.height);
+    let reach = (w.max(h) as f64 / 8.0).clamp(16.0, 120.0);
     let signed = matting::signed_distance(matte, w, h);
     let channel: [Vec<f32>; 3] =
         std::array::from_fn(|at| picture.rgb.iter().map(|color| linear(color[at])).collect());
-    let reach = (w.max(h) as f64 / 8.0).clamp(16.0, 120.0);
+    across(picture, corners, reach, &signed, &channel)
+}
+
+/// What the edge is at each of `corners`, read up to `reach` across it, from how far each pixel is from
+/// the matte's edge (`signed`) and the picture in light (`channel`).
+fn across(
+    picture: &Picture,
+    corners: &[[f64; 2]],
+    reach: f64,
+    signed: &[f32],
+    channel: &[Vec<f32>; 3],
+) -> Vec<Across> {
+    let (w, h) = (picture.width, picture.height);
     let step = (reach / STEPS).max(0.5);
     let normals = normals(corners);
     let n = corners.len();
@@ -164,7 +216,7 @@ pub(super) fn measured(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) ->
             let (into, onto) = (leg(a, at), leg(at, b));
             let straight = (into[0] * onto[0] + into[1] * onto[1]).max(0.0).powi(4);
             let depth =
-                |x: f64| matting::sample(&signed, w, h, at[0] + out[0] * x, at[1] + out[1] * x);
+                |x: f64| matting::sample(signed, w, h, at[0] + out[0] * x, at[1] + out[1] * x);
             // As far in as the object keeps getting deeper, and as far out as it keeps falling away,
             // or what is read comes round to some other edge.
             let far = |sign: f64| {
@@ -186,7 +238,7 @@ pub(super) fn measured(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) ->
                             at[0] + out[0] * x + along[0] * line,
                             at[1] + out[1] * x + along[1] * line,
                         );
-                        for (sum, channel) in sum.iter_mut().zip(&channel) {
+                        for (sum, channel) in sum.iter_mut().zip(channel) {
                             *sum += matting::sample(channel, w, h, px, py);
                         }
                     }
