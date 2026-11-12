@@ -283,8 +283,14 @@ model that answers with its guide. Where it stopped, and what was done:
   stands before it, and no clip can refuse one. The skill leaves a backdrop
   out of depth.
 
-Left as they are: a new project's empty first sequence makes every
-proposal's check not valid, for no fault of the edit; `x` is in frame widths
+A new project's empty first sequence made every proposal's check not valid,
+for no fault of the edit, and most of all here, where the guide is a sequence
+of its own beside it. A sequence with nothing on it is now said as
+information (`sequence.empty`) and blocks nothing: rendering it is still
+refused where that is asked for, and the full check fails the rows it cannot
+measure of it.
+
+Left as they are: `x` is in frame widths
 where `y` and `z` are in frame heights, so a directional light's `x` weighs
 more in a wide frame; and what `kerf-comfy --describe` lists under `more`
 includes the server's file names, which a person may want out of what an
