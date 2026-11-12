@@ -155,6 +155,13 @@ pub trait Facts {
     fn breaks(&self, _media: &Media) -> Option<Breaks> {
         None
     }
+
+    /// Where the media sounds like speech and its transcripts have no
+    /// words, from when to when in seconds of the media: what a transcriber
+    /// may have missed. None where nobody has looked.
+    fn unheard(&self, _media: &Media) -> Vec<(f64, f64)> {
+        Vec::new()
+    }
 }
 
 /// No analysis: scripts that read facts are refused for want of them.
