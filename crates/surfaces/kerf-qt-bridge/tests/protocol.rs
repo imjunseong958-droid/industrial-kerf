@@ -219,7 +219,11 @@ impl Editor {
             .into_iter()
             .filter(|event| event["type"] == "clock" || !event["peak"].is_null())
             .partition(|event| event["type"] == "meter");
-        assert!(readings.len() >= 10, "{readings:?}");
+        assert!(
+            readings.len() >= 10,
+            "{} readings in {seconds} s: {readings:?}; clocks: {clocks:?}",
+            readings.len()
+        );
         (readings, clocks)
     }
 }

@@ -7,7 +7,7 @@
 use crate::qc::{Finding, Severity};
 use crate::text_lint;
 use kerf_lang::{Breaks, Clock, Facts, Speech};
-use kerf_model::{Clip, Content, Param, Project, Sequence, Time, TrackKind, Value};
+use kerf_model::{Clip, Content, Id, Param, Project, Sequence, Time, TrackKind, Value};
 
 /// A picture or sound clip shorter than this many frames is a flash frame.
 const FLASH_FRAMES: i64 = 3;
@@ -500,7 +500,12 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
     }
 }
 
-/// Sound clips whose first or last frame falls inside a word.
+/// What cuts no transcript covers are called: information, since nothing is known to be wrong with
+/// them, only that nobody looked.
+pub(crate) const CUT_UNHEARD: &str = "cut.unheard";
+
+/// Sound clips whose first or last frame falls inside a word; and, as information, the cuts that
+/// could not be checked because no transcript of their media covers them, once for each media.
 fn cuts_in_words(
     project: &Project,
     sequence: &Sequence,
@@ -508,6 +513,8 @@ fn cuts_in_words(
     findings: &mut Vec<Finding>,
 ) {
     let mut known: std::collections::HashMap<_, Speech> = std::collections::HashMap::new();
+    // For each media, the clips with a cut nothing heard, how many such cuts, and the first.
+    let mut unheard: Vec<(&Id, Vec<&Id>, usize, Time)> = Vec::new();
     for track in sequence
         .tracks
         .iter()
@@ -535,6 +542,22 @@ fn cuts_in_words(
                 ("starts", source_in, clip.start),
                 ("ends", source_out, clip.end() - frame),
             ] {
+                // Nothing heard the media here: the cut is not checked, and that is said. A clip
+                // that starts where its media does, or ends where it ends, cuts into nothing there.
+                if !spoken.reaches(at.seconds()) {
+                    if at > Time::ZERO && at < media.duration {
+                        match unheard.iter_mut().find(|(id, ..)| *id == &media.id) {
+                            Some((_, clips, cuts, _)) => {
+                                if !clips.contains(&&clip.id) {
+                                    clips.push(&clip.id);
+                                }
+                                *cuts += 1;
+                            }
+                            None => unheard.push((&media.id, vec![&clip.id], 1, cut)),
+                        }
+                    }
+                    continue;
+                }
                 let at = at.seconds();
                 let Some((from, to, word)) = spoken
                     .words
@@ -562,6 +585,32 @@ fn cuts_in_words(
                 .during(sequence, cut, cut + frame));
             }
         }
+    }
+    let frame = sequence.rate.frame_duration();
+    for (media, clips, cuts, first) in unheard {
+        let named: Vec<String> = clips.iter().take(3).map(|id| format!("`{id}`")).collect();
+        let more = match clips.len() - named.len() {
+            0 => String::new(),
+            more => format!(" and {more} more"),
+        };
+        let mut finding = Finding::new(
+            Severity::Info,
+            CUT_UNHEARD,
+            Some(media.as_str()),
+            format!(
+                "{cuts} {} of `{media}` {} not checked for words, since no transcript covers {} ({}{more}); \
+                 look at `{media}` with transcript, from, and to around {} first",
+                if cuts == 1 { "cut" } else { "cuts" },
+                if cuts == 1 { "was" } else { "were" },
+                if cuts == 1 { "it" } else { "them" },
+                named.join(", "),
+                if cuts == 1 { "it" } else { "them" },
+            ),
+        )
+        .during(sequence, first, first + frame);
+        finding.value = Some(cuts as f64);
+        finding.unit = Some("cuts".to_owned());
+        findings.push(finding);
     }
 }
 
@@ -627,6 +676,8 @@ sequence s1 rate=24 size=1920x1080
     /// What every media's transcripts heard and its index found.
     struct Known {
         words: Vec<Word>,
+        /// The seconds of each media those transcripts cover.
+        covered: Vec<(f64, f64)>,
         cuts: Vec<f64>,
     }
 
@@ -634,7 +685,7 @@ sequence s1 rate=24 size=1920x1080
         fn speech(&self, _: &Media) -> Speech {
             Speech {
                 words: self.words.clone(),
-                covered: Vec::new(),
+                covered: self.covered.clone(),
             }
         }
 
@@ -650,7 +701,17 @@ sequence s1 rate=24 size=1920x1080
         found(script, words, &[])
     }
 
+    /// With a transcript of each media, whole.
     fn found(script: &str, words: &[(f64, f64, &str)], cuts: &[f64]) -> Vec<(String, String)> {
+        heard(script, words, cuts, &[(0.0, 60.0)])
+    }
+
+    fn heard(
+        script: &str,
+        words: &[(f64, f64, &str)],
+        cuts: &[f64],
+        covered: &[(f64, f64)],
+    ) -> Vec<(String, String)> {
         let catalog = Catalog::builtin();
         let project = parse_document(DOCUMENT, catalog).unwrap().project;
         let project = apply_script(&project, catalog, script).unwrap().project;
@@ -663,6 +724,7 @@ sequence s1 rate=24 size=1920x1080
                     text: (*text).to_owned(),
                 })
                 .collect(),
+            covered: covered.to_vec(),
             cuts: cuts.to_vec(),
         };
         findings(&project, &known)
@@ -877,6 +939,45 @@ sequence s1 rate=24 size=1920x1080
                 "clip `a1` ends inside the word \"country\" (00:00:03:19–00:00:04:07 of `m1`"
             ),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn cuts_no_transcript_covers_are_said_not_to_be_checked() {
+        // Nothing has heard m1: a1 ends inside it at 4s, and a2 starts at 10s and ends at 14s.
+        // That a1 starts where m1 does is no cut into it.
+        let found = heard("set c1 opacity=1", &[], &[], &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "cut.unheard");
+        assert_eq!(
+            found[0].1,
+            "3 cuts of `m1` were not checked for words, since no transcript covers them \
+             (`a1`, `a2`); look at `m1` with transcript, from, and to around them first"
+        );
+        // A transcript of its first five seconds checks the one cut it reaches, and finds it in a
+        // word; the other two are still said.
+        let found = heard(
+            "set c1 opacity=1",
+            &[(3.8, 4.3, "country")],
+            &[],
+            &[(0.0, 5.0)],
+        );
+        let codes: Vec<&str> = found.iter().map(|(code, _)| code.as_str()).collect();
+        assert_eq!(codes, ["cut.in_word", "cut.unheard"], "{found:?}");
+        assert!(
+            found[1]
+                .1
+                .starts_with("2 cuts of `m1` were not checked for words"),
+            "{found:?}"
+        );
+        assert!(found[1].1.contains("(`a2`)"), "{found:?}");
+        // One that covers them all leaves nothing to say.
+        assert!(heard("set c1 opacity=1", &[], &[], &[(0.0, 60.0)]).is_empty());
+        // A clip of the whole of its media has no cut into it.
+        let whole = heard("delete a2\ntrim a1 out to=00:01:00:00", &[], &[], &[]);
+        assert!(
+            !whole.iter().any(|(code, _)| code == "cut.unheard"),
+            "{whole:?}"
         );
     }
 }

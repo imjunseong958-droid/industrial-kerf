@@ -10,7 +10,10 @@ pub mod roto;
 pub mod shot;
 
 pub use planar::{follow_plane, simplified_quads, FollowedPlane, Quad};
-pub use roto::{follow_object, simplified_object, simplified_outlines, FollowedObject, Hints};
+pub use roto::{
+    follow_object, simplified_corners, simplified_object, simplified_outlines, FollowedObject,
+    Hints,
+};
 
 use kerf_raster::klt::{track, GrayPyramid, LkOpts};
 use kerf_raster::plane::Plane;

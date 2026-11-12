@@ -302,7 +302,13 @@ jobs:
       # usable GPU" in this step's log means they skipped.
       - name: Build workspace tests
         run: cargo test --workspace --no-run
+      # The runner's sound device is a virtual one that stops asking for
+      # sound for up to a second at a time. With the stats on, a playback test
+      # that fails says what its device and clock did (the lines are part of
+      # a test's own output, so a passing test shows none).
       - name: Test workspace
+        env:
+          KERF_PLAYBACK_STATS: "1"
         run: cargo test --workspace
       # The real store API keys and the Kerf Cloud token go to, which every
       # other test replaces with one in memory: here the login keychain.

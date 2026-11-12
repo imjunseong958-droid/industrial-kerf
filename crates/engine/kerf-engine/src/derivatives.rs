@@ -75,6 +75,11 @@ impl CacheEntry {
         self.directory.join(name)
     }
 
+    /// The options the entry was made with.
+    pub fn options(&self) -> &Value {
+        &self.options
+    }
+
     /// Whether the manifest and every requested artifact are complete.
     pub fn is_complete(&self, artifacts: &[&str]) -> bool {
         if artifacts.iter().any(|name| !self.path(name).is_file()) {

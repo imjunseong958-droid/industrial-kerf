@@ -210,6 +210,22 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
     assert_eq!(proposed["check"]["valid"], true, "{proposed}");
     assert!(has_image(&proposed["preview"]["after"]));
     assert_eq!(destination.runtime().get_document(false).unwrap(), before);
+    // What the preset calls `c1` and `a1` are clips of this project under
+    // ids of its own. The answer says which each became, and those are the
+    // names the script places them by; the target sequence keeps its own.
+    let ids = proposed["ids"].as_object().unwrap();
+    let script = proposed["script"].as_str().unwrap();
+    for template in ["c1", "a1"] {
+        let placed = ids[template].as_str().unwrap();
+        assert_ne!(placed, template, "{ids:?}");
+        assert!(
+            script.contains(&format!("as={placed}")),
+            "{template} became {placed}: {script}"
+        );
+    }
+    assert_eq!(ids["s1"], "s1", "{ids:?}");
+    // A slot became the media it was bound to.
+    assert_eq!(ids["slot1"], "m1", "{ids:?}");
     let frame = ok(
         &destination,
         "look",
@@ -416,12 +432,46 @@ fn look_shows_the_document_media_index_and_frames() {
             "params": {"name": "look", "arguments": {"media": "m1", "at": ["1s"], "width": 160}}}))
         .unwrap();
     let content = response["result"]["content"].as_array().unwrap();
-    assert_eq!(content.len(), 2, "{response}");
-    assert_eq!(content[1]["type"], "image");
-    assert_eq!(content[1]["mimeType"], "image/jpeg");
+    assert_eq!(content.len(), 3, "{response}");
+    // Each image comes after a line that says which it is.
+    assert_eq!(content[1]["text"], "image 0: frames[0] at 1s");
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[2]["mimeType"], "image/jpeg");
     let frame = &response["result"]["structuredContent"]["result"]["frames"][0];
     assert!(frame.get("imageBase64").is_none());
     assert_eq!(frame["image"], 0);
+
+    // An edit's sheets come the one before the edit first, each named with
+    // the frames it shows.
+    let response = server
+        .handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "edit", "arguments": {"script": "trim c1 out -30f ripple"}}}))
+        .unwrap();
+    let preview = &response["result"]["structuredContent"]["result"]["preview"];
+    assert_eq!(preview["before"]["image"], 0, "{preview}");
+    assert_eq!(preview["after"]["image"], 1, "{preview}");
+    let content = response["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 5, "{response}");
+    let label = |index: usize| content[index]["text"].as_str().unwrap();
+    let frames = |side: &str| {
+        preview[side]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|frame| frame.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    assert_eq!(
+        label(1),
+        format!("image 0: preview.before, frames {}", frames("before"))
+    );
+    assert_eq!(
+        label(3),
+        format!("image 1: preview.after, frames {}", frames("after"))
+    );
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[4]["type"], "image");
 }
 
 #[test]
@@ -937,6 +987,80 @@ fn look_hears_what_the_sequence_says() {
     assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
 }
 
+#[test]
+fn a_transcript_nothing_here_can_make_is_refused_before_any_work() {
+    // With a model set, the test above hears the sequence.
+    if std::env::var_os("KERF_WHISPER_MODEL").is_some() {
+        return;
+    }
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    for arguments in [
+        json!({"transcript": true}),
+        json!({"media": "m1", "transcript": true}),
+    ] {
+        let refused = error(&router, "look", arguments);
+        assert_eq!(refused["code"], "CAPABILITY_UNAVAILABLE", "{refused}");
+        assert_eq!(refused["details"]["capability"], "transcription");
+    }
+    // The program's sound was not rendered for a transcript nobody could make of it.
+    let rendered: Vec<String> = std::fs::read_dir(directory.path().join(".kerf/cache/derived"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("program-sound"))
+        .collect();
+    assert!(rendered.is_empty(), "{rendered:?}");
+}
+
+#[test]
+fn look_says_how_loud_the_sequence_plays() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A 440 Hz tone an eighth of full scale high, for three of four seconds.
+    let heard = ok(&router, "look", json!({"loudness": true}));
+    assert_eq!(heard["sequence"], "s1");
+    let loudness = &heard["loudness"];
+    let integrated = loudness["integrated"].as_f64().unwrap();
+    assert!((-24.0..-18.0).contains(&integrated), "{heard}");
+    assert_eq!(loudness["target"], -23.0);
+    let peak = loudness["truePeak"].as_f64().unwrap();
+    assert!((-20.0..-17.0).contains(&peak), "{heard}");
+    assert_eq!(loudness["limit"], -1.0);
+    assert!(loudness["momentaryMax"]["lufs"].is_number(), "{heard}");
+    assert!(loudness["momentaryMax"]["ends"].is_string(), "{heard}");
+    assert_eq!(loudness["seconds"], 4.0);
+    // Asked again of the same revision, it is not measured again.
+    assert_eq!(ok(&router, "look", json!({"loudness": true})), heard);
+
+    // What a proposal would make of it: twelve decibels down, as it says.
+    let proposal = ok(&router, "edit", json!({"script": "set a1 gain=-12"}));
+    let quieter = ok(
+        &router,
+        "look",
+        json!({"loudness": true, "proposal": proposal["proposal"]}),
+    );
+    let down = quieter["loudness"]["integrated"].as_f64().unwrap();
+    assert!((down - (integrated - 12.0)).abs() < 0.3, "{quieter}");
+    assert!(
+        (quieter["loudness"]["truePeak"].as_f64().unwrap() - (peak - 12.0)).abs() < 0.3,
+        "{quieter}"
+    );
+
+    // It is of a whole sequence: a media's own is in its fact sheet.
+    for arguments in [
+        json!({"loudness": true, "media": "m1"}),
+        json!({"loudness": true, "at": ["1s"]}),
+        json!({"loudness": true, "from": "1s", "to": "2s"}),
+    ] {
+        let refused = error(&router, "look", arguments);
+        assert_eq!(refused["code"], "INVALID_ARGUMENTS", "{refused}");
+    }
+}
+
 fn finish(router: &KerfMcpRouter, job: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -1035,6 +1159,29 @@ fn a_proposal_can_be_seen_extended_and_rendered() {
         json!({"script": "trim c1 in +1f", "extend": id, "revise": id}),
     );
     assert_eq!(both["code"], "INVALID_ARGUMENTS");
+    // Built on the first version again, a script would leave out what the
+    // second added and become the newest all the same: it is refused, and
+    // told which to build on. Nothing is staged.
+    let superseded = error(
+        &router,
+        "edit",
+        json!({"script": "trim c1 in +1f", "extend": first_id}),
+    );
+    assert_eq!(superseded["code"], "PROPOSAL_SUPERSEDED", "{superseded}");
+    let message = superseded["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(&format!(
+            "proposal {first_id} is version 1 of a proposal now at version 2"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("pass the newest, {id}, as `extend`")),
+        "{message}"
+    );
+    let open = router.runtime().get_state().unwrap().proposals;
+    assert_eq!(open[0].proposal_id, id, "{open:#?}");
+    assert_eq!(open[0].versions.len(), 2, "{open:#?}");
 
     // `render` with the proposal renders what it would make.
     let started = ok(
@@ -1546,7 +1693,10 @@ fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
         }),
     );
     assert!(followed["lostAt"].is_null(), "{followed}");
-    let outline = followed["outline"].as_str().unwrap();
+    // With a clip the outline is in the line that masks it, and nowhere else.
+    assert!(followed.get("outline").is_none(), "{followed}");
+    let script = followed["script"].as_str().unwrap();
+    let outline = script.split_once("points=").unwrap().1;
     let last = outline
         .trim_matches(['{', '}'])
         .split(' ')
@@ -1560,20 +1710,22 @@ fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
             [values[0], values[1], values[2]]
         })
         .collect();
+    // The corners down its left side and down its right: the left, straight and as hard all the way,
+    // is the two at its ends.
     let mean = |wanted: &dyn Fn(f64) -> bool| {
         let widths: Vec<f64> = corners
             .iter()
-            .filter(|corner| wanted(corner[0]) && (0.35..=0.65).contains(&corner[1]))
+            .filter(|corner| wanted(corner[0]))
             .map(|corner| corner[2])
             .collect();
         assert!(!widths.is_empty(), "{corners:?}");
         widths.iter().sum::<f64>() / widths.len() as f64
     };
-    let (left, right) = (mean(&|x| x < 0.4), mean(&|x| x > 0.6));
+    let (left, right) = (mean(&|x| x < 0.31), mean(&|x| x > 0.65));
+    assert!(corners.len() < 40, "{corners:?}");
     assert!(left < 12.0, "{left}: {corners:?}");
     assert!(right > 40.0, "{right}: {corners:?}");
     // What it gives is a line a document takes.
-    let script = followed["script"].as_str().unwrap();
     ok(
         &router,
         "edit",
@@ -1624,8 +1776,33 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
         "edit",
         json!({"extend": proposal, "script": script}),
     );
+    // A square is the corners by its own, the same ones in each keyframe, and not the forty it
+    // was followed by; and its outline is given once, in the line.
+    assert!(followed.get("outline").is_none(), "{followed}");
+    let outline = script.split_once("points=").unwrap().1;
+    let counts: Vec<usize> = outline
+        .trim_matches(['{', '}'])
+        .split(' ')
+        .map(|key| key.split(';').count())
+        .collect();
+    assert_eq!(followed["corners"], counts[0], "{followed}");
+    assert!(counts[0] <= 12, "{counts:?}");
+    assert!(counts.iter().all(|count| *count == counts[0]), "{counts:?}");
+    assert_eq!(followed["keyframes"], counts.len(), "{followed}");
+    // Without a clip it is `outline`, the same.
+    let alone = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"inside": [[0.3, 0.5]], "outside": [[0.05, 0.05]]},
+            "from": "0f",
+            "to": "24f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(alone.get("script").is_none(), "{alone}");
+    assert_eq!(alone["outline"].as_str(), Some(outline), "{alone}");
     // Where it ends, it has moved with the square: 0.32 of the frame to the right, at its middle.
-    let outline = followed["outline"].as_str().unwrap();
     let last = outline
         .trim_matches(['{', '}'])
         .split(' ')
@@ -3228,10 +3405,40 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert!(!dir.join("shots/open.takes/001.mp4").exists());
 
-    // Let through: it runs, and the media is the take once it is made.
+    // Let through: it runs, and the media is the take once it is made. Whoever watches the
+    // session's makings, as an editor does to show them, is told from its start to its end.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    router.watch_makings({
+        let seen = seen.clone();
+        std::sync::Arc::new(move |event| {
+            use kerf_mcp::MakingEvent::{Began, Failed, Made, Said, Stopped};
+            let said = match event {
+                Began { media, take, .. } => format!("began {media} {take}"),
+                Said { media, .. } => format!("said {media}"),
+                Made { media, take } => format!("made {media} {take}"),
+                Stopped { media } => format!("stopped {media}"),
+                Failed { media, why } => format!("failed {media}: {why}"),
+            };
+            seen.lock().unwrap().push(said);
+        })
+    });
     given(Mode::Auto, 1);
     let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
     assert_eq!(made["status"], "made", "{made}");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.first().map(String::as_str),
+            Some("began m9 1"),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(String::as_str),
+            Some("made m9 1"),
+            "{seen:?}"
+        );
+        assert!(seen.iter().any(|said| said == "said m9"), "{seen:?}");
+    }
     assert_eq!(made["take"], 1);
     assert_eq!(made["path"], "shots/open.takes/001.mp4");
     assert!(dir.join("shots/open.takes/001.mp4").is_file());
@@ -3269,6 +3476,18 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert!(!dir.join("shots/open.takes/002.mp4").exists());
     assert!(!dir.join("shots/open.takes/002.work").exists());
+    {
+        // One asked for is not a making, and was not said to be; the one stopped was.
+        let seen = seen.lock().unwrap();
+        let after: Vec<&str> = seen
+            .iter()
+            .skip_while(|said| *said != "made m9 1")
+            .skip(1)
+            .map(String::as_str)
+            .filter(|said| *said != "said m9")
+            .collect();
+        assert_eq!(after, ["began m9 2", "stopped m9"], "{seen:?}");
+    }
     let document = router.runtime().get_state().unwrap().document;
     assert!(
         document.contains("path=\"shots/open.takes/001.mp4\""),

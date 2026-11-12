@@ -381,6 +381,7 @@ fn main() -> Result<()> {
             print_json(&json!({
                 "logicalCpus": budget.logical_cpus,
                 "ffmpegThreads": budget.ffmpeg_threads,
+                "whisperThreads": budget.whisper_threads,
                 "extractParallelism": budget.extract_parallelism,
                 "softwarePreset": budget.software_preset,
                 "softwareCrf": budget.software_crf,

@@ -191,6 +191,20 @@ impl CheckReport {
             rows: rows.iter().map(|def| def.row(&findings, rows)).collect(),
             ..Summary::default()
         };
+        // A check that could not look at every cut says so beside what it found: `0 in words`
+        // of cuts nothing heard would read as none.
+        let unheard: f64 = findings
+            .iter()
+            .filter(|finding| finding.code == crate::lint::CUT_UNHEARD)
+            .filter_map(|finding| finding.value)
+            .sum();
+        if unheard > 0.0 {
+            for row in &mut summary.rows {
+                if row.code == CUTS_IN_WORDS.code {
+                    row.value = format!("{} · {unheard} not checked", row.value);
+                }
+            }
+        }
         summary.recount();
         let valid = !findings
             .iter()
@@ -397,7 +411,15 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
                         "media `{}` is not made yet: a person makes it from its recipe, `{recipe}`, with `kerf make {}`",
                         media.id, media.id
                     ),
-                    None => format!("media `{}` is missing: {}", media.id, media.path),
+                    // As the document writes it: where the project folder
+                    // is on this computer says nothing of what is missing.
+                    None => format!(
+                        "media `{}` is missing: no file at `{}`",
+                        media.id,
+                        Path::new(&media.path)
+                            .strip_prefix(dir)
+                            .map_or(media.path.as_str().into(), Path::to_string_lossy)
+                    ),
                 },
             ));
         }

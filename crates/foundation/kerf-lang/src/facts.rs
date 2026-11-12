@@ -31,6 +31,14 @@ impl Speech {
         reached + 0.05 >= to
     }
 
+    /// Whether a transcript covers the moment `at` seconds, give or take a
+    /// frame.
+    pub fn reaches(&self, at: f64) -> bool {
+        self.covered
+            .iter()
+            .any(|(start, end)| *start <= at + 0.05 && at <= *end + 0.05)
+    }
+
     /// The words in the order they were said, each once: transcripts of
     /// overlapping ranges repeat words, and the first is kept.
     pub fn heard(&self) -> Vec<&Word> {
@@ -171,6 +179,10 @@ mod tests {
         assert!(speech.covers(2.0, 19.0));
         assert!(!speech.covers(2.0, 21.0));
         assert!(!Speech::default().covers(0.0, 1.0));
+        // A moment is covered by a transcript it is in, and by none when there is none.
+        assert!(speech.reaches(20.0) && speech.reaches(0.0));
+        assert!(!speech.reaches(20.5));
+        assert!(!Speech::default().reaches(0.0));
     }
 
     fn word(start: f64, end: f64, text: &str) -> Word {
