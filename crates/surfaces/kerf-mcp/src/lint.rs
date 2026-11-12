@@ -202,10 +202,20 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
             Content::Media { media, .. } => project
                 .media(media.as_str())
                 .is_some_and(|media| media.video.is_some()),
-            Content::Generator { fx, .. } => fx.as_str() != "adjustment",
+            // An adjustment layer, a camera, a light, and a null draw nothing of their own.
+            Content::Generator { fx, .. } => {
+                !matches!(fx.as_str(), "adjustment" | "camera" | "light" | "null")
+            }
             Content::Sequence { .. } => true,
             Content::Caption { .. } => false,
         })
+}
+
+/// Whether `clip` is laid over a picture and is not one that fills a frame: text, a shape,
+/// particles. It leaves no edge of the frame black, and covers none that another does.
+fn laid_over(clip: &Clip) -> bool {
+    matches!(&clip.content, Content::Generator { fx, .. }
+        if matches!(fx.as_str(), "title" | "shape" | "particles"))
 }
 
 /// Black stretches with no picture, and stretches where no picture covers
@@ -239,50 +249,76 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
             .during(sequence, from, to),
         );
     }
+    // A title, a shape, or particles over a picture hide none of the frame's edges, and alone
+    // over nothing they are not a picture that was to fill it: the edges are of the others.
+    let framed: Vec<&Clip> = shown
+        .iter()
+        .copied()
+        .filter(|clip| !laid_over(clip))
+        .collect();
     let covered = union(
-        shown
+        framed
             .iter()
             .filter(|clip| covers(project, sequence, clip))
             .map(span),
     );
-    for (from, to) in subtract(&pictured, &covered) {
-        let short: Vec<&str> = shown
+    for (from, to) in subtract(&union(framed.iter().map(span)), &covered) {
+        let short: Vec<&Clip> = framed
             .iter()
+            .copied()
             .filter(|clip| clip.start < to && clip.end() > from)
             .filter(|clip| !covers(project, sequence, clip))
-            .map(|clip| clip.id.as_str())
             .collect();
-        // A picture is fit inside the frame before its `scale`, so what fills the frame is
-        // seldom what the sizes alone say: the scale that does is said with one clip.
-        let fills = match short.as_slice() {
-            [id] => shown
-                .iter()
-                .find(|clip| clip.id.as_str() == *id)
-                .and_then(|clip| fill_scale(project, sequence, clip))
-                .map(|scale| {
-                    format!("; `set {id} scale={scale}` fills it, cutting off what is over evenly")
-                })
-                .unwrap_or_default(),
-            _ => String::new(),
-        };
+        let ids: Vec<&str> = short.iter().map(|clip| clip.id.as_str()).collect();
         findings.push(finding(
             "picture.edges",
-            short.first().copied().unwrap_or(sequence.id.as_str()),
+            ids.first().copied().unwrap_or(sequence.id.as_str()),
             format!(
-                "the frame's edges are black in `{}` from {} to {}: {} does not fill the {}x{} frame{fills}",
+                "the frame's edges are black in `{}` from {} to {}: {} {} not fill the {}x{} frame{}",
                 sequence.id,
                 clock.print_position(from),
                 clock.print_position(to),
-                short
-                    .iter()
+                ids.iter()
                     .map(|id| format!("`{id}`"))
                     .collect::<Vec<_>>()
                     .join(", "),
+                if ids.len() == 1 { "does" } else { "do" },
                 sequence.width,
                 sequence.height,
+                fills(project, sequence, &short),
             ),
         )
         .during(sequence, from, to));
+    }
+}
+
+/// What to say after a finding that `short` do not fill the frame: the `scale` at which each
+/// does. A picture is fit inside the frame before its `scale`, so what fills the frame is
+/// seldom what the sizes alone say. Nothing for a clip that is placed otherwise.
+fn fills(project: &Project, sequence: &Sequence, short: &[&Clip]) -> String {
+    let scales: Vec<(&str, f64)> = short
+        .iter()
+        .filter_map(|clip| Some((clip.id.as_str(), fill_scale(project, sequence, clip)?)))
+        .collect();
+    let cut = "cutting off what is over evenly";
+    match scales.as_slice() {
+        [] => String::new(),
+        [(id, scale)] if short.len() == 1 => format!("; `set {id} scale={scale}` fills it, {cut}"),
+        // A cut of clips of one shape wants one number.
+        [(_, scale), rest @ ..]
+            if scales.len() == short.len() && rest.iter().all(|(_, other)| other == scale) =>
+        {
+            format!("; `scale={scale}` on each fills it, {cut}")
+        }
+        _ => format!(
+            "; {} {} it, {cut}",
+            scales
+                .iter()
+                .map(|(id, scale)| format!("`set {id} scale={scale}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if scales.len() == 1 { "fills" } else { "fill" },
+        ),
     }
 }
 
@@ -692,6 +728,107 @@ sequence s1 rate=24 size=1920x1080
             &[],
         );
         assert!(!placed[0].1.contains("scale="), "{placed:?}");
+    }
+
+    #[test]
+    fn a_title_over_a_picture_hides_none_of_its_edges() {
+        // c1 does not fill the tall frame, and a title is over its first two seconds.
+        let found = codes(
+            "sequence set s1 size=1080x1920\nset c2 scale=3.17\ntrack add V2 video\n\
+             overwrite gen=title at=00:00:00:00 dur=00:00:02:00 on=V2 as=t1\nset t1 text=\"Hi\"",
+            &[],
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "picture.edges");
+        // All of c1 is said, not what the title leaves of it, and with the scale that fills it.
+        assert!(
+            found[0]
+                .1
+                .contains("from 00:00:00:00 to 00:00:04:00: `c1` does not fill"),
+            "{found:?}"
+        );
+        assert!(
+            found[0].1.contains("`set c1 scale=3.17` fills it"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_over_nothing_is_a_picture_and_leaves_no_edge() {
+        // A title card: nothing under it was to fill the frame, and the screen is not black.
+        let found = codes(
+            "delete c1\ntrack add V2 video\n\
+             overwrite gen=title at=00:00:00:00 dur=00:00:04:00 on=V2 as=t1\nset t1 text=\"Hi\"",
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn what_draws_nothing_does_not_keep_the_screen_from_being_black() {
+        let found = codes(
+            "delete c1\ntrack add V2 video\n\
+             overwrite gen=camera at=00:00:00:00 dur=00:00:08:00 on=V2 as=cam",
+            &[],
+        );
+        let black: Vec<_> = found
+            .iter()
+            .filter(|(code, _)| code == "picture.black")
+            .collect();
+        assert_eq!(black.len(), 1, "{found:?}");
+        assert!(
+            black[0].1.contains("from 00:00:00:00 to 00:00:04:00"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn the_scale_that_fills_the_frame_is_said_for_several_clips() {
+        // Two clips of one shape want one number.
+        let found = codes("sequence set s1 size=1080x1920", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0]
+                .1
+                .contains("`c1`, `c2` do not fill the 1080x1920 frame"),
+            "{found:?}"
+        );
+        assert!(
+            found[0]
+                .1
+                .ends_with("; `scale=3.17` on each fills it, cutting off what is over evenly"),
+            "{found:?}"
+        );
+        // Two of different shapes, each its own: a square picture fills a tall frame at 1.78.
+        let found = codes(
+            "media add m2 path=\"b.mov\" rate=24 dur=00:01:00:00 video=1080x1080\n\
+             sequence set s1 size=1080x1920\n\
+             overwrite media=m2 at=00:00:04:00 dur=00:00:04:00 on=V1 as=sq",
+            &[],
+        );
+        let edges: Vec<_> = found
+            .iter()
+            .filter(|(code, _)| code == "picture.edges")
+            .collect();
+        assert_eq!(edges.len(), 1, "{found:?}");
+        assert!(
+            edges[0]
+                .1
+                .contains("; `set c1 scale=3.17`, `set sq scale=1.78` fill it, cutting off"),
+            "{found:?}"
+        );
+        // What they say fills it.
+        let filled = codes(
+            "media add m2 path=\"b.mov\" rate=24 dur=00:01:00:00 video=1080x1080\n\
+             sequence set s1 size=1080x1920\n\
+             overwrite media=m2 at=00:00:04:00 dur=00:00:04:00 on=V1 as=sq\n\
+             set c1 scale=3.17\nset sq scale=1.78",
+            &[],
+        );
+        assert!(
+            !filled.iter().any(|(code, _)| code == "picture.edges"),
+            "{filled:?}"
+        );
     }
 
     #[test]
