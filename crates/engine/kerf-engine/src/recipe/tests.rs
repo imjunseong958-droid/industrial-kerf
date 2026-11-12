@@ -907,3 +907,89 @@ fn a_rendered_sequence_is_what_it_draws_and_nothing_else_of_the_project() {
     std::fs::write(directory.join("b.mp4"), "frames").unwrap();
     assert_ne!(from(&document("3s", "2s", "0f")), as_it_is);
 }
+
+#[test]
+fn a_recipe_written_again_is_kept_beside_the_one_before() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    let first = "kerf-recipe 1\nrender s1 {out}\n";
+    let second = "kerf-recipe 1\nrender s1 {out} size=832x480\n";
+    let kept = |asked: &str, text: &str| version(directory, asked, text).unwrap();
+    // Nothing there: written where it is named.
+    let new = kept("shots/open.kerfrecipe", first);
+    assert_eq!(
+        (new.path.as_str(), new.new, new.before.as_deref()),
+        ("shots/open.kerfrecipe", true, None)
+    );
+    write_version(directory, &new, first).unwrap();
+    // The same text: nothing to write.
+    let same = kept("shots/open.kerfrecipe", first);
+    assert_eq!(
+        (same.path.as_str(), same.new),
+        ("shots/open.kerfrecipe", false)
+    );
+    // Another: its next version, beside it, and never over it.
+    let next = kept("shots/open.kerfrecipe", second);
+    assert_eq!(
+        (next.path.as_str(), next.new, next.before.as_deref()),
+        ("shots/open@2.kerfrecipe", true, Some(first))
+    );
+    write_version(directory, &next, second).unwrap();
+    assert!(write_version(directory, &next, first).is_err());
+    assert_eq!(
+        std::fs::read_to_string(directory.join("shots/open@2.kerfrecipe")).unwrap(),
+        second
+    );
+    // Asked of a version, a text another version holds is that one's.
+    let back = kept("shots/open@2.kerfrecipe", first);
+    assert_eq!(
+        (back.path.as_str(), back.new),
+        ("shots/open.kerfrecipe", false)
+    );
+    let third = kept(
+        "shots/open@2.kerfrecipe",
+        "kerf-recipe 1\nrender s1 {out} rate=16\n",
+    );
+    assert_eq!(third.path, "shots/open@3.kerfrecipe");
+    // What is not a recipe, or not a recipe's file, is refused.
+    let wrong = version(directory, "shots/open.kerfrecipe", "render s1 {out}\n").unwrap_err();
+    assert!(
+        wrong.to_string().starts_with("shots/open.kerfrecipe: "),
+        "{wrong}"
+    );
+    assert!(version(directory, "shots/open.txt", first).is_err());
+    assert!(version(directory, "../open.kerfrecipe", first).is_err());
+    // A name's versions, and a name that only looks like one.
+    assert_eq!(
+        versioned(Path::new("shots/open@12.kerfrecipe")),
+        ("open".to_owned(), 12)
+    );
+    assert_eq!(
+        versioned(Path::new("open@1.kerfrecipe")),
+        ("open@1".to_owned(), 1)
+    );
+    assert_eq!(
+        versioned(Path::new("open@v2.kerfrecipe")),
+        ("open@v2".to_owned(), 1)
+    );
+    assert_eq!(versioned(Path::new("@2.kerfrecipe")), ("@2".to_owned(), 1));
+}
+
+#[test]
+fn every_version_of_a_recipe_keeps_its_takes_in_one_folder() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    let place = |recipe: &str| takes::Place::of(directory, recipe, "shots/open.mp4").unwrap();
+    assert_eq!(
+        place("shots/open.kerfrecipe").stored(1),
+        "shots/open.takes/001.mp4"
+    );
+    assert_eq!(
+        place("shots/open@2.kerfrecipe").stored(1),
+        "shots/open.takes/001.mp4"
+    );
+    assert_eq!(
+        place("shots/a.b@3.kerfrecipe").stored(2),
+        "shots/a.b.takes/002.mp4"
+    );
+}

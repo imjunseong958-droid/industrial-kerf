@@ -42,6 +42,8 @@ fn run() -> Result<(), String> {
     // The client closed stdin: nobody is left to read a render's job, so
     // stop the ones still running rather than orphan their ffmpeg.
     router.finish_renders(true);
+    // The same of a making, whose model's program then takes back what it asked a server for.
+    router.finish_makings(true);
     served
 }
 

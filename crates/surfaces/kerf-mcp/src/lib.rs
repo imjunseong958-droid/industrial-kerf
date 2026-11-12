@@ -10,12 +10,15 @@ pub mod docs;
 pub mod harness;
 pub mod inbound;
 mod lint;
+mod making;
 mod media_facts;
+pub mod permissions;
 mod presets;
 pub mod qc;
 mod qc_full;
 mod text_lint;
 
+pub use making::{answer_make_requests, make_requests};
 pub use presets::{keep_looks, PRESET_FOLDERS};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
 pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
@@ -126,6 +129,11 @@ pub struct KerfMcpRouter {
     /// The render jobs `render` started, shared by every copy; see
     /// [`KerfMcpRouter::finish_renders`].
     renders: Arc<Mutex<Vec<RenderWorker>>>,
+    /// The makings `make` started, shared by every copy; see
+    /// [`KerfMcpRouter::finish_makings`].
+    makings: Arc<Mutex<making::Makings>>,
+    /// Permissions given in place of the person's file, as a test gives them.
+    permissions: Arc<Mutex<Option<permissions::Permissions>>>,
     /// Who the proposals and notes made through this router are by,
     /// shared by every copy: Kerf for the built-in agents, the client an
     /// [`McpServer`] serves once it has said who it is.
@@ -169,6 +177,8 @@ impl KerfMcpRouter {
             skills,
             namespace,
             renders: Arc::default(),
+            makings: Arc::default(),
+            permissions: Arc::default(),
             author: Arc::new(Mutex::new(Author::kerf())),
         })
     }
@@ -185,6 +195,28 @@ impl KerfMcpRouter {
     /// every copy of it, by `author`.
     pub fn set_author(&self, author: Author) {
         *self.author.lock().unwrap_or_else(PoisonError::into_inner) = author;
+    }
+
+    /// What the person lets an agent do without asking, read from their own
+    /// file at each asking, so a change to it holds from the next.
+    pub fn permissions(&self) -> Result<permissions::Permissions, String> {
+        match &*self
+            .permissions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            Some(given) => Ok(given.clone()),
+            None => permissions::Permissions::load(),
+        }
+    }
+
+    /// Have every copy of this router act on `permissions` in place of the
+    /// person's file, or on the file again with `None`.
+    pub fn set_permissions(&self, permissions: Option<permissions::Permissions>) {
+        *self
+            .permissions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = permissions;
     }
 
     /// This router, holding kerfd open for as long as it or a copy of it
@@ -326,8 +358,11 @@ impl KerfMcpRouter {
         } else {
             format!("{}.{}", self.namespace, base_name)
         };
-        let (description, input_schema, annotations) =
-            harness::metadata(base_name).expect("every harness tool has metadata");
+        let (description, input_schema, annotations) = if base_name == "make" {
+            making::metadata()
+        } else {
+            harness::metadata(base_name).expect("every harness tool has metadata")
+        };
         ToolDefinition {
             name,
             description: description.into(),
@@ -342,6 +377,7 @@ impl KerfMcpRouter {
             "edit" => self.edit(arguments),
             "render" => self.render(arguments),
             "note" => self.note(arguments),
+            "make" => self.make(arguments),
             _ => Err(McpError::new(
                 "UNKNOWN_TOOL",
                 format!("unknown tool: {name}"),
@@ -701,11 +737,17 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            ["kerf.look", "kerf.edit", "kerf.render", "kerf.note"]
+            [
+                "kerf.look",
+                "kerf.edit",
+                "kerf.render",
+                "kerf.note",
+                "kerf.make"
+            ]
         );
         assert_eq!(
             router.agent_tools().keys().collect::<Vec<_>>(),
-            ["edit", "look", "note", "render"]
+            ["edit", "look", "make", "note", "render"]
         );
     }
 

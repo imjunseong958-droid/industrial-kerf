@@ -1463,6 +1463,16 @@ impl Runtime {
         // No probe reads a reel or a recipe, so those the media was given stay.
         replacement.reel.clone_from(&existing.reel);
         replacement.recipe.clone_from(&existing.recipe);
+        // A take was made from one version of its recipe: the media that is that take again
+        // names that version, so that it is not asked for again.
+        if let Some(version) =
+            kerf_engine::recipe::takes(&self.state.project, self.directory(), existing)
+                .ok()
+                .and_then(|takes| takes.into_iter().find(|take| take.stored == stored))
+                .and_then(|take| take.recipe)
+        {
+            replacement.recipe = Some(version);
+        }
         let (mut candidate, change) =
             self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
         let operation = candidate.record_operation(operation, fingerprint);

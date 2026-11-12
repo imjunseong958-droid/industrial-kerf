@@ -83,6 +83,8 @@ sequence s1 rate=30 size=320x180
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    // Not what the person running the tests lets their own agents do.
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
     Some((directory, router))
 }
 
@@ -254,11 +256,11 @@ fn lists_the_four_tools_and_the_reference() {
         .into_iter()
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
-    assert_eq!(names, ["look", "edit", "render", "note"]);
+    assert_eq!(names, ["look", "edit", "render", "note", "make"]);
     let agent = router.agent_tools();
     assert_eq!(
         agent.keys().collect::<Vec<_>>(),
-        ["edit", "look", "note", "render"]
+        ["edit", "look", "make", "note", "render"]
     );
     let server = McpServer::new(router);
     let initialized = server
@@ -2876,4 +2878,283 @@ fn look_finds_what_is_in_properties_and_parameters() {
     // A name near one says so.
     let near = message(&error(&router, "look", json!({"effect": "solidd"})));
     assert!(near.contains("`solid`"), "{near}");
+}
+
+/// A recipe an agent writes is part of its proposal: shown in it, kept beside the one before
+/// it when it is written again, never over it, and taken back by undo.
+#[test]
+fn a_recipe_an_edit_writes_is_kept_beside_the_one_before_and_undo_goes_back() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let dir = directory.path();
+    let first = "kerf-recipe 1\nrender s1 {out}\n";
+    let staged = ok(
+        &router,
+        "edit",
+        json!({
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
+            "recipes": {"shots/open.kerfrecipe": first},
+        }),
+    );
+    assert_eq!(staged["status"], "awaiting_review", "{staged}");
+    assert_eq!(
+        staged["recipes"][0],
+        json!({"recipe": "shots/open.kerfrecipe", "keptAs": "shots/open.kerfrecipe", "written": true})
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(),
+        first
+    );
+    // The person reads the recipe in the proposal before saying yes.
+    let state = router.runtime().get_state().unwrap();
+    let source = &state.proposals[0].source;
+    assert!(
+        source.contains(
+            "# writes the recipe shots/open.kerfrecipe:\n#   kerf-recipe 1\n#   render s1 {out}\n"
+        ),
+        "{source}"
+    );
+    let accept = |proposal: &Value, key: &str| {
+        let revision = router.runtime().get_state().unwrap().revision;
+        router
+            .runtime()
+            .accept_proposal(proposal.as_str().unwrap(), "ui", key, revision)
+            .unwrap()
+    };
+    accept(&staged["proposal"], "accept-first");
+
+    // Written again with another text, alone: the first stays as it is, the second is kept
+    // beside it, and the media moves to it in the proposal.
+    let second = "kerf-recipe 1\nrender s1 {out} size=160x90\n";
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"recipes": {"shots/open.kerfrecipe": second}}),
+    );
+    assert_eq!(
+        staged["recipes"][0]["keptAs"], "shots/open@2.kerfrecipe",
+        "{staged}"
+    );
+    assert!(staged["recipes"][0]["diff"]
+        .as_str()
+        .is_some_and(|diff| diff.contains("+render s1 {out} size=160x90")));
+    assert!(
+        staged["script"].as_str().is_some_and(|script| script
+            .contains("media replace m9 path=\"shots/open.mp4\"")
+            && script.contains("recipe=\"shots/open@2.kerfrecipe\"")),
+        "{staged}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(),
+        first
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shots/open@2.kerfrecipe")).unwrap(),
+        second
+    );
+    let state = accept(&staged["proposal"], "accept-second");
+    assert!(
+        state
+            .document
+            .contains("recipe=\"shots/open@2.kerfrecipe\""),
+        "{}",
+        state.document
+    );
+    // Undo has the media be made from the first again.
+    let state = router
+        .runtime()
+        .undo_request("ui", "undo-second", state.revision)
+        .unwrap();
+    assert!(
+        state.document.contains("recipe=\"shots/open.kerfrecipe\""),
+        "{}",
+        state.document
+    );
+    // The second text again is the version that holds it, written once.
+    let again = ok(
+        &router,
+        "edit",
+        json!({"recipes": {"shots/open.kerfrecipe": second}}),
+    );
+    assert_eq!(
+        again["recipes"][0],
+        json!({"recipe": "shots/open.kerfrecipe", "keptAs": "shots/open@2.kerfrecipe", "written": false, "diff": kerf_lang::diff_text(first, second)})
+    );
+
+    // A text that is no recipe, and a file that is no recipe's, are refused with why.
+    let wrong = error(
+        &router,
+        "edit",
+        json!({"revise": again["proposal"], "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender {out}\n"}}),
+    );
+    assert_eq!(wrong["code"], "INVALID_RECIPE", "{wrong}");
+    assert!(
+        wrong["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("shots/open.kerfrecipe: "),
+        "{wrong}"
+    );
+    let outside = error(
+        &router,
+        "edit",
+        json!({"revise": again["proposal"], "recipes": {"../open.kerfrecipe": first}}),
+    );
+    assert_eq!(outside["code"], "INVALID_RECIPE", "{outside}");
+    let named = error(
+        &router,
+        "edit",
+        json!({"revise": again["proposal"], "recipes": {"shots/open.json": first}}),
+    );
+    assert!(
+        named["message"].as_str().unwrap().contains("`.kerfrecipe`"),
+        "{named}"
+    );
+}
+
+/// What the person lets an agent do on its own: accept its edits, and run what it asks to have
+/// made, up to a limit; else it is asked for, in the review, and listed for a terminal.
+#[test]
+fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
+    use kerf_mcp::permissions::{Mode, Permissions};
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let dir = directory.path();
+    let given = |mode: Mode, makes: u32| {
+        router.set_permissions(Some(Permissions {
+            mode,
+            makes,
+            ..Permissions::default()
+        }))
+    };
+    given(Mode::AcceptEdits, 0);
+    let revision = router.runtime().get_state().unwrap().revision;
+    let edited = ok(
+        &router,
+        "edit",
+        json!({
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
+            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=160x90\n"},
+        }),
+    );
+    assert_eq!(edited["status"], "accepted", "{edited}");
+    assert_eq!(edited["permissions"], "accept-edits");
+    assert_eq!(edited["revision"], revision + 1);
+
+    // Asked for: what it would run, and the person is asked in the review.
+    let asked = ok(
+        &router,
+        "make",
+        json!({"media": "m9", "why": "the first take"}),
+    );
+    assert_eq!(asked["status"], "asked", "{asked}");
+    assert_eq!(asked["take"], 1);
+    assert!(asked["steps"][0]
+        .as_str()
+        .is_some_and(|step| step.starts_with("Kerf renders sequence s1 at 160x90")));
+    let requests = kerf_mcp::make_requests(router.runtime());
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "m9");
+    assert_eq!(requests[0].1.id, asked["comment"].as_str().unwrap());
+    assert!(
+        requests[0]
+            .1
+            .body
+            .contains("the first take\n1. Kerf renders"),
+        "{}",
+        requests[0].1.body
+    );
+    assert!(!dir.join("shots/open.takes/001.mp4").exists());
+
+    // Let through: it runs, and the media is the take once it is made.
+    given(Mode::Auto, 1);
+    let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
+    assert_eq!(made["status"], "made", "{made}");
+    assert_eq!(made["take"], 1);
+    assert_eq!(made["path"], "shots/open.takes/001.mp4");
+    assert!(dir.join("shots/open.takes/001.mp4").is_file());
+    let document = router.runtime().get_state().unwrap().document;
+    assert!(
+        document.contains("path=\"shots/open.takes/001.mp4\""),
+        "{document}"
+    );
+    // Past the limit, it is asked for again.
+    let past = ok(&router, "make", json!({"media": "m9"}));
+    assert_eq!(past["status"], "asked", "{past}");
+    assert!(past["why"]
+        .as_str()
+        .is_some_and(|why| why.contains("the 1 its person lets")));
+
+    // A making that is stopped leaves no take, and the media as it was.
+    given(Mode::Auto, 5);
+    ok(
+        &router,
+        "edit",
+        json!({"recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrun sleep 30\nrender s1 {out}\n"}}),
+    );
+    let making = ok(&router, "make", json!({"media": "m9"}));
+    assert_eq!(making["status"], "making", "{making}");
+    let job = making["job"].clone();
+    let busy = error(&router, "make", json!({"media": "m9"}));
+    assert_eq!(busy["code"], "MAKING", "{busy}");
+    let started = Instant::now();
+    let stopped = ok(&router, "make", json!({"job": job, "cancel": true}));
+    assert_eq!(stopped["status"], "stopped", "{stopped}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!dir.join("shots/open.takes/002.mp4").exists());
+    assert!(!dir.join("shots/open.takes/002.work").exists());
+    let document = router.runtime().get_state().unwrap().document;
+    assert!(
+        document.contains("path=\"shots/open.takes/001.mp4\""),
+        "{document}"
+    );
+    assert_eq!(router.running_makings(), 0);
+
+    // Another take, of another version of the recipe: the take before is chosen again with the
+    // version it was made from, so that it is not asked for again.
+    ok(
+        &router,
+        "edit",
+        json!({"recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=96x54\n"}}),
+    );
+    let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
+    assert_eq!(made["path"], "shots/open.takes/002.mp4", "{made}");
+    let looked = ok(&router, "look", json!({"media": "m9"}));
+    let first = &looked["takes"]["made"][0];
+    assert!(
+        first["use"]
+            .as_str()
+            .is_some_and(|line| line.ends_with("recipe=\"shots/open.kerfrecipe\"")),
+        "{looked}"
+    );
+    let revision = router.runtime().get_state().unwrap().revision;
+    let state = router
+        .runtime()
+        .replace_media_request(
+            "ui",
+            "use-first",
+            "m9",
+            "shots/open.takes/001.mp4",
+            revision,
+        )
+        .unwrap();
+    assert!(
+        state.document.contains("path=\"shots/open.takes/001.mp4\"")
+            && state.document.contains("recipe=\"shots/open.kerfrecipe\""),
+        "{}",
+        state.document
+    );
+    assert!(ok(&router, "look", json!({})).get("toMake").is_none());
+
+    // A person's making answers what was asked.
+    kerf_mcp::answer_make_requests(router.runtime(), "m9");
+    assert!(kerf_mcp::make_requests(router.runtime()).is_empty());
+    let unknown = error(&router, "make", json!({"job": "make-none"}));
+    assert_eq!(unknown["code"], "UNKNOWN_JOB");
 }

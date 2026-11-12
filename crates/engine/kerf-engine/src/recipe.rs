@@ -30,7 +30,9 @@
 //! reads, so that a change to one is seen ([`takes`]).
 //!
 //! Each making is a take, kept beside the ones before it; the document
-//! says which one the media is. A recipe is a command someone wrote. Kerf
+//! says which one the media is. A recipe that is written again is kept the
+//! same way ([`version`]): beside the one before it, as `open@2.kerfrecipe`,
+//! with the takes of both in one folder. A recipe is a command someone wrote. Kerf
 //! runs one only when a person asks for that media to be made, never on
 //! opening or drawing a project.
 
@@ -400,6 +402,167 @@ pub(crate) fn within(folder: &Path, path: &str, what: &str) -> Result<PathBuf> {
     Ok(inside)
 }
 
+/// The file a recipe's text is kept in when it is written as the recipe
+/// `asked` names, and whether it has to be written. A recipe is never
+/// written over: a text that is not the one there is kept beside it, as its
+/// next version, so the document names the version a media is made from and
+/// undo goes back to the one before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Version {
+    /// The file, from the project's folder, as a document names it.
+    pub path: String,
+    /// Whether it is a new file, to be written; else it holds the text.
+    pub new: bool,
+    /// What the file `asked` names held, when it was there and is not the text.
+    pub before: Option<String>,
+}
+
+/// Where `text` is kept, written as the recipe `asked` names in the project
+/// in `directory`: there, when nothing is; in the version of it that holds
+/// the same text already, `shots/open@2.kerfrecipe` or `shots/open.kerfrecipe`
+/// itself; or in the next version. The text is read as a recipe first, and
+/// what is wrong in it said with its line.
+pub fn version(directory: &Path, asked: &str, text: &str) -> Result<Version> {
+    let inside = within(Path::new(""), asked, "recipe")?;
+    if inside.extension().and_then(|extension| extension.to_str()) != Some(RECIPE_EXTENSION) {
+        return Err(EngineError::msg(format!(
+            "a recipe is a `.{RECIPE_EXTENSION}` file, not `{asked}`"
+        )));
+    }
+    Recipe::parse(text).map_err(|error| EngineError::msg(format!("{asked}: {error}")))?;
+    let read = |path: &Path| std::fs::read_to_string(directory.join(path)).ok();
+    let Some(there) = read(&inside) else {
+        return Ok(Version {
+            path: stored(&inside),
+            new: true,
+            before: None,
+        });
+    };
+    if there == text {
+        return Ok(Version {
+            path: stored(&inside),
+            new: false,
+            before: None,
+        });
+    }
+    let held = versions(directory, &inside);
+    if let Some((path, _, _)) = held.iter().find(|(_, _, held)| *held == text) {
+        return Ok(Version {
+            path: stored(path),
+            new: false,
+            before: Some(there),
+        });
+    }
+    let last = held.iter().map(|(_, number, _)| *number).max().unwrap_or(1);
+    Ok(Version {
+        path: stored(&version_named(&inside, last + 1)),
+        new: true,
+        before: Some(there),
+    })
+}
+
+/// The file of version `number` of the recipe at `recipe`, from the project's folder.
+fn version_named(recipe: &Path, number: u32) -> PathBuf {
+    let (base, _) = versioned(recipe);
+    let name = if number == 1 {
+        format!("{base}.{RECIPE_EXTENSION}")
+    } else {
+        format!("{base}@{number}.{RECIPE_EXTENSION}")
+    };
+    recipe.with_file_name(name)
+}
+
+/// The versions of the recipe at `recipe` that are there, in the project in `directory`: each
+/// file from the project's folder, its number, and its text.
+pub(crate) fn versions(directory: &Path, recipe: &Path) -> Vec<(PathBuf, u32, String)> {
+    let mut found = Vec::new();
+    let mut last = 1;
+    for number in 1.. {
+        let path = version_named(recipe, number);
+        match std::fs::read_to_string(directory.join(&path)) {
+            Ok(text) => {
+                last = number;
+                found.push((path, number, text));
+            }
+            // A version is there or not; numbers past a gap of a few are not looked for.
+            Err(_) if number > last + 8 => break,
+            Err(_) => {}
+        }
+    }
+    found
+}
+
+/// Write `text` as `version` says, in the project in `directory`: a new file
+/// only, never one that is there.
+pub fn write_version(directory: &Path, version: &Version, text: &str) -> Result<()> {
+    if !version.new {
+        return Ok(());
+    }
+    let file = directory.join(&version.path);
+    if let Some(folder) = file.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    use std::io::Write;
+    let mut written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)
+        .map_err(|error| {
+            EngineError::msg(format!(
+                "cannot write the recipe {}: {error}",
+                file.display()
+            ))
+        })?;
+    written.write_all(text.as_bytes())?;
+    Ok(())
+}
+
+/// Whether the recipes `a` and `b` name, from the project's folder, are versions of one recipe:
+/// `shots/open.kerfrecipe` and `shots/open@2.kerfrecipe` are.
+pub fn same_recipe(a: &str, b: &str) -> bool {
+    let family = |name: &str| {
+        within(Path::new(""), name, "recipe")
+            .ok()
+            .map(|path| (path.parent().map(Path::to_path_buf), versioned(&path).0))
+    };
+    family(a).is_some_and(|a| Some(a) == family(b))
+}
+
+/// A recipe file's name without its extension, split into the name its
+/// versions share and its version: `open@2.kerfrecipe` is `open`, 2.
+pub(crate) fn versioned(recipe: &Path) -> (String, u32) {
+    let stem = recipe
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match stem.rsplit_once('@') {
+        Some((base, number))
+            if !base.is_empty()
+                && !number.is_empty()
+                && number.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            match number.parse::<u32>() {
+                Ok(number) if number >= 2 => (base.to_owned(), number),
+                _ => (stem, 1),
+            }
+        }
+        _ => (stem, 1),
+    }
+}
+
+/// What a recipe's file ends with.
+const RECIPE_EXTENSION: &str = "kerfrecipe";
+
+/// `directory` as a whole path, from the root.
+fn rooted(directory: &Path) -> Result<PathBuf> {
+    std::path::absolute(directory).map_err(|error| {
+        EngineError::msg(format!(
+            "cannot find the project {}: {error}",
+            directory.display()
+        ))
+    })
+}
+
 /// A project's path with `/` between its parts, as documents write them.
 pub(crate) fn stored(path: &Path) -> String {
     path.components()
@@ -459,6 +622,9 @@ pub fn plan(
     id: &str,
     models: &Models,
 ) -> Result<Plan> {
+    // Each path a plan holds is whole: a step runs in its recipe's folder, where a path from
+    // wherever this was asked does not lead.
+    let directory = &rooted(directory)?;
     let Read { name, text, recipe } = read(project, directory, id)?;
     let media = project.media(id).expect("read found it");
     let folder = folder_of(&name);
@@ -702,6 +868,7 @@ pub fn make(
     cancellation: &CancellationToken,
     mut on_line: impl FnMut(&str),
 ) -> Result<Made> {
+    let directory = &rooted(directory)?;
     let recipe = Recipe::parse(&plan.text)?;
     let media = project
         .media(&plan.media)

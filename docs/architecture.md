@@ -184,14 +184,29 @@ left then is killed, so a model's program has time to take back the job it
 queued, as `kerf-comfy` does. Windows has no such signal for a job object, and
 ends it outright.
 
-An agent's tools run no recipe. `look` tells it which media want making
-(`toMake`: a file that is not there, or something its take was made from
-changed, by name, or a recipe that cannot run, with why), a media's takes, and
-the models set up, and that a person makes them, so an agent writes the scene
-and the recipe, adds the media line, and asks. What would refuse a making is read as a person's plan is, with
-nothing run, and said with the media (`cannot`), and so is what the recipe
-asks that its model has said it does not take (`notes`, which a person sees
-as the plan's notes). What a model takes (the size
+An agent closes the loop itself, as far as the person lets it. `look` tells
+it which media want making (`toMake`: a file that is not there, or something
+its take was made from changed, by name, or a recipe that cannot run, with
+why), a media's takes, and the models set up. What would refuse a making is
+read as a person's plan is, with nothing run, and said with the media
+(`cannot`), and so is what the recipe asks that its model has said it does not
+take (`notes`, which a person sees as the plan's notes). It writes the recipe
+with its edit (`recipes`), as part of the proposal: the script carries the
+recipe as comments for the person to read, and a recipe is never written
+over: another text is kept as the next version beside it
+(`open@2.kerfrecipe`, `recipe::version`), and the proposal moves the
+media to it, so undo has it made from the one before, and the versions share
+their takes' folder. It asks for the making with `make`
+(`kerf-mcp/src/making.rs`), which answers with the plan. What follows is the
+person's, in their own `~/.kerf/agent.json`, outside any project as the
+models file is (`kerf-mcp/src/permissions.rs`), modelled on a coding agent's
+permission modes: `ask`, the default, leaves the plan in the review thread for
+`kerf make` or Make from Recipe…, which make it and answer the asking;
+`accept-edits` accepts an agent's edits as they are made; `auto` also runs
+the makings it asks for, up to a number a session, in the agent's own process
+as a job it can wait for and stop as Stop Making stops one, and has the media
+be the new take. What is let through is still a revision undo takes back and
+a take kept beside the others. What a model takes (the size
 and the rate a guide for it is drawn at, the longest shot, whether it follows
 a guide) is said beside its program in the person's models file, under
 `takes`, and `look` lists it with the model. Nothing is run to learn it: a
