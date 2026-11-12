@@ -40,8 +40,9 @@ pub use qc::{picture_qc, PictureCheck, PictureQc, QcRange};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use sidecar::CancellationToken;
 pub use transcription::{
-    cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached, TimeRange,
-    Transcript, TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,
-    TranscriptionProgress, TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
-    MAX_TRANSCRIPTION_RANGE_SECONDS, TRANSCRIPTION_SCHEMA_VERSION,
+    cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached,
+    transcription_available, TimeRange, Transcript, TranscriptCue, TranscriptWord,
+    TranscriptionBackend, TranscriptionOptions, TranscriptionProgress, TranscriptionResult,
+    TranscriptionStage, MAX_LISTEN_RANGE_SECONDS, MAX_TRANSCRIPTION_RANGE_SECONDS,
+    TRANSCRIPTION_SCHEMA_VERSION,
 };
