@@ -43,7 +43,7 @@ jobs:
               sample "$pid" 2 2>/dev/null | sed -n '1,70p' || true
               kill -9 "$pid" 2>/dev/null || true
             else
-              wait "$pid"; code=$?
+              code=0; wait "$pid" || code=$?
               echo "RESULT $name: ended with $code after about $((n/2)) s"
               tail -4 "/tmp/$name.log"
             fi
@@ -62,6 +62,15 @@ jobs:
           try decode_sw -i /tmp/x264.mp4 -f null -
           for f in /tmp/h264_vt.mp4 /tmp/hevc_vt.mp4 /tmp/prores_vt.mov; do
             [ -s "$f" ] && ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,nb_frames,width,height -of csv=p=0 "$f" || echo "no $f"
+          done
+          echo "===== again and again: the decoder stopped answering only after some sessions"
+          for round in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+            try "round${round}_h264" $src -c:v h264_videotoolbox -b:v 4M /tmp/again.mp4 | grep RESULT
+            try "round${round}_hevc" $src -c:v hevc_videotoolbox -b:v 4M -tag:v hvc1 /tmp/again.mp4 | grep RESULT
+          done
+          echo "===== and the decoder, last, as it is the one known to stop"
+          for round in 1 2 3 4 5 6 7 8; do
+            try "decode_round${round}" -hwaccel videotoolbox -i /tmp/x264.mp4 -f null - | grep RESULT
           done
 
   # Whether a contact sheet's time labels are drawn on Windows: the font is
