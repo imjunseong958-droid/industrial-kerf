@@ -165,6 +165,23 @@ impl KerfMcpRouter {
 
     fn make_media(&self, media: &str, why: Option<&str>, wait: bool) -> Result<Value, McpError> {
         let (_, project) = self.project_at(None)?;
+        // A media an edit has just added is in its proposal, not in the project, until the
+        // person accepts it: a making is of the project, and is not asked of a proposal.
+        if project.media(media).is_none() {
+            // Its script names it, and what it would make of the project has it.
+            let adds = |proposal: &String| {
+                self.project_at(Some(proposal))
+                    .is_ok_and(|(_, proposed)| proposed.media(media).is_some())
+            };
+            if let Some(proposal) = self.pending_with(media).filter(adds) {
+                return Err(McpError::new(
+                    "CANNOT_MAKE",
+                    format!(
+                        "no media `{media}` in this project yet: it is in proposal {proposal}, which waits for the person; ask for the making once it is accepted"
+                    ),
+                ));
+            }
+        }
         let models =
             Models::load().map_err(|error| McpError::new("CANNOT_MAKE", error.to_string()))?;
         let plan = recipe::plan(&project, &self.dir, media, &models).map_err(|error| {

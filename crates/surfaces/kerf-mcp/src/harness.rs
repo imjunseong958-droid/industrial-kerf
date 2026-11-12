@@ -69,7 +69,7 @@ says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `proposal` it shows what a pending proposal would make: its document, \
-its frames, and what it says.
+what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview: the frames \
 either side of each cut it made or moved, and the middle of a clip it changed \
@@ -862,9 +862,14 @@ impl KerfMcpRouter {
     /// What a pending proposal holds that the project does not, and how to reach it: ` <id> is in
     /// pending proposal p: pass it as `extend`` for what to say after a name was not found.
     fn in_pending(&self, name: &str, argument: &str) -> String {
-        let Ok(state) = self.runtime.get_state() else {
-            return String::new();
-        };
+        self.pending_with(name).map_or_else(String::new, |id| {
+            format!("; `{name}` is in pending proposal {id}: pass it as `{argument}`")
+        })
+    }
+
+    /// The pending proposal whose script names `name`, if one does.
+    pub(crate) fn pending_with(&self, name: &str) -> Option<String> {
+        let state = self.runtime.get_state().ok()?;
         let holds = |script: &str| {
             script
                 .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
@@ -875,12 +880,7 @@ impl KerfMcpRouter {
             .iter()
             .filter(|entry| entry.status == "pending")
             .find(|entry| holds(&entry.script))
-            .map_or_else(String::new, |entry| {
-                format!(
-                    "; `{name}` is in pending proposal {}: pass it as `{argument}`",
-                    entry.proposal_id
-                )
-            })
+            .map(|entry| entry.proposal_id.clone())
     }
 
     /// Where the rest of a cut may be, for a sequence that has too little in it.
@@ -925,7 +925,14 @@ impl KerfMcpRouter {
     /// why and who can. An agent's tools run no recipe. What would refuse the making is said here
     /// (`cannot`), read as a person's plan is and with nothing run, and so is what a model has said
     /// it does not take (`notes`): a recipe is mended before anyone is asked to make it.
-    fn to_make(&self, project: &Project) -> Vec<Value> {
+    /// `waiting` says that `project` is what a proposal not yet accepted would make: a making
+    /// is asked of the project, so of such a media only once its proposal is accepted.
+    fn to_make(&self, project: &Project, waiting: bool) -> Vec<Value> {
+        let first = if waiting {
+            "once this proposal is accepted, "
+        } else {
+            ""
+        };
         let models = kerf_engine::recipe::model::Models::load();
         project
             .media
@@ -952,14 +959,14 @@ impl KerfMcpRouter {
                             entry["notes"] = json!(plan.notes);
                         }
                         entry["make"] = json!(format!(
-                            "ask for it with `make`: a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin, unless they let an agent make on its own"
+                            "{first}ask for it with `make`: a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin, unless they let an agent make on its own"
                         ));
                     }
                     Err(cannot) => {
                         entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
-                        entry["make"] = json!(
-                            "it cannot be made as it is: mend what `cannot` says first; then ask for it with `make`"
-                        );
+                        entry["make"] = json!(format!(
+                            "it cannot be made as it is: mend what `cannot` says first; then, {first}ask for it with `make`"
+                        ));
                     }
                 }
                 Some(entry)
@@ -1349,7 +1356,7 @@ impl KerfMcpRouter {
                 "unplaced": unplaced,
             });
             if let Some(project) = project {
-                let to_make = self.to_make(&project);
+                let to_make = self.to_make(&project, false);
                 if !to_make.is_empty() {
                     result["toMake"] = json!(to_make);
                 }
@@ -1382,10 +1389,19 @@ impl KerfMcpRouter {
             None if input.sheet.is_some() => {
                 self.program_sheet(&project, revision, &input, width)?
             }
-            None if input.at.is_empty() => json!({
-                "revision": revision,
-                "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
-            }),
+            None if input.at.is_empty() => {
+                let mut shown = json!({
+                    "revision": revision,
+                    "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
+                });
+                // What it would have made, as `look` with no arguments says of the project:
+                // of a proposal, with what would refuse the making once it is accepted.
+                let to_make = self.to_make(&project, input.proposal.is_some());
+                if !to_make.is_empty() {
+                    shown["toMake"] = json!(to_make);
+                }
+                shown
+            }
             None if input.scopes => {
                 self.program_scopes(&project, input.sequence.as_deref(), revision, &input.at)?
             }
@@ -2604,7 +2620,7 @@ impl KerfMcpRouter {
                 "proposal": null,
                 "status": "written",
                 "recipes": recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>(),
-                "toMake": self.to_make(&applied.project),
+                "toMake": self.to_make(&applied.project, false),
             }));
         }
         // An extension runs the operations of the proposal it extends, which
@@ -2691,9 +2707,6 @@ impl KerfMcpRouter {
         let mut before_program = before.clone();
         kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
         let check = crate::qc::check(&after_program, &self.dir).to_json();
-        // What a person would be asked to make once this is accepted, with what would refuse
-        // it: a recipe the edit names is mended here, not after someone has tried to run it.
-        let to_make = self.to_make(&applied.project);
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
@@ -2712,9 +2725,6 @@ impl KerfMcpRouter {
             "check": check,
             "preview": preview,
         });
-        if !to_make.is_empty() {
-            result["toMake"] = json!(to_make);
-        }
         if !recipes.is_empty() {
             result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
         }
@@ -2746,6 +2756,14 @@ impl KerfMcpRouter {
                 result["permissionsError"] =
                     json!(format!("{error}: so it waits for the person's review"));
             }
+        }
+        // What a person would be asked to make, with what would refuse it: a recipe the edit
+        // names is mended here, not after someone has tried to run it. A making is asked of
+        // the project, so while this waits for review it says that the proposal comes first.
+        let waiting = result["status"] == "awaiting_review";
+        let to_make = self.to_make(&applied.project, waiting);
+        if !to_make.is_empty() {
+            result["toMake"] = json!(to_make);
         }
         Ok(result)
     }

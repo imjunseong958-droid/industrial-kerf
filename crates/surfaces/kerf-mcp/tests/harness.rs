@@ -2351,6 +2351,58 @@ fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
     assert!(looked.get("toMake").is_none(), "{looked}");
 }
 
+/// What a waiting proposal would have made is said with the proposal, as it is with the project,
+/// and a making asked of a media that is still in one says which, and what it waits for.
+#[test]
+fn a_waiting_proposal_says_what_it_would_have_made() {
+    let directory = TempDir::new().unwrap();
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        "kerf 1\nproject name=\"Harness\"\nsequence s1 rate=30 size=320x180\n",
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    // Every edit is proposed, whatever the person running the tests lets their own agents do.
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    let staged = ok(
+        &router,
+        "edit",
+        json!({
+            "script": "media add m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180 recipe=\"shots/open.kerfrecipe\"",
+            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrun vork render open.json --out {out}\n"},
+        }),
+    );
+    assert_eq!(staged["status"], "awaiting_review", "{staged}");
+    let id = staged["proposal"].as_str().unwrap().to_owned();
+    // The edit says what it would have made, and that the proposal comes first.
+    assert_eq!(staged["toMake"][0]["media"], json!("m1"), "{staged}");
+    let hint = staged["toMake"][0]["make"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("once this proposal is accepted") && hint.contains("`make`"),
+        "{staged}"
+    );
+    // Looked at again, by the proposal alone, it says the same.
+    let looked = ok(&router, "look", json!({"proposal": id}));
+    assert_eq!(looked["toMake"][0]["media"], json!("m1"), "{looked}");
+    assert_eq!(
+        looked["toMake"][0]["why"],
+        json!("its file is not there yet"),
+        "{looked}"
+    );
+    // The project has nothing to make until the proposal is accepted.
+    let project = ok(&router, "look", json!({}));
+    assert!(project.get("toMake").is_none(), "{project}");
+    // So a making asked for now says where the media is and what it waits for.
+    let refused = error(&router, "make", json!({"media": "m1"}));
+    assert_eq!(refused["code"], json!("CANNOT_MAKE"), "{refused}");
+    let said = message(&refused);
+    assert!(said.contains(&id) && said.contains("accepted"), "{refused}");
+    // A media that is nowhere is still only that.
+    let nowhere = error(&router, "make", json!({"media": "m9"}));
+    assert!(!message(&nowhere).contains("proposal"), "{nowhere}");
+}
+
 /// A media a recipe made: an agent sees its takes and which one the media is, and is told what the
 /// recipe reads that has changed since, by name. A recipe that cannot run is said with why.
 #[cfg(unix)]
