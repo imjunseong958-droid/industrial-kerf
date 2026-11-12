@@ -688,8 +688,10 @@ fn normalize_tool_result(mut value: Value) -> Result<Value, String> {
     // Native observations use imageBase64 beside path/time metadata. Promote
     // those bytes to image blocks, never send encoded image data as text.
     if value.get("type").and_then(Value::as_str) != Some("multimodal_tool_result") {
-        let mut images = Vec::new();
-        collect_inline_images(&mut value, &mut images);
+        let images: Vec<Value> = take_inline_images(&mut value, "imageIndex")
+            .into_iter()
+            .map(|image| json!({"mediaType": image.media_type, "data": image.data, "label": image.label}))
+            .collect();
         if !images.is_empty() {
             value = json!({"type":"multimodal_tool_result","metadata":value,"images":images});
         }
@@ -773,6 +775,11 @@ fn normalize_tool_result(mut value: Value) -> Result<Value, String> {
         if total > MAX_TOOL_RESULT_TOTAL_IMAGE_BYTES {
             return Err("tool result images exceed their total byte limit".into());
         }
+        // Which image this is, said right before it: several in a row say
+        // nothing of themselves.
+        if let Some(label) = image.get("label").and_then(Value::as_str) {
+            blocks.push(json!({"type": "text", "text": label}));
+        }
         blocks.push(json!({
             "type": "image",
             "source": {
@@ -794,24 +801,98 @@ fn normalize_tool_result(mut value: Value) -> Result<Value, String> {
     Ok(Value::Array(blocks))
 }
 
-fn collect_inline_images(value: &mut Value, images: &mut Vec<Value>) {
+/// An image a tool's answer carried inline, taken out of it.
+pub struct InlineImage {
+    /// Which image it is and what it shows: its number, where it was in the
+    /// answer, and the time or frames given beside it, such as `image 0:
+    /// preview.before, frames 00:00:03:23, 00:00:04:00`.
+    pub label: String,
+    /// `image/png` unless the answer said otherwise beside it.
+    pub media_type: String,
+    /// The image, base64.
+    pub data: String,
+}
+
+/// Take every `imageBase64` out of `value`, leaving under `index_key` the
+/// image's number where its data was. The images come in the order the
+/// answer reads, a `before` ahead of its `after`, each with a label that
+/// says which it is.
+pub fn take_inline_images(value: &mut Value, index_key: &str) -> Vec<InlineImage> {
+    let mut images = Vec::new();
+    collect_inline_images(value, index_key, &mut String::new(), &mut images);
+    images
+}
+
+fn collect_inline_images(
+    value: &mut Value,
+    index_key: &str,
+    path: &mut String,
+    images: &mut Vec<InlineImage>,
+) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(data)) = object.remove("imageBase64") {
-                let media_type = object.get("mediaType").cloned();
-                object.insert("imageIndex".into(), json!(images.len()));
-                images.push(json!({
-                    "mediaType": media_type.unwrap_or_else(|| json!("image/png")),
-                    "data": data,
-                }));
+                let media_type = object
+                    .get("mediaType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("image/png")
+                    .to_owned();
+                // What the answer says beside the image of what it shows.
+                let shows = if let Some(at) = object.get("at").and_then(Value::as_str) {
+                    format!(" at {at}")
+                } else if let Some(time) = object.get("time").and_then(Value::as_f64) {
+                    format!(" at {time}s")
+                } else if let Some(frames) = object.get("frames").and_then(Value::as_array) {
+                    let frames: Vec<&str> = frames.iter().filter_map(Value::as_str).collect();
+                    if frames.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", frames {}", frames.join(", "))
+                    }
+                } else {
+                    String::new()
+                };
+                let place = if path.is_empty() {
+                    "the answer"
+                } else {
+                    path.as_str()
+                };
+                object.insert(index_key.to_owned(), json!(images.len()));
+                images.push(InlineImage {
+                    label: format!("image {}: {place}{shows}", images.len()),
+                    media_type,
+                    data,
+                });
             }
-            for nested in object.values_mut() {
-                collect_inline_images(nested, images);
+            // As they are written, but what was before ahead of what is
+            // after: an answer's keys are otherwise read in letter order.
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            if let (Some(before), Some(after)) = (
+                keys.iter().position(|key| key == "before"),
+                keys.iter().position(|key| key == "after"),
+            ) {
+                if after < before {
+                    keys.swap(before, after);
+                }
+            }
+            for key in keys {
+                let length = path.len();
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(&key);
+                if let Some(nested) = object.get_mut(&key) {
+                    collect_inline_images(nested, index_key, path, images);
+                }
+                path.truncate(length);
             }
         }
         Value::Array(values) => {
-            for nested in values {
-                collect_inline_images(nested, images);
+            for (index, nested) in values.iter_mut().enumerate() {
+                let length = path.len();
+                path.push_str(&format!("[{index}]"));
+                collect_inline_images(nested, index_key, path, images);
+                path.truncate(length);
             }
         }
         _ => {}
@@ -1430,10 +1511,37 @@ mod tests {
         assert_eq!(metadata["frames"][0]["time"], 1.5);
         assert_eq!(metadata["frames"][0]["imageIndex"], 0);
         assert!(metadata["frames"][0].get("imageBase64").is_none());
-        assert_eq!(blocks[1]["type"], "image");
+        // Each image comes after a line that says which it is.
+        assert_eq!(blocks[1]["text"], "image 0: frames[0] at 1.5s");
+        assert_eq!(blocks[2]["type"], "image");
+        assert_eq!(blocks[3]["text"], "image 1: frames[1] at 2s");
         // The image keeps the type it was inlined with; PNG is the default.
-        assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
-        assert_eq!(blocks[2]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[2]["source"]["media_type"], "image/jpeg");
+        assert_eq!(blocks[4]["source"]["media_type"], "image/png");
+    }
+
+    #[test]
+    fn a_preview_comes_before_first_and_each_sheet_says_its_frames() {
+        let result = normalize_tool_result(json!({"preview": {
+            "after": {"frames": ["00:00:00:00", "00:00:03:23"], "imageBase64": "AQID"},
+            "before": {"frames": ["00:00:03:23", "00:00:04:00"], "imageBase64": "BAUG"},
+            "from": "00:00:00:00",
+        }}))
+        .unwrap();
+        let blocks = result.as_array().unwrap();
+        let metadata: Value = serde_json::from_str(blocks[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["preview"]["before"]["imageIndex"], 0);
+        assert_eq!(metadata["preview"]["after"]["imageIndex"], 1);
+        assert_eq!(
+            blocks[1]["text"],
+            "image 0: preview.before, frames 00:00:03:23, 00:00:04:00"
+        );
+        assert_eq!(blocks[2]["source"]["data"], "BAUG");
+        assert_eq!(
+            blocks[3]["text"],
+            "image 1: preview.after, frames 00:00:00:00, 00:00:03:23"
+        );
+        assert_eq!(blocks[4]["source"]["data"], "AQID");
     }
 
     #[test]

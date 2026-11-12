@@ -72,8 +72,11 @@ With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview: the frames \
-either side of each cut it made or moved, and the middle of a clip it changed \
-in place. The project does not change until the user accepts it. Several \
+either side of each cut it made or moved, the middle of a clip it changed \
+in place (with its first and last frame when the clip moves), and three \
+frames through a transition it added or changed. Each sheet is an image \
+after a line that says which it is and its frames in reading order, the \
+one before the edit first. The project does not change until the user accepts it. Several \
 proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
 becomes that proposal's next version (v2, v3), and the user can still see \
@@ -3363,10 +3366,25 @@ fn changed_span(sequence: &Sequence, old: Option<&Sequence>) -> Option<(Time, Ti
     (to > from).then_some((from, to))
 }
 
+/// Whether something of `clip` changes as it plays: a property, an effect's
+/// parameter or its generator's keyed or worked out from its time.
+fn moves(clip: &Clip) -> bool {
+    let animated = |params: &kerf_model::Params| {
+        params
+            .values()
+            .any(|param| !matches!(param, kerf_model::Param::Static(_)))
+    };
+    animated(&clip.props)
+        || clip.effects.iter().any(|effect| animated(&effect.params))
+        || matches!(&clip.content, Content::Generator { params, .. } if animated(params))
+}
+
 /// The positions in `sequence` that show what an edit changed on `side`, the
 /// project before or after it, compared with `other`: the last frame
-/// before and the first frame of every cut it made or moved, and the middle
-/// frame of a clip it changed in place. The earliest come first.
+/// before and the first frame of every cut it made or moved; the middle
+/// frame of a clip it changed in place, with its first and last when the
+/// clip moves; and a quarter, half and three quarters of the way through a
+/// transition it added or changed. The earliest come first.
 fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
     let Some(sequence) = side.sequence(sequence) else {
         return Vec::new();
@@ -3385,6 +3403,11 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
                     let (first, last) =
                         (rate.frames_floor(clip.start), rate.frames_floor(clip.end()));
                     middles.push(rate.time_of(first + (last - first) / 2));
+                    // One frame says nothing of a move: where it starts and
+                    // where it ends, either side of the middle.
+                    if moves(clip) || moves(was) {
+                        middles.extend([rate.time_of(first), rate.time_of(last - 1)]);
+                    }
                 }
                 _ => {
                     cut(clip.start);
@@ -3403,7 +3426,14 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
         for transition in &track.transitions {
             if previous.transition(transition.id.as_str()) != Some(transition) {
                 if let Some(clip) = track.clip(transition.from.as_str()) {
-                    cut(clip.end());
+                    // The two frames at its cut are both its middle: three
+                    // through it show what it does.
+                    let (before, _) = transition.split_at_cut(rate);
+                    let first = rate.frames_floor(clip.end() - before);
+                    let frames = rate.frames_floor(transition.duration).max(1);
+                    middles.extend(
+                        [1, 2, 3].map(|quarter| rate.time_of(first + frames * quarter / 4)),
+                    );
                 }
             }
         }
@@ -3735,6 +3765,34 @@ sequence s1 rate=24 size=1920x1080
         assert_eq!(
             print(&faded, preview_times(&faded, &before, "s1")),
             ["00:00:06:00"]
+        );
+
+        // A move shows where it starts and ends as well.
+        let moved = apply_script(&before, catalog(), "set c2 x={0f:0 95f:0.5}")
+            .unwrap()
+            .project;
+        assert_eq!(
+            print(&moved, preview_times(&moved, &before, "s1")),
+            ["00:00:04:00", "00:00:06:00", "00:00:07:23"]
+        );
+        // And so does taking one away, of what there was.
+        assert_eq!(
+            print(&before, preview_times(&before, &moved, "s1")).len(),
+            3
+        );
+
+        // A transition shows three frames through it, not the two at its
+        // cut, which are both its middle.
+        let dissolved = apply_script(
+            &before,
+            catalog(),
+            "transition add from=c1 to=c2 fx=dissolve@1 dur=24f as=t1",
+        )
+        .unwrap()
+        .project;
+        assert_eq!(
+            print(&dissolved, preview_times(&dissolved, &before, "s1")),
+            ["00:00:03:18", "00:00:04:00", "00:00:04:06"]
         );
     }
 
