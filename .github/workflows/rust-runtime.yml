@@ -63,3 +63,85 @@ jobs:
           for f in /tmp/h264_vt.mp4 /tmp/hevc_vt.mp4 /tmp/prores_vt.mov; do
             [ -s "$f" ] && ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,nb_frames,width,height -of csv=p=0 "$f" || echo "no $f"
           done
+
+  # Whether a contact sheet's time labels are drawn on Windows: the font is
+  # written to the temporary folder and handed to ffmpeg's drawtext, with a
+  # drive letter and backslashes in its path.
+  win-sheet-labels:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      KERF_AGENT: C:\nonexistent\agent.json
+      KERF_MODELS: C:\nonexistent\models.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg-archive
+          key: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          $build = 'autobuild-2026-09-30-13-08'
+          $name = 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0'
+          $sha256 = '3da6c7b60bb9ccd73ec5b5e815ba804a0879eb362ba0e3beebce50174c022696'
+          $folder = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'ffmpeg-archive')
+          $archive = Join-Path $folder "$name.zip"
+          $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          if (-not (Test-Path $archive)) {
+            Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.zip" -OutFile $archive -MaximumRetryCount 8 -RetryIntervalSec 30
+          }
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $name archive does not match its checksum" }
+          7z x $archive "-o$target" | Out-Null
+          $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$root" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+          $llvm = 'C:\Program Files\LLVM\bin'
+          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - name: The filter as Kerf builds it, given to ffmpeg by hand
+        shell: pwsh
+        run: |
+          ffmpeg -hide_banner -version | Select-Object -First 1
+          ffmpeg -hide_banner -filters | Select-String ' drawtext '
+          $frames = Join-Path $env:TEMP 'kerf-diag-frames'
+          New-Item -ItemType Directory -Force -Path $frames | Out-Null
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=1:duration=4 -start_number 0 (Join-Path $frames 'frame-%03d.jpg')
+          function Sheet($name, $fontPath) {
+            # filter_text: backslashes to slashes, ' to a typographic one, ':' and '%' escaped; in single quotes.
+            $f = $fontPath.Replace('\', '/').Replace("'", [string][char]0x2019).Replace(':', '\:').Replace('%', '\%')
+            $vf = "drawtext=fontfile='$f':text='00\:00\:01\:15':enable='eq(n\,0)':x=w/40:y=w/40:fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6,tile=2x2:padding=0:margin=0"
+            $out = Join-Path $env:TEMP "sheet-$name.jpg"
+            Write-Host "===== $name"
+            Write-Host "font: $fontPath"
+            Write-Host "-vf $vf"
+            ffmpeg -hide_banner -loglevel error -framerate 1 -start_number 0 -i (Join-Path $frames 'frame-%03d.jpg') -vf $vf -frames:v 1 -q:v 3 -y $out
+            Write-Host "RESULT ${name}: ffmpeg exit $LASTEXITCODE, sheet $(if (Test-Path $out) { (Get-Item $out).Length } else { 'missing' })"
+          }
+          $font = Join-Path $env:TEMP 'kerf-inter-medium-diag.ttf'
+          Copy-Item 'C:\Windows\Fonts\arial.ttf' $font
+          Write-Host "TEMP is $env:TEMP"
+          Sheet 'temp' $font
+          $spaced = Join-Path $env:TEMP 'Mary Ann (work)'
+          New-Item -ItemType Directory -Force -Path $spaced | Out-Null
+          Copy-Item $font (Join-Path $spaced 'font.ttf')
+          Sheet 'space-and-brackets' (Join-Path $spaced 'font.ttf')
+          $quoted = Join-Path $env:TEMP "O'Brien"
+          New-Item -ItemType Directory -Force -Path $quoted | Out-Null
+          Copy-Item $font (Join-Path $quoted 'font.ttf')
+          Sheet 'apostrophe' (Join-Path $quoted 'font.ttf')
+          $hangul = Join-Path $env:TEMP '임준성'
+          New-Item -ItemType Directory -Force -Path $hangul | Out-Null
+          Copy-Item $font (Join-Path $hangul 'font.ttf')
+          Sheet 'hangul' (Join-Path $hangul 'font.ttf')
+          exit 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Kerf's own sheet tests, on Windows
+        shell: pwsh
+        run: |
+          cargo build -p kerf-runtime --bin kerfd
+          cargo test -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document --nocapture
