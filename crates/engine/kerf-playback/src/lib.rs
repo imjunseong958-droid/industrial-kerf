@@ -73,7 +73,8 @@ pub enum PlaybackError {
 pub enum ClockSource {
     /// The platform audio callback advances the clock.
     AudioDevice,
-    /// A monotonic fallback is used when no output device is available.
+    /// Monotonic time, when no output device is available or the one that
+    /// is has stopped asking for sound.
     MonotonicFallback,
 }
 
