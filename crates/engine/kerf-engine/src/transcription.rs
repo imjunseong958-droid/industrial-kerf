@@ -563,21 +563,53 @@ fn whisper_args(
     args
 }
 
-fn extract_audio_range(
-    src: &str,
-    range: TimeRange,
-    output: &Path,
-    cancellation: &CancellationToken,
-    on_progress: &mut impl FnMut(TranscriptionProgress),
-) -> Result<()> {
-    let args = vec![
-        "-hide_banner".into(),
-        "-loglevel".into(),
-        "error".into(),
+/// How far before a range FFmpeg is sent in the file to start reading, in
+/// whole seconds: what is decoded on the way to the range settles the
+/// decoder (an MP3's bit reservoir, a codec's overlap with the frame before)
+/// and the resampler, and is then dropped.
+const SEEK_LEAD_SECONDS: f64 = 2.0;
+
+/// Where in the file FFmpeg starts reading for a range that starts at
+/// `start`, or `None` to read from the top. A whole second, so the 16 kHz
+/// samples fall where they do when the file is read from the top: the range
+/// then comes out sample for sample the same, without the file being read
+/// up to it.
+fn seek_before(start: f64) -> Option<f64> {
+    let at = start.floor() - SEEK_LEAD_SECONDS;
+    (at >= 1.0).then_some(at)
+}
+
+/// `seconds` less the whole seconds `whole`, with the digits after the point
+/// kept as they are: FFmpeg then cuts at the same microsecond as it does for
+/// `seconds` itself.
+fn seconds_after(seconds: f64, whole: f64) -> String {
+    let text = seconds.to_string();
+    let (before, after) = text.split_once('.').unwrap_or((&text, ""));
+    let before = before
+        .parse::<u64>()
+        .unwrap_or(0)
+        .saturating_sub(whole as u64);
+    if after.is_empty() {
+        before.to_string()
+    } else {
+        format!("{before}.{after}")
+    }
+}
+
+/// FFmpeg's arguments to write `range` of `src` as the WAV whisper reads.
+fn extract_audio_args(src: &str, range: TimeRange, output: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
+    // Before the input, `-ss` goes there in the file; after it, it reads
+    // and drops everything up to the range.
+    let seek = seek_before(range.start);
+    if let Some(seek) = seek {
+        args.extend(["-ss".into(), format!("{seek:.0}")]);
+    }
+    args.extend([
         "-i".into(),
         src.into(),
         "-ss".into(),
-        range.start.to_string(),
+        seconds_after(range.start, seek.unwrap_or(0.0)),
         "-t".into(),
         range.duration().to_string(),
         "-vn".into(),
@@ -591,10 +623,20 @@ fn extract_audio_range(
         "wav".into(),
         "-y".into(),
         output.to_string_lossy().into_owned(),
-    ];
+    ]);
+    args
+}
+
+fn extract_audio_range(
+    src: &str,
+    range: TimeRange,
+    output: &Path,
+    cancellation: &CancellationToken,
+    on_progress: &mut impl FnMut(TranscriptionProgress),
+) -> Result<()> {
     run_sidecar(
         Path::new(resolve_ffmpeg_bin()),
-        &args,
+        &extract_audio_args(src, range, output),
         cancellation,
         TranscriptionStage::PrepareAudio,
         on_progress,
@@ -1084,6 +1126,125 @@ mod tests {
         assert_eq!(parse_sidecar_progress("progress = 42%"), Some(0.42));
         assert_eq!(parse_sidecar_progress("progress: 0.5"), Some(0.5));
         assert_eq!(parse_sidecar_progress("no progress"), None);
+    }
+
+    #[test]
+    fn a_range_is_reached_by_seeking_to_a_whole_second_before_it() {
+        let args = |start: f64, end: f64| {
+            let range = TimeRange::new(start, end).expect("range");
+            extract_audio_args("in.mp4", range, Path::new("out.wav"))
+        };
+        // Near the top there is nothing to skip: the file is read from there.
+        let near = args(2.75, 10.0);
+        assert_eq!(near[3..9], ["-i", "in.mp4", "-ss", "2.75", "-t", "7.25"]);
+        // Further in, FFmpeg goes two whole seconds before and drops the rest.
+        let far = args(123.456, 143.5);
+        assert_eq!(far[3..9], ["-ss", "121", "-i", "in.mp4", "-ss", "2.456"]);
+        // The digits after the point are the range's own, not a subtraction's.
+        assert_eq!(seconds_after(600.3, 598.0), "2.3");
+        assert_ne!((600.3_f64 - 598.0).to_string(), "2.3");
+        assert_eq!(seconds_after(3600.0, 3598.0), "2");
+        assert_eq!(seek_before(2.999), None);
+        assert_eq!(seek_before(3.0), Some(1.0));
+    }
+
+    /// The 16-bit samples of a WAV file FFmpeg wrote.
+    fn wav_samples(path: &Path) -> Vec<i16> {
+        let bytes = fs::read(path).expect("wav");
+        let data = bytes
+            .windows(4)
+            .position(|tag| tag == b"data")
+            .expect("data chunk")
+            + 8;
+        bytes[data..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair))
+            .collect()
+    }
+
+    #[test]
+    fn a_range_reached_by_seeking_has_the_samples_of_one_read_from_the_top() {
+        let ffmpeg = resolve_ffmpeg_bin();
+        let run = |args: &[String]| {
+            Command::new(ffmpeg)
+                .args(args)
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        };
+        let root = tempdir().expect("temp directory");
+        // Noise under a tone: no two moments of it sound alike.
+        let sound = "anoisesrc=d=40:c=pink:r=44100:a=0.4:s=7,aformat=channel_layouts=stereo";
+        let picture = "testsrc2=size=160x90:rate=30:duration=40";
+        let sources: [(&str, &[&str]); 4] = [
+            ("pcm.wav", &["-c:a", "pcm_s16le"]),
+            ("lame.mp3", &["-c:a", "libmp3lame", "-q:a", "4"]),
+            ("vorbis.ogg", &["-c:a", "libvorbis"]),
+            (
+                "aac.mp4",
+                &["-f", "lavfi", "-i", picture, "-c:v", "libx264", "-preset"],
+            ),
+        ];
+        let mut compared = 0;
+        for (name, codec) in sources {
+            let source = root.path().join(name);
+            let mut make: Vec<String> = ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"]
+                .map(String::from)
+                .into();
+            make.push(sound.into());
+            make.extend(codec.iter().map(|arg| (*arg).to_owned()));
+            if name == "aac.mp4" {
+                make.extend(
+                    [
+                        "ultrafast",
+                        "-bf",
+                        "2",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                    ]
+                    .map(String::from),
+                );
+                make.extend(["-map", "1:v", "-map", "0:a", "-shortest"].map(String::from));
+            }
+            make.extend(["-y".to_owned(), source.to_string_lossy().into_owned()]);
+            if !run(&make) {
+                eprintln!("skipping {name}: this FFmpeg cannot make it");
+                continue;
+            }
+            for (start, end) in [(7.3, 12.3), (21.0625, 33.0), (30.0, 39.5)] {
+                let range = TimeRange::new(start, end).expect("range");
+                let sought = root.path().join("sought.wav");
+                let args = extract_audio_args(&source.to_string_lossy(), range, &sought);
+                assert!(
+                    args.iter().filter(|arg| *arg == "-ss").count() == 2,
+                    "{args:?}"
+                );
+                assert!(run(&args), "{name} {start}");
+                // As it was read before: from the top, dropping all up to the range.
+                let whole = root.path().join("whole.wav");
+                let mut from_top: Vec<String> =
+                    args.iter().filter(|arg| *arg != "-ss").cloned().collect();
+                let input = from_top.iter().position(|arg| arg == "-i").expect("-i");
+                from_top.drain(input - 1..input);
+                let cut = from_top.iter().position(|arg| arg == "-t").expect("-t");
+                from_top[cut - 1] = start.to_string();
+                from_top.insert(cut - 1, "-ss".into());
+                *from_top.last_mut().expect("output") = whole.to_string_lossy().into_owned();
+                assert!(run(&from_top), "{name} {start}: {from_top:?}");
+                let (sought, whole) = (wav_samples(&sought), wav_samples(&whole));
+                assert_eq!(sought.len(), whole.len(), "{name} from {start}");
+                assert!(sought.len() as f64 > (end - start) * 15_900.0, "{name}");
+                assert!(sought == whole, "{name} from {start}: the samples differ");
+                compared += 1;
+            }
+        }
+        if compared == 0 {
+            eprintln!("skipping: FFmpeg is unavailable");
+        }
     }
 
     #[cfg(unix)]
