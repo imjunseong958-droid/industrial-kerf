@@ -786,7 +786,7 @@ pub(crate) fn contrast(
             }
         }
         if let Some(when) = cut {
-            let place = clock.print_position(when);
+            let place = clock.print_position(clock.rate.round(when));
             findings.push(
                 Finding::warning(
                     "text.clipped",
@@ -803,7 +803,7 @@ pub(crate) fn contrast(
         if let Some((glyphs, when)) = cropped {
             let whole = uncropped(alone.clone(), id, &item.clip.id);
             if draw(&whole, when).is_some_and(|whole| crop_cuts(&whole, &glyphs)) {
-                let place = clock.print_position(when);
+                let place = clock.print_position(clock.rate.round(when));
                 findings.push(
                     Finding::warning(
                         "text.clipped",
@@ -820,7 +820,7 @@ pub(crate) fn contrast(
         if read.faint < FAINT_SHARE {
             continue;
         }
-        let place = clock.print_position(when);
+        let place = clock.print_position(clock.rate.round(when));
         let message = if read.shows {
             format!(
                 "{} is too faint against what is behind it at {place}: {:.1}:1 over {:.0}% of it, where {LEAST_CONTRAST}:1 is the least that reads; change its color or what is behind it",
