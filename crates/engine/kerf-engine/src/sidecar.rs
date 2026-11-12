@@ -34,6 +34,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// How long a cancelled sidecar has to end by itself once asked to, before
 /// it is killed.
 pub const GRACE: Duration = Duration::from_secs(5);
+/// How long what a cancelled sidecar said on its way out is read for, once it has ended.
+const LAST_WORDS: Duration = Duration::from_millis(250);
 const STDERR_QUEUE_CAPACITY: usize = 128;
 const MAX_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
@@ -134,6 +136,14 @@ fn run_within(
             }
             drain(&mut tail);
             kill(&mut child);
+            // What it said on its way out may not have been read from its stderr yet: it is,
+            // to the end, unless something outside its group holds the pipe open.
+            let killed = Instant::now();
+            while !reader.is_finished() && killed.elapsed() < LAST_WORDS {
+                drain(&mut tail);
+                thread::sleep(POLL_INTERVAL);
+            }
+            drain(&mut tail);
             break Err(EngineError::Cancelled);
         }
         match try_wait(&mut child) {
@@ -577,6 +587,41 @@ mod tests {
         assert!(!finished.status.success());
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
         assert!(!running().contains(&shell));
+    }
+
+    #[test]
+    fn everything_a_cancelled_sidecar_says_on_its_way_out_is_heard() {
+        // Many lines, said as it ends: more than are read in the time it takes to end.
+        let token = CancellationToken::new();
+        let (sender, lines) = mpsc::channel();
+        let runner = {
+            let token = token.clone();
+            thread::spawn(move || {
+                let mut command = Command::new("sh");
+                command.args([
+                    "-c",
+                    "trap 'i=0; while [ $i -lt 500 ]; do echo \"line $i\" >&2; i=$((i+1)); done; echo done >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
+                ]);
+                run(command, &token, |line| {
+                    let _ = sender.send(line.to_owned());
+                })
+            })
+        };
+        assert_eq!(
+            lines.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("waiting")
+        );
+        token.cancel();
+        assert!(matches!(
+            runner.join().expect("runner"),
+            Err(EngineError::Cancelled)
+        ));
+        let said: Vec<String> = lines.try_iter().collect();
+        let heard = |line: &str| said.iter().any(|said| said == line);
+        assert!(
+            heard("line 0") && heard("line 499") && heard("done"),
+            "{said:?}"
+        );
     }
 
     #[test]
