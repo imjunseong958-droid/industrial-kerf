@@ -1597,7 +1597,10 @@ fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
         }),
     );
     assert!(followed["lostAt"].is_null(), "{followed}");
-    let outline = followed["outline"].as_str().unwrap();
+    // With a clip the outline is in the line that masks it, and nowhere else.
+    assert!(followed.get("outline").is_none(), "{followed}");
+    let script = followed["script"].as_str().unwrap();
+    let outline = script.split_once("points=").unwrap().1;
     let last = outline
         .trim_matches(['{', '}'])
         .split(' ')
@@ -1611,20 +1614,22 @@ fn look_measures_how_soft_an_objects_edge_is_at_each_corner() {
             [values[0], values[1], values[2]]
         })
         .collect();
+    // The corners down its left side and down its right: the left, straight and as hard all the way,
+    // is the two at its ends.
     let mean = |wanted: &dyn Fn(f64) -> bool| {
         let widths: Vec<f64> = corners
             .iter()
-            .filter(|corner| wanted(corner[0]) && (0.35..=0.65).contains(&corner[1]))
+            .filter(|corner| wanted(corner[0]))
             .map(|corner| corner[2])
             .collect();
         assert!(!widths.is_empty(), "{corners:?}");
         widths.iter().sum::<f64>() / widths.len() as f64
     };
-    let (left, right) = (mean(&|x| x < 0.4), mean(&|x| x > 0.6));
+    let (left, right) = (mean(&|x| x < 0.31), mean(&|x| x > 0.65));
+    assert!(corners.len() < 40, "{corners:?}");
     assert!(left < 12.0, "{left}: {corners:?}");
     assert!(right > 40.0, "{right}: {corners:?}");
     // What it gives is a line a document takes.
-    let script = followed["script"].as_str().unwrap();
     ok(
         &router,
         "edit",
@@ -1675,8 +1680,33 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
         "edit",
         json!({"extend": proposal, "script": script}),
     );
+    // A square is the corners by its own, the same ones in each keyframe, and not the forty it
+    // was followed by; and its outline is given once, in the line.
+    assert!(followed.get("outline").is_none(), "{followed}");
+    let outline = script.split_once("points=").unwrap().1;
+    let counts: Vec<usize> = outline
+        .trim_matches(['{', '}'])
+        .split(' ')
+        .map(|key| key.split(';').count())
+        .collect();
+    assert_eq!(followed["corners"], counts[0], "{followed}");
+    assert!(counts[0] <= 12, "{counts:?}");
+    assert!(counts.iter().all(|count| *count == counts[0]), "{counts:?}");
+    assert_eq!(followed["keyframes"], counts.len(), "{followed}");
+    // Without a clip it is `outline`, the same.
+    let alone = ok(
+        &router,
+        "look",
+        json!({
+            "track": {"inside": [[0.3, 0.5]], "outside": [[0.05, 0.05]]},
+            "from": "0f",
+            "to": "24f",
+            "proposal": proposal,
+        }),
+    );
+    assert!(alone.get("script").is_none(), "{alone}");
+    assert_eq!(alone["outline"].as_str(), Some(outline), "{alone}");
     // Where it ends, it has moved with the square: 0.32 of the frame to the right, at its middle.
-    let outline = followed["outline"].as_str().unwrap();
     let last = outline
         .trim_matches(['{', '}'])
         .split(' ')

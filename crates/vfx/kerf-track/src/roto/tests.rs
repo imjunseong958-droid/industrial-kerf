@@ -535,6 +535,99 @@ fn softness_changing_alone_is_kept_as_keyframes() {
     assert!(simplified_object(&followed, 0.01).contains(&2));
 }
 
+/// Forty corners evenly around a square 0.3 of the frame each way whose upper left is at `left`, 0.35,
+/// starting `start` of the way along its top.
+fn square_outline(left: f64, start: f64) -> Vec<[f64; 2]> {
+    (0..OUTLINE_CORNERS)
+        .map(|corner| {
+            let around = (start + corner as f64 / OUTLINE_CORNERS as f64 * 1.2).rem_euclid(1.2);
+            let (side, along) = ((around / 0.3) as usize, around % 0.3);
+            match side {
+                0 => [left + along, 0.35],
+                1 => [left + 0.3, 0.35 + along],
+                2 => [left + 0.3 - along, 0.65],
+                _ => [left, 0.65 - along],
+            }
+        })
+        .collect()
+}
+
+/// How far `point` is from the closed outline through `corners`.
+fn off_outline(point: [f64; 2], corners: &[[f64; 2]]) -> f64 {
+    (0..corners.len())
+        .map(|index| {
+            let (a, b) = (corners[index], corners[(index + 1) % corners.len()]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let length = dx * dx + dy * dy;
+            let along = if length > 0.0 {
+                (((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (a[0] + dx * along - point[0]).hypot(a[1] + dy * along - point[1])
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn a_square_keeps_the_corners_that_shape_it_the_same_ones_in_every_frame() {
+    // A square going right, its forty corners a little way along its top from its own.
+    let outlines: Vec<Vec<[f64; 2]>> = (0..10)
+        .map(|frame| square_outline(0.15 + frame as f64 * 0.01, 0.004))
+        .collect();
+    let followed = FollowedObject {
+        soft: vec![vec![0.0; OUTLINE_CORNERS]; outlines.len()],
+        areas: vec![0.09; outlines.len()],
+        outlines,
+        lost_at: None,
+    };
+    let tolerance = 0.5 / 960.0;
+    let kept = simplified_corners(&followed, tolerance);
+    // Two by each of its corners, where forty evenly spaced cut it short.
+    assert_eq!(kept.len(), 8, "{kept:?}");
+    let shaped = followed.with_corners(&kept);
+    assert_eq!(shaped.outlines.len(), followed.outlines.len());
+    for (whole, fewer) in followed.outlines.iter().zip(&shaped.outlines) {
+        assert_eq!(fewer.len(), kept.len());
+        for corner in whole {
+            let off = off_outline(*corner, fewer);
+            assert!(off <= tolerance, "{corner:?} is {off} off {fewer:?}");
+        }
+    }
+    // One that any frame needs is kept in all of them: a dent in the top, in one frame.
+    let mut dented = followed.clone();
+    dented.outlines[6][5][1] += 0.01;
+    let kept = simplified_corners(&dented, tolerance);
+    assert!(kept.contains(&5), "{kept:?}");
+    assert!(kept.len() <= 11, "{kept:?}");
+    // And one where the edge is softer than it is on either side.
+    let mut softer = followed.clone();
+    for soft in &mut softer.soft {
+        soft[25] = 0.02;
+    }
+    let kept = simplified_corners(&softer, tolerance);
+    assert!(kept.contains(&25), "{kept:?}");
+    // A round outline needs most of its corners, and three are the least there are.
+    let round: Vec<[f64; 2]> = (0..OUTLINE_CORNERS)
+        .map(|corner| {
+            let turn = corner as f64 / OUTLINE_CORNERS as f64 * std::f64::consts::TAU;
+            [0.5 + 0.2 * turn.cos(), 0.5 + 0.2 * turn.sin()]
+        })
+        .collect();
+    let disk = FollowedObject {
+        outlines: vec![round],
+        soft: vec![vec![0.0; OUTLINE_CORNERS]],
+        areas: vec![0.1],
+        lost_at: None,
+    };
+    assert!(simplified_corners(&disk, tolerance).len() >= 20);
+    assert!(simplified_corners(&disk, 1.0).len() >= 2);
+    assert_eq!(
+        simplified_corners(&FollowedObject::default(), tolerance),
+        [0usize; 0]
+    );
+}
+
 /// A textured disk `radius` across going back and forth across a textured frame at `speed` pixels a
 /// frame, curving a little as it goes: where it is on `frame`.
 fn fast_center((w, h): (usize, usize), radius: f64, speed: f64, frame: usize) -> [f64; 2] {
