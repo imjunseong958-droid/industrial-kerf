@@ -1041,7 +1041,12 @@ pub(crate) fn draw_in_order(
             }
             Ok(())
         })();
-        stop.store(true, Ordering::SeqCst);
+        // Said under the lock the drawing threads wait with: one that had just found it must wait
+        // and was not yet waiting would miss the call, and wait for a frame nobody will write.
+        {
+            let _waiting = written.0.lock().unwrap_or_else(PoisonError::into_inner);
+            stop.store(true, Ordering::SeqCst);
+        }
         written.1.notify_all();
         result
     })
@@ -1520,5 +1525,33 @@ mod tests {
         second.cancel();
         first_watcher.join().expect("first watcher");
         second_watcher.join().expect("second watcher");
+    }
+
+    #[test]
+    fn drawing_that_is_stopped_leaves_no_thread_waiting() {
+        // The frames cost nothing to draw, so the drawing threads are going to wait for the writing
+        // as it stops at its first frame: what a render that is cancelled does to them.
+        let (finished, all) = mpsc::channel();
+        thread::spawn(move || {
+            for _ in 0..20_000 {
+                let stopped = draw_in_order(
+                    64,
+                    RENDER_DRAWERS,
+                    |_| Frame {
+                        width: 1,
+                        height: 1,
+                        rgba: vec![0; 4],
+                    },
+                    |_| Err(EngineError::msg("stopped")),
+                    &CancellationToken::new(),
+                );
+                assert!(stopped.is_err());
+            }
+            let _ = finished.send(());
+        });
+        assert!(
+            all.recv_timeout(Duration::from_secs(120)).is_ok(),
+            "a drawing thread went on waiting for a frame nobody will write"
+        );
     }
 }
