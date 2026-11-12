@@ -3132,10 +3132,40 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert!(!dir.join("shots/open.takes/001.mp4").exists());
 
-    // Let through: it runs, and the media is the take once it is made.
+    // Let through: it runs, and the media is the take once it is made. Whoever watches the
+    // session's makings, as an editor does to show them, is told from its start to its end.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    router.watch_makings({
+        let seen = seen.clone();
+        std::sync::Arc::new(move |event| {
+            use kerf_mcp::MakingEvent::{Began, Failed, Made, Said, Stopped};
+            let said = match event {
+                Began { media, take, .. } => format!("began {media} {take}"),
+                Said { media, .. } => format!("said {media}"),
+                Made { media, take } => format!("made {media} {take}"),
+                Stopped { media } => format!("stopped {media}"),
+                Failed { media, why } => format!("failed {media}: {why}"),
+            };
+            seen.lock().unwrap().push(said);
+        })
+    });
     given(Mode::Auto, 1);
     let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
     assert_eq!(made["status"], "made", "{made}");
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.first().map(String::as_str),
+            Some("began m9 1"),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(String::as_str),
+            Some("made m9 1"),
+            "{seen:?}"
+        );
+        assert!(seen.iter().any(|said| said == "said m9"), "{seen:?}");
+    }
     assert_eq!(made["take"], 1);
     assert_eq!(made["path"], "shots/open.takes/001.mp4");
     assert!(dir.join("shots/open.takes/001.mp4").is_file());
@@ -3173,6 +3203,18 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert!(!dir.join("shots/open.takes/002.mp4").exists());
     assert!(!dir.join("shots/open.takes/002.work").exists());
+    {
+        // One asked for is not a making, and was not said to be; the one stopped was.
+        let seen = seen.lock().unwrap();
+        let after: Vec<&str> = seen
+            .iter()
+            .skip_while(|said| *said != "made m9 1")
+            .skip(1)
+            .map(String::as_str)
+            .filter(|said| *said != "said m9")
+            .collect();
+        assert_eq!(after, ["began m9 2", "stopped m9"], "{seen:?}");
+    }
     let document = router.runtime().get_state().unwrap().document;
     assert!(
         document.contains("path=\"shots/open.takes/001.mp4\""),

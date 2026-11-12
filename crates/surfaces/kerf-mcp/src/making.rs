@@ -31,12 +31,42 @@ const KEPT_LINES: usize = 20;
 const MOST_WAIT: Duration = Duration::from_secs(20 * 60);
 const WAIT_PAUSE: Duration = Duration::from_millis(200);
 
+/// What a making this session started on its own is doing, for whoever shows makings: an
+/// editor says in its toolbar what is being made, as it does of one its person started, and
+/// can stop it.
+#[derive(Clone, Debug)]
+pub enum MakingEvent {
+    /// It began: the take it is making, and what stops it.
+    Began {
+        media: String,
+        take: u32,
+        stop: CancellationToken,
+    },
+    /// A line one of its steps said.
+    Said {
+        media: String,
+        take: u32,
+        line: String,
+    },
+    /// Its take is made, and the document has it.
+    Made { media: String, take: u32 },
+    /// It was stopped, and the media is as it was.
+    Stopped { media: String },
+    /// It made no take, and why.
+    Failed { media: String, why: String },
+}
+
+/// Who is told of this session's makings: see [`KerfMcpRouter::watch_makings`].
+pub type MakingWatcher = Arc<dyn Fn(MakingEvent) + Send + Sync>;
+
 /// The makings this session started, shared by every copy of the router.
 #[derive(Default)]
 pub(crate) struct Makings {
     /// How many it ran without asking, which the person's limit counts.
     started: u32,
     jobs: Vec<Job>,
+    /// Who is told what they do.
+    watcher: Option<MakingWatcher>,
 }
 
 struct Job {
@@ -271,6 +301,20 @@ impl KerfMcpRouter {
             status: Status::Making,
             said: VecDeque::new(),
         }));
+        // Whoever shows makings is told of this one as it goes, from its start.
+        let tell = {
+            let watcher = makings.watcher.clone();
+            move |event: MakingEvent| {
+                if let Some(watcher) = &watcher {
+                    watcher(event);
+                }
+            }
+        };
+        tell(MakingEvent::Began {
+            media: media.to_owned(),
+            take,
+            stop: token.clone(),
+        });
         let thread = {
             let (router, token, state) = (self.clone(), token.clone(), state.clone());
             let media = media.to_owned();
@@ -282,6 +326,11 @@ impl KerfMcpRouter {
                         return;
                     }
                     last = line.to_owned();
+                    tell(MakingEvent::Said {
+                        media: media.clone(),
+                        take,
+                        line: line.to_owned(),
+                    });
                     let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
                     // How far a step has come is one line, said again as it goes on.
                     let further = |said: &str| {
@@ -311,6 +360,20 @@ impl KerfMcpRouter {
                     Err(EngineError::Cancelled) => Status::Stopped,
                     Err(error) => Status::Failed(error.to_string()),
                 };
+                tell(match &status {
+                    Status::Made { .. } => MakingEvent::Made {
+                        media: media.clone(),
+                        take,
+                    },
+                    Status::Stopped => MakingEvent::Stopped {
+                        media: media.clone(),
+                    },
+                    Status::Failed(why) => MakingEvent::Failed {
+                        media: media.clone(),
+                        why: why.clone(),
+                    },
+                    Status::Making => unreachable!("a making that ended is not under way"),
+                });
                 state.lock().unwrap_or_else(PoisonError::into_inner).status = status;
             })
         };
@@ -414,6 +477,16 @@ impl KerfMcpRouter {
                 let _ = thread.join();
             }
         }
+    }
+
+    /// Have `watcher` told what the makings this session starts on its own do, from each
+    /// one's start to its end: through this router and every copy of it. An editor shows
+    /// them where it shows the makings its person starts.
+    pub fn watch_makings(&self, watcher: MakingWatcher) {
+        self.makings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .watcher = Some(watcher);
     }
 
     /// How many makings this session is running.
