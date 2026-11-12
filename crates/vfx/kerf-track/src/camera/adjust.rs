@@ -63,18 +63,29 @@ pub fn off(camera: &Camera, point: Vector, at: [f64; 2]) -> Option<[f64; 2]> {
     ])
 }
 
-/// The cost of it all, robustly.
+/// How many sightings are added up at a time.
+const PART: usize = 1024;
+
+/// The cost of it all, robustly. Added up in parts of a set size, and the parts in their order, so
+/// that the same sightings cost the same every time: split wherever a thread took the work up, the
+/// sum came out a unit or two apart in its last place from one run to the next, and a last step no
+/// better than that was taken in one solve of a shot and not in the next.
 fn cost(cameras: &[Camera], points: &[Vector], sightings: &[Sighting], options: &Options) -> f64 {
-    sightings
-        .par_iter()
-        .map(|sighting| {
-            let camera = &cameras[sighting.camera as usize];
-            match off(camera, points[sighting.point as usize], sighting.at) {
-                Some(r) => huber(r[0] * r[0] + r[1] * r[1], options.huber),
-                None => BEHIND,
-            }
+    let parts: Vec<f64> = sightings
+        .par_chunks(PART)
+        .map(|part| {
+            part.iter()
+                .map(|sighting| {
+                    let camera = &cameras[sighting.camera as usize];
+                    match off(camera, points[sighting.point as usize], sighting.at) {
+                        Some(r) => huber(r[0] * r[0] + r[1] * r[1], options.huber),
+                        None => BEHIND,
+                    }
+                })
+                .sum::<f64>()
         })
-        .sum()
+        .collect();
+    parts.iter().sum()
 }
 
 /// A point's part of the normal equations.
@@ -562,5 +573,59 @@ mod tests {
             "{}",
             cameras[3].focal
         );
+    }
+
+    #[test]
+    fn the_same_sightings_cost_the_same_whichever_threads_add_them_up() {
+        let mut part = parts(5);
+        let points: Vec<Vector> = (0..400)
+            .map(|_| [part() * 6.0, part() * 4.0, 6.0 + part() * 4.0])
+            .collect();
+        let cameras: Vec<Camera> = (0..40)
+            .map(|index| Camera {
+                view: View {
+                    turn: rotation([0.0, -0.01 * index as f64, 0.0]),
+                    place: [0.05 * index as f64, 0.0, 0.0],
+                },
+                focal: 900.0,
+            })
+            .collect();
+        let mut sightings = Vec::new();
+        for (c, camera) in cameras.iter().enumerate() {
+            for (p, point) in points.iter().enumerate() {
+                let at = off(camera, *point, [0.0, 0.0]).unwrap();
+                sightings.push(Sighting {
+                    camera: c as u32,
+                    point: p as u32,
+                    at: [at[0] + part(), at[1] + part()],
+                });
+            }
+        }
+        let options = Options {
+            free_focal: false,
+            own_focals: false,
+            fixed_points: false,
+            fixed: vec![true],
+            huber: 0.5,
+            iterations: 1,
+        };
+        // Other work on the same threads, as the tests beside this one are: it is what moves the
+        // places a sum taken up by any thread is split at.
+        let busy = std::sync::atomic::AtomicBool::new(true);
+        let costs: std::collections::BTreeSet<u64> = std::thread::scope(|scope| {
+            for _ in 0..3 {
+                scope.spawn(|| {
+                    while busy.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _: f64 = (0..2000).into_par_iter().map(|i| (i as f64).sqrt()).sum();
+                    }
+                });
+            }
+            let costs = (0..2000)
+                .map(|_| cost(&cameras, &points, &sightings, &options).to_bits())
+                .collect();
+            busy.store(false, std::sync::atomic::Ordering::Relaxed);
+            costs
+        });
+        assert_eq!(costs.len(), 1, "{costs:?}");
     }
 }
