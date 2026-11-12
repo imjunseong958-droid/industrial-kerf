@@ -1359,6 +1359,11 @@ fn look_says_which_text_is_too_faint_from_the_frames() {
     assert_eq!(found.len(), 1, "{read}");
     assert_eq!(found[0]["code"], "text.contrast");
     assert_eq!(found[0]["entity"], "lost");
+    // Where it was read is said as a position a script takes: a timecode of the sequence, on a
+    // frame, and not the moment between two frames that was looked at, in flicks.
+    let said = found[0]["message"].as_str().unwrap_or_default();
+    assert!(said.contains("does not show at 00:00:01:03:"), "{said}");
+    assert!(!said.contains("fl:"), "{said}");
     // Only where it was asked.
     let early = ok(
         &router,
