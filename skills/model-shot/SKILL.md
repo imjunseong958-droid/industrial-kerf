@@ -11,7 +11,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   the guide is drawn at the model's size and rate and not the sequence's.
 - A guide is read for layout, motion, and camera, not for finish. Flat colors
   and plain solids that differ clearly from each other guide better than
-  detail; what the picture should look like goes in the prompt.
+  detail; what the picture should look like goes in the prompt. A model keeps
+  where things are and how they move, and takes their color and kind from the
+  prompt alone: a white box is a dark boat until the prompt says a white hull.
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
   length of the shot. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
@@ -32,7 +34,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
 - The recipe is the `render` line and a `generate` line: the prompt,
   `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
   again. The media's line names the file the shot will be, with the model's
-  rate and size; a making replaces them with what was made.
+  rate and size; a making replaces them with what was made. A picture is fit
+  inside the frame before its `scale`, so a shot of another shape leaves
+  edges: the check says the `scale` that fills it.
 - You do not make the shot. `toMake` says what a person is to make; mend
   what its `cannot` and `notes` say before asking, then ask once.
 - After a making, look at the take (`media` with `sheet`), not at the guide,
