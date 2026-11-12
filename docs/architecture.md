@@ -178,7 +178,10 @@ The editor makes one from the bin's menu, and shows every step and asks
 first: the bridge answers a plain `media_make` with the plan and runs nothing,
 and runs only one sent confirmed, which a person's yes to that plan sends.
 While it runs the bridge passes on each line its steps say (`media_making`),
-and `media_make_cancel` stops it. Stopping any sidecar asks before it ends it
+and `media_make_cancel` stops it. A making says what it is doing in the
+project's folder as it goes (`.kerf/cache/makings`, `recipe/told.rs`), so the
+editor shows and can stop one that `kerf make` or an agent's own `kerf-mcp`
+runs as it does its own. Stopping any sidecar asks before it ends it
 (`sidecar.rs`): its process group gets SIGTERM and five seconds, and what is
 left then is killed, so a model's program has time to take back the job it
 queued, as `kerf-comfy` does. Windows has no such signal for a job object, and

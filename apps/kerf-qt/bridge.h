@@ -233,6 +233,11 @@ void kerf_bridge_free(void *bridge);
 // has not within a few seconds; it answers media_make_cancelled {media},
 // with no take and the media as it was. Closing the bridge stops every
 // making the same way.
+// A making another program runs on the project, `kerf make` or an agent's
+// own kerf-mcp, answers the same media_making, media_made,
+// media_make_cancelled and error as it goes, though nothing asked the bridge
+// for it, and media_make_cancel {media} stops it too. Closing the bridge
+// leaves it running.
 // Projection: projection_import loads a project.kerf changed outside Kerf
 // (a git pull in a terminal, a text editor) as one revision;
 // projection_repair writes the editor's project over it.
