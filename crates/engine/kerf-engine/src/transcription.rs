@@ -555,6 +555,9 @@ fn whisper_args(
         "-of".into(),
         output_base.to_string_lossy().into_owned(),
         "-pp".into(),
+        // Its own default is four threads on any machine.
+        "-t".into(),
+        crate::resources::whisper_thread_count().to_string(),
     ];
     let language = language
         .filter(|value| !value.trim().is_empty())
@@ -1057,6 +1060,36 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first["backendVersion"], "whisper.cpp/1");
         assert_eq!(first["modelVersion"], "base-v1");
+    }
+
+    #[test]
+    fn whisper_is_given_the_threads_the_budget_has_for_it() {
+        let config = WhisperConfig {
+            binary: "whisper-cli".into(),
+            model: "/models/base.bin".into(),
+            model_identity: SourceIdentity {
+                path: "/models/base.bin".into(),
+                size: 12,
+                modified_ns: Some(34),
+            },
+            binary_identity: json!({"path":"whisper-cli","size":1}),
+            backend_version: "whisper.cpp/1".into(),
+            model_version: "base-v1".into(),
+        };
+        let args = whisper_args(&config, Path::new("a.wav"), Path::new("out"), None);
+        let threads = args.iter().position(|arg| arg == "-t").expect("-t");
+        assert_eq!(
+            args[threads + 1],
+            crate::resources::whisper_thread_count().to_string()
+        );
+        // Half the machine, one at least and four at most.
+        let threads = |cpus: usize| crate::resources::budget_for_cpus(cpus).whisper_threads;
+        if std::env::var_os("KERF_WHISPER_THREADS").is_none() {
+            assert_eq!(
+                [1, 2, 3, 4, 6, 8, 16, 64].map(threads),
+                [1, 1, 1, 2, 3, 4, 4, 4]
+            );
+        }
     }
 
     #[test]
