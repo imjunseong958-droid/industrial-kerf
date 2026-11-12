@@ -325,6 +325,25 @@ fn the_check_is_deterministic_and_keeps_the_mcp_shape() {
 }
 
 #[test]
+fn a_sequence_with_nothing_on_it_yet_is_said_and_blocks_nothing() {
+    // A new project's first sequence is empty until something is cut into it, and work goes
+    // on beside it: footage is imported, a guide is blocked in a sequence of its own.
+    let project = project("sequence add s2 rate=24 size=1920x1080");
+    let report = run(&project);
+    assert!(report.valid, "{:#?}", report.findings);
+    let empty = with(&report, "sequence.empty");
+    assert_eq!(empty.len(), 1, "{:#?}", report.findings);
+    assert_eq!(empty[0].severity, Severity::Info);
+    assert_eq!(empty[0].entity.as_deref(), Some("s2"));
+    assert_eq!(empty[0].sequence.as_deref(), Some("s2"));
+    assert!(empty[0].message.contains("`s2`"), "{:?}", empty[0]);
+    assert!(with(&report, "unrenderable").is_empty());
+    // Nothing fails for it, so the rows the editor shows pass as they did.
+    assert!(row(&report, "render").passed);
+    assert_eq!(report.summary.blocking, 0);
+}
+
+#[test]
 fn missing_media_blocks_and_is_counted() {
     let script =
         "media add m1 path=\"/nowhere/shot.mov\" rate=24 dur=00:00:10:00 video=1920x1080\n\

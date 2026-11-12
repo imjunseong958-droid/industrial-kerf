@@ -375,6 +375,10 @@ pub(crate) const CAPTION_GAPS: RowDef = RowDef {
     limit: Some("≥ 2 frames or none"),
 };
 
+/// What a sequence with nothing on it is called: information, since it stands in the way of
+/// nothing but its own render.
+pub(crate) const EMPTY_SEQUENCE: &str = "sequence.empty";
+
 /// What stands between a project and its render: media that cannot be
 /// read, features the renderer cannot lower, and the model's warnings;
 /// and what an editor would catch in the cut. `project` has its media paths
@@ -400,6 +404,21 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
     }
     for sequence in &project.sequences {
         let id = sequence.id.as_str();
+        // A sequence with nothing on it yet is no fault of a cut: a new project's first one
+        // is empty while footage is imported and a guide is blocked beside it. It is said,
+        // and it blocks nothing. Rendering it is refused where that is asked for, and the
+        // full check fails the rows it cannot measure of it.
+        if !sequence.duration().is_positive() {
+            let mut finding = Finding::new(
+                Severity::Info,
+                EMPTY_SEQUENCE,
+                Some(id),
+                format!("sequence `{id}` is empty: nothing is on it to render yet"),
+            );
+            finding.sequence = Some(id.to_owned());
+            findings.push(finding);
+            continue;
+        }
         if let Err(error) = kerf_engine::render::renderable(project, Some(id)) {
             let mut finding = Finding::new(
                 Severity::Error,
