@@ -18,7 +18,9 @@
 //!   through a shell, so nothing in an argument is expanded or run.
 //! - `render <sequence> {name}` has Kerf draw a sequence of the project,
 //!   which is how a guide blocked with Kerf's own clips, cameras, and lights
-//!   reaches a model.
+//!   reaches a model. `size=WxH` and `rate=<fps>` draw it at a model's own
+//!   size and rate, not the sequence's: a picture of another shape fills
+//!   the size, and what is over is cut off evenly. The file has no sound.
 //! - `generate` asks a model ([`model`]) for the file: what it should show
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), and
 //!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
@@ -38,6 +40,7 @@ pub mod takes;
 use crate::error::{EngineError, Result};
 use crate::render::{render_program_with_cancellation, RenderOptions};
 use crate::sidecar::{self, CancellationToken};
+use kerf_model::Rate;
 use model::{Ask, Models, Source};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -58,8 +61,14 @@ pub enum Step {
         program: String,
         arguments: Vec<String>,
     },
-    /// A sequence of the project, drawn by Kerf into the file `to` names.
-    Render { sequence: String, to: String },
+    /// A sequence of the project, drawn by Kerf into the file `to` names,
+    /// with no sound: at the sequence's size and rate, or at the ones named.
+    Render {
+        sequence: String,
+        to: String,
+        size: Option<(u32, u32)>,
+        rate: Option<Rate>,
+    },
     /// A model asked for a file.
     Generate(Box<Ask>),
 }
@@ -110,17 +119,20 @@ impl Recipe {
                         arguments: words,
                     });
                 }
-                "render" if words.len() == 2 => {
+                "render" if words.len() >= 2 => {
                     let to = whole(&words[1]).ok_or_else(|| {
                         wrong(format!(
                             "`render <sequence> {{name}}` names the file it makes, such as `{{guide.mp4}}`, not `{}`",
                             words[1]
                         ))
                     })?;
+                    let (size, rate) = drawn_at(&words[2..]).map_err(wrong)?;
                     made.push(to.clone());
                     recipe.steps.push(Step::Render {
                         sequence: words.swap_remove(0),
                         to,
+                        size,
+                        rate,
                     });
                 }
                 "generate" if !words.is_empty() => {
@@ -130,7 +142,7 @@ impl Recipe {
                 }
                 "needs" | "run" | "render" | "generate" => {
                     return Err(wrong(format!(
-                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}}`, or `generate model=<name> prompt=\"…\" …`"
+                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>]`, or `generate model=<name> prompt=\"…\" …`"
                     )))
                 }
                 other => {
@@ -207,6 +219,48 @@ impl Recipe {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// A picture's width and height, in pixels.
+type Size = (u32, u32);
+
+/// A size as a line writes it, `1920x1080`: two whole numbers, neither 0.
+pub(crate) fn size_of(value: &str) -> Option<Size> {
+    let (width, height) = value.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
+        .filter(|(width, height): &Size| *width > 0 && *height > 0)
+}
+
+/// The size and the rate the words after `render <sequence> {name}` name.
+fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>), String> {
+    let (mut size, mut rate) = (None, None);
+    for word in words {
+        match word.split_once('=') {
+            Some(("size", value)) => {
+                let (width, height) = size_of(value)
+                    .ok_or_else(|| format!("`size={value}` is not a size such as 832x480"))?;
+                if width % 2 == 1 || height % 2 == 1 {
+                    return Err(format!(
+                        "`size={value}` has an odd side, which the file cannot have; `size={}x{}` has none",
+                        width + width % 2,
+                        height + height % 2
+                    ));
+                }
+                size = Some((width, height));
+            }
+            Some(("rate", value)) => {
+                rate = Some(Rate::parse(value).map_err(|_| {
+                    format!("`rate={value}` is not a rate in frames a second, such as 16 or 23.976")
+                })?);
+            }
+            _ => {
+                return Err(format!(
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH` and `rate=<fps>`"
+                ))
+            }
+        }
+    }
+    Ok((size, rate))
 }
 
 /// The names in braces an argument holds: `out` and `guide.mp4` of
@@ -415,10 +469,29 @@ pub fn plan(
                         .map(|argument| placed(argument, &|name| place.file_for(take, name))),
                 ),
             ),
-            Step::Render { sequence, to } => format!(
-                "Kerf renders sequence {sequence} to {}",
-                place.file_for(take, to).display()
-            ),
+            Step::Render {
+                sequence,
+                to,
+                size,
+                rate,
+            } => {
+                let mut at = Vec::new();
+                if let Some((width, height)) = size {
+                    at.push(format!("{width}x{height}"));
+                }
+                if let Some(rate) = rate {
+                    at.push(format!("{rate} frames a second"));
+                }
+                format!(
+                    "Kerf renders sequence {sequence}{} to {}",
+                    if at.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" at {}", at.join(", "))
+                    },
+                    place.file_for(take, to).display()
+                )
+            }
             Step::Generate(ask) => {
                 let request = working.join(model::REQUEST_FILE);
                 let command = models.command(&ask.model).expect("checked above");
@@ -572,7 +645,12 @@ impl Making<'_> {
                     );
                     self.supervised(command, program, on_line)?;
                 }
-                Step::Render { sequence, to } => {
+                Step::Render {
+                    sequence,
+                    to,
+                    size,
+                    rate,
+                } => {
                     let mut resolved = self.project.clone();
                     resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
                     render_program_with_cancellation(
@@ -582,6 +660,11 @@ impl Making<'_> {
                         &RenderOptions {
                             output: self.file_for(to).to_string_lossy().into_owned(),
                             project_dir: Some(self.directory.to_path_buf()),
+                            size: *size,
+                            rate: *rate,
+                            // What a step makes is for a model to follow, or a shot of its
+                            // own: a picture, with no sound.
+                            sound: false,
                             ..RenderOptions::default()
                         },
                         self.cancellation,

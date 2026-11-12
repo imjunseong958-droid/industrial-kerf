@@ -57,6 +57,12 @@ on `main`; its section here becomes the release's notes on GitHub
   carry yet: it fits the guide to the model's size and rate, asks the server,
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
+- A recipe's `render` line takes a size and a rate
+  (`render s2 {guide.mp4} size=832x480 rate=16`), so a guide is drawn as the
+  model reads it and not at the sequence's own size and rate: a guide that
+  took 54 s to draw took 8. A picture of another shape fills the size, with
+  what is over cut off evenly. What `render` draws no longer has a sound
+  track.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

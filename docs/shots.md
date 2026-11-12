@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name}` | Has Kerf draw a sequence of this project into a file. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way. |
+| `render <sequence> {name} [size=WxH] [rate=<fps>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -226,6 +226,9 @@ What it does with a request:
 - It fits the guide to the model. A guide drawn at 1920x1080 and 24 frames a
   second goes up at the model's 832x480 and 16, filling the picture with what
   is over cut off evenly, and is kept as `guide.comfy.mp4` beside the request.
+  A guide Kerf drew at the model's size and rate already
+  (`render s2 {guide.mp4} size=832x480 rate=16`) goes up as it was drawn, cut
+  the same way, for a fraction of the drawing.
 - It asks for a length and a size the model takes. `seconds=4` is 65 frames of
   a model that makes one frame and a multiple of four: never fewer than asked,
   and never more than the model makes at once. A size with more area than the
@@ -248,9 +251,9 @@ What a model is given to follow decides how much of a shot is directed and how
 much is left to it. Three places a guide comes from, all through the same
 steps:
 
-- **A sequence of the project** (`render s2 {guide.mp4}`): clips placed in
-  depth, a camera move, lights, a title, cut and timed in Kerf. It needs
-  nothing installed and runs on any machine Kerf does.
+- **A sequence of the project** (`render s2 {guide.mp4} size=832x480 rate=16`):
+  clips placed in depth, a camera move, lights, a title, cut and timed in
+  Kerf. It needs nothing installed and runs on any machine Kerf does.
 - **A 3D renderer** (`run vork render … --out {guide.mp4}`, or Blender the
   same way): a blocked scene with real geometry and a camera, drawn fast and
   rough. The renderer's own passes, such as depth, are files like any other
@@ -259,3 +262,35 @@ steps:
 
 Kerf does not draw depth, normals, or object ids of its own sequences as
 passes yet; a model that needs them takes them from a renderer.
+
+### A guide at the model's size and rate
+
+`render s2 {guide.mp4}` draws the sequence as it is: every frame of it, at its
+own size. A model follows a guide at its own size and rate, most often
+smaller and slower, and whatever is drawn past those is drawn to be thrown
+away. So a guide's line names them:
+
+```text
+render s2 {guide.mp4} size=832x480 rate=16
+```
+
+- `size=WxH` is the size of the file's picture; each side is even. Kerf draws
+  the frames at that size. It does not draw them whole and bring them down.
+- Where the size's shape is not the sequence's, **the picture fills the size
+  and what is over is cut off evenly**: both sides of a wider sequence, the top
+  and the bottom of a taller one. Nothing is squeezed, and no bars are added,
+  since a model follows bars as it follows anything else in the picture. Keep
+  what matters away from the edges that will go, or give the sequence the
+  model's shape. A size larger than the sequence's is the sequence's picture
+  scaled up.
+- `rate=<fps>` is how many frames a second the file has: `16`, `23.976`,
+  `24000/1001`. Each frame is the sequence at that frame's time, so the guide
+  plays for as long as the sequence does, in fewer frames, and what moves in it
+  moves at the same speed.
+- The file has no sound track, whatever the sequence plays.
+
+What that saves, measured on four cores with no GPU: a guide of clips in
+depth under two lights with a moving camera, 96 frames at 1920x1080 and 24 a
+second, took 54.5 s to draw as it is, and 7.8 s as `size=832x480 rate=16`, 64
+frames. Made again with nothing changed, either comes from the frames Kerf
+keeps on disk, in about a second.

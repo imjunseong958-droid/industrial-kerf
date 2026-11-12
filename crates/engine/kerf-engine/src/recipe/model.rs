@@ -134,17 +134,9 @@ impl Ask {
                     );
                 }
                 "size" => {
-                    ask.size = Some(
-                        value
-                            .split_once('x')
-                            .and_then(|(width, height)| {
-                                Some((width.parse().ok()?, height.parse().ok()?))
-                            })
-                            .filter(|(width, height): &(u32, u32)| *width > 0 && *height > 0)
-                            .ok_or_else(|| {
-                                format!("`size={value}` is not a size such as 1920x1080")
-                            })?,
-                    );
+                    ask.size = Some(super::size_of(value).ok_or_else(|| {
+                        format!("`size={value}` is not a size such as 1920x1080")
+                    })?);
                 }
                 "seed" => {
                     ask.seed = Some(

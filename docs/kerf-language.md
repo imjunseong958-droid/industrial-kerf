@@ -151,7 +151,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 
   `needs` names the files it reads; `run` is a program and its arguments,
   quoted where they hold spaces, run as it is named and never through a shell;
-  `render <sequence> {name}` has Kerf draw a sequence of the project; and
+  `render <sequence> {name} [size=WxH] [rate=<fps>]` has Kerf draw a sequence
+  of the project, with no sound, at its own size and rate or at the ones
+  named, as a guide for a model is; and
   `generate` asks a model the person has set up. `kerf make m3` shows the
   steps, asks, runs them in the recipe's folder, and has the media be the new
   take, with the document taking its path, length and streams; `--yes` does

@@ -56,7 +56,9 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
         recipe.steps[1],
         Step::Render {
             sequence: "s2".to_owned(),
-            to: "block.mp4".to_owned()
+            to: "block.mp4".to_owned(),
+            size: None,
+            rate: None,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -89,6 +91,28 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             "open scene.json",
             "refs/boat.png",
             "refs/sea.png"
+        ]
+    );
+    // A guide is drawn at the size and the rate a model takes, in either order.
+    let sized = Recipe::parse(
+        "kerf-recipe 1\nrender s2 {guide.mp4} size=832x480 rate=16\nrender s3 {out} rate=23.976 size=1280x720\n",
+    )
+    .unwrap();
+    assert_eq!(
+        sized.steps,
+        [
+            Step::Render {
+                sequence: "s2".to_owned(),
+                to: "guide.mp4".to_owned(),
+                size: Some((832, 480)),
+                rate: Some(Rate::new(16, 1).unwrap()),
+            },
+            Step::Render {
+                sequence: "s3".to_owned(),
+                to: "out".to_owned(),
+                size: Some((1280, 720)),
+                rate: Some(Rate::FPS_23_976),
+            }
         ]
     );
     // One model's picture can be the next one's first frame.
@@ -127,6 +151,20 @@ fn what_is_wrong_with_a_recipe_is_said() {
         .contains("line 3 of the recipe: the step before it writes `{out}`"));
     assert!(wrong("kerf-recipe 1\nrender s2 guide.mp4").contains("names the file it makes"));
     assert!(wrong("kerf-recipe 1\nrender s2").contains("`render` is"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} size=big").contains("not a size such as 832x480"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} size=833x480")
+        .contains("line 2 of the recipe: `size=833x480` has an odd side, which the file cannot have; `size=834x480` has none"));
+    assert!(
+        wrong("kerf-recipe 1\nrender s2 {out} rate=fast").contains("not a rate in frames a second")
+    );
+    assert!(
+        wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
+    );
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH` and `rate=<fps>`"));
+    assert!(
+        wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
+    );
     assert!(wrong("kerf-recipe 1\ngenerate prompt=\"a boat\"").contains("names its model"));
     assert!(
         wrong("kerf-recipe 1\ngenerate model=dawn guide={guide.mp4}")
@@ -272,6 +310,10 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
     write("shots/need.kerfrecipe", "needs open.json\nrun vork {out}");
     write("shots/seq.kerfrecipe", "render s9 {out}");
     write(
+        "shots/guide.kerfrecipe",
+        "render s1 {guide.mp4} size=832x480 rate=16\nrun follow {guide.mp4} {out}",
+    );
+    write(
         "shots/ask.kerfrecipe",
         "generate model=dawn prompt=\"a boat\"",
     );
@@ -283,7 +325,10 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
          media m6 path=\"shots/e.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/far.kerfrecipe\"\n\
          media m7 path=\"shots/f.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/need.kerfrecipe\"\n\
          media m8 path=\"shots/g.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/seq.kerfrecipe\"\n\
-         media m9 path=\"shots/h.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/ask.kerfrecipe\"\n",
+         media m9 path=\"shots/h.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/ask.kerfrecipe\"\n\
+         media m10 path=\"shots/i.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/guide.kerfrecipe\"\n\
+         sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track V1 video\n",
     );
     let none = Models::default();
     let made = plan(&project, directory, "m1", &none).unwrap();
@@ -311,6 +356,17 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
     assert!(wrong("m7").contains("needs `shots/open.json`, which is not there"));
     assert!(wrong("m8").contains("renders sequence `s9`, which this project has not"));
     assert!(wrong("m9").contains("no model `dawn` is set up"));
+    // A guide's step says the size and the rate it is drawn at.
+    let guided = plan(&project, directory, "m10", &none).unwrap();
+    assert_eq!(
+        guided.steps[0],
+        format!(
+            "Kerf renders sequence s1 at 832x480, 16 frames a second to {}",
+            directory
+                .join("shots/guide.takes/001.work/guide.mp4")
+                .display()
+        )
+    );
     // With the model set up, the plan says what its program is handed.
     let some = models(
         directory,
