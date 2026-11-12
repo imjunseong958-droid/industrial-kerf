@@ -102,9 +102,10 @@ fn ffprobe_beside(ffmpeg: &str) -> Option<String> {
 /// Cached `-hwaccel <name>` pair for video decode, or empty when none exist.
 /// Encode output is unchanged; this only accelerates decode into software filters.
 ///
-/// Auto-selects VideoToolbox on macOS and D3D11VA on Windows. Other GPUs
-/// (`cuda`, `qsv`, `vaapi`, …) must be opted in with `KERF_HWACCEL=<name>`.
-/// `KERF_HWACCEL=none` disables it.
+/// Auto-selects VideoToolbox on macOS, but not in a virtual machine (see
+/// [`runs_in_a_guest`]), and D3D11VA on Windows. Other GPUs (`cuda`, `qsv`,
+/// `vaapi`, …) must be opted in with `KERF_HWACCEL=<name>`, which also asks
+/// for VideoToolbox in a guest. `KERF_HWACCEL=none` disables it.
 pub fn hwaccel_decode_args() -> &'static [String] {
     static ARGS: OnceLock<Vec<String>> = OnceLock::new();
     ARGS.get_or_init(|| {
@@ -123,7 +124,7 @@ pub fn hwaccel_decode_args() -> &'static [String] {
             Err(_) => return Vec::new(),
         };
         let listed = |name: &str| output.lines().any(|line| line.trim() == name);
-        if cfg!(target_os = "macos") && listed("videotoolbox") {
+        if cfg!(target_os = "macos") && listed("videotoolbox") && !runs_in_a_guest() {
             vec!["-hwaccel".into(), "videotoolbox".into()]
         } else if cfg!(windows) && listed("d3d11va") {
             vec!["-hwaccel".into(), "d3d11va".into()]
@@ -131,6 +132,25 @@ pub fn hwaccel_decode_args() -> &'static [String] {
             Vec::new()
         }
     })
+}
+
+/// Whether this Mac runs under a hypervisor, by `kern.hv_vmm_present`.
+///
+/// VideoToolbox in a guest sets up paravirtualized decoding when a session
+/// is first made. On GitHub's macOS runners that set-up stops answering
+/// after some sessions, and from then on every ffmpeg asked for
+/// VideoToolbox waits in it for ever
+/// (`VTDecompressionSessionCreateWithOptions`, in
+/// `VTParavirtualizationGuestSupportSetUpWithHandlers`) and stays behind
+/// when killed, so whatever reads its frames waits too. A guest has no
+/// decoder of its own to gain from: it decodes in software.
+fn runs_in_a_guest() -> bool {
+    cfg!(target_os = "macos")
+        && Command::new("/usr/sbin/sysctl")
+            .args(["-n", "kern.hv_vmm_present"])
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1")
 }
 
 /// Cached `ffmpeg -encoders` listing used by hardware encoder selection.
