@@ -937,7 +937,12 @@ recipes, in `fixtures/shots/car`.
    once in Kerf, three frames' sets as three clips under the one camera,
    the first frame's surfaces, stretched where that frame saw them
    edge-on, stand in front of the later frames' from where those were
-   filmed. A whole set takes fusing the views, dropping what each sees
+   filmed. With those surfaces dropped (`discontinuity=0.01`), four
+   frames' sets at once cover more of the frame than one (0.33 to 0.64 of
+   it on five frames, for 0.05 to 0.19) and match the footage worse where
+   they draw (a mean difference of 63 to 85 of 255, for 47 to 66): the
+   road goes with the stretched surfaces, and the same house stands in
+   several places, a frame's set not lying quite where another's does. A whole set takes fusing the views, dropping what each sees
    badly, which is a rebuilder's work; sets timed to the part of the shot
    each was seen in stay the way. Also not done: the two
    models' lenses reconciled further than by their ratio along one way
