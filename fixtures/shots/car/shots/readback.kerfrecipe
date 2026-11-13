@@ -3,4 +3,4 @@ kerf-recipe 1
 # that take's own depth as MoGe reads it, to hold beside the guide.
 render s2 {guide.mp4} pass=depth size=832x480 rate=16
 generate model=vace prompt="a red sports car drives along a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
-generate model=moge guide={take.mp4}
+generate model=depth guide={take.mp4}

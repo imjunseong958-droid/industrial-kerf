@@ -47,12 +47,12 @@ const WORKFLOW_VERSION: u32 = 1;
 /// The workflows that come with this program, by name.
 pub const BUNDLED: [(&str, &str); 5] = [
     ("wan-vace", include_str!("../workflows/wan-vace.json")),
-    ("moge-depth", include_str!("../workflows/moge-depth.json")),
-    ("moge-set", include_str!("../workflows/moge-set.json")),
-    ("da3-depth", include_str!("../workflows/da3-depth.json")),
+    ("depth-moge", include_str!("../workflows/depth-moge.json")),
+    ("set-moge", include_str!("../workflows/set-moge.json")),
+    ("depth-da3", include_str!("../workflows/depth-da3.json")),
     (
-        "da3-multiview",
-        include_str!("../workflows/da3-multiview.json"),
+        "cameras-da3",
+        include_str!("../workflows/cameras-da3.json"),
     ),
 ];
 
@@ -528,7 +528,7 @@ mod tests {
             }
         }
         // One that makes a file of its guide reads a guide, and has no rate of its own.
-        for name in ["moge-depth", "moge-set", "da3-depth", "da3-multiview"] {
+        for name in ["depth-moge", "set-moge", "depth-da3", "cameras-da3"] {
             let workflow = Workflow::named(name).unwrap();
             assert!(
                 workflow.of_guide() && workflow.blanks().contains("guide"),
@@ -544,14 +544,14 @@ mod tests {
             assert!(!takes["about"].as_str().unwrap().is_empty(), "{name}");
         }
         // Depth Anything 3 finds a camera's path only with its weights as 32-bit floats.
-        let multiview = Workflow::named("da3-multiview").unwrap();
+        let multiview = Workflow::named("cameras-da3").unwrap();
         assert!(multiview
             .graph
             .values()
             .any(|node| node["class_type"] == "LoadDA3Model"
                 && node["inputs"]["weight_dtype"] == "fp32"));
         // MoGe refines three times unless a line says otherwise.
-        let moge = Workflow::named("moge-depth").unwrap();
+        let moge = Workflow::named("depth-moge").unwrap();
         assert_eq!(moge.takes()["more"]["refine_steps"], json!(3));
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("wan-vace"), "{missing}");
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn a_file_of_a_guide_has_the_guides_frames_and_its_size() {
-        let reader = Workflow::named("moge-depth").unwrap();
+        let reader = Workflow::named("depth-moge").unwrap();
         // Each frame the guide has, up to what is asked and to the most read at once.
         assert_eq!(reader.frames_of(65, None, 16.0), 65);
         assert_eq!(reader.frames_of(65, Some(2.0), 16.0), 32);

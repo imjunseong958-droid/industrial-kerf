@@ -691,7 +691,7 @@ recipes, in `fixtures/shots/car`.
 
    The workflows are in the repository since 2026-11-13, four that come
    with `kerf-comfy` ([shots.md](shots.md#a-picture-read-back)):
-   `moge-depth`, `moge-set`, `da3-depth`, and `da3-multiview`. Each says
+   `depth-moge`, `set-moge`, `depth-da3`, and `cameras-da3`. Each says
    `"of": "guide"`: what it makes is of its guide frame for frame, at the
    guide's own rate and size, where a model that makes a shot has a rate
    and a size of its own. That, and fetching the file whose kind the line
@@ -702,11 +702,11 @@ recipes, in `fixtures/shots/car`.
 
    | Recipe line | Took |
    |---|---|
-   | `generate model=moge guide={take.mp4}` (`moge-depth`) | 64 to 68 s |
+   | `generate model=depth guide={take.mp4}` (`depth-moge`) | 64 to 68 s |
    | the same with `refine_steps=1` | 30 s, its greys 0.3% from the default's |
-   | `generate model=moge-set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
-   | `generate model=da3 guide=…` (`da3-depth`) | 10 to 11 s |
-   | `generate model=da3-views guide=… out={cameras.txt}` (`da3-multiview`) | 10 to 11 s |
+   | `generate model=set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
+   | `generate model=depth-da3 guide=…` (`depth-da3`) | 10 to 11 s |
+   | `generate model=cameras guide=… out={cameras.txt}` (`cameras-da3`) | 10 to 11 s |
    | for scale, `generate model=vace …`, the take itself | 94 s |
 
    *A take read back* (`shots/readback.kerfrecipe`): the depth pass of the
@@ -737,7 +737,7 @@ recipes, in `fixtures/shots/car`.
 
    *A camera found* (`shots/views.kerfrecipe`): the camera going 75 degrees
    round the parked car, drawn as its picture in flat colors, with
-   `da3-multiview`. It put the camera turning 7 degrees the wrong way over
+   `cameras-da3`. It put the camera turning 7 degrees the wrong way over
    the first quarter and then 43 the right way, where the guide's turns 74
    one way throughout, with a lens of 37 degrees down the frame where the
    guide's is 40. A sky and a road in two flat colors give it little to
@@ -745,7 +745,7 @@ recipes, in `fixtures/shots/car`.
    What it wrote is a file and nothing reads it yet.
 
    *Not done:* the camera path into a `gen=camera@1` clip; a set's own
-   camera and lens, which `moge-set`'s file does not hold; a rebuilt set
+   camera and lens, which `set-moge`'s file does not hold; a rebuilt set
    drawn in a sequence with something added to it; footage.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a

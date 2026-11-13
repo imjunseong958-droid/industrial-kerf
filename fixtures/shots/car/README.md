@@ -18,8 +18,8 @@ A take is kept in `shots/<media>.takes/`, with the guide it was made from in
 its `.work` folder.
 
 Two more read a picture back (`docs/shots.md`, A picture read back), with the
-models `moge` and `da3-views` set up as `kerf-comfy`'s `moge-depth` and
-`da3-multiview`:
+models `depth` and `cameras` set up as `kerf-comfy`'s `depth-moge` and
+`cameras-da3`:
 
 - `readback`: the depth guide of the car driving across, the take `vace`
   makes of it, and that take's depth as MoGe reads it, which is the media.

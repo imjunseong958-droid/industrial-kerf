@@ -3,5 +3,5 @@ kerf-recipe 1
 # drawn as its picture, with where Depth Anything 3 puts the camera on each frame beside
 # the depth it agrees on across them.
 render s3 {guide.mp4} size=832x480 rate=16
-generate model=da3-views guide={guide.mp4} out={cameras.txt}
-generate model=da3-views guide={guide.mp4}
+generate model=cameras guide={guide.mp4} out={cameras.txt}
+generate model=cameras guide={guide.mp4}
