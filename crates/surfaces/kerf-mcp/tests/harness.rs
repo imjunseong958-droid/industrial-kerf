@@ -3232,6 +3232,105 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
     assert!(on_media.contains("program"), "{on_media}");
 }
 
+/// `look` says what shows of each clip on a frame, and what hides it.
+#[test]
+fn look_says_what_shows_of_each_clip_and_what_hides_it() {
+    // A floor higher than the foot of what stands on it, as a guide once had.
+    let Some((_directory, router)) = router_with(
+        "    clip sky gen=solid@1 at=0f dur=60f
+      set color=#88aaff
+  track V2 video
+    clip floor gen=solid@1 at=0f dur=60f
+      set color=#404040 three_d=true rotate_x=-80 y=0.1 z=0 scale=3
+  track V3 video
+    clip car gen=solid@1 at=0f dur=60f
+      set color=#ff0000 three_d=true scale=0.2 y=0.2 z=0.5
+  track V4 video
+    clip cam gen=camera@1 at=0f dur=60f
+",
+    ) else {
+        return;
+    };
+    let shows = ok(&router, "look", json!({"shows": true, "at": ["10f"]}));
+    assert_eq!(shows["sequence"], "s1", "{shows}");
+    let frame = &shows["frames"][0];
+    assert_eq!(frame["at"], "10f");
+    let clips = frame["clips"].as_array().unwrap();
+    assert_eq!(
+        clips.iter().map(|clip| &clip["clip"]).collect::<Vec<_>>(),
+        ["sky", "floor", "car"],
+        "{frame}"
+    );
+    let car = &clips[2];
+    assert!(car["hidden"].as_f64().unwrap() > 0.5, "{car}");
+    assert_eq!(car["by"][0]["clip"], "floor", "{car}");
+    assert_eq!(car["box"].as_array().map(Vec::len), Some(4), "{car}");
+    assert_eq!(clips[0]["edges"], json!(["left", "top", "right", "bottom"]));
+    assert!(
+        car.get("opacity").is_none() && car.get("edges").is_none(),
+        "{car}"
+    );
+    // Where it is not asked for sensibly, it says how.
+    let alone = message(&error(&router, "look", json!({"shows": true})));
+    assert!(alone.contains("`at`"), "{alone}");
+    let on_media = message(&error(
+        &router,
+        "look",
+        json!({"shows": true, "at": ["0f"], "media": "m1"}),
+    ));
+    assert!(on_media.contains("program"), "{on_media}");
+}
+
+/// `look` writes a signal's keys from the onsets of a sound on the timeline, and the edit that
+/// runs them has the signal follow it.
+#[test]
+fn look_writes_a_signals_keys_from_a_sounds_onsets() {
+    // The footage's tone starts on its first frame, which the clip plays a second in.
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00
+  track V2 video
+    clip cue gen=signal@1 at=0f dur=120f
+  track A1 audio
+    clip a1 media=m1 at=00:00:01:00 dur=00:00:02:00
+",
+    ) else {
+        return;
+    };
+    let read = ok(
+        &router,
+        "look",
+        json!({"signal": {"of": "a1", "clip": "cue"}}),
+    );
+    assert_eq!(
+        read["script"], "set cue value={0f:0:hold 30f:1:hold 33f:0:hold}",
+        "{read}"
+    );
+    assert_eq!((&read["onsets"], &read["outside"]), (&json!(1), &json!(0)));
+    // A longer hold, for a model that makes fewer frames.
+    let held = ok(
+        &router,
+        "look",
+        json!({"signal": {"of": "a1", "clip": "cue", "hold": 6}}),
+    );
+    assert_eq!(
+        held["script"],
+        "set cue value={0f:0:hold 30f:1:hold 36f:0:hold}"
+    );
+    // The line is one an edit runs, and the document then holds the keys.
+    ok(&router, "edit", json!({"script": read["script"]}));
+    // What cannot be read is said.
+    let wrong = |arguments: Value| message(&error(&router, "look", arguments));
+    assert!(wrong(json!({"signal": {"of": "a1", "clip": "c1"}})).contains("is not a signal"));
+    assert!(wrong(json!({"signal": {"of": "cue", "clip": "cue"}})).contains("plays no media"));
+    assert!(wrong(json!({"signal": {"of": "a9", "clip": "cue"}})).contains("no clip `a9`"));
+    assert!(
+        wrong(json!({"signal": {"of": "a1", "clip": "cue", "hold": 0}})).contains("from 1 to 240")
+    );
+    assert!(
+        wrong(json!({"signal": {"of": "a1", "clip": "cue"}, "at": ["0f"]})).contains("used alone")
+    );
+}
+
 /// Looking something up by what it does reaches what the clip properties and generators can do.
 #[test]
 fn look_finds_what_is_in_properties_and_parameters() {

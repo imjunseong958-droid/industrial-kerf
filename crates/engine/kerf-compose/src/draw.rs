@@ -22,7 +22,7 @@
 
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{domains, frames};
-use crate::{Accel, ComposeError, Frame};
+use crate::{Accel, ComposeError, ComposeOptions, Frame, Pass};
 use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_draw::blend::{composite, composite_placed};
@@ -97,6 +97,45 @@ pub(crate) struct Drawing {
     disk: Option<std::sync::Arc<crate::disk::DiskFrames>>,
     /// The files the program's effects name, read once.
     files: Files,
+    /// What is drawn of the program.
+    pass: Pass,
+    /// The color each clip that draws has in an ids pass, in the order they are told in.
+    ids: Vec<(Id, Rgba)>,
+}
+
+/// The color the clip told `index`th has in an ids pass: no two near each other for as many clips
+/// as a scene has, and none near black, which is where there is no clip.
+fn id_color(index: usize) -> Rgba {
+    // Hues a golden angle apart never bunch, and three kinds of color in turn part neighbors.
+    let hue = (index as f64 * 137.507_764) % 360.0;
+    let (saturation, value) = [(0.85, 1.0), (0.55, 0.8), (1.0, 0.62)][index % 3];
+    let chroma = value * saturation;
+    let within = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        0 => (chroma, within, 0.0),
+        1 => (within, chroma, 0.0),
+        2 => (0.0, chroma, within),
+        3 => (0.0, within, chroma),
+        4 => (within, 0.0, chroma),
+        _ => (chroma, 0.0, within),
+    };
+    let byte = |channel: f64| ((channel + value - chroma) * 255.0).round() as u8;
+    Rgba {
+        r: byte(r),
+        g: byte(g),
+        b: byte(b),
+        a: 255,
+    }
+}
+
+/// `picture` in the one color `color`, where and as much as it was there.
+fn flat(picture: &mut Image, color: [f32; 3]) {
+    picture.px.par_chunks_mut(4).for_each(|pixel| {
+        let alpha = pixel[3];
+        pixel[0] = color[0] * alpha;
+        pixel[1] = color[1] * alpha;
+        pixel[2] = color[2] * alpha;
+    });
 }
 
 struct SequencePlan {
@@ -285,15 +324,8 @@ struct Reveals {
 }
 
 impl Drawing {
-    pub fn new(
-        project: &Project,
-        catalog: &Catalog,
-        sequence: Option<&str>,
-        captions: bool,
-        accel: Accel,
-        keep_frames: bool,
-        disk: Option<std::sync::Arc<crate::disk::DiskFrames>>,
-    ) -> Result<Self> {
+    pub fn new(project: &Project, catalog: &Catalog, options: &ComposeOptions) -> Result<Self> {
+        let (sequence, pass) = (options.sequence.as_deref(), options.pass);
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
         let project = &expanded;
@@ -320,21 +352,88 @@ impl Drawing {
                     .map_err(ComposeError::Invalid)?;
             }
         }
+        let sequences: Vec<SequencePlan> = builder
+            .sequences
+            .into_iter()
+            .map(|plan| plan.expect("every sequence planned"))
+            .collect();
+        let mut ids: Vec<(Id, Rgba)> = Vec::new();
+        for shown in sequences
+            .iter()
+            .flat_map(|sequence| &sequence.tracks)
+            .flat_map(|track| &track.shown)
+        {
+            let id = &shown.plan.clip.id;
+            let draws = !matches!(shown.plan.source, Source::Nothing | Source::Adjustment);
+            if draws && !ids.iter().any(|(told, _)| told == id) {
+                ids.push((id.clone(), id_color(ids.len())));
+            }
+        }
         Ok(Self {
             hdr: HdrOutput::new(top.color),
-            sequences: builder
-                .sequences
-                .into_iter()
-                .map(|plan| plan.expect("every sequence planned"))
-                .collect(),
+            sequences,
             pictures: Pictures::new(builder.clips),
             sounds: crate::sound::Sounds::default(),
-            captions,
-            accel,
-            keep_frames,
-            disk,
+            captions: options.captions,
+            // A pass has no kernels: the CPU draws it.
+            accel: if pass == Pass::Picture {
+                options.accel
+            } else {
+                Accel::Never
+            },
+            keep_frames: options.keep_frames,
+            disk: options.frame_folder.as_deref().map(crate::disk::open),
             files,
+            pass,
+            ids,
         })
+    }
+
+    /// See [`Compositor::ids`](crate::Compositor::ids).
+    pub fn ids(&self) -> Vec<(String, [u8; 3])> {
+        self.ids
+            .iter()
+            .map(|(id, color)| (id.to_string(), [color.r, color.g, color.b]))
+            .collect()
+    }
+
+    /// A clip's blend, which a pass does not have: it is laid over what is behind it.
+    fn blend(&self, blend: Blend) -> Blend {
+        if self.pass == Pass::Picture {
+            blend
+        } else {
+            Blend::Normal
+        }
+    }
+
+    /// `picture`, a clip's own with all done to it, as the pass drawn has it: where it was, in the
+    /// clip's color, or by how near each of its pixels is.
+    fn as_pass(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        picture: &mut Image,
+        to_output: &Affine,
+        at: Time,
+        size: (usize, usize),
+    ) {
+        match self.pass {
+            Pass::Picture => {}
+            Pass::Ids => {
+                let color = self
+                    .ids
+                    .iter()
+                    .find(|(id, _)| *id == plan.clip.id)
+                    .map_or(Rgba::WHITE, |(_, color)| *color);
+                let [r, g, b, _] = premultiplied(color);
+                flat(picture, [r, g, b]);
+            }
+            Pass::Depth if plan.three_d => {
+                let scene = three_d::Scene::at(sequence, at, size);
+                three_d::shade_by_depth(&scene, plan, picture, to_output, at - plan.clip.start);
+            }
+            Pass::Depth => flat(picture, [0.0; 3]),
+        }
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -438,8 +537,10 @@ impl Drawing {
         }
         let image = self.draw(0, at, scale);
         let rgba = match &self.hdr {
-            Some(output) => image.to_signal16_over_black(|c| output.signal(c)),
-            None => image.to_rgba16_over_black(),
+            Some(output) if self.pass == Pass::Picture => {
+                image.to_signal16_over_black(|c| output.signal(c))
+            }
+            _ => image.to_rgba16_over_black(),
         };
         Frame {
             width: image.w as u32,
@@ -458,7 +559,7 @@ impl Drawing {
     }
 
     fn draw_frame(&self, at: Time, scale: f64) -> Frame {
-        if scale >= 1.0 && self.hdr.is_none() {
+        if scale >= 1.0 && self.hdr.is_none() && self.pass == Pass::Picture {
             if let Some(frame) = self.plain_frame(at) {
                 return frame;
             }
@@ -468,7 +569,8 @@ impl Drawing {
             return frame;
         }
         let mut image = self.draw(0, at, scale);
-        if let Some(output) = &self.hdr {
+        // A pass is numbers, which no display is to be fitted to.
+        if let Some(output) = self.hdr.as_ref().filter(|_| self.pass == Pass::Picture) {
             image.px.par_chunks_mut(4).for_each(|pixel| {
                 let sdr = output.sdr([pixel[0], pixel[1], pixel[2]]);
                 pixel[..3].copy_from_slice(&sdr);
@@ -487,6 +589,10 @@ impl Drawing {
         scale.clamp(1.0 / 16.0, 1.0).to_bits().hash(&mut hash);
         self.hdr.as_ref().map(|output| output.pq).hash(&mut hash);
         self.captions.hash(&mut hash);
+        // Only where it is not the picture, so that a picture's number is what it was.
+        if self.pass != Pass::Picture {
+            self.pass.hash(&mut hash);
+        }
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }
@@ -635,7 +741,7 @@ impl Drawing {
                 self.crossing(&mut canvas, plan, &crossing, &moment);
             }
         }
-        if self.captions {
+        if self.captions && self.pass == Pass::Picture {
             for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
                 let text_size = caption_size(plan, scale);
                 let text = caption_text(caption, text_size);
@@ -711,6 +817,9 @@ impl Drawing {
         size: (usize, usize),
     ) -> three_d::Scene {
         let mut scene = three_d::Scene::at(plan, at, size);
+        if self.pass != Pass::Picture {
+            return scene.bare();
+        }
         if scene.casts_shadows() {
             let casters = tracks
                 .iter()
@@ -838,7 +947,7 @@ impl Drawing {
                     picture,
                     depth,
                     opacity: ready.opacity,
-                    blend: shown.plan.blend,
+                    blend: self.blend(shown.plan.blend),
                 })
             })
             .collect();
@@ -866,6 +975,9 @@ impl Drawing {
                 Some(_) => {}
                 None => self.layer(canvas, sequence, shown, moment, shown.plan.blend),
             }
+        }
+        if self.pass != Pass::Picture {
+            return;
         }
         for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
             let opacity = f64::from(dip.color.a) / 255.0
@@ -921,7 +1033,7 @@ impl Drawing {
             _ if pair.from == pair.to => from.plan.blend,
             _ => Blend::Normal,
         };
-        composite(canvas, &mixed, 1.0, blend);
+        composite(canvas, &mixed, 1.0, self.blend(blend));
     }
 
     /// Draw a shown clip over `canvas` at `moment` with `blend`.
@@ -941,9 +1053,12 @@ impl Drawing {
             return;
         }
         if matches!(plan.source, Source::Adjustment) {
-            self.adjust(canvas, sequence, plan, time, scale);
+            if self.pass == Pass::Picture {
+                self.adjust(canvas, sequence, plan, time, scale);
+            }
             return;
         }
+        let blend = self.blend(blend);
         let (w, h) = (canvas.w, canvas.h);
         let Some(Ready {
             picture,
@@ -1020,6 +1135,10 @@ impl Drawing {
             _ => 1.0,
         };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
+        if self.pass != Pass::Picture {
+            let picture = Arc::make_mut(&mut picture);
+            self.as_pass(sequence, plan, picture, &to_output, at, (w, h));
+        }
         Some(Ready {
             picture,
             to_output,
@@ -2134,7 +2253,9 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
-                "null" | "camera" | "light" => (Source::Nothing, canvas, false, true),
+                "null" | "camera" | "light" | kerf_model::SIGNAL => {
+                    (Source::Nothing, canvas, false, true)
+                }
                 other => match domains::source(other) {
                     Some(source) => (Source::Drawn(source), canvas, false, true),
                     None => return Err(unsupported(&clip.id, format!("generator `{other}`"))),
@@ -2772,16 +2893,9 @@ mod tests {
             let project = kerf_lang::parse_document(&document, Catalog::builtin())
                 .unwrap_or_else(|errors| panic!("{set}: {errors:?}"))
                 .project;
-            let mut drawing = Drawing::new(
-                &project,
-                Catalog::builtin(),
-                None,
-                false,
-                Accel::Auto,
-                false,
-                None,
-            )
-            .unwrap_or_else(|error| panic!("{set}: {error}"));
+            let mut drawing =
+                Drawing::new(&project, Catalog::builtin(), &ComposeOptions::default())
+                    .unwrap_or_else(|error| panic!("{set}: {error}"));
             // What is planned for a solid, but for what a piece of media would be.
             let plan = &mut drawing.sequences[0].tracks[1].shown[0].plan;
             plan.size = size;

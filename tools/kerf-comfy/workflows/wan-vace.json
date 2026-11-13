@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone.",
+  "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
   "fps": 16,
   "frames": { "most": 81, "step": 4 },
   "size": [832, 480],

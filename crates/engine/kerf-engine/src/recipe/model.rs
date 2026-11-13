@@ -23,10 +23,14 @@
 //!   "seconds": 4.0,
 //!   "size": [1920, 1080],
 //!   "seed": 7,
+//!   "signals": [{ "name": "swell", "rate": 24.0, "values": [0.0, 0.25, 0.5] }],
 //!   "more": { "strength": "0.6" },
 //!   "out": "/project/shots/open.takes/.making-003.mp4"
 //! }
 //! ```
+//!
+//! `signals` holds each signal the line names ([`super::signal`]): a number
+//! for each frame of the clip's sequence, at that sequence's rate.
 //!
 //! The program runs as a recipe's `run` does, supervised and never through
 //! a shell, writes what it has to say to stderr, and ends well once the
@@ -44,6 +48,7 @@
 //!                        "reads": ["guide", "ref"] } } }
 //! ```
 
+use super::signal::Signal;
 use crate::error::{EngineError, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -93,6 +98,9 @@ pub struct Ask {
     pub seconds: Option<f64>,
     pub size: Option<(u32, u32)>,
     pub seed: Option<u64>,
+    /// Numbers over time that say when what the prompt asks for happens:
+    /// signal clips of the project, by their ids.
+    pub signals: Vec<String>,
     /// Anything else the line says, which only that model reads.
     pub more: BTreeMap<String, String>,
     /// The file it writes: `out`, or the name of one a later step reads.
@@ -113,6 +121,7 @@ impl Ask {
             seconds: None,
             size: None,
             seed: None,
+            signals: Vec::new(),
             more: BTreeMap::new(),
             out: "out".to_owned(),
         };
@@ -158,6 +167,13 @@ impl Ask {
                             .map_err(|_| format!("`seed={value}` is not a whole number"))?,
                     );
                 }
+                "signal" if value.is_empty() => {
+                    return Err(
+                        "`signal=` names a signal clip of the project, such as `signal=swell`"
+                            .to_owned(),
+                    )
+                }
+                "signal" => ask.signals.push(value.to_owned()),
                 "out" => {
                     ask.out = super::whole(value).ok_or_else(|| {
                         format!("`out={value}` names the file it makes in braces, such as `{{first.png}}`")
@@ -210,6 +226,7 @@ impl Ask {
         if let Some(seed) = self.seed {
             parts.push(format!("seed {seed}"));
         }
+        parts.extend(self.signals.iter().map(|signal| format!("signal {signal}")));
         parts.extend(
             self.more
                 .iter()
@@ -220,11 +237,13 @@ impl Ask {
 
     /// The request a model's program reads, with every file where it is:
     /// `file` says where one of the project is, and `made` where one a step
-    /// made is, the one this writes among them.
+    /// made is, the one this writes among them. `signals` are the ones it
+    /// names, read from the project.
     pub(crate) fn request(
         &self,
         file: &dyn Fn(&str) -> Result<PathBuf>,
         made: &dyn Fn(&str) -> PathBuf,
+        signals: &[Signal],
     ) -> Result<Value> {
         let place = |source: &Source| -> Result<Value> {
             Ok(Value::String(
@@ -248,6 +267,7 @@ impl Ask {
             "seconds": self.seconds,
             "size": self.size.map(|(width, height)| [width, height]),
             "seed": self.seed,
+            "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
             "more": self.more,
             "out": made(&self.out).to_string_lossy(),
         }))
@@ -256,6 +276,9 @@ impl Ask {
 
 /// The files a `generate` line hands a model, by the names it gives them.
 pub const FILES: [&str; 4] = ["guide", "first", "last", "ref"];
+
+/// The name a `generate` line hands a model a signal by.
+pub const SIGNAL: &str = "signal";
 
 /// What a model takes, as the person's models file says it under `takes`.
 /// Each part is there only where the file says it.
@@ -270,8 +293,8 @@ pub struct Takes {
     pub rate: Option<f64>,
     /// The longest shot it makes at once, in seconds.
     pub seconds: Option<f64>,
-    /// The files it has a use for, of [`FILES`]: none is a model that takes
-    /// a prompt alone.
+    /// What it has a use for of what a line hands it, the [`FILES`] and
+    /// [`SIGNAL`]: none is a model that takes a prompt alone.
     pub reads: Option<Vec<String>>,
     /// The other names a `generate` line can set for it, each with the
     /// value it has when the line does not.
@@ -319,11 +342,13 @@ impl Takes {
                     let reads: Vec<String> = serde_json::from_value(value.clone())
                         .ok()
                         .filter(|reads: &Vec<String>| {
-                            reads.iter().all(|read| FILES.contains(&read.as_str()))
+                            reads
+                                .iter()
+                                .all(|read| FILES.contains(&read.as_str()) || read == SIGNAL)
                         })
                         .ok_or_else(|| {
                             format!(
-                                "`reads` in `takes` is not a list of the files a `generate` line gives: {}",
+                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}",
                                 FILES.join(", ")
                             )
                         })?;

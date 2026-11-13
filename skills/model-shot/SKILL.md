@@ -9,6 +9,11 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   guide a sequence of its own, in the model's shape (`size`) and no longer
   than its `seconds`, and write the `render` line `look` gives as `guide`, so
   the guide is drawn at the model's size and rate and not the sequence's.
+- Which kind of guide a model follows is the model's, and its `about`
+  says: the picture, for a model that covers a render, or a pass of it,
+  `render <sequence> {guide.mp4} pass=depth size=… rate=…`, for one that
+  follows depth. With a depth pass the guide's colors say nothing, so the
+  prompt gives every color, and a backdrop out of depth is black.
 - A guide is read for layout, motion, and camera, not for finish. Flat colors
   and plain solids that differ clearly from each other guide better than
   detail; what the picture should look like goes in the prompt. A model keeps
@@ -33,8 +38,22 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   directional light's `x y z` is the way it shines. With a light that casts
   a `shadow`, add an `ambient` one, or what faces away is black. A guide may
   go without lights: a model lights the shot itself, and made as good a take.
-- Look at the guide's first, middle, and last frame before writing the
-  recipe: every clip in frame, nothing crossing by accident, the move plain.
+- When something has to happen on a frame, a ball landing, a flash, smoke
+  building, and the model's `reads` has `signal`, say when with a signal: a
+  `gen=signal@1` clip on a track of its own in the guide's sequence, from
+  `at=0f` for the shot's length, with `value` keyed 0 to 1, and
+  `signal=<clip>` on the `generate` line. The prompt says what the number is
+  of. Where the moments are a sound's, music's beats or what was recorded,
+  `look` with `signal` writes the keys from the clip that plays it. Hold a
+  peak for two of the model's frames, or it arrives lower. A
+  model that does not read one is said to have no use for it in `notes`:
+  leave it off the line.
+- Read the guide before writing the recipe, at its first, middle, and last
+  frame: `look` with `shows` and `at` says of each clip where it is (`box`),
+  what hides it (`hidden`, `by`), and which edges of the frame it reaches.
+  Mend a subject with a floor in its `by`, one with no `box`, which has left
+  the frame, and one at an edge it should not be at. Then look at the frames
+  themselves: nothing crossing by accident, the move plain.
 - The recipe is the `render` line and a `generate` line: the prompt,
   `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
   again. Write it with the edit, in `recipes`, beside the script that adds

@@ -45,6 +45,47 @@ pub enum Accel {
     Always,
 }
 
+/// What of a sequence is drawn: its picture, or something a picture does not say that the document
+/// knows, for a model that follows it or for measuring what shows.
+///
+/// A pass is drawn from the same clips, placed and seen as the picture's are, with no lights, no
+/// focus, no adjustment layers, no dips, no captions, and every clip laid over what is behind it
+/// whatever its blend. It is drawn on the CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Pass {
+    /// The picture.
+    #[default]
+    Picture,
+    /// Which clip each pixel is of: every clip that draws in one flat color of its own
+    /// ([`Compositor::ids`]), over black where there is none. A nested sequence is one clip.
+    Ids,
+    /// How near each pixel is: white at the camera, mid grey where a clip at `z=0` stands before a
+    /// camera left where it is, and darker the farther, black where nothing is in depth. A clip
+    /// out of depth has no distance, and is black.
+    Depth,
+}
+
+impl Pass {
+    /// The pass a recipe's `pass=` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "picture" => Some(Self::Picture),
+            "ids" => Some(Self::Ids),
+            "depth" => Some(Self::Depth),
+            _ => None,
+        }
+    }
+
+    /// Its name, as a recipe writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Picture => "picture",
+            Self::Ids => "ids",
+            Self::Depth => "depth",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ComposeOptions {
     /// The sequence to draw; the first one when absent.
@@ -60,6 +101,8 @@ pub struct ComposeOptions {
     /// A folder to keep frames in between sessions and renders, by what they depend on:
     /// [`default_frame_folder`] for the user's own.
     pub frame_folder: Option<std::path::PathBuf>,
+    /// What is drawn: the picture, unless it says otherwise.
+    pub pass: Pass,
 }
 
 /// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn
@@ -91,16 +134,15 @@ impl Compositor {
         options: &ComposeOptions,
     ) -> Result<Self, ComposeError> {
         Ok(Self {
-            drawing: draw::Drawing::new(
-                project,
-                catalog,
-                options.sequence.as_deref(),
-                options.captions,
-                options.accel,
-                options.keep_frames,
-                options.frame_folder.as_deref().map(disk::open),
-            )?,
+            drawing: draw::Drawing::new(project, catalog, options)?,
         })
+    }
+
+    /// The color each clip that draws has in [`Pass::Ids`], as the bytes of a frame: the program's
+    /// clips from its lowest track up, then those of the sequences it nests. Along an edge two
+    /// clips share a pixel, which is then between their colors.
+    pub fn ids(&self) -> Vec<(String, [u8; 3])> {
+        self.drawing.ids()
     }
 
     /// The canvas, made even as a render makes it.

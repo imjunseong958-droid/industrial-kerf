@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -55,6 +55,7 @@ but a file's name stand for themselves.
 | `guide=` | A picture in motion to follow: a blocking, a rough render, an earlier take. |
 | `first=`, `last=` | The first and the last frame. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
+| `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
 | `seconds=`, `size=WxH` | How long and how large. |
 | `seed=` | A whole number, for a model that gives the same file for the same seed. |
 | `out={name}` | Writes a file for a later step in place of the shot's own, so one model's picture can be the next one's `first=`. |
@@ -63,6 +64,10 @@ Anything else on the line, such as `strength=0.6`, goes to the model as it is
 written, for the models that read it. A file is a path from the recipe's
 folder (`../refs/boat.png`) or a `{name}` an earlier step made. Every file a
 recipe names has to be inside the project.
+
+So a model is told three things, each its own way: **where** things are and
+how the camera moves, by a guide; **when** something happens and how much, by
+a signal; and **what** it all looks like, by the prompt and the references.
 
 ## Making a shot
 
@@ -224,7 +229,9 @@ A take's record holds a hash of each thing it was made from:
 - the recipe, without its comments;
 - each file the recipe reads: what `needs` names and what a model is handed;
 - each sequence it has Kerf render: that sequence, the sequences it nests,
-  and the media lines they play.
+  and the media lines they play;
+- each signal it hands a model, as the model is handed it: the numbers, and
+  nothing else of the sequence its clip is in.
 
 A media wants making when one of those is no longer what its take was made
 from, and it says which: `look` lists it under `toMake` with
@@ -234,8 +241,8 @@ marks each take with what changed since.
 Nothing else is in the record. Trimming, moving, retiming, grading, titling,
 or mixing a made shot changes none of it, so those edits are free: they play
 at once and never ask for the shot again. Changing the guide, the prompt, a
-reference, or the seed is what costs a making, and Kerf says so before a
-person pays for one.
+reference, a signal's keys, or the seed is what costs a making, and Kerf says
+so before a person pays for one.
 
 A making of a recipe that has not changed is another take: another roll of
 the same shot.
@@ -272,10 +279,13 @@ program with `{request}` as the file's path:
   "seconds": 4.0,
   "size": null,
   "seed": 7,
+  "signals": [],
   "more": { "strength": "0.6" },
   "out": "/project/shots/open.takes/.making-003.mp4"
 }
 ```
+
+`signals` holds each signal the line names, as [Signals](#signals) says.
 
 The program asks its model however that model is asked, writes the file at
 `out`, writes what it has to say to stderr a line at a time, and ends with
@@ -308,7 +318,7 @@ Beside `run`, a model's entry can say so under `takes`:
       "size": [832, 480],
       "rate": 16,
       "seconds": 5,
-      "reads": ["guide", "ref"],
+      "reads": ["guide", "ref", "signal"],
       "more": { "steps": 20, "strength": 1.0 }
     }
   }
@@ -321,7 +331,7 @@ Beside `run`, a model's entry can say so under `takes`:
 | `size` | The picture it makes, width and height: the size a guide for it is drawn at, and the most a `size=` asks of it. |
 | `rate` | The frames a second it makes: the rate a guide for it is drawn at. |
 | `seconds` | The longest shot it makes at once. |
-| `reads` | The files of a `generate` line it has a use for, of `guide`, `first`, `last` and `ref`. An empty list is a model that takes a prompt alone. |
+| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref` and `signal`. An empty list is a model that takes a prompt alone. |
 | `more` | The other names a line can set for it, each with the value it has when the line does not. |
 
 Each is there only where the person says it, and anything else under `takes`
@@ -384,7 +394,7 @@ under the model's name. It reads the workflow and asks no server:
 {
   "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"],
   "takes": {
-    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone.",
+    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
     "size": [832, 480],
     "rate": 16,
     "seconds": 5.0625,
@@ -420,6 +430,7 @@ start from.
 | `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
 | `{width}`, `{height}`, `{frames}`, `{fps}` | What `size=` and `seconds=` come to for this model. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
+| `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
 
 What it does with a request:
@@ -449,6 +460,86 @@ Windows a making that is stopped ends the program outright, so its job stays
 on the server; and what it sends up and what the server saves stay on the
 server.
 
+## Signals
+
+A guide says where things are, and a prompt what they are. Neither says
+when: the frame a ball meets the floor, how a light comes up, how much smoke
+there is from one second to the next. A signal does. It is a number from 0
+to 1 over the shot's time, and the prompt says what it is of.
+
+A signal is a clip of the project, `gen=signal@1`. It draws nothing, and its
+`value` takes keyframes as any number does, so it is cut, moved, proposed,
+and merged with the rest of its sequence. Put it in the guide's sequence,
+from the shot's first frame, on a track of its own:
+
+```text
+clip bounce gen=signal@1 at=0f dur=96f
+  set value={0f:0 11f:0 12f:1 15f:1 16f:0 35f:0 36f:1 39f:1 40f:0}
+```
+
+```text
+render s2 {guide.mp4} size=832x480 rate=16
+generate model=cued prompt="a man dribbles a basketball; the ball meets the court on each beat" guide={guide.mp4} signal=bounce seed=7
+```
+
+The request then holds what the signal comes to on each frame of its
+sequence, from the sequence's first, at the sequence's rate:
+
+```json
+"signals": [
+  { "name": "bounce", "rate": 24.0, "values": [0.0, 0.0, 0.0, 1.0, 1.0, 0.0] }
+]
+```
+
+- **Where the clip is not, the signal is 0**: before it, after it, and while
+  it or its track is turned off (`enabled=false`). Inside the clip its keys hold before the first and after
+  the last, as keys do.
+- **A shot's time is the sequence's.** Frame 0 of the signal is the first
+  frame of the sequence its clip is in, which is the guide's first frame
+  when that sequence is the guide. A signal needs no guide: its sequence can
+  hold nothing else.
+- **It costs a making only when it changes.** A take is held to the numbers
+  a model was handed, to four places, and not to the rest of the sequence:
+  recoloring a clip beside it asks for nothing, and moving one of its keys
+  does.
+- **One that never moves says nothing of when**, and the plan says so before
+  a making is paid for.
+- **The model's program brings it to the model's frames.** `kerf-comfy` gives
+  a workflow one number for each frame asked for, at the model's rate. Where
+  the model makes fewer frames a second than the sequence has, each is the
+  mean of the signal over that frame's time, so a peak one frame long at 24 a
+  second reaches a model at 16 lower than it was, and spread over two frames.
+  Hold a peak for as long as two of the model's frames last and one of them
+  has it whole: three frames at 24 for a model at 16.
+
+What a signal does to the picture is the model's, not Kerf's. Kerf knows no
+model that reads one by name, and the workflow that comes with `kerf-comfy`
+has no blank for one, so a line that names a signal for it is told that it
+is left out. A workflow of your own takes one at a `{signal}` blank, in a
+node that takes a list of numbers, a frame each
+([A model on a ComfyUI server](#a-model-on-a-comfyui-server)); what it does
+there, a strength, a mask's weight, a motion scale, is the workflow's to say.
+
+A signal's moments can be a sound's. An agent's `look` with `signal` reads
+the onsets of the sound a clip on the timeline plays, the beats of a track
+or a ball on a floor, and gives the line that has a signal clip of the same
+sequence be 1 for a few frames from each and 0 between:
+
+```text
+look {"signal": {"of": "a1", "clip": "bounce", "hold": 3}}
+  → set bounce value={0f:0:hold 12f:1:hold 15f:0:hold 36f:1:hold 39f:0:hold}
+```
+
+`hold` is how many frames each lasts, 3 unless said; onsets nearer each other
+than that run together, and those that fall outside the signal clip are
+counted and left out. It reads onsets, where a sound starts, and not how
+loud it is.
+
+Not here yet: a signal from how loud a sound is, as a voice swells, and from
+footage, such as how fast something moves. Nor is there a place in the editor
+to draw one under the picture: its keys are text, which an agent writes, or a
+person with `set`.
+
 ## Guides
 
 What a model is given to follow decides how much of a shot is directed and how
@@ -464,8 +555,47 @@ steps:
   for a model that reads them.
 - **Footage**: a take of another shot, or something filmed, named as a file.
 
-Kerf does not draw depth, normals, or object ids of its own sequences as
-passes yet; a model that needs them takes them from a renderer.
+### Passes
+
+A picture leaves out what the document knows: which clip a pixel is of, and
+how far away it is. A `render` step draws either in place of the picture,
+from the same clips, placed and seen as the picture's are:
+
+```text
+render s2 {guide.mp4} size=832x480 rate=16
+render s2 {depth.mp4} pass=depth size=832x480 rate=16
+render s2 {ids.mp4} pass=ids size=832x480 rate=16
+```
+
+- **`pass=ids`**: every clip that draws, in one flat color of its own, over
+  black where there is none. A clip keeps its color from frame to frame, so
+  the file says which thing is which as the camera and the clips move. A
+  nested sequence is one clip. The colors go by the clips' order, the lowest
+  track first, so adding a clip below others gives those above it new ones.
+- **`pass=depth`**: how near each pixel is, as a grey: white at the camera,
+  mid grey where a clip at `z=0` stands before a camera left where it is,
+  and darker the farther, by one over the distance, as a model that reads
+  depth is given it. It goes by the scene's own numbers and by nothing in
+  the frame, so it holds still from one frame to the next. A clip out of
+  depth, such as a backdrop on the lowest track, has no distance and is
+  black, and so is where there is no clip.
+
+A pass has no lights, no focus, no adjustment layers, no dips, and no
+captions, and every clip is laid over what is behind it whatever its blend.
+It is drawn on the CPU. The sides of a clip with a `depth` take the grey of
+its face beside them, as they take its color, and not their own distance.
+
+A pass is a file as a guide is, and a model that follows one is handed it as
+its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
+workflow's to say. Handing one model a picture and a pass of it at once has
+no word on a `generate` line yet, and normals are not drawn.
+
+Which kind a model follows is the model's, and its entry's `about` says. A
+model that covers a render is handed the picture. Wan 2.1 VACE 1.3B, the
+small model `kerf-comfy` comes with a workflow for, made more of a depth
+pass than of a picture in flat colors, and nothing of an ids pass, which is
+what `look` with `shows` reads a frame by
+([architecture.md](architecture.md#measured)).
 
 ### A guide at the model's size and rate
 

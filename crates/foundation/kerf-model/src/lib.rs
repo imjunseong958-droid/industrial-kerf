@@ -42,6 +42,13 @@ pub use validate::validate;
 /// reads it where it draws.
 pub const SHAPE_OUTLINE: &str = "shape.outline";
 
+/// The generator that draws nothing and holds a number over time for a model: a recipe's
+/// `generate … signal=<clip>` hands it what [`SIGNAL_VALUE`] comes to on each frame.
+pub const SIGNAL: &str = "signal";
+
+/// The parameter of a [`SIGNAL`] clip that is the signal: 0 to 1, keyframed.
+pub const SIGNAL_VALUE: &str = "value";
+
 /// The axes of a variable font a title can set, by the tags fonts name them with.
 pub const TITLE_AXES: [[u8; 4]; 5] = [*b"wght", *b"wdth", *b"slnt", *b"opsz", *b"ital"];
 pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};

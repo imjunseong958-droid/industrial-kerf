@@ -1,4 +1,5 @@
 use super::model::{Ask, Models, Source};
+use super::signal::Signal;
 use super::*;
 use kerf_model::Project;
 
@@ -59,6 +60,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             to: "block.mp4".to_owned(),
             size: None,
             rate: None,
+            pass: Pass::Picture,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -106,14 +108,29 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 to: "guide.mp4".to_owned(),
                 size: Some((832, 480)),
                 rate: Some(Rate::new(16, 1).unwrap()),
+                pass: Pass::Picture,
             },
             Step::Render {
                 sequence: "s3".to_owned(),
                 to: "out".to_owned(),
                 size: Some((1280, 720)),
                 rate: Some(Rate::FPS_23_976),
+                pass: Pass::Picture,
             }
         ]
+    );
+    // A pass of the same sequence is another file of the recipe's, for a model that reads it.
+    let passes = Recipe::parse(
+        "kerf-recipe 1\nrender s2 {guide.mp4} size=832x480 rate=16\nrender s2 {ids.mp4} pass=ids size=832x480 rate=16\nrender s2 {out} pass=depth\n",
+    )
+    .unwrap();
+    let pass_of = |step: &Step| match step {
+        Step::Render { pass, .. } => *pass,
+        _ => panic!("a render step"),
+    };
+    assert_eq!(
+        passes.steps.iter().map(pass_of).collect::<Vec<_>>(),
+        [Pass::Picture, Pass::Ids, Pass::Depth]
     );
     // One model's picture can be the next one's first frame.
     let chained = Recipe::parse(
@@ -161,7 +178,9 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH` and `rate=<fps>`"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth`"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=normals")
+        .contains("`pass=normals` is not a pass Kerf draws: `ids`, which clip each pixel is of, or `depth`, how near it is"));
     assert!(
         wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
     );
@@ -307,8 +326,9 @@ fn a_models_entry_can_say_what_the_model_takes() {
     assert!(
         wrong(r#"{"seconds": "five"}"#).contains("`seconds` in `takes` is not a number above 0")
     );
-    assert!(wrong(r#"{"reads": ["guide", "depth"]}"#)
-        .contains("not a list of the files a `generate` line gives: guide, first, last, ref"));
+    assert!(wrong(r#"{"reads": ["guide", "depth"]}"#).contains(
+        "not a list of what a `generate` line hands a model: guide, first, last, ref, signal"
+    ));
     assert!(wrong(r#"{"about": 3}"#).contains("`about` in `takes` is not text"));
     assert!(wrong(r#"{"more": ["steps"]}"#).contains("`more` in `takes` is not an object"));
 }
@@ -335,6 +355,7 @@ fn a_request_says_where_every_file_is() {
                     .map(|inside| Path::new("/project").join(inside))
             },
             &|name| Path::new("/project/shots/open.takes/001.work").join(name),
+            &[],
         )
         .unwrap();
     assert_eq!(
@@ -350,6 +371,7 @@ fn a_request_says_where_every_file_is() {
             "seconds": 4.0,
             "size": [1280, 720],
             "seed": 7,
+            "signals": [],
             "more": {"strength": "0.6"},
             "out": "/project/shots/open.takes/001.work/out",
         })
@@ -358,6 +380,170 @@ fn a_request_says_where_every_file_is() {
         ask.shown(),
         "prompt \"a boat\", guide {guide.mp4}, first ../refs/boat.png, 4 s, 1280x720, seed 7, strength 0.6"
     );
+}
+
+/// A guide of twelve frames with a signal on it: `swell`, from its third
+/// frame for six, whose value is `value`.
+fn with_a_signal(value: &str, solid: &str) -> Project {
+    project(&format!(
+        "media m1 path=\"shots/open.json\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s2 rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=12f\n\
+         \x20     set color={solid}\n\
+         \x20 track V2 video\n\
+         \x20   clip swell gen=signal@1 at=2f dur=6f\n\
+         \x20     set value={value}\n"
+    ))
+}
+
+#[test]
+fn a_signal_is_what_its_clip_comes_to_on_each_frame() {
+    let project = with_a_signal("{0f:0 4f:1}", "#102030");
+    let swell = Signal::read(&project, "swell").unwrap();
+    assert_eq!(swell.name, "swell");
+    assert_eq!(swell.rate, 24.0);
+    // Nothing before the clip or after it; in it, its keys, the last one holding.
+    assert_eq!(
+        swell.values,
+        [0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    );
+    assert_eq!(swell.steady(), None);
+    // One that never moves is said to hold, and one past 1 stops there.
+    let held = Signal::read(&with_a_signal("0.5", "#102030"), "swell").unwrap();
+    assert_eq!(held.steady(), None, "it is 0 outside its clip");
+    let curved = Signal::read(
+        &with_a_signal("{0f:0:0.3,4,0.7,4 5f:1}", "#102030"),
+        "swell",
+    )
+    .unwrap();
+    assert!(curved
+        .values
+        .iter()
+        .all(|value| (0.0..=1.0).contains(value)));
+    assert!(curved.values[3..7].contains(&1.0), "{:?}", curved.values);
+    // Turned off, it is not there.
+    let mut off = project.clone();
+    let at = off.locate("swell").unwrap();
+    off.clip_at_mut(at).enabled = false;
+    assert_eq!(Signal::read(&off, "swell").unwrap().steady(), Some(0.0));
+    // What is not a signal is said.
+    let none = Signal::read(&project, "swel").unwrap_err();
+    assert_eq!(none, "`signal=swel`: no clip `swel`; did you mean `swell`?");
+    let other = Signal::read(&project, "g1").unwrap_err();
+    assert!(
+        other.contains("names a clip that is not a signal: a signal is a `gen=signal@1` clip"),
+        "{other}"
+    );
+}
+
+#[test]
+fn a_line_hands_a_model_its_signals() {
+    let project = with_a_signal("{0f:0 4f:1}", "#102030");
+    let words = ["model=dawn", "prompt=a wave", "signal=swell", "seed=7"].map(str::to_owned);
+    let ask = Ask::parse(&words, &[]).unwrap();
+    assert_eq!(ask.signals, ["swell"]);
+    assert_eq!(ask.shown(), "prompt \"a wave\", seed 7, signal swell");
+    let signals = [Signal::read(&project, "swell").unwrap()];
+    let request = ask
+        .request(
+            &|_| unreachable!(),
+            &|name| Path::new("/work").join(name),
+            &signals,
+        )
+        .unwrap();
+    assert_eq!(
+        request["signals"],
+        serde_json::json!([{
+            "name": "swell",
+            "rate": 24.0,
+            "values": [0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        }])
+    );
+    let unnamed = Ask::parse(&["model=dawn", "signal="].map(str::to_owned), &[]).unwrap_err();
+    assert!(
+        unnamed.contains("`signal=` names a signal clip"),
+        "{unnamed}"
+    );
+}
+
+#[test]
+fn a_plan_reads_a_recipes_signals() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    let some = models(
+        directory,
+        r#"{
+            "vace": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}},
+            "cued": {"run": ["b", "{request}"], "takes": {"reads": ["guide", "signal"]}}
+        }"#,
+    );
+    let planned = |project: &Project, steps: &str| {
+        std::fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            format!("kerf-recipe 1\n{steps}\n"),
+        )
+        .unwrap();
+        plan(project, directory, "m1", &some)
+    };
+    let waves = with_a_signal("{0f:0 4f:1}", "#102030");
+    // A model that reads one is handed it with nothing to note.
+    let plan = planned(&waves, "generate model=cued prompt=\"a wave\" signal=swell").unwrap();
+    assert!(plan.notes.is_empty(), "{:?}", plan.notes);
+    assert!(plan.steps[0].ends_with("signal swell"), "{}", plan.steps[0]);
+    // One that does not is said to have no use for it.
+    assert_eq!(
+        planned(&waves, "generate model=vace prompt=\"a wave\" signal=swell")
+            .unwrap()
+            .notes,
+        ["model `vace` has no use for `signal=`: of what a line hands it, it reads guide"]
+    );
+    // A signal that is not there stops the plan, as a sequence that is not does.
+    let missing = planned(&waves, "generate model=cued signal=surge")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(missing, "`signal=surge`: no clip `surge`");
+    // One that never moves says nothing of when.
+    let flat = project(
+        "media m1 path=\"shots/open.json\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s2 rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip swell gen=signal@1 at=0f dur=12f\n\
+         \x20     set value=0.5\n",
+    );
+    assert_eq!(
+        planned(&flat, "generate model=cued signal=swell").unwrap().notes,
+        ["signal `swell` is 0.5 on every frame, which says nothing of when: keyframe its `value`, as `set swell value={0f:0 24f:1}`"]
+    );
+}
+
+#[test]
+fn a_take_is_held_to_its_signal_and_not_to_the_signals_sequence() {
+    let folder = tempfile::tempdir().unwrap();
+    let recipe =
+        Recipe::parse("kerf-recipe 1\ngenerate model=dawn prompt=\"a wave\" signal=swell\n")
+            .unwrap();
+    assert_eq!(recipe.signals(), ["swell"]);
+    let from = |project: &Project| {
+        takes::from(
+            project,
+            folder.path(),
+            Path::new("shots"),
+            "kerf-recipe 1\n",
+            &recipe,
+        )
+        .unwrap()
+    };
+    let as_it_is = from(&with_a_signal("{0f:0 4f:1}", "#102030"));
+    assert_eq!(
+        as_it_is.keys().collect::<Vec<_>>(),
+        ["recipe", "signal swell"]
+    );
+    // Another clip of its sequence recolored: the signal is what it was.
+    assert_eq!(from(&with_a_signal("{0f:0 4f:1}", "#ffffff")), as_it_is);
+    // Its own keys moved: it is not.
+    assert_ne!(from(&with_a_signal("{0f:0 3f:1}", "#102030")), as_it_is);
 }
 
 #[test]
@@ -562,7 +748,7 @@ fn a_plan_notes_what_a_model_has_said_it_does_not_take() {
         notes("generate model=vace prompt=\"a boat\" first=boat.png seconds=9 duration=9"),
         [
             "`seconds=9` is more than model `vace` makes at once, 5.0625 s",
-            "model `vace` has no use for `first=`: of a line's files it reads guide, ref",
+            "model `vace` has no use for `first=`: of what a line hands it, it reads guide, ref",
             "model `vace` has nothing named `duration` to set: beside what every model is asked, a line sets its steps, strength",
         ]
     );
@@ -711,6 +897,52 @@ fn a_model_is_handed_its_request_and_writes_the_take() {
         .to_string();
     assert!(unset.contains("no model `dawn` is set up"), "{unset}");
     assert!(!directory.join("shots/open.takes/002.work").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_making_hands_its_model_the_signal_and_is_held_to_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\ngenerate model=dawn prompt=\"a wave\" signal=swell seed=7\n",
+    )
+    .unwrap();
+    // A model that answers with what it was asked.
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+    );
+    let project = with_a_signal("{0f:0 4f:1}", "#102030");
+    let token = CancellationToken::new();
+    let planned = plan(&project, directory, "m1", &some).unwrap();
+    let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join(&made.stored)).unwrap()).unwrap();
+    assert_eq!(
+        request["signals"],
+        serde_json::json!([{
+            "name": "swell",
+            "rate": 24.0,
+            "values": [0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        }])
+    );
+    // The media that is this take wants nothing while its signal is what it was made from.
+    let taken = |value: &str, solid: &str| {
+        let mut project = with_a_signal(value, solid);
+        project.media[0].path = made.stored.clone();
+        project
+    };
+    let wants = |project: &Project| unmade(project, directory, project.media("m1").unwrap());
+    assert_eq!(wants(&taken("{0f:0 4f:1}", "#102030")), None);
+    assert_eq!(wants(&taken("{0f:0 4f:1}", "#ffffff")), None);
+    let moved = wants(&taken("{0f:0 2f:1}", "#102030")).unwrap();
+    assert_eq!(
+        moved.reason(),
+        "signal swell changed after its file was made"
+    );
 }
 
 #[cfg(unix)]

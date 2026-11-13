@@ -18,17 +18,18 @@
 //! `workflow` is a graph as ComfyUI exports it for its API. A blank is a name
 //! in braces: `{prompt}`, `{seed}`, `{width}`, `{height}`, `{frames}`, and
 //! `{fps}` are the request's, `{guide}`, `{first}`, `{last}`, and `{ref}` the
-//! files it gives, as the server names them once sent, and any other is a
+//! files it gives, as the server names them once sent, `{signal}` a signal
+//! it gives, as a number for each frame asked for (`0,0.25,0.5`), and any other is a
 //! value `set` holds, which the same name on a `generate` line replaces
 //! (`steps=30`). A value that is a blank and nothing else takes what fills
 //! it as it is, a number as a number; a blank in a longer text is filled in
 //! as text.
 //!
-//! A node that reads a file the request does not give is left out, and with
-//! it whatever cannot do without it, so one workflow serves a shot with a
-//! guide, with a reference, with both, or with neither.
+//! A node that reads a file or a signal the request does not give is left
+//! out, and with it whatever cannot do without it, so one workflow serves a
+//! shot with a guide, with a reference, with both, or with neither.
 
-use crate::request::names_a_file;
+use crate::request::{names_a_file, names_a_signal, names_what_is_handed};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -178,6 +179,10 @@ impl Workflow {
         if references > 0 {
             reads.push("ref");
         }
+        let signals = blanks.iter().filter(|name| names_a_signal(name)).count();
+        if signals > 0 {
+            reads.push("signal");
+        }
         let more: Map<String, Value> = self
             .set
             .iter()
@@ -213,6 +218,9 @@ impl Workflow {
         if references > 1 {
             takes.insert("refs".to_owned(), Value::from(references));
         }
+        if signals > 1 {
+            takes.insert("signals".to_owned(), Value::from(signals));
+        }
         if !more.is_empty() {
             takes.insert("more".to_owned(), Value::Object(more));
         }
@@ -231,7 +239,7 @@ impl Workflow {
     }
 
     /// The graph to send, with `values` in its blanks. A node with a blank
-    /// for a file that `values` has not got is left out, and so is each
+    /// for a file or a signal that `values` has not got is left out, and so is each
     /// node that `required` says cannot do without one left out; an input
     /// that can loses its link.
     pub fn graph(&self, values: &Values, required: &mut Required<'_>) -> Result<Value, String> {
@@ -242,7 +250,7 @@ impl Workflow {
                 let mut missing = false;
                 each_text(&node["inputs"], &mut |text| {
                     missing |= blanks(text)
-                        .any(|(name, _)| names_a_file(name) && !values.contains_key(name));
+                        .any(|(name, _)| names_what_is_handed(name) && !values.contains_key(name));
                 });
                 missing
             })
@@ -622,6 +630,34 @@ mod tests {
             .graph(&values(&[]), &mut |_| Err("the server is away".to_owned()))
             .unwrap_err();
         assert_eq!(failed, "the server is away");
+    }
+
+    #[test]
+    fn a_signal_fills_its_blank_or_its_node_goes() {
+        let cued = Workflow::parse(
+            r#"{
+                "kerf-comfy": 1, "fps": 16, "frames": {"most": 81, "step": 4}, "size": [832, 480],
+                "workflow": {
+                    "1": {"class_type": "Words", "inputs": {"text": "{prompt}"}},
+                    "2": {"class_type": "Values", "inputs": {"values": "{signal}"}},
+                    "3": {"class_type": "Sampler", "inputs": {"words": ["1", 0], "cue": ["2", 0]}}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(cued.takes()["reads"], json!(["signal"]));
+        assert!(cued.takes().get("signals").is_none(), "one needs no count");
+        let mut needs = |_: &str| Ok(BTreeSet::from(["words".to_owned()]));
+        let mut values: Values = [("prompt".to_owned(), json!("a wave"))].into();
+        // No signal: the node that reads one goes, and the link to it.
+        let without = cued.graph(&values, &mut needs).unwrap();
+        assert!(without.get("2").is_none());
+        assert_eq!(without["3"]["inputs"], json!({"words": ["1", 0]}));
+        // One given: its numbers, as text.
+        values.insert("signal".to_owned(), json!("0,0.5,1"));
+        let with = cued.graph(&values, &mut needs).unwrap();
+        assert_eq!(with["2"]["inputs"]["values"], "0,0.5,1");
+        assert_eq!(with["3"]["inputs"]["cue"], json!(["2", 0]));
     }
 
     #[test]

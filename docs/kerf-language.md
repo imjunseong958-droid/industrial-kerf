@@ -151,10 +151,12 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 
   `needs` names the files it reads; `run` is a program and its arguments,
   quoted where they hold spaces, run as it is named and never through a shell;
-  `render <sequence> {name} [size=WxH] [rate=<fps>]` has Kerf draw a sequence
-  of the project, with no sound, at its own size and rate or at the ones
-  named, as a guide for a model is; and
-  `generate` asks a model the person has set up. `kerf make m3` shows the
+  `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth]` has Kerf
+  draw a sequence of the project, with no sound, at its own size and rate or
+  at the ones named, as a guide for a model is, and its picture or, with
+  `pass=`, which clip each pixel is of or how near it is; and
+  `generate` asks a model the person has set up, with `signal=<clip>` handing
+  it a `gen=signal@1` clip's number over time. `kerf make m3` shows the
   steps, asks, runs them in the recipe's folder, and has the media be the new
   take, with the document taking its path, length and streams; `--yes` does
   not ask. Each making is a take, kept beside the ones before it
@@ -163,8 +165,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   line chooses another; `look` with `media` gives the line whole. A run
   that fails or writes nothing leaves no take and the media as it was. A media
   wants making again when what its take was made from has changed (the recipe,
-  a file it reads, a sequence it renders), and says which; no other edit asks
-  for it. The recipe and everything it names have to be inside the project.
+  a file it reads, a sequence it renders, a signal it hands a model), and says
+  which; no other edit asks for it. The recipe and everything it names have to be inside the project.
   Only a person asking runs a recipe, with `kerf make` or Make from Recipe… in
   the editor's bin, which shows every step first: opening, drawing, and an
   agent's tools never do. See [shots.md](shots.md).
@@ -287,6 +289,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one
   (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
   child of a clip that is split stays with its first part.
+- `gen=signal@1` draws nothing and holds a number for a model: `set swell value={0f:0 48f:1:ease}`,
+  from 0 to 1. A recipe's `generate … signal=swell` hands the model what it comes to on each frame
+  of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
+  not, or is turned off, it is 0. Changing it asks for the shot again. See [shots.md](shots.md#signals).
 - Printing is deterministic and omits defaults. Printing with annotations
   appends comments with each clip's end and source out; parsing ignores them.
 

@@ -235,6 +235,8 @@ pub struct RenderOptions {
     pub rate: Option<Rate>,
     /// Whether the file carries the sequence's sound. A guide a model follows carries none.
     pub sound: bool,
+    /// What of the sequence is drawn: its picture, or a pass of it for a model that reads one.
+    pub pass: kerf_compose::Pass,
 }
 
 /// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
@@ -348,6 +350,7 @@ impl Default for RenderOptions {
             size: None,
             rate: None,
             sound: true,
+            pass: kerf_compose::Pass::Picture,
         }
     }
 }
@@ -918,6 +921,7 @@ where
             captions: true,
             // Rendering again after a small edit draws only what it changed.
             frame_folder: kerf_compose::default_frame_folder(),
+            pass: opts.pass,
             ..Default::default()
         },
     )?;
