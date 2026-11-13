@@ -178,9 +178,9 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth|relative`"));
-    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=normals")
-        .contains("`pass=normals` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, or `relative`"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth|relative|normals`"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=albedo")
+        .contains("`pass=albedo` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`"));
     assert!(
         wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
     );

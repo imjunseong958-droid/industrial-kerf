@@ -157,6 +157,32 @@ fn a_relative_depth_pass_is_stretched_to_its_frames_own_nearest_and_farthest() {
 }
 
 #[test]
+fn a_normals_pass_says_which_way_each_pixel_faces() {
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3);
+    let frame = frame(SCENE, Pass::Normals);
+    // The box and the wall face the camera: no way across or up, and all of it toward.
+    assert!(near(pixel(&frame, 160, 90), [128, 128, 255]), "{:?}", pixel(&frame, 160, 90));
+    assert!(near(pixel(&frame, 118, 90), [128, 128, 255]), "{:?}", pixel(&frame, 118, 90));
+    // The floor is tipped back, so it faces up more than it faces the camera.
+    let [across, up, toward] = pixel(&frame, 160, 170);
+    assert!(across.abs_diff(128) <= 3 && up > 230 && toward > 128 && toward < 180, "{across} {up} {toward}");
+    // What is not in depth faces no way.
+    assert_eq!(pixel(&frame, 10, 5), [0, 0, 0]);
+    // A clip turned to its right shows red for it, and one turned the other way the less.
+    let turned = |by: i32| {
+        let body = format!(
+            "  track V1 video\n    clip side gen=solid@1 at=0f dur=24f\n      set three_d=true rotate_y={by} scale=0.5\n"
+        );
+        pixel(&self::frame(&body, Pass::Normals), 160, 90)
+    };
+    let (one, other) = (turned(40), turned(-40));
+    assert!(one[0].abs_diff(128) > 60 && other[0].abs_diff(128) > 60, "{one:?} {other:?}");
+    assert!((one[0] > 128) != (other[0] > 128), "{one:?} {other:?}");
+    assert!(one[1].abs_diff(128) <= 3 && one[2] > 200, "{one:?}");
+    assert_eq!(Pass::parse("normals"), Some(Pass::Normals));
+}
+
+#[test]
 fn a_pass_holds_still_and_is_kept_apart_from_the_picture() {
     // The same scene drawn twice is the same pass to the byte, and its number is its own.
     let at = Rate::FPS_24.time_of(3);
@@ -204,5 +230,5 @@ fn a_nested_sequence_is_one_clip_in_a_pass() {
     assert_eq!(pixel(&frame, 10, 10), [0, 0, 0]);
     assert_eq!(Pass::parse("ids"), Some(Pass::Ids));
     assert_eq!(Pass::parse(Pass::Depth.name()), Some(Pass::Depth));
-    assert_eq!(Pass::parse("normals"), None);
+    assert_eq!(Pass::parse("albedo"), None);
 }

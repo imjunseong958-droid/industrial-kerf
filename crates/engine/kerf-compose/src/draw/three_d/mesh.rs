@@ -74,6 +74,8 @@ pub(in crate::draw) enum Shade<'a> {
     Flat([f32; 3]),
     /// As grey as it is near, as a depth pass has it.
     Near,
+    /// Colored by the way each place faces, as a normals pass has it.
+    Facing,
 }
 
 impl Mesh {
@@ -984,6 +986,22 @@ pub(in crate::draw) fn draw(
         match &shade {
             Shade::Flat(color) => *color,
             Shade::Near => [kerf_draw::color::to_linear(scene.nearness(f64::from(ahead))); 3],
+            Shade::Facing => {
+                let corners = mesh.triangles[triangle as usize];
+                let shares = [
+                    f64::from(of[0]),
+                    f64::from(of[1]),
+                    f64::from(1.0 - of[0] - of[1]),
+                ];
+                let mixed = |all: &[Vector]| {
+                    let mut sum = [0.0; 3];
+                    for (corner, share) in corners.iter().zip(shares) {
+                        sum = add(sum, times(all[*corner as usize], share));
+                    }
+                    sum
+                };
+                scene.facing(mixed(&points), unit(mixed(&normals)))
+            }
             Shade::Lit(receiver) => {
                 let corners = mesh.triangles[triangle as usize];
                 let shares = [
@@ -1041,7 +1059,7 @@ pub(in crate::draw) fn draw(
                     depth[x] = depth[x].min(ahead);
                     // Its own colors change within a pixel, and are read at each place.
                     let once = match shade {
-                        Shade::Near => false,
+                        Shade::Near | Shade::Facing => false,
                         Shade::Flat(_) => true,
                         Shade::Lit(_) => !mesh.part_of(triangle as usize).is_some_and(|p| p.own),
                     };

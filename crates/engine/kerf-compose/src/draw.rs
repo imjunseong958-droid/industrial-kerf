@@ -436,6 +436,11 @@ impl Drawing {
                 three_d::shade_by_depth(&scene, plan, picture, to_output, at - plan.clip.start);
             }
             Pass::Depth | Pass::Relative => flat(picture, [0.0; 3]),
+            Pass::Normals if plan.three_d => {
+                let scene = three_d::Scene::at(sequence, at, size);
+                three_d::shade_by_facing(&scene, plan, picture, to_output, at - plan.clip.start);
+            }
+            Pass::Normals => flat(picture, [0.0; 3]),
         }
     }
 
@@ -1221,6 +1226,7 @@ impl Drawing {
                 three_d::mesh::Shade::Flat([r, g, b])
             }
             Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
+            Pass::Normals => three_d::mesh::Shade::Facing,
         };
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));

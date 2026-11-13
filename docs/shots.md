@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -886,7 +886,14 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   the frame, so it holds still from one frame to the next. A clip out of
   depth, such as a backdrop on the lowest track, has no distance and is
   black, and so is where there is no clip.
-- **`pass=relative`**: the same, each frame stretched to its own nearest
+- **`pass=normals`**: which way each pixel faces, as a color, in the
+  camera's own space: to the right as red, up as green, and toward the
+  camera as blue, each from -1 to 1 as black to full, as a normal map has
+  them (the one a model that reads a picture back calls `normal_opengl`).
+  A clip in depth is flat and so one color; a mesh has the way each place
+  of it faces; a surface seen from behind faces whoever sees it. What is
+  not in depth is black.
+- **`pass=relative`**: the same as `pass=depth`, each frame stretched to its own nearest
   and farthest: white at the nearest thing in the frame and one step above
   black at the farthest, as a model that reads depth from a picture gives
   it and as one trained on such depth expects it. It does not hold still:
@@ -903,7 +910,7 @@ A pass is a file as a guide is, and a model that follows one is handed it as
 its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
 workflow's to say. One model is handed a picture and a pass of it at once
 by naming the second, `guide={picture.mp4} guide_depth={depth.mp4}`
-([Recipes](#recipes)); normals are not drawn.
+([Recipes](#recipes)).
 
 Which kind a model follows is the model's, and its entry's `about` says. A
 model that covers a render is handed the picture. The

@@ -555,6 +555,24 @@ impl Scene {
         1.0 - shadow * (1.0 - through)
     }
 
+    /// The way a surface at `at` faces, `normal` a unit long, as a normals pass writes it:
+    /// toward whoever sees it, in the camera's space, to the right, up, and toward the
+    /// camera as red, green, and blue. The color is a display's, as a model reads a file,
+    /// and the picture is light.
+    pub(super) fn facing(&self, at: Vector, normal: Vector) -> [f32; 3] {
+        let seen = if dot(minus(self.eye, at), normal) < 0.0 {
+            times(normal, -1.0)
+        } else {
+            normal
+        };
+        [
+            dot(seen, self.right),
+            -dot(seen, self.down),
+            -dot(seen, self.forward),
+        ]
+        .map(|side| kerf_draw::color::to_linear((0.5 + 0.5 * side.clamp(-1.0, 1.0)) as f32))
+    }
+
     /// A point of the output picture on the plane z = 0, in the world.
     fn world(&self, x: f64, y: f64, z: f64) -> Vector {
         [x - self.center.0, y - self.center.1, z]
@@ -670,6 +688,25 @@ pub(super) fn shade_by_depth(
                 pixel[..3].fill(grey);
             }
         });
+}
+
+/// A clip in depth as which way it faces: one color, a plane facing one way all over.
+pub(super) fn shade_by_facing(
+    scene: &Scene,
+    plan: &ClipPlan,
+    picture: &mut Image,
+    to_output: &Affine,
+    time: Time,
+) {
+    let (w, h) = (picture.w, picture.h);
+    let plane = Plane::of(scene, plan, (w as f64, h as f64), to_output, time);
+    let color = scene.facing(plane.point(w as f64 / 2.0, h as f64 / 2.0), plane.normal);
+    picture.px.par_chunks_mut(4).for_each(|pixel| {
+        let alpha = pixel[3];
+        for (channel, color) in pixel[..3].iter_mut().zip(color) {
+            *channel = color * alpha;
+        }
+    });
 }
 
 /// A clip's plane in the world: where its picture's first pixel is, and how far each of its pixels

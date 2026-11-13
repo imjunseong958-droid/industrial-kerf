@@ -81,6 +81,9 @@ on `main`; its section here becomes the release's notes on GitHub
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.
+- A guide can be drawn as which way each pixel faces, `render …
+  pass=normals`: a normal map in the camera's space, of clips in depth and
+  of meshes.
 - A guide can be drawn as depth stretched to each frame's own nearest and
   farthest, `render … pass=relative`, as a model that reads depth from a
   picture gives it; `pass=depth` still goes by the scene's own numbers.

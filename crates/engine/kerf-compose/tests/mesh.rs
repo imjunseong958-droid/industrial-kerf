@@ -308,6 +308,22 @@ fn a_depth_pass_has_a_mesh_by_the_pixel() {
 }
 
 #[test]
+fn a_normals_pass_has_a_mesh_by_the_way_each_place_faces() {
+    // A ball: its middle faces the camera, its left side the left, and its top up.
+    let ball = frame(
+        &mesh("thing", 1, "kind=ball width=0.6 height=0.6 length=0.6"),
+        Pass::Normals,
+    );
+    let [across, up, toward] = pixel(&ball, 160, 90);
+    assert!(across.abs_diff(128) <= 6 && up.abs_diff(128) <= 6 && toward > 245, "{across} {up} {toward}");
+    assert!(pixel(&ball, 115, 90)[0] < 40, "{:?}", pixel(&ball, 115, 90));
+    assert!(pixel(&ball, 205, 90)[0] > 215, "{:?}", pixel(&ball, 205, 90));
+    assert!(pixel(&ball, 160, 45)[1] > 215, "{:?}", pixel(&ball, 160, 45));
+    assert!(pixel(&ball, 160, 135)[1] < 40, "{:?}", pixel(&ball, 160, 135));
+    assert_eq!(pixel(&ball, 20, 20), [0, 0, 0]);
+}
+
+#[test]
 fn a_mesh_is_keyed_and_parented_as_a_clip_is() {
     // Keyed across the frame, and carried by a null it is parented to.
     let keyed = mesh(

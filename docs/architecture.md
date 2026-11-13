@@ -319,10 +319,10 @@ model's program can write its own entry for the person to keep, as
 starts one.
 
 Passes of Kerf's own sequences are drawn: which clip each pixel is of, and
-how near it is (`render … pass=ids|depth`, `kerf_compose::Pass`). Not here
-yet: normals, which a 3D renderer gives today; a way to choose a
-take in the editor's own window, where `kerf takes` and the conversation do
-it; and a model reached without a program, such as Kerf Cloud hosting one.
+how near it is, and which way it faces (`render …
+pass=ids|depth|relative|normals`, `kerf_compose::Pass`), and a take is
+chosen in the editor's own window (Takes, on a media in the bin). Not here
+yet: a model reached without a program, such as Kerf Cloud hosting one.
 What comes of these, and in what order, is under [What directs a
 model](#what-directs-a-model).
 
@@ -495,7 +495,7 @@ What is built for it, in this order, each measured before the next:
    signal's frames, with a workflow whose strength or mask takes a number a
    frame.
 2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
-   is of, and how near it is (`render … pass=ids|depth|relative`). What ties one
+   is of, and how near it is (`render … pass=ids|depth|relative|normals`). What ties one
    frame to the next has been found to guide better than depth alone
    ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)), and an ids
    pass does: a clip keeps its color as it moves. A pass is the picture's
@@ -578,7 +578,8 @@ What is built for it, in this order, each measured before the next:
    transition's wipe are of its picture as the camera sees it, on the
    canvas, after which it goes down among the clips in depth as before; a
    pass draws the mask and no effect. *Not done:* the GPU does not draw it, so a
-   frame with one is the CPU's. It was not handed to a model.
+   frame with one is the CPU's. It has been handed to a model: the crate of
+   Next 3 is one, in the guide of every take there.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A recipe makes
    files in steps, and a draft that is not kept wants a way of its own: the
