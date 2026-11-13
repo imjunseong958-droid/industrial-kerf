@@ -3438,6 +3438,68 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(far.contains("no frame 7"), "{far}");
 }
 
+/// Where a project has more than one sequence, the lines `look` writes for a new camera say
+/// which sequence they are for, and name the camera as no clip of any sequence is named.
+#[test]
+fn look_writes_a_camera_into_the_meshes_sequence_where_there_is_more_than_one() {
+    // The set is in the second sequence. The first has two tracks and a camera, `camera1`,
+    // which the new one must not be called, though it is no clip of the set's sequence.
+    let Some((directory, router)) = router_with(
+        "    clip hold gen=solid@1 at=0f dur=60f
+  track V2 video
+    clip camera1 gen=camera@1 at=0f dur=60f
+sequence s2 rate=30 size=320x180
+  track V1 video
+    clip set gen=mesh@1 at=30f dur=60f
+      set file=\"set.glb\" height=0.5
+",
+    ) else {
+        return;
+    };
+    set_with_a_camera(directory.path());
+    std::fs::write(directory.path().join("lens.txt"), "40\n").unwrap();
+    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    // Its track is the first free name in the set's sequence, which has no V2.
+    assert_eq!(
+        lens["script"],
+        "use s2\ntrack add V2 video\noverwrite gen=camera@1 at=30f dur=60f on=V2 as=camera2\nset camera2 x=0 y=0.25 z=1.37374 pan=0 tilt=0 roll=0 fov=40"
+    );
+    // A camera the file holds is written the same way.
+    let held = ok(&router, "look", json!({"mesh": {"clip": "set", "camera": 0}}));
+    let script = held["script"].as_str().unwrap();
+    assert!(
+        script.starts_with("use s2\ntrack add V2 video\noverwrite gen=camera@1 at=30f dur=60f on=V2 as=camera2\n"),
+        "{script}"
+    );
+    // The lines are taken as they are, and the camera is in the set's sequence and not the
+    // first one.
+    let revision = router.runtime().get_document(false).unwrap().0;
+    let staged = ok(&router, "edit", json!({"script": lens["script"]}));
+    router
+        .runtime()
+        .accept_proposal(staged["proposal"].as_str().unwrap(), "ui", "accept-camera", revision)
+        .unwrap();
+    let document = router.runtime().get_document(false).unwrap().1;
+    let second = document.split("sequence s2").nth(1).expect("a second sequence");
+    assert!(second.contains("clip camera2 gen=camera@1"), "{document}");
+    assert_eq!(document.matches("gen=camera@1").count(), 2, "{document}");
+    // Asked again, the next one is named after both, on the next free track, and `as`
+    // takes the one there is with no line that adds, so no sequence is named.
+    let again = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    let script = again["script"].as_str().unwrap();
+    assert!(
+        script.starts_with("use s2\ntrack add V3 video\noverwrite gen=camera@1 at=30f dur=60f on=V3 as=camera3\n"),
+        "{script}"
+    );
+    let onto = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "lens.txt", "as": "camera2"}}),
+    );
+    let script = onto["script"].as_str().unwrap();
+    assert!(script.starts_with("set camera2 x=0 "), "{script}");
+}
+
 /// `look` says what a mesh's file holds, and writes a camera of it as a camera clip's keys.
 #[test]
 fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {
