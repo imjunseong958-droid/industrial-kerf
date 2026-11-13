@@ -55,6 +55,9 @@ fn a_take_with_its_subject_where_the_guide_has_it_is_not_off() {
     // The guide's own picture is followed as the take is, so the same picture is not off
     // at all, whatever a tracker's box adds to an ids pass's.
     assert_eq!((same.off, same.size), (0.0, 1.0), "{same:?}");
+    // Every frame it was followed on is the same box, so what is short of 1 is the frames
+    // it was not.
+    assert_eq!(same.overlap, (same.frames as f64 / same.shown as f64 * 1e4).round() / 1e4);
     assert!(same.shows > 0.005, "{same:?}");
 }
 
@@ -68,6 +71,7 @@ fn a_take_with_its_subject_to_one_side_says_how_far_and_which_way() {
     assert!(aside.down.abs() < 0.03, "{aside:?}");
     assert!((aside.off - aside.across).abs() < 0.03, "{aside:?}");
     assert!(aside.worst.1 >= aside.off, "{aside:?}");
+    assert!(aside.overlap < 0.6, "{aside:?}");
     let nearer = placed(&guide, &scene("x={0f:-0.25 24f:0.25} z={0f:2.2 24f:1.4}")).expect("the car");
     assert!(nearer.size > 1.3, "{nearer:?}");
     // The other way is the other sign.

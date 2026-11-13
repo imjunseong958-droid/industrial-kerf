@@ -66,6 +66,11 @@ pub struct Placed {
     pub size: f64,
     /// The frame it is furthest off on, and how far.
     pub worst: (usize, f64),
+    /// How much of the two boxes is in both, of what is in either, as a mean over every
+    /// frame the guide shows the clip on, a frame it was not followed on counting as none:
+    /// 1 where the take has the subject where and as large as the guide does on every
+    /// frame, 0 where it has none. The one number for place, size, and whether it is there.
+    pub overlap: f64,
 }
 
 /// A box in pixels, left, top, right, bottom, the last two past its last pixel.
@@ -219,6 +224,7 @@ impl Placing {
         let (mut frames, mut read) = (0usize, (usize::MAX, 0usize));
         let (mut off, mut right, mut lower, mut shows) = (0.0, 0.0, 0.0, 0.0);
         let mut size = (0.0, 0.0);
+        let mut overlap = 0.0;
         let mut worst = (from, 0.0);
         for (frame, shown) in self.guide.iter().enumerate() {
             let (Some((_, pixels)), Some(guide), Some(taken)) =
@@ -231,6 +237,14 @@ impl Placing {
             let (x, y) = ((drawn[0] - asked[0]) / tall, (drawn[1] - asked[1]) / tall);
             let far = x.hypot(y);
             let sides = |of: &Box| (of[2] - of[0]) + (of[3] - of[1]);
+            let area = |of: &Box| (of[2] - of[0]).max(0.0) * (of[3] - of[1]).max(0.0);
+            let both = area(&[
+                guide[0].max(taken[0]),
+                guide[1].max(taken[1]),
+                guide[2].min(taken[2]),
+                guide[3].min(taken[3]),
+            ]);
+            overlap += both / (area(guide) + area(taken) - both).max(1e-9);
             frames += 1;
             read = (read.0.min(frame), read.1.max(frame));
             off += far;
@@ -259,6 +273,7 @@ impl Placing {
             down: mean(lower),
             size: rounded(size.0 / size.1),
             worst: (worst.0, rounded(worst.1)),
+            overlap: rounded(overlap / shown.max(1) as f64),
         })
     }
 }

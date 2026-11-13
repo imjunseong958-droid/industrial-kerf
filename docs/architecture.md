@@ -974,8 +974,39 @@ recipes, in `fixtures/shots/car`.
    there is a thing there to find; and a take can pass either alone. One
    shot and one small model, again, and a subject that is 1% of the frame.
 
-   What is still not done is one number for the two together, and either
-   read on more than a shot or two. Either is what lets an agent say of a
+   *One number for the place*, and the guide with fewer holes. `placed`
+   also gives `overlap`: how much of the two boxes is in both, of what is
+   in either, as a mean over every frame the guide shows the clip on, with
+   a frame the subject was not followed on as none. So it falls for a
+   subject that is aside, for one drawn another size, and for one that is
+   not there, and is what two takes are chosen between by. With the five
+   sets of 3 in the guide, which leave a tenth of the frame empty where
+   the three left a third to a half, both takes were made again, the
+   prompt and the seed as they were:
+
+   | The take | `follows`: `order` | `off`, the frame | `placed`: frames followed, of 65 | `off` | `size` | `overlap` |
+   |---|---|---|---|---|---|---|
+   | The guide's own picture, through an encoder | | | 65 | 0.006 | 1.00 | 0.90 |
+   | The same moved 0.083 to the right | | | 65 | 0.091 | 1.00 | 0.22 |
+   | Guided by the five sets' picture | 0.893 | 0.100 | 32 | 0.027 | 1.16 | 0.35 |
+   | Guided by the five sets' depth | 0.928 | 0.079 | 44 | 0.038 | 0.82 | 0.38 |
+   | The first picture-guided take, held to this guide | | | 62 | 0.054 | 0.96 | 0.42 |
+   | The first depth-guided take, which had no crate | | | 1 | | | 0.002 |
+
+   What it says. A guide with fewer holes is followed better by both
+   (`order` 0.859 to 0.893 and 0.912 to 0.928), and the depth-guided take
+   is now a street with a road and houses where it was walls about a void,
+   with a crate where one was asked for on two thirds of the frames. No
+   take has the crate as the guide has it: the best is 0.42 where the
+   guide's own picture is 0.90, and the take with nothing there is 0.002,
+   so the number orders them as the eye does. It also shows what a set of
+   several frames costs: the car ahead in the footage is in each set where
+   it then was, a smear along the road by the last frame, and both takes
+   drew things there, the depth-guided one a second crate.
+
+   What is still not done is one number for depth and place together, a
+   set with what moved left out, and either reading
+   on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,

@@ -680,6 +680,7 @@ edge and what is hidden of it, is then in both
 | `across`, `down` | The same with its direction: above 0 where the take has it to the right, or lower. |
 | `size` | How large the take drew it beside the guide, by the sides of the two boxes: above 1 larger. |
 | `worst` | The frame it is furthest off on, from 0, and how far. |
+| `overlap` | How much of the two boxes is in both, of what is in either, as a mean over every frame the guide shows the clip on, a frame it was not followed on counting as none. 1 where the take has the subject where and as large as asked throughout, 0 where it has none: the one number to choose between two takes by. The guide's own picture through an encoder read 0.90, and moved a crate's width aside 0.22. |
 | `shown`, `frames` | How many frames the guide shows the clip on, and on how many of them it was followed in both pictures. |
 | `from`, `read` | The frame it was found on, and the first and last it was followed on. |
 
