@@ -570,7 +570,9 @@ What is built for it, in this order, each measured before the next:
    footage is; one run by the clip's time alone starts again at the new
    first frame, which is said in the language's reference. Its size and
    middle are taken at rest, so that an animation that carries it across a
-   room carries it across the frame. Morph targets are not read. It casts
+   room carries it across the frame. Morph targets are read (2026-11-13):
+   how far each takes a corner, by the weights its mesh has at rest or an
+   animation gives them, and not how they turn the way a corner faces. It casts
    its shadow on the clips in depth and the meshes a light reaches past it,
    and not on itself: a ray to the light is stopped by the first of its
    triangles it meets, found through a tree of boxes (`mesh::Standing`,

@@ -273,7 +273,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   backward. Trimming a clip's head keeps keyframes with what they were over, so a keyed `seconds` shows
   what it showed; with no `seconds` the animation starts again at the clip's new first frame. Its size
   and its middle are those it has at rest, so what an animation moves, moves from there. Morph targets
-  are not read, nor more than four bones to a corner.
+  reshape it by the weights its animation gives them; more than four bones to a corner are not read.
   `look` with `mesh: {"clip": "set"}` says what the file holds, its animations and cameras by name, and
   with `"camera": "shot"` writes that camera as a `gen=camera@1` clip, `set camera1 x={…} y={…} z={…}
   pan={…} tilt={…} roll={…} fov=28.6`: where the file has it on each frame of the mesh's clip, so that

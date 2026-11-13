@@ -1103,6 +1103,70 @@ fn a_skin_bends_a_mesh_with_its_bones() {
 }
 
 #[test]
+fn a_morph_target_reshapes_a_mesh_by_its_weight() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // The sheet, and a target that takes its two right corners up by the sheet's height.
+    // Its corners go round from the top left: the second and third are on the right.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let lifted = file.floats(
+        3,
+        &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    );
+    let times = file.floats(1, &[0.0, 1.0]);
+    let weights = file.floats(1, &[0.0, 1.0]);
+    let written = |file: &mut Writing, name: &str, rest: &str| {
+        let animations = format!(
+            concat!(
+                "\"animations\":[{{\"name\":\"lift\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"weights\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            times, weights
+        );
+        std::mem::take(file).glb(
+            folder.path(),
+            name,
+            &format!(
+                concat!(
+                    "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],",
+                    "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},",
+                    "\"targets\":[{{\"POSITION\":{}}}]}}]{}}}],{}",
+                ),
+                points, indices, lifted, rest, animations
+            ),
+        );
+    };
+    let mut again = Writing {
+        bytes: file.bytes.clone(),
+        views: file.views.clone(),
+        accessors: file.accessors.clone(),
+    };
+    written(&mut file, "morph.glb", "");
+    written(&mut again, "half.glb", ",\"weights\":[0.5]");
+    // With the animation, it is the sheet at its start and has its right side its own
+    // height higher a second in, in the picture and in the passes.
+    for pass in [Pass::Picture, Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "morph.glb", "animation=\"lift\"", "", pass).unwrap();
+        let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
+        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        let lifted = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
+        assert!(reaches(reach(&lifted), [70, 0, 250, 135]), "{:?}", reach(&lifted));
+        assert!(lit(&lifted, 245, 20) && !lit(&lifted, 245, 60));
+        // Half a second in it is half way.
+        let half = drawn.frame(Rate::FPS_24.time_of(12), 1.0);
+        assert!(lit(&half, 245, 60) && !lit(&half, 245, 100), "{:?}", reach(&half));
+    }
+    // With no animation named it is as its mesh's own weights have it: half way.
+    let still = posed(folder.path(), "half.glb", "", "", Pass::Ids).unwrap();
+    let frame = still.frame(Rate::FPS_24.time_of(0), 1.0);
+    // It is half as tall again at rest, and is fitted to its clip as it is at rest: its
+    // right side up, its left side down.
+    assert!(reaches(reach(&frame), [100, 45, 220, 135]), "{:?}", reach(&frame));
+    assert!(lit(&frame, 215, 60) && !lit(&frame, 215, 120), "{:?}", reach(&frame));
+    assert!(lit(&frame, 105, 120) && !lit(&frame, 105, 60), "{:?}", reach(&frame));
+}
+
+#[test]
 fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
     let folder = tempfile::tempdir().expect("a folder");
     // The sheet, 2 across and 1 up about x and z at 0. A camera 5 from the sheet's middle and

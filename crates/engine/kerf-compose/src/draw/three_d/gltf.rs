@@ -5,8 +5,8 @@
 //! picture a material lays over its part, and the colors its corners are given. And how it
 //! moves: its animations of where its nodes are, and the skins by which a mesh bends with the
 //! nodes that are its bones, so that it can be posed at any time of one ([`Read::posed`]). And
-//! its cameras, each where its node is at any time of one ([`Read::seen_from`]). Morph
-//! targets and lights in the file are not read, and of a material nothing but its base
+//! its cameras, each where its node is at any time of one ([`Read::seen_from`]). Morph targets are read as how far they take each corner, and not as how they turn the
+//! way it faces. Lights in the file are not read, and of a material nothing but its base
 //! color: how a thing shines is a model's to draw. A `.gltf` with its buffers and
 //! pictures beside it or inside it, and a `.glb`, are read.
 //!
@@ -110,6 +110,13 @@ impl Read {
                     })
                     .collect()
             });
+            // How much of each morph target it has: as the animation says, or at rest.
+            let weights = animation
+                .and_then(|(animation, seconds)| {
+                    let told = animation.morphs.iter().find(|told| told.node == run.node)?;
+                    Some(told.at(seconds))
+                })
+                .unwrap_or_else(|| run.weights.clone());
             for corner in run.corners.0..run.corners.1 {
                 let placed = match &bones {
                     Some(bones) => {
@@ -134,7 +141,14 @@ impl Read {
                     }
                     None => whole,
                 };
-                points.push(placed.point(rig.points[corner]));
+                let mut at = rig.points[corner];
+                for (morph, weight) in run.morphs.iter().zip(&weights) {
+                    if *weight != 0.0 {
+                        let by = morph[corner - run.corners.0];
+                        at = [0, 1, 2].map(|axis| at[axis] + by[axis] * weight);
+                    }
+                }
+                points.push(placed.point(at));
                 normals.push(placed.facing(rig.normals[corner]));
             }
             if run.flat {
@@ -170,6 +184,47 @@ pub(super) struct Animation {
     /// How long it is, in seconds: when the last of its keys is.
     pub length: f64,
     channels: Vec<Channel>,
+    /// What it says of the morph targets of nodes' meshes.
+    morphs: Vec<Weighed>,
+}
+
+/// What an animation says of how much of each morph target a node's mesh has, over time.
+struct Weighed {
+    node: usize,
+    how: How,
+    /// How many targets a value is of.
+    across: usize,
+    times: Vec<f64>,
+    values: Vec<f64>,
+}
+
+impl Weighed {
+    /// The weights `seconds` in: the first before its first key, and the last after its
+    /// last. With curves it goes straight from key to key, which the keys are still on.
+    fn at(&self, seconds: f64) -> Vec<f64> {
+        let each = self.across * if self.how == How::Cubic { 3 } else { 1 };
+        let value = |key: usize| {
+            let from = key * each + if self.how == How::Cubic { self.across } else { 0 };
+            &self.values[from..from + self.across]
+        };
+        let after = self.times.partition_point(|time| *time <= seconds);
+        if after == 0 {
+            return value(0).to_vec();
+        }
+        if after == self.times.len() {
+            return value(after - 1).to_vec();
+        }
+        if self.how == How::Step {
+            return value(after - 1).to_vec();
+        }
+        let (from, to) = (self.times[after - 1], self.times[after]);
+        let share = (seconds - from) / (to - from).max(1e-12);
+        value(after - 1)
+            .iter()
+            .zip(value(after))
+            .map(|(a, b)| a + (b - a) * share)
+            .collect()
+    }
 }
 
 /// What an animation says of one node over time.
@@ -347,6 +402,11 @@ struct Run {
     skin: Option<usize>,
     /// Whether the file told no way its corners face, so that each triangle is flat.
     flat: bool,
+    /// Its morph targets: for each, how far it takes each of the run's corners from where
+    /// it is, at a weight of 1.
+    morphs: Vec<Vec<Vector>>,
+    /// How much of each target it has at rest.
+    weights: Vec<f64>,
 }
 
 struct Skin {
@@ -809,6 +869,7 @@ impl File<'_> {
         primitive: &Json,
         node: usize,
         skin: Option<usize>,
+        weights: &[f64],
         out: &mut Read,
     ) -> Result<(), String> {
         let mode = primitive["mode"].as_u64().unwrap_or(4);
@@ -924,13 +985,32 @@ impl File<'_> {
                 .as_ref()
                 .map_or([1.0; 3], |colors| colors[corner as usize])
         };
+        // Its morph targets: how far each takes each point. One that does not say, or says
+        // it of another number of points, takes none anywhere.
+        let targets: Vec<Vec<Vector>> = primitive["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|target| match &target["POSITION"] {
+                Json::Null => Ok(vec![[0.0; 3]; points.len()]),
+                told => self.threes(told).map(|moved| {
+                    if moved.len() == points.len() {
+                        moved
+                    } else {
+                        vec![[0.0; 3]; points.len()]
+                    }
+                }),
+            })
+            .collect::<Result<_, String>>()?;
         let rig = &mut out.rig;
         let first = rig.points.len();
         let first_triangle = out.triangles.len();
+        let mut morphs: Vec<Vec<Vector>> = vec![Vec::new(); targets.len()];
         match &normals {
             Some(normals) => {
                 rig.points.extend(&points);
                 rig.normals.extend(normals);
+                morphs.clone_from(&targets);
                 rig.bones.extend((0..points.len() as u32).map(bone));
                 out.uvs.extend((0..points.len() as u32).map(uv));
                 out.colors.extend((0..points.len() as u32).map(colored));
@@ -946,6 +1026,9 @@ impl File<'_> {
                     let at = rig.points.len() as u32;
                     rig.points
                         .extend(three.map(|corner| points[corner as usize]));
+                    for (morph, target) in morphs.iter_mut().zip(&targets) {
+                        morph.extend(three.map(|corner| target[corner as usize]));
+                    }
                     rig.normals.extend([[0.0; 3]; 3]);
                     rig.bones.extend(three.map(bone));
                     out.uvs.extend(three.map(uv));
@@ -960,6 +1043,10 @@ impl File<'_> {
             node,
             skin,
             flat: normals.is_none(),
+            weights: (0..morphs.len())
+                .map(|target| weights.get(target).copied().unwrap_or(0.0))
+                .collect(),
+            morphs,
         });
         let color = material.map(|material| {
             let told = numbers(&material["pbrMetallicRoughness"]["baseColorFactor"])
@@ -1005,13 +1092,42 @@ impl File<'_> {
         Ok(skins)
     }
 
-    /// The file's animations: what each says of a node's place over time. What one says of a
-    /// mesh's morph targets is not read.
+    /// The file's animations: what each says of a node's place over time, and of how much
+    /// of each morph target its mesh has.
     fn animations(&self, nodes: usize) -> Result<Vec<Animation>, String> {
         let mut animations = Vec::new();
         for animation in self.json["animations"].as_array().into_iter().flatten() {
             let mut channels = Vec::new();
+            let mut morphs = Vec::new();
             for channel in animation["channels"].as_array().into_iter().flatten() {
+                if channel["target"]["path"].as_str() == Some("weights") {
+                    let node = channel["target"]["node"].as_u64().map(|node| node as usize);
+                    let sampler = channel["sampler"]
+                        .as_u64()
+                        .and_then(|sampler| animation["samplers"].get(sampler as usize))
+                        .ok_or("an animation's sampler is missing")?;
+                    let how = match sampler["interpolation"].as_str() {
+                        Some("STEP") => How::Step,
+                        Some("CUBICSPLINE") => How::Cubic,
+                        _ => How::Linear,
+                    };
+                    let times = self.numbers(&sampler["input"], 1)?;
+                    let values = self.numbers(&sampler["output"], 1)?;
+                    let each = times.len() * if how == How::Cubic { 3 } else { 1 };
+                    if let Some(node) = node.filter(|node| *node < nodes) {
+                        if times.is_empty() || values.len() % each != 0 || values.is_empty() {
+                            return Err("an animation's times and weights do not match".into());
+                        }
+                        morphs.push(Weighed {
+                            node,
+                            how,
+                            across: values.len() / each,
+                            times,
+                            values,
+                        });
+                    }
+                    continue;
+                }
                 let (what, across) = match channel["target"]["path"].as_str() {
                     Some("translation") => (What::Moved, 3),
                     Some("rotation") => (What::Turned, 4),
@@ -1052,11 +1168,13 @@ impl File<'_> {
             let length = channels
                 .iter()
                 .filter_map(|channel| channel.times.last())
+                .chain(morphs.iter().filter_map(|told| told.times.last()))
                 .fold(0.0f64, |length, last| length.max(*last));
             animations.push(Animation {
                 name: animation["name"].as_str().unwrap_or("").to_owned(),
                 length,
                 channels,
+                morphs,
             });
         }
         Ok(animations)
@@ -1182,8 +1300,12 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
             .as_u64()
             .map(|skin| skin as usize)
             .filter(|skin| *skin < out.rig.skins.len());
+        // How much of each morph target it has at rest: as its node says, or else its mesh.
+        let weights = numbers(&node["weights"])
+            .or_else(|| numbers(&mesh["weights"]))
+            .unwrap_or_default();
         for primitive in mesh["primitives"].as_array().into_iter().flatten() {
-            file.primitive(primitive, index, skin, &mut out)?;
+            file.primitive(primitive, index, skin, &weights, &mut out)?;
         }
     }
     if out.triangles.is_empty() {

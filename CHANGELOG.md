@@ -81,6 +81,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.
+- A glTF file's morph targets are read: a face or a shape that the file
+  reshapes by weights is reshaped as its animation has it.
 - A guide can be drawn as which way each pixel faces, `render …
   pass=normals`: a normal map in the camera's space, of clips in depth and
   of meshes.
