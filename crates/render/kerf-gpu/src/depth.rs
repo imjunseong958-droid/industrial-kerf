@@ -340,6 +340,7 @@ pub struct Distance {
 /// Pictures of clips that cross, one below another, with how far off each is at each pixel.
 pub struct Layers {
     pictures: Picture,
+    depths: wgpu::Texture,
     depths_view: wgpu::TextureView,
     h: u32,
     laid: Vec<[u8; 16]>,
@@ -941,17 +942,50 @@ impl Frame<'_> {
             w,
             h * count,
             wgpu::TextureFormat::R32Float,
-            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
         );
         let depths = self.gpu.texture(key);
         self.used.push((key, depths.clone()));
         let depths_view = depths.create_view(&Default::default());
         Layers {
             pictures: self.take(w, h * count),
+            depths: depths.clone(),
             depths_view,
             h,
             laid: Vec::new(),
         }
+    }
+
+    /// How far off the next of `layers` is at each pixel, where it was drawn off the GPU:
+    /// `depths` row by row, as wide as the canvas and as tall, in place of what
+    /// [`Frame::project`] would write. A mesh is drawn so.
+    pub fn lay_depths(&mut self, layers: &Layers, depths: &[f32], w: u32) {
+        let bytes: Vec<u8> = depths.iter().flat_map(|far| far.to_le_bytes()).collect();
+        let h = layers.h.min((depths.len() as u32).checked_div(w).unwrap_or(0));
+        if w == 0 || h == 0 {
+            return;
+        }
+        let drawn = self.upload(wgpu::TextureFormat::R32Float, (w, h), &bytes, w * 4);
+        self.encoder.copy_texture_to_texture(
+            drawn.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                texture: &layers.depths,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: layers.laid.len() as u32 * layers.h,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// `picture` as the next of `layers`, which is the row its [`Frame::project`] wrote depth to.
@@ -987,6 +1021,7 @@ impl Frame<'_> {
         let kernels = gpu.depth_kernels()?;
         let Layers {
             pictures,
+            depths: _,
             depths_view,
             h: _,
             laid,

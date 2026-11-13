@@ -233,7 +233,9 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = plan.clip.id.as_str();
         if matches!(plan.source, Source::Mesh) {
-            why.push(format!("clip `{clip}` is a mesh, which the CPU draws"));
+            why.push(format!(
+                "clip `{clip}` is a mesh, under a light that casts a shadow or shines from a picture, which the CPU draws"
+            ));
             return;
         }
         if plan.clip.retime != kerf_model::Retime::Frames {
@@ -364,9 +366,17 @@ impl Drawing {
         scale: f64,
     ) -> bool {
         let plan = &shown.plan;
-        // Frames between frames are made on the CPU, and so is a mesh.
-        if plan.clip.retime != kerf_model::Retime::Frames || matches!(plan.source, Source::Mesh) {
+        // Frames between frames are made on the CPU.
+        if plan.clip.retime != kerf_model::Retime::Frames {
             return false;
+        }
+        // A mesh is drawn on the CPU and handed over as a picture and how far off it is,
+        // which does where its light is the scene's lights alone: a shadow is cast through
+        // the GPU's own planes and a light from a picture is the GPU's to read.
+        if matches!(plan.source, Source::Mesh) {
+            let size = output_size(sequence.width, sequence.height, scale);
+            let scene = three_d::Scene::at(sequence, at, size);
+            return !scene.casts_shadows() && scene.environments().is_empty();
         }
         let time = at - plan.clip.start;
         if let Source::Nested {
@@ -757,6 +767,23 @@ impl Drawing {
             return self.gpu_adjust(frame, canvas, (sequence, plan, time, scale), &ops);
         }
         let size = (canvas.w, canvas.h);
+        if matches!(plan.source, Source::Mesh) {
+            // Drawn on the CPU, as the scene sees it, and laid over what is there.
+            let moment = Moment {
+                at,
+                scale,
+                scene: depth.as_deref().map(|depth| &depth.scene),
+            };
+            let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+            else {
+                return Some(canvas);
+            };
+            let drawn = frame.image(&mesh.picture);
+            let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            let over = frame.composite(canvas, &drawn, &Affine::IDENTITY, whole, mesh.opacity, blend);
+            frame.release(drawn);
+            return Some(over);
+        }
         if let (true, Some(depth)) = (plan.three_d, depth) {
             let ready = match depth.ready.iter().position(|(id, _)| *id == clip.id) {
                 Some(place) => Some(depth.ready.swap_remove(place).1),
@@ -1032,6 +1059,23 @@ impl Drawing {
         let mut layers = frame.depth_layers(size, run.len() as u32);
         for shown in run {
             let id = &shown.plan.clip.id;
+            if matches!(shown.plan.source, Source::Mesh) {
+                // Drawn on the CPU, as the scene sees it, and laid with the rest.
+                let moment = Moment {
+                    at,
+                    scale,
+                    scene: Some(&depth.scene),
+                };
+                let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+                else {
+                    continue;
+                };
+                let drawn = frame.image(&mesh.picture);
+                frame.lay_depths(&layers, &mesh.depth, size.0);
+                frame.lay(&mut layers, &drawn, mesh.opacity, shown.plan.blend);
+                frame.release(drawn);
+                continue;
+            }
             let ready = match depth.ready.iter().position(|(kept, _)| kept == id) {
                 Some(place) => Some(depth.ready.swap_remove(place).1),
                 None => self.gpu_ready(frame, sequence, shown, at, scale, size)?,

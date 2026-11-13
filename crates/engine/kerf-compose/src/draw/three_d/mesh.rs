@@ -13,7 +13,10 @@
 //! A part in one flat color is lit by the scene's lights by the way each place faces. A part
 //! with colors of its own, a picture its file lays over it or a color at each corner, is drawn in
 //! them as they are, with no light: they are what the thing is, and a set rebuilt from a shot
-//! has the shot's light in them already. It is drawn on the CPU.
+//! has the shot's light in them already. Its triangles are drawn on the CPU, and where the
+//! rest of a frame is the GPU's the picture and how far off it is are handed over to be laid
+//! with it (`Drawing::gpu_crossing`), but for a frame whose lights cast shadows or shine
+//! from a picture.
 //!
 //! Its clip's masks, effects, and wipe are done to that picture, the mesh as the camera sees
 //! it on the canvas (`Drawing::mesh`), there being no flat picture of it before that.

@@ -579,8 +579,12 @@ What is built for it, in this order, each measured before the next:
    2026-11-13). Its effects, its masks, and a
    transition's wipe are of its picture as the camera sees it, on the
    canvas, after which it goes down among the clips in depth as before; a
-   pass draws the mask and no effect. *Not done:* the GPU does not draw it, so a
-   frame with one is the CPU's. It has been handed to a model: the crate of
+   pass draws the mask and no effect. Its triangles are the CPU's, and a
+   frame with one stays on the GPU all the same (2026-11-13): the mesh's
+   picture and how far off it is at each pixel are handed over and laid
+   among the rest by depth, to within 1 of 255 of the CPU's frame on a
+   software GPU; a frame whose lights cast shadows or shine from a
+   picture is still the CPU's. It has been handed to a model: the crate of
    Next 3 is one, in the guide of every take there.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A recipe makes

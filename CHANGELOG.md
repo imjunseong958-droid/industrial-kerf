@@ -136,7 +136,8 @@ on `main`; its section here becomes the release's notes on GitHub
   lights, and is in the ids and depth passes and in an agent's `look` with
   `shows` as any clip is. It casts its shadow on other clips in depth, takes effects and masks on
   its picture as the camera sees it,
-  and is drawn on the CPU.
+  and no longer sends its whole frame to the CPU: its triangles are drawn
+  there and laid among the rest on the GPU, where no light casts a shadow.
 - A recipe can tell a model when something happens, and not only where and
   what: a `gen=signal@1` clip draws nothing and holds a number from 0 to 1
   that you keyframe, and `generate … signal=<clip>` hands the model what it

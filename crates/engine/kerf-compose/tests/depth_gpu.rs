@@ -95,6 +95,38 @@ const TITLE: &str =
     "gen=title@1 at=0f dur=24f\n      set text=\"Soft\" size=0.4 three_d=true z=-0.2";
 
 #[test]
+fn a_mesh_among_clips_in_depth_holds_to_the_cpu() {
+    // A box across a wall turned about its middle, which it is before on one side and
+    // behind on the other, under a light that casts no shadow, with a flat clip over them.
+    let crossing = concat!(
+        "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n",
+        "      set color=#c0c0c0 three_d=true scale=0.9 rotate_y=30\n",
+        "  track V2 video\n    clip seen gen=camera@1 at=0f dur=24f\n",
+        "  track V3 video\n    clip thing gen=mesh@1 at=0f dur=24f\n",
+        "      set kind=box width=1 height=0.2 length=0.05 color=#ff0000 rotate_x=20\n",
+        "  track V4 video\n    clip l gen=light@1 at=0f dur=24f\n",
+        "      set kind=point x=0.2 y=-0.3 z=-1\n",
+        "  track V5 video\n    clip over gen=solid@1 at=0f dur=24f\n",
+        "      set color=#00ff00 scale=0.1 x=0.4 y=0.4 opacity=0.5\n",
+    );
+    holds("a mesh across a wall", crossing);
+    // And one alone over a flat clip, half clear.
+    let alone = concat!(
+        "  track V1 video\n    clip back gen=solid@1 at=0f dur=24f\n      set color=#203040\n",
+        "  track V2 video\n    clip thing gen=mesh@1 at=0f dur=24f\n",
+        "      set kind=ball width=0.5 height=0.5 length=0.5 color=#ffcc00 opacity=0.6\n",
+    );
+    holds("a mesh alone", alone);
+    // Where a light casts a shadow the frame is the CPU's, a mesh standing in its way by
+    // its triangles.
+    if kerf_gpu::shared().is_some() {
+        let shadowed = crossing.replace("kind=point x=0.2 y=-0.3 z=-1", "kind=point x=0.2 y=-0.3 z=-1 shadow=1");
+        let at = Rate::FPS_24.time_of(12);
+        assert!(!compositor(&shadowed, Accel::Always).draws_on_gpu(at, 1.0));
+    }
+}
+
+#[test]
 fn flat_clips_hold_to_the_cpu() {
     holds(
         "apart",
