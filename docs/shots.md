@@ -541,13 +541,19 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   frame 36 would see it. So for such a set `frame` is the path's `anchor`,
   which `look` returns, and not the frame the set is of; a shot that hardly
   moves hides the difference, and one that travels draws nothing without
-  it. Sets of several frames are all in that one space.
+  it. Sets of several frames are all in that one space, and `look` with
+  `mesh` and `beside` puts one where another is: `{"mesh": {"clip":
+  "set32", "beside": "set"}}` returns the `height`, `x`, `y`, and `z` that
+  make the two one set, the clips standing still and not turned.
 - **A set of one frame is what the camera leaves.** What a frame rebuilds
   is what it saw, nearest best, and a camera that travels is past the near
   ground of its first frame within a second. As it comes (`confidence=0.1`)
   a set of frame 0 was off the picture by the middle of a four-second
   drive; with `confidence=0` it held the far houses to the end and no road.
-  A set of a later frame, put in beside it, has the road again.
+  A set of a later frame, put in beside it, has the road again: five sets a
+  second apart, each with every pixel, left 6 to 13% of the frame empty
+  after the first, where one left 35 to 59%. What moved in the footage is
+  in each set where it then was.
 - **`set-views` sends its guide up at the size its model runs at**, 504 on
   the longer side. The server's node makes the mesh over the guide's own
   pixels with a lens measured in the model's, so a guide of another size
@@ -573,7 +579,7 @@ being where its clip puts it, with as few keyframes as say it.
 | `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
 | `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
 | `fits` | In place of `scale`: the media the path is the camera of, to find the size from. |
-| `lens` | A lens for the camera, degrees down the picture, in place of the one `from` has: the lens a set's own model found (`out={lens.txt}`), where the two models do not agree on it. |
+| `lens` | A lens for the camera, degrees down the picture, in place of the one `from` has: the lens a set's own model found (`out={lens.txt}`), where the two models do not agree on it. With `fits` it need not be given: the set's own lens is found from the footage first. |
 | `as` | A camera clip to `set`, where a new one is not wanted. |
 
 What comes back with the lines is `from`: its `frames`, how many of the
@@ -596,11 +602,12 @@ furthest from `frame`, each held to the footage's own frame over the
 pixels the set covers, and then more finely about the best.
 
 ```json
-{ "mesh": { "clip": "set", "from": "cameras.txt", "frame": 0, "fits": "footage", "lens": 22.8 } }
+{ "mesh": { "clip": "set", "from": "cameras.txt", "frame": 0, "fits": "footage" } }
 ```
 
 | In `fit` | Says |
 |---|---|
+| `lens` | The set's own lens, found first where none is given: the one through which the set, seen from `frame`, is that frame of the footage again, with its `error` and `sure`. A set is rebuilt along the rays of the lens its model took the frame to have, so only through that lens does it draw its frame; where it is sure (1.1 or more) the camera gets it, and else the path's. |
 | `scale` | The size found, which the lines returned are written at. |
 | `error` | How far the set's picture is from the footage there, of 255 a pixel, over what the set covers. |
 | `sure` | How many times worse half or twice that size is. Near 1, any size fits as well: the camera turns and does not travel, or the set is of another frame than `frame`, and a `note` says so. |

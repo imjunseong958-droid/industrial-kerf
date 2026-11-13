@@ -83,7 +83,9 @@ on `main`; its section here becomes the release's notes on GitHub
   the subject is there.
 - `look` with `mesh` and `from` finds the size of a camera path against a
   set another model rebuilt, from the footage both are of (`fits`), and
-  takes a `lens` for the camera. It also says which frame a path counts its
+  takes a `lens` for the camera, or finds the set's own from the footage.
+  With `beside` it puts one mesh's file where another's is, for sets
+  rebuilt of several frames of one reading. It also says which frame a path counts its
   places from (`anchor`): a set made of the path's own reading is in that
   frame's space, whichever frame it shows, and without it a travelling
   shot's set was drawn from the wrong place.

@@ -204,6 +204,39 @@ pub(crate) fn frames_to_read(eyes: &[[f64; 3]], origin: usize) -> Vec<usize> {
     frames
 }
 
+/// The lens through which `seen`, from `view`, is most like `footage`, the footage's picture
+/// on the frame `view` is the camera of: degrees down the picture, with how far the set's
+/// picture is from the footage there, and how many times worse a lens a quarter narrower
+/// or wider is. A set is rebuilt along the rays of the lens its model took the frame to
+/// have, and only through that lens is it the frame again; it says nothing of size, the
+/// camera being where the set was seen from.
+pub(crate) fn lens(seen: &Seen, view: &FileView, footage: &[u8]) -> Option<(f64, f64, f64)> {
+    let bare = seen.compositor(&seen.alone(None)?)?;
+    let far = |fov: f64| apart(&seen.through(&bare, view, fov)?, footage);
+    // From 10 degrees to 115, an eighth of a doubling at a time.
+    let step = |index: i32| 10.0 * 2f64.powf(f64::from(index) / 8.0);
+    let (best, _) = (0..=28)
+        .filter_map(|index| Some((index, far(step(index))?)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let (mut low, mut high) = (f64::from(best - 1) / 8.0, f64::from(best + 1) / 8.0);
+    for _ in 0..8 {
+        let (one, other) = (low + (high - low) / 3.0, high - (high - low) / 3.0);
+        match (far(10.0 * 2f64.powf(one)), far(10.0 * 2f64.powf(other))) {
+            (Some(a), Some(b)) if a <= b => high = other,
+            (Some(_), Some(_)) | (None, Some(_)) => low = one,
+            (Some(_), None) => high = other,
+            (None, None) => break,
+        }
+    }
+    let fov = 10.0 * 2f64.powf((low + high) / 2.0);
+    let error = far(fov)?;
+    let beside = [far(fov / 1.25), far(fov * 1.25)]
+        .into_iter()
+        .flatten()
+        .fold(f64::INFINITY, f64::min);
+    Some((fov, error, beside / error.max(1e-9)))
+}
+
 /// The size at which `seen`, drawn through `views(scale)` on `frames`, is most like
 /// `footage`, which holds the footage's picture on each of those frames at [`Seen::size`].
 pub(crate) fn fit(
@@ -262,6 +295,127 @@ pub(crate) fn fit(
         },
         frames: frames.to_vec(),
     })
+}
+
+/// Where the origin of a mesh clip's file is in its sequence, as a camera's place is said,
+/// and how many frame heights one of the file's units is.
+fn file_in_sequence(project: &Project, sequence: usize, clip: &str) -> Option<([f64; 3], f64)> {
+    let planned = project.sequences.get(sequence)?;
+    let start = planned
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|found| found.id.as_str() == clip)?
+        .start;
+    let compositor = Compositor::new(
+        project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: Some(planned.id.to_string()),
+            ..ComposeOptions::default()
+        },
+    )
+    .ok()?;
+    let at = |eye: [f64; 3]| {
+        let place = compositor.mesh_view(
+            clip,
+            &FileView {
+                eye,
+                ..FileView::ORIGIN
+            },
+            start,
+        )?;
+        Some([place.x, place.y, place.z])
+    };
+    let (origin, up) = (at([0.0; 3])?, at([0.0, 1.0, 0.0])?);
+    // A place's x is in frame widths, and the rest in heights.
+    let wide = f64::from(planned.width) / f64::from(planned.height.max(1));
+    let unit = ((up[0] - origin[0]) * wide)
+        .hypot(up[1] - origin[1])
+        .hypot(up[2] - origin[2]);
+    Some((origin, unit))
+}
+
+fn clip_of<'a>(project: &'a mut Project, sequence: usize, id: &str) -> Option<&'a mut Clip> {
+    project
+        .sequences
+        .get_mut(sequence)?
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .find(|clip| clip.id.as_str() == id)
+}
+
+/// The line that puts the file of mesh clip `clip` where the file of `other` is, the two
+/// files being in one space: as tall as `other` has a unit of its file, and moved until the
+/// two origins are one place.
+pub(crate) fn beside(
+    project: &Project,
+    sequence: usize,
+    clip: &str,
+    other: &str,
+) -> Result<String, String> {
+    let mut project = project.clone();
+    let number = |param: Option<&Param>, otherwise: f64| match param {
+        None => Some(otherwise),
+        Some(Param::Static(Value::Number(value))) => Some(*value),
+        Some(_) => None,
+    };
+    for id in [clip, other] {
+        let found = clip_of(&mut project, sequence, id).ok_or(format!("no clip `{id}`"))?;
+        let turned = ["rotate_x", "rotate_y", "rotation"]
+            .iter()
+            .any(|name| number(found.props.get(*name), 0.0) != Some(0.0));
+        let keyed = ["x", "y", "z"]
+            .iter()
+            .any(|name| number(found.props.get(*name), 0.0).is_none());
+        if turned || keyed || found.parent.is_some() {
+            return Err(format!(
+                "`{id}` is turned, keyed, or moves with another clip: `beside` places a mesh that stands still and square"
+            ));
+        }
+    }
+    let wanted = |project: &Project, id: &str| {
+        file_in_sequence(project, sequence, id).ok_or(format!(
+            "`{id}`: it is no `gen=mesh@1` clip with a `file`"
+        ))
+    };
+    let (to, unit) = wanted(&project, other)?;
+    let (_, own) = wanted(&project, clip)?;
+    let default = Catalog::builtin()
+        .fx("mesh")
+        .and_then(|def| def.find("height"))
+        .and_then(|def| def.default.as_number())
+        .unwrap_or(1.0);
+    let moved = clip_of(&mut project, sequence, clip).ok_or("no clip")?;
+    let Content::Generator { params, .. } = &mut moved.content else {
+        return Err(format!("`{clip}` is no mesh"));
+    };
+    let height = number(params.get("height"), default)
+        .ok_or(format!("the `height` of `{clip}` is keyed"))?
+        * unit
+        / own;
+    params.insert("height".to_owned(), Param::Static(Value::Number(height)));
+    // A place is not quite a straight line of a clip's own, so twice more from where it lands.
+    let mut place = [0.0; 3];
+    for _ in 0..3 {
+        let (from, _) = wanted(&project, clip)?;
+        let moved = clip_of(&mut project, sequence, clip).ok_or("no clip")?;
+        for (axis, name) in ["x", "y", "z"].into_iter().enumerate() {
+            place[axis] = number(moved.props.get(name), 0.0).unwrap_or(0.0) + to[axis] - from[axis];
+            moved
+                .props
+                .insert(name.to_owned(), Param::Static(Value::Number(place[axis])));
+        }
+    }
+    let rounded = |value: f64| (value * 1e5).round() / 1e5 + 0.0;
+    Ok(format!(
+        "set {clip} height={} x={} y={} z={}",
+        rounded(height),
+        rounded(place[0]),
+        rounded(place[1]),
+        rounded(place[2])
+    ))
 }
 
 #[cfg(test)]
@@ -387,9 +541,37 @@ mod tests {
         assert!((found.scale - 2.0).abs() < 0.05, "{found:?}");
         assert!(found.error < 1.0 && found.sure > 2.0, "{found:?}");
         assert_eq!(found.frames, frames);
+        // The lens is found from the frame the set is of, where size says nothing.
+        let own = seen.through(&bare, &FileView::ORIGIN, 40.0).unwrap();
+        let (fov, error, sure) = lens(&seen, &FileView::ORIGIN, &own).expect("a lens");
+        assert!((fov - 40.0).abs() < 0.5 && error < 1.0 && sure > 2.0, "{fov} {error} {sure}");
         // Through another lens nothing fits as well, and it is still the nearest size.
         let other = fit(&seen, 55.0, &frames, &footage, views).expect("a size");
         assert!(other.error > found.error, "{other:?}");
+    }
+
+    #[test]
+    fn a_mesh_is_put_where_another_of_the_same_space_is() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = set(folder.path());
+        let scene = |more: &str| {
+            kerf_lang::parse_document(
+                &format!(
+                    "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n  track V1 video\n    clip first gen=mesh@1 at=0f dur=24f\n      set file=\"{file}\" height=0.5 x=0.2 y=-0.1 z=0.3\n  track V2 video\n    clip second gen=mesh@1 at=0f dur=24f\n      set file=\"{file}\" {more}\n",
+                    file = file.display()
+                ),
+                Catalog::builtin(),
+            )
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project
+        };
+        // The same file is in its own space, so it is put exactly where the first is.
+        let line = beside(&scene("height=2 x=-1"), 0, "second", "first").expect("a line");
+        assert_eq!(line, "set second height=0.5 x=0.2 y=-0.1 z=0.3");
+        // One that is turned is not placed, and one that is no mesh is said.
+        let turned = beside(&scene("rotate_y=30"), 0, "second", "first").unwrap_err();
+        assert!(turned.contains("stands still and square"), "{turned}");
+        assert!(beside(&scene(""), 0, "second", "nobody").is_err());
     }
 
     #[test]

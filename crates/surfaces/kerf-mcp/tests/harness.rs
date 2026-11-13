@@ -3493,6 +3493,11 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(still.contains("no `extrinsics`") || still.contains("does not move"), "{still}");
     let wide = said(json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 200}}));
     assert!(wide.contains("between 0 and 180"), "{wide}");
+    // `beside` is of two meshes, and is not asked with a camera.
+    let alone = said(json!({"mesh": {"clip": "set", "beside": "set", "from": "lens.txt"}}));
+    assert!(alone.contains("ask for one"), "{alone}");
+    let same = ok(&router, "look", json!({"mesh": {"clip": "set", "beside": "set"}}));
+    assert_eq!(same["script"], "set set height=0.5 x=0 y=0 z=0", "{same}");
     // A lens given is the camera's, whatever the file's is.
     let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 25}}));
     assert!(lens["script"].as_str().unwrap().ends_with(" fov=25"), "{lens}");

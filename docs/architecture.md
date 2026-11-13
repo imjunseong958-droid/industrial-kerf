@@ -864,9 +864,13 @@ recipes, in `fixtures/shots/car`.
    `look` now returns that frame as `anchor` and says so where `frame` is
    another, and what the workflow says of itself was wrong and is put
    right. **A set of one frame is what the camera leaves**, so a travelling
-   shot wants sets of several frames, which the one space allows; putting
-   them together took four numbers a set by hand, and is not a line of
-   `look` yet. **The two models do not agree on the lens**: the path's has
+   shot wants sets of several frames, which the one space allows, and
+   `look` with `mesh` and `beside` writes the line that puts one where
+   another is (it was four numbers a set by hand the first time). Five
+   sets a second apart, each with every pixel, leave 6 to 13% of the frame
+   empty after the first frame, where the set of frame 0 alone left 35 to
+   59%; what moved in the footage, a car ahead, is in each set where it
+   then was. **The two models do not agree on the lens**: the path's has
    37.2 degrees down the frame, between 36.4 and 38.1, and the one that
    rebuilds a frame alone has 22.8, of the same footage. The sets have
    holes where a surface turns from the camera, a third to a half of the
@@ -882,6 +886,7 @@ recipes, in `fixtures/shots/car`.
    | The set | The size found | The picture's error there, of 255 | `sure`: half or twice the size, over that |
    |---|---|---|---|
    | Of the path's own reading, where the size is 1 | 0.956 | 29.1 | 1.57 |
+   | Of the other model, with no lens given: `look` finds 22.7 from frame 0 of the footage, 6.3 times surer than a quarter either way, where the model's own file says 22.8 | 20.0 | 46.8 | 1.12 |
    | Of the other model, seen through its own lens of 22.8 degrees | 20.1 | 46.8 | 1.13 |
    | Of the other model, through the path's lens of 37.2 | 3.24 | 44.5 | 1.04, which is no finding |
 
@@ -894,8 +899,9 @@ recipes, in `fixtures/shots/car`.
    the fit is flat and is said to be. So two models can be used together
    coarsely, and one reading is still the way to have them meet.
 
-   *Not done:* sets of several frames put together by `look`; a set with
-   no holes; the two models' lenses reconciled; splats.
+   *Not done:* one set of a whole shot with what moved left out; the two
+   models' lenses reconciled, `look` finding the set's and using it, which
+   leaves the path found through another; splats.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
