@@ -278,8 +278,16 @@ pub fn signal_named(index: usize) -> String {
     }
 }
 
-/// Whether `name` is one a request gives a signal under.
+/// The blank that takes a signal as a picture in motion, in place of numbers: a grey video
+/// of the frames asked for, as light on each frame as the signal is then, for a node that
+/// reads a mask a frame. `signal_video` for the first, `signal2_video` for the second.
+pub fn signal_video_named(index: usize) -> String {
+    format!("{}_video", signal_named(index))
+}
+
+/// Whether `name` is one a request gives a signal under, as numbers or as a video.
 pub fn names_a_signal(name: &str) -> bool {
+    let name = name.strip_suffix("_video").unwrap_or(name);
     match name.strip_prefix("signal") {
         Some("") => true,
         Some(number) => number.parse::<usize>().is_ok_and(|number| number >= 2),
@@ -394,6 +402,11 @@ mod tests {
             assert!(!names_a_signal(name), "{name}");
         }
         assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
+        // As a video it is the same signal under another blank.
+        assert_eq!(signal_video_named(0), "signal_video");
+        assert_eq!(signal_video_named(1), "signal2_video");
+        assert!(names_a_signal("signal_video") && names_a_signal("signal3_video"));
+        assert!(!names_a_signal("signal1_video") && !names_a_signal("video"));
     }
 
     #[test]

@@ -83,6 +83,10 @@ on `main`; its section here becomes the release's notes on GitHub
   choosing another has the media be that take again.
 - A glTF file's morph targets are read: a face or a shape that the file
   reshapes by weights is reshaped as its animation has it.
+- `kerf-comfy` hands a signal to a workflow as a grey video at a
+  `{signal_video}` blank, for a node that reads a mask a frame, and comes
+  with `shot-timed`: a shot that keeps its guide where a signal is 0 and
+  is made anew where it is 1.
 - A guide can be drawn as which way each pixel faces, `render …
   pass=normals`: a normal map in the camera's space, of clips in depth and
   of meshes.

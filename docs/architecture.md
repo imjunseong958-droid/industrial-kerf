@@ -618,8 +618,9 @@ design.
   entry says it is `about`, and is no rule of the skill's.
 - *With the camera going round, the car turned and the scenery did not.*
   Written down, and nothing is decided by it.
-- *Signals are still not measured.* This model has no input that takes a
-  number a frame, and it is the only one on that server.
+- *Signals were not measured here.* This model has no input that takes a
+  number a frame, and it is the only one on that server; it does take a
+  mask a frame, by which one was measured later (Next, 7).
 
 This is one scene, two seeds and a small model, as before.
 
@@ -1063,7 +1064,28 @@ recipes, in `fixtures/shots/car`.
    over, as a signal's numbers are. The weights were not on the server. It
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
-7. **A signal measured.** Still wanting a model that takes a number a frame.
+7. **A signal measured** (2026-11-13), on the one model in reach, which
+   takes no number a frame and does take a mask a frame. `kerf-comfy`
+   hands a signal to a workflow as a grey video, each frame as light as
+   the signal is then (`{signal_video}`), and a workflow that comes with
+   it, `shot-timed`, has the model keep its guide where the signal is 0
+   and make the frame anew where it is 1. On the travelling shot of 3,
+   the sets' picture as the guide, a signal that steps at the middle
+   frame, and how far each frame of the take is from its guide, in grey
+   of 255, by a script kept out of the repository:
+
+   | The signal | Frames where it is 0 | Frames where it is 1 | The two, frame by frame (correlation) |
+   |---|---|---|---|
+   | 0 for the first 32 frames, then 1 | 7.6 from the guide | 17.1 | 0.93 |
+   | 1 for the first 32 frames, then 0 | 6.8 | 12.1 | 0.84 |
+
+   The take leaves its guide where the signal says and when it says, the
+   other way round as readily, and begins three frames before the step:
+   the model makes four frames as one. So a number over time reaches a
+   model and is followed, and what it does there is a workflow's to say;
+   here it is how much of the guide is kept. Still wanting is a model
+   that takes the number itself, for what a mask cannot say: how fast,
+   how bright, how much.
 8. **In the editor**, both in (2026-11-13). A signal's curve is drawn
    where its clip is, in the timeline under the picture: its number along
    the clip, 0 at the bottom and 1 at the top, filled under as a sound's

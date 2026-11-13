@@ -161,6 +161,59 @@ impl Shape {
 
 /// Run `command` to its end and give what it wrote; one that does not end
 /// well is an error with what it said.
+impl Tools {
+    /// A grey video at `to` of `size`, `fps` frames a second: each frame as light all over
+    /// as its number in `levels` says, 0 black and 1 white. It is how a number a frame
+    /// reaches a node that reads a mask a frame.
+    pub fn levels(
+        &self,
+        levels: &[f64],
+        (width, height): (u32, u32),
+        fps: f64,
+        to: &Path,
+    ) -> Result<(), String> {
+        use std::io::Write;
+        let mut child = Command::new(&self.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "rawvideo", "-pix_fmt", "gray", "-color_range", "pc"])
+            .args(["-s", &format!("{width}x{height}"), "-r", &fps.to_string(), "-i", "-"])
+            .args(["-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p"])
+            .arg(to)
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                format!(
+                    "{} could not start: {error}; KERF_FFMPEG names where FFmpeg is",
+                    self.ffmpeg
+                )
+            })?;
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let pixels = (width * height) as usize;
+        for level in levels {
+            let grey = (level.clamp(0.0, 1.0) * 255.0).round() as u8;
+            // FFmpeg ending early is said by its status, below.
+            if stdin.write_all(&vec![grey; pixels]).is_err() {
+                break;
+            }
+        }
+        drop(stdin);
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("{} failed: {error}", self.ffmpeg))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} failed ({}): {}",
+                self.ffmpeg,
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    }
+}
+
 fn run(command: &mut Command, program: &str) -> Result<String, String> {
     let output = command.output().map_err(|error| {
         format!("{program} could not start: {error}; KERF_FFMPEG names where FFmpeg is")

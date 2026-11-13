@@ -444,6 +444,7 @@ start from. `kerf-comfy --list` names those that come with it; the others
 | `{guide_depth}`, `{guide_ids}` … | A guide the line gives beside the first, by its name: sent up as `{guide}` is, brought to the size, rate, and frames asked for. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
 | `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
+| `{signal_video}`, `{signal2_video}` … | The same signal as a picture in motion: a grey video of the size and frames asked for, each frame as light all over as the signal is then, sent up as a file is. For a node that reads a mask a frame, which a list of numbers does not reach. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
 
@@ -775,10 +776,14 @@ sequence, from the sequence's first, at the sequence's rate:
   has it whole: three frames at 24 for a model at 16.
 
 What a signal does to the picture is the model's, not Kerf's. Kerf knows no
-model that reads one by name, and the workflow that comes with `kerf-comfy`
-has no blank for one, so a line that names a signal for it is told that it
-is left out. A workflow of your own takes one at a `{signal}` blank, in a
-node that takes a list of numbers, a frame each
+model that reads one by name. Of the workflows that come with `kerf-comfy`
+one reads a signal, `shot-timed`: a shot that follows its guide where the
+signal is 0 and is made anew from the prompt where it is 1, the signal
+reaching the model as a mask a frame. `shot` has no blank for one, so a
+line that names a signal for it is told that it is left out. A workflow of
+your own takes one at a `{signal}` blank, in a node that takes a list of
+numbers, a frame each, or at `{signal_video}`, as a grey video of the
+frames asked for, in a node that reads a mask or a picture a frame
 ([A model on a ComfyUI server](#a-model-on-a-comfyui-server)); what it does
 there, a strength, a mask's weight, a motion scale, is the workflow's to say.
 

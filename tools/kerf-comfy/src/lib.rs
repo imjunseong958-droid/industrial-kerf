@@ -251,15 +251,31 @@ pub fn make(
     // The signals the workflow reads, each as a number for every frame asked for.
     for (index, signal) in request.signals.iter().enumerate() {
         let name = signal_named(index);
-        if !blanks.contains(&name) {
+        let as_video = request::signal_video_named(index);
+        if !blanks.contains(&name) && !blanks.contains(&as_video) {
             unread.push(format!("`{name}`"));
             continue;
         }
-        values.insert(name, json!(signal.text(frames, fps)));
-        say(&format!(
-            "handed signal `{}` as {frames} values",
-            signal.name
-        ));
+        if blanks.contains(&as_video) {
+            // As a grey video of the frames asked for, for a node that reads a mask a frame.
+            let file = work.join(format!("{as_video}.comfy.mp4"));
+            tools.levels(&signal.over(frames, fps), (width, height), fps, &file)?;
+            let bytes = std::fs::read(&file)
+                .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+            let sent = server.upload(&file, &format!("kerf-{}.mp4", hash(&bytes)))?;
+            values.insert(as_video, json!(sent));
+            say(&format!(
+                "handed signal `{}` as a video of {frames} frames",
+                signal.name
+            ));
+        }
+        if blanks.contains(&name) {
+            values.insert(name, json!(signal.text(frames, fps)));
+            say(&format!(
+                "handed signal `{}` as {frames} values",
+                signal.name
+            ));
+        }
     }
     // Where clips go, as one list of tracks in the pixels and frames asked for.
     if !request.moves.is_empty() {

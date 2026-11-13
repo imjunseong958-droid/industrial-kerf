@@ -45,8 +45,9 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 6] = [
+pub const BUNDLED: [(&str, &str); 7] = [
     ("shot", include_str!("../workflows/shot.json")),
+    ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),
@@ -532,7 +533,7 @@ mod tests {
                 assert!(
                     ["prompt", "seed", "width", "height", "frames", "fps"]
                         .contains(&blank.as_str())
-                        || names_a_file(&blank)
+                        || names_what_is_handed(&blank)
                         || workflow.set.contains_key(&blank),
                     "{name}: nothing fills {{{blank}}}"
                 );
