@@ -125,6 +125,75 @@ pub fn tracks(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> Strin
 /// The name a workflow reads where clips go under.
 pub const MOVES: &str = "moves";
 
+/// The blank that takes where clips go as a picture in motion, in place of points: a video
+/// of the frames asked for, white, with each clip's box drawn on it in black where it is on
+/// that frame, as a layout a model follows.
+pub const MOVES_VIDEO: &str = "moves_video";
+
+impl Moves {
+    /// Its box on each of `frames` frames at `fps` a second, in pixels of a picture `width`
+    /// by `height`, left, top, right, bottom: none on a frame it does not show on. A
+    /// sequence of another shape fills the picture as its guide does.
+    pub fn boxes(&self, frames: u32, fps: f64, (width, height): (u32, u32)) -> Vec<Option<[f64; 4]>> {
+        let Some(last) = self.places.len().checked_sub(1) else {
+            return vec![None; frames as usize];
+        };
+        let (wide, tall) = self
+            .frame
+            .map_or((f64::from(width), f64::from(height)), |(wide, tall)| {
+                (f64::from(wide), f64::from(tall))
+            });
+        let fills = (f64::from(width) / wide).max(f64::from(height) / tall);
+        (0..frames)
+            .map(|frame| {
+                let own = ((f64::from(frame) * self.rate / fps).round() as usize).min(last);
+                let [x, y, w, h] = self.places[own]?;
+                let across = |share: f64| (share - 0.5) * wide * fills + f64::from(width) / 2.0;
+                let down = |share: f64| (share - 0.5) * tall * fills + f64::from(height) / 2.0;
+                Some([
+                    across(x - w / 2.0),
+                    down(y - h / 2.0),
+                    across(x + w / 2.0),
+                    down(y + h / 2.0),
+                ])
+            })
+            .collect()
+    }
+}
+
+/// The frames of a `{moves_video}`: each `width` by `height` bytes of grey, white with every
+/// clip's box on that frame outlined in black.
+pub fn layout(moves: &[Moves], frames: u32, fps: f64, (width, height): (u32, u32)) -> Vec<Vec<u8>> {
+    let boxes: Vec<Vec<Option<[f64; 4]>>> = moves
+        .iter()
+        .map(|clip| clip.boxes(frames, fps, (width, height)))
+        .collect();
+    // As thick as a model's own annotator draws a box: a hundredth of the frame's height.
+    let line = (i64::from(height) / 100).max(2);
+    let (wide, tall) = (i64::from(width), i64::from(height));
+    (0..frames as usize)
+        .map(|frame| {
+            let mut picture = vec![255u8; (width * height) as usize];
+            for [left, top, right, bottom] in boxes.iter().filter_map(|clip| clip[frame]) {
+                let (left, top) = (left.round() as i64, top.round() as i64);
+                let (right, bottom) = (right.round() as i64, bottom.round() as i64);
+                for y in top.max(0)..bottom.min(tall) {
+                    for x in left.max(0)..right.min(wide) {
+                        let edge = x < left + line
+                            || x >= right - line
+                            || y < top + line
+                            || y >= bottom - line;
+                        if edge {
+                            picture[(y * wide + x) as usize] = 0;
+                        }
+                    }
+                }
+            }
+            picture
+        })
+        .collect()
+}
+
 /// A signal as a request holds it: a number from 0 to 1 for each frame of
 /// the sequence its clip is in.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -298,7 +367,7 @@ pub fn names_a_signal(name: &str) -> bool {
 /// Whether `name` is one a request hands something under, a file or a
 /// signal: a blank of that name is filled only by a request that has it.
 pub fn names_what_is_handed(name: &str) -> bool {
-    names_a_file(name) || names_a_signal(name) || name == MOVES
+    names_a_file(name) || names_a_signal(name) || name == MOVES || name == MOVES_VIDEO
 }
 
 #[cfg(test)]
@@ -443,6 +512,18 @@ mod tests {
         // a frame twice as wide as it is tall is the left edge of a square.
         let wide = Moves { frame: Some((400, 200)), ..ball.clone() };
         assert_eq!(wide.points(1, 8.0, (100, 100)).unwrap()[0], [0.0, 50.0]);
+        // As a layout: its box on each frame, and a picture white but for the box's edge.
+        let boxes = ball.boxes(4, 8.0, (200, 100));
+        let first = boxes[0].unwrap().map(f64::round);
+        assert_eq!(first, [40.0, 45.0, 60.0, 55.0]);
+        assert_eq!(boxes[3], None);
+        let drawn = layout(std::slice::from_ref(&ball), 4, 8.0, (200, 100));
+        assert_eq!(drawn.len(), 4);
+        assert_eq!(drawn[0][45 * 200 + 40], 0);
+        assert_eq!(drawn[0][50 * 200 + 50], 255);
+        assert_eq!(drawn[0][10 * 200 + 10], 255);
+        assert!(drawn[3].iter().all(|grey| *grey == 255));
+        assert!(names_what_is_handed(MOVES_VIDEO));
         // One that shows on no frame is no track.
         let none = Moves { places: vec![None; 3], ..ball };
         assert_eq!(tracks(&[none], 2, 8.0, (200, 100)), "[]");

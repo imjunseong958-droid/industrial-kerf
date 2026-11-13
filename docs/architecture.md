@@ -1067,14 +1067,24 @@ recipes, in `fixtures/shots/car`.
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two of those, and Wan VACE takes one
    control video, so a picture with its depth waits for one that does.
-6. **How a point moves, as a direction of its own**, whose half in the
-   document is in (2026-11-13): `generate … moves=<clip>` puts a clip's
+6. **How a point moves, as a direction of its own**, which is in
+   (2026-11-13): `generate … moves=<clip>` puts a clip's
    place on each frame in the request, read from the frame as `shows`
    reads it, and `kerf-comfy` fills a workflow's `{moves}` blank with them
    as tracks of points in the model's pixels
    ([shots.md](shots.md#where-a-thing-goes), `recipe/moves.rs`). On the
-   travelling shot the crate's 65 places are the boxes `shows` gives. No
-   model was run with them: the weights are still not on the server. ComfyUI has nodes for
+   travelling shot the crate's 65 places are the boxes `shows` gives. The
+   model that follows points is still not on the server, so it was run on
+   the one that is, which follows a layout: `kerf-comfy` draws the boxes
+   as a video, white with each box's edge in black (`{moves_video}`), and
+   its workflow `shot-led` hands the model that and the prompt, with no
+   picture of the scene at all. The take is a street of the model's own
+   with a red container that goes where the box goes, small at the left
+   at the start and large at the right at the end, on all 65 frames:
+   `placed` has it 0.040 of a frame height from the box, 0.002 across and
+   0.027 down, 1.14 times its size, with an `overlap` of 0.57. So where a
+   thing goes is a direction a model follows by itself, apart from what
+   the scene looks like, and the document says it by naming a clip. ComfyUI has nodes for
    Wan-Move, which follows paths of points given as coordinates
    (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
    reads and what the document says outright, so its path is there to hand

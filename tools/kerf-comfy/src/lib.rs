@@ -278,7 +278,25 @@ pub fn make(
         }
     }
     // Where clips go, as one list of tracks in the pixels and frames asked for.
-    if !request.moves.is_empty() {
+    if !request.moves.is_empty() && blanks.contains(request::MOVES_VIDEO) {
+        // As a layout a model follows: white, with each clip's box where it is on each frame.
+        let file = work.join("moves_video.comfy.mp4");
+        let drawn = request::layout(&request.moves, frames, fps, (width, height));
+        tools.greys(&drawn, (width, height), fps, &file)?;
+        let bytes = std::fs::read(&file)
+            .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+        let sent = server.upload(&file, &format!("kerf-{}.mp4", hash(&bytes)))?;
+        values.insert(request::MOVES_VIDEO.to_owned(), json!(sent));
+        say(&format!(
+            "handed where {} goes as a layout of {frames} frames",
+            request
+                .moves
+                .iter()
+                .map(|clip| format!("`{}`", clip.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    } else if !request.moves.is_empty() {
         if blanks.contains(request::MOVES) {
             values.insert(
                 request::MOVES.to_owned(),

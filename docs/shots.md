@@ -848,10 +848,14 @@ generate model=led prompt="a crate on a street" first={first.png} moves=crate
 - A take is held to the clip's whole sequence, as to one it renders: moving
   the clip, the camera, or what hides it asks for the shot again.
 
-No workflow that comes with `kerf-comfy` reads it, and none was run: the
-server the rest was measured on has the nodes that take point tracks and
-not the weights. What is in is the document's side, to the request and to a
-workflow's blank.
+A workflow reads it at `{moves}`, as tracks of points, or at
+`{moves_video}`, as a layout: a video of the size and frames asked for,
+white, with each clip's box outlined in black where it is on that frame.
+`shot-led`, which comes with `kerf-comfy`, hands a model that layout and the
+prompt and no picture of the scene: the subject the prompt names goes where
+the clip goes. The server the rest was measured on has the nodes that take
+point tracks and not the weights, so `{moves}` itself was not run on a
+model.
 
 ## Guides
 

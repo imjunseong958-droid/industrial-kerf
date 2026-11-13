@@ -45,10 +45,11 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 8] = [
+pub const BUNDLED: [(&str, &str); 9] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
+    ("shot-led", include_str!("../workflows/shot-led.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),
@@ -253,7 +254,7 @@ impl Workflow {
         if signals > 0 {
             reads.push("signal");
         }
-        if blanks.contains(crate::request::MOVES) {
+        if blanks.contains(crate::request::MOVES) || blanks.contains(crate::request::MOVES_VIDEO) {
             reads.push(crate::request::MOVES);
         }
         let more: Map<String, Value> = self

@@ -172,6 +172,23 @@ impl Tools {
         fps: f64,
         to: &Path,
     ) -> Result<(), String> {
+        let pixels = (width * height) as usize;
+        let frames: Vec<Vec<u8>> = levels
+            .iter()
+            .map(|level| vec![(level.clamp(0.0, 1.0) * 255.0).round() as u8; pixels])
+            .collect();
+        self.greys(&frames, (width, height), fps, to)
+    }
+
+    /// A grey video at `to` of `size`, `fps` frames a second, of `frames`, each `width` by
+    /// `height` bytes row by row.
+    pub fn greys(
+        &self,
+        frames: &[Vec<u8>],
+        (width, height): (u32, u32),
+        fps: f64,
+        to: &Path,
+    ) -> Result<(), String> {
         use std::io::Write;
         let mut child = Command::new(&self.ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -189,11 +206,9 @@ impl Tools {
                 )
             })?;
         let mut stdin = child.stdin.take().expect("stdin is piped");
-        let pixels = (width * height) as usize;
-        for level in levels {
-            let grey = (level.clamp(0.0, 1.0) * 255.0).round() as u8;
+        for frame in frames {
             // FFmpeg ending early is said by its status, below.
-            if stdin.write_all(&vec![grey; pixels]).is_err() {
+            if stdin.write_all(frame).is_err() {
                 break;
             }
         }
