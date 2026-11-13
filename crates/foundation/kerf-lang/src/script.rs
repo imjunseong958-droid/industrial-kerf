@@ -232,6 +232,22 @@ impl<'a> Positions<'a> {
     }
 }
 
+/// Where `text` is on `sequence` of `project`, read as a script reads a
+/// position: timecode, frames or seconds, or an anchor with an optional
+/// amount, such as `end`, `c3.end-1f`, `beat1+2f` or `c3@14:24:05:02`.
+pub fn sequence_position(
+    project: &Project,
+    sequence: &Sequence,
+    text: &str,
+) -> Result<Time, String> {
+    Positions {
+        clock: Clock::of_sequence(sequence),
+        project,
+        sequence,
+    }
+    .position(text)
+}
+
 /// The clock of what `clip` plays: its media's or its nested sequence's;
 /// `None` for generators and captions.
 fn source_clock(project: &Project, clip: &Clip) -> Result<Option<Clock>, String> {
