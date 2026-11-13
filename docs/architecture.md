@@ -1144,15 +1144,20 @@ compositor asks no effect which kind it is. The editor's effect previews run
 the same code on one decoded picture (`kerf_compose::effects_on_picture`), in
 the order of the stack.
 
-Still to come, each a place that runs effects its own way and so asks the
-catalog what draws one (`Engine`):
+Two places ran effects their own way and asked a table what draws one, and
+no longer do (2026-11-13):
 
-- **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) names the effects with
-  kernels by id. A kernel belongs on the same interface as the CPU's code.
+- **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) named the effects with
+  kernels by id. An effect of `kerf-fx` now says what it is on the GPU beside
+  what it is on the CPU (`kerf_fx::picture::KernelEffect`, found by the same
+  id), and the plan asks it: none, or none as it is set, is the CPU's frame.
 - **Playback of plain cuts** (`kerf-playback/src/timeline.rs`) runs EffectCraft
-  effects itself on the frames it decodes.
+  effects itself on the frames it decodes, and asked the catalog's `Engine`
+  which those are. It asks the crate that runs them (`kerf_fx::is_raster`).
 
-`Engine` goes when the last of these does. How an effect meets an HDR picture
+`Engine` is left as which table a definition was read from, which the
+language's reference lists effects by and a look is told apart by; nothing
+that draws asks it. How an effect meets an HDR picture
 (`filmcraft::catalog::headroom`) and whether it leaves a picture alone are
 still tables by id beside the interface.
 

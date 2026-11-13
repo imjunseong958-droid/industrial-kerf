@@ -30,7 +30,7 @@ use kerf_draw::correct::Correction;
 use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::source::{premultiplied, PictureSource, SourceRun};
 use kerf_draw::text::{self, Justify, Text};
-use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
+use kerf_draw::{mask, wipe, Affine, Blend, Image, Rect, Vec2};
 use kerf_fx::filmcraft::{self, catalog::Headroom};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
@@ -2867,18 +2867,6 @@ fn param(clip: &Clip, name: &str) -> Param {
                 .unwrap_or(Value::Number(0.0)),
         )
     })
-}
-
-/// An effect parameter's number at clip time `time`, or its default.
-fn effect_number(effect: &Effect, name: &str, time: Time) -> f64 {
-    match effect.params.get(name) {
-        Some(param) => number(&param.value_at(time)),
-        None => Catalog::builtin()
-            .fx(effect.fx.as_str())
-            .and_then(|def| def.find(name))
-            .and_then(|def| def.default.as_number())
-            .unwrap_or(0.0),
-    }
 }
 
 fn static_number(

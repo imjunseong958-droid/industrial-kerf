@@ -5,8 +5,7 @@
 
 use super::*;
 use kerf_fx::filmcraft::catalog::Headroom;
-use kerf_fx::filmcraft::gpufx::FxOp;
-use kerf_fx::filmcraft::instance::{GpuEffect, Picture};
+use kerf_fx::filmcraft::instance::GpuEffect;
 use kerf_fx::transitions::gpu::Kernel as TransitionKernel;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -492,88 +491,34 @@ impl Drawing {
                 return None;
             }
             let before = ops.len();
-            match effect.fx.as_str() {
-                "color.basic" => {
-                    let correction = Correction::new(&|name| effect_number(effect, name, time));
-                    if !correction.is_identity() {
-                        ops.push(Op::Correct(correction));
-                    }
-                }
-                "blur.gaussian" => {
-                    let sigma = (effect_number(effect, "radius", time) / 2.0 * density) as f32;
-                    let (across, down) =
-                        blur::gaussian_radii(shape.size.0, shape.size.1, sigma, sigma);
-                    let radii = |radii: Vec<usize>| radii.into_iter().map(|r| r as u32).collect();
-                    ops.push(Op::Effect(GpuEffect::Op(FxOp::Gaussian {
-                        rx: radii(across),
-                        ry: radii(down),
-                        repeat: true,
-                    })));
-                }
-                "blur.radialzoom" => {
-                    let kernel = kerf_fx::kept::radial_zoom_kernel(
-                        effect,
-                        time,
-                        shape.size,
-                        shape.per_source,
-                    )?;
-                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
-                }
-                "noise.addgrain" => {
-                    let seed =
-                        kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32);
-                    let kernel = kerf_fx::kept::grain_kernel(
-                        effect,
-                        time,
-                        shape.size,
-                        shape.per_source,
-                        seed,
-                    )?;
-                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
-                }
-                "color.curves" | "color.huesaturation" | "color.photofilter"
-                | "color.selectivecolor" | "key.unmult" => {
-                    let kernel =
-                        kerf_fx::kept::color_kernel(effect, time, shape.size, shape.per_source)?;
-                    ops.push(Op::Effect(GpuEffect::Kernel(kernel)));
-                }
-                // Only FilmCraft's effects have kernels beyond those above.
-                id if filmcraft::catalog::carried(id).is_none() => return None,
-                _ => {
-                    let track = |id: &str| {
-                        sequence
-                            .tracks
-                            .iter()
-                            .position(|track| track.id == id)
-                            .map(|place| place + 1)
-                    };
-                    let on = Picture {
-                        size: shape.size,
-                        per_source: shape.per_source as f32,
-                    };
-                    let Some(instance) = filmcraft::instance::instance(effect, time, on, &track)
-                    else {
-                        continue;
-                    };
-                    if filmcraft::vfx::is_temporal(&instance.effect) {
-                        return None;
-                    }
-                    let timecode =
-                        format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
-                    let library = filmcraft::instance::luts(effect, &self.files);
-                    let run = filmcraft::instance::Run {
-                        working: self.working(),
-                        at: time,
-                        per_source: shape.per_source as f32,
-                        timecode: &timecode,
-                        clip_name: &plan.name,
-                        library: library.as_ref(),
-                        env: None,
-                        frame_rate: sequence.rate.fps(),
-                    };
-                    let op = filmcraft::instance::gpu_effect(&instance, &run, shape.size)?;
-                    ops.push(Op::Effect(op));
-                }
+            // The effect says what it is on the GPU, as it says what it is on the CPU: one this
+            // crate does not find, or that has no kernel as it is set, sends the frame there.
+            let track = |id: &str| {
+                sequence
+                    .tracks
+                    .iter()
+                    .position(|track| track.id == id)
+                    .map(|place| place + 1)
+            };
+            let timecode =
+                format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
+            let run = kerf_fx::picture::KernelRun {
+                at: time,
+                timecode: &timecode,
+                size: shape.size,
+                per_source: shape.per_source,
+                per_canvas: density,
+                seed: kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32),
+                working: self.working(),
+                clip_name: &plan.name,
+                frame_rate: sequence.rate.fps(),
+                files: &self.files,
+                track: &track,
+            };
+            match kerf_fx::picture::kernel(effect.fx.as_str())?.on_gpu(effect, &run)? {
+                kerf_fx::picture::OnGpu::Nothing => {}
+                kerf_fx::picture::OnGpu::Effect(op) => ops.push(Op::Effect(op)),
+                kerf_fx::picture::OnGpu::Correct(correction) => ops.push(Op::Correct(correction)),
             }
             if ops.len() > before {
                 match (way, ops.pop()) {

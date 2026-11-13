@@ -5,7 +5,7 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, Id, Mask, Param, ParamType, Project, Sequence,
+    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence,
     Time, TrackKind, Value,
 };
 use std::collections::HashMap;
@@ -371,9 +371,7 @@ impl PlaybackTimeline {
 
 /// Whether an effect is a raster effect, which playback runs itself.
 fn raster(effect: &Effect) -> bool {
-    Catalog::builtin()
-        .fx(effect.fx.as_str())
-        .is_some_and(|fx| fx.engine == Engine::Raster)
+    kerf_fx::is_raster(effect.fx.as_str())
 }
 
 /// Raster effect categories playback cannot run on the one picture it holds,
@@ -716,7 +714,7 @@ impl NativeCheck<'_> {
                     });
                     let reads_a_mask = !clip.masks.is_empty()
                         && fx.params.iter().any(|param| param.ty == ParamType::Mask);
-                    fx.engine == Engine::Raster
+                    kerf_fx::is_raster(effect.fx.as_str())
                         && !NOT_LIVE.contains(&fx.category.as_str())
                         && !kerf_fx::reads_other_frames(effect.fx.as_str())
                         && !reads_a_track

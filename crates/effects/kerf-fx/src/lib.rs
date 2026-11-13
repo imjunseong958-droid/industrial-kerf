@@ -14,7 +14,7 @@
 //! them through [`kept`]; [`RasterStack`] runs them on a clip's 8-bit
 //! source frames, after its masks cut them, as playback of plain cuts does.
 
-use kerf_model::{Catalog, Effect, Engine, Rgba, Time, Value};
+use kerf_model::{Catalog, Effect, Rgba, Time, Value};
 use kerf_raster_fx::{
     Buf, EffectCtx, EffectEnv, EffectSpec, Image, ParamSpec, ParamUi, Params, Value as FxValue,
 };
@@ -33,6 +33,13 @@ pub use kerf_draw::mask::cuts;
 /// Kept effects that read the clip's other frames: they fix what changes
 /// between neighbouring frames.
 const READS_OTHER_FRAMES: &[&str] = &["ec.distort.rollingshutterrepair"];
+
+/// Whether `id` is a raster effect: one that is run on a clip's own picture before the clip
+/// is placed, which is what playback of a plain cut can do by itself. The effect says so,
+/// by being one this crate runs that way, and not a table of the catalog.
+pub fn is_raster(id: &str) -> bool {
+    spec(id).is_some()
+}
 
 /// Whether the raster effect `id` reads the clip's other frames, which only
 /// the compositor gives it; on one picture alone it passes that picture
@@ -276,10 +283,9 @@ impl RasterStack {
         let steps = effects
             .iter()
             .filter(|effect| effect.enabled)
+            // One the catalog knows and this crate does not run so is another's to run.
             .filter(|effect| {
-                Catalog::builtin()
-                    .fx(effect.fx.as_str())
-                    .is_none_or(|fx| fx.engine == Engine::Raster)
+                is_raster(effect.fx.as_str()) || Catalog::builtin().fx(effect.fx.as_str()).is_none()
             })
             .enumerate()
             .map(|(index, effect)| {
@@ -516,7 +522,7 @@ fn write_back(buf: &Buf, rgba: &mut [u8], width: u32, height: u32, scale: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_model::{Id, Param};
+    use kerf_model::{Engine, Id, Param};
 
     #[test]
     fn raster_catalog_is_current() {
