@@ -232,6 +232,10 @@ impl Drawing {
         }
         let plan = &shown.plan;
         let clip = plan.clip.id.as_str();
+        if matches!(plan.source, Source::Mesh) {
+            why.push(format!("clip `{clip}` is a mesh, which the CPU draws"));
+            return;
+        }
         if plan.clip.retime != kerf_model::Retime::Frames {
             why.push(format!(
                 "clip `{clip}` makes frames between frames with `retime`"
@@ -360,8 +364,8 @@ impl Drawing {
         scale: f64,
     ) -> bool {
         let plan = &shown.plan;
-        // Frames between frames are made on the CPU.
-        if plan.clip.retime != kerf_model::Retime::Frames {
+        // Frames between frames are made on the CPU, and so is a mesh.
+        if plan.clip.retime != kerf_model::Retime::Frames || matches!(plan.source, Source::Mesh) {
             return false;
         }
         let time = at - plan.clip.start;
@@ -405,7 +409,7 @@ impl Drawing {
             }
             Source::Solid(_) | Source::Title(_) | Source::Drawn(_) => (canvas, scale),
             // It works on the canvas beneath it, unplaced.
-            Source::Adjustment | Source::Nothing => {
+            Source::Adjustment | Source::Nothing | Source::Mesh => {
                 return Shape {
                     source: canvas,
                     source_per: scale,
@@ -1264,7 +1268,7 @@ impl Drawing {
                 };
                 frame.image(&source.draw(&plan.clip, &run))
             }
-            Source::Adjustment | Source::Nothing => return None,
+            Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         }))
     }
 }

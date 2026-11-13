@@ -120,6 +120,50 @@ fn what_has_left_the_frame_or_lets_light_through_is_said() {
 }
 
 #[test]
+fn a_mesh_is_read_as_any_clip_is() {
+    // The car a box with its sides, standing on the floor: where it is, with nothing before it.
+    let car = |floor: &str, set: &str| {
+        format!(
+            concat!(
+                "  track V1 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set color=#88aaff\n",
+                "  track V2 video\n    clip floor gen=solid@1 at=0f dur=24f\n",
+                "      set color=#404040 three_d=true {floor}\n",
+                "  track V3 video\n    clip car gen=mesh@1 at=0f dur=24f\n",
+                "      set kind=box width=0.4 height=0.2 length=0.2 color=#ff0000 {set}\n",
+                "  track V4 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=ambient\n",
+            ),
+            floor = floor,
+            set = set,
+        )
+    };
+    let shown = read(&car("rotate_x=-80 y=0.4 z=1 scale=3", ""));
+    assert_eq!(
+        shown
+            .iter()
+            .map(|shown| shown.clip.as_str())
+            .collect::<Vec<_>>(),
+        ["sky", "floor", "car"]
+    );
+    let there = clip(&shown, "car");
+    let [left, top, right, bottom] = there.at.unwrap();
+    // Its front is nearer than z=0 by half its length, and so a little larger than 0.4 by 0.2
+    // of the frame's height.
+    assert!(left < 0.5 - 0.1125 && left > 0.34, "{there:?}");
+    assert!(right > 0.5 + 0.1125 && right < 0.66, "{there:?}");
+    assert!(top < 0.4 && top > 0.34 && bottom > 0.6 && bottom < 0.66, "{there:?}");
+    assert!(there.hidden < 0.03 && there.by.is_empty(), "{there:?}");
+    // The fault a guide once had, with a mesh for the car: a floor above its foot hides it.
+    let shown = read(&car("rotate_x=-80 y=0.1 z=0 scale=3", "y=0.2 z=0.5"));
+    let there = clip(&shown, "car");
+    assert!(there.hidden > 0.5, "{there:?}");
+    assert_eq!(there.by[0].0, "floor", "{there:?}");
+    // Turned edge on, a mesh is still there, where a flat clip is gone.
+    let shown = read(&car("rotate_x=-80 y=0.4 z=1 scale=3", "rotate_y=90"));
+    let there = clip(&shown, "car");
+    assert!(there.at.is_some() && there.area > 0.01, "{there:?}");
+}
+
+#[test]
 fn nothing_is_said_of_a_moment_with_no_clips() {
     let whole = showing(
         &project("  track V1 video\n    clip one gen=solid@1 at=0f dur=2f\n      set scale=0.5\n"),

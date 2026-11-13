@@ -251,6 +251,18 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   each clip is blurred alone, so a sharp one keeps its edge over a soft one behind it. Clips in depth draw on the GPU where there is one.
   `look` with `track: {"camera": true}` over a shot solves where its camera went, and writes it as these keyframes: `set cam x={0f:0 24f:0.1} y={…} z={…} pan={…} tilt={…} roll={…} fov=38.4`.
   Its first frame is the 2D picture at the shot's own lens, with z=0 at the middle depth of what shows. A lens that zooms comes out as `fov` keyframes and `zooms: true`; where the picture cannot tell a zoom from a push in, `zoomOrPush` says so and the move is written with one lens. It also gives places in the world: `set pin three_d=true x=0.21 y=-0.04 z=0.3` with one of those stays on that spot of the footage on every frame. It says so when a shot cannot be solved, such as a camera that only turns.
+- `gen=mesh@1` is a solid thing with every side it has, for a guide: `kind=box|ball|cylinder` (a cylinder
+  stands on its end), `width`, `height`, and `length` in frame heights, `length` being how far back it goes,
+  and `color`. It is in depth without `three_d`: `x`, `y`, and `z` are where its middle is, `rotate_x`,
+  `rotate_y`, `rotation`, and `scale` turn and size it, and it is keyed and parented as any clip is. The
+  camera sees it and the lights light each side by the way it faces; with no light it is its color, flat.
+  What is nearer at each pixel is in front, whichever track it is on, and it is in the ids and depth
+  passes and `look` with `shows` as any clip is. It casts no shadow, takes no effect or mask, and is drawn
+  on the CPU. `set car kind=box width=0.9 height=0.25 length=0.4 color=#c02020 y=0.2 z=1 rotate_y=30`.
+  `file="models/car.glb"` takes the mesh from a glTF file (`.glb`, or `.gltf` with its buffers beside it or
+  inside it) in place of `kind`: every mesh of its scene at rest, each part in its material's color, or
+  `color` where it has none, `height` tall in its own proportions. Its textures, skins, and animations are
+  not read.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

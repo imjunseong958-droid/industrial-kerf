@@ -442,7 +442,9 @@ impl FxDef {
             "image" => Area::Image,
             "blur" | "distort" | "key" | "light" | "matte" | "noise" | "stylize" | "time"
             | "vr" => Area::Vfx,
-            "generate" | "look" | "perspective" | "shape" | "text" | "transform" => Area::Motion,
+            "generate" | "look" | "mesh" | "perspective" | "shape" | "text" | "transform" => {
+                Area::Motion
+            }
             _ => Area::Edit,
         }
     }
@@ -1315,6 +1317,34 @@ fn builtin_catalog() -> Catalog {
                 .range(0.0, 90.0)
                 .doc("Softens shadows: a point light's width in frame heights, a directional one's in degrees; 0 is hard."),
         ),
+        FxDef::new(
+            "mesh",
+            FxKind::Generator,
+            Domain::Video,
+            "A solid thing for a guide, with every side it has: a box, a ball, a cylinder on its end, or a glTF `file`'s mesh. It is in depth without `three_d`, its middle at the clip's `x`, `y`, `z`; lights light it, and with none it is its color, flat.",
+        )
+        .category("Generate")
+        .param(P::choice("kind", &["box", "ball", "cylinder"]))
+        .param(
+            P::number("width", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("height", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("length", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("How far back it goes."),
+        )
+        .param(P::color("color", Rgba::WHITE))
+        .param(P::file("file", &["glb", "gltf"]).doc(
+            "A glTF file's mesh in place of `kind`: `height` tall, a color a part.",
+        )),
         FxDef::new(
             "null",
             FxKind::Generator,

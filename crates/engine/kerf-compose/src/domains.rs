@@ -16,8 +16,8 @@ pub(crate) fn effect(id: &str) -> Option<&'static dyn PictureEffect> {
 }
 
 /// The generator a crate draws with the catalog id `id`. A solid, a title,
-/// and what draws nothing of its own (an adjustment layer, a null, a camera,
-/// a light, a signal) are the compositor's.
+/// a mesh, and what draws nothing of its own (an adjustment layer, a null, a
+/// camera, a light, a signal) are the compositor's.
 pub(crate) fn source(id: &str) -> Option<&'static dyn PictureSource> {
     kerf_motion::SOURCES
         .iter()
@@ -34,6 +34,7 @@ const OWN_GENERATORS: &[&str] = &[
     "null",
     "camera",
     "light",
+    "mesh",
     kerf_model::SIGNAL,
 ];
 
