@@ -3281,6 +3281,124 @@ fn look_says_what_shows_of_each_clip_and_what_hides_it() {
     assert!(on_media.contains("program"), "{on_media}");
 }
 
+/// A glTF file of one triangle 2 across and 1 up, with a camera 5 before it that goes 2 to the
+/// right in a second, and another that holds still and has no perspective.
+fn set_with_a_camera(folder: &std::path::Path) {
+    let mut bytes = Vec::new();
+    for value in [-1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for value in [0.0f32, 1.0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for value in [0.0f32, 0.5, 5.0, 2.0, 0.5, 5.0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    let mut json = concat!(
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0,1,2]}],",
+        "\"nodes\":[{\"mesh\":0},{\"camera\":0,\"translation\":[0,0.5,5]},{\"camera\":1}],",
+        "\"cameras\":[{\"name\":\"shot\",\"type\":\"perspective\",\"perspective\":{\"yfov\":0.5,\"znear\":0.1}},",
+        "{\"name\":\"plan\",\"type\":\"orthographic\",\"orthographic\":{\"xmag\":1,\"ymag\":1,\"znear\":0.1,\"zfar\":9}}],",
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],",
+        "\"animations\":[{\"name\":\"dolly\",\"channels\":[{\"sampler\":0,\"target\":{\"node\":1,\"path\":\"translation\"}}],",
+        "\"samplers\":[{\"input\":1,\"output\":2}]}],",
+        "\"buffers\":[{\"byteLength\":68}],",
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},",
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":8},{\"buffer\":0,\"byteOffset\":44,\"byteLength\":24}],",
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},",
+        "{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"},",
+        "{\"bufferView\":2,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}]}",
+    )
+    .as_bytes()
+    .to_vec();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let mut file = b"glTF".to_vec();
+    file.extend(2u32.to_le_bytes());
+    file.extend((12 + 8 + json.len() as u32 + 8 + bytes.len() as u32).to_le_bytes());
+    file.extend((json.len() as u32).to_le_bytes());
+    file.extend(b"JSON");
+    file.extend(&json);
+    file.extend((bytes.len() as u32).to_le_bytes());
+    file.extend(b"BIN\0");
+    file.extend(&bytes);
+    std::fs::write(folder.join("set.glb"), file).unwrap();
+}
+
+/// `look` says what a mesh's file holds, and writes a camera of it as a camera clip's keys.
+#[test]
+fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {
+    let Some((directory, router)) = router_with(
+        "    clip set gen=mesh@1 at=30f dur=60f
+      set file=\"set.glb\" height=0.5 animation=\"dolly\"
+  track V2 video
+    clip still gen=mesh@1 at=0f dur=30f
+      set file=\"set.glb\" height=0.5
+    clip plain gen=mesh@1 at=30f dur=30f
+  track V3 video
+    clip lens gen=camera@1 at=0f dur=90f
+",
+    ) else {
+        return;
+    };
+    set_with_a_camera(directory.path());
+    let held = ok(&router, "look", json!({"mesh": {"clip": "set"}}));
+    assert_eq!(held["triangles"], 1, "{held}");
+    assert_eq!(held["size"], json!([2.0, 1.0, 0.0]));
+    assert_eq!(
+        held["animations"],
+        json!([{"number": 0, "name": "dolly", "seconds": 1.0}])
+    );
+    assert_eq!(held["playing"], 0);
+    assert_eq!(held["cameras"][0]["name"], "shot");
+    assert_eq!(held["cameras"][0]["fov"], 28.648);
+    assert_eq!(held["cameras"][1]["fov"], Value::Null);
+    assert!(held.get("script").is_none(), "{held}");
+    // A unit of the file is half the frame's height here, 0.28125 of its width: the camera
+    // goes 2 of them to the right over the animation's second, and starts again. It is 5 of
+    // them before the mesh, less how far back a sequence's own camera stands.
+    let shot = ok(&router, "look", json!({"mesh": {"clip": "set", "camera": "shot"}}));
+    assert_eq!(shot["moves"], true, "{shot}");
+    assert_eq!(
+        shot["script"],
+        "track add V4 video\noverwrite gen=camera@1 at=30f dur=60f on=V4 as=camera1\nset camera1 x={0f:0 30f:0.5625 31f:0.01875 59f:0.54375} y=0 z=-1.12626 pan=0 tilt=0 roll=0 fov=28.648"
+    );
+    // On a camera clip that is there, by number, its keys count from that clip's first frame.
+    let onto = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "camera": 0, "as": "lens"}}),
+    );
+    assert!(
+        onto["script"]
+            .as_str()
+            .unwrap()
+            .starts_with("set lens x={30f:0 60f:0.5625 61f:0.01875 89f:0.54375} y=0 "),
+        "{onto}"
+    );
+    // The lines are ones an edit runs.
+    ok(&router, "edit", json!({"script": shot["script"]}));
+    ok(&router, "edit", json!({"script": onto["script"]}));
+    // A clip that plays no animation has its camera at rest, and is told how to have it move.
+    let rest = ok(&router, "look", json!({"mesh": {"clip": "still", "camera": "shot"}}));
+    assert_eq!(rest["moves"], false, "{rest}");
+    assert!(rest["script"].as_str().unwrap().contains(" x=0 y=0 z=-1.12626 "), "{rest}");
+    assert!(rest["note"].as_str().unwrap().contains("animation="), "{rest}");
+    // What cannot be done is said.
+    let said = |arguments: Value| message(&error(&router, "look", arguments));
+    let none = said(json!({"mesh": {"clip": "set", "camera": "crane"}}));
+    assert!(none.contains("it has 0 `shot`, 1 `plan`"), "{none}");
+    let flat = said(json!({"mesh": {"clip": "set", "camera": "plan"}}));
+    assert!(flat.contains("no perspective"), "{flat}");
+    let solid = said(json!({"mesh": {"clip": "plain"}}));
+    assert!(solid.contains("it is of no file"), "{solid}");
+    let other = said(json!({"mesh": {"clip": "set", "camera": 0, "as": "still"}}));
+    assert!(other.contains("is not a camera"), "{other}");
+    let with = said(json!({"mesh": {"clip": "set"}, "at": ["0f"]}));
+    assert!(with.contains("used alone"), "{with}");
+}
+
 /// `look` writes a signal's keys from the onsets of a sound on the timeline, and the edit that
 /// runs them has the signal follow it.
 #[test]

@@ -988,3 +988,143 @@ fn a_skin_bends_a_mesh_with_its_bones() {
         assert!(lit(&bent, 75, 120) && !lit(&bent, 75, 30));
     }
 }
+
+#[test]
+fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // The sheet, 2 across and 1 up about x and z at 0. A camera 5 from the sheet's middle and
+    // to its right, turned to look at it, that goes in a second to straight before it; and one
+    // a unit to the right of that place, tipped a quarter turn about its own line.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[3.0, 0.5, 4.0, 0.0, 0.5, 5.0]);
+    let (sin, cos) = (0.6f32.atan2(0.8) / 2.0).sin_cos();
+    let turns = file.floats(4, &[0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 1.0]);
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    file.glb(
+        folder.path(),
+        "seen.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1,2]}}],\"nodes\":[{{\"mesh\":0}},",
+                "{{\"camera\":0,\"translation\":[3,0.5,4],\"rotation\":[0,{},0,{}]}},",
+                "{{\"camera\":0,\"name\":\"tipped\",\"translation\":[1,0.5,5],\"rotation\":[0,0,{},{}]}}],",
+                "\"cameras\":[{{\"name\":\"main\",\"type\":\"perspective\",\"perspective\":{{\"yfov\":0.5,\"znear\":0.1}}}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"name\":\"move\",\"channels\":[",
+                "{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}},",
+                "{{\"sampler\":1,\"target\":{{\"node\":1,\"path\":\"rotation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}},{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            sin, cos, half, half, points, indices, times, places, times, turns
+        ),
+    );
+    // Where the clip puts the mesh changes where the camera is said to be, and not what it sees.
+    for set in [
+        "animation=\"move\"",
+        "animation=\"move\" x=0.2 y=-0.1 z=0.7 rotate_y=30 rotate_x=10 scale=1.5",
+    ] {
+        let mesh = posed(folder.path(), "seen.glb", set, "", Pass::Picture).unwrap();
+        let held = mesh.mesh_file("thing").unwrap();
+        assert_eq!(held.animations, [("move".to_owned(), 1.0)]);
+        assert_eq!(held.playing, Some(0));
+        assert_eq!(held.size, [2.0, 1.0, 0.0]);
+        let names: Vec<&str> = held.cameras.iter().map(|camera| camera.name.as_str()).collect();
+        assert_eq!(names, ["main", "main"]);
+        let seen = |camera: usize, frame: i64| {
+            let at = Rate::FPS_24.time_of(frame);
+            let place = mesh.mesh_camera("thing", camera, at).expect("a camera");
+            let fov = place.fov.expect("a lens");
+            assert!((fov - 0.5f64.to_degrees()).abs() < 1e-9);
+            let camera = format!(
+                "  track V2 video\n    clip cam gen=camera@1 at=0f dur=48f\n      set x={} y={} z={} pan={} tilt={} roll={} fov={fov}\n",
+                place.x, place.y, place.z, place.pan, place.tilt, place.roll
+            );
+            let through = posed(folder.path(), "seen.glb", set, &camera, Pass::Picture).unwrap();
+            reach(&through.frame(at, 1.0))
+        };
+        // From the right, the sheet's near end is larger and its middle is the frame's: where
+        // the file's own numbers put its corners, by hand.
+        let from_right = seen(0, 0);
+        assert!(reaches(from_right, [110, 50, 224, 130]), "{set}: {from_right:?}");
+        // Straight on from 5 away through a lens of half a radian, it is 141 across and 70.5
+        // down about the middle.
+        let straight = seen(0, 24);
+        assert!(reaches(straight, [90, 55, 230, 125]), "{set}: {straight:?}");
+        // Tipped a quarter turn the way glTF turns, the sheet stands on end above the middle.
+        let tipped = seen(1, 0);
+        assert!(reaches(tipped, [125, 0, 195, 90]), "{set}: {tipped:?}");
+    }
+    // Outside its clip, and of a camera the file has not, there is nothing to say.
+    let mesh = posed(folder.path(), "seen.glb", "", "", Pass::Picture).unwrap();
+    assert!(mesh.mesh_camera("thing", 0, Rate::FPS_24.time_of(48)).is_none());
+    assert!(mesh.mesh_camera("thing", 2, Rate::FPS_24.time_of(0)).is_none());
+    assert!(mesh.mesh_file("nothing").is_err());
+}
+
+#[test]
+fn what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A set of two walls a unit apart, the near one half as wide, with the camera that saw
+    // them from 5 before the near one.
+    let mut file = Writing::default();
+    let far = file.floats(3, &[-1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 0.0, -1.0, -1.0, 0.0, -1.0]);
+    let near = file.floats(3, &[-1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+    let indices = file.shorts(&[0, 1, 2, 0, 2, 3]);
+    file.glb(
+        folder.path(),
+        "set.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1]}}],",
+                "\"nodes\":[{{\"mesh\":0}},{{\"camera\":0,\"translation\":[0,0.5,5]}}],",
+                "\"cameras\":[{{\"type\":\"perspective\",\"perspective\":{{\"yfov\":0.5,\"znear\":0.1}}}}],",
+                "\"meshes\":[{{\"primitives\":[",
+                "{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":0}},",
+                "{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":1}}]}}],",
+                "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,0,1,1]}}}},",
+                "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,1,0,1]}}}}]",
+            ),
+            far, indices, near, indices
+        ),
+    );
+    let set = posed(folder.path(), "set.glb", "", "", Pass::Picture).unwrap();
+    let place = set.mesh_camera("thing", 0, Rate::FPS_24.time_of(0)).unwrap();
+    // The set is a unit long and half the frame's height tall, so its walls are a quarter of
+    // the frame's height either side of its clip's z, the far one behind. A red ball between
+    // them, across the near wall's edge, on a track under the set's.
+    let with_ball = |z: f64, pass: Pass| {
+        let more = format!(
+            concat!(
+                "  track V2 video\n    clip ball gen=mesh@1 at=0f dur=48f\n",
+                "      set kind=ball width=0.2 height=0.2 length=0.2 color=#ff0000 z={}\n",
+                "  track V3 video\n    clip cam gen=camera@1 at=0f dur=48f\n",
+                "      set x={} y={} z={} pan={} tilt={} roll={} fov={}\n",
+            ),
+            z, place.x, place.y, place.z, place.pan, place.tilt, place.roll, place.fov.unwrap()
+        );
+        posed(folder.path(), "set.glb", "", &more, pass)
+            .unwrap()
+            .frame(Rate::FPS_24.time_of(0), 1.0)
+    };
+    // Between the walls: the near wall hides its left half, and it hides the far wall.
+    let between = with_ball(0.0, Pass::Picture);
+    assert_eq!(pixel(&between, 150, 90), [0, 255, 0]);
+    assert_eq!(pixel(&between, 170, 90), [255, 0, 0]);
+    // Before both, all of it shows; behind both, none of it.
+    let before = with_ball(-0.5, Pass::Picture);
+    assert_eq!(pixel(&before, 150, 90), [255, 0, 0]);
+    assert_eq!(pixel(&before, 170, 90), [255, 0, 0]);
+    let behind = with_ball(0.5, Pass::Picture);
+    assert_eq!(pixel(&behind, 150, 90), [0, 255, 0]);
+    assert_eq!(pixel(&behind, 170, 90), [0, 0, 255]);
+    // And so in the passes: where the ball shows it is its own clip, nearer than the far wall
+    // and farther than the near one.
+    let ids = with_ball(0.0, Pass::Ids);
+    assert_ne!(pixel(&ids, 170, 90), pixel(&ids, 150, 90));
+    assert_eq!(pixel(&ids, 150, 90), pixel(&ids, 190, 60));
+    let depth = with_ball(0.0, Pass::Depth);
+    let grey = |x: u32, y: u32| pixel(&depth, x, y)[0];
+    assert!(grey(150, 90) > grey(170, 90) && grey(170, 90) > grey(190, 60));
+}

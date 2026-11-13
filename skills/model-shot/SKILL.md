@@ -38,6 +38,14 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   or its number from 0), from the clip's start, looping; `seconds={0f:0
   48f:1}` retimes it with keyframes, and `loop=false` holds its end. A
   wrong name is answered with the names the file has.
+- A file that comes with a camera, a set rebuilt from a shot or a scene
+  framed in a 3D program, is seen through it: `look` with `mesh: {"clip":
+  "set", "camera": "shot"}` returns the lines that add that camera to the
+  sequence, where the file has it on every frame; `look` with `mesh` alone
+  lists the file's cameras and animations. Name the clip's `animation` first
+  if the file moves its camera by one. What is then added to the sequence
+  stands in the set: nearer than a wall it is before it, farther it is
+  hidden, which `look` with `shows` reports.
 - In depth x runs right, y down, and z away from the viewer, in frame
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a

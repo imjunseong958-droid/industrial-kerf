@@ -275,6 +275,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   what it showed; with no `seconds` the animation starts again at the clip's new first frame. Its size
   and its middle are those it has at rest, so what an animation moves, moves from there. Morph targets
   are not read, nor more than four bones to a corner.
+  `look` with `mesh: {"clip": "set"}` says what the file holds, its animations and cameras by name, and
+  with `"camera": "shot"` writes that camera as a `gen=camera@1` clip, `set camera1 x={…} y={…} z={…}
+  pan={…} tilt={…} roll={…} fov=28.6`: where the file has it on each frame of the mesh's clip, so that
+  the mesh is seen as the file's camera saw it, and what is added to the sequence is in the same space,
+  before and behind the mesh's own sides. Ask again after moving or retiming the mesh's clip.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

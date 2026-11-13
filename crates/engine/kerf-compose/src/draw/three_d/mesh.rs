@@ -205,21 +205,7 @@ impl Mesh {
         color: [f32; 3],
         pose: Option<(usize, f64)>,
     ) -> Self {
-        let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for point in &read.points {
-            for axis in 0..3 {
-                least[axis] = least[axis].min(point[axis]);
-                most[axis] = most[axis].max(point[axis]);
-            }
-        }
-        let middle = times(add(least, most), 0.5);
-        let size = minus(most, least);
-        // Flat as a sheet lying down, it is as wide as it was to be tall.
-        let tall = if size[1] > 1e-12 {
-            size[1]
-        } else {
-            size[0].max(size[2]).max(1e-12)
-        };
+        let (middle, _, tall) = fit(read);
         let (points, normals) = match pose {
             Some(pose) => read.posed(Some(pose)),
             None => (read.points.clone(), read.normals.clone()),
@@ -330,6 +316,111 @@ impl Mesh {
                 .map_or([0.0; 2], |file| file.uvs[corner as usize].map(f64::from))
         })
     }
+}
+
+/// The box a file's mesh fills at rest: its middle, its size, and how tall it is taken to be.
+fn fit(read: &super::gltf::Read) -> (Vector, Vector, f64) {
+    let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for point in &read.points {
+        for axis in 0..3 {
+            least[axis] = least[axis].min(point[axis]);
+            most[axis] = most[axis].max(point[axis]);
+        }
+    }
+    let size = minus(most, least);
+    // Flat as a sheet lying down, it is as wide as it was to be tall.
+    let tall = if size[1] > 1e-12 {
+        size[1]
+    } else {
+        size[0].max(size[2]).max(1e-12)
+    };
+    (times(add(least, most), 0.5), size, tall)
+}
+
+/// What a `gen=mesh` clip's file holds besides its triangles, for one who is to write of it.
+pub(in crate::draw) fn holds(clip: &Clip) -> std::result::Result<crate::MeshFile, String> {
+    let path = file_of(clip).ok_or("it is of no file")?;
+    let read = loaded(&path).map_err(|why| format!("`{path}` cannot be read: {why}"))?;
+    let (_, size, tall) = fit(&read);
+    Ok(crate::MeshFile {
+        triangles: read.triangles.len(),
+        size: size.map(|side| side / tall),
+        animations: read
+            .animations
+            .iter()
+            .map(|animation| (animation.name.clone(), animation.length))
+            .collect(),
+        playing: animation_of(clip, &read).and_then(|which| which.ok()),
+        cameras: read
+            .cameras
+            .iter()
+            .map(|camera| crate::MeshCamera {
+                name: camera.name.clone(),
+                fov: camera.fov,
+                aspect: camera.aspect,
+            })
+            .collect(),
+    })
+}
+
+/// Where camera `which` of the file of the mesh clip of `plan` is at clip time `time`, as a
+/// `gen=camera@1` clip of the same sequence says it: the mesh being where its clip puts it, and
+/// its file's animation as far in as the clip has it.
+pub(in crate::draw) fn camera(
+    scene: &Scene,
+    plan: &ClipPlan,
+    to_output: &Affine,
+    time: Time,
+    which: usize,
+) -> Option<crate::CameraPlace> {
+    let clip = &plan.clip;
+    let read = loaded(&file_of(clip)?).ok()?;
+    let def = Catalog::builtin().fx("mesh");
+    let at = clip.start + time;
+    let pose = animation_of(clip, &read)
+        .and_then(|which| which.ok())
+        .map(|which| (which, seconds_into(clip, def, &read, which, at)));
+    let seen = read.seen_from(which, pose)?;
+    let height = generated(def, clip, "height", at)
+        .and_then(|value| value.as_number())
+        .unwrap_or(0.0)
+        .max(0.0);
+    let (middle, _, tall) = fit(&read);
+    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+    let plane = Plane::of(scene, plan, size, to_output, time);
+    let ways = [
+        times(plane.across, size.1),
+        times(plane.down, size.1),
+        times(plane.normal, plane.pixel_size() * size.1),
+    ];
+    let along = |of: Vector| {
+        add(
+            add(times(ways[0], of[0]), times(ways[1], of[1])),
+            times(ways[2], of[2]),
+        )
+    };
+    let eye = add(
+        plane.middle,
+        along(times(minus(seen.eye, middle), height / tall)),
+    );
+    let (right, forward) = (unit(along(seen.right)), unit(along(seen.forward)));
+    // As `Scene::at` turns a camera: tilted, then panned, then rolled about its own line.
+    let tilt = (-forward[1]).clamp(-1.0, 1.0).asin();
+    let pan = forward[0].atan2(forward[2]);
+    let level_right = turned([1.0, 0.0, 0.0], tilt, pan);
+    let level_down = cross(forward, level_right);
+    let roll = dot(right, level_down).atan2(dot(right, level_right));
+    let (wide, tall) = (scene.center.0 * 2.0, scene.height);
+    let back = tall / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
+    Some(crate::CameraPlace {
+        x: eye[0] / wide,
+        y: eye[1] / tall,
+        z: (eye[2] + back) / tall,
+        pan: pan.to_degrees(),
+        tilt: tilt.to_degrees(),
+        roll: roll.to_degrees(),
+        fov: read.cameras[which].fov,
+    })
 }
 
 /// The file a `gen=mesh` clip reads its triangles from, when it names one.

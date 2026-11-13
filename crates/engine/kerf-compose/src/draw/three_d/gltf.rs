@@ -4,8 +4,9 @@
 //! mesh its scene's nodes hold, each where its node puts it, each material's base color, the
 //! picture a material lays over its part, and the colors its corners are given. And how it
 //! moves: its animations of where its nodes are, and the skins by which a mesh bends with the
-//! nodes that are its bones, so that it can be posed at any time of one ([`Read::posed`]). Morph
-//! targets, cameras, and lights in the file are not read, and of a material nothing but its base
+//! nodes that are its bones, so that it can be posed at any time of one ([`Read::posed`]). And
+//! its cameras, each where its node is at any time of one ([`Read::seen_from`]). Morph
+//! targets and lights in the file are not read, and of a material nothing but its base
 //! color: how a thing shines is a model's to draw. A `.gltf` with its buffers and
 //! pictures beside it or inside it, and a `.glb`, are read.
 //!
@@ -35,10 +36,57 @@ pub(super) struct Read {
     pub textures: Vec<Texture>,
     /// The ways the file says it moves.
     pub animations: Vec<Animation>,
+    /// The cameras its nodes hold.
+    pub cameras: Vec<Camera>,
     rig: Rig,
 }
 
+/// A camera of a file: a node that holds one.
+pub(super) struct Camera {
+    /// What the file calls the camera, or its node: nothing where it calls neither anything.
+    pub name: String,
+    node: usize,
+    /// How much it sees from the top of its picture to the bottom, in degrees: none for a
+    /// camera with no perspective.
+    pub fov: Option<f64>,
+    /// How wide its picture is for its height, where the file says.
+    pub aspect: Option<f64>,
+}
+
+/// Where a camera is and how it is turned, in Kerf's axes and the file's own units.
+pub(super) struct Seen {
+    pub eye: Vector,
+    pub right: Vector,
+    pub forward: Vector,
+}
+
 impl Read {
+    /// Where camera `which` is: at rest, or `seconds` into the animation numbered. A glTF camera
+    /// looks along its node's z backward, with its node's y up.
+    pub(super) fn seen_from(&self, which: usize, animation: Option<(usize, f64)>) -> Option<Seen> {
+        let camera = self.cameras.get(which)?;
+        let animation =
+            animation.and_then(|(which, seconds)| Some((self.animations.get(which)?, seconds)));
+        let place = *self.rig.places(animation).get(camera.node)?;
+        // A node's size is not its camera's: only where its axes point.
+        let axis = |column: usize, sign: f64| {
+            let way = [0, 1, 2].map(|row| place[row][column]);
+            let length = (way[0] * way[0] + way[1] * way[1] + way[2] * way[2])
+                .sqrt()
+                .max(1e-300);
+            [
+                sign * way[0] / length,
+                -sign * way[1] / length,
+                -sign * way[2] / length,
+            ]
+        };
+        Some(Seen {
+            eye: [place[0][3], -place[1][3], -place[2][3]],
+            right: axis(0, 1.0),
+            forward: axis(2, -1.0),
+        })
+    }
+
     /// Where every corner is and the way it faces, in Kerf's axes and the file's own units:
     /// at rest, or `seconds` into the animation numbered.
     pub(super) fn posed(&self, animation: Option<(usize, f64)>) -> (Vec<Vector>, Vec<Vector>) {
@@ -1098,6 +1146,20 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         parts: Vec::new(),
         textures: Vec::new(),
         animations: file.animations(nodes.len())?,
+        cameras: told
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                let camera = json["cameras"].get(node["camera"].as_u64()? as usize)?;
+                let name = camera["name"].as_str().or(node["name"].as_str());
+                Some(Camera {
+                    name: name.unwrap_or("").to_owned(),
+                    node: index,
+                    fov: camera["perspective"]["yfov"].as_f64().map(f64::to_degrees),
+                    aspect: camera["perspective"]["aspectRatio"].as_f64(),
+                })
+            })
+            .collect(),
         rig: Rig {
             nodes,
             order,

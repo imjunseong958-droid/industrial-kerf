@@ -56,8 +56,9 @@ Five rules follow, and the rest of this document should be read by them:
   a guide shows is what the shot has, so a guide holds real shapes: clips in
   depth, cameras, lights, and meshes (`gen=mesh`: a solid, or a glTF file's;
   What directs a model). What it leaves out is what a model draws over it: materials, light
-  that bounces, hair, water. What bends or breaks, a character or a cloth,
-  is a renderer's, reached by a recipe's `run`. This rule said until
+  that bounces, hair, water. A character that comes rigged and moving in its
+  file is played as the file has it; what is simulated, a cloth or a thing
+  that breaks, is a renderer's, reached by a recipe's `run`. This rule said until
   2026-11-13 that Kerf builds no mesh renderer; the fifth rule is why it
   changed.
 - **The speed that counts is from an intent to an accepted shot.** That is
@@ -640,8 +641,23 @@ recipes, in `fixtures/shots/car`.
    camera a `gen=camera@1` clip keyed from the file or from Kerf's own solve
    (`look` with `track`), and what is added stands in the same space, behind
    and before the set's own surfaces, in the passes as in the picture. So
-   this waits only on 2, and on a glTF's camera and animation being read
-   with its mesh.
+   this waited only on 2, and on a glTF's camera and animation being read
+   with its mesh, and both are (2026-11-13). `look` with `mesh` says what a
+   mesh clip's file holds, its animations and its cameras, and with `camera`
+   writes one of them as a `gen=camera@1` clip (`Compositor::mesh_camera`,
+   `kerf-mcp/src/mesh_camera.rs`): where the file has the camera on each
+   frame of the mesh's clip, the mesh being where its clip puts it and its
+   animation as far in as the clip plays it, so that the mesh seen through
+   it is the mesh as the file's camera saw it, wherever the clip stands,
+   and with as few keyframes as say it. It is the document's camera from
+   then on: nothing ties it to the file, and it is asked for again when the
+   mesh's clip is moved or retimed. A glTF camera has one lens for the whole
+   of a file, so a zoom does not come through, and one with no perspective
+   is refused. What is added then goes down among the set's surfaces by the
+   pixel, as any two meshes do
+   (`what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it`). *Not
+   done:* no rebuilder was run, so no set a model made from a shot was read,
+   only files the tests wrote and Khronos's samples; and splats.
 
    A pass goes from
    the document to a picture. The other way, from a picture to its depth,

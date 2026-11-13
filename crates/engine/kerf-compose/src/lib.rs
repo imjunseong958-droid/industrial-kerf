@@ -127,6 +127,42 @@ pub struct Compositor {
     drawing: draw::Drawing,
 }
 
+/// What the file of a `gen=mesh` clip holds besides its triangles.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshFile {
+    pub triangles: usize,
+    /// How wide, tall, and long it is at rest, for a height of 1.
+    pub size: [f64; 3],
+    /// Its animations: what the file calls each, and how many seconds it lasts.
+    pub animations: Vec<(String, f64)>,
+    /// Which of them the clip plays.
+    pub playing: Option<usize>,
+    pub cameras: Vec<MeshCamera>,
+}
+
+/// A camera in a mesh's file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshCamera {
+    pub name: String,
+    /// How much it sees down its picture, in degrees: none for one with no perspective.
+    pub fov: Option<f64>,
+    /// How wide its picture is for its height, where the file says.
+    pub aspect: Option<f64>,
+}
+
+/// Where a camera is, in the words of a `gen=camera@1` clip: `x` in frame widths, `y` and `z`
+/// in frame heights, and the rest in degrees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraPlace {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub pan: f64,
+    pub tilt: f64,
+    pub roll: f64,
+    pub fov: Option<f64>,
+}
+
 impl Compositor {
     pub fn new(
         project: &Project,
@@ -143,6 +179,18 @@ impl Compositor {
     /// clips share a pixel, which is then between their colors.
     pub fn ids(&self) -> Vec<(String, [u8; 3])> {
         self.drawing.ids()
+    }
+
+    /// What the file of the program's `gen=mesh` clip `clip` holds.
+    pub fn mesh_file(&self, clip: &str) -> Result<MeshFile, String> {
+        self.drawing.mesh_file(clip)
+    }
+
+    /// Where camera `camera` of the file of the program's mesh clip `clip` is at sequence time
+    /// `at`, were it a camera of the sequence: the mesh being where its clip puts it then, and
+    /// its file's animation as far in as the clip has it. `None` outside the clip.
+    pub fn mesh_camera(&self, clip: &str, camera: usize, at: Time) -> Option<CameraPlace> {
+        self.drawing.mesh_camera(clip, camera, at)
     }
 
     /// The canvas, made even as a render makes it.
