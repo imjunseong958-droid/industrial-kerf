@@ -107,11 +107,13 @@ void kerf_bridge_free(void *bridge);
 // Rendering: preview {proposalId?, start?, duration?} renders the program,
 // or what that pending proposal would make of it, over start..start+duration
 // seconds when given (both or neither, at most 120 s), and plays it in place
-// of the program; preview_stop stops the preview render running
-// (preview {status: stopped}); preview_exit stops it and plays the program
-// again (preview {status: exited}, then viewer_reset and the program's own
-// preview status). One viewer preview renders at a time; it is not an
-// output and never shows in the render queue.
+// of the program; preview_stop stops every preview sent before it, the one
+// rendering and one not begun alike, each of which answers preview {status:
+// stopped} (with none to stop, the stop answers so at once); preview_exit
+// stops them too and plays the program again (preview {status: exited}, then
+// viewer_reset and the program's own preview status when a preview was
+// showing). One viewer preview renders at a time; it is not an output and
+// never shows in the render queue.
 // Render queue: export {quality: preview|full|review|master, codec?:
 // h264|hevc|prores_hq (a master is ProRes 422 HQ in QuickTime with 24-bit
 // PCM unless codec says otherwise; a review copy is full-size H.264 at

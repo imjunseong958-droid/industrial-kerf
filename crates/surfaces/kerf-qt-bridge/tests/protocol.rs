@@ -594,6 +594,9 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     editor.expect("the program again", |event| event["type"] == "viewer_reset");
 
     // A range preview stopped while it renders, and a stop with none running.
+    // The first preview's events are behind us: the `running` waited for
+    // below is this render's.
+    editor.forget("preview");
     editor.send(json!({"type": "preview", "start": 0.0, "duration": 4.0}));
     editor.expect("the range rendering", |event| {
         event["type"] == "preview" && event["status"] == "running"
@@ -606,6 +609,57 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     editor.expect("a stop with nothing running", |event| {
         event["type"] == "preview" && event["status"] == "stopped"
     });
+}
+
+/// What the viewer says when it opens something to play: a preview shown,
+/// or the program again.
+fn opened(event: &Value) -> bool {
+    event["type"] == "viewer_reset" || event["type"] == "preview" && event["status"] == "ready"
+}
+
+/// A stop or an exit sent straight after a preview, before the bridge has
+/// begun to render it or just as it begins, still stops that preview: it
+/// answers `stopped` once and nothing is shown in place of the program.
+#[test]
+fn a_stop_or_exit_sent_straight_after_a_preview_keeps_it_from_showing() {
+    let Some(project) = tone_project("stop") else {
+        return;
+    };
+    let mut editor = Editor::open(&project.0);
+    ready(&mut editor);
+    editor.expect("the program in the viewer", |event| {
+        event["type"] == "preview" && event["status"] == "ready"
+    });
+    // How long after the preview the stop is sent: at once, which reaches the
+    // bridge before the preview does, and at the moments the render starts.
+    for (round, wait) in [0, 0, 0, 1, 2, 5, 10, 20, 40].into_iter().enumerate() {
+        let stop = if round % 3 == 2 {
+            "preview_exit"
+        } else {
+            "preview_stop"
+        };
+        editor.forget("preview");
+        editor.forget("viewer_reset");
+        editor.send(json!({"type": "preview", "start": 0.0, "duration": 4.0}));
+        std::thread::sleep(Duration::from_millis(wait));
+        editor.send(json!({"type": stop}));
+        editor.expect(&format!("round {round}: the {stop} answered"), |event| {
+            event["type"] == "preview" && event["status"] == "stopped"
+        });
+        if stop == "preview_exit" {
+            editor.expect(&format!("round {round}: the exit answered"), |event| {
+                event["type"] == "preview" && event["status"] == "exited"
+            });
+        }
+        // The render, were it still going, would end and show in this time.
+        let after = editor.gather(1.5, |event| {
+            opened(event) || event["type"] == "preview" && event["status"] == "stopped"
+        });
+        assert!(
+            after.is_empty(),
+            "round {round}: {stop} sent {wait} ms after the preview left {after:?}"
+        );
+    }
 }
 
 fn track<'a>(snapshot: &'a Value, id: &str) -> &'a Value {
