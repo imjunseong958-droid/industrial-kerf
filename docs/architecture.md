@@ -444,6 +444,21 @@ What is built for it, in this order, each measured before the next:
    of the frame. A clip that is partly clear is read as not showing, and
    said to be.
 
+4. **Meshes, if a measurement asks for them.** The first one did not
+   (Measured, below). The rule above stands: no mesh renderer. A clip with depth is its outline pushed straight back, so
+   what a camera sees going round it is a slab's side and not the thing's,
+   and that is the one place a guide of clips may fall short.
+   A shot whose camera goes a quarter of the way round a car, guided once by
+   Kerf's clips and once by a renderer's boxes through `run`, says whether
+   the take differs. If it does, what comes is a guide's worth: boxes,
+   spheres, a glTF read in, flat shading, and the passes of 2, with no
+   materials.
+5. **A making that streams**, last. Models that answer in under a second
+   are reported, on data-center cards and at small sizes for now. A recipe makes
+   files in steps, and a draft that is not kept wants a way of its own: the
+   guide drawn on the GPU and handed on as it is drawn, with a take still
+   the only thing the document names.
+
 #### Measured
 
 On 2026-11-13, with Wan 2.1 VACE 1.3B on a ComfyUI server, as on the 11th
@@ -484,20 +499,66 @@ What was decided of it:
   number a frame, and it is the only one on that server.
 
 This is one scene, two seeds and a small model, as before.
-4. **Meshes, if a measurement asks for them.** The first one did not
-   (Measured, below). The rule above stands: no mesh renderer. A clip with depth is its outline pushed straight back, so
-   what a camera sees going round it is a slab's side and not the thing's,
-   and that is the one place a guide of clips may fall short.
-   A shot whose camera goes a quarter of the way round a car, guided once by
-   Kerf's clips and once by a renderer's boxes through `run`, says whether
-   the take differs. If it does, what comes is a guide's worth: boxes,
-   spheres, a glTF read in, flat shading, and the passes of 2, with no
-   materials.
-5. **A making that streams**, last. Models that answer in under a second
-   are reported, on data-center cards and at small sizes for now. A recipe makes
-   files in steps, and a draft that is not kept wants a way of its own: the
-   guide drawn on the GPU and handed on as it is drawn, with a take still
-   the only thing the document names.
+
+#### Next
+
+What comes after these, in the order it would be built. The scene the
+measurements above were made on is kept, with its recipes, in
+`fixtures/shots/car`.
+
+1. **A take held to its guide by numbers.** Every row of the tables above
+   was judged by eye: place, path, size. The document has both halves of a
+   measure. `look` with `shows` says where a clip is on each frame of the
+   guide, and `track` follows a thing through a picture from points on it
+   (`kerf_track::roto`). So: follow the subject through the take from the
+   middle of its box in the guide's first frame, and say how far its box
+   in the take is from its box in the guide, frame by frame, as shares of
+   the frame. It needs no model and no server, and is tried first on the
+   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
+   what a person says of it, and choose between two.
+2. **Reading a picture back into what a guide is made of.** A pass goes from
+   the document to a picture. The other way, from a picture to its depth,
+   its normals, the color of its surfaces without their light, is what
+   inverse rendering does (DiffusionRenderer, UniVidX, and in ComfyUI itself
+   MoGe and Marigold), which people call unrendering. In Kerf it is no engine
+   code: a model's program whose file is a pass, as any model's is a shot,
+   `generate model=<reader> guide=<footage> out={depth.mp4}`, with the next
+   step's model following that file. Three uses, in the order they pay:
+   - *Footage as a guide.* A filmed shot's depth has a model make it again
+     in another look, with where everything is kept. This is the third place
+     a guide comes from ([shots.md](shots.md#guides)), which so far is handed
+     to a model as its picture.
+   - *A take read back.* Its depth beside its guide's depth pass says how
+     well it followed, where 1 above says only where the subject went.
+   - *Light.* Normals and surface color of footage are what Kerf's own
+     lights would need to fall on it. Not before the first two are measured:
+     it would have the compositor draw a look, which the first rule is
+     against.
+   What it takes is a workflow for `kerf-comfy` and nothing else: load the
+   guide, `MoGeInference`, `MoGeRender` with `depth`, save. On the server
+   the measurements were made with, ComfyUI 0.45, those nodes are there and
+   the model's weights are not (`LoadMoGeModel` lists none), so it was not
+   run and no workflow is in the repository for it: one is written when it
+   can be run.
+3. **A scene that says nothing of its camera's move is said to.** The guide
+   with the camera going round had a road and a sky and nothing else, and
+   the model held its scenery still. Where a camera moves and nothing but
+   the subject and one plane are in depth, `look` with `shows`, or the check,
+   says so: the fault is in the document, and is found there.
+4. **More than one guide on a line.** A `generate` line hands a model one
+   guide. A model that reads a picture and its depth, or depth and ids,
+   wants each named. No model in reach reads two, and Wan VACE takes one
+   control video, so this waits for one that does.
+5. **How a point moves, as a direction of its own.** ComfyUI has nodes for
+   Wan-Move, which follows paths of points given as coordinates
+   (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
+   reads and what the document says outright, so its path is there to hand
+   over, as a signal's numbers are. The weights were not on the server. It
+   would be the fourth row of the table at the top: where, when, what, and
+   how each thing goes.
+6. **A signal measured.** Still wanting a model that takes a number a frame.
+7. **In the editor**: somewhere to draw a signal's curve under the picture,
+   and to choose a take.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
