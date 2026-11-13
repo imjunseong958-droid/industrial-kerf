@@ -254,6 +254,66 @@ fn a_request_becomes_a_job_and_the_job_the_shots_file() {
 }
 
 #[test]
+fn a_signal_reaches_the_workflow_as_a_number_for_each_frame() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut request = request(folder.path(), "{}");
+    // A second each at 0, 1, 1 and 0, and one more signal than the workflow reads.
+    request.signals = serde_json::from_value(json!([
+        {"name": "swell", "rate": 1.0, "values": [0.0, 1.0, 1.0, 0.0]},
+        {"name": "spare", "rate": 1.0, "values": [1.0]},
+    ]))
+    .unwrap();
+    let workflow = Workflow::parse(
+        r#"{
+            "kerf-comfy": 1, "fps": 16, "frames": {"most": 81, "step": 4}, "size": [832, 480],
+            "workflow": {
+                "1": {"class_type": "Words", "inputs": {"text": "{prompt}"}},
+                "2": {"class_type": "Values", "inputs": {"values": "{signal}", "count": "{frames}"}},
+                "3": {"class_type": "Sampler", "inputs": {"words": ["1", 0], "cue": ["2", 0]}}
+            }
+        }"#,
+    )
+    .unwrap();
+    let (server, kept) = serve(comfy);
+    let mut said = Vec::new();
+    make(
+        &request,
+        folder.path(),
+        &workflow,
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |line| said.push(line.to_owned()),
+    )
+    .unwrap();
+    let kept = kept.lock().unwrap();
+    let queued = kept
+        .iter()
+        .find(|asked| asked.line == "POST /prompt")
+        .unwrap();
+    let queued: serde_json::Value = serde_json::from_slice(&queued.body).unwrap();
+    let node = &queued["prompt"]["2"]["inputs"];
+    // Four seconds is 65 of the model's frames, each with the signal at its time.
+    assert_eq!(node["count"], json!(65));
+    let values: Vec<&str> = node["values"].as_str().unwrap().split(',').collect();
+    assert_eq!(values.len(), 65);
+    assert_eq!(
+        [values[0], values[8], values[16], values[32], values[40], values[64]],
+        ["0", "0.5", "1", "1", "0.5", "0"]
+    );
+    let said = said.join("\n");
+    assert!(
+        said.contains("handed signal `swell` as 65 values"),
+        "{said}"
+    );
+    assert!(
+        said.contains("reads no `first`, `ref`, `signal2`: left out"),
+        "{said}"
+    );
+}
+
+#[test]
 fn what_the_server_refuses_or_fails_is_said_and_leaves_no_file() {
     let folder = tempfile::tempdir().unwrap();
     let request = request(folder.path(), "{}");

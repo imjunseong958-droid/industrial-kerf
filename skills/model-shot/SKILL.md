@@ -33,6 +33,14 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   directional light's `x y z` is the way it shines. With a light that casts
   a `shadow`, add an `ambient` one, or what faces away is black. A guide may
   go without lights: a model lights the shot itself, and made as good a take.
+- When something has to happen on a frame, a ball landing, a flash, smoke
+  building, and the model's `reads` has `signal`, say when with a signal: a
+  `gen=signal@1` clip on a track of its own in the guide's sequence, from
+  `at=0f` for the shot's length, with `value` keyed 0 to 1, and
+  `signal=<clip>` on the `generate` line. The prompt says what the number is
+  of. Hold a peak for two of the model's frames, or it arrives lower. A
+  model that does not read one is said to have no use for it in `notes`:
+  leave it off the line.
 - Look at the guide's first, middle, and last frame before writing the
   recipe: every clip in frame, nothing crossing by accident, the move plain.
 - The recipe is the `render` line and a `generate` line: the prompt,

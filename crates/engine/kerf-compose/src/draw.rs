@@ -2134,7 +2134,9 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
-                "null" | "camera" | "light" => (Source::Nothing, canvas, false, true),
+                "null" | "camera" | "light" | kerf_model::SIGNAL => {
+                    (Source::Nothing, canvas, false, true)
+                }
                 other => match domains::source(other) {
                     Some(source) => (Source::Drawn(source), canvas, false, true),
                     None => return Err(unsupported(&clip.id, format!("generator `{other}`"))),

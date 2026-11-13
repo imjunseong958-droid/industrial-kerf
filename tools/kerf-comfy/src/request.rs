@@ -34,11 +34,77 @@ pub struct Request {
     pub size: Option<(u32, u32)>,
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Numbers over time that say when what the prompt asks for happens.
+    #[serde(default)]
+    pub signals: Vec<Signal>,
     /// Anything else the `generate` line said, as it was written.
     #[serde(default)]
     pub more: BTreeMap<String, String>,
     /// The file to write.
     pub out: PathBuf,
+}
+
+/// A signal as a request holds it: a number from 0 to 1 for each frame of
+/// the sequence its clip is in.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Signal {
+    /// The clip it is, by its id.
+    pub name: String,
+    /// The frames a second its values are at.
+    pub rate: f64,
+    pub values: Vec<f64>,
+}
+
+impl Signal {
+    /// What it is at `at`, counted in its own frames: on a line between
+    /// the two around it, and past either end what it is there.
+    fn at(&self, at: f64) -> f64 {
+        let Some(last) = self.values.len().checked_sub(1) else {
+            return 0.0;
+        };
+        let at = at.clamp(0.0, last as f64);
+        let before = at.floor() as usize;
+        let after = (before + 1).min(last);
+        let along = at - before as f64;
+        self.values[before] * (1.0 - along) + self.values[after] * along
+    }
+
+    /// What it is on each of `frames` frames at `fps` a second, the first
+    /// at its own first. Where the model makes fewer frames than it has,
+    /// each is the mean of it over that frame's time, so a peak one of its
+    /// own frames long is still there, lower and as long as one of the
+    /// model's.
+    pub fn over(&self, frames: u32, fps: f64) -> Vec<f64> {
+        /// How many places a longer frame is read at.
+        const READS: u32 = 8;
+        let span = self.rate / fps;
+        (0..frames)
+            .map(|frame| {
+                let middle = f64::from(frame) * span;
+                let value = if span > 1.0 {
+                    (0..READS)
+                        .map(|read| {
+                            let across = (f64::from(read) + 0.5) / f64::from(READS) - 0.5;
+                            self.at(middle + across * span)
+                        })
+                        .sum::<f64>()
+                        / f64::from(READS)
+                } else {
+                    self.at(middle)
+                };
+                (value.clamp(0.0, 1.0) * 1e4).round() / 1e4
+            })
+            .collect()
+    }
+
+    /// [`Signal::over`] as a node takes a list of numbers: `0,0.25,0.5`.
+    pub fn text(&self, frames: u32, fps: f64) -> String {
+        self.over(frames, fps)
+            .iter()
+            .map(f64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 impl Request {
@@ -107,6 +173,30 @@ pub fn names_a_file(name: &str) -> bool {
     matches!(name, "guide" | "first" | "last") || reference(name).is_some()
 }
 
+/// The name a request's signal has, counting from 0: `signal` is the
+/// first, `signal2` the second, as its references are named.
+pub fn signal_named(index: usize) -> String {
+    match index {
+        0 => "signal".to_owned(),
+        index => format!("signal{}", index + 1),
+    }
+}
+
+/// Whether `name` is one a request gives a signal under.
+pub fn names_a_signal(name: &str) -> bool {
+    match name.strip_prefix("signal") {
+        Some("") => true,
+        Some(number) => number.parse::<usize>().is_ok_and(|number| number >= 2),
+        None => false,
+    }
+}
+
+/// Whether `name` is one a request hands something under, a file or a
+/// signal: a blank of that name is filled only by a request that has it.
+pub fn names_what_is_handed(name: &str) -> bool {
+    names_a_file(name) || names_a_signal(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +213,7 @@ mod tests {
       "seconds": 4.0,
       "size": null,
       "seed": 7,
+      "signals": [{ "name": "swell", "rate": 24.0, "values": [0.0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5] }],
       "more": { "strength": "0.6" },
       "out": "/project/shots/open.takes/.making-003.mp4"
     }"#;
@@ -156,6 +247,57 @@ mod tests {
         let sized =
             Request::parse(&SHOWN.replace("\"size\": null", "\"size\": [1280, 720]")).unwrap();
         assert_eq!(sized.size, Some((1280, 720)));
+    }
+
+    #[test]
+    fn a_signal_is_brought_to_the_frames_the_model_makes() {
+        let request = Request::parse(SHOWN).unwrap();
+        let swell = &request.signals[0];
+        assert_eq!(swell.name, "swell");
+        // At its own rate it is what it was, and past its end what it ended on.
+        assert_eq!(
+            swell.over(9, 24.0),
+            [0.0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5]
+        );
+        // At twice the rate, each frame between two of its own is half way.
+        assert_eq!(swell.over(6, 48.0), [0.0, 0.0, 0.0, 0.5, 1.0, 0.5]);
+        // At a slower one its peak, one of its own frames long, is still there: lower, and
+        // spread over the frames of the model's it falls in.
+        let slower = swell.over(5, 16.0);
+        assert_eq!(slower[0], 0.0);
+        assert!(slower[1] > 0.4 && slower[1] < 1.0, "{slower:?}");
+        assert!(slower[2] > 0.0 && slower[2] < slower[1], "{slower:?}");
+        assert_eq!(slower[4], 0.5);
+        assert_eq!(swell.text(3, 24.0), "0,0,1");
+        // Held for two of the model's frames, three of its own here, a peak reaches one of
+        // them whole, wherever it starts.
+        for start in 4..8 {
+            let mut values = vec![0.0; 20];
+            values[start..=start + 3].fill(1.0);
+            let held = Signal {
+                name: "held".to_owned(),
+                rate: 24.0,
+                values,
+            };
+            assert!(held.over(13, 16.0).contains(&1.0), "from frame {start}");
+        }
+        // A request from before signals has none.
+        let before = Request::parse(
+            &SHOWN
+                .lines()
+                .filter(|line| !line.contains("signals"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert!(before.signals.is_empty());
+        for name in ["signal", "signal2", "signal12"] {
+            assert!(names_a_signal(name) && names_what_is_handed(name), "{name}");
+        }
+        for name in ["signal1", "signal0", "signals", "sign"] {
+            assert!(!names_a_signal(name), "{name}");
+        }
+        assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
     }
 
     #[test]

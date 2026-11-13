@@ -26,7 +26,7 @@ pub mod server;
 pub mod workflow;
 
 use guide::{Shape, Tools};
-use request::{names_a_file, Request};
+use request::{names_what_is_handed, signal_named, Request};
 use serde_json::json;
 use server::{Server, State};
 use sha2::{Digest, Sha256};
@@ -168,7 +168,7 @@ pub fn make(
     let mut values: Values = workflow.set.clone();
     let mut unread = Vec::new();
     for (name, text) in &request.more {
-        if ASKED.contains(&name.as_str()) || names_a_file(name) || !blanks.contains(name) {
+        if ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name) {
             unread.push(format!("`{name}`"));
         } else {
             values.insert(name.clone(), value_of(name, text, workflow.set.get(name))?);
@@ -217,6 +217,19 @@ pub fn make(
             bytes.len().div_ceil(1024)
         ));
         values.insert(name, json!(sent));
+    }
+    // The signals the workflow reads, each as a number for every frame asked for.
+    for (index, signal) in request.signals.iter().enumerate() {
+        let name = signal_named(index);
+        if !blanks.contains(&name) {
+            unread.push(format!("`{name}`"));
+            continue;
+        }
+        values.insert(name, json!(signal.text(frames, fps)));
+        say(&format!(
+            "handed signal `{}` as {frames} values",
+            signal.name
+        ));
     }
     if !unread.is_empty() {
         say(&format!(

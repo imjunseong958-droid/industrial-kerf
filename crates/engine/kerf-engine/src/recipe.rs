@@ -22,7 +22,8 @@
 //!   size and rate, not the sequence's: a picture of another shape fills
 //!   the size, and what is over is cut off evenly. The file has no sound.
 //! - `generate` asks a model ([`model`]) for the file: what it should show
-//!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), and
+//!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
+//!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
 //!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
 //!
 //! `{out}` stands for the media's file, and `{name}` for a file a step
@@ -37,6 +38,7 @@
 //! opening or drawing a project.
 
 pub mod model;
+pub mod signal;
 pub mod takes;
 pub mod told;
 
@@ -45,6 +47,7 @@ use crate::render::{render_program_with_cancellation, RenderOptions};
 use crate::sidecar::{self, CancellationToken};
 use kerf_model::Rate;
 use model::{Ask, Models, Source};
+use signal::Signal;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -187,6 +190,24 @@ impl Recipe {
             Step::Generate(ask) => Some(ask.model.as_str()),
             _ => None,
         })
+    }
+
+    /// The signals its steps hand a model: clips of the project, by their
+    /// ids, each once.
+    pub fn signals(&self) -> Vec<&str> {
+        let mut signals: Vec<&str> = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Generate(ask) => Some(&ask.signals),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        signals.sort_unstable();
+        signals.dedup();
+        signals
     }
 
     /// The sequences its steps have Kerf draw.
@@ -660,6 +681,9 @@ pub fn plan(
             )));
         }
     }
+    for signal in recipe.signals() {
+        Signal::read(project, signal).map_err(EngineError::msg)?;
+    }
     for model in recipe.models() {
         models.command(model)?;
     }
@@ -738,14 +762,28 @@ fn plain(number: f64) -> String {
 }
 
 /// What `recipe` asks of its models that they have said they do not take,
-/// each as a line for whoever is about to make it. A model that has not
-/// said what it takes ([`model::Takes`]) is asked nothing of here.
+/// each as a line for whoever is about to make it, and what it hands one
+/// that says nothing. A model that has not said what it takes
+/// ([`model::Takes`]) is asked nothing of here.
 fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec<String> {
     let mut notes = Vec::new();
     for step in &recipe.steps {
         let Step::Generate(ask) = step else {
             continue;
         };
+        // A signal that never changes says nothing of when, whatever the model.
+        for signal in &ask.signals {
+            if let Some(held) = Signal::read(project, signal)
+                .ok()
+                .and_then(|signal| signal.steady())
+            {
+                notes.push(format!(
+                    "signal `{signal}` is {} on every frame, which says nothing of when: keyframe its `{value}`, as `set {signal} {value}={{0f:0 24f:1}}`",
+                    plain(held),
+                    value = kerf_model::SIGNAL_VALUE,
+                ));
+            }
+        }
         let Some(takes) = models.takes(&ask.model) else {
             continue;
         };
@@ -817,6 +855,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 ("first", ask.first.is_some()),
                 ("last", ask.last.is_some()),
                 ("ref", !ask.references.is_empty()),
+                (model::SIGNAL, !ask.signals.is_empty()),
             ];
             for (name, _) in given
                 .iter()
@@ -827,7 +866,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                     if reads.is_empty() {
                         "it takes a prompt alone".to_owned()
                     } else {
-                        format!("of a line's files it reads {}", reads.join(", "))
+                        format!("of what a line hands it, it reads {}", reads.join(", "))
                     }
                 ));
             }
@@ -1013,12 +1052,19 @@ impl Making<'_> {
                 }
                 Step::Generate(ask) => {
                     let request = self.place.working(self.take).join(model::REQUEST_FILE);
+                    let signals = ask
+                        .signals
+                        .iter()
+                        .map(|signal| Signal::read(self.project, signal))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(EngineError::msg)?;
                     let asked = ask.request(
                         &|file| {
                             within(self.folder, file, "file the recipe needs")
                                 .map(|inside| self.directory.join(inside))
                         },
                         &|name| self.file_for(name),
+                        &signals,
                     )?;
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
                     let words = self.models.command(&ask.model)?;

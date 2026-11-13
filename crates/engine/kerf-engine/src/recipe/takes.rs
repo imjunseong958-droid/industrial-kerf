@@ -18,13 +18,14 @@
 //! merged as one.
 //!
 //! A take's record holds a hash of each thing it was made from: the recipe,
-//! each file the recipe reads, and each sequence it has Kerf render. A media
+//! each file the recipe reads, each sequence it has Kerf render, and each
+//! signal it hands a model, as the model is handed it. A media
 //! wants making again when one of those is no longer what its take was made
 //! from, and says which. Nothing else about a project is in the record, so
 //! trimming, moving, grading, or titling a made shot never asks for it
 //! again.
 
-use super::{stored, within, Recipe};
+use super::{signal::Signal, stored, within, Recipe};
 use crate::error::{EngineError, Result};
 use kerf_model::{Content, Media, Project};
 use serde::{Deserialize, Serialize};
@@ -274,6 +275,14 @@ pub(crate) fn from(
         from.insert(
             format!("sequence {sequence}"),
             sequence_hash(project, directory, sequence),
+        );
+    }
+    for signal in recipe.signals() {
+        from.insert(
+            format!("signal {signal}"),
+            Signal::read(project, signal)
+                .map_err(EngineError::msg)?
+                .hash(),
         );
     }
     Ok(from)

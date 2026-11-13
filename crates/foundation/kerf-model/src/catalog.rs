@@ -1329,6 +1329,18 @@ fn builtin_catalog() -> Catalog {
             "Draws nothing; clips parent to it to move together.",
         )
         .category("Utility"),
+        FxDef::new(
+            crate::SIGNAL,
+            FxKind::Generator,
+            Domain::Video,
+            "Draws nothing; its `value` over time is handed to a model by a recipe's `generate … signal=<clip>`, to say when what the prompt asks for happens, and how much.",
+        )
+        .category("Utility")
+        .param(
+            P::number(crate::SIGNAL_VALUE, 0.0)
+                .range(0.0, 1.0)
+                .doc("0 is none of it and 1 all of it; keyframe it."),
+        ),
     ];
     for definition in definitions
         .into_iter()

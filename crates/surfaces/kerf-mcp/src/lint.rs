@@ -66,7 +66,7 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
             _ => None,
         };
         let fx = generator.map(|(fx, _)| fx);
-        let draws_nothing = matches!(fx, Some("camera" | "light" | "null"));
+        let draws_nothing = matches!(fx, Some("camera" | "light" | "null" | kerf_model::SIGNAL));
         if draws_nothing {
             if !clip.masks.is_empty() || !clip.effects.is_empty() {
                 says("masks and effects on it do nothing, since it draws nothing".to_owned());
@@ -203,10 +203,12 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
             Content::Media { media, .. } => project
                 .media(media.as_str())
                 .is_some_and(|media| media.video.is_some()),
-            // An adjustment layer, a camera, a light, and a null draw nothing of their own.
-            Content::Generator { fx, .. } => {
-                !matches!(fx.as_str(), "adjustment" | "camera" | "light" | "null")
-            }
+            // An adjustment layer, a camera, a light, a null, and a signal draw nothing of
+            // their own.
+            Content::Generator { fx, .. } => !matches!(
+                fx.as_str(),
+                "adjustment" | "camera" | "light" | "null" | kerf_model::SIGNAL
+            ),
             Content::Sequence { .. } => true,
             Content::Caption { .. } => false,
         })

@@ -29,7 +29,23 @@ asked, and of which model; each making is a take, and the take says what it
 was made from ([shots.md](shots.md)). No model has that and no renderer does,
 and a text document with proposals and Git merging holds it naturally.
 
-Three rules follow, and the rest of this document should be read by them:
+A model is told three things, and the document holds each as something it
+already has:
+
+| What a model is told | By | Which in the document is |
+|---|---|---|
+| Where things are, and how the camera moves | A guide | Clips in depth, a camera, and lights, in a sequence |
+| When something happens, and how much | A signal | A number with keyframes, on a clip that draws nothing ([shots.md](shots.md#signals)) |
+| What it all looks like | A prompt and references | Words and files, in the recipe |
+
+So it is one document, with one space and one time, and not one engine. The
+camera a shot's footage was solved to, the camera its guide is drawn from,
+and the plane a title stands on over the take are the same numbers, and a
+signal's frames are the cut's. What draws from them stays apart: a
+compositor for what has to be exact, a guide renderer for what has to be
+fast, and a model for the picture.
+
+Four rules follow, and the rest of this document should be read by them:
 
 - **The compositor assembles; it does not stylize.** An effect that makes a
   look or an image a model would make better has no claim on a kernel, and
@@ -45,6 +61,13 @@ Three rules follow, and the rest of this document should be read by them:
   kernel shortens. What Kerf can do is make a guide show at once, say which
   edits are free and which cost a making, and play what came back without a
   stutter.
+- **What grows is what the document can say to a model, not what Kerf
+  draws.** A model that follows a new kind of direction gets a word a
+  `generate` line hands it, written as keyframes where it changes over time,
+  and its program turns that into whatever the model reads. A guide is made
+  to say more (which clip a pixel is of, how far it is, where it went) before
+  it is made to look better. Models change by the season; what directed a
+  shot should still read when they have.
 
 ### What these rules cut
 
@@ -157,7 +180,7 @@ drawn by the compositor, which is how Kerf's own clips in depth are a guide,
 at the sequence's size and rate or at the ones the step names, with no sound;
 and `generate`, a model asked for the file. `generate` says what is wanted in
 words any model takes (a prompt, a guide, first and last frames, references,
-length, size, seed), and Kerf writes that as a request, a JSON file, for the
+signals, length, size, seed), and Kerf writes that as a request, a JSON file, for the
 program the person's own `~/.kerf/models.json` names for that model
 (`recipe/model.rs`). Kerf knows no model by name and ships none: with none set
 up, a recipe that asks one is refused with how one is set up. A model with a
@@ -167,9 +190,10 @@ What a recipe makes is kept as media, not as a cache, since a model does not
 give the same shot twice. Each making is a take, in a folder beside the recipe
 (`recipe/takes.rs`), and the media's line names the one it is, so choosing a
 take is an edit: undone, proposed, and merged as any other. A take records a
-hash of what it was made from, the recipe, the files it reads, and the
+hash of what it was made from, the recipe, the files it reads, the
 sequences it renders (the sequence, what it nests, and the media lines it
-plays, printed as a document and hashed), and a media wants making when one
+plays, printed as a document and hashed), and the signals it hands a model
+(the numbers alone, `recipe/signal.rs`), and a media wants making when one
 of those has changed, and says which. Nothing else about the project is in
 the record: an edit that trims, moves, grades, or titles a made shot is free,
 and only a change to what guided it or what was asked costs a making.
@@ -221,6 +245,8 @@ Not here yet: passes of Kerf's own sequences (depth, normals, object ids) for
 a model that reads them, which a 3D renderer gives today; a way to choose a
 take in the editor's own window, where `kerf takes` and the conversation do
 it; and a model reached without a program, such as Kerf Cloud hosting one.
+What comes of these, and in what order, is under [What directs a
+model](#what-directs-a-model).
 
 One model's program is in the repository, and the engine knows nothing of it:
 `tools/kerf-comfy`, for a model on a ComfyUI server
@@ -351,6 +377,64 @@ Left as it is: what `kerf-comfy --describe` lists under `more`
 includes the server's file names, which a person may want out of what an
 agent reads. Where the person is asked for a making, the agent looks again
 to learn that it was made.
+
+### What directs a model
+
+Decided on 2026-11-13, after Adobe showed a generated clip timed by a signal
+(What others do): whether everything, effects and motion and the
+guide, should become one 3D engine, since an agent and not a person now
+writes the scene. It should not, and the 3D guide stays and grows.
+
+- *The curve was not 3D.* It is a number over time, and no scene holds it.
+  What holds a guide's space, a signal's time, and a prompt's words together
+  is the document, which is why the table at the top has three rows and one
+  document.
+- *An agent writes a scene gladly and cannot see that it is wrong.* Of the
+  faults in the shot an agent blocked (above), those in the scene itself
+  were ones it had no way to see: a floor over a car, a shadow on a sky,
+  clips laid end to end that should have stood together. Writing in three
+  dimensions stopped being hard; checking did not.
+- *What makes a 3D engine large is what a model now draws.* Materials,
+  light that bounces, smoke, water. A guide wanted an outline and nothing
+  finer (above), so a renderer of Kerf's own would be large where it adds
+  nothing.
+- *Color, keys, sound, retiming, and text are not in space.* They are done
+  to a frame or along time, and they are what has to be exact. Nothing is
+  gained by placing them in a scene.
+
+What is built for it, in this order, each measured before the next:
+
+1. **Signals**, which are in: `gen=signal@1`, and `signal=` on a `generate`
+   line (`recipe/signal.rs`). Held by tests from the clip to the numbers a
+   workflow's node is given. *Not measured against a model:* none in reach
+   reads one, and the workflow that comes with `kerf-comfy` has no blank for
+   one. The first thing to learn is whether a take's event lands on the
+   signal's frames, with a workflow whose strength or mask takes a number a
+   frame.
+2. **Passes of Kerf's own sequences**: which clip each pixel is of, and how
+   far, first. Each pixel's ray already meets a known plane, so they cost
+   little to draw, and what ties one frame to the next has been found to
+   guide better than depth alone
+   ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)). Whether the
+   models in reach keep more of a guide given them is what building it is
+   for.
+3. **What `look` says of a scene in depth**: what shows on a frame, what
+   hides what, and what has left the frame, as it says a title's contrast.
+   This is what lets an agent block a shot without a person's eye.
+4. **Meshes, if a measurement asks for them.** The rule above stands: no
+   mesh renderer. A clip with depth is its outline pushed straight back, so
+   what a camera sees going round it is a slab's side and not the thing's,
+   and that is the one place a guide of clips may fall short.
+   A shot whose camera goes a quarter of the way round a car, guided once by
+   Kerf's clips and once by a renderer's boxes through `run`, says whether
+   the take differs. If it does, what comes is a guide's worth: boxes,
+   spheres, a glTF read in, flat shading, and the passes of 2, with no
+   materials.
+5. **A making that streams**, last. Models that answer in under a second
+   are reported, on data-center cards and at small sizes for now. A recipe makes
+   files in steps, and a draft that is not kept wants a way of its own: the
+   guide drawn on the GPU and handed on as it is drawn, with a take still
+   the only thing the document names.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -628,7 +712,7 @@ reads the document and not the frame.
 
 ### Motion
 
-Has: keyframes (hold, linear, easings, Bezier curves) with a graph editor in the editor (`apps/kerf-qt/ui/graph_editor.h`), transforms, titles with reveals by character or
+Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with reveals by character or
 word, set in variable fonts at any axis (`wght`, `wdth`, `slnt`, `opsz`, `ital`, which animate, in `glyf` or CFF2 outlines, with line height left at the font's own since none of those axes changes it by more than 0.7% in any of 50 variable faces tried), shapes whose outlines combine and offset (`fx shape.outline@1`, `offset`, on a sweep carried from
 EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
@@ -668,7 +752,7 @@ second document type, and an agent learns one model.
 
 The picture shows and edits the curve of a selected clip's `path=`, through its parents
 (`ViewerWidget::setMotionPath`, `parentMotion`; both held to the compositor by a table of values), adding a
-point with a double-click and removing one with Delete. The graph editor zooms and pans both axes.
+point with a double-click and removing one with Delete. The Graph Editor, which drew a clip's keyframed numbers as curves, was taken out of the editor (`e6fe569`), so a number's keys are written as text: by an agent, or with `set`. A signal's curve is the first such number a person would want to draw, under the picture and against it.
 
 On a clip in depth the curve and the masks are drawn through what the camera does to a plane, which one projective
 map says exactly, so `picturePlacement` and `pathPlacement` return it and the viewer paints through it and inverts it to drag
@@ -853,6 +937,18 @@ Since the survey: Export follows Deliver, the quality numbers are checked on rea
   Auto Mask. On-device matting is now expected, not special.
 - **After Effects 26** has parametric meshes, depth of field in its 3D renderer,
   variable-font animation, and a faster mask tracker with Object Matte.
+- **Adobe's Sneaks at MAX 2026** (11 November, as reported; not products) showed
+  directing a generated clip without a prompt. Project On Cue times what
+  happens in one by a signal, drawn by hand or taken from a video or a piece
+  of music; Project Live Set changes the subject, the setting, or the camera
+  while the clip plays. The first is what a signal is here (What directs a
+  model), with the curve kept in the document; the second wants a making
+  that streams, which is last on that list.
+- **[NKD VFX Tools](https://github.com/Nekodificador/ComfyUI-NKD-VFX-Tools)**
+  (GPL-3.0, so none of its code comes here) are ComfyUI nodes that direct a
+  model with a compositor's tools: a camera solved from a photograph, a 3D
+  view to place a model in, relighting from depth and normals. Its premise is
+  this document's: block the shot first, and let the model draw it.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in
