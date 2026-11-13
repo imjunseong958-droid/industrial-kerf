@@ -32,6 +32,24 @@ use kerf_model::{
 };
 use serde_json::{json, Map, Value as Json};
 
+/// [`timeline_json`] with, on each source its recipe has made takes of, `takes`: each one's
+/// `number`, its `path` as the document would name it, and whether it is the one the
+/// source is (`chosen`), for an editor to offer them.
+pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path) -> Json {
+    let mut value = timeline_json(project);
+    let sources = value["sources"].as_array_mut().into_iter().flatten();
+    for (source, media) in sources.zip(&project.media) {
+        let takes = kerf_engine::recipe::takes::listed(directory, media);
+        if !takes.is_empty() {
+            source["takes"] = takes
+                .into_iter()
+                .map(|(number, path, chosen)| json!({"number": number, "path": path, "chosen": chosen}))
+                .collect();
+        }
+    }
+    value
+}
+
 pub(crate) fn timeline_json(project: &Project) -> Json {
     let mut value = json!({
         "name": project.name,
@@ -451,6 +469,34 @@ fn value_json(value: &Value) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_source_lists_the_takes_its_recipe_has_made() {
+        let folder = tempfile::tempdir().unwrap();
+        let directory = folder.path();
+        std::fs::create_dir_all(directory.join("shots/open.takes")).unwrap();
+        std::fs::write(directory.join("shots/open.kerfrecipe"), "kerf-recipe 1\n").unwrap();
+        for take in ["001.mp4", "002.mp4", "002.take.json", "003.take.json"] {
+            std::fs::write(directory.join("shots/open.takes").join(take), "").unwrap();
+        }
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\nmedia m1 path=\"shots/open.takes/002.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\nmedia m2 path=\"plain.mp4\" rate=24 dur=1s video=160x120\nsequence s1 rate=24 size=160x120 audio=48000\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_with_takes(&project, directory);
+        // Those there is a file of, the one the media is marked; a record alone is no take.
+        assert_eq!(
+            value["sources"][0]["takes"],
+            json!([
+                {"number": 1, "path": "shots/open.takes/001.mp4", "chosen": false},
+                {"number": 2, "path": "shots/open.takes/002.mp4", "chosen": true},
+            ])
+        );
+        // A source with no recipe has none, and says nothing of them.
+        assert!(value["sources"][1].get("takes").is_none());
+    }
 
     #[test]
     fn every_sequence_is_listed_with_its_format() {

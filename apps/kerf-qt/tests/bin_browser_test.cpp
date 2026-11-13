@@ -648,7 +648,10 @@ private slots:
                 QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m2"}, {"path", "/Volumes/Shoot/b.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}},
-                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"}}}}}}});
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"}},
+                QJsonObject{{"id", "m5"}, {"path", "shots/boat.takes/002.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/boat.kerfrecipe"},
+                            {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/boat.takes/001.mp4"}, {"chosen", false}},
+                                                 QJsonObject{{"number", 2}, {"path", "shots/boat.takes/002.mp4"}, {"chosen", true}}}}}}}}}});
         window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m3"}},
                                        {"pointers", QJsonArray{"m1"}}, {"external", QJsonArray{"m2"}}});
         ProjectPanel *bin = window.m_projectPanel;
@@ -703,6 +706,28 @@ private slots:
         window.runMake(QStringLiteral("m4"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;
+
+        // A media with takes offers them: the one it is is ticked, and another is chosen as a
+        // replace of its file, which the document names.
+        menu = window.binMenu(QStringLiteral("m4"));
+        QVERIFY(!menu->findChild<QMenu *>(QStringLiteral("binTakes")));
+        delete menu;
+        menu = window.binMenu(QStringLiteral("m5"));
+        QMenu *takes = menu->findChild<QMenu *>(QStringLiteral("binTakes"));
+        QVERIFY(takes);
+        QCOMPARE(takes->title(), QStringLiteral("Takes"));
+        QCOMPARE(takes->actions().size(), 2);
+        QAction *first = takes->findChild<QAction *>(QStringLiteral("binTake1"));
+        QAction *second = takes->findChild<QAction *>(QStringLiteral("binTake2"));
+        QVERIFY(first && second);
+        QVERIFY(second->isChecked() && !second->isEnabled());
+        QVERIFY(!first->isChecked() && first->isEnabled());
+        QVERIFY(first->toolTip().contains(QStringLiteral("shots/boat.takes/001.mp4")));
+        first->trigger();
+        QCOMPARE(window.m_lastCommand,
+                 (QJsonObject{{"type", "media_replace"}, {"media", "m5"}, {"path", "shots/boat.takes/001.mp4"}}));
+        delete menu;
+        menu = window.binMenu(QStringLiteral("m4"));
 
         // While it is made, what its steps say shows, and the menu stops it in place of
         // starting another.

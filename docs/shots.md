@@ -216,6 +216,10 @@ kerf takes m3            # the takes, a * on the one the media is
 kerf takes m3 --use 1    # have the media be take 1 again
 ```
 
+In the editor it is **Takes** on the media in the bin: every take there is
+a file of, the one the media is ticked, and choosing another has the media
+be it.
+
 An agent sees the same with `look` and `media`, where each take the media is
 not has the line that has the media be it, as `use`:
 `media replace m3 path="shots/open.takes/001.mp4" rate=16 dur=65f video=832x480 recipe="shots/open.kerfrecipe"`.

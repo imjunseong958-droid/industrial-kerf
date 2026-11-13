@@ -372,7 +372,10 @@ impl Runtime {
         StateSnapshot {
             duration: kernel::program_duration(&state.project).seconds(),
             document: kernel::print(&state.project),
-            timeline: timeline::timeline_json(&state.project),
+            timeline: timeline::timeline_with_takes(
+                &state.project,
+                self.project_path.parent().unwrap_or(Path::new("")),
+            ),
             revision: state.revision,
             can_undo: !state.past.is_empty(),
             can_redo: !state.future.is_empty(),

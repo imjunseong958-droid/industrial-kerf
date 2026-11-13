@@ -460,6 +460,30 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
         .collect())
 }
 
+/// The takes of `media` there are files of, in the order they were made, each with its
+/// number, its path as a document names it, and whether it is the one the media's line
+/// names. It reads the takes' folder and nothing else, so it can be asked often: what has
+/// changed since each was made is [`takes`]'s to say.
+pub fn listed(directory: &Path, media: &Media) -> Vec<(u32, String, bool)> {
+    let Some(place) = media
+        .recipe
+        .as_deref()
+        .and_then(|name| Place::of(directory, name, &media.path).ok())
+    else {
+        return Vec::new();
+    };
+    place
+        .numbers()
+        .into_iter()
+        .filter(|take| place.file(*take).is_file())
+        .map(|take| {
+            let stored = place.stored(take);
+            let chosen = Path::new(&media.path) == Path::new(&stored);
+            (take, stored, chosen)
+        })
+        .collect()
+}
+
 /// The take numbered `number` among `media`'s, or an error that says which
 /// there are.
 pub fn take(project: &Project, directory: &Path, media: &Media, number: u32) -> Result<Take> {

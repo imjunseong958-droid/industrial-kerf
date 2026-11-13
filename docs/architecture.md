@@ -1032,8 +1032,10 @@ recipes, in `fixtures/shots/car`.
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
 7. **A signal measured.** Still wanting a model that takes a number a frame.
-8. **In the editor**: somewhere to draw a signal's curve under the picture,
-   and to choose a take.
+8. **In the editor**: somewhere to draw a signal's curve under the picture.
+   Choosing a take is in (2026-11-13): Takes, on a media in the bin, lists
+   the takes its recipe has made, which a snapshot's sources now carry,
+   and has the media be another.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
