@@ -16,15 +16,21 @@ const TURN: f64 = 0.01;
 /// The words of a `set` line for a camera that is at `places` on the frames from
 /// `first`, one a frame: each of `x`, `y`, `z`, `pan`, `tilt`, and `roll` as one number
 /// where it holds still and as keyframes where it does not, and `fov`. With whether
-/// any of them moves.
-pub(crate) fn params(places: &[CameraPlace], first: i64, fov: f64) -> (String, bool) {
+/// any of them moves. A key's line comes within `coarse` times [`PLACE`] and [`TURN`] of what
+/// it stands for: 1 for a camera a file holds.
+pub(crate) fn params(
+    places: &[CameraPlace],
+    first: i64,
+    fov: f64,
+    coarse: f64,
+) -> (String, bool) {
     let mut words = Vec::new();
     let mut moves = false;
     let mut word = |name: &str, values: Vec<f64>, tolerance: f64, digits: i32| {
         let by = 10f64.powi(digits);
         // Not `-0`, which is 0.
         let rounded = |value: f64| ((value * by).round() / by) + 0.0;
-        let kept = kept(&values, tolerance);
+        let kept = kept(&values, tolerance * coarse);
         if kept.len() <= 1 {
             words.push(format!("{name}={}", rounded(values[0])));
         } else {
@@ -110,7 +116,7 @@ mod tests {
 
     #[test]
     fn a_camera_that_holds_still_is_numbers_and_one_that_moves_is_keys() {
-        let (still, moves) = params(&[place(0.5, 10.0); 4], 0, 28.6479);
+        let (still, moves) = params(&[place(0.5, 10.0); 4], 0, 28.6479, 1.0);
         assert_eq!(still, "x=0.5 y=0.25 z=-1 pan=10 tilt=0 roll=0 fov=28.648");
         assert!(!moves);
         // Evenly from one place to another is two keys, however many frames it takes; a
@@ -121,7 +127,7 @@ mod tests {
                 place(frame / 10.0, if frame < 4.0 { frame } else { 4.0 })
             })
             .collect();
-        let (moving, moves) = params(&places, 12, 40.0);
+        let (moving, moves) = params(&places, 12, 40.0, 1.0);
         assert_eq!(
             moving,
             "x={12f:0 22f:1} y=0.25 z=-1 pan={12f:0 16f:4 22f:4} tilt=0 roll=0 fov=40"
@@ -136,7 +142,7 @@ mod tests {
             .iter()
             .map(|pan| place(0.0, *pan))
             .collect();
-        let (words, _) = params(&places, 0, 40.0);
+        let (words, _) = params(&places, 0, 40.0, 1.0);
         assert!(words.contains("pan={0f:170 3f:194}"), "{words}");
     }
 }

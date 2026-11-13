@@ -1090,7 +1090,39 @@ fn what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it() {
         ),
     );
     let set = posed(folder.path(), "set.glb", "", "", Pass::Picture).unwrap();
-    let place = set.mesh_camera("thing", 0, Rate::FPS_24.time_of(0)).unwrap();
+    let place = set
+        .mesh_camera("thing", 0, Rate::FPS_24.time_of(0))
+        .unwrap();
+    // A camera the file does not hold, said to be where the file's is, is put where it is:
+    // all but its lens, which is no part of where it stands.
+    let said = kerf_compose::FileView {
+        eye: [0.0, 0.5, 5.0],
+        ..kerf_compose::FileView::ORIGIN
+    };
+    let view = set
+        .mesh_view("thing", &said, Rate::FPS_24.time_of(0))
+        .unwrap();
+    assert_eq!(view.fov, None);
+    assert_eq!(
+        kerf_compose::CameraPlace {
+            fov: place.fov,
+            ..view
+        },
+        place
+    );
+    // Turned a quarter round to look along the file's x, it pans a quarter round.
+    let aside = kerf_compose::FileView {
+        right: [0.0, 0.0, 1.0],
+        forward: [1.0, 0.0, 0.0],
+        ..said
+    };
+    let aside = set
+        .mesh_view("thing", &aside, Rate::FPS_24.time_of(0))
+        .unwrap();
+    assert!((aside.pan - place.pan - 90.0).abs() < 1e-9, "{aside:?}");
+    assert!(set
+        .mesh_view("thing", &said, Rate::FPS_24.time_of(48))
+        .is_none());
     // The set is a unit long and half the frame's height tall, so its walls are a quarter of
     // the frame's height either side of its clip's z, the far one behind. A red ball between
     // them, across the near wall's edge, on a track under the set's.

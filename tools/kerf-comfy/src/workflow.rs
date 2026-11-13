@@ -45,15 +45,16 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 5] = [
-    ("wan-vace", include_str!("../workflows/wan-vace.json")),
-    ("depth-moge", include_str!("../workflows/depth-moge.json")),
-    ("set-moge", include_str!("../workflows/set-moge.json")),
-    ("depth-da3", include_str!("../workflows/depth-da3.json")),
+pub const BUNDLED: [(&str, &str); 6] = [
+    ("shot", include_str!("../workflows/shot.json")),
+    ("depth", include_str!("../workflows/depth.json")),
+    ("set", include_str!("../workflows/set.json")),
+    ("depth-whole", include_str!("../workflows/depth-whole.json")),
     (
-        "cameras-da3",
-        include_str!("../workflows/cameras-da3.json"),
+        "cameras",
+        include_str!("../workflows/cameras.json"),
     ),
+    ("set-views", include_str!("../workflows/set-views.json")),
 ];
 
 /// What fills a workflow's blanks, by name.
@@ -471,7 +472,7 @@ mod tests {
     use serde_json::json;
 
     fn bundled() -> Workflow {
-        Workflow::named("wan-vace").unwrap()
+        Workflow::named("shot").unwrap()
     }
 
     /// What the server says of the kinds of node the bundled workflow links.
@@ -528,7 +529,13 @@ mod tests {
             }
         }
         // One that makes a file of its guide reads a guide, and has no rate of its own.
-        for name in ["depth-moge", "set-moge", "depth-da3", "cameras-da3"] {
+        for name in [
+            "depth",
+            "set",
+            "depth-whole",
+            "cameras",
+            "set-views",
+        ] {
             let workflow = Workflow::named(name).unwrap();
             assert!(
                 workflow.of_guide() && workflow.blanks().contains("guide"),
@@ -543,18 +550,20 @@ mod tests {
             );
             assert!(!takes["about"].as_str().unwrap().is_empty(), "{name}");
         }
-        // Depth Anything 3 finds a camera's path only with its weights as 32-bit floats.
-        let multiview = Workflow::named("cameras-da3").unwrap();
-        assert!(multiview
-            .graph
-            .values()
-            .any(|node| node["class_type"] == "LoadDA3Model"
-                && node["inputs"]["weight_dtype"] == "fp32"));
-        // MoGe refines three times unless a line says otherwise.
-        let moge = Workflow::named("depth-moge").unwrap();
-        assert_eq!(moge.takes()["more"]["refine_steps"], json!(3));
+        // A camera's path is found only with the model's weights as 32-bit floats.
+        for name in ["cameras", "set-views"] {
+            let multiview = Workflow::named(name).unwrap();
+            assert!(multiview
+                .graph
+                .values()
+                .any(|node| node["class_type"] == "LoadDA3Model"
+                    && node["inputs"]["weight_dtype"] == "fp32"));
+        }
+        // Depth is refined three times unless a line says otherwise.
+        let depth = Workflow::named("depth").unwrap();
+        assert_eq!(depth.takes()["more"]["refine_steps"], json!(3));
         let missing = Workflow::named("no-such").unwrap_err();
-        assert!(missing.contains("wan-vace"), "{missing}");
+        assert!(missing.contains("shot"), "{missing}");
     }
 
     #[test]
@@ -568,7 +577,7 @@ mod tests {
         assert_eq!(takes["reads"], json!(["guide", "ref"]));
         assert_eq!(takes["more"]["steps"], json!(20));
         assert_eq!(takes["more"]["strength"], json!(1.0));
-        assert!(takes["about"].as_str().unwrap().starts_with("Wan 2.1 VACE"));
+        assert!(takes["about"].as_str().unwrap().starts_with("A shot that follows a guide"));
         assert!(takes.get("refs").is_none(), "one reference needs no count");
 
         // A model that reads first and last frames and two references, at a rate that is not
@@ -661,7 +670,7 @@ mod tests {
 
     #[test]
     fn a_file_of_a_guide_has_the_guides_frames_and_its_size() {
-        let reader = Workflow::named("depth-moge").unwrap();
+        let reader = Workflow::named("depth").unwrap();
         // Each frame the guide has, up to what is asked and to the most read at once.
         assert_eq!(reader.frames_of(65, None, 16.0), 65);
         assert_eq!(reader.frames_of(65, Some(2.0), 16.0), 32);
@@ -715,22 +724,22 @@ mod tests {
         let workflow = bundled();
         let nodes = |files: &[(&str, &str)]| {
             let graph = workflow.graph(&values(files), &mut required).unwrap();
-            let vace = graph["9"]["inputs"].as_object().unwrap().clone();
-            (graph.as_object().unwrap().len(), vace)
+            let shot = graph["9"]["inputs"].as_object().unwrap().clone();
+            (graph.as_object().unwrap().len(), shot)
         };
         // No reference: its loader goes, and the link to it.
-        let (count, vace) = nodes(&[("guide", "kerf-1.mp4")]);
+        let (count, shot) = nodes(&[("guide", "kerf-1.mp4")]);
         assert_eq!(count, 15);
-        assert!(vace.contains_key("control_video") && !vace.contains_key("reference_image"));
+        assert!(shot.contains_key("control_video") && !shot.contains_key("reference_image"));
         // No guide: its loader goes, and what takes it apart, which cannot do without it.
-        let (count, vace) = nodes(&[("ref", "kerf-2.png")]);
+        let (count, shot) = nodes(&[("ref", "kerf-2.png")]);
         assert_eq!(count, 14);
-        assert!(!vace.contains_key("control_video") && vace.contains_key("reference_image"));
+        assert!(!shot.contains_key("control_video") && shot.contains_key("reference_image"));
         // Neither: the prompt alone.
-        let (count, vace) = nodes(&[]);
+        let (count, shot) = nodes(&[]);
         assert_eq!(count, 13);
-        assert!(!vace.contains_key("control_video") && !vace.contains_key("reference_image"));
-        assert_eq!(vace["positive"], json!(["4", 0]));
+        assert!(!shot.contains_key("control_video") && !shot.contains_key("reference_image"));
+        assert_eq!(shot["positive"], json!(["4", 0]));
         // A server that cannot say what a node needs stops it.
         let failed = workflow
             .graph(&values(&[]), &mut |_| Err("the server is away".to_owned()))

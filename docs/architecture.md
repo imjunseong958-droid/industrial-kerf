@@ -731,7 +731,7 @@ recipes, in `fixtures/shots/car`.
 
    The workflows are in the repository since 2026-11-13, four that come
    with `kerf-comfy` ([shots.md](shots.md#a-picture-read-back)):
-   `depth-moge`, `set-moge`, `depth-da3`, and `cameras-da3`. Each says
+   `depth`, `set`, `depth-whole`, and `cameras`. Each says
    `"of": "guide"`: what it makes is of its guide frame for frame, at the
    guide's own rate and size, where a model that makes a shot has a rate
    and a size of its own. That, and fetching the file whose kind the line
@@ -742,12 +742,12 @@ recipes, in `fixtures/shots/car`.
 
    | Recipe line | Took |
    |---|---|
-   | `generate model=depth guide={take.mp4}` (`depth-moge`) | 64 to 68 s |
+   | `generate model=depth guide={take.mp4}` | 64 to 68 s |
    | the same with `refine_steps=1` | 30 s, its greys 0.3% from the default's |
    | `generate model=set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
-   | `generate model=depth-da3 guide=…` (`depth-da3`) | 10 to 11 s |
-   | `generate model=cameras guide=… out={cameras.txt}` (`cameras-da3`) | 10 to 11 s |
-   | for scale, `generate model=vace …`, the take itself | 94 s |
+   | `generate model=depth-whole guide=…` | 10 to 11 s |
+   | `generate model=cameras guide=… out={cameras.txt}` | 10 to 11 s |
+   | for scale, `generate model=shot …`, the take itself | 94 s |
 
    *A take read back* (`shots/readback.kerfrecipe`): the depth pass of the
    car driving across, the take Wan VACE made of it with seed 7, and that
@@ -777,26 +777,109 @@ recipes, in `fixtures/shots/car`.
 
    *A camera found* (`shots/views.kerfrecipe`): the camera going 75 degrees
    round the parked car, drawn as its picture in flat colors, with
-   `cameras-da3`. It put the camera turning 7 degrees the wrong way over
+   `cameras`. It put the camera turning 7 degrees the wrong way over
    the first quarter and then 43 the right way, where the guide's turns 74
    one way throughout, with a lens of 37 degrees down the frame where the
    guide's is 40. A sky and a road in two flat colors give it little to
    hold, and footage was not tried: no filmed shot is in the repository.
-   What it wrote is a file and nothing reads it yet.
 
-   *Not done:* the camera path into a `gen=camera@1` clip; a set's own
-   camera and lens, which `set-moge`'s file does not hold; a rebuilt set
-   drawn in a sequence with something added to it; footage.
+   *A camera the mesh's file does not hold.* A path such as that, and the
+   camera a set was seen by, come into the sequence the way a glTF's camera
+   does. `look` with `mesh` takes `from`, a file that says where a camera
+   was, in place of `camera`, one the file holds
+   ([shots.md](shots.md#a-picture-read-back)): a path a model wrote, or
+   a lens alone, which is a camera standing at the set's own origin. The
+   compositor learned one thing for it, where a camera that is at a given
+   place in a mesh file's space is in the sequence
+   (`Compositor::mesh_view`), which is `mesh_camera` without the file's own
+   camera; reading the text is `kerf-mcp`'s (`camera_file.rs`). A path is in
+   its own model's units and a set in another's, so how much of the set one
+   of the path's units is is given (`scale`), and so is which of the path's
+   frames the set is of (`frame`). The workflow that rebuilds a set writes
+   its lens as a file of its own (`out={lens.txt}`), and a fifth workflow,
+   `set-views`, makes a set from the same reading of the frames a path
+   comes from, so that the two are one size and `scale` is 1.
+
+   *The whole of it, once, on a filmed shot* (2026-11-13). Four seconds of
+   a walk along an overgrown railway, handheld, 65 frames at 16 a second
+   and 640x360, from Wikimedia Commons (*Walking Keage Incline*, Kamigata0,
+   CC BY-SA 4.0); it is not in the repository. One recipe read it back, in
+   1 min 45 s: a set and a path in one size, a set with its lens, and the
+   shot's depth.
+
+   | Step | What came of it |
+   |---|---|
+   | The set with its lens as a mesh clip, and the camera `look` wrote from `lens.txt` | The frame it was rebuilt from, drawn again: the stones, the hedge, and the sign where the footage has them. A lens of 39.9 degrees. |
+   | The set in the path's size, and the camera `look` wrote from `cameras.txt` | The footage's first, middle, and last frames, each drawn again with the stones where that frame has them: the camera turns 2 degrees and the set turns with it. 65 frames placed, in 3 to 11 keys a value. |
+   | A box added on the path, on a track under the camera's | Hidden by the set's ground where it is under it, by the pixel; `look` with `shows` says how much. |
+   | `render s1 {guide.mp4} pass=depth`, then the model that makes the shot | A red crate where the box is, on every frame, in a grassy scene of the model's own: 100 s. |
+   | That take's depth read back, and `look` with `follows` | In 4, below. |
+
+   What it shows, and what it does not. The way works from footage to a
+   take, with every step a line of a recipe or of `look`, and the numbers
+   that place a camera hold on a set a model made. Three things were found
+   on the way. A box set down by eye, to look as if it stood on the path,
+   was two frame heights off in the air behind it, where the same pixels
+   are: the picture did not say so and the depth pass did. A clip on a
+   track above the camera's is laid over the set and not sorted with it, so
+   what is added goes under the camera, which the lines `look` writes put
+   on top. And the server makes a set seen through the wrong lens from a
+   guide that is not the size its model runs at, so `set-views` sends its
+   guide at that size ([shots.md](shots.md#a-picture-read-back)). The set
+   that comes in the path's size is, as it comes, the near ground and
+   little else; with `confidence=0` it is the whole frame, sky and all, as
+   surfaces. It is one shot, in which the camera hardly moves, and one
+   small model.
+
+   *Not done:* a shot whose camera travels; finding `scale` between two
+   models' units rather than making both from one reading; splats.
 4. **A take held to its guide by numbers.** Every row of the tables above
-   was judged by eye: place, path, size. The document has both halves of a
-   measure. `look` with `shows` says where a clip is on each frame of the
-   guide, and `track` follows a thing through a picture from points on it
-   (`kerf_track::roto`). So: follow the subject through the take from the
-   middle of its box in the guide's first frame, and say how far its box
-   in the take is from its box in the guide, frame by frame, as shares of
-   the frame. It needs no model and no server, and is tried first on the
-   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
-   what a person says of it, and choose between two.
+   was judged by eye: place, path, size. The whole frame's rank correlation
+   (3) does not replace the eye: the wrong take scored 0.966. What does is
+   the same two depths read by the clip, which is in: `look` with `follows`
+   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/follows.rs`).
+   The guide's ids pass says which pixels are a clip's, and over those it
+   says how far the take's order of near and far is from the guide's, as a
+   share of the frame's order, with the direction kept: where a subject is
+   not where the guide has it, what was behind it is there, and is farther.
+   On the scene of `fixtures/shots/car`, 64 frames, with no model: the
+   guide's own depth pass handed back as the take, and the same played
+   backward, each through an encoder as a take is.
+
+   | The take's depth | `order`, the whole frame | `off`, the whole frame | the road | the car's body | its cabin |
+   |---|---|---|---|---|---|
+   | The guide's own | 0.999 | 0.009 | 0.008 | 0.016 | 0.021 |
+   | The guide's, played backward | 0.971 | 0.032 | 0.023 | 0.094 | 0.217 |
+
+   The whole frame moves by a thirtieth, and the subject by six and ten
+   times. It needs a model to read the take's depth and nothing else, and
+   draws the guide's two passes itself.
+
+   On the filmed shot of 3, with real takes and their depth read back by
+   a model, the box added to the set:
+
+   | The guide | `order` | `off`, the whole frame | the set | the box |
+   |---|---|---|---|---|
+   | The box standing on the path | 0.833 | 0.112 | 0.112 | 0.118 |
+   | The box in the air two frame heights behind, looking as if it stood there | 0.787 | 0.122 | 0.111 | 0.507, all of it nearer |
+
+   In both the take has a crate where the box is in the picture. Where the
+   box stood on the ground it is as far off as the frame is. Where the
+   guide had it far away and the model drew it standing on the near ground,
+   as it looked, it is four times the frame, and `farther` says which way.
+   So it reads a subject's depth and not only its place, and it is read
+   beside the frame's own `off`, which here is a tenth: the set has holes
+   and a sky as a surface, and the model drew trees there. Two takes of one
+   shot.
+
+   What it does not say is where the subject went. For that the document
+   has the other half: `look` with `shows` says where a clip is on each
+   frame of the guide, and `track` follows a thing through a picture from
+   points on it (`kerf_track::roto`). So: follow the subject through the
+   take from the middle of its box in the guide's first frame, and say how
+   far its box in the take is from its box in the guide, frame by frame, as
+   shares of the frame. Not done. Either is what lets an agent say of a
+   take what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one

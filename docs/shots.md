@@ -382,19 +382,19 @@ kerf-comfy`); the packages do not carry it.
 
 ```json
 {
-  "vace": { "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"] }
+  "shot": { "run": ["/path/to/kerf-comfy", "--workflow", "shot", "{request}"] }
 }
 ```
 
-`kerf-comfy --workflow wan-vace --describe` prints that entry whole, with
+`kerf-comfy --workflow shot --describe` prints that entry whole, with
 [what the model takes](#what-a-model-takes) as its workflow has it, to put
 under the model's name. It reads the workflow and asks no server:
 
 ```json
 {
-  "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"],
+  "run": ["/path/to/kerf-comfy", "--workflow", "shot", "{request}"],
   "takes": {
-    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
+    "about": "A shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
     "size": [832, 480],
     "rate": 16,
     "seconds": 5.0625,
@@ -420,9 +420,9 @@ another file), which is yours and outside any project:
 
 A workflow is a ComfyUI graph, as ComfyUI exports it for its API, with blanks
 in it, and what the model it runs makes: its rate, how many frames, how
-large. `wan-vace` comes with the program: Wan 2.1 VACE, which follows a guide
+large. `shot` comes with the program, for a model that follows a guide
 video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
-takes a file too, and `tools/kerf-comfy/workflows/wan-vace.json` is the one to
+takes a file too, and `tools/kerf-comfy/workflows/shot.json` is the one to
 start from. `kerf-comfy --list` names those that come with it; the others
 [read a picture back](#a-picture-read-back).
 
@@ -467,30 +467,31 @@ A model can go the other way from a shot: from a picture in motion to what
 the picture is of, how near each pixel is, the shape of what it shows, where
 the camera was. To Kerf it is a model like any other, whose file is not a
 shot: `generate model=<reader> guide=<footage>`, with `out={depth.mp4}`
-where a later step reads what it makes. Four such workflows come with
+where a later step reads what it makes. Five such workflows come with
 `kerf-comfy`, for the models ComfyUI has nodes for:
 
 | Workflow | What it makes of its guide | As |
 |---|---|---|
-| `depth-moge` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
-| `set-moge` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
-| `depth-da3` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
-| `cameras-da3` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+| `depth` | How near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
+| `set` | One frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
+| `depth-whole` | How near each pixel is, a picture at a time, by another model: it gives a sky a distance, where `depth` gives it none. | a video |
+| `cameras` | The frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+| `set-views` | The frames together as views of one scene, and one of them rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
 
-A workflow is named for what it makes, with the model that makes it after,
-and a recipe names neither: it says `model=depth`, the name the person's
+A workflow is named for what it makes, and the model it runs is in its
+graph. A recipe names neither: it says `model=depth`, the name the person's
 file gives whichever reads depth for them, so that the recipe still reads
 when the model behind it is another.
 
 ```json
 {
-  "depth": { "run": ["/path/to/kerf-comfy", "--workflow", "depth-moge", "{request}"] },
-  "cameras": { "run": ["/path/to/kerf-comfy", "--workflow", "cameras-da3", "{request}"] }
+  "depth": { "run": ["/path/to/kerf-comfy", "--workflow", "depth", "{request}"] },
+  "cameras": { "run": ["/path/to/kerf-comfy", "--workflow", "cameras", "{request}"] }
 }
 ```
 
 ```text
-generate model=vace prompt="a red sports car drives along a wet street at dusk" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
+generate model=shot prompt="a red sports car drives along a wet street at dusk" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
 generate model=depth guide={take.mp4} out={depth.mp4}
 generate model=cameras guide=../footage/shot.mp4 out={cameras.txt}
 ```
@@ -504,13 +505,13 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 `--describe` prints it, has no `size` and no `rate`, so `look` offers no
 `render` line for it: a guide is not drawn for it, it is given one.
 
-- **Which file is fetched goes by the name asked for.** `cameras-da3`
+- **Which file is fetched goes by the name asked for.** `cameras`
   saves a video and a text, and `out={cameras.txt}` takes the text.
-- **MoGe is asked as it comes**, refining three times. `refine_steps=1` took
+- **`depth` asks its model as it comes**, refining three times. `refine_steps=1` took
   under half the time on the server it was measured on, for a depth 0.3%
   from the default's, and is for a very long shot.
-- **Depth Anything 3 finds a camera's path only with its weights as 32-bit
-  floats**, which `cameras-da3` sets on `LoadDA3Model`
+- **A camera's path is found only with the model's weights as 32-bit
+  floats**, which `cameras` sets where it loads them
   (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a
   dtype. `pose=ray_pose` finds the path from the model's rays in place of
   its camera decoder, three times as slowly.
@@ -521,16 +522,87 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   frame's lens in pixels of the size the model ran at (`resolution`, 504 on
   its longer side), among the depth it also holds, cut short. PyTorch prints
   a tensor whole up to a thousand numbers, which is 83 frames, so the
-  workflow reads 81 at most. Nothing in Kerf reads the file yet: bringing a
-  path in as a `gen=camera@1` clip's keyframes is what a glTF's camera
-  already has (`look` with `mesh`), and is next for this.
-- **A set comes without its camera.** `set-moge`'s mesh is as the frame's
+  workflow reads 81 at most, and a file cut short is refused.
+- **A set comes without its camera.** `set`'s mesh is as the frame's
   camera saw it, the camera at the file's own origin looking along its z
   backward, as a glTF camera does. The file holds no camera and no lens, so
-  `look` with `mesh` has none to write.
+  `look` with `mesh` and `camera` has none to write. The lens comes as a
+  file of its own, one number (`out={lens.txt}`).
+- **A set and a path of one size come from one answer.** A set one model
+  rebuilt and a path another found are each in units of their own, and
+  nothing says how many of one are one of the other. `set-views` makes the
+  set from the same reading of the frames a path comes from, so the two
+  fit as they are.
+- **`set-views` sends its guide up at the size its model runs at**, 504 on
+  the longer side. The server's node makes the mesh over the guide's own
+  pixels with a lens measured in the model's, so a guide of another size
+  comes back as a set seen through the wrong lens: at 640x360 its ground
+  stood a quarter too wide.
+
+Both come into the sequence as a `gen=camera@1` clip, by `look` with `mesh`
+and `from` in place of `camera`: a file in the project's folder that says
+where a camera the mesh's file does not hold was.
+
+```json
+{ "mesh": { "clip": "set", "from": "shots/views.takes/001.work/cameras.txt", "rate": 16 } }
+```
+
+It returns the lines to run with `edit`, as it does for a glTF's camera:
+the camera where the file has it on each frame of the mesh's clip, the mesh
+being where its clip puts it, with as few keyframes as say it.
+
+| In `mesh` | Says |
+|---|---|
+| `from` | The file. What a model wrote of a shot's camera is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
+| `frame` | The frame of `from` the set was rebuilt from (the `frame=` its line gave), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
+| `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
+| `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
+| `as` | A camera clip to `set`, where a new one is not wanted. |
+
+What comes back with the lines is `from`: its `frames`, how many of the
+clip's were `placed`, and the least and most `fov` it found. The camera
+gets the middle one of them: a `gen=camera@1` has one lens, and what a
+model finds of a lens wavers by the frame, so a zoom does not come through.
+A path shorter than the mesh's clip holds still after its last frame, and
+is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
+
+What is added to the set then goes on a track under the camera's, which
+the lines `look` writes put on top: a clip above the camera is laid over
+the set and not sorted with it by depth. `look` with `shows` says how much
+of it the set hides, and so whether it stands on the set's ground or is in
+it.
+
+A take's depth read back is held to its guide by `look` with `follows`, the
+media that depth is, and `sequence`, the guide's:
+
+```json
+{ "follows": "readback", "sequence": "s2" }
+```
+
+The media's frames are the sequence's from its start, as a guide drawn at
+the model's rate has them. Each pixel the guide has a depth for is given
+its place in its frame's order of near and far, from 0 to 1, in the guide's
+depth pass and in the take, since order is what the two share: a pass goes
+by the scene's own numbers and a model stretches each frame to its own. For
+each clip the guide has in depth, by the pixels its ids pass gives that
+clip:
+
+| | Says |
+|---|---|
+| `off` | How far apart the two places are over the clip's pixels, as a mean over the `frames` it shows on. |
+| `farther` | The same with its direction kept: above 0 where the take has those pixels farther, as it does where the subject is not there and what was behind it is. |
+| `worst` | The frame it is most off on, from 0, and how far. |
+| `shows` | The share of the frame it has. |
+
+`off` at the top is the same over every pixel, and `order` the rank
+correlation of the whole frame, which a take with its subject elsewhere
+still has near 1 where most of the frame is ground. A subject's `off` is
+read beside the frame's and the floor's: a take that followed has them
+alike, and one that did not has the subject several times the floor
+(`kerf-engine/src/follows.rs`).
 
 What they took, and how a take read back holds beside its guide, is in
-[architecture.md](architecture.md#next) (Next, 3).
+[architecture.md](architecture.md#next) (Next, 3 and 4).
 
 ## Signals
 
@@ -668,8 +740,8 @@ workflow's to say. Handing one model a picture and a pass of it at once has
 no word on a `generate` line yet, and normals are not drawn.
 
 Which kind a model follows is the model's, and its entry's `about` says. A
-model that covers a render is handed the picture. Wan 2.1 VACE 1.3B, the
-small model `kerf-comfy` comes with a workflow for, made more of a depth
+model that covers a render is handed the picture. The
+small model `kerf-comfy`'s `shot` is written for made more of a depth
 pass than of a picture in flat colors, and nothing of an ids pass, which is
 what `look` with `shows` reads a frame by
 ([architecture.md](architecture.md#measured)).

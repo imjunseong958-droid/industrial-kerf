@@ -58,13 +58,24 @@ on `main`; its section here becomes the release's notes on GitHub
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
 - `kerf-comfy` comes with four workflows that read a picture back, for a
-  ComfyUI server with MoGe 3 and Depth Anything 3: `depth-moge` and
-  `depth-da3` make a video of how near each pixel of a guide is, `set-moge`
+  ComfyUI server that has models for it: `depth` and
+  `depth-whole` make a video of how near each pixel of a guide is, `set`
   rebuilds a frame as a `.glb` mesh with the frame as its colors, and
-  `cameras-da3` writes where the camera was on each frame. Each is a model
+  `cameras` writes where the camera was on each frame. Each is a model
   to a recipe, `generate model=depth guide={take.mp4} out={depth.mp4}`, and
   what it makes has its guide's own size, rate, and frames
   ([docs/shots.md](docs/shots.md#a-picture-read-back)).
+- What a model reads back comes into the document. An agent's `look` with
+  `mesh` and `from` writes a camera a model found as a `gen=camera@1` clip
+  with keyframes: the path a model wrote for a shot, or a lens alone
+  for the camera a rebuilt set was seen by, placed against the set's mesh
+  clip. `look` with `follows` holds a take's depth, read back from it, to
+  the guide its sequence draws, clip by clip: how far the take has each
+  clip's pixels from where the guide has them in the order of near and
+  far, which says of a take whether its subject is where the guide put it.
+  For these `kerf-comfy` writes the lens a rebuilt set was seen through
+  (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
+  in the units of the camera path found of the same frames.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`
@@ -106,7 +117,7 @@ on `main`; its section here becomes the release's notes on GitHub
   under `takes`: the picture it makes, its rate, its longest shot, and the
   files it reads. An agent's `look` lists it with the model, with the
   `render` line that draws a guide at that size and rate, so a recipe is
-  written for the model it asks. `kerf-comfy --workflow wan-vace --describe`
+  written for the model it asks. `kerf-comfy --workflow shot --describe`
   prints the entry for a workflow
   ([docs/shots.md](docs/shots.md#what-a-model-takes)).
 - A project can be worked on from a terminal with no editor open. `kerf load`

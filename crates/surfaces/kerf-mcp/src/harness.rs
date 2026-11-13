@@ -70,7 +70,8 @@ frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
-With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it as a camera clip's keyframes. \
+With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
+With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip. \
 With `signal`, the keys of a signal clip from the onsets of a sound on the timeline, so that what a model is told happens on its beats. \
 With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
 With `proposal` it shows what a pending proposal would make: its document, \
@@ -302,7 +303,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "effect": {"type": "string", "description": "An effect, transition, generator, or clip property: every parameter of it, where the reference keeps a few of a generator that has many. Raster effects are listed by id only. Use alone."},
                     "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. Or a folder of it, such as `media` (`.` for the project's own): each footage file there the same way, in `files`, and in `script` the lines for those not in the document, to run as one edit. With no arguments `look` gives in `unplaced` the footage in the project's folder and in `media` not yet in the document. Use alone."},
                     "cost": {"type": "boolean", "description": "With `at`, program positions: who draws each frame and what it costs. `draws` is `gpu` or `cpu`, `because` says what sends it to the CPU, one line a cause, `ms` is a frame at full size and `msHalf` at half, against `frameMs`, a frame's share of the time. Playing, the editor draws smaller until frames keep up, and a frame the CPU draws takes every core."},
-                    "mesh": {"type": "object", "description": "What the glTF file of a `gen=mesh@1` clip holds: `triangles`; `size`, how wide, tall, and long it is at rest for a `height` of 1; `animations`, each with its `name`, `number`, and `seconds`, and `playing`, the one the clip's `animation=` names; `cameras`, each with its `name`, `number`, and `fov`. With `camera`, a name or a number of those, it returns `script`: that camera as a `gen=camera@1` clip over the mesh's clip (or `set` on the camera clip `as` names), where the file has it on each frame, the mesh being where its clip puts it and its animation as far in as the clip plays it. Through it the mesh is seen as the file's camera sees it, and what is added to the sequence stands in the same space. `moves` says whether it has keyframes. Ask again after moving or retiming the mesh's clip. Used alone.", "properties": {"clip": {"type": "string"}, "camera": {"type": ["string", "integer"]}, "as": {"type": "string"}}, "required": ["clip"]},
+                    "mesh": {"type": "object", "description": "What the glTF file of a `gen=mesh@1` clip holds: `triangles`; `size`, how wide, tall, and long it is at rest for a `height` of 1; `animations`, each with its `name`, `number`, and `seconds`, and `playing`, the one the clip's `animation=` names; `cameras`, each with its `name`, `number`, and `fov`. With `camera`, a name or a number of those, it returns `script`: that camera as a `gen=camera@1` clip over the mesh's clip (or `set` on the camera clip `as` names), where the file has it on each frame, the mesh being where its clip puts it and its animation as far in as the clip plays it. Through it the mesh is seen as the file's camera sees it, and what is added to the sequence stands in the same space. `moves` says whether it has keyframes. Ask again after moving or retiming the mesh's clip. For a camera the file does not hold, `from` in place of `camera`: a file in the project's folder that says where one was, as a model wrote it. A model that finds a shot's camera writes it on each frame, as `extrinsics` and `intrinsics`; a file that is one number is a lens alone, degrees down the picture, for the camera a set was seen by, which is at the set's own origin. `frame` is the frame of `from` the mesh was rebuilt from, 0 unless given, whose camera is put at the mesh's origin; `rate` how many frames of `from` a second has, the sequence's unless given; `scale` how much of the mesh's file one of `from`'s units is, 1 unless given, a path and a set from two models not being the same size. It returns `from`: its `frames`, how many of the clip's were `placed`, and the least and most `fov` it has, of which the camera gets the middle one. Used alone.", "properties": {"clip": {"type": "string"}, "camera": {"type": ["string", "integer"]}, "from": {"type": "string"}, "frame": {"type": "integer", "minimum": 0}, "rate": {"type": "number", "exclusiveMinimum": 0}, "scale": {"type": "number", "exclusiveMinimum": 0}, "as": {"type": "string"}}, "required": ["clip"]},
+                    "follows": {"type": "string", "description": "A media whose picture is a take's depth, as a model read it back (`generate model=depth guide={take.mp4}`): how it holds beside the guide `sequence` draws, the first unless given, the media's frames being the sequence's from its start. Each pixel has a place in its frame's order of near and far, from 0 to 1, in the guide's depth pass and in the take. `clips` is each clip the guide has in depth, by the pixels the ids pass gives it: `off`, how far apart those places are over its pixels, as a mean over the `frames` it shows on; `farther`, the same with its direction, above 0 where the take has those pixels farther, as it does where the subject is not there and what was behind it is; `worst`, the frame it is most off on, from 0; `shows`, its share of the frame. `off` at the top is the same over every pixel, and `order` the rank correlation of the whole frame, which a take with its subject elsewhere still has near 1 where most of the frame is ground. Read a subject's `off` beside the frame's and the floor's. Used alone, or with `sequence`."},
                     "signal": {"type": "object", "description": "A signal's keys from a sound: `of` is a clip that plays a media with sound, music or what was recorded, and `clip` a `gen=signal@1` clip of the same sequence. It returns `script`, a `set <clip> value={…}` line to run with `edit`, which has the signal at 1 for `hold` frames (3 unless given) from each sound onset of `of` that falls in the signal clip and 0 between, onsets nearer than that running together; `onsets`, how many it placed, and `outside`, how many of the sound's fall outside the clip. Hold for as long as two of the model's frames last. Used alone.", "properties": {"of": {"type": "string"}, "clip": {"type": "string"}, "hold": {"type": "integer", "minimum": 1}}, "required": ["of", "clip"]},
                     "shows": {"type": "boolean", "description": "With `at`, program positions: what shows of each clip that draws there, in `frames`, each with `clips` from the lowest track up. `box` is where the clip would be with nothing before it, [left, top, right, bottom] in shares of the frame, absent when none of it is in the frame; `area` the share of the frame that is; `shows` the share of the frame it has as the frame is drawn; `hidden` the share of it other clips hide, and `by` which, each with its share, the most first; `edges` the edges of the frame it reaches, where it may go on past them; `opacity` where it is not wholly opaque, and such a clip is read as not showing. `empty` is the share of the frame no clip has. A nested sequence is one clip. A floor in `by` of what stands on it, a subject with no `box`, and a subject at an edge are what to mend. Read on a small frame, to about a hundredth of it. Not with `media`."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
@@ -446,6 +448,8 @@ struct LookInput {
     shows: bool,
     signal: Option<SignalInput>,
     mesh: Option<MeshInput>,
+    /// A media that is a take's depth, to hold to the guide a sequence draws.
+    follows: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -454,6 +458,14 @@ struct MeshInput {
     clip: String,
     /// A camera of the file, by its name or its number.
     camera: Option<Value>,
+    /// A file that says where a camera the mesh's file does not hold was.
+    from: Option<String>,
+    /// Which frame of `from` the mesh was rebuilt from.
+    frame: Option<usize>,
+    /// How many frames of `from` a second has.
+    rate: Option<f64>,
+    /// How much of the mesh's file one of `from`'s units is.
+    scale: Option<f64>,
     /// The camera clip its keys are written on.
     #[serde(rename = "as")]
     onto: Option<String>,
@@ -1422,6 +1434,51 @@ impl KerfMcpRouter {
         }))
     }
 
+    /// How a take's depth, read back from it, holds beside the guide a sequence draws.
+    fn take_follows(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        revision: u64,
+        take: &str,
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, sequence)?;
+        let media = project.media(take).ok_or_else(|| {
+            McpError::new(
+                "INVALID_ARGUMENTS",
+                format!(
+                    "no media `{take}`: `follows` is a media whose picture is a take's depth, as a model read it back{}",
+                    self.any_pending("proposal")
+                ),
+            )
+        })?;
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let followed = kerf_engine::follows::follows(
+            &resolved,
+            Some(sequence.id.as_str()),
+            &resolve_project_source_path(&self.dir, &media.path),
+            media.rate.fps().round().max(1.0) as u32,
+        )
+        .map_err(|error| McpError::new("MEDIA_FAILED", error.to_string()))?;
+        Ok(json!({
+            "revision": revision,
+            "sequence": sequence.id.to_string(),
+            "follows": take,
+            "frames": followed.frames,
+            "order": followed.order,
+            "off": followed.off,
+            "clips": followed.clips.iter().map(|clip| json!({
+                "clip": clip.clip,
+                "frames": clip.frames,
+                "shows": clip.shows,
+                "off": clip.off,
+                "farther": clip.farther,
+                "worst": {"frame": clip.worst.0, "off": clip.worst.1},
+            })).collect::<Vec<_>>(),
+        }))
+    }
+
     /// What the file of a mesh clip holds, and one of its cameras as a camera clip's keys.
     fn mesh_file(
         &self,
@@ -1474,52 +1531,113 @@ impl KerfMcpRouter {
                 "fov": camera.fov.map(rounded), "aspect": camera.aspect.map(rounded),
             })).collect::<Vec<_>>(),
         });
-        let Some(wanted) = &input.camera else {
-            return Ok(result);
-        };
-        let wanted = match wanted {
-            Value::String(name) => name.clone(),
-            other => other.to_string(),
-        };
-        let which = file
-            .cameras
-            .iter()
-            .position(|camera| camera.name == wanted)
-            .or_else(|| wanted.parse().ok().filter(|number| *number < file.cameras.len()))
-            .ok_or_else(|| {
-                let has: Vec<String> = file
-                    .cameras
-                    .iter()
-                    .enumerate()
-                    .map(|(number, camera)| format!("{number} `{}`", camera.name))
-                    .collect();
-                invalid(match has.len() {
-                    0 => format!("the file of `{}` has no camera", input.clip),
-                    _ => format!(
-                        "the file of `{}` has no camera `{wanted}`: it has {}",
-                        input.clip,
-                        has.join(", ")
-                    ),
-                })
-            })?;
-        let fov = file.cameras[which].fov.ok_or_else(|| {
-            invalid(format!(
-                "camera `{wanted}` has no perspective, and a `gen=camera@1` has a lens"
-            ))
-        })?;
-        // Where it is on each frame of the mesh's clip.
+        // Where the camera is on each frame of the mesh's clip.
         let rate = sequence.rate;
         let (first, length) = (
             rate.frames_round(clip.start),
             rate.frames_round(clip.duration).max(1),
         );
-        let places: Vec<kerf_compose::CameraPlace> = (0..length)
-            .filter_map(|frame| compositor.mesh_camera(&input.clip, which, rate.time_of(first + frame)))
-            .collect();
+        let (places, fov) = match (&input.camera, &input.from) {
+            (None, None) => return Ok(result),
+            (Some(_), Some(_)) => {
+                return Err(invalid(
+                    "`camera` is one the mesh's file holds and `from` a file that says where another was: give one".to_owned(),
+                ));
+            }
+            (Some(wanted), None) => {
+                let wanted = match wanted {
+                    Value::String(name) => name.clone(),
+                    other => other.to_string(),
+                };
+                let which = file
+                    .cameras
+                    .iter()
+                    .position(|camera| camera.name == wanted)
+                    .or_else(|| wanted.parse().ok().filter(|number| *number < file.cameras.len()))
+                    .ok_or_else(|| {
+                        let has: Vec<String> = file
+                            .cameras
+                            .iter()
+                            .enumerate()
+                            .map(|(number, camera)| format!("{number} `{}`", camera.name))
+                            .collect();
+                        invalid(match has.len() {
+                            0 => format!(
+                                "the file of `{}` has no camera: `from` takes a file that says where one was",
+                                input.clip
+                            ),
+                            _ => format!(
+                                "the file of `{}` has no camera `{wanted}`: it has {}",
+                                input.clip,
+                                has.join(", ")
+                            ),
+                        })
+                    })?;
+                let fov = file.cameras[which].fov.ok_or_else(|| {
+                    invalid(format!(
+                        "camera `{wanted}` has no perspective, and a `gen=camera@1` has a lens"
+                    ))
+                })?;
+                result["camera"] = json!(which);
+                let places: Vec<kerf_compose::CameraPlace> = (0..length)
+                    .filter_map(|frame| {
+                        compositor.mesh_camera(&input.clip, which, rate.time_of(first + frame))
+                    })
+                    .collect();
+                (places, fov)
+            }
+            (None, Some(from)) => {
+                let path = resolve_project_source_path(&self.dir, from);
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|why| invalid(format!("`{from}` cannot be read: {why}")))?;
+                let scale = input.scale.unwrap_or(1.0);
+                if !(scale > 0.0 && scale.is_finite()) {
+                    return Err(invalid(format!("`scale` is more than 0, not {scale}")));
+                }
+                let found = crate::camera_file::read(&text, input.frame.unwrap_or(0), scale)
+                    .map_err(|why| invalid(format!("`{from}`: {why}")))?;
+                // The file's frames are its shot's, which may not be the sequence's.
+                let a_frame = match input.rate {
+                    Some(per_second) if per_second > 0.0 && per_second.is_finite() => {
+                        per_second / rate.fps()
+                    }
+                    Some(other) => {
+                        return Err(invalid(format!("`rate` is frames a second, not {other}")))
+                    }
+                    None => 1.0,
+                };
+                let frames = found.views.len();
+                let lasts = (((frames - 1) as f64 / a_frame).floor() as i64 + 1).min(length);
+                let places: Vec<kerf_compose::CameraPlace> = (0..lasts)
+                    .filter_map(|frame| {
+                        compositor.mesh_view(
+                            &input.clip,
+                            &found.at(frame as f64 * a_frame),
+                            rate.time_of(first + frame),
+                        )
+                    })
+                    .collect();
+                let least = found.fovs.iter().copied().fold(f64::INFINITY, f64::min);
+                let most = found.fovs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                result["from"] = json!({
+                    "frames": frames,
+                    "placed": places.len(),
+                    "fov": [rounded(least), rounded(most)],
+                });
+                if frames > 1 && (places.len() as i64) < length {
+                    result["note"] = json!(format!(
+                        "`{from}` says where the camera was for {} of the {length} frames of `{}`: it holds still after.",
+                        places.len(),
+                        input.clip
+                    ));
+                }
+                (places, found.lens())
+            }
+        };
         if places.is_empty() {
             return Err(McpError::new(
                 "RENDER_FAILED",
-                format!("camera `{wanted}` of `{}` could not be placed", input.clip),
+                format!("the camera could not be placed on `{}`", input.clip),
             ));
         }
         let target = match &input.onto {
@@ -1536,7 +1654,10 @@ impl KerfMcpRouter {
         };
         // A clip's keys count from its own first frame.
         let origin = target.map_or(first, |target| rate.frames_round(target.start));
-        let (params, moves) = crate::mesh_camera::params(&places, first - origin, fov);
+        // What a model found of a camera is not as fine as what a file says of its own.
+        let fine = if input.from.is_some() { 10.0 } else { 1.0 };
+        let (params, moves) =
+            crate::mesh_camera::params(&places, first - origin, fov, fine);
         let script = match target {
             Some(target) => format!("set {} {params}", target.id),
             None => {
@@ -1548,19 +1669,22 @@ impl KerfMcpRouter {
                         .unwrap_or_default()
                 };
                 let on = free(&|name| sequence.track(name).is_some(), "V");
-                let id = free(
-                    &|name| sequence.tracks.iter().any(|track| track.clip(name).is_some()),
-                    "camera",
-                );
+                let id = free(&|name| project.locate(name).is_some(), "camera");
+                // Where there is more than one sequence, a line that adds says which.
+                let within = if project.sequences.len() > 1 {
+                    format!("use {}\n", sequence.id)
+                } else {
+                    String::new()
+                };
                 format!(
-                    "track add {on} video\noverwrite gen=camera@1 at={first}f dur={length}f on={on} as={id}\nset {id} {params}"
+                    "{within}track add {on} video\noverwrite gen=camera@1 at={first}f dur={length}f on={on} as={id}\nset {id} {params}"
                 )
             }
         };
-        result["camera"] = json!(which);
         result["moves"] = json!(moves);
         result["script"] = json!(script);
-        if !moves && file.playing.is_none() && !file.animations.is_empty() {
+        if input.camera.is_some() && !moves && file.playing.is_none() && !file.animations.is_empty()
+        {
             result["note"] = json!(format!(
                 "`{}` plays no animation, so the camera is where it is at rest: set `animation=` on the clip, and ask again, to have it move as the file moves it.",
                 input.clip
@@ -1757,6 +1881,16 @@ impl KerfMcpRouter {
             }
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.signal_from_sound(&project, revision, signal);
+        }
+        if let Some(take) = &input.follows {
+            if input.media.is_some() || !input.at.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`follows` names its media, and is used alone, or with `sequence` or `proposal`",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.take_follows(&project, input.sequence.as_deref(), revision, take);
         }
         if let Some(mesh) = &input.mesh {
             if input.media.is_some() || !input.at.is_empty() || input.sequence.is_some() {
@@ -4407,8 +4541,8 @@ sequence s1 rate=24 size=1920x1080
         std::fs::write(
             &file,
             r#"{
-                "vace": {
-                    "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"],
+                "shot": {
+                    "run": ["kerf-comfy", "--workflow", "shot", "{request}"],
                     "takes": {
                         "about": "follows a guide",
                         "size": [832, 480],
@@ -4436,7 +4570,7 @@ sequence s1 rate=24 size=1920x1080
                 // A rate that is not whole is written as a line writes it.
                 {"name": "ntsc", "rate": 23.976, "reads": ["guide"],
                  "guide": "render <sequence> {guide.mp4} rate=23.976"},
-                {"name": "vace", "about": "follows a guide", "size": "832x480", "rate": 16.0,
+                {"name": "shot", "about": "follows a guide", "size": "832x480", "rate": 16.0,
                  "seconds": 5.0625, "reads": ["guide", "ref"], "more": {"steps": 20},
                  "frames": {"most": 81, "step": 4},
                  "guide": "render <sequence> {guide.mp4} size=832x480 rate=16"},

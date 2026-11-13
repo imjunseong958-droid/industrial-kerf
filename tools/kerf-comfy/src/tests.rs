@@ -151,7 +151,7 @@ fn request(folder: &Path, more: &str) -> Request {
     std::fs::write(folder.join("boat.png"), "a boat").unwrap();
     let text = json!({
         "kerf-request": 1,
-        "model": "vace",
+        "model": "shot",
         "prompt": "a boat leaves, at dawn",
         "guide": null,
         "first": folder.join("boat.png"),
@@ -185,7 +185,7 @@ fn a_request_becomes_a_job_and_the_job_the_shots_file() {
     make(
         &request,
         folder.path(),
-        &Workflow::named("wan-vace").unwrap(),
+        &Workflow::named("shot").unwrap(),
         &server,
         &Tools::find(),
         &patience(),
@@ -220,15 +220,15 @@ fn a_request_becomes_a_job_and_the_job_the_shots_file() {
     let graph = &queued["prompt"];
     assert!(graph.get("6").is_none() && graph.get("7").is_none());
     assert_eq!(graph["8"]["inputs"]["image"], named);
-    let vace = &graph["9"]["inputs"];
-    assert_eq!(vace["reference_image"], json!(["8", 0]));
-    assert!(vace.get("control_video").is_none());
+    let shot = &graph["9"]["inputs"];
+    assert_eq!(shot["reference_image"], json!(["8", 0]));
+    assert!(shot.get("control_video").is_none());
     // 1920x1080 is past what the model makes, and four seconds is 65 of its frames.
     assert_eq!(
-        (&vace["width"], &vace["height"], &vace["length"]),
+        (&shot["width"], &shot["height"], &shot["length"]),
         (&json!(848), &json!(480), &json!(65))
     );
-    assert_eq!(vace["strength"], json!(0.6));
+    assert_eq!(shot["strength"], json!(0.6));
     assert_eq!(graph["12"]["inputs"]["steps"], json!(30));
     assert_eq!(graph["12"]["inputs"]["seed"], json!(7));
     assert_eq!(graph["4"]["inputs"]["text"], "a boat leaves, at dawn");
@@ -317,7 +317,7 @@ fn a_signal_reaches_the_workflow_as_a_number_for_each_frame() {
 fn what_the_server_refuses_or_fails_is_said_and_leaves_no_file() {
     let folder = tempfile::tempdir().unwrap();
     let request = request(folder.path(), "{}");
-    let workflow = Workflow::named("wan-vace").unwrap();
+    let workflow = Workflow::named("shot").unwrap();
     let run = |server: &Server| {
         make(
             &request,
@@ -428,7 +428,7 @@ fn a_job_waited_for_too_long_is_taken_back() {
     let late = make(
         &request,
         folder.path(),
-        &Workflow::named("wan-vace").unwrap(),
+        &Workflow::named("shot").unwrap(),
         &server,
         &Tools::find(),
         &Patience {
@@ -487,7 +487,7 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
     let stopped = make(
         &request,
         folder.path(),
-        &Workflow::named("wan-vace").unwrap(),
+        &Workflow::named("shot").unwrap(),
         &server,
         &Tools::find(),
         // A pause far longer than the test: the asking is what ends the wait.
@@ -525,7 +525,7 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
     let early = make(
         &request,
         folder.path(),
-        &Workflow::named("wan-vace").unwrap(),
+        &Workflow::named("shot").unwrap(),
         &server,
         &Tools::find(),
         &patience(),
@@ -623,7 +623,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
 
     // The file asked for is the one fetched, by its kind: the cameras as text.
     let cameras = asking("cameras.txt", json!({}));
-    let (graph, said) = made(&cameras, "cameras-da3");
+    let (graph, said) = made(&cameras, "cameras");
     assert_eq!(std::fs::read(&cameras.out).unwrap(), b"its cameras");
     // The guide's own rate, each of its frames, and its size with its sides made even: not a
     // model's. It went up as it is, but for that.
@@ -637,7 +637,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         .picture(&folder.path().join(GUIDE_SENT))
         .unwrap();
     assert_eq!((sent.size, sent.frames, sent.fps), ((322, 180), 10, 12.0));
-    // Depth Anything 3 finds a camera's path with its weights as 32-bit floats, and no other way.
+    // A camera's path is found with the model's weights as 32-bit floats, and no other way.
     assert_eq!(graph["3"]["inputs"]["weight_dtype"], "fp32");
     assert_eq!(graph["4"]["inputs"]["mode"], "multiview");
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "cam_dec");
@@ -647,14 +647,14 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         "depth.mp4",
         json!({"pose": "ray_pose", "resolution": "756"}),
     );
-    let (graph, _) = made(&depth, "cameras-da3");
+    let (graph, _) = made(&depth, "cameras");
     assert_eq!(std::fs::read(&depth.out).unwrap(), b"its depth");
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "ray_pose");
     assert_eq!(graph["4"]["inputs"]["resolution"], json!(756));
 
-    // MoGe refines three times as it comes, and once where a line says so; `seconds` reads
+    // Depth is refined three times as it comes, and once where a line says so; `seconds` reads
     // the guide's first frames only.
-    let (graph, _) = made(&asking("moge.mp4", json!({})), "depth-moge");
+    let (graph, _) = made(&asking("near.mp4", json!({})), "depth");
     assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
     assert_eq!(graph["5"]["inputs"]["output"], "depth");
     let mut short = asking(
@@ -662,7 +662,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         json!({"refine_steps": "1", "output": "normal_opengl"}),
     );
     short.seconds = Some(0.5);
-    let (graph, said) = made(&short, "depth-moge");
+    let (graph, said) = made(&short, "depth");
     assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
     assert_eq!(graph["5"]["inputs"]["output"], "normal_opengl");
     assert!(said.contains("for 6 frames of 322x180"), "{said}");
@@ -674,7 +674,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     let refused = make(
         &none,
         folder.path(),
-        &Workflow::named("depth-moge").unwrap(),
+        &Workflow::named("depth").unwrap(),
         &server,
         &Tools::find(),
         &patience(),

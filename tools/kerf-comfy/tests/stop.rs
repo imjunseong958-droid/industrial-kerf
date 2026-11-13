@@ -96,7 +96,7 @@ fn the_program_takes_its_job_back_on_sigterm() {
         &request,
         json!({
             "kerf-request": 1,
-            "model": "vace",
+            "model": "shot",
             "prompt": "a boat leaves, at dawn",
             "guide": null, "first": null, "last": null, "references": [],
             "seconds": 2.0, "size": null, "seed": 7, "more": {},
@@ -107,7 +107,7 @@ fn the_program_takes_its_job_back_on_sigterm() {
     .unwrap();
     let (url, kept) = comfy();
     let program = Command::new(env!("CARGO_BIN_EXE_kerf-comfy"))
-        .args(["--workflow", "wan-vace"])
+        .args(["--workflow", "shot"])
         .arg(&request)
         .env("COMFY_URL", &url)
         .env_remove("COMFY_API_KEY")

@@ -269,8 +269,8 @@ fn a_models_entry_can_say_what_the_model_takes() {
     let some = models(
         folder.path(),
         r#"{
-            "vace": {
-                "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"],
+            "shot": {
+                "run": ["kerf-comfy", "--workflow", "shot", "{request}"],
                 "takes": {
                     "about": "follows a guide",
                     "size": [832, 480],
@@ -285,39 +285,39 @@ fn a_models_entry_can_say_what_the_model_takes() {
             "dawn": {"run": ["dawn-adapter", "{request}"]}
         }"#,
     );
-    let vace = some.takes("vace").unwrap();
-    assert_eq!(vace.about.as_deref(), Some("follows a guide"));
+    let shot = some.takes("shot").unwrap();
+    assert_eq!(shot.about.as_deref(), Some("follows a guide"));
     assert_eq!(
-        (vace.size, vace.rate, vace.seconds),
+        (shot.size, shot.rate, shot.seconds),
         (Some((832, 480)), Some(16.0), Some(5.0625))
     );
     assert_eq!(
-        vace.reads.as_deref(),
+        shot.reads.as_deref(),
         Some(&["guide".to_owned(), "ref".to_owned()][..])
     );
-    assert_eq!(vace.follows_a_guide(), Some(true));
-    assert_eq!(vace.more["steps"], 20);
+    assert_eq!(shot.follows_a_guide(), Some(true));
+    assert_eq!(shot.more["steps"], 20);
     // What Kerf has no name for is kept as it is written.
-    assert_eq!(vace.other["frames"]["most"], 81);
+    assert_eq!(shot.other["frames"]["most"], 81);
     // A model that reads no file takes a prompt alone; one that does not say is not known.
     assert_eq!(some.takes("words").unwrap().follows_a_guide(), Some(false));
     assert_eq!(some.takes("dawn"), None);
     assert_eq!(some.takes("dusk"), None);
     // Saying what it takes changes nothing of how it is run.
     assert_eq!(
-        some.command("vace").unwrap(),
-        ["kerf-comfy", "--workflow", "wan-vace", "{request}"]
+        some.command("shot").unwrap(),
+        ["kerf-comfy", "--workflow", "shot", "{request}"]
     );
     let wrong = |takes: &str| {
         let file = folder.path().join("wrong.json");
         std::fs::write(
             &file,
-            format!(r#"{{"vace": {{"run": ["a", "{{request}}"], "takes": {takes}}}}}"#),
+            format!(r#"{{"shot": {{"run": ["a", "{{request}}"], "takes": {takes}}}}}"#),
         )
         .unwrap();
         Models::read(&file).unwrap_err().to_string()
     };
-    assert!(wrong("16").contains("model `vace`: `takes` is not an object"));
+    assert!(wrong("16").contains("model `shot`: `takes` is not an object"));
     assert!(
         wrong(r#"{"size": "832x480"}"#).contains("`size` in `takes` is not a width and a height")
     );
@@ -475,7 +475,7 @@ fn a_plan_reads_a_recipes_signals() {
     let some = models(
         directory,
         r#"{
-            "vace": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}},
+            "shot": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}},
             "cued": {"run": ["b", "{request}"], "takes": {"reads": ["guide", "signal"]}}
         }"#,
     );
@@ -494,10 +494,10 @@ fn a_plan_reads_a_recipes_signals() {
     assert!(plan.steps[0].ends_with("signal swell"), "{}", plan.steps[0]);
     // One that does not is said to have no use for it.
     assert_eq!(
-        planned(&waves, "generate model=vace prompt=\"a wave\" signal=swell")
+        planned(&waves, "generate model=shot prompt=\"a wave\" signal=swell")
             .unwrap()
             .notes,
-        ["model `vace` has no use for `signal=`: of what a line hands it, it reads guide"]
+        ["model `shot` has no use for `signal=`: of what a line hands it, it reads guide"]
     );
     // A signal that is not there stops the plan, as a sequence that is not does.
     let missing = planned(&waves, "generate model=cued signal=surge")
@@ -708,7 +708,7 @@ fn a_plan_notes_what_a_model_has_said_it_does_not_take() {
     let some = models(
         directory,
         r#"{
-            "vace": {"run": ["a", "{request}"], "takes": {
+            "shot": {"run": ["a", "{request}"], "takes": {
                 "size": [832, 480], "rate": 16, "seconds": 5.0625,
                 "reads": ["guide", "ref"], "more": {"steps": 20, "strength": 1.0}}},
             "words": {"run": ["b", "{request}"], "takes": {"reads": []}},
@@ -726,30 +726,30 @@ fn a_plan_notes_what_a_model_has_said_it_does_not_take() {
     // A recipe written for its model has nothing to note.
     assert!(notes(
         "render s2 {guide.mp4} size=832x480 rate=16\n\
-         generate model=vace prompt=\"a boat\" guide={guide.mp4} ref=boat.png seconds=4 seed=7 steps=30"
+         generate model=shot prompt=\"a boat\" guide={guide.mp4} ref=boat.png seconds=4 seed=7 steps=30"
     )
     .is_empty());
     // A guide drawn as its sequence is, for a model that reads it smaller and slower, and
     // from a sequence of another shape.
     assert_eq!(
-        notes("render s1 {guide.mp4}\ngenerate model=vace prompt=\"a boat\" guide={guide.mp4}"),
+        notes("render s1 {guide.mp4}\ngenerate model=shot prompt=\"a boat\" guide={guide.mp4}"),
         [
-            "the guide `{guide.mp4}` is not drawn as model `vace` reads it, 832x480 at 16 frames a second: `render s1 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time",
+            "the guide `{guide.mp4}` is not drawn as model `shot` reads it, 832x480 at 16 frames a second: `render s1 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time",
             "sequence `s1` is 1920x1080, another shape than the 832x480 of its guide: the guide fills that size, and the sides of the sequence are cut off",
         ]
     );
     // The rate alone, where the size is the model's.
     assert_eq!(
-        notes("render s2 {guide.mp4} size=832x480\ngenerate model=vace guide={guide.mp4}"),
-        ["the guide `{guide.mp4}` is not drawn as model `vace` reads it, 832x480 at 16 frames a second: `render s2 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time"]
+        notes("render s2 {guide.mp4} size=832x480\ngenerate model=shot guide={guide.mp4}"),
+        ["the guide `{guide.mp4}` is not drawn as model `shot` reads it, 832x480 at 16 frames a second: `render s2 {guide.mp4} size=832x480 rate=16` draws only what it reads, in less time"]
     );
     // A shot longer than it makes, a file it does not read, and a name it has not got.
     assert_eq!(
-        notes("generate model=vace prompt=\"a boat\" first=boat.png seconds=9 duration=9"),
+        notes("generate model=shot prompt=\"a boat\" first=boat.png seconds=9 duration=9"),
         [
-            "`seconds=9` is more than model `vace` makes at once, 5.0625 s",
-            "model `vace` has no use for `first=`: of what a line hands it, it reads guide, ref",
-            "model `vace` has nothing named `duration` to set: beside what every model is asked, a line sets its steps, strength",
+            "`seconds=9` is more than model `shot` makes at once, 5.0625 s",
+            "model `shot` has no use for `first=`: of what a line hands it, it reads guide, ref",
+            "model `shot` has nothing named `duration` to set: beside what every model is asked, a line sets its steps, strength",
         ]
     );
     assert_eq!(

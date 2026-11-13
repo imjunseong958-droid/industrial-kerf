@@ -617,6 +617,24 @@ impl Drawing {
         three_d::mesh::camera(&scene, plan, &to_output, time, camera)
     }
 
+    /// See [`Compositor::mesh_view`](crate::Compositor::mesh_view).
+    pub fn mesh_view(
+        &self,
+        id: &str,
+        view: &crate::FileView,
+        at: Time,
+    ) -> Option<crate::CameraPlace> {
+        let (sequence, plan) = self.mesh_plan(id)?;
+        let time = at - plan.clip.start;
+        if time.is_negative() || time >= plan.clip.duration {
+            return None;
+        }
+        let size = (sequence.width as usize, sequence.height as usize);
+        let scene = three_d::Scene::at(sequence, at, size);
+        let to_output = self.geometry(sequence, plan, time);
+        three_d::mesh::view(&scene, plan, &to_output, time, view)
+    }
+
     /// See [`Compositor::frame_key`](crate::Compositor::frame_key).
     pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
         let mut hash = DefaultHasher::new();
