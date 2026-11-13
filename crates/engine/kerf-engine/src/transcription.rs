@@ -343,11 +343,7 @@ where
         return Err(EngineError::msg("source has no audio stream"));
     }
     if let Some(duration) = metadata.duration {
-        if !duration.is_finite() || duration <= 0.0 || options.range.end > duration + 1e-6 {
-            return Err(EngineError::msg(format!(
-                "transcription range must be inside source duration {duration:.3}s"
-            )));
-        }
+        validate_source_range(options.range, duration)?;
     }
 
     let key_options = cache_options(options, &config)?;
@@ -1126,6 +1122,25 @@ fn validate_operation_range(range: TimeRange, listen: bool) -> Result<()> {
     if range.duration() > max + 1e-9 {
         return Err(EngineError::msg(format!(
             "transcription range exceeds the {max:.0}s limit"
+        )));
+    }
+    Ok(())
+}
+
+/// How far past the length a source is probed to have a range may end and
+/// still be inside it: one sample of the sound a transcriber hears.
+///
+/// A file holds whole samples, so one written to be as long as a sequence
+/// is up to half a sample short of it: 3625 frames at 30 fps are
+/// 1,933,333⅓ samples of that sound and are written as 1,933,333, which is
+/// 21 microseconds less. A probe then gives that length to the microsecond.
+const SOURCE_END_TOLERANCE: f64 = 1.0 / TRANSCRIPTION_SAMPLE_RATE as f64;
+
+/// Refuse a range that ends after a source `duration` seconds long does.
+fn validate_source_range(range: TimeRange, duration: f64) -> Result<()> {
+    if !duration.is_finite() || duration <= 0.0 || range.end > duration + SOURCE_END_TOLERANCE {
+        return Err(EngineError::msg(format!(
+            "transcription range must be inside source duration {duration:.3}s"
         )));
     }
     Ok(())
@@ -2608,11 +2623,110 @@ mod tests {
         assert!(stitched(range(0.0, 130.0), &pieces).is_none());
     }
 
+    #[test]
+    fn a_range_may_end_within_a_sample_of_where_its_source_does() {
+        // The sound of 3625 frames at 30 fps is written as 1,933,333 whole
+        // samples, a third of one short, and probed to the microsecond;
+        // that of 121 frames, as 64,533.
+        for (frames, probed) in [(3625.0, 120.833313), (121.0, 4.033313)] {
+            validate_source_range(range(0.0, frames / 30.0), probed).expect("inside");
+        }
+        // Up to the one sample a file's length is counted in, and no more.
+        let end = 120.833313;
+        validate_source_range(range(0.0, end + 0.9 * SOURCE_END_TOLERANCE), end).expect("inside");
+        for past in [end + 1.1 * SOURCE_END_TOLERANCE, 3626.0 / 30.0] {
+            let refused = validate_source_range(range(0.0, past), end).expect_err("past the end");
+            assert_eq!(
+                refused.to_string(),
+                "transcription range must be inside source duration 120.833s"
+            );
+        }
+        for unknown in [0.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_source_range(range(0.0, 1.0), unknown).is_err());
+        }
+    }
+
+    /// Options for `range` that transcribe with a stand-in for whisper kept
+    /// in `root`: it hears "hello" in whatever it is given, and adds a line
+    /// to the file `runs` beside it each time it runs.
+    #[cfg(unix)]
+    fn heard_by_a_stand_in(root: &Path, range: TimeRange) -> TranscriptionOptions {
+        use std::os::unix::fs::PermissionsExt;
+
+        let model = root.join("model.bin");
+        fs::write(&model, b"test model").expect("model");
+        let whisper = root.join("whisper-cli");
+        fs::write(
+            &whisper,
+            r##"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-of" ]; then out="$2"; shift 2
+  else shift
+  fi
+done
+printf '%s' '{"result":{"language":"en"},"transcription":[{"timestamps":{"from":"00:00:00,000","to":"00:00:00,500"},"text":" hello"}]}' > "${out}.json"
+printf '%s\n' 'progress = 50%' >&2
+printf 'run\n' >> "$(dirname "$0")/runs"
+"##,
+        )
+        .expect("whisper script");
+        let mut permissions = fs::metadata(&whisper)
+            .expect("whisper metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&whisper, permissions).expect("whisper permissions");
+
+        let mut options = TranscriptionOptions::new(range);
+        options.binary = Some(whisper);
+        options.model = Some(model);
+        options.model_version = Some("test-model-v1".into());
+        options
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sequences_sound_is_transcribed_to_the_end_of_the_sequence() {
+        let available = |tool: &str| {
+            Command::new(tool)
+                .arg("-version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        };
+        if !available(resolve_ffmpeg_bin()) || !available(crate::ffmpeg::resolve_ffprobe_bin()) {
+            return;
+        }
+        // As a sequence's sound is mixed: 3625 frames at 30 fps are
+        // 120.8333… seconds, and the file holds the 1,933,333 whole samples
+        // that come to 21 microseconds less.
+        let root = tempdir().expect("temp directory");
+        let source = root.path().join("sound.wav");
+        let seconds = 3625.0 / 30.0;
+        tone_where(&source, seconds, |_| true);
+        assert_eq!(wav_samples(&source).len(), 1_933_333);
+        let probed = info(&source.to_string_lossy())
+            .expect("probe")
+            .duration
+            .expect("duration");
+        assert!(probed < seconds - RANGE_EPSILON, "{probed}");
+
+        let asked = range(0.0, seconds);
+        let options = heard_by_a_stand_in(root.path(), asked);
+        let heard = transcribe_cached(
+            &source.to_string_lossy(),
+            &DerivativeCache::new(root.path()),
+            &options,
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .expect("transcribe");
+        assert_eq!(heard.transcript.range, asked);
+        assert_eq!(heard.transcript.text, "hello");
+    }
+
     #[cfg(unix)]
     #[test]
     fn local_sidecar_result_and_listen_audio_reuse_the_derived_cache() {
-        use std::os::unix::fs::PermissionsExt;
-
         let root = tempdir().expect("temp directory");
         let source = root.path().join("source.wav");
         let ffmpeg = resolve_ffmpeg_bin();
@@ -2648,35 +2762,8 @@ mod tests {
             .expect("generate source");
         assert!(generated.success());
 
-        let model = root.path().join("model.bin");
-        fs::write(&model, b"test model").expect("model");
-        let whisper = root.path().join("whisper-cli");
-        fs::write(
-            &whisper,
-            r##"#!/bin/sh
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-of" ]; then out="$2"; shift 2
-  else shift
-  fi
-done
-printf '%s' '{"result":{"language":"en"},"transcription":[{"timestamps":{"from":"00:00:00,000","to":"00:00:00,500"},"text":" hello"}]}' > "${out}.json"
-printf '%s\n' 'progress = 50%' >&2
-printf 'run\n' >> "$(dirname "$0")/runs"
-"##,
-        )
-        .expect("whisper script");
-        let mut permissions = fs::metadata(&whisper)
-            .expect("whisper metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&whisper, permissions).expect("whisper permissions");
-
         let range = TimeRange::new(0.25, 1.25).expect("range");
-        let mut options = TranscriptionOptions::new(range);
-        options.binary = Some(whisper);
-        options.model = Some(model);
-        options.model_version = Some("test-model-v1".into());
+        let options = heard_by_a_stand_in(root.path(), range);
         let cache = DerivativeCache::new(root.path());
         let token = CancellationToken::new();
         let first = transcribe_cached(&source.to_string_lossy(), &cache, &options, &token, |_| {})

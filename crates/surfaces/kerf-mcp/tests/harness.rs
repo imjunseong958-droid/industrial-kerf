@@ -1040,6 +1040,11 @@ fn look_hears_what_the_sequence_says() {
     assert_eq!(heard["from"], "00:00:01:00");
     assert_eq!(heard["to"], "00:00:03:00");
     assert!(heard["transcript"].is_array(), "{heard}");
+    // 91 frames of sound are 48,533⅓ samples to a transcriber, mixed as the 48,533 whole ones
+    // that end a little before the range does: it is heard to its end all the same.
+    let odd = ok(&router, "look", json!({"transcript": true, "to": "91f"}));
+    assert_eq!(odd["to"], "00:00:03:01");
+    assert!(odd["transcript"].is_array(), "{odd}");
     let mixed = error(&router, "look", json!({"transcript": true, "at": ["1s"]}));
     assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
 }
