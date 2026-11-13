@@ -1507,6 +1507,22 @@ fn clip_digest(clip: &Clip, catalog: &Catalog, media: Option<&Media>) -> Option<
     let mut unplaced = clip.clone();
     unplaced.start = Time::ZERO;
     format!("{unplaced:?}").hash(&mut hash);
+    // A file a generator reads, a mesh's, replaced under the same name is another picture.
+    if let Content::Generator { fx, params, .. } = &clip.content {
+        let def = catalog.fx(fx.as_str())?;
+        for param in &def.params {
+            if !matches!(param.ty, ParamType::File(_)) {
+                continue;
+            }
+            if let Some(Param::Static(Value::Text(path))) = params.get(&param.name) {
+                if !path.is_empty() {
+                    let file = std::fs::metadata(path).ok()?;
+                    file.len().hash(&mut hash);
+                    file.modified().ok()?.hash(&mut hash);
+                }
+            }
+        }
+    }
     if let Some(media) = media {
         format!("{media:?}").hash(&mut hash);
         // A file replaced under the same name is another picture.
@@ -2347,6 +2363,9 @@ impl<'a> Builder<'a> {
             if !clip.masks.is_empty() {
                 return Err(unsupported(&clip.id, "a mask on a mesh"));
             }
+            three_d::mesh::check(clip).map_err(|why| {
+                ComposeError::Invalid(format!("clip `{}`: its mesh's file {why}", clip.id))
+            })?;
         }
         let mut effects = Vec::new();
         for effect in clip.effects.iter().filter(|effect| effect.enabled) {

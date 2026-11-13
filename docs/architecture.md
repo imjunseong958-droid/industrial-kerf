@@ -54,8 +54,8 @@ Five rules follow, and the rest of this document should be read by them:
   color correction, keys and mattes, tracking, restoration, retouching, text.
 - **Kerf draws a guide, not a finished picture, and builds no model.** What
   a guide shows is what the shot has, so a guide holds real shapes: clips in
-  depth, cameras, lights, and solids now (`gen=mesh`), and meshes read from
-  a file next (What directs a model). What it leaves out is what a model draws over it: materials, light
+  depth, cameras, lights, and meshes (`gen=mesh`: a solid, or a glTF file's;
+  What directs a model). What it leaves out is what a model draws over it: materials, light
   that bounces, hair, water. What bends or breaks, a character or a cloth,
   is a renderer's, reached by a recipe's `run`. This rule said until
   2026-11-13 that Kerf builds no mesh renderer; the fifth rule is why it
@@ -496,14 +496,15 @@ What is built for it, in this order, each measured before the next:
    of the frame. A clip that is partly clear is read as not showing, and
    said to be.
 
-4. **Geometry in the guide**, of which the solids are in (Next, 2). By the
+4. **Geometry in the guide**, which is in (Next, 2). By the
    fifth rule what a guide shows is what the shot has: a model covers a
    render and keeps its shapes, so a car that is two boxes is a shot of two
    boxes. A clip with depth is its outline pushed straight back, one profile
    of a thing, and a thing has more than one. No measurement is waited for:
    this was to be decided by what a small model made of a camera going
    round, and the fifth rule says such a take decides nothing. `gen=mesh@1`
-   is a box, a ball, or a cylinder (`kerf-compose/src/draw/three_d/mesh.rs`):
+   is a box, a ball, or a cylinder, or with `file=` the mesh of a glTF file
+   (`kerf-compose/src/draw/three_d/mesh.rs`, `gltf.rs`):
    its triangles are cut where the camera stops seeing, put on the screen,
    and scanned, the nearest kept at each of four places a pixel, which gives
    what a plane's rays give, a picture and how far ahead each pixel is. So
@@ -512,7 +513,11 @@ What is built for it, in this order, each measured before the next:
    color with a hard edge for ids, a grey from each pixel's own distance for
    depth. `look` with `shows` reads it with no change, since it reads the
    ids pass. It is lit by the scene's lights by the way each place faces,
-   and takes the shadows clips in depth cast on it. *Not done:* it casts no
+   and takes the shadows clips in depth cast on it. Of a file it reads what
+   is rigid: the triangles of every mesh of its scene, each where its node
+   puts it at rest, and each material's base color, made as tall as the clip
+   says in the file's own proportions. Textures, skins, morph targets, and
+   animations are not read. *Not done:* it casts no
    shadow, takes no effect and no mask (the compositor refuses them), a
    transition's wipe is a fade on it, and the GPU does not draw it, so a
    frame with one is the CPU's. It was not handed to a model.
@@ -581,8 +586,11 @@ recipes, in `fixtures/shots/car`.
    materials. The first of it is the solids, which need no file and are
    enough to say whether the passes and `shows` hold for a mesh: they are
    in, and the passes and `shows` hold (`kerf-compose/tests/mesh.rs`,
-   `kerf-engine/tests/shows.rs`). What is left is reading a glTF file into
-   the same triangles, a color a part.
+   `kerf-engine/tests/shows.rs`). A glTF file is read into the same
+   triangles, a color a part. A recipe does not yet count such a file among
+   what a guide was made from, so replacing one does not ask for the shot
+   again; and no file a modeling program wrote was tried, only ones written
+   by the tests.
 3. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the

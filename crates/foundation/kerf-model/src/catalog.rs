@@ -1328,7 +1328,7 @@ fn builtin_catalog() -> Catalog {
             "mesh",
             FxKind::Generator,
             Domain::Video,
-            "A solid thing for a guide, with every side it has: a box, a ball, or a cylinder standing on its end, in one flat color. It is in depth without `three_d`: the clip's `x`, `y`, and `z` are where its middle is, and `rotate_x`, `rotate_y`, `rotation`, and `scale` turn and size it. The sequence's camera sees it and its lights light it; with no light it is its color, flat.",
+            "A solid thing for a guide, with every side it has: a box, a ball, a cylinder on its end, or a glTF `file`'s mesh. It is in depth without `three_d`, its middle at the clip's `x`, `y`, `z`; lights light it, and with none it is its color, flat.",
         )
         .category("Generate")
         .param(P::choice("kind", &["box", "ball", "cylinder"]))
@@ -1346,9 +1346,12 @@ fn builtin_catalog() -> Catalog {
             P::number("length", 0.25)
                 .range(0.0, 100.0)
                 .unit("frame heights")
-                .doc("How far it goes back, from its front to its back."),
+                .doc("How far back it goes."),
         )
-        .param(P::color("color", Rgba::WHITE)),
+        .param(P::color("color", Rgba::WHITE))
+        .param(P::file("file", &["glb", "gltf"]).doc(
+            "A glTF file's mesh in place of `kind`: `height` tall, a color a part.",
+        )),
         FxDef::new(
             "null",
             FxKind::Generator,

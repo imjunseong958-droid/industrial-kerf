@@ -260,6 +260,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   What is nearer at each pixel is in front, whichever track it is on, and it is in the ids and depth
   passes and `look` with `shows` as any clip is. It casts no shadow, takes no effect or mask, and is drawn
   on the CPU. `set car kind=box width=0.9 height=0.25 length=0.4 color=#c02020 y=0.2 z=1 rotate_y=30`.
+  `file="models/car.glb"` takes the mesh from a glTF file (`.glb`, or `.gltf` with its buffers beside it or
+  inside it) in place of `kind`: every mesh of its scene at rest, each part in its material's color, or
+  `color` where it has none, `height` tall in its own proportions. Its textures, skins, and animations are
+  not read.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

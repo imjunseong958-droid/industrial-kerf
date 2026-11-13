@@ -333,3 +333,190 @@ fn a_mesh_takes_no_effect_or_mask() {
         refused(&masked)
     );
 }
+
+/// A glTF model of two flat parts, written three ways: a red sheet 2 across and 1 up, standing on
+/// the ground, with no normals and with indices; and on a node under it, moved up by 1 and half
+/// the size, a green sheet of the same shape with neither. `.glb`, `.gltf` with its bytes beside
+/// it, and `.gltf` with them inside.
+fn model(folder: &std::path::Path, kind: &str) -> std::path::PathBuf {
+    let sheet: [[f32; 3]; 4] = [
+        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0],
+    ];
+    let mut bytes = Vec::new();
+    for corner in sheet {
+        bytes.extend(corner.iter().flat_map(|value| value.to_le_bytes()));
+    }
+    for index in [0u16, 1, 2, 0, 2, 3] {
+        bytes.extend(index.to_le_bytes());
+    }
+    for index in [0, 1, 2, 0, 2, 3] {
+        bytes.extend(sheet[index].iter().flat_map(|value| value.to_le_bytes()));
+    }
+    let buffer = match kind {
+        "glb" => String::new(),
+        "beside" => "\"uri\":\"model.bin\",".to_owned(),
+        _ => {
+            const LETTERS: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut text = String::new();
+            for three in bytes.chunks(3) {
+                let held = three
+                    .iter()
+                    .fold(0u32, |held, byte| (held << 8) | u32::from(*byte))
+                    << (8 * (3 - three.len()));
+                for place in 0..4 {
+                    text.push(if place <= three.len() {
+                        LETTERS[((held >> (18 - 6 * place)) & 63) as usize] as char
+                    } else {
+                        '='
+                    });
+                }
+            }
+            format!("\"uri\":\"data:application/octet-stream;base64,{text}\",")
+        }
+    };
+    let json = format!(
+        concat!(
+            "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],",
+            "\"nodes\":[{{\"mesh\":0,\"children\":[1]}},",
+            "{{\"mesh\":1,\"translation\":[0,1,0],\"scale\":[0.5,0.5,0.5]}}],",
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"indices\":1,\"material\":0}}]}},",
+            "{{\"primitives\":[{{\"attributes\":{{\"POSITION\":2}},\"material\":1}}]}}],",
+            "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[1,0,0,1]}}}},",
+            "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,1,0,1]}}}}],",
+            "\"buffers\":[{{{buffer}\"byteLength\":132}}],",
+            "\"bufferViews\":[{{\"buffer\":0,\"byteOffset\":0,\"byteLength\":48}},",
+            "{{\"buffer\":0,\"byteOffset\":48,\"byteLength\":12}},",
+            "{{\"buffer\":0,\"byteOffset\":60,\"byteLength\":72}}],",
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":4,\"type\":\"VEC3\"}},",
+            "{{\"bufferView\":1,\"componentType\":5123,\"count\":6,\"type\":\"SCALAR\"}},",
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":6,\"type\":\"VEC3\"}}]}}",
+        ),
+        buffer = buffer
+    );
+    if kind == "glb" {
+        let mut json = json.into_bytes();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let mut file = Vec::new();
+        file.extend(b"glTF");
+        file.extend(2u32.to_le_bytes());
+        file.extend((12 + 8 + json.len() as u32 + 8 + bytes.len() as u32).to_le_bytes());
+        file.extend((json.len() as u32).to_le_bytes());
+        file.extend(b"JSON");
+        file.extend(&json);
+        file.extend((bytes.len() as u32).to_le_bytes());
+        file.extend(b"BIN\0");
+        file.extend(&bytes);
+        let path = folder.join("model.glb");
+        std::fs::write(&path, file).unwrap();
+        return path;
+    }
+    if kind == "beside" {
+        std::fs::write(folder.join("model.bin"), &bytes).unwrap();
+    }
+    let path = folder.join(format!("{kind}.gltf"));
+    std::fs::write(&path, json).unwrap();
+    path
+}
+
+/// A sequence with one mesh read from the file `name` of the project's folder.
+fn from_file(
+    folder: &std::path::Path,
+    name: &str,
+    set: &str,
+    pass: Pass,
+) -> Result<Compositor, String> {
+    let mut project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip thing gen=mesh@1 at=0f dur=24f\n      set file=\"{name}\" {set}\n"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    // A document names its files from its own folder.
+    project.resolve_paths(Catalog::builtin(), folder);
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass,
+            ..ComposeOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_mesh_is_read_from_a_gltf_file_a_color_a_part() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let at = Rate::FPS_24.time_of(3);
+    let mut frames = Vec::new();
+    for kind in ["glb", "beside", "inside"] {
+        let path = model(folder.path(), kind);
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        let drawn = from_file(folder.path(), &name, "height=0.6", Pass::Picture).expect(kind);
+        frames.push(drawn.frame(at, 1.0));
+    }
+    // The three ways a file is written are one model.
+    assert!(frames[1] == frames[0] && frames[2] == frames[0]);
+    let frame = &frames[0];
+    // 1.5 tall in its own units and 0.6 of the frame's height here, about the middle: the red
+    // sheet below, 144 across and 72 down, and the green on top of it, half the size, each in
+    // its material's color, where its node put it and the right way up.
+    assert!(
+        reaches(reach(frame), [88, 36, 232, 144]),
+        "{:?}",
+        reach(frame)
+    );
+    assert_eq!(pixel(frame, 160, 110), [255, 0, 0]);
+    assert_eq!(pixel(frame, 100, 140), [255, 0, 0]);
+    assert_eq!(pixel(frame, 160, 55), [0, 255, 0]);
+    assert!(!lit(frame, 100, 55) && lit(frame, 130, 55));
+    // It is a clip like any other: one color in an ids pass, turned and moved as a clip is.
+    let ids = from_file(folder.path(), "model.glb", "height=0.6", Pass::Ids).unwrap();
+    let color = ids.ids()[0].1;
+    let frame = ids.frame(at, 1.0);
+    assert_eq!(pixel(&frame, 160, 110), pixel(&frame, 160, 55));
+    assert!(pixel(&frame, 160, 110)
+        .iter()
+        .zip(color)
+        .all(|(a, b)| a.abs_diff(b) <= 1));
+    let turned = from_file(
+        folder.path(),
+        "model.glb",
+        "height=0.6 rotate_y=60 x=0.2",
+        Pass::Ids,
+    )
+    .unwrap();
+    let [left, _, right, _] = reach(&turned.frame(at, 1.0));
+    assert!(left > 160 && (right - left) < 130, "{left} to {right}");
+}
+
+#[test]
+fn a_file_that_is_no_mesh_is_said_when_the_sequence_is_planned() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let missing = from_file(folder.path(), "nowhere.glb", "", Pass::Picture)
+        .err()
+        .unwrap();
+    assert!(
+        missing.contains("clip `thing`") && missing.contains("cannot be read"),
+        "{missing}"
+    );
+    std::fs::write(
+        folder.path().join("empty.gltf"),
+        "{\"asset\":{\"version\":\"2.0\"}}",
+    )
+    .unwrap();
+    let empty = from_file(folder.path(), "empty.gltf", "", Pass::Picture)
+        .err()
+        .unwrap();
+    assert!(empty.contains("it has no triangles"), "{empty}");
+    std::fs::write(folder.path().join("broken.glb"), b"glTF\x02\0\0\0").unwrap();
+    assert!(from_file(folder.path(), "broken.glb", "", Pass::Picture).is_err());
+}

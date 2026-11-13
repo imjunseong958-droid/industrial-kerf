@@ -547,8 +547,8 @@ much is left to it. Three places a guide comes from, all through the same
 steps:
 
 - **A sequence of the project** (`render s2 {guide.mp4} size=832x480 rate=16`):
-  clips placed in depth, solids (`gen=mesh@1`: a box, a ball, a cylinder), a
-  camera move, lights, a title, cut and timed in Kerf. It needs nothing
+  clips placed in depth, meshes (`gen=mesh@1`: a box, a ball, a cylinder, or
+  a glTF file's), a camera move, lights, a title, cut and timed in Kerf. It needs nothing
   installed and runs on any machine Kerf does.
 - **A 3D renderer** (`run vork render … --out {guide.mp4}`, or Blender the
   same way): a blocked scene with real geometry and a camera, drawn fast and

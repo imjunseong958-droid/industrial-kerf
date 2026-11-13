@@ -13,6 +13,9 @@
 //! It is in one flat color a part, lit by the scene's lights by the way each place faces: all a
 //! model that covers it wants of it. It casts no shadow, and is drawn on the CPU.
 //!
+//! It is one of a few solids, a box, a ball, a cylinder, or the triangles of a glTF file
+//! ([`super::gltf`]), as tall as the clip says and in the file's own proportions.
+//!
 //! A mesh stands where its clip's 2D geometry puts the middle of the frame, turned and pushed back
 //! by `z`, `rotate_x`, and `rotate_y` as a plane is. Its own space runs x right, y down, and z away
 //! from the viewer, in frame heights.
@@ -167,6 +170,40 @@ impl Mesh {
         mesh.finished(color)
     }
 
+    /// What was read of a file, about the middle of the box it fills and `height` tall, with
+    /// `color` where a part has no material.
+    fn fitted(read: &super::gltf::Read, height: f64, color: [f32; 3]) -> Self {
+        let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for point in &read.points {
+            for axis in 0..3 {
+                least[axis] = least[axis].min(point[axis]);
+                most[axis] = most[axis].max(point[axis]);
+            }
+        }
+        let middle = times(add(least, most), 0.5);
+        let size = minus(most, least);
+        // Flat as a sheet lying down, it is as wide as it was to be tall.
+        let tall = if size[1] > 1e-12 {
+            size[1]
+        } else {
+            size[0].max(size[2]).max(1e-12)
+        };
+        Self {
+            points: read
+                .points
+                .iter()
+                .map(|point| times(minus(*point, middle), height / tall))
+                .collect(),
+            normals: read.normals.clone(),
+            triangles: read.triangles.clone(),
+            parts: read
+                .parts
+                .iter()
+                .map(|(end, told)| (*end, told.unwrap_or(color)))
+                .collect(),
+        }
+    }
+
     /// The mesh of a `gen=mesh` clip at sequence time `at`.
     pub(in crate::draw) fn of(clip: &Clip, at: Time) -> Self {
         let def = Catalog::builtin().fx("mesh");
@@ -182,6 +219,13 @@ impl Mesh {
             _ => Rgba::WHITE,
         };
         let [r, g, b, _] = premultiplied(Rgba { a: 255, ..color });
+        if let Some(path) = file_of(clip) {
+            // A file that cannot be read was said when the sequence was planned.
+            return match loaded(&path) {
+                Ok(read) => Self::fitted(&read, size[1], [r, g, b]),
+                Err(_) => Self::new(),
+            };
+        }
         match generated(def, clip, "kind", at) {
             Some(Value::Enum(kind)) if kind == "ball" => Self::a_ball(size, [r, g, b]),
             Some(Value::Enum(kind)) if kind == "cylinder" => Self::a_cylinder(size, [r, g, b]),
@@ -192,6 +236,47 @@ impl Mesh {
     fn color_of(&self, triangle: usize) -> [f32; 3] {
         let part = self.parts.partition_point(|(end, _)| *end <= triangle);
         self.parts.get(part).map_or([1.0; 3], |(_, color)| *color)
+    }
+}
+
+/// The file a `gen=mesh` clip reads its triangles from, when it names one.
+fn file_of(clip: &Clip) -> Option<String> {
+    let Content::Generator { params, .. } = &clip.content else {
+        return None;
+    };
+    match params.get("file") {
+        Some(Param::Static(Value::Text(path))) if !path.is_empty() => Some(path.clone()),
+        _ => None,
+    }
+}
+
+/// What a file holds, read once for as long as the file is what it was.
+fn loaded(path: &str) -> std::result::Result<Arc<super::gltf::Read>, String> {
+    type Kept = (u64, Option<std::time::SystemTime>, Arc<super::gltf::Read>);
+    static FILES: std::sync::Mutex<Vec<(String, Kept)>> = std::sync::Mutex::new(Vec::new());
+    let file = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    let now = (file.len(), file.modified().ok());
+    let mut files = FILES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, (length, modified, read))) = files.iter().find(|(kept, _)| kept == path) {
+        if (*length, *modified) == now {
+            return Ok(read.clone());
+        }
+    }
+    let read = Arc::new(super::gltf::read(std::path::Path::new(path))?);
+    files.retain(|(kept, _)| kept != path);
+    files.push((path.to_owned(), (now.0, now.1, read.clone())));
+    Ok(read)
+}
+
+/// Whether the file a `gen=mesh` clip names can be read, and why not.
+pub(in crate::draw) fn check(clip: &Clip) -> std::result::Result<(), String> {
+    match file_of(clip) {
+        Some(path) => loaded(&path)
+            .map(|_| ())
+            .map_err(|why| format!("`{path}` cannot be read: {why}")),
+        None => Ok(()),
     }
 }
 

@@ -19,6 +19,7 @@
 
 use super::*;
 
+mod gltf;
 pub(super) mod mesh;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
