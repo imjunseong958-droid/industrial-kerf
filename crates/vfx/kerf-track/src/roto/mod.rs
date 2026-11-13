@@ -29,7 +29,8 @@ use kerf_segment::{MaskModel, Prompt};
 use maxflow::{Graph, Segment};
 use rayon::prelude::*;
 
-/// Corners in an outline. Every frame's has this many, as a moving mask needs.
+/// Corners in an outline. Every frame's has this many, as a moving mask needs: one on each corner the
+/// object's edge turns on the first frame, and the rest evenly between those.
 pub const OUTLINE_CORNERS: usize = 40;
 
 /// Hard constraints: 1 = foreground, 2 = background, 0 = free.
@@ -865,69 +866,221 @@ fn edge_of(matte: &[u8], w: usize, h: usize) -> Vec<[f64; 2]> {
     edge
 }
 
-/// `count` corners evenly spaced along a closed edge, smoothed so that it does not follow every pixel
-/// step, starting from `start` of the way around.
-fn resampled(edge: &[[f64; 2]], count: usize, start: f64) -> Vec<[f64; 2]> {
-    let n = edge.len();
-    if n < 3 {
-        return Vec::new();
-    }
-    // A moving average, about as wide as the spacing asks for, but not so wide as to round a corner away.
-    let reach = (n / count / 4).clamp(1, 8);
-    let smooth: Vec<[f64; 2]> = (0..n)
-        .map(|i| {
-            let mut sum = [0.0, 0.0];
-            for k in 0..=2 * reach {
-                let p = edge[(i + n + k - reach) % n];
-                sum[0] += p[0];
-                sum[1] += p[1];
-            }
-            let spread = (2 * reach + 1) as f64;
-            [sum[0] / spread, sum[1] / spread]
-        })
-        .collect();
-    let mut lengths = Vec::with_capacity(n + 1);
-    lengths.push(0.0);
-    for i in 0..n {
-        let (a, b) = (smooth[i], smooth[(i + 1) % n]);
-        lengths.push(lengths[i] + (b[0] - a[0]).hypot(b[1] - a[1]));
-    }
-    let total = lengths[n];
-    if total <= 0.0 {
-        return Vec::new();
-    }
-    (0..count)
-        .map(|k| {
-            let at = ((start + k as f64 / count as f64).rem_euclid(1.0)) * total;
-            let after = lengths.partition_point(|length| *length <= at).clamp(1, n);
-            let (from, to) = (lengths[after - 1], lengths[after]);
-            let along = if to > from { (at - from) / (to - from) } else { 0.0 };
-            let (a, b) = (smooth[after - 1], smooth[after % n]);
-            [a[0] + (b[0] - a[0]) * along, a[1] + (b[1] - a[1]) * along]
-        })
-        .collect()
+/// How sharply an edge has to turn, over [`Edge::arm`] to either side, to be a corner of what it goes
+/// around: a right angle is well over it, and the steps of a slanted side and the bumps of a cut
+/// through texture are well under.
+const SHARP_TURN: f64 = 0.7;
+
+/// A closed edge as it is traced, pixel corner by pixel corner, and smoothed so that an outline does
+/// not follow every pixel step.
+struct Edge<'e> {
+    traced: &'e [[f64; 2]],
+    smooth: Vec<[f64; 2]>,
+    /// How far along the smoothed edge each of its points is, and at the end its whole length.
+    lengths: Vec<f64>,
 }
 
-/// The start around `edge` whose corners lie nearest to the corners of the frame before, so that each
-/// moves to its own place rather than sliding around the outline.
-fn aligned(edge: &[[f64; 2]], before: &[[f64; 2]]) -> Vec<[f64; 2]> {
-    let tries = before.len() * 4;
-    let mut best = (f64::INFINITY, Vec::new());
-    for attempt in 0..tries {
-        let corners = resampled(edge, before.len(), attempt as f64 / tries as f64);
-        if corners.len() != before.len() {
+impl<'e> Edge<'e> {
+    /// `edge`, to be followed by `count` corners; `None` for one with nothing to go around.
+    fn of(edge: &'e [[f64; 2]], count: usize) -> Option<Self> {
+        let n = edge.len();
+        if n < 3 {
+            return None;
+        }
+        // A moving average, about as wide as the spacing asks for, but not so wide as to round a corner away.
+        let reach = (n / count / 4).clamp(1, 8);
+        let smooth: Vec<[f64; 2]> = (0..n)
+            .map(|i| {
+                let mut sum = [0.0, 0.0];
+                for k in 0..=2 * reach {
+                    let p = edge[(i + n + k - reach) % n];
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                }
+                let spread = (2 * reach + 1) as f64;
+                [sum[0] / spread, sum[1] / spread]
+            })
+            .collect();
+        let mut lengths = Vec::with_capacity(n + 1);
+        lengths.push(0.0);
+        for i in 0..n {
+            let (a, b) = (smooth[i], smooth[(i + 1) % n]);
+            lengths.push(lengths[i] + (b[0] - a[0]).hypot(b[1] - a[1]));
+        }
+        (lengths[n] > 0.0).then_some(Self { traced: edge, smooth, lengths })
+    }
+
+    /// The smoothed edge `around` of the way along it.
+    fn at(&self, around: f64) -> [f64; 2] {
+        let n = self.traced.len();
+        let at = around.rem_euclid(1.0) * self.lengths[n];
+        let after = self.lengths.partition_point(|length| *length <= at).clamp(1, n);
+        let (from, to) = (self.lengths[after - 1], self.lengths[after]);
+        let along = if to > from { (at - from) / (to - from) } else { 0.0 };
+        let (a, b) = (self.smooth[after - 1], self.smooth[after % n]);
+        [a[0] + (b[0] - a[0]) * along, a[1] + (b[1] - a[1]) * along]
+    }
+
+    /// How far to either side a turn is looked at: half the room a corner of `count` has, so that two
+    /// corners of the outline can sit on two of the shape's.
+    fn arm(&self, count: usize) -> usize {
+        (self.traced.len() / count / 2).clamp(6, 12)
+    }
+
+    /// Where the edge turns a corner: each as how far around it is and the traced point there, in the
+    /// order they come, at most half of `count` of them.
+    fn sharp(&self, count: usize) -> Vec<(f64, [f64; 2])> {
+        let n = self.traced.len();
+        let arm = self.arm(count);
+        if n < arm * 4 {
             return Vec::new();
         }
-        let cost: f64 = corners
-            .iter()
-            .zip(before)
-            .map(|(a, b)| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2))
-            .sum();
-        if cost < best.0 {
-            best = (cost, corners);
+        let turn = |i: usize| {
+            let (before, here, after) = (self.traced[(i + n - arm) % n], self.traced[i], self.traced[(i + arm) % n]);
+            let (a, b) = ([here[0] - before[0], here[1] - before[1]], [after[0] - here[0], after[1] - here[1]]);
+            (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).abs()
+        };
+        let mut turns: Vec<(f64, usize)> = (0..n).map(|i| (turn(i), i)).filter(|(turn, _)| *turn >= SHARP_TURN).collect();
+        // The sharpest first, and none within an arm of one already taken: a corner is one place.
+        turns.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut taken: Vec<usize> = Vec::new();
+        for (_, i) in turns {
+            let apart = |other: &usize| {
+                let gap = i.abs_diff(*other);
+                gap.min(n - gap)
+            };
+            if taken.len() < count / 2 && taken.iter().all(|other| apart(other) > arm) {
+                taken.push(i);
+            }
         }
+        taken.sort_unstable();
+        taken.into_iter().map(|i| (self.lengths[i] / self.lengths[n], self.traced[i])).collect()
     }
-    best.1
+}
+
+/// Where the corners of an outline sit around an edge: the ones on a corner of the shape, and how many
+/// are spread evenly between each of those and the next. The same in every frame, so that corners move
+/// one for one.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Places {
+    /// How many corners there are.
+    count: usize,
+    /// The place of each corner on a corner of the shape, in order, and how far around it was found.
+    sharp: Vec<(usize, f64)>,
+}
+
+impl Places {
+    /// Places for `count` corners around `edge`: one on each corner it turns, the rest shared out
+    /// between them by how long each stretch is.
+    fn of(edge: &Edge, count: usize) -> Self {
+        let found = edge.sharp(count);
+        if found.is_empty() {
+            return Self { count, sharp: Vec::new() };
+        }
+        // What is left of `count` goes to the stretches by their length, the largest remainders first.
+        let spare = count - found.len();
+        let stretch = |index: usize| (found[(index + 1) % found.len()].0 - found[index].0).rem_euclid(1.0);
+        let stretch = |index: usize| if found.len() == 1 { 1.0 } else { stretch(index) };
+        let mut between: Vec<usize> = (0..found.len()).map(|index| (stretch(index) * spare as f64) as usize).collect();
+        let mut order: Vec<usize> = (0..found.len()).collect();
+        order.sort_by(|a, b| {
+            let rest = |index: usize| (stretch(index) * spare as f64).fract();
+            rest(*b).total_cmp(&rest(*a)).then(a.cmp(b))
+        });
+        let short = spare - between.iter().sum::<usize>();
+        for index in order.into_iter().cycle().take(short) {
+            between[index] += 1;
+        }
+        let mut place = 0;
+        let sharp = found
+            .iter()
+            .zip(&between)
+            .map(|((around, _), between)| {
+                let here = (place, *around);
+                place += 1 + between;
+                here
+            })
+            .collect();
+        Self { count, sharp }
+    }
+
+    /// The corners around `edge`, each sharp one where `sharp` says it is now (how far around, and the
+    /// point), the others evenly between; or all of them evenly from `start` where none is sharp.
+    fn corners(&self, edge: &Edge, sharp: &[(f64, [f64; 2])], start: f64) -> Vec<[f64; 2]> {
+        if self.sharp.is_empty() {
+            return (0..self.count).map(|k| edge.at(start + k as f64 / self.count as f64)).collect();
+        }
+        let mut corners = vec![[0.0; 2]; self.count];
+        for (index, ((place, _), (around, point))) in self.sharp.iter().zip(sharp).enumerate() {
+            let next = (index + 1) % self.sharp.len();
+            let between = (self.sharp[next].0 + self.count - place - 1) % self.count;
+            let stretch = if self.sharp.len() == 1 { 1.0 } else { (sharp[next].0 - around).rem_euclid(1.0) };
+            corners[*place] = *point;
+            for step in 1..=between {
+                corners[(place + step) % self.count] = edge.at(around + stretch * step as f64 / (between + 1) as f64);
+            }
+        }
+        corners
+    }
+
+    /// The corners around the edge they were made for.
+    fn first(&self, edge: &Edge) -> Vec<[f64; 2]> {
+        let sharp: Vec<(f64, [f64; 2])> = edge.sharp(self.count);
+        self.corners(edge, &sharp, 0.0)
+    }
+
+    /// The corners around `edge`, another frame's, nearest to those of the frame before, so that each
+    /// moves to its own place rather than sliding around the outline. A sharp one goes to the corner
+    /// the edge turns nearest to where that puts it, if there is one within its own room.
+    fn aligned(&self, edge: &[[f64; 2]], before: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        let Some(edge) = Edge::of(edge, self.count) else {
+            return Vec::new();
+        };
+        let tries = self.count * 4;
+        // The sharp ones as the frame before spaced them, turned around the edge by `start`.
+        let turned = |start: f64| -> Vec<(f64, [f64; 2])> {
+            self.sharp.iter().map(|(_, around)| (around + start, edge.at(around + start))).collect()
+        };
+        let mut best = (f64::INFINITY, 0.0);
+        for attempt in 0..tries {
+            let start = attempt as f64 / tries as f64;
+            let cost: f64 = self
+                .corners(&edge, &turned(start), start)
+                .iter()
+                .zip(before)
+                .map(|(a, b)| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2))
+                .sum();
+            if cost < best.0 {
+                best = (cost, start);
+            }
+        }
+        let start = best.1;
+        if self.sharp.is_empty() {
+            return self.corners(&edge, &[], start);
+        }
+        let found = edge.sharp(self.count);
+        let apart = |a: f64, b: f64| {
+            let gap = (a - b).rem_euclid(1.0);
+            gap.min(1.0 - gap)
+        };
+        let mut sharp = turned(start);
+        for index in 0..sharp.len() {
+            // Its own room: less than half the way to the sharp one on either side.
+            let room = [index + sharp.len() - 1, index + 1]
+                .map(|other| apart(sharp[other % sharp.len()].0, sharp[index].0))
+                .into_iter()
+                .fold(0.5, f64::min)
+                / 2.0;
+            let room = if self.sharp.len() == 1 { 0.25 } else { room };
+            let nearest = found
+                .iter()
+                .min_by(|a, b| apart(a.0, sharp[index].0).total_cmp(&apart(b.0, sharp[index].0)));
+            if let Some(nearest) = nearest.filter(|nearest| apart(nearest.0, sharp[index].0) < room) {
+                sharp[index] = *nearest;
+            }
+        }
+        self.corners(&edge, &sharp, start)
+    }
 }
 
 /// Follow what `hints` point at through `count` frames that `frame` gives as `(width, height, rgba)`,
@@ -953,6 +1106,8 @@ struct Traced {
     raw: Vec<Vec<[f64; 2]>>,
     /// What the edge was measured to be at each of its corners.
     across: Vec<Vec<soft::Across>>,
+    /// Where its corners sit around its edge.
+    places: Places,
     width: usize,
     height: usize,
 }
@@ -992,7 +1147,7 @@ impl Traced {
         for ((corners, go), measured) in self.raw.iter().zip(shutter::going(&self.raw)).zip(&self.across) {
             let frame = shutter.frame(corners, measured, go);
             let half = shutter.half_covered(corners, &frame, width, height);
-            let moved = aligned(&edge_of(&half, width, height), corners);
+            let moved = self.places.aligned(&edge_of(&half, width, height), corners);
             // Nothing is left where a blur is longer than the subject is wide: it stays as it was cut.
             let moved = if moved.is_empty() { corners.clone() } else { moved };
             self.followed.soft.push(shutter.widths(&moved, &frame).iter().map(|wide| wide / width as f64).collect());
@@ -1010,7 +1165,14 @@ fn trace(
     mut frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
 ) -> Traced {
     let mut followed = FollowedObject::default();
-    let nothing = |followed| Traced { followed, raw: Vec::new(), across: Vec::new(), width: 0, height: 0 };
+    let nothing = |followed| Traced {
+        followed,
+        raw: Vec::new(),
+        across: Vec::new(),
+        places: Places::default(),
+        width: 0,
+        height: 0,
+    };
     let Some((width, height, rgba)) = frame(0) else {
         return nothing(followed);
     };
@@ -1023,11 +1185,14 @@ fn trace(
         followed.lost_at = Some(0);
         return nothing(followed);
     };
-    let mut corners = resampled(&edge_of(&matte, width, height), OUTLINE_CORNERS, 0.0);
-    if corners.is_empty() {
+    // Where its corners sit is settled on the first frame: on the corners its edge turns, and evenly
+    // between them.
+    let edge = edge_of(&matte, width, height);
+    let Some(places) = Edge::of(&edge, OUTLINE_CORNERS).map(|edge| (Places::of(&edge, OUTLINE_CORNERS), edge)) else {
         followed.lost_at = Some(0);
         return nothing(followed);
-    }
+    };
+    let (places, mut corners) = (places.0.clone(), places.0.first(&places.1));
     let area_of = |matte: &[u8]| matte.iter().filter(|v| **v != 0).count() as f64 / (w * h);
     let mut area = area_of(&matte);
     let mut raw = vec![corners.clone()];
@@ -1053,7 +1218,7 @@ fn trace(
             .iter()
             .map(|at| [at[0] + went[0] as f64, at[1] + went[1] as f64])
             .collect();
-        let moved = aligned(&edge_of(&labels, width, height), &before);
+        let moved = places.aligned(&edge_of(&labels, width, height), &before);
         // A cut that loses the object or spills over it is no longer following it.
         if moved.is_empty() || now < area * 0.5 || now > area * 2.0 {
             lost_at = Some(index);
@@ -1068,7 +1233,7 @@ fn trace(
         followed.areas.push(area);
     }
     followed.lost_at = lost_at;
-    Traced { followed, raw, across, width, height }
+    Traced { followed, raw, across, places, width, height }
 }
 
 /// The frames of a followed outline that shape its way, within `tolerance` of the frame's width:
