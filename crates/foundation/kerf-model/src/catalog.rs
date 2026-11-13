@@ -442,7 +442,9 @@ impl FxDef {
             "image" => Area::Image,
             "blur" | "distort" | "key" | "light" | "matte" | "noise" | "stylize" | "time"
             | "vr" => Area::Vfx,
-            "generate" | "look" | "perspective" | "shape" | "text" | "transform" => Area::Motion,
+            "generate" | "look" | "mesh" | "perspective" | "shape" | "text" | "transform" => {
+                Area::Motion
+            }
             _ => Area::Edit,
         }
     }
@@ -1322,6 +1324,31 @@ fn builtin_catalog() -> Catalog {
                 .range(0.0, 90.0)
                 .doc("Softens shadows: a point light's width in frame heights, a directional one's in degrees; 0 is hard."),
         ),
+        FxDef::new(
+            "mesh",
+            FxKind::Generator,
+            Domain::Video,
+            "A solid thing for a guide, with every side it has: a box, a ball, or a cylinder standing on its end, in one flat color. It is in depth without `three_d`: the clip's `x`, `y`, and `z` are where its middle is, and `rotate_x`, `rotate_y`, `rotation`, and `scale` turn and size it. The sequence's camera sees it and its lights light it; with no light it is its color, flat.",
+        )
+        .category("Generate")
+        .param(P::choice("kind", &["box", "ball", "cylinder"]))
+        .param(
+            P::number("width", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("height", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("length", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("How far it goes back, from its front to its back."),
+        )
+        .param(P::color("color", Rgba::WHITE)),
         FxDef::new(
             "null",
             FxKind::Generator,

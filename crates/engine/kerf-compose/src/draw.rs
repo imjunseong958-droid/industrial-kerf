@@ -293,6 +293,9 @@ enum Source {
     Adjustment,
     /// A null: it draws nothing, and other clips move with it.
     Nothing,
+    /// A mesh: it has no picture of its own, and is drawn in depth from its triangles
+    /// (`three_d::mesh`).
+    Mesh,
 }
 
 struct TitlePlan {
@@ -827,7 +830,10 @@ impl Drawing {
                 .filter(|shown| {
                     shown.shows(at)
                         && shown.plan.three_d
-                        && !matches!(shown.plan.source, Source::Nothing | Source::Adjustment)
+                        && !matches!(
+                            shown.plan.source,
+                            Source::Nothing | Source::Adjustment | Source::Mesh
+                        )
                 })
                 .filter_map(|shown| {
                     let ready = self.ready(plan, shown, at, scale, size)?;
@@ -905,12 +911,18 @@ impl Drawing {
         // Two that cross are cut where they meet. Two that do not are one way round all over, but
         // not always the way their middles have them: then they too are drawn by the pixel, so
         // that a floor is not drawn over what stands on it for having its middle the nearer.
-        let crosses = planes.iter().enumerate().any(|(index, (plane, crop))| {
-            planes[index + 1..].iter().any(|(other, other_crop)| {
-                plane.crosses(*crop, other, *other_crop)
-                    || !plane.surely_behind(*crop, other, *other_crop, scene)
-            })
-        });
+        // A mesh has no one plane to be before or behind, so what stands with one is drawn by
+        // the pixel too.
+        let meshes = run
+            .iter()
+            .any(|shown| matches!(shown.plan.source, Source::Mesh));
+        let crosses = meshes
+            || planes.iter().enumerate().any(|(index, (plane, crop))| {
+                planes[index + 1..].iter().any(|(other, other_crop)| {
+                    plane.crosses(*crop, other, *other_crop)
+                        || !plane.surely_behind(*crop, other, *other_crop, scene)
+                })
+            });
         if crosses {
             run
         } else {
@@ -934,6 +946,9 @@ impl Drawing {
         let layers: Vec<three_d::Layer> = run
             .iter()
             .filter_map(|shown| {
+                if matches!(shown.plan.source, Source::Mesh) {
+                    return self.mesh(sequence, shown, moment, size);
+                }
                 let ready = self.ready(sequence, shown, at, scale, size)?;
                 let (picture, depth) = three_d::project_with_depth(
                     scene,
@@ -1060,6 +1075,12 @@ impl Drawing {
         }
         let blend = self.blend(blend);
         let (w, h) = (canvas.w, canvas.h);
+        if matches!(plan.source, Source::Mesh) {
+            if let Some(mesh) = self.mesh(sequence, shown, moment, (w, h)) {
+                composite(canvas, &mesh.picture, mesh.opacity, blend);
+            }
+            return;
+        }
         let Some(Ready {
             picture,
             to_output,
@@ -1085,6 +1106,52 @@ impl Drawing {
                 composite_placed(canvas, &picture, &to_output, crop, opacity, blend);
             }
         }
+    }
+
+    /// A shown clip that is a mesh, as the scene of `moment` sees it on a canvas of `size`: its
+    /// picture, lit, or as the pass drawn has it, and how far ahead it is at each pixel.
+    fn mesh(
+        &self,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        moment: &Moment,
+        size: (usize, usize),
+    ) -> Option<three_d::Layer> {
+        let Moment { at, scale, scene } = *moment;
+        let scene = scene?;
+        let plan = &shown.plan;
+        let clip = &plan.clip;
+        let time = at - clip.start;
+        // It has no picture for a wipe to cross: an entrance fades it in.
+        let fade = shown
+            .reveal
+            .map_or(1.0, |(_, start, end)| progress(at, start, end));
+        let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
+        if opacity <= 0.0 {
+            return None;
+        }
+        let shade = match self.pass {
+            Pass::Picture => three_d::mesh::Shade::Lit(&clip.id),
+            Pass::Ids => {
+                let color = self
+                    .ids
+                    .iter()
+                    .find(|(id, _)| *id == clip.id)
+                    .map_or(Rgba::WHITE, |(_, color)| *color);
+                let [r, g, b, _] = premultiplied(color);
+                three_d::mesh::Shade::Flat([r, g, b])
+            }
+            Pass::Depth => three_d::mesh::Shade::Near,
+        };
+        let to_output =
+            Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        let (picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        Some(three_d::Layer {
+            picture,
+            depth,
+            opacity,
+            blend: self.blend(plan.blend),
+        })
     }
 
     /// A shown clip's picture at sequence time `at` with its effects and reveal done, and how it goes
@@ -1241,7 +1308,7 @@ impl Drawing {
                 };
                 (Arc::new(source.draw(&plan.clip, &run)), scale)
             }
-            Source::Adjustment | Source::Nothing => return None,
+            Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         })
     }
 
@@ -2253,6 +2320,7 @@ impl<'a> Builder<'a> {
                     true,
                 ),
                 "adjustment" => (Source::Adjustment, canvas, false, true),
+                "mesh" => (Source::Mesh, canvas, false, true),
                 "null" | "camera" | "light" | kerf_model::SIGNAL => {
                     (Source::Nothing, canvas, false, true)
                 }
@@ -2268,7 +2336,18 @@ impl<'a> Builder<'a> {
             || GEOMETRY
                 .iter()
                 .any(|name| param(clip, name).varies());
-        let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)));
+        // A mesh is in depth whether it says so or not.
+        let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)))
+            || matches!(source, Source::Mesh);
+        if matches!(source, Source::Mesh) {
+            // It has no picture for either to be done to.
+            if clip.effects.iter().any(|effect| effect.enabled) {
+                return Err(unsupported(&clip.id, "an effect on a mesh"));
+            }
+            if !clip.masks.is_empty() {
+                return Err(unsupported(&clip.id, "a mask on a mesh"));
+            }
+        }
         let mut effects = Vec::new();
         for effect in clip.effects.iter().filter(|effect| effect.enabled) {
             let def = self.catalog.fx(effect.fx.as_str()).ok_or_else(|| {

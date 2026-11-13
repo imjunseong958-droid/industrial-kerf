@@ -71,6 +71,15 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
             if !clip.masks.is_empty() || !clip.effects.is_empty() {
                 says("masks and effects on it do nothing, since it draws nothing".to_owned());
             }
+        } else if fx == Some("mesh") {
+            // It is in depth without saying so, and is a solid of its own.
+            for name in ["depth", "bevel", "bevel_profile"] {
+                if prop(name).is_some() {
+                    says(format!(
+                        "`{name}` does nothing on a mesh, whose `length` is how far back it goes"
+                    ));
+                }
+            }
         } else {
             if !is_set_true(prop("three_d")) {
                 for name in ["z", "rotate_x", "rotate_y", "depth", "bevel"] {
@@ -215,10 +224,10 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
 }
 
 /// Whether `clip` is laid over a picture and is not one that fills a frame: text, a shape,
-/// particles. It leaves no edge of the frame black, and covers none that another does.
+/// particles, a mesh. It leaves no edge of the frame black, and covers none that another does.
 fn laid_over(clip: &Clip) -> bool {
     matches!(&clip.content, Content::Generator { fx, .. }
-        if matches!(fx.as_str(), "title" | "shape" | "particles"))
+        if matches!(fx.as_str(), "title" | "shape" | "particles" | "mesh"))
 }
 
 /// Black stretches with no picture, and stretches where no picture covers

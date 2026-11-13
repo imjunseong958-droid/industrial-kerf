@@ -57,6 +57,13 @@ on `main`; its section here becomes the release's notes on GitHub
   carry yet: it fits the guide to the model's size and rate, asks the server,
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
+- A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
+  cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
+  and a `color`), with every side it has, so a camera can go round it. It is
+  placed, keyed, and parented as a clip in depth is, lit by the sequence's
+  lights, and is in the ids and depth passes and in an agent's `look` with
+  `shows` as any clip is. It casts no shadow yet, takes no effect or mask,
+  and is drawn on the CPU.
 - A recipe can tell a model when something happens, and not only where and
   what: a `gen=signal@1` clip draws nothing and holds a number from 0 to 1
   that you keyframe, and `generate … signal=<clip>` hands the model what it
