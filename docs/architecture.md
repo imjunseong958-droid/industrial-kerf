@@ -931,8 +931,11 @@ recipes, in `fixtures/shots/car`.
 
    *Not done:* one set of a whole shot, whole and with nothing in it that
    moved; the two
-   models' lenses reconciled further than by their ratio along one way;
-   splats. Of those the server has
+   models' lenses reconciled further than by their ratio along one way
+   (letting the footage choose the stretch about that ratio was tried: it
+   chose more, 2.2 for 1.68, for a picture error a hundredth less, and the
+   houses at the last frame were no nearer their size in the footage, so
+   the ratio is kept); splats. Of those the server has
    a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
    a mesh clip reads and the compositor need draw none; what it has no
    model for is rebuilding a scene as splats, only a thing, so none was
