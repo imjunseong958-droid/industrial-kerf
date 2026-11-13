@@ -75,108 +75,6 @@ fn bilinear_clamped(picture: texture_2d<f32>, x: f32, y: f32) -> vec4<f32> {
     return top + (bottom - top) * t.y;
 }
 
-// `vfx::highlights`. p0: threshold, softness.
-@compute @workgroup_size(16, 16)
-fn highlights(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    if c.a <= 1e-6 {
-        textureStore(dst, p, vec4(0.0));
-        return;
-    }
-    let l = luma(linear_to_srgb(c.rgb / c.a));
-    let t = clamp((l - u.p0.x) / max(u.p0.y, 1e-6), 0.0, 1.0);
-    textureStore(dst, p, c * (t * t * (3.0 - 2.0 * t)));
-}
-
-// `lights::saturate_image` when a.x, then `lights::tint` when a.y. p0: saturation, tint amount;
-// p1: tint color.
-@compute @workgroup_size(16, 16)
-fn grade_light(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    var c = textureLoad(src, p, 0);
-    if u.a.x != 0u {
-        let l = luma(c.rgb);
-        c = vec4(max(vec3(l) + (c.rgb - vec3(l)) * u.p0.x, vec3(0.0)), c.a);
-    }
-    if u.a.y != 0u {
-        let l = luma(c.rgb);
-        c = vec4(c.rgb + (l * u.p1.rgb * 1.5 - c.rgb) * u.p0.y, c.a);
-    }
-    textureStore(dst, p, c);
-}
-
-// `src` plus `aux` by a weight. p0.x: weight.
-@compute @workgroup_size(16, 16)
-fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    textureStore(dst, p, textureLoad(src, p, 0) + textureLoad(aux, p, 0) * u.p0.x);
-}
-
-// `lights::add_image`: the light `aux` on `src`. p0: gain; a.x: screen.
-@compute @workgroup_size(16, 16)
-fn add_light(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    let add = textureLoad(aux, p, 0).rgb * u.p0.rgb;
-    if u.a.x != 0u {
-        let a = min(add, vec3(1.0));
-        let rgb = c.rgb + a - min(c.rgb, vec3(1.0)) * a;
-        textureStore(dst, p, vec4(rgb, c.a + (1.0 - c.a) * max(max(a.r, a.g), a.b)));
-    } else {
-        let m = clamp(max(max(add.r, add.g), add.b), 0.0, 1.0);
-        textureStore(dst, p, vec4(c.rgb + add, c.a + (1.0 - c.a) * m));
-    }
-}
-
-// One doubling of `lights::streak`. p0: dx, dy, weight.
-@compute @workgroup_size(16, 16)
-fn streak(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let q = sample(f32(id.x) + 0.5 - u.p0.x, f32(id.y) + 0.5 - u.p0.y);
-    textureStore(dst, p, textureLoad(src, p, 0) + q * u.p0.z);
-}
-
-// Every value by p0.x.
-@compute @workgroup_size(16, 16)
-fn scale_all(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    textureStore(dst, p, textureLoad(src, p, 0) * u.p0.x);
-}
-
-// `lights::rgb_split`. a.x: radial; p0: offset x, y, blend; p1: center x, y, reach, amount.
-@compute @workgroup_size(16, 16)
-fn rgb_split(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let xy = vec2<f32>(id.xy) + 0.5;
-    var offset = u.p0.xy;
-    if u.a.x != 0u {
-        offset = (xy - u.p1.xy) / u.p1.z * u.p1.w;
-    }
-    let r = sample(xy.x - offset.x, xy.y - offset.y);
-    let g = textureLoad(src, p, 0);
-    let b = sample(xy.x + offset.x, xy.y + offset.y);
-    let o = vec4(r.r, g.g, b.b, max(max(r.a, g.a), b.a));
-    textureStore(dst, p, o + (g - o) * u.p0.z);
-}
-
-// The wave warp in `effects`. p0: across x, y, height, width; p1.x: phase.
-@compute @workgroup_size(16, 16)
-fn wave_warp(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let xy = vec2<f32>(id.xy) + 0.5;
-    let along = xy.x * u.p0.x + xy.y * u.p0.y;
-    let off = u.p0.z * sin(along / u.p0.w * 6.283185307179586 - u.p1.x);
-    textureStore(dst, vec2<i32>(id.xy), sample(xy.x - u.p0.y * off, xy.y + u.p0.x * off));
-}
-
 // 32-bit multiply with the high word.
 fn mul32(a: u32, b: u32) -> vec2<u32> {
     let a0 = a & 0xffffu;
@@ -855,7 +753,7 @@ fn hsl_apply(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// `light_leaks`, on `noise3`, whose hash is 64 bits a step, as two words here: x the low, y the high.
+// `hash_u`, whose hash is 64 bits a step, as two words here: x the low, y the high.
 
 fn high_of_product(a: u32, b: u32) -> u32 {
     let a0 = a & 0xffffu;
@@ -891,77 +789,8 @@ fn hash_u(x: i32, y: i32, z: i32, seed: vec2<u32>) -> vec2<u32> {
     return vec2(h.x ^ h.y, h.y);
 }
 
-fn grad3(h: vec2<u32>, x: f32, y: f32, z: f32) -> f32 {
-    // `h % 12`, 2^32 being 4 more than a multiple of 12.
-    switch ((h.y % 12u) * 4u + (h.x % 12u)) % 12u {
-        case 0u: { return x + y; }
-        case 1u: { return -x + y; }
-        case 2u: { return x - y; }
-        case 3u: { return -x - y; }
-        case 4u: { return x + z; }
-        case 5u: { return -x + z; }
-        case 6u: { return x - z; }
-        case 7u: { return -x - z; }
-        case 8u: { return y + z; }
-        case 9u: { return -y + z; }
-        case 10u: { return y - z; }
-        default: { return -y - z; }
-    }
-}
-
 fn fade(t: f32) -> f32 {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-}
-
-fn noise3(x: f32, y: f32, z: f32, seed: vec2<u32>) -> f32 {
-    let xi = floor(x);
-    let yi = floor(y);
-    let zi = floor(z);
-    let xf = x - xi;
-    let yf = y - yi;
-    let zf = z - zi;
-    let ix = i32(xi);
-    let iy = i32(yi);
-    let iz = i32(zi);
-    let ux = fade(xf);
-    let vy = fade(yf);
-    let wz = fade(zf);
-    let g000 = grad3(hash_u(ix, iy, iz, seed), xf, yf, zf);
-    let g100 = grad3(hash_u(ix + 1, iy, iz, seed), xf - 1.0, yf, zf);
-    let g010 = grad3(hash_u(ix, iy + 1, iz, seed), xf, yf - 1.0, zf);
-    let g110 = grad3(hash_u(ix + 1, iy + 1, iz, seed), xf - 1.0, yf - 1.0, zf);
-    let g001 = grad3(hash_u(ix, iy, iz + 1, seed), xf, yf, zf - 1.0);
-    let g101 = grad3(hash_u(ix + 1, iy, iz + 1, seed), xf - 1.0, yf, zf - 1.0);
-    let g011 = grad3(hash_u(ix, iy + 1, iz + 1, seed), xf, yf - 1.0, zf - 1.0);
-    let g111 = grad3(hash_u(ix + 1, iy + 1, iz + 1, seed), xf - 1.0, yf - 1.0, zf - 1.0);
-    let x00 = g000 + (g100 - g000) * ux;
-    let x10 = g010 + (g110 - g010) * ux;
-    let x01 = g001 + (g101 - g001) * ux;
-    let x11 = g011 + (g111 - g011) * ux;
-    let y0 = x00 + (x10 - x00) * vy;
-    let y1 = x01 + (x11 - x01) * vy;
-    return (y0 + (y1 - y0) * wz) * 0.9;
-}
-
-// `fbm` at a whole number of octaves. Each octave's seed, already multiplied, is in a.
-fn fbm_leak(x: f32, y: f32, z: f32, octaves: u32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var freq = 1.0;
-    var norm = 0.0;
-    for (var i = 0u; i < octaves; i++) {
-        let seed = select(select(u.b.xy, u.b.zw, i == 2u), u.a.zw, i == 0u);
-        sum += noise3(x * freq, y * freq, z * freq + f32(i) * 17.13, seed) * amp;
-        norm += amp;
-        amp *= 0.5;
-        freq *= 2.0;
-    }
-    return sum / max(norm, 1e-6);
-}
-
-fn leak_step(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = clamp((x - e0) / max(e1 - e0, 1e-6), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
 }
 
 fn screen_on(b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
@@ -972,46 +801,6 @@ fn overlay_on(b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
     let dark = 2.0 * b * s;
     let light = vec3(1.0) - 2.0 * (vec3(1.0) - min(b, vec3(1.0))) * (vec3(1.0) - min(s, vec3(1.0)));
     return select(light, dark, b < vec3(0.5));
-}
-
-// a.x the mode, a.zw and b.xy and b.zw: the seeds of octaves 0, 1, and 2, each by `hash_u`'s constant.
-// p0: first color, intensity; p1: second color, scale; p2: direction, time.
-@compute @workgroup_size(16, 16)
-fn light_leaks(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let at = vec2<i32>(id.xy);
-    let c = textureLoad(src, at, 0);
-    let size = vec2<f32>(textureDimensions(dst));
-    let x = f32(id.x) + 0.5;
-    let y = f32(id.y) + 0.5;
-    let scale = u.p1.w;
-    let dx = u.p2.x;
-    let dy = u.p2.y;
-    let t = u.p2.z;
-    let up = x / scale;
-    let vp = y / scale;
-    let along = ((x / size.x - 0.5) * dx + (y / size.y - 0.5) * dy) * 2.0;
-    let bias = leak_step(-0.2, 1.0, -along);
-    let n = fbm_leak(up + dx * t * 0.3, vp + dy * t * 0.3, t * 0.15, 3u) * 0.5 + 0.5;
-    let m = fbm_leak(up * 0.7 + 5.2, vp * 0.7, t * 0.1 + 9.0, 2u) * 0.5 + 0.5;
-    let k = leak_step(0.35, 0.85, n) * bias * u.p0.w;
-    let light = (u.p0.xyz + (u.p1.xyz - u.p0.xyz) * m) * k;
-    let base = straight(c);
-    var o: vec3<f32>;
-    switch u.a.x {
-        case 1u: {
-            o = base + light;
-        }
-        case 2u: {
-            let s = light + vec3(0.5);
-            o = overlay_on(base, base + (s - base) * min(k, 1.0));
-        }
-        default: {
-            o = screen_on(base, light);
-        }
-    }
-    let a = c.a + (1.0 - c.a) * min(k, 1.0);
-    textureStore(dst, at, vec4(o * a, a));
 }
 
 // ---------------------------------------------------------------------------------------------

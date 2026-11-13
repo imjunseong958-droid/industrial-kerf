@@ -986,10 +986,10 @@ mod tests {
              track V2 video\n    clip c2 media=source-a src=0s at=0s dur=2s\n",
         );
         assert_eq!(preview_plan(&matted).mode, PreviewMode::Composited);
-        let echoed = project(
-            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx time.echo\n",
+        let held = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx time.posterizetime\n",
         );
-        let plan = preview_plan(&echoed);
+        let plan = preview_plan(&held);
         assert_eq!(plan.mode, PreviewMode::Composited);
         assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
         let gained = project(

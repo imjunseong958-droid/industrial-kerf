@@ -17,7 +17,6 @@ pub(crate) use color::cdl;
 mod distort;
 pub mod gpu;
 mod immersive;
-mod lights;
 mod stylize;
 mod temporal;
 mod text;
@@ -68,7 +67,7 @@ pub trait FxEnv: Sync {
 pub fn is_temporal(id: &str) -> bool {
     matches!(
         id,
-        "posterize_time" | "echo" | "warp_stabilizer" | "auto_reframe"
+        "posterize_time" | "warp_stabilizer" | "auto_reframe"
     )
 }
 
@@ -209,16 +208,6 @@ pub(crate) fn over(dst: &mut [f32], src: [f32; 4]) {
     }
 }
 
-/// Add light `add` (linear RGB) to a premultiplied pixel, keeping it opaque where light lands on
-/// transparency (glows extend past alpha).
-#[inline]
-pub(crate) fn add_light(p: &mut [f32], add: [f32; 3]) {
-    let m = add[0].max(add[1]).max(add[2]).clamp(0.0, 1.0);
-    for k in 0..3 {
-        p[k] += add[k];
-    }
-    p[3] = p[3] + (1.0 - p[3]) * m;
-}
 
 // ------------------------------------------------------------------ noise
 
@@ -240,73 +229,6 @@ pub(crate) fn hash01(x: i64, y: i64, z: i64, seed: u64) -> f32 {
     (hash_u(x, y, z, seed) >> 40) as f32 / (1u64 << 24) as f32
 }
 
-#[inline]
-fn fade(t: f32) -> f32 {
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-}
-#[inline]
-fn grad3(h: u64, x: f32, y: f32, z: f32) -> f32 {
-    // 12 edge directions of a cube (Perlin 2002)
-    match h % 12 {
-        0 => x + y,
-        1 => -x + y,
-        2 => x - y,
-        3 => -x - y,
-        4 => x + z,
-        5 => -x + z,
-        6 => x - z,
-        7 => -x - z,
-        8 => y + z,
-        9 => -y + z,
-        10 => y - z,
-        _ => -y - z,
-    }
-}
-
-/// 3-D gradient noise in about −1..1 (our own hash; Perlin's interpolant and gradient set).
-pub(crate) fn noise3(x: f32, y: f32, z: f32, seed: u64) -> f32 {
-    let (xi, yi, zi) = (x.floor(), y.floor(), z.floor());
-    let (xf, yf, zf) = (x - xi, y - yi, z - zi);
-    let (xi, yi, zi) = (xi as i64, yi as i64, zi as i64);
-    let (u, v, w) = (fade(xf), fade(yf), fade(zf));
-    let g = |dx: i64, dy: i64, dz: i64| {
-        grad3(
-            hash_u(xi + dx, yi + dy, zi + dz, seed),
-            xf - dx as f32,
-            yf - dy as f32,
-            zf - dz as f32,
-        )
-    };
-    let l = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let x00 = l(g(0, 0, 0), g(1, 0, 0), u);
-    let x10 = l(g(0, 1, 0), g(1, 1, 0), u);
-    let x01 = l(g(0, 0, 1), g(1, 0, 1), u);
-    let x11 = l(g(0, 1, 1), g(1, 1, 1), u);
-    l(l(x00, x10, v), l(x01, x11, v), w) * 0.9
-}
-
-/// Fractal (fBm) noise with `octaves` (fractional octaves fade in), about −1..1.
-pub(crate) fn fbm(x: f32, y: f32, z: f32, octaves: f32, seed: u64) -> f32 {
-    let n = octaves.clamp(1.0, 10.0);
-    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
-    let mut i = 0;
-    while (i as f32) < n {
-        let k = (n - i as f32).min(1.0);
-        sum += noise3(
-            x * freq,
-            y * freq,
-            z * freq + i as f32 * 17.13,
-            seed.wrapping_add(i as u64),
-        ) * amp
-            * k;
-        norm += amp * k;
-        amp *= 0.5;
-        freq *= 2.0;
-        i += 1;
-    }
-    sum / norm.max(1e-6)
-}
-
 // ------------------------------------------------------------------ image helpers
 
 /// Gaussian-blur a single-channel buffer (via a temporary image).
@@ -323,23 +245,6 @@ pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f
     im.px.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
 }
 
-/// Bright parts of an image above `threshold` (display luma), premultiplied linear, for glows.
-pub(crate) fn highlights(img: &Image, threshold: f32, soft: f32) -> Image {
-    let mut out = img.clone();
-    out.px.par_chunks_mut(4).for_each(|p| {
-        let a = p[3];
-        if a <= 1e-6 {
-            p.fill(0.0);
-            return;
-        }
-        let l = crate::filmcraft::effects::enc([p[0] / a, p[1] / a, p[2] / a]);
-        let k = smoothstep(threshold, threshold + soft.max(1e-3), luma(l));
-        for v in p.iter_mut() {
-            *v *= k;
-        }
-    });
-    out
-}
 
 /// Fill an image from a per-pixel premultiplied colour function (x, y at pixel centres).
 pub(crate) fn generate(img: &mut Image, f: impl Fn(f32, f32, [f32; 4]) -> [f32; 4] + Sync) {
@@ -376,10 +281,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "cineon_converter" => color::cineon(img, e, cx),
         "noise" => color::noise(img, e, cx),
         // Blur & Sharpen
-        "bokeh_blur" => blur::bokeh(img, e, cx),
-        "channel_blur" => blur::channel_blur(img, e, cx),
-        "compound_blur" => blur::compound(img, e, cx),
-        "focus_blur" => blur::focus(img, e, cx),
         "reduce_interlace_flicker" => blur::interlace_flicker(img, e, cx),
         // Distort / Transform / Utility geometry
         "corner_pin" => distort::corner_pin(img, e, cx),
@@ -391,20 +292,13 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "auto_align" => distort::auto_align(img, e, cx),
         "rounded_crop" => distort::rounded_crop(img, e, cx),
         "mosaic" => distort::mosaic(img, e, cx),
-        // Lights & Glows
-        "glint" => lights::glint(img, e, cx),
-        "light_leaks" => lights::light_leaks(img, e, cx),
-        "rgb_split" => lights::rgb_split(img, e, cx),
-        "wonder_glow" => lights::wonder_glow(img, e, cx),
         // Stylize / Perspective / Generate / Legacy & obsolete generators
         "stroke" => stylize::stroke(img, e, cx),
         "gradient" => stylize::gradient(img, e, cx),
         "checkerboard" => stylize::checkerboard(img, e, cx),
         "paint_bucket" => stylize::paint_bucket(img, e, cx),
-        "write_on" => stylize::write_on(img, e, cx),
         // Time / analysis
         "posterize_time" => temporal::posterize_time(img, e, cx),
-        "echo" => temporal::echo(img, e, cx),
         "warp_stabilizer" => temporal::warp_stabilizer(img, e, cx),
         "auto_reframe" => temporal::auto_reframe(img, e, cx),
         // Text

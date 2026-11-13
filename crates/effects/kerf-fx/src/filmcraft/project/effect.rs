@@ -928,12 +928,6 @@ fn build_effects() -> Vec<EffectDef> {
                 ),
             ],
         ),
-        video(
-            "camera_blur",
-            "Camera Blur",
-            vfx::LEGACY,
-            vec![f("percent", "Percent Blur", 0.0, 0.0, 100.0, "")],
-        ),
         video("black_white", "Black & White", IMAGE_CONTROL, vec![]),
         video(
             "color_pass",
@@ -1072,12 +1066,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "posterize",
-            "Posterize",
-            STYLIZE,
-            vec![fs("levels", "Level", 7.0, (2.0, 255.0), (2.0, 32.0), "", 0)],
-        ),
-        video(
             "mosaic",
             "Mosaic",
             STYLIZE,
@@ -1199,24 +1187,6 @@ fn build_effects() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "mirror",
-            "Mirror",
-            DISTORT,
-            vec![
-                pt("center", "Reflection Center", f64::NAN, f64::NAN),
-                ang("angle", "Reflection Angle", 0.0),
-            ],
-        ),
-        video(
-            "offset",
-            "Offset",
-            TRANSFORM,
-            vec![
-                pt("shift", "Shift Center To", f64::NAN, f64::NAN),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
             "lens_distortion",
             "Lens Distortion",
             DISTORT,
@@ -1237,41 +1207,6 @@ fn build_effects() -> Vec<EffectDef> {
                     -100.0,
                     100.0,
                     "",
-                ),
-            ],
-        ),
-        video(
-            "wave_warp",
-            "Wave Warp",
-            DISTORT,
-            vec![
-                fs(
-                    "height",
-                    "Wave Height",
-                    10.0,
-                    (-4000.0, 4000.0),
-                    (-100.0, 100.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "width",
-                    "Wave Width",
-                    40.0,
-                    (1.0, 4000.0),
-                    (1.0, 400.0),
-                    "",
-                    0,
-                ),
-                ang("direction", "Direction", 90.0),
-                fs(
-                    "speed",
-                    "Wave Speed",
-                    1.0,
-                    (-100.0, 100.0),
-                    (-10.0, 10.0),
-                    "",
-                    1,
                 ),
             ],
         ),
