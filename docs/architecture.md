@@ -287,8 +287,8 @@ over half of a first making. What that showed of the guide:
 
 The shot kept the guide's layout, the boat's path, and the camera's move. It
 also kept the guide's flat shapes, a cabin that is a box staying one; whether
-depth would guide better than color was not settled, this model being a small
-one.
+depth would guide better than color was not settled then, and for this model
+is now (What directs a model, Measured).
 
 The same shot was then written by an agent with `kerf-mcp`'s tools and file
 tools alone, from an empty project to a second take, with a stand-in for the
@@ -428,8 +428,9 @@ What is built for it, in this order, each measured before the next:
    with no kernels: a guide is small. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
-   farthest may want it stretched, which is not done. *Not measured against
-   a model*, and a line cannot yet hand a model a picture and a pass at once.
+   farthest may want it stretched, which is not done. A depth pass handed
+   to a model as its guide made the better take (Measured, below); a line
+   cannot yet hand a model a picture and a pass at once.
 3. **What `look` says of a scene in depth**, which is in: `look` with
    `shows` and `at` (`kerf_engine::shows`). It draws the frame's ids pass,
    and then each clip alone with the others made clear, so that what is
@@ -442,8 +443,49 @@ What is built for it, in this order, each measured before the next:
    each clip that draws, at most 32 of them, and reads to about a hundredth
    of the frame. A clip that is partly clear is read as not showing, and
    said to be.
-4. **Meshes, if a measurement asks for them.** The rule above stands: no
-   mesh renderer. A clip with depth is its outline pushed straight back, so
+
+#### Measured
+
+On 2026-11-13, with Wan 2.1 VACE 1.3B on a ComfyUI server, as on the 11th
+and 12th: one scene, a road tipped back under a sky out of depth, a car of
+two solids (a body and a cabin, `depth=0.3`) driving across, a camera
+pushing in and turning ten degrees; one prompt, "a red sports car drives
+along a wet city street at dusk"; 65 frames at 832x480. A making took 78 to
+89 s. What changed was what the `render` step drew for the model to follow.
+
+| The guide | Seed | What its take kept |
+|---|---|---|
+| The picture, in flat colors | 7 | Place and path. The guide's red boxes as red boxes, inside a dark van the model drew around them |
+| The picture, in flat colors | 11 | Place, path and size. A red car at first, boxes again by the last frame |
+| `pass=depth` | 7 | Place, path and size. A car, a red sedan with wheels and glass, its color from the prompt; a skyline where the road ends |
+| `pass=depth` | 11 | The same: a car on its path, in every frame |
+| `pass=ids` | 7 | The place and path of a faint outline with tail lights; the picture nearly black |
+| `pass=depth`, the camera going 75 degrees round the car, parked | 7 | The car in its place, seen from its side and then from behind as the camera went round. The scenery did not turn with it |
+
+What was decided of it:
+
+- *A guide for a model that follows depth is its depth pass.* Both kept
+  where the car was and where it went. Depth left the model to draw the
+  thing, and color had it keep the guide's own shapes: the boxes that a
+  guide of 11 November's stayed as. With depth the color of a thing comes
+  from the prompt alone, and a backdrop out of depth is black, which the
+  model made a sky of. The `model-shot` skill says so.
+- *An ids pass is not a guide for this model.* It is what `look` reads a
+  frame by (3, above), and what a model trained on it would be given.
+- *The solids were enough for the car; the world had nothing to show the
+  move by.* Under a camera going round it the car turned as its solids did,
+  two outlines pushed back, which is what 4 doubted. What did not follow
+  was everything else: a road that is one gradient and a sky with no depth
+  say nothing of a camera's move, so the model held its scenery still. What
+  a guide wants first is things standing around its subject, not finer
+  geometry. This was not set beside a renderer's boxes, none being
+  installed where it was run, and it is one take.
+- *Signals are still not measured.* This model has no input that takes a
+  number a frame, and it is the only one on that server.
+
+This is one scene, two seeds and a small model, as before.
+4. **Meshes, if a measurement asks for them.** The first one did not
+   (Measured, below). The rule above stands: no mesh renderer. A clip with depth is its outline pushed straight back, so
    what a camera sees going round it is a slab's side and not the thing's,
    and that is the one place a guide of clips may fall short.
    A shot whose camera goes a quarter of the way round a car, guided once by

@@ -588,8 +588,15 @@ its face beside them, as they take its color, and not their own distance.
 A pass is a file as a guide is, and a model that follows one is handed it as
 its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
 workflow's to say. Handing one model a picture and a pass of it at once has
-no word on a `generate` line yet, and normals are not drawn. Neither pass has
-been made into a take by a model: none in reach reads one.
+no word on a `generate` line yet, and normals are not drawn.
+
+Wan 2.1 VACE, the model `kerf-comfy` comes with a workflow for, follows a
+depth pass, and made the better take of it: where a guide in flat colors had
+it keep the guide's boxes, the same scene's depth had it draw the car, in
+the same place and on the same path. An ids pass it could make nothing of:
+that one is what `look` with `shows` reads a frame by, and what a model
+trained on one would be given
+([architecture.md](architecture.md#measured)).
 
 ### A guide at the model's size and rate
 

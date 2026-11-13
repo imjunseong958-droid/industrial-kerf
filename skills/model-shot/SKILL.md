@@ -9,6 +9,16 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   guide a sequence of its own, in the model's shape (`size`) and no longer
   than its `seconds`, and write the `render` line `look` gives as `guide`, so
   the guide is drawn at the model's size and rate and not the sequence's.
+- For a model that follows depth, as Wan VACE does, draw the guide as its
+  depth pass: `render <sequence> {guide.mp4} pass=depth size=… rate=…`. It
+  kept where things were and where they went as a guide in colors did, and
+  drew the thing itself, where the colored guide's boxes stayed boxes. The
+  guide's colors then say nothing, so the prompt gives every color, and a
+  backdrop out of depth is black, which the model makes its own sky of.
+- Give a camera's move something to show by: things standing around the
+  subject, at other depths. A bare road and a sky tell a model nothing of
+  how the camera goes, and it holds the scenery still while the subject
+  turns.
 - A guide is read for layout, motion, and camera, not for finish. Flat colors
   and plain solids that differ clearly from each other guide better than
   detail; what the picture should look like goes in the prompt. A model keeps
