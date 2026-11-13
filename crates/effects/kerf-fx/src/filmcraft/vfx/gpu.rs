@@ -21,35 +21,6 @@ use std::sync::{Arc, OnceLock};
 pub enum Kernel {
     /// It changes nothing as set.
     Nothing,
-    WonderGlow {
-        threshold: f32,
-        saturation: f32,
-        tint: Option<[f32; 3]>,
-        /// Half of the radius in the picture's pixels.
-        radius: f32,
-        gain: f32,
-        screen: bool,
-    },
-    Glint {
-        threshold: f32,
-        /// The angle of each ray, in radians.
-        rays: Vec<f32>,
-        length: f32,
-        tint: [f32; 3],
-        colorize: f32,
-        gain: [f32; 3],
-    },
-    RgbSplit {
-        offset: [f32; 2],
-        radial: Option<([f32; 2], f32, f32)>,
-        blend: f32,
-    },
-    WaveWarp {
-        across: [f32; 2],
-        height: f32,
-        width: f32,
-        phase: f32,
-    },
     Noise {
         amount: f32,
         grain: f32,
@@ -85,16 +56,6 @@ pub enum Kernel {
     },
     /// A Lumetri using what its plain numbers do not say.
     Lumetri(Box<Lumetri>),
-    Leaks {
-        colors: [[f32; 3]; 2],
-        intensity: f32,
-        scale: f32,
-        direction: [f32; 2],
-        time: f32,
-        /// `hash_u`'s seed for the first octave, and the second, and the third.
-        seeds: [u64; 3],
-        mode: u32,
-    },
     /// Add Grain, whose picture is encoded and decoded as a kept effect's is.
     Grain(Box<Grain>),
     CornerPin {
@@ -627,65 +588,6 @@ impl Kernel {
     /// The effect `e` on a picture of `size`, if it has a kernel.
     pub fn eval(e: &EffectInstance, cx: &FxCtx, size: (usize, usize)) -> Option<Self> {
         Some(match e.effect.as_str() {
-            "wonder_glow" => Kernel::WonderGlow {
-                threshold: fv(e, "threshold", cx) / 100.0,
-                saturation: fv(e, "saturation", cx) / 100.0,
-                tint: bv(e, "use_color").then(|| lin(cv(e, "color", cx))),
-                radius: fv(e, "radius", cx) * cx.px_scale * 0.5,
-                gain: fv(e, "intensity", cx) / 100.0 * 1.5,
-                screen: chv(e, "mode") == 1,
-            },
-            "glint" => {
-                let count = [2usize, 4, 6, 8][chv(e, "rays").min(3) as usize];
-                let rotation = fv(e, "rotation", cx).to_radians();
-                let intensity = fv(e, "intensity", cx) / 100.0 * 3.0;
-                let color = lin(cv(e, "color", cx));
-                Kernel::Glint {
-                    threshold: fv(e, "threshold", cx) / 100.0,
-                    rays: (0..count)
-                        .map(|i| rotation + std::f32::consts::TAU * i as f32 / count as f32)
-                        .collect(),
-                    length: fv(e, "length", cx) * cx.px_scale * 0.35,
-                    tint: color,
-                    colorize: fv(e, "colorize", cx) / 100.0,
-                    gain: color.map(|channel| intensity * channel.max(0.2)),
-                }
-            }
-            "rgb_split" => {
-                let amount = fv(e, "amount", cx) * cx.px_scale;
-                if amount.abs() < 1e-3 {
-                    return Some(Kernel::Nothing);
-                }
-                let angle = fv(e, "angle", cx).to_radians();
-                let (w, h) = size;
-                let sized = Image {
-                    w,
-                    h,
-                    px: Vec::new(),
-                };
-                let center = pv(e, "center", cx, &sized);
-                let reach = ((w as f64).hypot(h as f64) / 2.0) as f32;
-                Kernel::RgbSplit {
-                    offset: [angle.cos() * amount, angle.sin() * amount],
-                    radial: (chv(e, "mode") == 1).then_some((
-                        [center.x as f32, center.y as f32],
-                        reach,
-                        amount,
-                    )),
-                    blend: fv(e, "blend", cx) / 100.0,
-                }
-            }
-            "wave_warp" => {
-                let direction = f64::from(fv(e, "direction", cx)).to_radians();
-                let phase = cx.seconds * f64::from(fv(e, "speed", cx)) * std::f64::consts::TAU;
-                Kernel::WaveWarp {
-                    across: [direction.sin() as f32, -direction.cos() as f32],
-                    height: f64::from(fv(e, "height", cx)) as f32 * cx.px_scale,
-                    width: (fv(e, "width", cx) * cx.px_scale).max(1.0),
-                    // Only its angle counts, which keeps its precision in a long clip.
-                    phase: phase.rem_euclid(std::f64::consts::TAU) as f32,
-                }
-            }
             "noise" => {
                 let amount = fv(e, "amount", cx) / 100.0;
                 if amount <= 0.0 {
@@ -777,19 +679,6 @@ impl Kernel {
                 }))
             }
             "lumetri" => Kernel::Lumetri(Box::new(Lumetri::eval(e, cx, size)?)),
-            "light_leaks" => {
-                let direction = fv(e, "direction", cx).to_radians();
-                let seed = fv(e, "seed", cx).max(0.0) as u64;
-                Kernel::Leaks {
-                    colors: [lin(cv(e, "c1", cx)), lin(cv(e, "c2", cx))],
-                    intensity: fv(e, "intensity", cx) / 100.0,
-                    scale: (fv(e, "scale", cx) / 100.0).max(0.05) * size.0.max(size.1) as f32 * 0.6,
-                    direction: [direction.cos(), direction.sin()],
-                    time: (cx.seconds * f64::from(fv(e, "speed", cx))) as f32,
-                    seeds: [seed, seed + 1, seed + 2].map(|one| one.wrapping_mul(HASH_SEED)),
-                    mode: chv(e, "mode"),
-                }
-            }
             "corner_pin" => {
                 let (w, h) = (size.0 as f64, size.1 as f64);
                 let sized = Image {
@@ -1089,157 +978,6 @@ impl Kernel {
         let stage = stage(frame.gpu())?;
         Some(match self {
             Kernel::Nothing => picture,
-            Kernel::WonderGlow {
-                threshold,
-                saturation,
-                tint,
-                radius,
-                gain,
-                screen,
-            } => {
-                let hi = stage.pass(
-                    frame,
-                    &stage.highlights,
-                    &picture,
-                    None,
-                    &U::floats([*threshold, 0.15, 0.0, 0.0]),
-                );
-                let saturates = (saturation - 1.0).abs() >= 1e-4;
-                let color = tint.unwrap_or([0.0; 3]);
-                let graded = stage.pass(
-                    frame,
-                    &stage.grade_light,
-                    &hi,
-                    None,
-                    &U {
-                        a: [u32::from(saturates), u32::from(tint.is_some()), 0, 0],
-                        p0: [*saturation, 1.0, 0.0, 0.0],
-                        p1: [color[0], color[1], color[2], 0.0],
-                        ..U::default()
-                    },
-                );
-                frame.release(hi);
-                let (w, h) = (picture.w, picture.h);
-                let mut sum = frame.clear(w, h);
-                for (factor, weight) in [(0.25f32, 0.45f32), (1.0, 0.35), (3.0, 0.2)] {
-                    let sigma = radius * factor;
-                    let (rx, ry) = gaussian_boxes(w as usize, h as usize, sigma, sigma);
-                    let blur = FxOp::Gaussian {
-                        rx,
-                        ry,
-                        repeat: false,
-                    };
-                    let copy = frame.copy(&graded);
-                    let blurred = run_ops(frame, copy, std::slice::from_ref(&blur))?;
-                    let next = stage.pass(
-                        frame,
-                        &stage.accumulate,
-                        &sum,
-                        Some(&blurred),
-                        &U::floats([weight, 0.0, 0.0, 0.0]),
-                    );
-                    frame.release(blurred);
-                    frame.release(sum);
-                    sum = next;
-                }
-                frame.release(graded);
-                let out = stage.add_light(frame, &picture, &sum, [*gain; 3], *screen);
-                frame.release(sum);
-                frame.release(picture);
-                out
-            }
-            Kernel::Glint {
-                threshold,
-                rays,
-                length,
-                tint,
-                colorize,
-                gain,
-            } => {
-                let hi = stage.pass(
-                    frame,
-                    &stage.highlights,
-                    &picture,
-                    None,
-                    &U::floats([*threshold, 0.08, 0.0, 0.0]),
-                );
-                let mut sum = frame.clear(picture.w, picture.h);
-                for ray in rays {
-                    let streaked = stage.streak(frame, &hi, (ray.cos(), ray.sin()), *length);
-                    let next = stage.pass(
-                        frame,
-                        &stage.accumulate,
-                        &sum,
-                        Some(&streaked),
-                        &U::floats([1.0, 0.0, 0.0, 0.0]),
-                    );
-                    frame.release(streaked);
-                    frame.release(sum);
-                    sum = next;
-                }
-                frame.release(hi);
-                if *colorize > 0.0 {
-                    let next = stage.pass(
-                        frame,
-                        &stage.grade_light,
-                        &sum,
-                        None,
-                        &U {
-                            a: [0, 1, 0, 0],
-                            p0: [1.0, *colorize, 0.0, 0.0],
-                            p1: [tint[0], tint[1], tint[2], 0.0],
-                            ..U::default()
-                        },
-                    );
-                    frame.release(sum);
-                    sum = next;
-                }
-                let out = stage.add_light(frame, &picture, &sum, *gain, false);
-                frame.release(sum);
-                frame.release(picture);
-                out
-            }
-            Kernel::RgbSplit {
-                offset,
-                radial,
-                blend,
-            } => {
-                let (center, reach, amount) = radial.unwrap_or(([0.0; 2], 1.0, 0.0));
-                let out = stage.pass(
-                    frame,
-                    &stage.rgb_split,
-                    &picture,
-                    None,
-                    &U {
-                        a: [u32::from(radial.is_some()), 0, 0, 0],
-                        p0: [offset[0], offset[1], *blend, 0.0],
-                        p1: [center[0], center[1], reach, amount],
-                        ..U::default()
-                    },
-                );
-                frame.release(picture);
-                out
-            }
-            Kernel::WaveWarp {
-                across,
-                height,
-                width,
-                phase,
-            } => {
-                let out = stage.pass(
-                    frame,
-                    &stage.wave_warp,
-                    &picture,
-                    None,
-                    &U {
-                        p0: [across[0], across[1], *height, *width],
-                        p1: [*phase, 0.0, 0.0, 0.0],
-                        ..U::default()
-                    },
-                );
-                frame.release(picture);
-                out
-            }
             Kernel::Noise {
                 amount,
                 grain,
@@ -1383,34 +1121,6 @@ impl Kernel {
                 out
             }
             Kernel::Lumetri(lumetri) => return lumetri.run(frame, picture),
-            Kernel::Leaks {
-                colors,
-                intensity,
-                scale,
-                direction,
-                time,
-                seeds,
-                mode,
-            } => {
-                let low = |value: u64| value as u32;
-                let high = |value: u64| (value >> 32) as u32;
-                let out = stage.pass(
-                    frame,
-                    &stage.light_leaks,
-                    &picture,
-                    None,
-                    &U {
-                        a: [*mode, 0, low(seeds[0]), high(seeds[0])],
-                        b: [low(seeds[1]), high(seeds[1]), low(seeds[2]), high(seeds[2])],
-                        p0: [colors[0][0], colors[0][1], colors[0][2], *intensity],
-                        p1: [colors[1][0], colors[1][1], colors[1][2], *scale],
-                        p2: [direction[0], direction[1], *time, 0.0],
-                        ..U::default()
-                    },
-                );
-                frame.release(picture);
-                out
-            }
             Kernel::Grain(grain) => {
                 let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
                 frame.release(picture);
@@ -1874,14 +1584,6 @@ fn source() -> String {
 
 struct Stage {
     layout: wgpu::BindGroupLayout,
-    highlights: wgpu::ComputePipeline,
-    grade_light: wgpu::ComputePipeline,
-    accumulate: wgpu::ComputePipeline,
-    add_light: wgpu::ComputePipeline,
-    streak: wgpu::ComputePipeline,
-    scale_all: wgpu::ComputePipeline,
-    rgb_split: wgpu::ComputePipeline,
-    wave_warp: wgpu::ComputePipeline,
     noise: wgpu::ComputePipeline,
     color_key: wgpu::ComputePipeline,
     luma_key: wgpu::ComputePipeline,
@@ -1894,7 +1596,6 @@ struct Stage {
     lumetri_more: wgpu::ComputePipeline,
     hsl_key: wgpu::ComputePipeline,
     hsl_apply: wgpu::ComputePipeline,
-    light_leaks: wgpu::ComputePipeline,
     add_grain: wgpu::ComputePipeline,
     encode_kept: wgpu::ComputePipeline,
     decode_kept: wgpu::ComputePipeline,
@@ -1949,14 +1650,6 @@ impl Stage {
                 })
             };
             Self {
-                highlights: kernel("highlights"),
-                grade_light: kernel("grade_light"),
-                accumulate: kernel("accumulate"),
-                add_light: kernel("add_light"),
-                streak: kernel("streak"),
-                scale_all: kernel("scale_all"),
-                rgb_split: kernel("rgb_split"),
-                wave_warp: kernel("wave_warp"),
                 noise: kernel("noise"),
                 color_key: kernel("color_key"),
                 luma_key: kernel("luma_key"),
@@ -1969,7 +1662,6 @@ impl Stage {
                 lumetri_more: kernel("lumetri_more"),
                 hsl_key: kernel("hsl_key"),
                 hsl_apply: kernel("hsl_apply"),
-                light_leaks: kernel("light_leaks"),
                 add_grain: kernel("add_grain"),
                 encode_kept: kernel("encode_kept"),
                 decode_kept: kernel("decode_kept"),
@@ -2025,60 +1717,7 @@ impl Stage {
         out
     }
 
-    fn add_light(
-        &self,
-        frame: &mut Frame<'static>,
-        picture: &Picture,
-        light: &Picture,
-        gain: [f32; 3],
-        screen: bool,
-    ) -> Picture {
-        self.pass(
-            frame,
-            &self.add_light,
-            picture,
-            Some(light),
-            &U {
-                a: [u32::from(screen), 0, 0, 0],
-                p0: [gain[0], gain[1], gain[2], 0.0],
-                ..U::default()
-            },
-        )
-    }
 
-    /// `lights::streak`: `src` smeared along `direction` by doubling.
-    fn streak(
-        &self,
-        frame: &mut Frame<'static>,
-        src: &Picture,
-        direction: (f32, f32),
-        length: f32,
-    ) -> Picture {
-        let falloff = (-1.0 / length.max(1.0)).exp();
-        let mut current = frame.copy(src);
-        let mut n = 1.0f32;
-        while n < length * 3.0 {
-            let next = self.pass(
-                frame,
-                &self.streak,
-                &current,
-                None,
-                &U::floats([direction.0 * n, direction.1 * n, falloff.powf(n), 0.0]),
-            );
-            frame.release(current);
-            current = next;
-            n *= 2.0;
-        }
-        let out = self.pass(
-            frame,
-            &self.scale_all,
-            &current,
-            None,
-            &U::floats([1.0 - falloff, 0.0, 0.0, 0.0]),
-        );
-        frame.release(current);
-        out
-    }
 }
 
 fn stage(gpu: &'static Gpu) -> Option<&'static Stage> {
@@ -2172,47 +1811,6 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let cases: Vec<(&str, Vec<(&str, ParamValue)>)> = vec![
-            ("wonder_glow", vec![]),
-            (
-                "wonder_glow",
-                vec![
-                    ("threshold", fl(40.0)),
-                    ("radius", fl(30.0)),
-                    ("intensity", fl(120.0)),
-                ],
-            ),
-            (
-                "wonder_glow",
-                vec![("mode", choice(1)), ("saturation", fl(160.0))],
-            ),
-            (
-                "wonder_glow",
-                vec![("use_color", on.clone()), ("radius", fl(6.0))],
-            ),
-            ("glint", vec![]),
-            (
-                "glint",
-                vec![
-                    ("rays", choice(3)),
-                    ("length", fl(60.0)),
-                    ("rotation", fl(30.0)),
-                ],
-            ),
-            ("glint", vec![("rays", choice(0)), ("colorize", fl(70.0))]),
-            ("rgb_split", vec![("amount", fl(7.5)), ("angle", fl(30.0))]),
-            ("rgb_split", vec![("amount", fl(12.0)), ("mode", choice(1))]),
-            ("rgb_split", vec![("amount", fl(9.0)), ("blend", fl(40.0))]),
-            ("rgb_split", vec![("amount", fl(0.0))]),
-            ("wave_warp", vec![("height", fl(10.0)), ("width", fl(40.0))]),
-            (
-                "wave_warp",
-                vec![
-                    ("height", fl(6.0)),
-                    ("width", fl(20.0)),
-                    ("direction", fl(35.0)),
-                    ("speed", fl(2.0)),
-                ],
-            ),
             ("noise", vec![("amount", fl(30.0))]),
             (
                 "noise",
@@ -2304,19 +1902,6 @@ mod tests {
                     ("contrast", fl(30.0)),
                     ("output", choice(1)),
                 ],
-            ),
-            ("light_leaks", vec![]),
-            (
-                "light_leaks",
-                vec![
-                    ("mode", choice(1)),
-                    ("seed", fl(7.0)),
-                    ("direction", fl(70.0)),
-                ],
-            ),
-            (
-                "light_leaks",
-                vec![("mode", choice(2)), ("scale", fl(30.0)), ("speed", fl(3.0))],
             ),
             // Corners left where they are.
             ("corner_pin", vec![]),

@@ -230,7 +230,7 @@ def first_pass():
             pointer = lib.kerf_fx_catalog()
             catalog = json.loads(C.string_at(pointer))
             lib.kerf_bridge_string_free(pointer)
-            assert any(fx['id'] == 'light.wonderglow' and fx['params'] for fx in catalog), catalog[:2]
+            assert any(fx['id'] == 'blur.unsharp' and fx['params'] for fx in catalog), catalog[:2]
             send({'type': 'effect_previews', 'clip': clip['id'], 'at': 1.0,
                   'effects': ['channel.invert', 'color.basic'], 'width': 64})
             preview = wait(lambda event: event['type'] == 'effect_preview')

@@ -307,7 +307,6 @@ fn looks_built_on_a_basic_correction_keep_highlights_apart() {
     assert!(plain.0 > 0.68 && plain.1 > 0.78, "{plain:?}");
     for look in [
         "look.noir@1",
-        "look.vhs@1",
         "look.flash@1",
         "color.basic@1 contrast=1.2 saturation=0.8",
         "noise.noise amount=10",
@@ -413,17 +412,6 @@ fn an_sdr_picture_in_an_hdr_sequence_is_held_by_nothing() {
     }
 }
 
-/// A PQ signal in cd/m^2.
-fn nits(signal: f64) -> f64 {
-    let (m1, m2) = (2610.0 / 16384.0, 2523.0 / 4096.0 * 128.0);
-    let (c1, c2, c3) = (
-        3424.0 / 4096.0,
-        2413.0 / 4096.0 * 32.0,
-        2392.0 / 4096.0 * 32.0,
-    );
-    let p = signal.powf(1.0 / m2);
-    10000.0 * (((p - c1).max(0.0)) / (c2 - c3 * p)).powf(1.0 / m1)
-}
 
 /// A flat HLG picture of those code values, in BT.2020.
 fn flat_hlg_footage(dir: &Path, name: &str, rgb: &str) -> String {
@@ -525,7 +513,6 @@ fn the_gpu_holds_an_hlg_picture_for_effects_as_the_cpu_does() {
         "color.gamma gamma=12",
         "color.tint amount=60",
         "blur.gaussian radius=2",
-        "light.wonderglow",
     ] {
         let document = hlg_document(&bright, fx);
         let (gpu, cpu) = (
@@ -546,105 +533,8 @@ fn the_gpu_holds_an_hlg_picture_for_effects_as_the_cpu_does() {
     }
 }
 
-#[test]
-fn echoes_add_up_a_color_past_bt709_and_do_not_wash_it_out() {
-    let dir = tempfile::tempdir().expect("a folder");
-    let path = flat_footage(dir.path(), "wide", "00C000");
-    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
-    // Three of a flat picture at 1, 0.5, and 0.25 are 1.75 of it, each channel alike. It was 1491 cd/m²
-    // of red and 73 of blue on 757 of green, from what lifted it under 1 being added up with it.
-    let echoed = signals(
-        &pq_document(&path, "time.echo time=0.04 count=2 decay=0.5"),
-        Accel::Never,
-    )
-    .map(nits);
-    assert!(
-        (echoed[1] / plain[1] - 1.75).abs() < 0.05,
-        "{echoed:?} of {plain:?}"
-    );
-    assert!(echoed[0] < 5.0 && echoed[2] < 5.0, "{echoed:?}");
-    // The same in HLG, on a signal it stays low in.
-    let wide = flat_hlg_footage(dir.path(), "hlg", "00C000");
-    let plain = signals(&hlg_document(&wide, ""), Accel::Never);
-    let echoed = signals(
-        &hlg_document(&wide, "time.echo time=0.04 count=2 decay=0.5"),
-        Accel::Never,
-    );
-    assert!(echoed[1] > plain[1], "{echoed:?} of {plain:?}");
-    assert!(echoed[0] < 0.1 && echoed[2] < 0.1, "{echoed:?}");
-}
 
-#[test]
-fn an_echo_screened_keeps_what_lies_above_sdr_white() {
-    let dir = tempfile::tempdir().expect("a folder");
-    let path = flat_footage(dir.path(), "wide", "00C000");
-    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
-    assert!(plain[1] > 400.0, "{plain:?}");
-    // Two of a flat picture, at 1 and at a half, screened: white, and what each has past it, which the
-    // second has little of. It stopped at SDR white, 203 cd/m², however bright what went in.
-    let echoed = signals(
-        &pq_document(
-            &path,
-            "time.echo time=0.04 count=1 decay=0.5 operator=screen",
-        ),
-        Accel::Never,
-    )
-    .map(nits);
-    assert!(echoed[1] > plain[1] * 1.1, "{echoed:?} of {plain:?}");
-    assert!(echoed[1] < plain[1] * 1.75, "{echoed:?} of {plain:?}");
-    // And its color stays about what it was, past BT.709 as it is. It is not added up, so it moves a
-    // little, where what is between 0 and white is screened and the rest is not.
-    assert!(
-        echoed[0] < 5.0 && echoed[2] < echoed[1] * 0.06,
-        "{echoed:?}"
-    );
-}
 
-#[test]
-fn glows_add_light_to_a_color_past_bt709_and_leave_what_it_is() {
-    let dir = tempfile::tempdir().expect("a folder");
-    let path = flat_footage(dir.path(), "wide", "00C000");
-    let plain = signals(&pq_document(&path, ""), Accel::Never).map(nits);
-    let accels = |fx: &str| {
-        let on_gpu = has_gpu_path(&pq_document(&path, fx));
-        if on_gpu {
-            vec![Accel::Never, Accel::Always]
-        } else {
-            vec![Accel::Never]
-        }
-    };
-    // White light adds alike to every channel, so green stands as far past the other two as it did,
-    // or further where some of the light is its own.
-    for fx in [
-        "light.glint intensity=5 colorize=100 color=#ffffff",
-        "light.glint intensity=5 colorize=50 color=#ffffff",
-    ] {
-        for accel in accels(fx) {
-            let lit = signals(&pq_document(&path, fx), accel).map(nits);
-            assert!(
-                lit[0] > plain[0] + 20.0,
-                "{fx} on {accel:?} added nothing: {lit:?}"
-            );
-            let (past, was) = (lit[1] - lit[0], plain[1] - plain[0]);
-            assert!(
-                past >= was * 0.95,
-                "{fx} on {accel:?}: {past} past where it was {was}"
-            );
-        }
-    }
-    // Light taken from the picture itself is all green.
-    for accel in accels("light.glint intensity=5 colorize=0") {
-        let lit = signals(
-            &pq_document(&path, "light.glint intensity=5 colorize=0"),
-            accel,
-        )
-        .map(nits);
-        assert!(
-            lit[1] > plain[1] + 100.0 && lit[0] < 5.0 && lit[2] < 5.0,
-            "{accel:?} {lit:?}"
-        );
-    }
-}
 
 /// A picture that moves, in SDR or as an HLG signal in BT.2020.
 fn moving_footage(dir: &Path, hlg: bool) -> String {

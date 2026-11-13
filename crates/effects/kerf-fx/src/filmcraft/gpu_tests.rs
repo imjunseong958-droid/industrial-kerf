@@ -2,8 +2,8 @@
 //! `fx_tests.rs`.
 //!
 //! The working picture read back as f32 must match to [`EXACT`] per value (f32 arithmetic and the
-//! GPU's `pow` and `sqrt` differ in the last bits). Step functions (Posterize, Color Pass, Leave
-//! Color and Change to Color keys, Extract) may flip a pixel that lands on a threshold; at most
+//! GPU's `pow` and `sqrt` differ in the last bits). Step functions (Color Pass, Leave Color and
+//! Change to Color keys, Extract) may flip a pixel that lands on a threshold; at most
 //! [`FLIPS`] of the values may differ by more, and the others by up to [`STEP`].
 
 use super::*;
@@ -304,9 +304,6 @@ fn cases() -> Vec<Case> {
             false,
         ),
         ("invert", vec![("channel", ParamValue::Choice(9))], false),
-        ("posterize", vec![("levels", fl(2.0))], true),
-        ("posterize", vec![("levels", fl(7.0))], true),
-        ("posterize", vec![("levels", fl(255.0))], true),
         ("gaussian_blur", vec![("blurriness", fl(0.0))], false),
         ("gaussian_blur", vec![("blurriness", fl(5.0))], false),
         (
@@ -353,7 +350,6 @@ fn cases() -> Vec<Case> {
         ),
         ("gaussian_blur", vec![("blurriness", fl(1e9))], false),
         ("gaussian_blur", vec![("blurriness", fl(-50.0))], false),
-        ("camera_blur", vec![("percent", fl(20.0))], false),
         (
             "directional_blur",
             vec![("length", fl(10.0)), ("direction", fl(30.0))],
@@ -447,18 +443,6 @@ fn cases() -> Vec<Case> {
         ),
         ("horizontal_flip", vec![], false),
         ("vertical_flip", vec![], false),
-        (
-            "mirror",
-            vec![("center", pt(20.0, 10.0)), ("angle", fl(30.0))],
-            false,
-        ),
-        ("mirror", vec![("angle", fl(200.0))], false),
-        (
-            "offset",
-            vec![("shift", pt(10.0, 30.0)), ("blend", fl(25.0))],
-            false,
-        ),
-        ("offset", vec![("shift", pt(-1e5, 7.25))], false),
         (
             "asc_cdl",
             vec![
@@ -828,8 +812,7 @@ fn gpu_effects_match_cpu_exactly() {
         op.apply(&mut cpu);
         let gpu_px = on_gpu(gpu, &image, std::slice::from_ref(&op));
         let (worst, flips) = compare(&cpu.px, &gpu_px);
-        // A step function's pixel on a threshold moves a whole step, which at Posterize's finest
-        // levels is under what counts as a flip.
+        // A step function's pixel on a threshold moves a whole step.
         let exact = if steps { STEP } else { EXACT };
         if worst > exact || flips > if steps { FLIPS } else { 0.0 } {
             failures.push(format!("{id} {params:?}: {worst:.2e}, flips {flips:.4}"));
@@ -931,7 +914,6 @@ fn gpu_effect_chains_match_cpu() {
             ),
             effect("horizontal_flip", &[]),
             effect("levels", &[("in_black", fl(15.0)), ("gamma", fl(80.0))]),
-            effect("offset", &[("shift", pt(70.0, 10.0))]),
             effect("invert", &[("channel", ParamValue::Choice(4))]),
             effect(
                 "directional_blur",

@@ -11,7 +11,6 @@
 use super::*;
 
 const IMMERSIVE: &[&str] = &["Video Effects", "Immersive Video"];
-pub(super) const LIGHTS: &[&str] = &["Video Effects", "Lights & Glows"];
 const TIME: &[&str] = &["Video Effects", "Time"];
 pub(super) const UTILITY: &[&str] = &["Video Effects", "Utility"];
 /// Hidden-in-Premiere effects that old projects still render (kept so they round-trip and render).
@@ -19,7 +18,7 @@ pub(super) const OBSOLETE: &[&str] = &["Video Effects", "Obsolete"];
 /// The Effects panel's Legacy bin.
 pub(super) const LEGACY: &[&str] = &["Legacy", "Video Effects"];
 
-/// Track choices for effects that read another video track (Track Matte Key, Compound Blur…).
+/// Track choices for effects that read another video track (Track Matte Key…).
 pub const TRACK_CHOICES: &[&str] = &[
     "None", "Video 1", "Video 2", "Video 3", "Video 4", "Video 5", "Video 6", "Video 7", "Video 8",
 ];
@@ -105,17 +104,6 @@ fn px(id: &'static str, label: &'static str, def: f64, max: f64, soft: f64) -> P
 fn layout() -> ParamDef {
     ch("frame_layout", "Frame Layout", FRAME_LAYOUTS, 0)
 }
-fn seed() -> ParamDef {
-    fs(
-        "seed",
-        "Random Seed",
-        0.0,
-        (0.0, 10000.0),
-        (0.0, 1000.0),
-        "",
-        0,
-    )
-}
 fn blend_orig() -> ParamDef {
     pct("blend", "Blend With Original", 0.0)
 }
@@ -131,7 +119,6 @@ pub fn auto_point(effect: &str, param: &str) -> Option<(f64, f64)> {
         ("gradient", "start") => (0.5, 0.0),
         ("gradient", "end") => (0.5, 1.0),
         ("checkerboard", "anchor") => (0.0, 0.0),
-        ("write_on", "brush") => (0.5, 0.5),
         _ => return None,
     })
 }
@@ -231,68 +218,6 @@ fn immersive() -> Vec<EffectDef> {
 pub(super) fn defs() -> Vec<EffectDef> {
     let mut v = vec![
         // ---- Blur & Sharpen ----
-        video(
-            "bokeh_blur",
-            "Bokeh Blur",
-            BLUR,
-            vec![
-                px("amount", "Blur Amount", 10.0, 500.0, 60.0),
-                ch(
-                    "shape",
-                    "Iris Shape",
-                    &[
-                        "Circle", "Triangle", "Square", "Pentagon", "Hexagon", "Octagon",
-                    ],
-                    4,
-                ),
-                ang("rotation", "Iris Rotation", 0.0),
-                pct("highlight", "Highlight Brightness", 50.0),
-                pct("threshold", "Highlight Threshold", 80.0),
-            ],
-        ),
-        video(
-            "channel_blur",
-            "Channel Blur",
-            BLUR,
-            vec![
-                px("red", "Red Blurriness", 0.0, 1000.0, 100.0),
-                px("green", "Green Blurriness", 0.0, 1000.0, 100.0),
-                px("blue", "Blue Blurriness", 0.0, 1000.0, 100.0),
-                px("alpha", "Alpha Blurriness", 0.0, 1000.0, 100.0),
-                b("repeat_edge", "Repeat Edge Pixels", false),
-                ch(
-                    "dimensions",
-                    "Blur Dimensions",
-                    &["Horizontal and Vertical", "Horizontal", "Vertical"],
-                    0,
-                ),
-            ],
-        ),
-        video(
-            "compound_blur",
-            "Compound Blur",
-            BLUR,
-            vec![
-                ch("layer", "Blur Layer", TRACK_CHOICES, 0),
-                px("max", "Maximum Blur", 20.0, 500.0, 100.0),
-                b("stretch", "Stretch Map to Fit", true),
-                b("invert", "Invert Blur", false),
-            ],
-        ),
-        video(
-            "focus_blur",
-            "Focus Blur",
-            BLUR,
-            vec![
-                ch("shape", "Focus Shape", &["Radial", "Linear"], 0),
-                pt("center", "Focus Point", f64::NAN, f64::NAN),
-                ang("angle", "Angle", 0.0),
-                px("size", "Focus Size", 200.0, 4000.0, 1000.0),
-                px("feather", "Feather", 200.0, 4000.0, 1000.0),
-                px("amount", "Blur Amount", 20.0, 500.0, 100.0),
-                b("show", "Show Focus Area", false),
-            ],
-        ),
         video(
             "reduce_interlace_flicker",
             "Reduce Interlace Flicker",
@@ -649,93 +574,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Lights & Glows ----
-        video(
-            "glint",
-            "Glint",
-            LIGHTS,
-            vec![
-                pct("threshold", "Threshold", 75.0),
-                ch("rays", "Rays", &["2", "4", "6", "8"], 1),
-                px("length", "Length", 60.0, 2000.0, 400.0),
-                ang("rotation", "Rotation", 45.0),
-                fs(
-                    "intensity",
-                    "Intensity",
-                    100.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "%",
-                    0,
-                ),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                pct("colorize", "Colorize", 0.0),
-            ],
-        ),
-        video(
-            "light_leaks",
-            "Light Leaks",
-            LIGHTS,
-            vec![
-                col("c1", "Color 1", [1.0, 0.45, 0.1, 1.0]),
-                col("c2", "Color 2", [1.0, 0.15, 0.35, 1.0]),
-                pct("intensity", "Intensity", 70.0),
-                fs(
-                    "scale",
-                    "Scale",
-                    100.0,
-                    (10.0, 1000.0),
-                    (20.0, 400.0),
-                    "%",
-                    0,
-                ),
-                ang("direction", "Direction", 30.0),
-                fs("speed", "Speed", 1.0, (0.0, 20.0), (0.0, 5.0), "", 2),
-                seed(),
-                ch("mode", "Blending Mode", &["Screen", "Add", "Overlay"], 0),
-            ],
-        ),
-        video(
-            "rgb_split",
-            "RGB Split",
-            LIGHTS,
-            vec![
-                ch("mode", "Mode", &["Linear", "Radial"], 0),
-                px("amount", "Amount", 10.0, 1000.0, 100.0),
-                ang("angle", "Angle", 0.0),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                blend_orig(),
-            ],
-        ),
-        video(
-            "wonder_glow",
-            "Wonder Glow",
-            LIGHTS,
-            vec![
-                pct("threshold", "Threshold", 60.0),
-                px("radius", "Radius", 25.0, 1000.0, 200.0),
-                fs(
-                    "intensity",
-                    "Intensity",
-                    100.0,
-                    (0.0, 1000.0),
-                    (0.0, 400.0),
-                    "%",
-                    0,
-                ),
-                fs(
-                    "saturation",
-                    "Saturation",
-                    100.0,
-                    (0.0, 400.0),
-                    (0.0, 200.0),
-                    "%",
-                    0,
-                ),
-                b("use_color", "Use Glow Color", false),
-                col("color", "Glow Color", [1.0, 0.8, 0.5, 1.0]),
-                ch("mode", "Blending Mode", &["Add", "Screen"], 0),
-            ],
-        ),
         // ---- Perspective ----
         // ---- Stylize ----
         // ---- Time ----
@@ -939,42 +777,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
         ),
         // ---- Obsolete (still render in old projects) ----
         video(
-            "echo",
-            "Echo",
-            OBSOLETE,
-            vec![
-                fs(
-                    "time",
-                    "Echo Time (seconds)",
-                    -0.033,
-                    (-10.0, 10.0),
-                    (-2.0, 2.0),
-                    "",
-                    3,
-                ),
-                fs(
-                    "count",
-                    "Number Of Echoes",
-                    1.0,
-                    (0.0, 30.0),
-                    (0.0, 30.0),
-                    "",
-                    0,
-                ),
-                fs(
-                    "start",
-                    "Starting Intensity",
-                    1.0,
-                    (0.0, 1.0),
-                    (0.0, 1.0),
-                    "",
-                    2,
-                ),
-                fs("decay", "Decay", 1.0, (0.0, 2.0), (0.0, 2.0), "", 2),
-                ch("operator", "Echo Operator", ECHO_OPERATORS, 0),
-            ],
-        ),
-        video(
             "checkerboard",
             "Checkerboard",
             OBSOLETE,
@@ -1022,46 +824,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                     "mode",
                     "Blending Mode",
                     &["Normal", "Behind", "Add", "Multiply", "Screen"],
-                    0,
-                ),
-            ],
-        ),
-        video(
-            "write_on",
-            "Write-on",
-            OBSOLETE,
-            vec![
-                pt("brush", "Brush Position", f64::NAN, f64::NAN),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                px("size", "Brush Size", 8.0, 500.0, 100.0),
-                pct("hardness", "Brush Hardness", 75.0),
-                pct("opacity", "Brush Opacity", 100.0),
-                fs(
-                    "stroke_length",
-                    "Stroke Length (secs)",
-                    0.0,
-                    (0.0, 3600.0),
-                    (0.0, 30.0),
-                    "",
-                    2,
-                ),
-                fs(
-                    "spacing",
-                    "Brush Spacing (secs)",
-                    0.01,
-                    (0.001, 1.0),
-                    (0.001, 0.2),
-                    "",
-                    3,
-                ),
-                ch(
-                    "style",
-                    "Paint Style",
-                    &[
-                        "On Original Image",
-                        "On Transparent",
-                        "Reveal Original Image",
-                    ],
                     0,
                 ),
             ],
@@ -1220,11 +982,7 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
         let folder = e.category.get(1).copied().unwrap_or("");
         let a32 = matches!(
             id,
-            "bokeh_blur"
-                | "channel_blur"
-                | "compound_blur"
-                | "directional_blur"
-                | "focus_blur"
+            "directional_blur"
                 | "gaussian_blur"
                 | "asc_cdl"
                 | "lumetri"
@@ -1241,7 +999,7 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "mosaic"
                 | "spacer"
                 | "proc_amp"
-        ) || folder == "Lights & Glows";
+        );
         let yuv = matches!(
             id,
             "proc_amp"
@@ -1253,7 +1011,7 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "track_matte"
         );
         let accel = match e.category.first().copied() {
-            Some("Legacy") => !matches!(id, "camera_blur"),
+            Some("Legacy") => true,
             _ if folder == "Obsolete" => false,
             _ => !matches!(id, "clone" | "stroke"),
         };
@@ -1276,11 +1034,7 @@ mod tests {
         (
             "Blur & Sharpen",
             &[
-                "Bokeh Blur",
-                "Channel Blur",
-                "Compound Blur",
                 "Directional Blur",
-                "Focus Blur",
                 "Gaussian Blur",
                 "Reduce Interlace Flicker",
                 "Sharpen",
@@ -1304,9 +1058,7 @@ mod tests {
                 "Corner Pin",
                 "Lens Distortion",
                 "Magnify",
-                "Mirror",
                 "Warp Stabilizer",
-                "Wave Warp",
             ],
         ),
         ("Generate", &["4-Color Gradient", "Gradient"]),
@@ -1344,31 +1096,15 @@ mod tests {
                 "Ultra Key",
             ],
         ),
-        (
-            "Lights & Glows",
-            &[
-                "Glint",
-                "Light Leaks",
-                "RGB Split",
-                "Wonder Glow",
-            ],
-        ),
         ("Noise & Grain", &["Noise"]),
         ("Perspective", &["Drop Shadow"]),
-        (
-            "Stylize",
-            &[
-                "Mosaic",
-                "Posterize",
-            ],
-        ),
+        ("Stylize", &["Mosaic"]),
         ("Time", &["Posterize Time"]),
         (
             "Transform",
             &[
                 "Auto Reframe",
                 "Horizontal Flip",
-                "Offset",
                 "Spacer",
                 "Transform",
                 "Vertical Flip",
@@ -1387,7 +1123,6 @@ mod tests {
     ];
 
     const LEGACY_NAMES: &[&str] = &[
-        "Camera Blur",
         "Crop",
         "Edge Feather",
         "Ramp",
@@ -1409,8 +1144,8 @@ mod tests {
                 n += 1;
             }
         }
-        assert_eq!(n, 65);
-        assert_eq!(CATALOGUE.len(), 16);
+        assert_eq!(n, 53);
+        assert_eq!(CATALOGUE.len(), 15);
         // nothing else sits in the current folders
         for d in effect_defs()
             .iter()
@@ -1438,7 +1173,6 @@ mod tests {
         assert_eq!(b("ProcAmp"), (true, true, true));
         assert_eq!(b("Luma Key"), (true, true, true));
         assert_eq!(b("Black & White"), (true, false, true));
-        assert_eq!(b("Glint"), (true, true, false));
         assert_eq!(b("Sharpen"), (true, false, false));
     }
 

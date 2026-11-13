@@ -125,6 +125,19 @@ on `main`; its section here becomes the release's notes on GitHub
   `makes` a session ([docs/shots.md](docs/shots.md#an-agents-part)).
 - A shot that does not fill the frame says the `scale` that does: a picture is
   fit inside the frame first, so it is seldom what the sizes alone say.
+- Kerf no longer has 15 more effects and four looks, those that make how a
+  shot looks, which is now a model's by the prompt and references of the
+  shot's recipe: Glint, Light Leaks, RGB Split, Wonder Glow, Wave Warp, Mirror,
+  Posterize and Echo; Bokeh, Focus, Compound and Channel Blur (for a plain
+  blur there is `blur.gaussian@1`, under a mask if you like, which Camera Blur
+  also was, and a camera's `focus` on clips in depth); Offset (keyframes on
+  `x` and `y`) and Write-on (a `gen=shape@1` clip with keys on `trim_end`);
+  and the looks VHS, Glitch, Dreamy and Sparkle. The Film look is now grain
+  and darkened corners, as `look.film@2`. What is done to a shot once it is
+  made stays: color and grades, grain, keys and mattes, tracking, restoration,
+  retouching, text, transitions, and time. A project that uses one of those
+  gone does not open until its line is changed: the error names the line and
+  what to use instead.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

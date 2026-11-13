@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 
 use crate::filmcraft::project::EffectInstance;
-use crate::filmcraft::tick::Tick;
 use rayon::prelude::*;
 
 use super::*;
@@ -286,92 +285,3 @@ pub fn paint_bucket(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         });
 }
 
-/// Write-on (obsolete): paints the animated Brush Position's path up to now.
-pub fn write_on(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    let Some(param) = e.param("brush") else {
-        return;
-    };
-    let col = lin(cv(e, "color", cx));
-    let r = (fv(e, "size", cx) * cx.px_scale / 2.0).max(0.5);
-    let hard = fv(e, "hardness", cx) / 100.0;
-    let op = fv(e, "opacity", cx) / 100.0;
-    let stroke_len = fv(e, "stroke_length", cx) as f64;
-    let spacing = (fv(e, "spacing", cx) as f64).max(0.001);
-    let style = chv(e, "style");
-    let elapsed = cx.seconds.max(0.0);
-    let n = ((elapsed / spacing).floor() as usize).min(20_000);
-    let first = if stroke_len > 0.0 {
-        ((elapsed - stroke_len) / spacing).ceil().max(0.0) as usize
-    } else {
-        0
-    };
-    let to_px = |t: f64| {
-        let mt = cx.t - Tick::from_seconds_f64(elapsed - t);
-        let v = param.vec2_at(mt);
-        let (fx, fy) = (
-            if v.x.is_nan() {
-                img.w as f64 / 2.0
-            } else {
-                v.x * cx.px_scale as f64
-            },
-            if v.y.is_nan() {
-                img.h as f64 / 2.0
-            } else {
-                v.y * cx.px_scale as f64
-            },
-        );
-        (fx as f32, fy as f32)
-    };
-    let mut stamps: Vec<(f32, f32)> = Vec::new();
-    let mut prev: Option<(f32, f32)> = None;
-    for i in first..=n {
-        let p = to_px(i as f64 * spacing);
-        if let Some(q) = prev {
-            let d = ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt();
-            let steps = (d / (r * 0.5)).ceil() as usize;
-            for s in 1..steps.min(2000) {
-                let t = s as f32 / steps as f32;
-                stamps.push((q.0 + (p.0 - q.0) * t, q.1 + (p.1 - q.1) * t));
-            }
-        }
-        stamps.push(p);
-        prev = Some(p);
-    }
-    let (w, h) = (img.w, img.h);
-    let mut cov = vec![0f32; w * h];
-    for (sx, sy) in stamps {
-        let (x0, x1) = (
-            (sx - r - 1.0).floor().max(0.0) as usize,
-            ((sx + r + 1.0).ceil().max(0.0) as usize).min(w),
-        );
-        let (y0, y1) = (
-            (sy - r - 1.0).floor().max(0.0) as usize,
-            ((sy + r + 1.0).ceil().max(0.0) as usize).min(h),
-        );
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let d = ((x as f32 + 0.5 - sx).powi(2) + (y as f32 + 0.5 - sy).powi(2)).sqrt();
-                let a = 1.0 - smoothstep(r * hard - 0.5, r + 0.5, d);
-                let i = y * w + x;
-                if a > cov[i] {
-                    cov[i] = a;
-                }
-            }
-        }
-    }
-    img.px
-        .par_chunks_mut(4)
-        .zip(cov.par_iter())
-        .for_each(|(p, &c)| {
-            let k = c * op;
-            match style {
-                1 => p.copy_from_slice(&[col[0] * k, col[1] * k, col[2] * k, k]),
-                2 => {
-                    for v in p.iter_mut() {
-                        *v *= k;
-                    }
-                }
-                _ => over(p, [col[0] * k, col[1] * k, col[2] * k, k]),
-            }
-        });
-}

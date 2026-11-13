@@ -36,6 +36,76 @@ fn setf(e: &mut EffectInstance, k: &str, v: f64) {
     set(e, k, ParamValue::Float(v));
 }
 
+// Noise for the test pictures.
+
+#[inline]
+fn fade(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+#[inline]
+fn grad3(h: u64, x: f32, y: f32, z: f32) -> f32 {
+    // 12 edge directions of a cube (Perlin 2002)
+    match h % 12 {
+        0 => x + y,
+        1 => -x + y,
+        2 => x - y,
+        3 => -x - y,
+        4 => x + z,
+        5 => -x + z,
+        6 => x - z,
+        7 => -x - z,
+        8 => y + z,
+        9 => -y + z,
+        10 => y - z,
+        _ => -y - z,
+    }
+}
+
+/// 3-D gradient noise in about −1..1 (our own hash; Perlin's interpolant and gradient set).
+fn noise3(x: f32, y: f32, z: f32, seed: u64) -> f32 {
+    let (xi, yi, zi) = (x.floor(), y.floor(), z.floor());
+    let (xf, yf, zf) = (x - xi, y - yi, z - zi);
+    let (xi, yi, zi) = (xi as i64, yi as i64, zi as i64);
+    let (u, v, w) = (fade(xf), fade(yf), fade(zf));
+    let g = |dx: i64, dy: i64, dz: i64| {
+        grad3(
+            hash_u(xi + dx, yi + dy, zi + dz, seed),
+            xf - dx as f32,
+            yf - dy as f32,
+            zf - dz as f32,
+        )
+    };
+    let l = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let x00 = l(g(0, 0, 0), g(1, 0, 0), u);
+    let x10 = l(g(0, 1, 0), g(1, 1, 0), u);
+    let x01 = l(g(0, 0, 1), g(1, 0, 1), u);
+    let x11 = l(g(0, 1, 1), g(1, 1, 1), u);
+    l(l(x00, x10, v), l(x01, x11, v), w) * 0.9
+}
+
+/// Fractal (fBm) noise with `octaves` (fractional octaves fade in), about −1..1.
+fn fbm(x: f32, y: f32, z: f32, octaves: f32, seed: u64) -> f32 {
+    let n = octaves.clamp(1.0, 10.0);
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
+    let mut i = 0;
+    while (i as f32) < n {
+        let k = (n - i as f32).min(1.0);
+        sum += noise3(
+            x * freq,
+            y * freq,
+            z * freq + i as f32 * 17.13,
+            seed.wrapping_add(i as u64),
+        ) * amp
+            * k;
+        norm += amp * k;
+        amp *= 0.5;
+        freq *= 2.0;
+        i += 1;
+    }
+    sum / norm.max(1e-6)
+}
+
 /// A deterministic textured test picture (straight sRGB-ish values in linear premultiplied form).
 fn picture(w: usize, h: usize) -> Image {
     let mut img = Image::new(w, h);
@@ -79,10 +149,6 @@ fn max_diff(a: &Image, b: &Image) -> f32 {
 
 /// The ids this milestone added or rebuilt.
 const NEW_IDS: &[&str] = &[
-    "bokeh_blur",
-    "channel_blur",
-    "compound_blur",
-    "focus_blur",
     "reduce_interlace_flicker",
     "asc_cdl",
     "video_limiter",
@@ -102,10 +168,6 @@ const NEW_IDS: &[&str] = &[
     "vr_sharpen",
     "alpha_adjust",
     "logo_cutout",
-    "glint",
-    "light_leaks",
-    "rgb_split",
-    "wonder_glow",
     "posterize_time",
     "auto_reframe",
     "spacer",
@@ -113,10 +175,8 @@ const NEW_IDS: &[&str] = &[
     "cineon_converter",
     "stroke",
     "metadata_burnin",
-    "echo",
     "checkerboard",
     "paint_bucket",
-    "write_on",
     // rebuilt
     "ultra_key",
     "track_matte",
@@ -193,15 +253,12 @@ fn neutral_parameters_are_identity() {
         ("corner_pin", vec![]),
         ("alpha_adjust", vec![]),
         ("rounded_crop", vec![("radius", ParamValue::Float(0.0))]),
-        ("channel_blur", vec![]),
-        ("bokeh_blur", vec![("amount", ParamValue::Float(0.0))]),
         ("reduce_interlace_flicker", vec![]),
         ("vr_blur", vec![]),
         ("vr_sharpen", vec![]),
         ("vr_denoise", vec![]),
         ("vr_rotate_sphere", vec![]),
         ("vr_projection", vec![]),
-        ("rgb_split", vec![("amount", ParamValue::Float(0.0))]),
         (
             "color_replace",
             vec![
@@ -220,7 +277,6 @@ fn neutral_parameters_are_identity() {
         ("magnify", vec![("magnification", ParamValue::Float(100.0))]),
         ("stroke", vec![("width", ParamValue::Float(0.0))]),
         ("posterize_time", vec![]),
-        ("echo", vec![]),
         ("warp_stabilizer", vec![]),
         ("track_matte", vec![]),
         ("noise", vec![]),
@@ -236,7 +292,6 @@ fn neutral_parameters_are_identity() {
                 ("white10", ParamValue::Float(685.0)),
             ],
         ),
-        ("light_leaks", vec![("intensity", ParamValue::Float(0.0))]),
         (
             "simple_text",
             vec![("text", ParamValue::Text(String::new()))],
@@ -534,56 +589,6 @@ fn colour_replace_and_cineon() {
     }
 }
 
-#[test]
-fn lights_add_light_around_highlights() {
-    let mut img = solid(48, 48, [0.05, 0.05, 0.05]);
-    for y in 22..26 {
-        for x in 22..26 {
-            img.px[(y * 48 + x) * 4..(y * 48 + x) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
-        }
-    }
-    let total = |i: &Image| {
-        i.px.as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| p[0] as f64)
-            .sum::<f64>()
-    };
-    for id in [
-        "glint",
-        "wonder_glow",
-    ] {
-        let o = run(id, &inst(id), &img, &cx());
-        let added = total(&o) - total(&img);
-        assert!(added > 0.5, "{id}: added only {added}");
-        assert!(
-            o.get(2, 2)[0] < 0.2,
-            "{id}: lit the far corner {:?}",
-            o.get(2, 2)
-        );
-    }
-    // Glint with 4 rays at 0°: light along the horizontal, not the diagonal
-    let mut e = inst("glint");
-    setf(&mut e, "rotation", 0.0);
-    let o = run("glint", &e, &img, &cx());
-    assert!(
-        o.get(38, 24)[0] > o.get(34, 34)[0],
-        "{:?} {:?}",
-        o.get(38, 24),
-        o.get(34, 34)
-    );
-    // RGB Split: red sampled from the left
-    let mut s = Image::new(9, 1);
-    s.px[4 * 4..4 * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
-    let mut e = inst("rgb_split");
-    setf(&mut e, "amount", 2.0);
-    let o = run("rgb_split", &e, &s, &cx());
-    assert!(
-        close(o.get(6, 0)[0], 1.0, 1e-4)
-            && close(o.get(2, 0)[2], 1.0, 1e-4)
-            && close(o.get(4, 0)[1], 1.0, 1e-4)
-    );
-}
 
 #[test]
 fn stroke_geometry() {
@@ -657,24 +662,6 @@ fn paint_bucket_fills_the_connected_region() {
     assert!(enc_px(&o, 8, 1)[2] > 0.95 && enc_px(&o, 8, 1)[1] < 0.05);
 }
 
-#[test]
-fn write_on_follows_the_animated_brush() {
-    let img = solid(40, 20, [0.0, 0.0, 0.0]);
-    let mut e = inst("write_on");
-    e.params.insert(
-        "brush".into(),
-        moving(Vec2::new(5.0, 10.0), Vec2::new(35.0, 10.0), 0.0, 1.0),
-    );
-    // half way: painted from x=5 to x=20, not beyond
-    let c = FxCtx {
-        t: Tick::from_seconds_f64(0.5),
-        seconds: 0.5,
-        ..cx()
-    };
-    let o = run("write_on", &e, &img, &c);
-    assert!(enc_px(&o, 12, 10)[0] > 0.9, "{:?}", enc_px(&o, 12, 10));
-    assert!(enc_px(&o, 30, 10)[0] < 0.05, "{:?}", enc_px(&o, 30, 10));
-}
 
 #[test]
 fn burn_ins_read_the_clip_and_its_media() {
@@ -825,167 +812,12 @@ fn vr_rotate_sphere_pans_exactly() {
     assert_eq!((o.w, o.h), (64, 32));
 }
 
-/// Radius of a regular `n`-gon (circumradius 1, rotated by `rot`) in direction `theta`;
-/// `n == 0` is a circle.
-fn poly_radius(n: u32, theta: f32, rot: f32) -> f32 {
-    if n == 0 {
-        return 1.0;
-    }
-    let seg = std::f32::consts::TAU / n as f32;
-    let a = (theta - rot).rem_euclid(seg) - seg / 2.0;
-    (std::f32::consts::PI / n as f32).cos() / a.cos()
-}
 
-/// Bokeh Blur gathered as it first was, a tap for each pixel of the iris: what the faster way has to
-/// look like.
-fn bokeh_by_taps(src: &Image, radius: f32, sides: u32, rot: f32) -> Image {
-    let rings = (radius.ceil() as usize).clamp(1, 12);
-    let mut taps = vec![(0.0f32, 0.0f32)];
-    for ring in 1..=rings {
-        let rad = radius * ring as f32 / rings as f32;
-        let n = (ring * 8).max(6);
-        for i in 0..n {
-            let th = std::f32::consts::TAU * (i as f32 + 0.5 * (ring % 2) as f32) / n as f32;
-            let pr = rad * poly_radius(sides, th, rot);
-            taps.push((th.cos() * pr, th.sin() * pr));
-        }
-    }
-    let mut out = Image::new(src.w, src.h);
-    for y in 0..src.h {
-        for x in 0..src.w {
-            let mut acc = [0f32; 4];
-            for &(dx, dy) in &taps {
-                let p = src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
-                for (acc, value) in acc.iter_mut().zip(p) {
-                    *acc += value;
-                }
-            }
-            let place = (y * src.w + x) * 4;
-            for (out, acc) in out.px[place..place + 4].iter_mut().zip(acc) {
-                *out = acc / taps.len() as f32;
-            }
-        }
-    }
-    out
-}
 
-/// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values read as the
-/// sequence's, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
-fn footage(name: &str) -> Option<Image> {
-    let path = std::path::Path::new(&std::env::var_os("KERF_REAL_FOOTAGE")?).join(name);
-    let decoded = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(&path)
-        .args(["-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
-        .output()
-        .expect("ffmpeg");
-    assert!(decoded.status.success(), "{}", path.display());
-    let header = std::fs::read(&path).expect("the frame");
-    let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]) as usize;
-    let mut img = Image::new(size(16), size(20));
-    for (px, rgb) in img.px.as_chunks_mut::<4>().0.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
-        let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
-        let linear = dec([channel(0), channel(2), channel(4)]);
-        px.copy_from_slice(&[linear[0], linear[1], linear[2], 1.0]);
-    }
-    Some(img)
-}
 
-/// Bokeh Blur on real footage against the tap-by-tap gather it replaced: water catching the sun, at
-/// the radius each size gets by default. `KERF_REAL_FOOTAGE=… cargo test --release -p kerf-fx
-/// real_footage_bokeh -- --ignored --nocapture`.
-#[test]
-#[ignore = "needs scripts/fetch-real-footage.sh"]
-fn real_footage_bokeh() {
-    for (size, radius) in [("1080", 5.0), ("4k", 10.0)] {
-        let Some(src) = footage(&format!("fountain/{size}/3836.png")) else {
-            eprintln!("KERF_REAL_FOOTAGE is not set");
-            return;
-        };
-        for (shape, sides) in [(0, 0), (4, 6)] {
-            let mut e = inst("bokeh_blur");
-            setf(&mut e, "amount", radius);
-            set(&mut e, "shape", ParamValue::Choice(shape));
-            setf(&mut e, "highlight", 0.0);
-            let start = std::time::Instant::now();
-            let now = run("bokeh", &e, &src, &cx());
-            let took = start.elapsed().as_secs_f64();
-            let was = bokeh_by_taps(&src, radius as f32, sides, 0.0);
-            let (mut se, mut worst) = (0.0f64, 0.0f32);
-            for (a, b) in now.px.as_chunks::<4>().0.iter().zip(was.px.as_chunks::<4>().0.iter()) {
-                let (a, b) = (enc([a[0], a[1], a[2]]), enc([b[0], b[1], b[2]]));
-                for c in 0..3 {
-                    se += f64::from(a[c] - b[c]).powi(2);
-                    worst = worst.max((a[c] - b[c]).abs());
-                }
-            }
-            let db = 10.0 * (1.0 / (se / (src.w * src.h * 3) as f64).max(1e-12)).log10();
-            println!(
-                "bokeh {size} radius {radius} sides {sides}: {db:.1} dB of the gather tap by tap, worst channel {:.1} of 255 ({took:.2} s)",
-                worst * 255.0
-            );
-            assert!(db > 63.0 && worst * 255.0 < 5.0, "{size} {sides}: {db:.1} dB, {:.1}", worst * 255.0);
-        }
-    }
-}
 
-#[test]
-fn bokeh_and_focus_blur() {
-    let mut img = solid(48, 48, [0.0, 0.0, 0.0]);
-    img.px[(24 * 48 + 24) * 4..(24 * 48 + 24) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
-    let mut e = inst("bokeh_blur");
-    setf(&mut e, "amount", 8.0);
-    set(&mut e, "shape", ParamValue::Choice(2)); // square
-    setf(&mut e, "rotation", 45.0); // axis-aligned, half-side 8/√2
-    let o = run("bokeh", &e, &img, &cx());
-    // the bright point becomes a square: lit at (+5, +5), dark at (+7, 0) where a disc would be lit
-    assert!(
-        o.get(29, 29)[0] > 1e-4 && o.get(31, 24)[0] < 1e-6,
-        "{:?} {:?}",
-        o.get(29, 29),
-        o.get(31, 24)
-    );
-    set(&mut e, "shape", ParamValue::Choice(0));
-    let o = run("bokeh", &e, &img, &cx());
-    assert!(o.get(31, 24)[0] > 1e-4);
-    // Focus Blur: the focus point stays sharp
-    let pic = picture(64, 64);
-    let mut e = inst("focus_blur");
-    setf(&mut e, "size", 20.0);
-    setf(&mut e, "feather", 10.0);
-    setf(&mut e, "amount", 20.0);
-    let o = run("focus", &e, &pic, &cx());
-    assert!(max_diff(&o, &pic) > 0.01);
-    let (a, b) = (o.get(32, 32), pic.get(32, 32));
-    assert!((0..4).all(|k| close(a[k], b[k], 1e-4)));
-}
 
-#[test]
-fn echoes_of_a_color_past_bt709_keep_what_is_below_0() {
-    let a = Image::filled(1, 1, [-0.2, 1.4, -0.1, 1.0]);
-    let layers = vec![(a.clone(), 1.0), (a.clone(), 0.5)];
-    let add = temporal::combine_echoes(&layers, 0, false);
-    assert!(close(add.get(0, 0)[0], -0.3, 1e-6) && close(add.get(0, 0)[1], 2.1, 1e-6));
-    let least = temporal::combine_echoes(&layers, 2, false);
-    assert!(close(least.get(0, 0)[0], -0.2, 1e-6));
-}
 
-#[test]
-fn echo_combines_operators() {
-    let a = Image::filled(1, 1, [0.2, 0.4, 0.1, 1.0]);
-    let b = Image::filled(1, 1, [0.6, 0.1, 0.3, 1.0]);
-    let layers = vec![(a.clone(), 1.0), (b.clone(), 0.5)];
-    let add = temporal::combine_echoes(&layers, 0, false);
-    assert!(close(add.get(0, 0)[0], 0.5, 1e-6) && close(add.get(0, 0)[3], 1.0, 1e-6));
-    let max = temporal::combine_echoes(&layers, 1, false);
-    assert!(close(max.get(0, 0)[0], 0.3, 1e-6) && close(max.get(0, 0)[1], 0.4, 1e-6));
-    let back = temporal::combine_echoes(&layers, 4, false);
-    assert_eq!(
-        back.get(0, 0),
-        a.get(0, 0),
-        "the current frame stays in front"
-    );
-}
 
 /// A clip environment over a synthetic moving picture (for the analysis effects).
 struct ClipEnv {
@@ -1079,7 +911,7 @@ fn shaky(x: f64, y: f64, t: f64) -> [f32; 3] {
 }
 
 #[test]
-fn posterize_time_and_echo_read_other_frames() {
+fn posterize_time_reads_other_frames() {
     fn moving(x: f64, _y: f64, t: f64) -> [f32; 3] {
         let v = if (x - t * 100.0).abs() < 4.0 {
             1.0
@@ -1116,31 +948,6 @@ fn posterize_time_and_echo_read_other_frames() {
     };
     assert_eq!(at(0.0).px, at(1.0 / 24.0).px);
     assert_ne!(at(0.0).px, at(2.0 / 24.0).px);
-    // Echo (one echo a frame back, Add): two bars
-    let env = mk(0.5);
-    let mut img = env.render(0.5, 1.0);
-    let mut e = inst("echo");
-    setf(&mut e, "time", -0.1);
-    setf(&mut e, "decay", 0.5);
-    crate::filmcraft::effects::apply(
-        &mut img,
-        &e,
-        &FxCtx {
-            seconds: 0.5,
-            env: Some(&env),
-            ..cx()
-        },
-    );
-    assert!(
-        close(img.get(50, 4)[0], 1.0, 1e-5),
-        "current bar {:?}",
-        img.get(50, 4)
-    );
-    assert!(
-        close(img.get(40, 4)[0], 0.5, 1e-5),
-        "echo bar {:?}",
-        img.get(40, 4)
-    );
 }
 
 #[test]
@@ -1445,51 +1252,3 @@ fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
     }
 }
 
-/// Screen in HDR keeps what lies above SDR white, and goes as it always did below it.
-#[test]
-fn an_echo_screens_up_to_white_and_adds_what_is_past_it_in_hdr() {
-    let picture = |value: f32, alpha: f32| {
-        let mut image = Image::new(1, 1);
-        image.px.copy_from_slice(&[value, 0.25, 0.0, alpha]);
-        image
-    };
-    let of = |values: &[(f32, f32)], hdr: bool| {
-        let layers: Vec<(Image, f32)> = values
-            .iter()
-            .map(|(value, weight)| (picture(*value, 1.0), *weight))
-            .collect();
-        let out = temporal::combine_echoes(&layers, 3, hdr);
-        [out.px[0], out.px[1], out.px[2], out.px[3]]
-    };
-    let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
-    // Below white, the two are the same, bit for bit.
-    let below = [(0.5, 1.0), (0.25, 0.5)];
-    assert_eq!(of(&below, true), of(&below, false));
-    assert!(close(of(&below, true)[0], 1.0 - 0.5 * (1.0 - 0.125)));
-    // A value of 3 stopped at 1, and now is what it is, whatever goes under it.
-    assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], false)[0], 1.0));
-    assert!(close(of(&[(3.0, 1.0), (0.5, 1.0)], true)[0], 3.0));
-    // What is past white in two layers adds, weighed as they are.
-    assert!(close(
-        of(&[(3.0, 1.0), (4.0, 0.5)], true)[0],
-        1.0 + 2.0 + 1.0
-    ));
-    // It leaves no step at white: just past it and just under it are about as bright.
-    let (under, past) = (of(&[(0.999, 1.0)], true)[0], of(&[(1.001, 1.0)], true)[0]);
-    assert!(past > under && past - under < 0.01, "{under} {past}");
-    // What is below 0, a color past BT.709, adds too, where multiplying sent it further.
-    assert!(close(of(&[(-0.5, 1.0), (-0.5, 0.5)], true)[0], -0.75));
-    assert!(close(
-        of(&[(-0.5, 1.0), (-0.5, 0.5)], false)[0],
-        1.0 - 1.5 * 1.25
-    ));
-    // It goes up with what goes in.
-    let values: Vec<f32> = [0.5, 1.0, 1.5, 2.0, 4.0]
-        .iter()
-        .map(|value| of(&[(*value, 1.0), (0.4, 0.5)], true)[0])
-        .collect();
-    assert!(
-        values.windows(2).all(|pair| pair[1] > pair[0]),
-        "{values:?}"
-    );
-}

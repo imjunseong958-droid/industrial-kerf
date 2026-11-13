@@ -204,18 +204,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             let by = f(e, "vertical", cx).max(1.0) as usize;
             mosaic(img, bx, by);
         }
-        "wave_warp" => {
-            let hgt = f(e, "height", cx) as f64 * cx.px_scale as f64;
-            let wid = (f(e, "width", cx) as f64 * cx.px_scale as f64).max(1.0);
-            let dir = (f(e, "direction", cx) as f64).to_radians();
-            let phase = cx.seconds * f(e, "speed", cx) as f64 * std::f64::consts::TAU;
-            let (ux, uy) = (dir.sin(), -dir.cos());
-            warp(img, |x, y| {
-                let along = x * ux + y * uy;
-                let off = hgt * (along / wid * std::f64::consts::TAU - phase).sin();
-                (x - uy * off, y + ux * off)
-            });
-        }
         "lens_distortion" => {
             let k = f(e, "curvature", cx) as f64 / 100.0;
             let (cxp, cyp) = (
