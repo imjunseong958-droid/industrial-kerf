@@ -1,182 +1,27 @@
 name: Rust runtime
 
-# Linux carries the testing, the Qt editor included; Windows and macOS
-# check what differs on them. The repository is public, so hosted runners
-# cost nothing: the systems run side by side, and so do the parts of one
-# that do not wait on each other (Linux's tests, lint and editor; macOS's
-# editor and workspace), on every pull request, every merge to main, and by
-# hand (Actions > Rust runtime > Run workflow). A run takes as long as its
-# slowest job, not the sum of them.
-# Feature branches are not built on push: their pull request runs the
-# jobs. A weekly run catches what a newer toolchain, Qt, or FFmpeg broke.
+# DIAGNOSTIC BRANCH, NOT TO BE MERGED: whether Kerf decodes on the hosted
+# Windows runner, which has no D3D11 video device, now that d3d11va is asked
+# for only where a device opens. Run by hand only (Actions > Rust runtime >
+# Run workflow, on this branch).
 on:
-  schedule:
-    # Mondays, 03:00 in Seoul.
-    - cron: "0 18 * * 0"
-  push:
-    branches: [main]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "crates/**"
-      - "tools/**"
-      - "apps/kerf-qt/**"
-      - "scripts/test-kerf-qt-bridge.py"
-      - ".github/workflows/rust-runtime.yml"
-      - ".github/actions/**"
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "crates/**"
-      - "tools/**"
-      - "apps/kerf-qt/**"
-      - "scripts/test-kerf-qt-bridge.py"
-      - ".github/workflows/rust-runtime.yml"
-      - ".github/actions/**"
   workflow_dispatch:
-
-# A newer push supersedes the checks still running for the one before it, on a
-# pull request and on main alike: main's newest commit holds all that was
-# merged before it, so its run is the one that says whether main is green, and
-# merging several pull requests in a row no longer queues a run for each.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: "1"
-
 jobs:
-  linux:
-    runs-on: ubuntu-26.04
+  win-hwaccel:
+    runs-on: windows-latest
     timeout-minutes: 60
     env:
-      # The runner has no GPU. Limiting wgpu to Vulkan, which has no driver
-      # here, keeps it off Mesa's software GL, so the GPU tests skip
-      # themselves rather than compare against a software rasterizer.
-      WGPU_BACKEND: vulkan
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      KERF_AGENT: C:\nonexistent\agent.json
+      KERF_MODELS: C:\nonexistent\models.json
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/linux-setup
-      # Caches the registry and dependency builds, keyed on Cargo.lock.
-      # Workspace crates, the EffectCraft ones included, rebuild each run.
-      # Only main saves: a pull request's own cache would serve only that
-      # pull request, so pull requests restore main's. The editor job of a
-      # system builds a part of what its test job builds, so it restores
-      # that job's cache and saves none.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Built in a step of its own, so the run's page says how long the
-      # build took and how long the tests did.
-      - name: Build workspace tests
-        run: cargo test --workspace --no-run
-      - name: Test workspace
-        run: cargo test --workspace
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here the Secret Service,
-      # gnome-keyring on a session bus of its own, its login keyring unlocked
-      # with a throwaway password. Locked, it refuses every write.
-      # Asked of the whole workspace, here and in the step after, so the tests
-      # built above are the ones run: asked of one package, cargo builds its
-      # dependencies again with that package's features alone.
-      #
-      # The daemon's command returns before the daemon is on the bus: it
-      # wakes the command, and only then unlocks the keyring and takes
-      # org.freedesktop.secrets. A test that calls before it has makes the
-      # bus start a second daemon from the name's service file. Where that
-      # one cannot find the first (no XDG_RUNTIME_DIR, and the first one's
-      # GNOME_KEYRING_CONTROL goes to /dev/null) it becomes the secret
-      # service itself, and has no password: its keyring is locked, the
-      # prompt it asks for has no display, and the write fails. With the
-      # tests already built they start 0.3 s after the daemon, which was
-      # once too soon (NoReply, 10 Nov). So the tests wait for the name to
-      # have an owner; asking who owns a name starts nothing.
-      - name: Test the system keychain
-        run: |
-          dbus-run-session -- sh -e -c '
-            printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null
-            tries=0
-            until dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets | grep -q "boolean true"; do
-              tries=$((tries + 1))
-              [ "$tries" -lt 300 ] || { echo "gnome-keyring never took org.freedesktop.secrets" >&2; exit 1; }
-              sleep 0.1
-            done
-            cargo test --workspace --lib real_keychain -- --ignored'
-      # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
-      # of a GPU: looks, grades and transitions stay on the GPU. Only this
-      # runs on llvmpipe; its pow and exp are a byte off color.basic's.
-      - name: Test what the catalog sends to the CPU
-        env:
-          KERF_GPU: software
-        run: cargo test --workspace --test catalog_cost -- --nocapture
-
-  # The rest of the gate README.md's Verification names. Clippy checks
-  # rather than builds, so it shares nothing with the tests' build and
-  # waits on none of it.
-  linux-lint:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: ./.github/actions/linux-setup
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-
-  # The Qt editor, its UI tests, and the bridge workflow against a real
-  # kerfd. They need the bridge and the daemon built, not the tests.
-  linux-editor:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 45
-    env:
-      WGPU_BACKEND: vulkan
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: ./.github/actions/linux-setup
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux
-          save-if: false
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel "$(nproc)"
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
-
-  windows-runtime:
-    runs-on: windows-latest
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # kerf-runtime reaches libav through kerf-engine and kerf-compose
-      # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
-      # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
-      # a pinned shared build; its DLLs go on PATH for the tests. The build the
-      # Windows package carries (package.yml), so that is what is tested.
-      # Kept in the Actions cache, as on Linux, and fetched with retries over
-      # several minutes only when it is not there.
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
@@ -199,140 +44,58 @@ jobs:
           "FFMPEG_DIR=$root" >> $env:GITHUB_ENV
           "$root\bin" >> $env:GITHUB_PATH
           $llvm = 'C:\Program Files\LLVM\bin'
-          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      # Qt for MSVC, with its bin folder on PATH so the editor and its
-      # tests find Qt's DLLs and plugins.
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: "6.10.*"
-          arch: win64_msvc2022_64
-          cache: true
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The kernel and the durable runtime against Windows paths, line
-      # endings, and processes. The runtime's integration tests start real
-      # kerfd daemons and reach them over the named pipe.
-      - name: Test kernel and interchange
-        run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
-      - name: Test durable runtime
-        run: cargo test -p kerf-runtime --all-targets
-      # Sidecars run in job objects, which end them with kerfd.
-      - name: Test sidecar supervision
-        run: cargo test -p kerf-engine --lib "sidecar::"
-      # The editor steps run even when a test above failed, so the bridge
-      # they link is built regardless.
-      - name: Build native bridge and daemon
-        if: ${{ !cancelled() }}
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here Credential Manager, which
-      # also refuses a value over 1280 UTF-16 units.
-      - name: Test the system keychain
-        if: ${{ !cancelled() }}
-        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored
-      # The editor's C ABI starts kerfd and edits through the pipe beside
-      # another client. On Windows it also fails on any access violation,
-      # handled or not; it runs a few times, since a crash once came and
-      # went.
-      - name: Test editor connection to kerfd
-        if: ${{ !cancelled() }}
-        timeout-minutes: 10
-        run: |
-          for ($run = 1; $run -le 5; $run++) {
-            cargo test -q -p kerf-qt-bridge --test connection -- --nocapture
-            if ($LASTEXITCODE -ne 0) { "failed on run $run"; exit 1 }
-          }
-      - name: Build Qt editor and UI tests
-        if: ${{ !cancelled() }}
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --config Release --parallel 4
-      # Qt logs to the debugger on Windows unless told otherwise.
-      - name: Test Qt UI
-        if: ${{ !cancelled() }}
-        env:
-          QT_FORCE_STDERR_LOGGING: "1"
-        run: ctest --test-dir target/qt -C Release --output-on-failure
-
-  macos-editor:
-    runs-on: macos-latest
-    timeout-minutes: 90
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
-      # build against; ffmpeg-next 9 binds it.
-      - name: Install native media and Qt dependencies
-        run: |
-          brew install ffmpeg qt pkg-config cmake
-          ffmpeg_prefix="$(brew --prefix ffmpeg)"
-          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
-          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos
           save-if: false
-      # Only what Linux cannot show: the editor's dylib against Homebrew's
-      # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
-      # and sockets, which the bridge workflow below goes through.
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
+      # What Kerf asks of ffmpeg, by hand: the listing, the device it tries,
+      # and a decode with d3d11va named, with ffmpeg's auto, and with none.
+      - name: ffmpeg by hand
+        shell: pwsh
         run: |
-          cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel 3
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
-
-  macos-workspace:
-    runs-on: macos-latest
-    timeout-minutes: 90
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
-      # build against; ffmpeg-next 9 binds it.
-      - name: Install native media dependencies
+          Write-Host "KERF_HWACCEL is '$env:KERF_HWACCEL'"
+          ffmpeg -hide_banner -hwaccels 2>&1 | ForEach-Object { Write-Host "  $_" }
+          foreach ($kind in @('d3d11va', 'dxva2', 'd3d12va')) {
+            ffmpeg -hide_banner -loglevel error -init_hw_device $kind -f lavfi -i color=black:s=16x16 -frames:v 1 -f null - 2>&1 | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "DEVICE -init_hw_device ${kind}: ffmpeg exit $LASTEXITCODE"
+          }
+          $clip = Join-Path $env:TEMP 'kerf-diag-clip.mp4'
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=30:duration=2 -c:v libx264 -pix_fmt yuv420p $clip
+          foreach ($accel in @('d3d11va', 'auto', 'none')) {
+            ffmpeg -hide_banner -loglevel info -hwaccel $accel -i $clip -vf scale=160:90 -frames:v 4 -f null - 2>&1 | Select-String -Pattern 'hwaccel|[Dd]evice|Error|error|frame=' | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "DECODE -hwaccel ${accel}: ffmpeg exit $LASTEXITCODE"
+          }
+          exit 0
+      - name: Build
+        shell: pwsh
         run: |
-          brew install ffmpeg pkg-config
-          ffmpeg_prefix="$(brew --prefix ffmpeg)"
-          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
-          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The whole workspace on macOS, beside the editor's job: its paths,
-      # sockets, and VideoToolbox, and the runner's Metal GPU, so the GPU
-      # parity tests run somewhere other than a developer's Mac. "kerf-gpu: no
-      # usable GPU" in this step's log means they skipped.
-      - name: Build workspace tests
-        run: cargo test --workspace --no-run
-      # The runner's sound device is a virtual one that stops asking for
-      # sound for up to a second at a time. With the stats on, a playback test
-      # that fails says what its device and clock did (the lines are part of
-      # a test's own output, so a passing test shows none).
-      - name: Test workspace
+          cargo build -q -p kerf-runtime --bin kerfd
+          cargo test -q -p kerf-mcp --test harness --no-run
+      - name: The choosing, given listed and opens
+        shell: pwsh
+        run: cargo test -q -p kerf-engine --lib "ffmpeg::"
+      # The two that failed here with "No device available for decoder".
+      # KERF_HWACCEL is not set: they pass only if Kerf chose no d3d11va.
+      - name: Kerf's look tests as the machine is
+        shell: pwsh
+        run: |
+          if ($env:KERF_HWACCEL) { throw "KERF_HWACCEL is set to '$env:KERF_HWACCEL'" }
+          cargo test -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test |test result|FAILED|panicked|d3d11va|unavailable|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(600, $l.Length)) }
+          exit $LASTEXITCODE
+      # The control: named by the person, d3d11va is still asked for with
+      # nothing tried first, so on this machine the same tests fail as they
+      # did before. Its outcome is told, and does not fail the run.
+      - name: The same tests with KERF_HWACCEL=d3d11va
+        id: named
+        continue-on-error: true
+        shell: pwsh
         env:
-          KERF_PLAYBACK_STATS: "1"
-        run: cargo test --workspace
-      # The real store API keys and the Kerf Cloud token go to, which every
-      # other test replaces with one in memory: here the login keychain.
-      # Asked of the whole workspace, so the tests built above are the ones
-      # run and nothing is built again.
-      - name: Test the system keychain
-        run: cargo test --workspace --lib real_keychain -- --ignored
+          KERF_HWACCEL: d3d11va
+        run: |
+          cargo test -p kerf-mcp --test harness -- look_scans_with_sheets look_shows_the_document 2>&1 | Select-String -Pattern 'test |test result|FAILED|panicked|d3d11va|unavailable|Error|error' | ForEach-Object { $l = "$_"; Write-Host $l.Substring(0, [Math]::Min(600, $l.Length)) }
+          exit $LASTEXITCODE
+      - name: What the control showed
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          Write-Host "CONTROL with KERF_HWACCEL=d3d11va: ${{ steps.named.outcome }} (failure expected on a machine with no D3D11 video device)"
