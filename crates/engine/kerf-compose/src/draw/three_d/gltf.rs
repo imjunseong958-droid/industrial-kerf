@@ -1,10 +1,11 @@
 //! The triangles of a glTF file, for a mesh read from one (`gen=mesh file=`).
 //!
-//! What a guide wants of a model is its shape at rest, a color a part: the triangles of every
-//! mesh its scene's nodes hold, each where its node puts it, and each material's base color.
-//! Textures, skins, morph targets, animations, cameras, and lights in the file are not read: a
-//! mesh in a guide is rigid, and what bends is a renderer's. A `.gltf` with its buffers beside it
-//! or inside it, and a `.glb`, are read.
+//! What a guide wants of a model is its shape at rest and its own colors: the triangles of every
+//! mesh its scene's nodes hold, each where its node puts it, each material's base color, the
+//! picture a material lays over its part, and the colors its corners are given. Skins, morph
+//! targets, animations, cameras, and lights in the file are not read, and of a material nothing
+//! but its base color: how a thing shines is a model's to draw. A `.gltf` with its buffers and
+//! pictures beside it or inside it, and a `.glb`, are read.
 //!
 //! glTF's x runs right, its y up, and its z toward the viewer. Kerf's y runs down and its z away,
 //! so a model is turned half round about x, which keeps it the way round it was.
@@ -12,6 +13,8 @@
 use std::path::Path;
 
 use serde_json::Value as Json;
+
+use super::texture::{Texture, Wrap};
 
 type Vector = [f64; 3];
 /// A node's place: rows of three across and what it is moved by.
@@ -21,10 +24,25 @@ type Matrix = [[f64; 4]; 3];
 pub(super) struct Read {
     pub points: Vec<Vector>,
     pub normals: Vec<Vector>,
+    /// Where on its part's picture each corner is, as shares of it from its top left.
+    pub uvs: Vec<[f32; 2]>,
+    /// The color each corner is given, in linear light: white where it is given none.
+    pub colors: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,
-    /// Where each run of triangles ends, and its material's color in linear light, where it has
-    /// a material.
-    pub parts: Vec<(usize, Option<[f32; 3]>)>,
+    pub parts: Vec<Part>,
+    pub textures: Vec<Texture>,
+}
+
+/// A run of triangles of one material.
+pub(super) struct Part {
+    /// The triangle after its last.
+    pub end: usize,
+    /// Its material's color in linear light, where it has a material.
+    pub color: Option<[f32; 3]>,
+    /// The picture laid over it: which of the file's, and what it does past its edges.
+    pub texture: Option<(usize, [Wrap; 2])>,
+    /// Whether its corners are given colors of their own.
+    pub colored: bool,
 }
 
 const IDENTITY: Matrix = [
@@ -148,6 +166,57 @@ fn parts_of(bytes: &[u8]) -> Result<(Json, Option<&[u8]>), String> {
 struct File<'a> {
     json: &'a Json,
     buffers: Vec<Vec<u8>>,
+    /// Where the file is, for what it names beside it.
+    folder: &'a Path,
+    /// The pictures read so far: which of the file's, and where among what was read.
+    pictures: std::cell::RefCell<Vec<(usize, usize)>>,
+}
+
+/// A material's picture on its part.
+struct Laid {
+    texture: usize,
+    wrap: [Wrap; 2],
+    /// Which of a corner's places on a picture it is read at.
+    set: u64,
+    offset: [f64; 2],
+    turn: f64,
+    scale: [f64; 2],
+}
+
+impl Laid {
+    /// Where on the picture a corner told `[u, v]` is: sized, turned, and then moved.
+    fn at(&self, [u, v]: [f64; 2]) -> [f32; 2] {
+        let (u, v) = (u * self.scale[0], v * self.scale[1]);
+        let (sin, cos) = self.turn.sin_cos();
+        [
+            (cos * u + sin * v + self.offset[0]) as f32,
+            (-sin * u + cos * v + self.offset[1]) as f32,
+        ]
+    }
+}
+
+/// A name in a URI as a file's: `%20` a space.
+fn unescaped(uri: &str) -> String {
+    let mut out = Vec::with_capacity(uri.len());
+    let bytes = uri.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = std::str::from_utf8(bytes.get(at + 1..at + 3).unwrap_or(&[]))
+            .ok()
+            .filter(|_| bytes[at] == b'%')
+            .and_then(|two| u8::from_str_radix(two, 16).ok());
+        match byte {
+            Some(byte) => {
+                out.push(byte);
+                at += 3;
+            }
+            None => {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl File<'_> {
@@ -170,8 +239,11 @@ impl File<'_> {
         };
         let across = match accessor["type"].as_str() {
             Some("SCALAR") => 1,
+            Some("VEC2") => 2,
             Some("VEC3") => 3,
-            _ => return Err("an accessor is neither a number nor three".into()),
+            Some("VEC4") => 4,
+            Some("MAT4") => 16,
+            _ => return Err("an accessor is of a type that is not read".into()),
         };
         let count = accessor["count"].as_u64().unwrap_or(0) as usize;
         let view = accessor["bufferView"]
@@ -198,19 +270,138 @@ impl File<'_> {
     }
 
     fn threes(&self, index: &Json) -> Result<Vec<Vector>, String> {
-        let (elements, component, across) = self.accessor(index)?;
-        if component != 5126 || across != 3 {
-            return Err("positions and normals are read as three floats".into());
+        Ok(self.numbers(index, 3)?.as_chunks::<3>().0.to_vec())
+    }
+
+    /// The numbers of accessor `index`, `across` to an element: floats as they are, and whole
+    /// numbers as shares of the most they can hold where the accessor says they are.
+    fn numbers(&self, index: &Json, across: usize) -> Result<Vec<f64>, String> {
+        let (elements, component, told) = self.accessor(index)?;
+        if told != across {
+            return Err(format!(
+                "an accessor read {across} to an element has {told}"
+            ));
         }
-        Ok(elements
-            .iter()
-            .map(|element| {
-                [0, 1, 2].map(|axis| {
-                    let four = &element[axis * 4..axis * 4 + 4];
-                    f64::from(f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
-                })
-            })
-            .collect())
+        let shares = index
+            .as_u64()
+            .and_then(|index| self.json["accessors"].get(index as usize))
+            .is_some_and(|accessor| accessor["normalized"].as_bool() == Some(true));
+        let width = elements.first().map_or(1, |element| element.len() / across);
+        let mut out = Vec::with_capacity(elements.len() * across);
+        for element in elements {
+            for bytes in element.chunks(width) {
+                let (value, most) = match component {
+                    5120 => (f64::from(bytes[0] as i8), 127.0),
+                    5121 => (f64::from(bytes[0]), 255.0),
+                    5122 => (f64::from(i16::from_le_bytes([bytes[0], bytes[1]])), 32767.0),
+                    5123 => (f64::from(u16::from_le_bytes([bytes[0], bytes[1]])), 65535.0),
+                    5125 => {
+                        let four = [bytes[0], bytes[1], bytes[2], bytes[3]];
+                        (f64::from(u32::from_le_bytes(four)), 4294967295.0)
+                    }
+                    _ => {
+                        let four = [bytes[0], bytes[1], bytes[2], bytes[3]];
+                        (f64::from(f32::from_le_bytes(four)), 1.0)
+                    }
+                };
+                out.push(if shares && component != 5126 {
+                    (value / most).max(-1.0)
+                } else {
+                    value
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// The bytes of picture `index`: inside the file, or beside it.
+    fn picture(&self, index: usize) -> Result<Texture, String> {
+        let image = self.json["images"]
+            .get(index)
+            .ok_or("a picture is missing")?;
+        let named = |why: String| format!("its picture {index}: {why}");
+        if let Some(uri) = image["uri"].as_str() {
+            let bytes = self.beside(uri).map_err(named)?;
+            return Texture::read(&bytes).map_err(named);
+        }
+        let view = image["bufferView"]
+            .as_u64()
+            .and_then(|view| self.json["bufferViews"].get(view as usize))
+            .ok_or("a picture is nowhere")?;
+        let start = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let length = view["byteLength"].as_u64().unwrap_or(0) as usize;
+        let bytes = view["buffer"]
+            .as_u64()
+            .and_then(|buffer| self.buffers.get(buffer as usize))
+            .and_then(|buffer| buffer.get(start..start + length))
+            .ok_or("a picture's bytes are missing")?;
+        Texture::read(bytes).map_err(named)
+    }
+
+    /// What `uri` names: bytes written in it, or a file beside this one.
+    fn beside(&self, uri: &str) -> Result<Vec<u8>, String> {
+        if uri.starts_with("data:") {
+            return uri
+                .split_once(',')
+                .and_then(|(_, data)| decoded(data))
+                .ok_or("what is inside it is not base64".into());
+        }
+        let name = unescaped(uri);
+        std::fs::read(self.folder.join(&name))
+            .map_err(|error| format!("`{name}` beside it: {error}"))
+    }
+
+    /// The picture a material lays over its part, as a place among `out`'s, what it does past
+    /// its edges, which of a corner's places it is read at, and how those are moved on it.
+    fn base_picture(
+        &self,
+        material: &Json,
+        out: &mut Read,
+        read: &mut Vec<(usize, usize)>,
+    ) -> Result<Option<Laid>, String> {
+        let told = &material["pbrMetallicRoughness"]["baseColorTexture"];
+        let Some(texture) = told["index"]
+            .as_u64()
+            .and_then(|index| self.json["textures"].get(index as usize))
+        else {
+            return Ok(None);
+        };
+        let Some(image) = texture["source"]
+            .as_u64()
+            .or_else(|| texture["extensions"]["EXT_texture_webp"]["source"].as_u64())
+        else {
+            return Ok(None);
+        };
+        let image = image as usize;
+        let place = match read.iter().find(|(known, _)| *known == image) {
+            Some((_, place)) => *place,
+            None => {
+                out.textures.push(self.picture(image)?);
+                read.push((image, out.textures.len() - 1));
+                out.textures.len() - 1
+            }
+        };
+        let sampler = texture["sampler"]
+            .as_u64()
+            .and_then(|sampler| self.json["samplers"].get(sampler as usize));
+        let wrap = |way: &str| Wrap::of(sampler.and_then(|sampler| sampler[way].as_u64()));
+        let moved = &told["extensions"]["KHR_texture_transform"];
+        let pair = |name: &str, otherwise: f64| {
+            numbers(&moved[name])
+                .filter(|pair| pair.len() == 2)
+                .map_or([otherwise; 2], |pair| [pair[0], pair[1]])
+        };
+        Ok(Some(Laid {
+            texture: place,
+            wrap: [wrap("wrapS"), wrap("wrapT")],
+            set: moved["texCoord"]
+                .as_u64()
+                .or(told["texCoord"].as_u64())
+                .unwrap_or(0),
+            offset: pair("offset", 0.0),
+            turn: moved["rotation"].as_f64().unwrap_or(0.0),
+            scale: pair("scale", 1.0),
+        }))
     }
 
     fn indices(&self, index: &Json) -> Result<Vec<u32>, String> {
@@ -319,12 +510,64 @@ impl File<'_> {
                 .max(1e-300);
             [at[0] / length, -at[1] / length, -at[2] / length]
         };
+        let material = primitive["material"]
+            .as_u64()
+            .and_then(|material| self.json["materials"].get(material as usize));
+        let laid = match material {
+            Some(material) => {
+                let mut read = self.pictures.borrow_mut();
+                self.base_picture(material, out, &mut read)?
+            }
+            None => None,
+        };
+        // Where each corner is on the picture, where the part has one and says where.
+        let uvs: Option<Vec<[f32; 2]>> = match &laid {
+            Some(laid) => match &attributes[format!("TEXCOORD_{}", laid.set).as_str()] {
+                Json::Null => None,
+                told => Some(
+                    self.numbers(told, 2)?
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| laid.at(*pair))
+                        .collect::<Vec<_>>(),
+                )
+                .filter(|uvs| uvs.len() == points.len()),
+            },
+            None => None,
+        };
+        let laid = laid.filter(|_| uvs.is_some());
+        // A corner's color is three numbers or, with how clear it is, four.
+        let colors: Option<Vec<[f32; 3]>> = match &attributes["COLOR_0"] {
+            Json::Null => None,
+            told => {
+                let across = match self.accessor(told)?.2 {
+                    4 => 4,
+                    _ => 3,
+                };
+                Some(
+                    self.numbers(told, across)?
+                        .chunks(across)
+                        .map(|color| [color[0] as f32, color[1] as f32, color[2] as f32])
+                        .collect::<Vec<_>>(),
+                )
+                .filter(|colors| colors.len() == points.len())
+            }
+        };
+        let uv = |corner: u32| uvs.as_ref().map_or([0.0; 2], |uvs| uvs[corner as usize]);
+        let colored = |corner: u32| {
+            colors
+                .as_ref()
+                .map_or([1.0; 3], |colors| colors[corner as usize])
+        };
         let first = out.points.len() as u32;
         match normals {
             Some(normals) => {
                 out.points.extend(points.iter().map(|point| placed(*point)));
                 out.normals
                     .extend(normals.iter().map(|normal| facing(*normal)));
+                out.uvs.extend((0..points.len() as u32).map(uv));
+                out.colors.extend((0..points.len() as u32).map(colored));
                 out.triangles.extend(
                     corners
                         .iter()
@@ -352,20 +595,24 @@ impl File<'_> {
                     let at = out.points.len() as u32;
                     out.points.extend([a, b, c]);
                     out.normals.extend([normal; 3]);
+                    out.uvs.extend(three.map(uv));
+                    out.colors.extend(three.map(colored));
                     out.triangles.push([at, at + 1, at + 2]);
                 }
             }
         }
-        let color = primitive["material"]
-            .as_u64()
-            .and_then(|material| self.json["materials"].get(material as usize))
-            .map(|material| {
-                let told = numbers(&material["pbrMetallicRoughness"]["baseColorFactor"])
-                    .filter(|told| told.len() >= 3)
-                    .unwrap_or_else(|| vec![1.0; 3]);
-                [told[0] as f32, told[1] as f32, told[2] as f32]
-            });
-        out.parts.push((out.triangles.len(), color));
+        let color = material.map(|material| {
+            let told = numbers(&material["pbrMetallicRoughness"]["baseColorFactor"])
+                .filter(|told| told.len() >= 3)
+                .unwrap_or_else(|| vec![1.0; 3]);
+            [told[0] as f32, told[1] as f32, told[2] as f32]
+        });
+        out.parts.push(Part {
+            end: out.triangles.len(),
+            color,
+            texture: laid.map(|laid| (laid.texture, laid.wrap)),
+            colored: colors.is_some(),
+        });
         Ok(())
     }
 }
@@ -374,25 +621,21 @@ impl File<'_> {
 pub(super) fn read(path: &Path) -> Result<Read, String> {
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
     let (json, binary) = parts_of(&bytes)?;
-    let mut buffers = Vec::new();
+    let folder = path.parent().unwrap_or(Path::new("."));
+    let mut file = File {
+        json: &json,
+        buffers: Vec::new(),
+        folder,
+        pictures: std::cell::RefCell::new(Vec::new()),
+    };
     for (index, buffer) in json["buffers"].as_array().into_iter().flatten().enumerate() {
-        buffers.push(match buffer["uri"].as_str() {
-            Some(uri) if uri.starts_with("data:") => uri
-                .split_once(',')
-                .and_then(|(_, data)| decoded(data))
-                .ok_or("a buffer inside it is not base64")?,
-            Some(uri) => {
-                let beside = path.parent().unwrap_or(Path::new(".")).join(uri);
-                std::fs::read(&beside).map_err(|error| format!("`{uri}` beside it: {error}"))?
-            }
+        let bytes = match buffer["uri"].as_str() {
+            Some(uri) => file.beside(uri).map_err(|why| format!("a buffer: {why}"))?,
             None if index == 0 => binary.ok_or("its first buffer is nowhere")?.to_vec(),
             None => return Err("a buffer is nowhere".into()),
-        });
+        };
+        file.buffers.push(bytes);
     }
-    let file = File {
-        json: &json,
-        buffers,
-    };
     let nodes = json["nodes"].as_array().map_or(0, Vec::len);
     // The nodes of the scene it opens on, or, where it names no scene, those under no other.
     let scene = json["scene"].as_u64().unwrap_or(0) as usize;
@@ -420,8 +663,11 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
     let mut out = Read {
         points: Vec::new(),
         normals: Vec::new(),
+        uvs: Vec::new(),
+        colors: Vec::new(),
         triangles: Vec::new(),
         parts: Vec::new(),
+        textures: Vec::new(),
     };
     for root in roots {
         file.node(root, &IDENTITY, 0, &mut out)?;

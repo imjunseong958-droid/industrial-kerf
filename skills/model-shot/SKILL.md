@@ -31,7 +31,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   cabin are two of them. Give it a light, or it is one flat color. With
   `file="car.glb"` it is a glTF model, `height` tall, a color a part; name
   the file on the recipe's `needs` line, so that replacing it asks for the
-  shot again.
+  shot again. A part the file gives a picture or corner colors is drawn in
+  them as they are, and lights do not change it: light the plain parts, and
+  do not expect a shadow or a shade on a textured one.
 - In depth x runs right, y down, and z away from the viewer, in frame
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a

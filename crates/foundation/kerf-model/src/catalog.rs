@@ -1350,7 +1350,7 @@ fn builtin_catalog() -> Catalog {
         )
         .param(P::color("color", Rgba::WHITE))
         .param(P::file("file", &["glb", "gltf"]).doc(
-            "A glTF file's mesh in place of `kind`: `height` tall, a color a part.",
+            "A glTF file's mesh in place of `kind`: `height` tall, a color a part, or its own picture and corner colors, unlit.",
         )),
         FxDef::new(
             "null",

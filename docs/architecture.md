@@ -516,8 +516,14 @@ What is built for it, in this order, each measured before the next:
    and takes the shadows clips in depth cast on it. Of a file it reads what
    is rigid: the triangles of every mesh of its scene, each where its node
    puts it at rest, and each material's base color, made as tall as the clip
-   says in the file's own proportions. Textures, skins, morph targets, and
-   animations are not read. *Not done:* it casts no
+   says in the file's own proportions. A part's own colors are read too, the
+   picture its material lays over it and the color its corners are given,
+   and such a part is drawn in them with no light (`three_d/texture.rs`):
+   they say what a thing is, and a set rebuilt from a shot has the shot's
+   light in them already. A picture is read at the size it is on the screen,
+   one size for each triangle, so that it holds still as it moves; its alpha
+   and how it is filtered are not read, nor anything else of a material.
+   Skins, morph targets, and animations are not read. *Not done:* it casts no
    shadow, takes no effect and no mask (the compositor refuses them), a
    transition's wipe is a fade on it, and the GPU does not draw it, so a
    frame with one is the CPU's. It was not handed to a model.
@@ -588,8 +594,12 @@ recipes, in `fixtures/shots/car`.
    in, and the passes and `shows` hold (`kerf-compose/tests/mesh.rs`,
    `kerf-engine/tests/shows.rs`). A glTF file is read into the same
    triangles, a color a part. A recipe counts such a file among what a shot
-   was made from only where its `needs` line names it; and no file a
-   modeling program wrote was tried, only ones written by the tests.
+   was made from only where its `needs` line names it. The tests write their
+   own files; eight of Khronos's sample models were read and looked at by
+   hand as well (2026-11-13: Duck, BoxTextured, BoxVertexColors,
+   CesiumMilkTruck from Blender's exporter, CesiumMan, Fox, BoxAnimated,
+   RiggedSimple), which have strides, node trees, and PNG and JPEG
+   pictures, and none is in the repository.
 
    Where the shapes come from is not Kerf's to build. ComfyUI's 3D (What
    others do) is fine in what it holds, not in how it draws: models that
@@ -600,7 +610,7 @@ recipes, in `fixtures/shots/car`.
    and Kerf's drawing of them stays plain. Two things follow for what is
    drawn, now that the solids and a glTF's triangles are in: a mesh's own colors, its
    texture drawn unlit, since they are what a thing is and not how it is
-   lit; and then a glTF's own animation, bones and all, since a character
+   lit, which is in; and then a glTF's own animation, bones and all, since a character
    that comes rigged and moving is the one thing in a guide that rigid
    shapes cannot be. Splats, for a set rebuilt from photographs, wait for
    those.

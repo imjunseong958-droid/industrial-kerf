@@ -61,7 +61,8 @@ on `main`; its section here becomes the release's notes on GitHub
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`
   tall and a color a part, with every side it has, so a camera can go round
-  it. It is
+  it. A part the file gives a picture (its material's base color texture) or
+  a color at each corner is drawn in those, as they are and unlit. It is
   placed, keyed, and parented as a clip in depth is, lit by the sequence's
   lights, and is in the ids and depth passes and in an agent's `look` with
   `shows` as any clip is. It casts no shadow yet, takes no effect or mask,

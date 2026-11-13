@@ -10,8 +10,10 @@
 //! and how far along the camera's way each pixel is, so that a mesh goes down among the other
 //! clips in depth, and into the ids and depth passes, as they do.
 //!
-//! It is in one flat color a part, lit by the scene's lights by the way each place faces: all a
-//! model that covers it wants of it. It casts no shadow, and is drawn on the CPU.
+//! A part in one flat color is lit by the scene's lights by the way each place faces. A part
+//! with colors of its own, a picture its file lays over it or a color at each corner, is drawn in
+//! them as they are, with no light: they are what the thing is, and a set rebuilt from a shot
+//! has the shot's light in them already. It casts no shadow, and is drawn on the CPU.
 //!
 //! It is one of a few solids, a box, a ball, a cylinder, or the triangles of a glTF file
 //! ([`super::gltf`]), as tall as the clip says and in the file's own proportions.
@@ -20,6 +22,7 @@
 //! by `z`, `rotate_x`, and `rotate_y` as a plane is. Its own space runs x right, y down, and z away
 //! from the viewer, in frame heights.
 
+use super::texture::Wrap;
 use super::*;
 
 /// How many places across and down a pixel are read, for an edge that is not jagged.
@@ -35,8 +38,23 @@ pub(in crate::draw) struct Mesh {
     points: Vec<Vector>,
     normals: Vec<Vector>,
     triangles: Vec<[u32; 3]>,
-    /// Where each run of triangles ends, and its color, in linear light.
-    parts: Vec<(usize, [f32; 3])>,
+    parts: Vec<Part>,
+    /// The file it was read from, which has its parts' pictures and its corners' colors and
+    /// places on them, corner for corner.
+    file: Option<Arc<super::gltf::Read>>,
+}
+
+/// A run of triangles of one material.
+#[derive(Debug, PartialEq)]
+struct Part {
+    /// The triangle after its last.
+    end: usize,
+    /// Its color, in linear light.
+    color: [f32; 3],
+    /// The picture laid over it: which of its file's, and what it does past its edges.
+    texture: Option<(usize, [Wrap; 2])>,
+    /// Whether it is drawn in its own colors, with no light.
+    own: bool,
 }
 
 /// What a mesh is drawn as.
@@ -56,6 +74,7 @@ impl Mesh {
             normals: Vec::new(),
             triangles: Vec::new(),
             parts: Vec::new(),
+            file: None,
         }
     }
 
@@ -73,7 +92,12 @@ impl Mesh {
     }
 
     fn finished(mut self, color: [f32; 3]) -> Self {
-        self.parts.push((self.triangles.len(), color));
+        self.parts.push(Part {
+            end: self.triangles.len(),
+            color,
+            texture: None,
+            own: false,
+        });
         self
     }
 
@@ -172,7 +196,7 @@ impl Mesh {
 
     /// What was read of a file, about the middle of the box it fills and `height` tall, with
     /// `color` where a part has no material.
-    fn fitted(read: &super::gltf::Read, height: f64, color: [f32; 3]) -> Self {
+    fn fitted(read: &Arc<super::gltf::Read>, height: f64, color: [f32; 3]) -> Self {
         let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
         for point in &read.points {
             for axis in 0..3 {
@@ -199,8 +223,21 @@ impl Mesh {
             parts: read
                 .parts
                 .iter()
-                .map(|(end, told)| (*end, told.unwrap_or(color)))
+                .map(|part| Part {
+                    end: part.end,
+                    // A picture or a corner's colors with no material are as they are.
+                    color: part
+                        .color
+                        .unwrap_or(if part.texture.is_some() || part.colored {
+                            [1.0; 3]
+                        } else {
+                            color
+                        }),
+                    texture: part.texture,
+                    own: part.texture.is_some() || part.colored,
+                })
                 .collect(),
+            file: Some(read.clone()),
         }
     }
 
@@ -233,9 +270,49 @@ impl Mesh {
         }
     }
 
-    fn color_of(&self, triangle: usize) -> [f32; 3] {
-        let part = self.parts.partition_point(|(end, _)| *end <= triangle);
-        self.parts.get(part).map_or([1.0; 3], |(_, color)| *color)
+    fn part_of(&self, triangle: usize) -> Option<&Part> {
+        let part = self.parts.partition_point(|part| part.end <= triangle);
+        self.parts.get(part)
+    }
+
+    /// The color of `part` where its `triangle` is `shares` of each of its corners: its picture
+    /// there, at the size `sizes` has for the triangle, times its corners' colors and its own.
+    fn own_color(&self, part: &Part, triangle: usize, shares: [f64; 3], sizes: &[f32]) -> [f32; 3] {
+        let Some(file) = &self.file else {
+            return part.color;
+        };
+        let mut color = part.color;
+        let corners = self.triangles[triangle];
+        for (channel, color) in color.iter_mut().enumerate() {
+            *color *= corners
+                .iter()
+                .zip(shares)
+                .map(|(corner, share)| file.colors[*corner as usize][channel] * share as f32)
+                .sum::<f32>();
+        }
+        if let Some((texture, wrap)) = part.texture {
+            let places = self.places(triangle);
+            let place = [0, 1].map(|axis| {
+                (0..3)
+                    .map(|corner| shares[corner] * places[corner][axis])
+                    .sum::<f64>()
+            });
+            let size = sizes.get(triangle).copied().unwrap_or(0.0);
+            let read = file.textures[texture].at(place, size, wrap);
+            for (color, read) in color.iter_mut().zip(read) {
+                *color *= read;
+            }
+        }
+        color
+    }
+
+    /// Where on its part's picture each corner of `triangle` is.
+    fn places(&self, triangle: usize) -> [[f64; 2]; 3] {
+        self.triangles[triangle].map(|corner| {
+            self.file
+                .as_ref()
+                .map_or([0.0; 2], |file| file.uvs[corner as usize].map(f64::from))
+        })
     }
 }
 
@@ -466,6 +543,11 @@ pub(in crate::draw) fn draw(
             cut,
         )
     };
+    // Which size of its part's picture each triangle reads, where it has one: the size at which
+    // a texel is as large as a place read, by how much of the picture and of the screen the
+    // triangle covers.
+    let pictured = mesh.parts.iter().any(|part| part.texture.is_some());
+    let mut sizes = vec![0.0f32; if pictured { mesh.triangles.len() } else { 0 }];
     for (index, triangle) in mesh.triangles.iter().enumerate() {
         let corners = [0, 1, 2].map(|corner| Cut {
             seen: seen[triangle[corner] as usize],
@@ -478,6 +560,31 @@ pub(in crate::draw) fn draw(
                 [onto(cut[0]), onto(cut[last - 1]), onto(cut[last])],
                 down,
             );
+        }
+        let texture = mesh
+            .part_of(index)
+            .and_then(|part| part.texture)
+            .and_then(|(texture, _)| mesh.file.as_ref()?.textures.get(texture));
+        if let (Some(texture), true) = (texture, cut.len() >= 3) {
+            let places = mesh.places(index);
+            let on = [cut[0], cut[1], cut[2]].map(|cut| {
+                let (x, y, _) = onto(cut);
+                let place = [0, 1].map(|axis| {
+                    (0..3)
+                        .map(|corner| cut.of[corner] * places[corner][axis])
+                        .sum::<f64>()
+                });
+                ((x, y), place)
+            });
+            let area = |[a, b, c]: [(f64, f64); 3]| {
+                ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs()
+            };
+            let (wide, tall) = texture.size();
+            let texels = area(on.map(|(_, place)| (place[0], place[1]))) * (wide * tall) as f64;
+            let read = area(on.map(|(screen, _)| screen));
+            if texels > 0.0 && read > 0.0 {
+                sizes[index] = (0.5 * (texels / read).log2()).max(0.0) as f32;
+            }
         }
     }
 
@@ -492,6 +599,12 @@ pub(in crate::draw) fn draw(
                     f64::from(of[1]),
                     f64::from(1.0 - of[0] - of[1]),
                 ];
+                let Some(part) = mesh.part_of(triangle as usize) else {
+                    return [1.0; 3];
+                };
+                if part.own {
+                    return mesh.own_color(part, triangle as usize, shares, &sizes);
+                }
                 let mixed = |all: &[Vector]| {
                     let mut sum = [0.0; 3];
                     for (corner, share) in corners.iter().zip(shares) {
@@ -505,7 +618,7 @@ pub(in crate::draw) fn draw(
                 if dot(minus(scene.eye, at), normal) < 0.0 {
                     normal = times(normal, -1.0);
                 }
-                let color = mesh.color_of(triangle as usize);
+                let color = part.color;
                 match scene.lit_outside(receiver, at, normal) {
                     Some(light) => [0, 1, 2].map(|channel| color[channel] * light[channel]),
                     None => color,
@@ -534,10 +647,14 @@ pub(in crate::draw) fn draw(
                     }
                     let ahead = nearest.ahead[at];
                     depth[x] = depth[x].min(ahead);
+                    // Its own colors change within a pixel, and are read at each place.
+                    let once = match shade {
+                        Shade::Near => false,
+                        Shade::Flat(_) => true,
+                        Shade::Lit(_) => !mesh.part_of(triangle as usize).is_some_and(|p| p.own),
+                    };
                     let color = match last {
-                        Some((lit, color)) if lit == triangle && !matches!(shade, Shade::Near) => {
-                            color
-                        }
+                        Some((lit, color)) if lit == triangle && once => color,
                         _ => colored(triangle, nearest.of[at], ahead),
                     };
                     last = Some((triangle, color));
@@ -582,7 +699,8 @@ mod tests {
             Mesh::a_ball([1.0, 2.0, 3.0], [1.0; 3]),
             Mesh::a_cylinder([1.0, 2.0, 3.0], [1.0; 3]),
         ] {
-            assert_eq!(mesh.parts, [(mesh.triangles.len(), [1.0; 3])]);
+            assert_eq!(mesh.parts.len(), 1);
+            assert_eq!(mesh.parts[0].end, mesh.triangles.len());
             // Every corner faces away from the middle, and is within the box it was asked to fill.
             for (point, normal) in mesh.points.iter().zip(&mesh.normals) {
                 assert!((dot(*normal, *normal) - 1.0).abs() < 1e-9);
