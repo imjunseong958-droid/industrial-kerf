@@ -620,7 +620,10 @@ mod tests {
         let making = made_elsewhere(dir, &project, &stop);
         let began = until("the making", &|event| event["type"] == "media_making");
         assert_eq!((began["media"].as_str(), began["take"].as_u64()), (Some("m1"), Some(1)));
-        until("its first line", &|event| event["line"] == "warming up");
+        // The look that first sees the making may already find its first line said.
+        if began["line"] != "warming up" {
+            until("its first line", &|event| event["line"] == "warming up");
+        }
         // Shown once: looking again says nothing new.
         look();
         assert!(events.try_recv().is_err());
