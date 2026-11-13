@@ -29,7 +29,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   heights, and a `color`. It is in depth as it is, with its middle at `x`,
   `y`, `z`, and has every side, so a camera can go round it; a body and a
   cabin are two of them. Give it a light, or it is one flat color. With
-  `file="car.glb"` it is a glTF model, `height` tall, a color a part.
+  `file="car.glb"` it is a glTF model, `height` tall, a color a part; name
+  the file on the recipe's `needs` line, so that replacing it asks for the
+  shot again.
 - In depth x runs right, y down, and z away from the viewer, in frame
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a

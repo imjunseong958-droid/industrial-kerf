@@ -587,10 +587,9 @@ recipes, in `fixtures/shots/car`.
    enough to say whether the passes and `shows` hold for a mesh: they are
    in, and the passes and `shows` hold (`kerf-compose/tests/mesh.rs`,
    `kerf-engine/tests/shows.rs`). A glTF file is read into the same
-   triangles, a color a part. A recipe does not yet count such a file among
-   what a guide was made from, so replacing one does not ask for the shot
-   again; and no file a modeling program wrote was tried, only ones written
-   by the tests.
+   triangles, a color a part. A recipe counts such a file among what a shot
+   was made from only where its `needs` line names it; and no file a
+   modeling program wrote was tried, only ones written by the tests.
 3. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the
