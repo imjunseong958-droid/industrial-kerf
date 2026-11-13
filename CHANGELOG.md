@@ -76,6 +76,10 @@ on `main`; its section here becomes the release's notes on GitHub
   For these `kerf-comfy` writes the lens a rebuilt set was seen through
   (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
   in the units of the camera path found of the same frames.
+- Clips in depth are sorted, and cut where they cross, across a track that
+  draws nothing: a camera, a light, or a null on a track between two 3D
+  clips, or an empty track there, no longer has the upper one laid over the
+  lower whatever their depth. A track with a flat clip still parts them.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`

@@ -566,11 +566,13 @@ model finds of a lens wavers by the frame, so a zoom does not come through.
 A path shorter than the mesh's clip holds still after its last frame, and
 is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
 
-What is added to the set then goes on a track under the camera's, which
-the lines `look` writes put on top: a clip above the camera is laid over
-the set and not sorted with it by depth. `look` with `shows` says how much
-of it the set hides, and so whether it stands on the set's ground or is in
-it.
+What is added to the set then goes on a track of its own, over the
+camera's or under it: the lines `look` writes put the camera on top, and a
+camera's track does not come between what is in depth either side of it,
+so the set hides what is behind its surfaces wherever the camera's clip
+is. A track with a flat clip between the two does part them. `look` with
+`shows` says how much of what is added the set hides, and so whether it
+stands on the set's ground or is in it.
 
 A take's depth read back is held to its guide by `look` with `follows`, the
 media that depth is, and `sequence`, the guide's:

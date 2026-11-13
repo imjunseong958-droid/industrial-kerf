@@ -214,6 +214,64 @@ fn a_mesh_and_a_clip_in_depth_are_cut_where_they_meet() {
     }
 }
 
+/// The wall and the box of [`across`], each on a track of its own.
+fn wall_on(track: u32) -> String {
+    format!(
+        "  track V{track} video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#c0c0c0 three_d=true scale=0.9 rotate_y=30\n"
+    )
+}
+
+fn box_on(track: u32) -> String {
+    format!(
+        "  track V{track} video\n    clip thing gen=mesh@1 at=0f dur=24f\n      set kind=box width=1 height=0.2 length=0.05 color=#ff0000\n"
+    )
+}
+
+#[test]
+fn a_track_that_draws_nothing_between_two_in_depth_does_not_part_them() {
+    let same = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
+    let drawn = |body: &str| {
+        let drawn = compositor(body, Pass::Ids);
+        let ids = drawn.ids();
+        let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+        (
+            drawn.frame(Rate::FPS_24.time_of(3), 1.0),
+            color("wall"),
+            color("thing"),
+        )
+    };
+    let between = [
+        // A camera, as the lines `look` writes for a mesh put one: on a track of its own.
+        "  track V2 video\n    clip seen gen=camera@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip lamp gen=light@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip hand gen=null@1 at=0f dur=24f\n",
+        // A track with nothing on it, and one whose clip is over by the frame drawn.
+        "  track V2 video\n",
+        "  track V2 video\n    clip early gen=solid@1 at=0f dur=2f\n      set color=#00ff00\n",
+    ];
+    for middle in between {
+        for wall_under in [true, false] {
+            let body = if wall_under {
+                format!("{}{middle}{}", wall_on(1), box_on(3))
+            } else {
+                format!("{}{middle}{}", box_on(1), wall_on(3))
+            };
+            let (frame, wall, thing) = drawn(&body);
+            // The box before the wall on the left and behind it on the right, by the pixel,
+            // whichever of the two is on the track above.
+            assert!(same(pixel(&frame, 115, 90), thing), "{middle} {wall_under}");
+            assert!(same(pixel(&frame, 205, 90), wall), "{middle} {wall_under}");
+        }
+    }
+    // A track that does draw still parts them: what is over a flat picture is laid over it,
+    // and over what is under it.
+    let flat = "  track V2 video\n    clip card gen=solid@1 at=0f dur=24f\n      set color=#00ff00 scale=0.1 y=-0.4\n";
+    let (frame, wall, _) = drawn(&format!("{}{flat}{}", box_on(1), wall_on(3)));
+    assert!(same(pixel(&frame, 115, 90), wall));
+    let (frame, _, thing) = drawn(&format!("{}{flat}{}", wall_on(1), box_on(3)));
+    assert!(same(pixel(&frame, 205, 90), thing));
+}
+
 #[test]
 fn a_depth_pass_has_a_mesh_by_the_pixel() {
     let grey = |frame: &Frame, x: u32, y: u32| {

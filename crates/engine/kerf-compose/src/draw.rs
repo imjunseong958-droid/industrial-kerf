@@ -803,7 +803,12 @@ impl Drawing {
         canvas
     }
 
-    /// The tracks to draw, with adjacent ones showing clips in depth put far to near.
+    /// The tracks to draw, with adjacent ones showing clips in depth put far to near. Adjacent
+    /// among those that put something on the canvas at `at`: a track of a camera, a light, a
+    /// null, or a signal, and one with no clip then, is left out, so that the clips in depth
+    /// under it and over it are one run, sorted and cut where they cross as if it were not
+    /// there. A camera sees the whole sequence from whichever track it is on, and where it is
+    /// put should not change what is before what.
     fn in_order<'p>(
         &self,
         plan: &'p SequencePlan,
@@ -814,7 +819,7 @@ impl Drawing {
         let mut tracks: Vec<&TrackPlan> = plan
             .tracks
             .iter()
-            .filter(|track| track.drawn(angle))
+            .filter(|track| track.drawn(angle) && !track.idle(at))
             .collect();
         fn in_depth(track: &TrackPlan, at: Time) -> Option<&ClipPlan> {
             track
@@ -1951,6 +1956,17 @@ impl TrackPlan {
             Some(angle) => self.id == *angle,
             None => self.shows,
         }
+    }
+
+    /// Whether it puts nothing on the canvas at `at`: no dip, and no clip but those that draw
+    /// nothing.
+    fn idle(&self, at: Time) -> bool {
+        !self.dips.iter().any(|dip| dip.shows(at))
+            && self
+                .shown
+                .iter()
+                .filter(|shown| shown.shows(at))
+                .all(|shown| matches!(shown.plan.source, Source::Nothing))
     }
 
     /// The transition mixing its clip `index` at `at`.
