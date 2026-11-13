@@ -33,7 +33,11 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   the file on the recipe's `needs` line, so that replacing it asks for the
   shot again. A part the file gives a picture or corner colors is drawn in
   them as they are, and lights do not change it: light the plain parts, and
-  do not expect a shadow or a shade on a textured one.
+  do not expect a shadow or a shade on a textured one. A file that comes
+  rigged and moving plays with `animation="Walk"` (the file's name for it,
+  or its number from 0), from the clip's start, looping; `seconds={0f:0
+  48f:1}` retimes it with keyframes, and `loop=false` holds its end. A
+  wrong name is answered with the names the file has.
 - In depth x runs right, y down, and z away from the viewer, in frame
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a

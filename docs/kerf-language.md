@@ -265,7 +265,16 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `color` where it has none, `height` tall in its own proportions. A part with colors of its own, a picture
   its material lays over it (a PNG, JPEG, or WebP in the file or beside it) or a color at each corner, is
   drawn in them as they are, and no light changes it: they are what the thing is. Nothing else of a
-  material is read. Its skins and animations are not read.
+  material is read. `animation="Walk"` plays one of the file's animations, named as the file names it or by
+  its number from 0 (`animation="0"`): its nodes move, and a skinned mesh bends with its bones. With no
+  `animation` it is at rest. It starts where the clip starts and runs a second a second, starting again
+  when it ends; `loop=false` holds its last pose. A mesh clip has no source and no `speed`, so `seconds`
+  is how it is retimed: it says how far into the animation the mesh is, in place of the clip's own time.
+  `seconds=0.5` holds a pose, `seconds={0f:0 48f:1}` plays a second over two, `{0f:1 24f:0}` plays it
+  backward. Trimming a clip's head keeps keyframes with what they were over, so a keyed `seconds` shows
+  what it showed; with no `seconds` the animation starts again at the clip's new first frame. Its size
+  and its middle are those it has at rest, so what an animation moves, moves from there. Morph targets
+  are not read, nor more than four bones to a corner.
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and

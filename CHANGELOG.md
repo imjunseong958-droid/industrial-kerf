@@ -62,7 +62,9 @@ on `main`; its section here becomes the release's notes on GitHub
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`
   tall and a color a part, with every side it has, so a camera can go round
   it. A part the file gives a picture (its material's base color texture) or
-  a color at each corner is drawn in those, as they are and unlit. It is
+  a color at each corner is drawn in those, as they are and unlit.
+  `animation="Walk"` plays one of the file's animations, bones and all, as
+  the clip runs, and `seconds={0f:0 48f:1}` retimes it. It is
   placed, keyed, and parented as a clip in depth is, lit by the sequence's
   lights, and is in the ids and depth passes and in an agent's `look` with
   `shows` as any clip is. It casts no shadow yet, takes no effect or mask,

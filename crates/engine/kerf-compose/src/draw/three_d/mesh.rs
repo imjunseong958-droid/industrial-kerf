@@ -16,7 +16,9 @@
 //! has the shot's light in them already. It casts no shadow, and is drawn on the CPU.
 //!
 //! It is one of a few solids, a box, a ball, a cylinder, or the triangles of a glTF file
-//! ([`super::gltf`]), as tall as the clip says and in the file's own proportions.
+//! ([`super::gltf`]), as tall as the clip says and in the file's own proportions. A file's
+//! animation moves it where the clip names one: its nodes, and the bones its skin bends with, are
+//! where the animation has them as many seconds in as the clip has run, or as its `seconds` says.
 //!
 //! A mesh stands where its clip's 2D geometry puts the middle of the frame, turned and pushed back
 //! by `z`, `rotate_x`, and `rotate_y` as a plane is. Its own space runs x right, y down, and z away
@@ -194,9 +196,15 @@ impl Mesh {
         mesh.finished(color)
     }
 
-    /// What was read of a file, about the middle of the box it fills and `height` tall, with
-    /// `color` where a part has no material.
-    fn fitted(read: &Arc<super::gltf::Read>, height: f64, color: [f32; 3]) -> Self {
+    /// What was read of a file, about the middle of the box it fills at rest and `height` tall
+    /// there, with `color` where a part has no material: at rest, or as `pose` has it, an
+    /// animation of the file's and how many seconds into it.
+    fn fitted(
+        read: &Arc<super::gltf::Read>,
+        height: f64,
+        color: [f32; 3],
+        pose: Option<(usize, f64)>,
+    ) -> Self {
         let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
         for point in &read.points {
             for axis in 0..3 {
@@ -212,13 +220,16 @@ impl Mesh {
         } else {
             size[0].max(size[2]).max(1e-12)
         };
+        let (points, normals) = match pose {
+            Some(pose) => read.posed(Some(pose)),
+            None => (read.points.clone(), read.normals.clone()),
+        };
         Self {
-            points: read
-                .points
+            points: points
                 .iter()
                 .map(|point| times(minus(*point, middle), height / tall))
                 .collect(),
-            normals: read.normals.clone(),
+            normals,
             triangles: read.triangles.clone(),
             parts: read
                 .parts
@@ -259,7 +270,12 @@ impl Mesh {
         if let Some(path) = file_of(clip) {
             // A file that cannot be read was said when the sequence was planned.
             return match loaded(&path) {
-                Ok(read) => Self::fitted(&read, size[1], [r, g, b]),
+                Ok(read) => {
+                    let pose = animation_of(clip, &read)
+                        .and_then(|which| which.ok())
+                        .map(|which| (which, seconds_into(clip, def, &read, which, at)));
+                    Self::fitted(&read, size[1], [r, g, b], pose)
+                }
                 Err(_) => Self::new(),
             };
         }
@@ -327,6 +343,73 @@ fn file_of(clip: &Clip) -> Option<String> {
     }
 }
 
+/// Which of its file's animations a `gen=mesh` clip plays, where it names one: by what the file
+/// calls it, or by its number from 0. An error says which the file has.
+fn animation_of(
+    clip: &Clip,
+    read: &super::gltf::Read,
+) -> Option<std::result::Result<usize, String>> {
+    let Content::Generator { params, .. } = &clip.content else {
+        return None;
+    };
+    let Some(Param::Static(Value::Text(name))) = params.get("animation") else {
+        return None;
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let named = read
+        .animations
+        .iter()
+        .position(|animation| animation.name == *name);
+    let numbered = name
+        .parse::<usize>()
+        .ok()
+        .filter(|number| *number < read.animations.len());
+    Some(named.or(numbered).ok_or_else(|| {
+        let has: Vec<String> = read
+            .animations
+            .iter()
+            .enumerate()
+            .map(|(number, animation)| match animation.name.as_str() {
+                "" => format!("`{number}`"),
+                name => format!("`{name}`"),
+            })
+            .collect();
+        match has.len() {
+            0 => format!("has no animation, and `{name}` is asked for"),
+            _ => format!("has no animation `{name}`: it has {}", has.join(", ")),
+        }
+    }))
+}
+
+/// How many seconds into animation `which` of its file a `gen=mesh` clip is at sequence time
+/// `at`: what its `seconds` says, or with none as long as the clip has run; from the start again
+/// past its end where it loops, and held at its end where it does not.
+fn seconds_into(
+    clip: &Clip,
+    def: Option<&FxDef>,
+    read: &super::gltf::Read,
+    which: usize,
+    at: Time,
+) -> f64 {
+    let told = match &clip.content {
+        Content::Generator { params, .. } => params.get("seconds"),
+        _ => None,
+    };
+    let seconds = match told {
+        Some(told) => told.value_at(at - clip.start).as_number().unwrap_or(0.0),
+        None => (at - clip.start).seconds(),
+    };
+    let length = read.animations[which].length;
+    let loops = !matches!(generated(def, clip, "loop", at), Some(Value::Bool(false)));
+    if loops && length > 0.0 && !(0.0..=length).contains(&seconds) {
+        seconds.rem_euclid(length)
+    } else {
+        seconds.clamp(0.0, length)
+    }
+}
+
 /// What a file holds, read once for as long as the file is what it was.
 fn loaded(path: &str) -> std::result::Result<Arc<super::gltf::Read>, String> {
     type Kept = (u64, Option<std::time::SystemTime>, Arc<super::gltf::Read>);
@@ -350,9 +433,13 @@ fn loaded(path: &str) -> std::result::Result<Arc<super::gltf::Read>, String> {
 /// Whether the file a `gen=mesh` clip names can be read, and why not.
 pub(in crate::draw) fn check(clip: &Clip) -> std::result::Result<(), String> {
     match file_of(clip) {
-        Some(path) => loaded(&path)
-            .map(|_| ())
-            .map_err(|why| format!("`{path}` cannot be read: {why}")),
+        Some(path) => {
+            let read = loaded(&path).map_err(|why| format!("`{path}` cannot be read: {why}"))?;
+            match animation_of(clip, &read) {
+                Some(Err(why)) => Err(format!("`{path}` {why}")),
+                _ => Ok(()),
+            }
+        }
         None => Ok(()),
     }
 }

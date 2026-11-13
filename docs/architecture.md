@@ -523,7 +523,20 @@ What is built for it, in this order, each measured before the next:
    light in them already. A picture is read at the size it is on the screen,
    one size for each triangle, so that it holds still as it moves; its alpha
    and how it is filtered are not read, nor anything else of a material.
-   Skins, morph targets, and animations are not read. *Not done:* it casts no
+   And it reads how a file moves (`gltf.rs`, `Read::posed`): the animations
+   of where its nodes are, and the skins by which a mesh bends with the
+   nodes that are its bones, four to a corner. A clip plays one by naming
+   it, `animation=`; unnamed, the mesh is at rest, as it was before
+   animations were read. It runs with the clip's own time from the clip's
+   first frame and starts again at its end. A mesh clip is a generator, with
+   no source to trim into and no `speed`, so what retimes it is a number
+   with keyframes as everything else that changes is: `seconds`, how far
+   into the animation it is. Keyframes stay with what they were over when a
+   clip's head is trimmed or it is split, so a keyed animation is cut as
+   footage is; one run by the clip's time alone starts again at the new
+   first frame, which is said in the language's reference. Its size and
+   middle are taken at rest, so that an animation that carries it across a
+   room carries it across the frame. Morph targets are not read. *Not done:* it casts no
    shadow, takes no effect and no mask (the compositor refuses them), a
    transition's wipe is a fade on it, and the GPU does not draw it, so a
    frame with one is the CPU's. It was not handed to a model.
@@ -584,8 +597,8 @@ recipes, in `fixtures/shots/car`.
    camera, and in the ids and depth passes and in `look` with `shows` as any
    clip is, since those go by a clip and not by how it is drawn. It is drawn
    in one flat color a part, with the scene's lights, which is all a model
-   covering it wants of it. Rigid only: what bends or breaks stays a
-   renderer's through `run`, or footage. To draw it, the planes' rays do not
+   covering it wants of it. Rigid, or bent by the bones a file comes with: what breaks, flows, or
+   is simulated stays a renderer's through `run`, or footage. To draw it, the planes' rays do not
    do: it wants triangles and a depth for each pixel. EffectCraft's
    `render/three_d/adv` at `5c54866` is such a rasterizer and is the place
    to start from, carried into Kerf's terms as the rest was, and without its
@@ -612,7 +625,8 @@ recipes, in `fixtures/shots/car`.
    texture drawn unlit, since they are what a thing is and not how it is
    lit, which is in; and then a glTF's own animation, bones and all, since a character
    that comes rigged and moving is the one thing in a guide that rigid
-   shapes cannot be. Splats, for a set rebuilt from photographs, wait for
+   shapes cannot be, which is in too: CesiumMan walked and Fox turned its
+   head, looked at by hand. Splats, for a set rebuilt from photographs, wait for
    those.
 3. **Footage into the scene, and a picture read back.** What people do in
    ComfyUI with a filmed shot is one loop, and Kerf wants the whole of it:

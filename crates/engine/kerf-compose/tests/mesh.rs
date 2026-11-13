@@ -682,9 +682,22 @@ fn png(width: u32, height: u32, color: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> 
 
 /// A sequence with a mesh read from the file `name` of `folder`, `height` 0.5, and `more` tracks.
 fn sheet_of(folder: &std::path::Path, name: &str, more: &str, pass: Pass) -> Frame {
+    posed(folder, name, "", more, pass)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .frame(Rate::FPS_24.time_of(3), 1.0)
+}
+
+/// The same for two seconds, with `set` said of the mesh as well.
+fn posed(
+    folder: &std::path::Path,
+    name: &str,
+    set: &str,
+    more: &str,
+    pass: Pass,
+) -> Result<Compositor, String> {
     let mut project = parse_document(
         &format!(
-            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip thing gen=mesh@1 at=0f dur=24f\n      set file=\"{name}\" height=0.5\n{more}"
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip thing gen=mesh@1 at=0f dur=48f\n      set file=\"{name}\" height=0.5 {set}\n{more}"
         ),
         Catalog::builtin(),
     )
@@ -699,8 +712,7 @@ fn sheet_of(folder: &std::path::Path, name: &str, more: &str, pass: Pass) -> Fra
             ..ComposeOptions::default()
         },
     )
-    .unwrap_or_else(|error| panic!("{error}"))
-    .frame(Rate::FPS_24.time_of(3), 1.0)
+    .map_err(|error| error.to_string())
 }
 
 const SUN: &str = "  track V2 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=1 y=0 z=0.3\n";
@@ -872,4 +884,107 @@ fn corners_given_colors_are_drawn_in_them_with_no_light() {
     // The clip's color is for a part with none of its own.
     let tinted = sheet_of(folder.path(), "colored.glb", "", Pass::Picture);
     assert!(tinted == sheet_of(folder.path(), "colored.glb", SUN, Pass::Picture));
+}
+
+/// Where the sheet of `name` reaches at `frame`, with `set` said of its clip.
+fn reach_at(folder: &std::path::Path, name: &str, set: &str, frame: i64) -> [u32; 4] {
+    let drawn = posed(folder, name, set, "", Pass::Picture).unwrap_or_else(|error| panic!("{error}"));
+    reach(&drawn.frame(Rate::FPS_24.time_of(frame), 1.0))
+}
+
+#[test]
+fn a_files_animation_moves_its_nodes_as_the_clip_runs_or_as_its_seconds_say() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A sheet whose node goes half its own width to the right in a second, and one before it
+    // that is never asked for.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let away = file.floats(3, &[0.0, 0.0, 0.0, 0.0, 50.0, 0.0]);
+    file.glb(
+        folder.path(),
+        "slides.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"children\":[1]}},{{\"mesh\":0}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}},",
+                "{{\"name\":\"slide\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            points, indices, times, away, times, places
+        ),
+    );
+    let rest = [70, 45, 250, 135];
+    let by = |pixels: u32| [rest[0] + pixels, rest[1], rest[2] + pixels, rest[3]];
+    let at = |set: &str, frame: i64| reach_at(folder.path(), "slides.glb", set, frame);
+    // Asked for no animation, it is at rest however long the clip has run.
+    assert!(reaches(at("", 0), rest) && reaches(at("", 12), rest));
+    // Named, or numbered, it is as far into it as the clip has run: its own size is the one it
+    // has at rest, so half its width is 90 pixels.
+    assert!(reaches(at("animation=\"slide\"", 0), rest));
+    assert!(reaches(at("animation=\"slide\"", 12), by(45)), "{:?}", at("animation=\"slide\"", 12));
+    assert!(reaches(at("animation=\"1\"", 18), by(67)));
+    // Past its end it starts again, or stays at its end.
+    assert!(reaches(at("animation=\"slide\"", 36), by(45)));
+    // (There its right side is past the frame's.)
+    let held = at("animation=\"slide\" loop=false", 36);
+    assert!(held[0].abs_diff(160) <= 1 && held[2] == 320, "{held:?}");
+    // `seconds` says how far into it in place of the clip's time: held, or keyed at any speed
+    // and either way.
+    assert!(reaches(at("animation=\"slide\" seconds=0.5", 0), by(45)));
+    assert!(reaches(at("animation=\"slide\" seconds=0.5", 30), by(45)));
+    assert!(reaches(at("animation=\"slide\" seconds={0f:0 48f:1}", 12), by(22)));
+    assert!(reaches(at("animation=\"slide\" seconds={0f:1 24f:0}", 6), by(67)));
+    // In its passes it is where it is in the picture.
+    for pass in [Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "slides.glb", "animation=\"slide\"", "", pass).unwrap();
+        let there = reach(&drawn.frame(Rate::FPS_24.time_of(12), 1.0));
+        assert!(reaches(there, by(45)), "{there:?}");
+    }
+    // An animation the file has none of is said, with those it has.
+    let said = posed(folder.path(), "slides.glb", "animation=\"walk\"", "", Pass::Picture)
+        .err()
+        .expect("no such animation");
+    assert!(said.contains("has no animation `walk`: it has `0`, `slide`"), "{said}");
+}
+
+#[test]
+fn a_skin_bends_a_mesh_with_its_bones() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A sheet whose left corners are one bone's and whose right corners are another's, which
+    // goes up by the sheet's height in a second. Its corners go round from the top left.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let joints = file.accessor(&[0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 5121, 4, "");
+    let weights = file.floats(4, &[1.0, 0.0, 0.0, 0.0].repeat(4));
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    file.glb(
+        folder.path(),
+        "bends.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1,2]}}],",
+                "\"nodes\":[{{\"mesh\":0,\"skin\":0}},{{}},{{}}],\"skins\":[{{\"joints\":[1,2]}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{},\"JOINTS_0\":{},\"WEIGHTS_0\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"name\":\"lift\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":2,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            points, joints, weights, indices, times, places
+        ),
+    );
+    for pass in [Pass::Picture, Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "bends.glb", "animation=\"lift\"", "", pass).unwrap();
+        // At rest it is the sheet: 180 across and 90 down about the middle.
+        let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
+        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        // A second in, its right side is its own height higher and its left where it was.
+        let bent = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
+        assert!(reaches(reach(&bent), [70, 0, 250, 135]), "{:?}", reach(&bent));
+        assert!(lit(&bent, 245, 20) && !lit(&bent, 245, 60));
+        assert!(lit(&bent, 75, 120) && !lit(&bent, 75, 30));
+    }
 }

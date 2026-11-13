@@ -2,9 +2,11 @@
 //!
 //! What a guide wants of a model is its shape at rest and its own colors: the triangles of every
 //! mesh its scene's nodes hold, each where its node puts it, each material's base color, the
-//! picture a material lays over its part, and the colors its corners are given. Skins, morph
-//! targets, animations, cameras, and lights in the file are not read, and of a material nothing
-//! but its base color: how a thing shines is a model's to draw. A `.gltf` with its buffers and
+//! picture a material lays over its part, and the colors its corners are given. And how it
+//! moves: its animations of where its nodes are, and the skins by which a mesh bends with the
+//! nodes that are its bones, so that it can be posed at any time of one ([`Read::posed`]). Morph
+//! targets, cameras, and lights in the file are not read, and of a material nothing but its base
+//! color: how a thing shines is a model's to draw. A `.gltf` with its buffers and
 //! pictures beside it or inside it, and a `.glb`, are read.
 //!
 //! glTF's x runs right, its y up, and its z toward the viewer. Kerf's y runs down and its z away,
@@ -31,6 +33,370 @@ pub(super) struct Read {
     pub triangles: Vec<[u32; 3]>,
     pub parts: Vec<Part>,
     pub textures: Vec<Texture>,
+    /// The ways the file says it moves.
+    pub animations: Vec<Animation>,
+    rig: Rig,
+}
+
+impl Read {
+    /// Where every corner is and the way it faces, in Kerf's axes and the file's own units:
+    /// at rest, or `seconds` into the animation numbered.
+    pub(super) fn posed(&self, animation: Option<(usize, f64)>) -> (Vec<Vector>, Vec<Vector>) {
+        let rig = &self.rig;
+        let animation =
+            animation.and_then(|(which, seconds)| Some((self.animations.get(which)?, seconds)));
+        let places = rig.places(animation);
+        let mut points = Vec::with_capacity(rig.points.len());
+        let mut normals = Vec::with_capacity(rig.points.len());
+        for run in &rig.runs {
+            let whole = Placed::by(places[run.node]);
+            // A bone moves a corner from where the bone was when the mesh was bound to it.
+            let bones: Option<Vec<Matrix>> = run.skin.map(|skin| {
+                let skin = &rig.skins[skin];
+                skin.joints
+                    .iter()
+                    .zip(&skin.inverse)
+                    .map(|(joint, inverse)| match places.get(*joint) {
+                        Some(place) => then(place, inverse),
+                        None => IDENTITY,
+                    })
+                    .collect()
+            });
+            for corner in run.corners.0..run.corners.1 {
+                let placed = match &bones {
+                    Some(bones) => {
+                        let (joints, weights) = rig.bones[corner];
+                        let mut sum = [[0.0; 4]; 3];
+                        let mut all = 0.0;
+                        for (joint, weight) in joints.iter().zip(weights) {
+                            let Some(bone) = bones.get(*joint as usize) else {
+                                continue;
+                            };
+                            let weight = f64::from(weight);
+                            all += weight;
+                            for (sum, bone) in sum.iter_mut().flatten().zip(bone.iter().flatten()) {
+                                *sum += bone * weight;
+                            }
+                        }
+                        if all > 1e-9 {
+                            Placed::by(sum)
+                        } else {
+                            whole
+                        }
+                    }
+                    None => whole,
+                };
+                points.push(placed.point(rig.points[corner]));
+                normals.push(placed.facing(rig.normals[corner]));
+            }
+            if run.flat {
+                for three in &self.triangles[run.triangles.0..run.triangles.1] {
+                    let [a, b, c] = three.map(|corner| points[corner as usize]);
+                    let (ab, ac) = (
+                        [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                        [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+                    );
+                    let across = [
+                        ab[1] * ac[2] - ab[2] * ac[1],
+                        ab[2] * ac[0] - ab[0] * ac[2],
+                        ab[0] * ac[1] - ab[1] * ac[0],
+                    ];
+                    let length =
+                        (across[0] * across[0] + across[1] * across[1] + across[2] * across[2])
+                            .sqrt()
+                            .max(1e-300);
+                    for corner in three {
+                        normals[*corner as usize] = across.map(|value| value / length);
+                    }
+                }
+            }
+        }
+        (points, normals)
+    }
+}
+
+/// One of a file's animations.
+pub(super) struct Animation {
+    /// What the file calls it: nothing where it calls it nothing.
+    pub name: String,
+    /// How long it is, in seconds: when the last of its keys is.
+    pub length: f64,
+    channels: Vec<Channel>,
+}
+
+/// What an animation says of one node over time.
+struct Channel {
+    node: usize,
+    what: What,
+    how: How,
+    /// How many numbers a value is.
+    across: usize,
+    times: Vec<f64>,
+    values: Vec<f64>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum What {
+    Moved,
+    Turned,
+    Sized,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum How {
+    Step,
+    Linear,
+    Cubic,
+}
+
+impl Channel {
+    /// Its value `seconds` in: the first before its first key, and the last after its last.
+    fn at(&self, seconds: f64) -> [f64; 4] {
+        let each = self.across * if self.how == How::Cubic { 3 } else { 1 };
+        // A key's value: with curves, it is between the way in and the way out.
+        let part = |key: usize, which: usize| {
+            let from = key * each + which * self.across;
+            let mut out = [0.0; 4];
+            out[..self.across].copy_from_slice(&self.values[from..from + self.across]);
+            out
+        };
+        let value = |key: usize| part(key, usize::from(self.how == How::Cubic));
+        let after = self.times.partition_point(|time| *time <= seconds);
+        if after == 0 {
+            return value(0);
+        }
+        if after == self.times.len() {
+            return value(after - 1);
+        }
+        let (from, to) = (self.times[after - 1], self.times[after]);
+        let share = (seconds - from) / (to - from).max(1e-12);
+        let (a, b) = (value(after - 1), value(after));
+        let mut out = match self.how {
+            How::Step => a,
+            How::Linear if self.what == What::Turned => turned_between(a, b, share),
+            How::Linear => [0, 1, 2, 3].map(|k| a[k] + (b[k] - a[k]) * share),
+            How::Cubic => {
+                let (out_of, into) = (part(after - 1, 2), part(after, 0));
+                let (t, long) = (share, to - from);
+                let (t2, t3) = (t * t, t * t * t);
+                [0, 1, 2, 3].map(|k| {
+                    (2.0 * t3 - 3.0 * t2 + 1.0) * a[k]
+                        + (t3 - 2.0 * t2 + t) * long * out_of[k]
+                        + (-2.0 * t3 + 3.0 * t2) * b[k]
+                        + (t3 - t2) * long * into[k]
+                })
+            }
+        };
+        if self.what == What::Turned {
+            let length = out.iter().map(|value| value * value).sum::<f64>().sqrt();
+            out = out.map(|value| value / length.max(1e-300));
+        }
+        out
+    }
+}
+
+/// The turn `share` of the way from `a` to `b`, the short way round and at an even speed.
+fn turned_between(a: [f64; 4], mut b: [f64; 4], share: f64) -> [f64; 4] {
+    let mut alike: f64 = a.iter().zip(&b).map(|(a, b)| a * b).sum();
+    if alike < 0.0 {
+        (b, alike) = (b.map(|value| -value), -alike);
+    }
+    // Nearly one turn: the straight way between them is as good, and divides by nothing.
+    if alike > 0.9995 {
+        return [0, 1, 2, 3].map(|k| a[k] + (b[k] - a[k]) * share);
+    }
+    let angle = alike.acos();
+    let (from, to) = (
+        ((1.0 - share) * angle).sin() / angle.sin(),
+        (share * angle).sin() / angle.sin(),
+    );
+    [0, 1, 2, 3].map(|k| a[k] * from + b[k] * to)
+}
+
+/// A node's own place as what it is moved, turned, and sized by.
+#[derive(Clone, Copy)]
+struct Told {
+    moved: Vector,
+    turned: [f64; 4],
+    sized: Vector,
+}
+
+impl Told {
+    fn of(node: &Json) -> Self {
+        let read = |name: &str, otherwise: &[f64]| {
+            numbers(&node[name])
+                .filter(|told| told.len() == otherwise.len())
+                .unwrap_or_else(|| otherwise.to_vec())
+        };
+        let (t, q, s) = (
+            read("translation", &[0.0; 3]),
+            read("rotation", &[0.0, 0.0, 0.0, 1.0]),
+            read("scale", &[1.0; 3]),
+        );
+        Self {
+            moved: [t[0], t[1], t[2]],
+            turned: [q[0], q[1], q[2], q[3]],
+            sized: [s[0], s[1], s[2]],
+        }
+    }
+
+    fn place(&self) -> Matrix {
+        let (t, s) = (self.moved, self.sized);
+        let length = self
+            .turned
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt()
+            .max(1e-300);
+        let [x, y, z, w] = self.turned.map(|value| value / length);
+        let turn = [
+            [
+                1.0 - 2.0 * (y * y + z * z),
+                2.0 * (x * y - z * w),
+                2.0 * (x * z + y * w),
+            ],
+            [
+                2.0 * (x * y + z * w),
+                1.0 - 2.0 * (x * x + z * z),
+                2.0 * (y * z - x * w),
+            ],
+            [
+                2.0 * (x * z - y * w),
+                2.0 * (y * z + x * w),
+                1.0 - 2.0 * (x * x + y * y),
+            ],
+        ];
+        [0, 1, 2].map(|row| {
+            [
+                turn[row][0] * s[0],
+                turn[row][1] * s[1],
+                turn[row][2] * s[2],
+                t[row],
+            ]
+        })
+    }
+}
+
+struct Node {
+    /// The node it is under.
+    parent: Option<usize>,
+    /// Its place where the file gives it whole, which no animation moves.
+    matrix: Option<Matrix>,
+    told: Told,
+}
+
+/// Which bones move a corner, and how much each.
+type Bones = ([u16; 4], [f32; 4]);
+
+/// A run of corners that one thing places: a primitive of one node's mesh.
+struct Run {
+    /// Its corners and its triangles: the first, and the one after the last.
+    corners: (usize, usize),
+    triangles: (usize, usize),
+    node: usize,
+    /// The skin whose bones move it, in place of its node.
+    skin: Option<usize>,
+    /// Whether the file told no way its corners face, so that each triangle is flat.
+    flat: bool,
+}
+
+struct Skin {
+    /// The nodes that are its bones.
+    joints: Vec<usize>,
+    /// For each bone, the way back from where the mesh was bound to it.
+    inverse: Vec<Matrix>,
+}
+
+/// What places a file's corners: its nodes, and the corners as their meshes have them.
+struct Rig {
+    nodes: Vec<Node>,
+    /// Every node, each after the one it is under.
+    order: Vec<usize>,
+    /// Each corner in its mesh's own space, in the file's axes.
+    points: Vec<Vector>,
+    normals: Vec<Vector>,
+    bones: Vec<Bones>,
+    runs: Vec<Run>,
+    skins: Vec<Skin>,
+}
+
+impl Rig {
+    /// Where each node is in the file's world: at rest, or with an animation some seconds in.
+    fn places(&self, animation: Option<(&Animation, f64)>) -> Vec<Matrix> {
+        let mut told: Vec<Told> = self.nodes.iter().map(|node| node.told).collect();
+        let mut moved = vec![false; told.len()];
+        if let Some((animation, seconds)) = animation {
+            for channel in &animation.channels {
+                let value = channel.at(seconds);
+                let three = [value[0], value[1], value[2]];
+                moved[channel.node] = true;
+                match channel.what {
+                    What::Moved => told[channel.node].moved = three,
+                    What::Turned => told[channel.node].turned = value,
+                    What::Sized => told[channel.node].sized = three,
+                }
+            }
+        }
+        let mut places = vec![IDENTITY; told.len()];
+        for index in &self.order {
+            let node = &self.nodes[*index];
+            let own = match node.matrix {
+                Some(matrix) if !moved[*index] => matrix,
+                _ => told[*index].place(),
+            };
+            places[*index] = match node.parent {
+                Some(parent) => then(&places[parent], &own),
+                None => own,
+            };
+        }
+        places
+    }
+}
+
+/// What moves a corner into the file's world, and from there into Kerf's axes: y down, z away.
+#[derive(Clone, Copy)]
+struct Placed {
+    place: Matrix,
+    /// What turns the way a side faces: the cofactors of what moved it, which is its inverse
+    /// turned over, but for its size.
+    turn: [[f64; 3]; 3],
+}
+
+impl Placed {
+    fn by(place: Matrix) -> Self {
+        let cofactor = |row: usize, column: usize| {
+            let (r1, r2) = ((row + 1) % 3, (row + 2) % 3);
+            let (c1, c2) = ((column + 1) % 3, (column + 2) % 3);
+            place[r1][c1] * place[r2][c2] - place[r1][c2] * place[r2][c1]
+        };
+        Self {
+            place,
+            turn: [0, 1, 2].map(|row| [0, 1, 2].map(|column| cofactor(row, column))),
+        }
+    }
+
+    fn point(&self, point: Vector) -> Vector {
+        let at = [0, 1, 2].map(|row| {
+            self.place[row][0] * point[0]
+                + self.place[row][1] * point[1]
+                + self.place[row][2] * point[2]
+                + self.place[row][3]
+        });
+        [at[0], -at[1], -at[2]]
+    }
+
+    fn facing(&self, normal: Vector) -> Vector {
+        let at = [0, 1, 2].map(|row| {
+            self.turn[row][0] * normal[0]
+                + self.turn[row][1] * normal[1]
+                + self.turn[row][2] * normal[2]
+        });
+        let length = (at[0] * at[0] + at[1] * at[1] + at[2] * at[2])
+            .sqrt()
+            .max(1e-300);
+        [at[0] / length, -at[1] / length, -at[2] / length]
+    }
 }
 
 /// A run of triangles of one material.
@@ -68,48 +434,17 @@ fn numbers(value: &Json) -> Option<Vec<f64>> {
     value.as_array()?.iter().map(Json::as_f64).collect()
 }
 
+/// A node's place where the file gives it whole.
+fn matrix_of(node: &Json) -> Option<Matrix> {
+    let m = numbers(&node["matrix"]).filter(|m| m.len() == 16)?;
+    // Written a column at a time.
+    Some([0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
+}
+
 /// A node's own place: its `matrix`, or its translation, rotation, and scale.
+#[cfg(test)]
 fn local(node: &Json) -> Matrix {
-    if let Some(m) = numbers(&node["matrix"]).filter(|m| m.len() == 16) {
-        // Written a column at a time.
-        return [0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row]));
-    }
-    let read = |name: &str, otherwise: &[f64]| {
-        numbers(&node[name])
-            .filter(|told| told.len() == otherwise.len())
-            .unwrap_or_else(|| otherwise.to_vec())
-    };
-    let (t, q, s) = (
-        read("translation", &[0.0; 3]),
-        read("rotation", &[0.0, 0.0, 0.0, 1.0]),
-        read("scale", &[1.0; 3]),
-    );
-    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
-    let turn = [
-        [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - z * w),
-            2.0 * (x * z + y * w),
-        ],
-        [
-            2.0 * (x * y + z * w),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - x * w),
-        ],
-        [
-            2.0 * (x * z - y * w),
-            2.0 * (y * z + x * w),
-            1.0 - 2.0 * (x * x + y * y),
-        ],
-    ];
-    [0, 1, 2].map(|row| {
-        [
-            turn[row][0] * s[0],
-            turn[row][1] * s[1],
-            turn[row][2] * s[2],
-            t[row],
-        ]
-    })
+    matrix_of(node).unwrap_or_else(|| Told::of(node).place())
 }
 
 fn decoded(base64: &str) -> Option<Vec<u8>> {
@@ -419,35 +754,15 @@ impl File<'_> {
             .collect())
     }
 
-    /// The triangles of node `index` and of the nodes under it, each placed by `above`.
-    fn node(
+    /// The triangles of a primitive of the mesh of node `node`, as they are in the mesh's own
+    /// space, with what places them: the node, or the bones of `skin`.
+    fn primitive(
         &self,
-        index: usize,
-        above: &Matrix,
-        depth: usize,
+        primitive: &Json,
+        node: usize,
+        skin: Option<usize>,
         out: &mut Read,
     ) -> Result<(), String> {
-        let node = self.json["nodes"].get(index).ok_or("a node is missing")?;
-        if depth > 64 {
-            return Err("its nodes go round in a ring".into());
-        }
-        let place = then(above, &local(node));
-        if let Some(mesh) = node["mesh"]
-            .as_u64()
-            .and_then(|mesh| self.json["meshes"].get(mesh as usize))
-        {
-            for primitive in mesh["primitives"].as_array().into_iter().flatten() {
-                self.primitive(primitive, &place, out)?;
-            }
-        }
-        for child in node["children"].as_array().into_iter().flatten() {
-            let child = child.as_u64().ok_or("a node's child is no number")? as usize;
-            self.node(child, &place, depth + 1, out)?;
-        }
-        Ok(())
-    }
-
-    fn primitive(&self, primitive: &Json, place: &Matrix, out: &mut Read) -> Result<(), String> {
         let mode = primitive["mode"].as_u64().unwrap_or(4);
         if !matches!(mode, 4..=6) {
             // Points and lines have no sides.
@@ -481,34 +796,35 @@ impl File<'_> {
                 .map(|pair| [indices[0], pair[0], pair[1]])
                 .collect(),
         };
-        // Into the world, and into Kerf's axes: y down, z away.
-        let placed = |point: Vector| {
-            let at = [0, 1, 2].map(|row| {
-                place[row][0] * point[0]
-                    + place[row][1] * point[1]
-                    + place[row][2] * point[2]
-                    + place[row][3]
-            });
-            [at[0], -at[1], -at[2]]
-        };
-        // A side faces by the cofactors of what moved it, which is its inverse turned over, but
-        // for its size.
-        let m = |row: usize, column: usize| place[row][column];
-        let cofactor = |row: usize, column: usize| {
-            let (r1, r2) = ((row + 1) % 3, (row + 2) % 3);
-            let (c1, c2) = ((column + 1) % 3, (column + 2) % 3);
-            m(r1, c1) * m(r2, c2) - m(r1, c2) * m(r2, c1)
-        };
-        let facing = |normal: Vector| {
-            let at = [0, 1, 2].map(|row| {
-                cofactor(row, 0) * normal[0]
-                    + cofactor(row, 1) * normal[1]
-                    + cofactor(row, 2) * normal[2]
-            });
-            let length = (at[0] * at[0] + at[1] * at[1] + at[2] * at[2])
-                .sqrt()
-                .max(1e-300);
-            [at[0] / length, -at[1] / length, -at[2] / length]
+        // Which bones move each corner, and how much each: the first four it names.
+        let bones: Option<Vec<Bones>> =
+            match (skin, &attributes["JOINTS_0"], &attributes["WEIGHTS_0"]) {
+                (None, _, _) | (_, Json::Null, _) | (_, _, Json::Null) => None,
+                (Some(_), joints, weights) => {
+                    let (joints, weights) = (self.numbers(joints, 4)?, self.numbers(weights, 4)?);
+                    Some(
+                        joints
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(weights.as_chunks::<4>().0)
+                            .map(|(joints, weights)| {
+                                let all: f64 = weights.iter().sum();
+                                (
+                                    joints.map(|joint| joint as u16),
+                                    weights.map(|weight| (weight / all.max(1e-12)) as f32),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .filter(|bones| bones.len() == points.len())
+                }
+            };
+        let skin = skin.filter(|_| bones.is_some());
+        let bone = |corner: u32| {
+            bones
+                .as_ref()
+                .map_or(([0; 4], [0.0; 4]), |bones| bones[corner as usize])
         };
         let material = primitive["material"]
             .as_u64()
@@ -560,47 +876,43 @@ impl File<'_> {
                 .as_ref()
                 .map_or([1.0; 3], |colors| colors[corner as usize])
         };
-        let first = out.points.len() as u32;
-        match normals {
+        let rig = &mut out.rig;
+        let first = rig.points.len();
+        let first_triangle = out.triangles.len();
+        match &normals {
             Some(normals) => {
-                out.points.extend(points.iter().map(|point| placed(*point)));
-                out.normals
-                    .extend(normals.iter().map(|normal| facing(*normal)));
+                rig.points.extend(&points);
+                rig.normals.extend(normals);
+                rig.bones.extend((0..points.len() as u32).map(bone));
                 out.uvs.extend((0..points.len() as u32).map(uv));
                 out.colors.extend((0..points.len() as u32).map(colored));
                 out.triangles.extend(
                     corners
                         .iter()
-                        .map(|three| three.map(|corner| first + corner)),
+                        .map(|three| three.map(|corner| first as u32 + corner)),
                 );
             }
-            // With no normals told, each triangle is flat.
+            // With no normals told, each triangle is flat, and has corners of its own.
             None => {
                 for three in &corners {
-                    let [a, b, c] = three.map(|corner| placed(points[corner as usize]));
-                    let (ab, ac) = (
-                        [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
-                        [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
-                    );
-                    let across = [
-                        ab[1] * ac[2] - ab[2] * ac[1],
-                        ab[2] * ac[0] - ab[0] * ac[2],
-                        ab[0] * ac[1] - ab[1] * ac[0],
-                    ];
-                    let length =
-                        (across[0] * across[0] + across[1] * across[1] + across[2] * across[2])
-                            .sqrt()
-                            .max(1e-300);
-                    let normal = across.map(|value| value / length);
-                    let at = out.points.len() as u32;
-                    out.points.extend([a, b, c]);
-                    out.normals.extend([normal; 3]);
+                    let at = rig.points.len() as u32;
+                    rig.points
+                        .extend(three.map(|corner| points[corner as usize]));
+                    rig.normals.extend([[0.0; 3]; 3]);
+                    rig.bones.extend(three.map(bone));
                     out.uvs.extend(three.map(uv));
                     out.colors.extend(three.map(colored));
                     out.triangles.push([at, at + 1, at + 2]);
                 }
             }
         }
+        rig.runs.push(Run {
+            corners: (first, rig.points.len()),
+            triangles: (first_triangle, out.triangles.len()),
+            node,
+            skin,
+            flat: normals.is_none(),
+        });
         let color = material.map(|material| {
             let told = numbers(&material["pbrMetallicRoughness"]["baseColorFactor"])
                 .filter(|told| told.len() >= 3)
@@ -615,9 +927,95 @@ impl File<'_> {
         });
         Ok(())
     }
+
+    /// The file's skins: the nodes that are each one's bones, and where each bone was when the
+    /// mesh was bound to it, undone.
+    fn skins(&self) -> Result<Vec<Skin>, String> {
+        let mut skins = Vec::new();
+        for skin in self.json["skins"].as_array().into_iter().flatten() {
+            let joints: Vec<usize> = skin["joints"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|joint| joint.as_u64().map(|joint| joint as usize))
+                .collect();
+            let inverse = match &skin["inverseBindMatrices"] {
+                Json::Null => vec![IDENTITY; joints.len()],
+                told => self
+                    .numbers(told, 16)?
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .map(|m| [0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
+                    .collect(),
+            };
+            if inverse.len() != joints.len() {
+                return Err("a skin's bones and where they were bound do not match".into());
+            }
+            skins.push(Skin { joints, inverse });
+        }
+        Ok(skins)
+    }
+
+    /// The file's animations: what each says of a node's place over time. What one says of a
+    /// mesh's morph targets is not read.
+    fn animations(&self, nodes: usize) -> Result<Vec<Animation>, String> {
+        let mut animations = Vec::new();
+        for animation in self.json["animations"].as_array().into_iter().flatten() {
+            let mut channels = Vec::new();
+            for channel in animation["channels"].as_array().into_iter().flatten() {
+                let (what, across) = match channel["target"]["path"].as_str() {
+                    Some("translation") => (What::Moved, 3),
+                    Some("rotation") => (What::Turned, 4),
+                    Some("scale") => (What::Sized, 3),
+                    _ => continue,
+                };
+                let Some(node) = channel["target"]["node"]
+                    .as_u64()
+                    .map(|node| node as usize)
+                    .filter(|node| *node < nodes)
+                else {
+                    continue;
+                };
+                let sampler = channel["sampler"]
+                    .as_u64()
+                    .and_then(|sampler| animation["samplers"].get(sampler as usize))
+                    .ok_or("an animation's sampler is missing")?;
+                let how = match sampler["interpolation"].as_str() {
+                    Some("STEP") => How::Step,
+                    Some("CUBICSPLINE") => How::Cubic,
+                    _ => How::Linear,
+                };
+                let times = self.numbers(&sampler["input"], 1)?;
+                let values = self.numbers(&sampler["output"], across)?;
+                let each = across * if how == How::Cubic { 3 } else { 1 };
+                if times.is_empty() || values.len() != times.len() * each {
+                    return Err("an animation's times and values do not match".into());
+                }
+                channels.push(Channel {
+                    node,
+                    what,
+                    how,
+                    across,
+                    times,
+                    values,
+                });
+            }
+            let length = channels
+                .iter()
+                .filter_map(|channel| channel.times.last())
+                .fold(0.0f64, |length, last| length.max(*last));
+            animations.push(Animation {
+                name: animation["name"].as_str().unwrap_or("").to_owned(),
+                length,
+                channels,
+            });
+        }
+        Ok(animations)
+    }
 }
 
-/// The triangles of the glTF file at `path`.
+/// The glTF file at `path`: its triangles at rest, and what moves them.
 pub(super) fn read(path: &Path) -> Result<Read, String> {
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
     let (json, binary) = parts_of(&bytes)?;
@@ -636,30 +1034,61 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         };
         file.buffers.push(bytes);
     }
-    let nodes = json["nodes"].as_array().map_or(0, Vec::len);
+    let told: &[Json] = json["nodes"].as_array().map_or(&[], Vec::as_slice);
+    let mut nodes: Vec<Node> = told
+        .iter()
+        .map(|node| Node {
+            parent: None,
+            matrix: matrix_of(node),
+            told: Told::of(node),
+        })
+        .collect();
+    let under = |node: &Json| -> Vec<usize> {
+        node["children"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|child| child.as_u64().map(|child| child as usize))
+            .filter(|child| *child < told.len())
+            .collect()
+    };
+    for (index, node) in told.iter().enumerate() {
+        for child in under(node) {
+            nodes[child].parent = Some(index);
+        }
+    }
+    // Every node after the one it is under, from those under none.
+    let mut order: Vec<usize> = (0..nodes.len())
+        .filter(|node| nodes[*node].parent.is_none())
+        .collect();
+    let mut next = 0;
+    while next < order.len() && order.len() <= nodes.len() {
+        order.extend(under(&told[order[next]]));
+        next += 1;
+    }
+    if order.len() != nodes.len() {
+        return Err("its nodes go round in a ring".into());
+    }
     // The nodes of the scene it opens on, or, where it names no scene, those under no other.
     let scene = json["scene"].as_u64().unwrap_or(0) as usize;
-    let roots: Vec<usize> = match json["scenes"]
+    let mut shown: Vec<usize> = match json["scenes"]
         .get(scene)
         .and_then(|scene| scene["nodes"].as_array())
     {
         Some(roots) => roots
             .iter()
             .filter_map(|root| root.as_u64().map(|root| root as usize))
+            .filter(|root| *root < nodes.len())
             .collect(),
-        None => {
-            let under: Vec<u64> = json["nodes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .flat_map(|node| node["children"].as_array().into_iter().flatten())
-                .filter_map(Json::as_u64)
-                .collect();
-            (0..nodes)
-                .filter(|node| !under.contains(&(*node as u64)))
-                .collect()
-        }
+        None => (0..nodes.len())
+            .filter(|node| nodes[*node].parent.is_none())
+            .collect(),
     };
+    let mut next = 0;
+    while next < shown.len() && shown.len() <= nodes.len() {
+        shown.extend(under(&told[shown[next]]));
+        next += 1;
+    }
     let mut out = Read {
         points: Vec::new(),
         normals: Vec::new(),
@@ -668,13 +1097,37 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         triangles: Vec::new(),
         parts: Vec::new(),
         textures: Vec::new(),
+        animations: file.animations(nodes.len())?,
+        rig: Rig {
+            nodes,
+            order,
+            points: Vec::new(),
+            normals: Vec::new(),
+            bones: Vec::new(),
+            runs: Vec::new(),
+            skins: file.skins()?,
+        },
     };
-    for root in roots {
-        file.node(root, &IDENTITY, 0, &mut out)?;
+    for index in shown {
+        let node = &told[index];
+        let Some(mesh) = node["mesh"]
+            .as_u64()
+            .and_then(|mesh| json["meshes"].get(mesh as usize))
+        else {
+            continue;
+        };
+        let skin = node["skin"]
+            .as_u64()
+            .map(|skin| skin as usize)
+            .filter(|skin| *skin < out.rig.skins.len());
+        for primitive in mesh["primitives"].as_array().into_iter().flatten() {
+            file.primitive(primitive, index, skin, &mut out)?;
+        }
     }
     if out.triangles.is_empty() {
         return Err("it has no triangles".into());
     }
+    (out.points, out.normals) = out.posed(None);
     Ok(out)
 }
 
@@ -697,6 +1150,37 @@ mod tests {
         // One node under another is placed by both, the outer last.
         let both = then(&local(&told), &turned);
         assert!((both[1][0] - 2.0).abs() < 1e-12 && both[0][3] == 1.0);
+    }
+
+    #[test]
+    fn a_value_between_two_keys_is_as_the_animation_says_it_goes() {
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let channel = |what: What, how: How, across: usize, values: &[f64]| Channel {
+            node: 0,
+            what,
+            how,
+            across,
+            times: vec![1.0, 3.0],
+            values: values.to_vec(),
+        };
+        // Evenly, held until the next, and by a curve that leaves and arrives at no speed.
+        let moved = [0.0, 0.0, 0.0, 4.0, 0.0, 0.0];
+        assert_eq!(channel(What::Moved, How::Linear, 3, &moved).at(1.5)[0], 1.0);
+        assert_eq!(channel(What::Moved, How::Step, 3, &moved).at(2.9)[0], 0.0);
+        let mut curved = vec![0.0; 18];
+        curved[12] = 4.0;
+        let curve = channel(What::Moved, How::Cubic, 3, &curved);
+        assert_eq!(curve.at(2.0)[0], 2.0);
+        assert!(curve.at(1.5)[0] < 1.0 && curve.at(2.5)[0] > 3.0);
+        // Before its first key it is the first, and after its last the last.
+        assert_eq!(curve.at(0.0)[0], 0.0);
+        assert_eq!(curve.at(9.0)[0], 4.0);
+        // A turn goes the short way round at an even speed: from none to a quarter turn about z
+        // written the long way, an eighth is halfway.
+        let turned = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -half, -half];
+        let eighth = channel(What::Turned, How::Linear, 4, &turned).at(2.0);
+        let (sin, cos) = (std::f64::consts::PI / 8.0).sin_cos();
+        assert!((eighth[2] - sin).abs() < 1e-12 && (eighth[3] - cos).abs() < 1e-12);
     }
 
     #[test]
