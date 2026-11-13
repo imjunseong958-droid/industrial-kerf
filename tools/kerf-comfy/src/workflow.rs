@@ -34,6 +34,12 @@
 //! `fps`. What it makes is of its guide frame for frame: `{fps}` is the
 //! guide's own rate, `{frames}` each frame it has up to `frames.most`, and
 //! `{width}` and `{height}` its own size, down to `size` by area.
+//!
+//! A workflow that reads a file that is not a picture, a scene as splats,
+//! and makes another file of it says `"of": "ref"`: the file is the line's
+//! `ref=`, sent as it is, and the workflow has no rate, size, or frames to
+//! ask for. `{no_picture}` is a small black picture on the server, for a
+//! node that loads a file and will not run without pictures beside it.
 
 use crate::request::{names_a_file, names_a_signal, names_what_is_handed};
 use serde::Deserialize;
@@ -45,7 +51,7 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 9] = [
+pub const BUNDLED: [(&str, &str); 11] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
@@ -58,6 +64,8 @@ pub const BUNDLED: [(&str, &str); 9] = [
         include_str!("../workflows/cameras.json"),
     ),
     ("set-views", include_str!("../workflows/set-views.json")),
+    ("set-splats", include_str!("../workflows/set-splats.json")),
+    ("moves-shown", include_str!("../workflows/moves-shown.json")),
 ];
 
 /// What fills a workflow's blanks, by name.
@@ -83,8 +91,9 @@ pub struct Workflow {
     /// What it makes, in a line.
     #[serde(default)]
     pub about: String,
-    /// What it makes a file of, frame for frame: `guide`, or nothing for a
-    /// model that makes a shot at a rate and a size of its own.
+    /// What it makes a file of: `guide`, frame for frame, `ref`, a file that
+    /// is not a picture, or nothing for a model that makes a shot at a rate
+    /// and a size of its own.
     #[serde(default)]
     of: Option<String>,
     /// The rate the model makes frames at.
@@ -133,10 +142,16 @@ impl Workflow {
                 workflow.version
             ));
         }
-        if let Some(of) = workflow.of.as_deref().filter(|of| *of != "guide") {
-            return Err(format!("`of` is `guide` or is left out, not `{of}`"));
+        if let Some(of) = workflow
+            .of
+            .as_deref()
+            .filter(|of| !["guide", "ref"].contains(of))
+        {
+            return Err(format!(
+                "`of` is `guide`, `ref`, or is left out, not `{of}`"
+            ));
         }
-        if !workflow.of_guide() && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
+        if workflow.of.is_none() && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
             return Err("`fps` is not a rate".to_owned());
         }
         if workflow.frames.most == 0 || workflow.frames.step == 0 {
@@ -158,7 +173,12 @@ impl Workflow {
     /// Whether what it makes is of its guide, frame for frame, and not a
     /// shot at a rate and a size of the model's own.
     pub fn of_guide(&self) -> bool {
-        self.of.is_some()
+        self.of.as_deref() == Some("guide")
+    }
+
+    /// Whether what it makes is of a file that is not a picture, the line's `ref=`.
+    pub fn of_file(&self) -> bool {
+        self.of.as_deref() == Some("ref")
     }
 
     /// The frames to read of a guide that has `guide` of them: each, up to
@@ -208,18 +228,24 @@ impl Workflow {
     /// has when the line does not.
     pub fn takes(&self) -> Value {
         let blanks = self.blanks();
-        if self.of_guide() {
+        if let Some(of) = self.of.as_deref() {
             // It has no rate and no size of its own to draw a guide at.
             let mut takes = Map::new();
             if !self.about.is_empty() {
                 takes.insert("about".to_owned(), Value::from(self.about.clone()));
             }
-            takes.insert("of".to_owned(), Value::from("guide"));
-            takes.insert(
-                "frames".to_owned(),
-                serde_json::json!({"most": self.frames.most}),
-            );
-            takes.insert("reads".to_owned(), Value::from(vec!["guide"]));
+            takes.insert("of".to_owned(), Value::from(of));
+            if self.of_guide() {
+                takes.insert(
+                    "frames".to_owned(),
+                    serde_json::json!({"most": self.frames.most}),
+                );
+            }
+            let mut reads = vec![of];
+            if blanks.contains(crate::request::MOVES) {
+                reads.push(crate::request::MOVES);
+            }
+            takes.insert("reads".to_owned(), Value::from(reads));
             let more: Map<String, Value> = self
                 .set
                 .iter()
@@ -533,7 +559,7 @@ mod tests {
             // Each blank is the request's, a file's, or one `set` fills.
             for blank in workflow.blanks() {
                 assert!(
-                    ["prompt", "seed", "width", "height", "frames", "fps"]
+                    ["prompt", "seed", "width", "height", "frames", "fps", "no_picture"]
                         .contains(&blank.as_str())
                         || names_what_is_handed(&blank)
                         || workflow.set.contains_key(&blank),
@@ -563,6 +589,16 @@ mod tests {
             );
             assert!(!takes["about"].as_str().unwrap().is_empty(), "{name}");
         }
+        // One that makes a file of a file reads it as the line's `ref=`, and asks for no frames.
+        let of_file = Workflow::named("set-splats").unwrap();
+        assert!(of_file.of_file() && !of_file.of_guide());
+        let takes = of_file.takes();
+        assert_eq!(takes["of"], "ref");
+        assert_eq!(takes["reads"], json!(["ref"]));
+        assert!(takes.get("frames").is_none() && takes.get("rate").is_none());
+        // One that draws where clips go over its guide reads both.
+        let shown = Workflow::named("moves-shown").unwrap();
+        assert_eq!(shown.takes()["reads"], json!(["guide", "moves"]));
         // A camera's path is found only with the model's weights as 32-bit floats.
         for name in ["cameras", "set-views"] {
             let multiview = Workflow::named(name).unwrap();

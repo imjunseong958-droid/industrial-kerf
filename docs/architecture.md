@@ -938,8 +938,19 @@ recipes, in `fixtures/shots/car`.
    the ratio is kept); splats. Of those the server has
    a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
    a mesh clip reads and the compositor need draw none; what it has no
-   model for is rebuilding a scene as splats, only a thing, so none was
-   run.
+   model for is rebuilding a scene as splats, only a thing. So the half
+   that needs no model is in (2026-11-13): `set-splats`, a workflow of
+   `kerf-comfy`, takes a scene kept as splats, whatever made it, as a
+   line's `ref=`, and has the server's nodes make the mesh a `gen=mesh@1`
+   clip reads. Run on a scene written by hand as 14,300 splats, a floor, a
+   wall, and a red box of side 1 three units ahead, it gave a `.glb` of
+   554,166 corners in 13 s whose box is within 0.06 of the one written
+   on every side (x -0.56 to 0.56 for -0.5 to 0.5, y -0.94 to 0.06 for -1
+   to 0, z -3.56 to -2.44 for -3.5 to -2.5: fatter by a splat's width),
+   the floor within 0.05, in the file's units and turned to Kerf's axes,
+   so a camera at the origin sees the box ahead of it on the floor before
+   the wall, looked at. Splats of a filmed scene were not tried: nothing
+   in reach makes them.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -1102,7 +1113,12 @@ recipes, in `fixtures/shots/car`.
    Wan-Move, which follows paths of points given as coordinates
    (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
    reads and what the document says outright, so its path is there to hand
-   over, as a signal's numbers are. The weights were not on the server. It
+   over, as a signal's numbers are. The weights were not on the server. The node
+   that reads the points is, and was run (2026-11-13): `moves-shown` has it
+   read what `kerf-comfy` fills `{moves}` with and draws the points over a
+   guide. Over the take `shot-led` made, the crate's point is on the
+   container on the frames looked at, so the text Kerf hands is the text
+   the node reads, in the model's pixels; what is untried is the model. It
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
 7. **A signal measured** (2026-11-13), on the one model in reach, which

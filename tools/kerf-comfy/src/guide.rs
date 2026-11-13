@@ -78,6 +78,18 @@ impl Tools {
             .ok_or_else(|| format!("ffprobe found no picture in the guide {}", file.display()))
     }
 
+    /// A small black picture at `to`, for a node that will not run without one.
+    pub fn black(&self, to: &Path) -> Result<(), String> {
+        run(
+            Command::new(&self.ffmpeg)
+                .args(["-hide_banner", "-loglevel", "error", "-y"])
+                .args(["-f", "lavfi", "-i", "color=black:s=16x16", "-frames:v", "1"])
+                .arg(to),
+            &self.ffmpeg,
+        )
+        .map(drop)
+    }
+
     /// Write `guide` to `to` as the model takes it.
     pub fn conform(&self, guide: &Path, to: &Path, shape: &Shape) -> Result<(), String> {
         run(

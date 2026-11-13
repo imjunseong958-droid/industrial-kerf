@@ -86,6 +86,10 @@ on `main`; its section here becomes the release's notes on GitHub
 - A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
   where that clip shows and black elsewhere, with what stands before it cut
   out, which is the mask a model is handed to make a thing in one place.
+- `kerf-comfy` comes with `set-splats`: a scene kept as splats (`ref=scene.ply`)
+  becomes the mesh a mesh clip reads, on the server's own nodes, with no model.
+  And with `moves-shown`, which draws the points `moves=<clip>` hands a model
+  over a guide.
 - `kerf-comfy` comes with `shot-led`: a shot whose subject goes where a
   clip of the project goes, the clip's box on each frame handed over as a
   layout (`moves=<clip>`), with no picture of the scene.

@@ -492,6 +492,17 @@ where a later step reads what it makes. Five such workflows come with
 | `cameras` | The frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
 | `set-views` | The frames together as views of one scene, and one of them rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
 
+One more reads a file that is not a picture. `set-splats` takes a scene
+kept as splats (`ref=<scene.ply>`, or `.spz`, `.splat`, `.ksplat`) and makes
+the mesh of it a `gen=mesh@1` clip reads, a `.glb` with the splats' colors:
+`generate model=<name> ref=sets/scene.ply out={set.glb}`. It runs no model,
+only the server's own nodes, so whatever made the splats, the set comes to
+Kerf the same way. The mesh is in the file's units, turned from a splat
+file's axes (y down, z forward) to Kerf's, so the camera the scene was
+filmed from is where it was. `resolution=<n>` is how fine the surface is,
+384 as it comes and up to 768; `solid=true` closes a single thing, where a
+scene is left open.
+
 A workflow is named for what it makes, and the model it runs is in its
 graph. A recipe names neither: it says `model=depth`, the name the person's
 file gives whichever reads depth for them, so that the recipe still reads
@@ -865,7 +876,11 @@ white, with each clip's box outlined in black where it is on that frame.
 prompt and no picture of the scene: the subject the prompt names goes where
 the clip goes. The server the rest was measured on has the nodes that take
 point tracks and not the weights, so `{moves}` itself was not run on a
-model.
+model. What was run is the node that reads them: `moves-shown`, which comes
+with `kerf-comfy` too, has it read `{moves}` and draws the points over a
+guide (`generate model=<name> guide=<take> moves=<clip>`), with no model.
+It is what a model that follows points is told, to look at before a take or
+over one.
 
 ## Guides
 

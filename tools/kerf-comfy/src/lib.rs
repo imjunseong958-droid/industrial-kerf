@@ -42,6 +42,9 @@ const ASKED: [&str; 6] = ["prompt", "seed", "width", "height", "frames", "fps"];
 /// request.
 const GUIDE_SENT: &str = "guide.comfy.mp4";
 const GRAPH_SENT: &str = "workflow.comfy.json";
+/// The blank a small black picture on the server fills, for a node that will not run
+/// without pictures it does not read.
+const NO_PICTURE: &str = "no_picture";
 
 /// How often a server that does not answer, or does not know the job, is
 /// asked again before that is taken as its answer.
@@ -134,6 +137,12 @@ pub fn make(
     } else {
         None
     };
+    if workflow.of_file() && request.references.is_empty() {
+        return Err(
+            "this workflow makes a file of a file, and the line gives none: `ref=<file>`"
+                .to_owned(),
+        );
+    }
     let fps = read.map_or(workflow.fps, |read| read.fps);
     let (width, height) = workflow.size(request.size.or(read.map(|read| read.size)));
     if let Some((asked_width, asked_height)) =
@@ -208,6 +217,15 @@ pub fn make(
         ("frames".to_owned(), json!(frames)),
         ("fps".to_owned(), json!(fps)),
     ]);
+
+    if blanks.contains(NO_PICTURE) {
+        let file = work.join("no_picture.comfy.png");
+        tools.black(&file)?;
+        let bytes = std::fs::read(&file)
+            .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+        let sent = server.upload(&file, &format!("kerf-{}.png", hash(&bytes)))?;
+        values.insert(NO_PICTURE.to_owned(), json!(sent));
+    }
 
     // The files the workflow reads go up, each named by what it holds.
     for name in request.files() {
@@ -332,9 +350,13 @@ pub fn make(
     let id = server.queue(&graph)?;
     // Not where the server is: what is said here reaches whoever asked for the making, an agent
     // among them, and the server is the person's to name.
-    say(&format!(
-        "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"
-    ));
+    if workflow.of_file() {
+        say(&format!("asked the server for a file of the file: job {id}"));
+    } else {
+        say(&format!(
+            "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"
+        ));
+    }
 
     let started = Instant::now();
     let mut told = (String::new(), Instant::now());
