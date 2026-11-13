@@ -57,6 +57,15 @@ on `main`; its section here becomes the release's notes on GitHub
   carry yet: it fits the guide to the model's size and rate, asks the server,
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
+- A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
+  cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
+  and a `color`), or with `file="car.glb"` a glTF model at rest, `height`
+  tall and a color a part, with every side it has, so a camera can go round
+  it. It is
+  placed, keyed, and parented as a clip in depth is, lit by the sequence's
+  lights, and is in the ids and depth passes and in an agent's `look` with
+  `shows` as any clip is. It casts no shadow yet, takes no effect or mask,
+  and is drawn on the CPU.
 - A recipe can tell a model when something happens, and not only where and
   what: a `gen=signal@1` clip draws nothing and holds a number from 0 to 1
   that you keyframe, and `generate … signal=<clip>` hands the model what it
@@ -116,6 +125,19 @@ on `main`; its section here becomes the release's notes on GitHub
   `makes` a session ([docs/shots.md](docs/shots.md#an-agents-part)).
 - A shot that does not fill the frame says the `scale` that does: a picture is
   fit inside the frame first, so it is seldom what the sizes alone say.
+- Kerf no longer has 15 more effects and four looks, those that make how a
+  shot looks, which is now a model's by the prompt and references of the
+  shot's recipe: Glint, Light Leaks, RGB Split, Wonder Glow, Wave Warp, Mirror,
+  Posterize and Echo; Bokeh, Focus, Compound and Channel Blur (for a plain
+  blur there is `blur.gaussian@1`, under a mask if you like, which Camera Blur
+  also was, and a camera's `focus` on clips in depth); Offset (keyframes on
+  `x` and `y`) and Write-on (a `gen=shape@1` clip with keys on `trim_end`);
+  and the looks VHS, Glitch, Dreamy and Sparkle. The Film look is now grain
+  and darkened corners, as `look.film@2`. What is done to a shot once it is
+  made stays: color and grades, grain, keys and mattes, tracking, restoration,
+  retouching, text, transitions, and time. A project that uses one of those
+  gone does not open until its line is changed: the error names the line and
+  what to use instead.
 - Kerf no longer has 38 effects, none of which a look, a grade or a preset
   used. Gone are those that make a look a video model makes better: Brush
   Strokes, Emboss and Color Emboss, Find Edges, Roughen Edges, Motion Tile,

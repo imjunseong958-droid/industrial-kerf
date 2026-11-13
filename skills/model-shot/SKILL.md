@@ -24,8 +24,16 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
   length of the shot. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
+- A thing that is seen from more than one side is a `gen=mesh@1` clip:
+  `kind=box|ball|cylinder` with `width`, `height`, and `length` in frame
+  heights, and a `color`. It is in depth as it is, with its middle at `x`,
+  `y`, `z`, and has every side, so a camera can go round it; a body and a
+  cabin are two of them. Give it a light, or it is one flat color. With
+  `file="car.glb"` it is a glTF model, `height` tall, a color a part; name
+  the file on the recipe's `needs` line, so that replacing it asks for the
+  shot again.
 - In depth x runs right, y down, and z away from the viewer, in frame
-  heights (x in frame widths); `depth` gives a clip sides. What is nearer
+  heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a
   floor a large clip tipped back, below the middle (`rotate_x=-84 y=0.75
   z=4 scale=16`). Tipped so, it is 0.1 lower for each frame height nearer:

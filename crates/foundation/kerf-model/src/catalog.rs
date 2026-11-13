@@ -442,7 +442,9 @@ impl FxDef {
             "image" => Area::Image,
             "blur" | "distort" | "key" | "light" | "matte" | "noise" | "stylize" | "time"
             | "vr" => Area::Vfx,
-            "generate" | "look" | "perspective" | "shape" | "text" | "transform" => Area::Motion,
+            "generate" | "look" | "mesh" | "perspective" | "shape" | "text" | "transform" => {
+                Area::Motion
+            }
             _ => Area::Edit,
         }
     }
@@ -667,7 +669,6 @@ static MADE: Mutex<Vec<&'static Catalog>> = Mutex::new(Vec::new());
 
 /// The looks bundled with Kerf: ordinary look files.
 const BUNDLED_LOOKS: &[(&str, &str)] = &[
-    ("dreamy.kerflook", include_str!("../looks/dreamy.kerflook")),
     (
         "grade-teal-warm.kerflook",
         include_str!("../looks/grade-teal-warm.kerflook"),
@@ -746,7 +747,6 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         include_str!("../looks/flash-cut.kerflook"),
     ),
     ("flash.kerflook", include_str!("../looks/flash.kerflook")),
-    ("glitch.kerflook", include_str!("../looks/glitch.kerflook")),
     ("noir.kerflook", include_str!("../looks/noir.kerflook")),
     ("pop-in.kerflook", include_str!("../looks/pop-in.kerflook")),
     ("shake.kerflook", include_str!("../looks/shake.kerflook")),
@@ -754,11 +754,6 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         "slow-push.kerflook",
         include_str!("../looks/slow-push.kerflook"),
     ),
-    (
-        "sparkle.kerflook",
-        include_str!("../looks/sparkle.kerflook"),
-    ),
-    ("vhs.kerflook", include_str!("../looks/vhs.kerflook")),
     ("whip.kerflook", include_str!("../looks/whip.kerflook")),
     ("wobble.kerflook", include_str!("../looks/wobble.kerflook")),
     (
@@ -1323,6 +1318,34 @@ fn builtin_catalog() -> Catalog {
                 .doc("Softens shadows: a point light's width in frame heights, a directional one's in degrees; 0 is hard."),
         ),
         FxDef::new(
+            "mesh",
+            FxKind::Generator,
+            Domain::Video,
+            "A solid thing for a guide, with every side it has: a box, a ball, a cylinder on its end, or a glTF `file`'s mesh. It is in depth without `three_d`, its middle at the clip's `x`, `y`, `z`; lights light it, and with none it is its color, flat.",
+        )
+        .category("Generate")
+        .param(P::choice("kind", &["box", "ball", "cylinder"]))
+        .param(
+            P::number("width", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("height", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("length", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("How far back it goes."),
+        )
+        .param(P::color("color", Rgba::WHITE))
+        .param(P::file("file", &["glb", "gltf"]).doc(
+            "A glTF file's mesh in place of `kind`: `height` tall, a color a part.",
+        )),
+        FxDef::new(
             "null",
             FxKind::Generator,
             Domain::Video,
@@ -1380,7 +1403,7 @@ const IMAGE_EFFECTS: &str = include_str!("image_effects.tsv");
 const RETIRED: &str = include_str!("retired.tsv");
 
 /// What to use instead of `id`, an effect or transition Kerf no longer
-/// has: a catalog reference (`light.wonderglow@1`), words, or
+/// has: a catalog reference (`blur.gaussian@1`), words, or
 /// nothing (`""`). `None` for an id Kerf never had.
 pub fn retired(id: &str) -> Option<&'static str> {
     RETIRED
@@ -1644,7 +1667,7 @@ mod tests {
             .all()
             .filter(|fx| fx.engine == Engine::Kerf && fx.kind == FxKind::Effect)
             .collect();
-        assert!(kerf.len() > 70, "{}", kerf.len());
+        assert!(kerf.len() > 60, "{}", kerf.len());
         // Lumetri is FilmCraft's at version 2, which reads no older version.
         let lumetri = catalog.fx("color.lumetri").unwrap();
         assert_eq!((lumetri.engine, lumetri.version), (Engine::Kerf, 2));
@@ -1680,7 +1703,7 @@ mod tests {
         }
         assert_eq!(
             unknown("effect", "stylize.glow"),
-            "Kerf no longer has the effect `stylize.glow`; use `light.wonderglow@1` instead"
+            "Kerf no longer has the effect `stylize.glow`; use the prompt and references of the shot's recipe instead"
         );
         // One cut since, whose work a clip's own properties do.
         assert_eq!(
@@ -1690,6 +1713,17 @@ mod tests {
         assert_eq!(
             unknown("effect", "stylize.emboss"),
             "Kerf no longer has the effect `stylize.emboss`"
+        );
+        // One cut for being how a shot looks, a look made of such, and one a plain blur does.
+        for id in ["light.glint", "look.vhs"] {
+            assert_eq!(
+                unknown("effect", id),
+                format!("Kerf no longer has the effect `{id}`; use the prompt and references of the shot's recipe instead")
+            );
+        }
+        assert_eq!(
+            unknown("effect", "blur.camera"),
+            "Kerf no longer has the effect `blur.camera`; use `blur.gaussian@1` instead"
         );
         assert_eq!(
             unknown("effect", "nope"),

@@ -977,7 +977,7 @@ impl Project {
     }
 
     /// Make the paths a document keeps relative to its project absolute
-    /// against `directory`: media files and the files clips' effects read
+    /// against `directory`: media files and the files clips' effects and generators read
     /// (`ParamType::File`).
     pub fn resolve_paths(&mut self, catalog: &Catalog, directory: &Path) {
         let resolve = |path: &mut String| {
@@ -987,6 +987,29 @@ impl Project {
         };
         for media in &mut self.media {
             resolve(&mut media.path);
+        }
+        // A file a generator reads, as a mesh's.
+        let generators = self
+            .sequences
+            .iter_mut()
+            .flat_map(|sequence| sequence.tracks.iter_mut())
+            .flat_map(|track| track.clips.iter_mut())
+            .filter_map(|clip| match &mut clip.content {
+                Content::Generator { fx, params, .. } => Some((fx, params)),
+                _ => None,
+            });
+        for (fx, params) in generators {
+            let Some(fx) = catalog.fx(fx.as_str()) else {
+                continue;
+            };
+            for (name, param) in params.iter_mut() {
+                let file = fx
+                    .find(name)
+                    .is_some_and(|def| matches!(def.ty, ParamType::File(_)));
+                if let (true, Param::Static(Value::Text(path))) = (file, param) {
+                    resolve(path);
+                }
+            }
         }
         let effects = self
             .sequences

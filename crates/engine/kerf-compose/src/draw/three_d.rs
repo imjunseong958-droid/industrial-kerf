@@ -14,8 +14,13 @@
 //! around the scene, by how much of it each way a surface faces can see. A clip with a `depth` is a solid in the outline of
 //! its picture: each pixel's ray goes between the planes of its front and its back, reading its picture's
 //! alpha as it goes, so no mesh is made of it and the edge of what it reads is the edge of the solid.
+//! A clip that is a mesh is drawn from its triangles ([`mesh`]), and goes down among the rest by the
+//! depth it has at each pixel.
 
 use super::*;
+
+mod gltf;
+pub(super) mod mesh;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
 const DEFAULT_FOV: f64 = 40.0;

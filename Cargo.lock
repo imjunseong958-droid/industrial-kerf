@@ -1761,6 +1761,7 @@ dependencies = [
  "kerf-text",
  "lz4_flex",
  "rayon",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
 ]

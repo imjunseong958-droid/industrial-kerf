@@ -1,6 +1,0 @@
-kerf-look 1
-look look.dreamy version=1 name="Dreamy" category="Light" on=clip
-  doc "A soft, glowing dream: bloom from the highlights and a gentle blur; memories, romance, and music videos."
-  param amount number default=1 range=0..2 doc="How dreamy it is."
-  fx light.wonderglow@1 intensity=100*$amount radius=40
-  fx blur.gaussian@1 radius=2*$amount
