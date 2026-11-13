@@ -15,6 +15,9 @@
 //! them as they are, with no light: they are what the thing is, and a set rebuilt from a shot
 //! has the shot's light in them already. It is drawn on the CPU.
 //!
+//! Its clip's masks, effects, and wipe are done to that picture, the mesh as the camera sees
+//! it on the canvas (`Drawing::mesh`), there being no flat picture of it before that.
+//!
 //! It stands in a light's way as a clip in depth does ([`Standing`]): a ray from a place to a
 //! light is stopped by the first of its triangles it meets, found through a tree of boxes
 //! about them, and not by the mesh the place is on.

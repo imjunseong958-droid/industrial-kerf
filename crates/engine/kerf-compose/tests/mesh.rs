@@ -392,39 +392,43 @@ fn a_mesh_casts_its_shadow_on_a_mesh_and_on_a_clip_in_depth() {
 }
 
 #[test]
-fn a_mesh_takes_no_effect_or_mask() {
-    let refused = |body: &str| {
-        let project = parse_document(
-            &format!(
-                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
-            ),
-            Catalog::builtin(),
+fn a_mesh_takes_effects_and_masks_on_its_picture_as_the_camera_sees_it() {
+    let thing = |more: &str| {
+        format!(
+            "{}{more}",
+            mesh("thing", 1, "kind=box width=0.5 height=0.5 length=0.1 color=#ff0000")
         )
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default())
-            .err()
-            .map(|error| error.to_string())
-            .unwrap_or_default()
     };
-    let blurred = format!(
-        "{}      fx blur.gaussian@1 radius=4\n",
-        mesh("thing", 1, "kind=box")
+    let plain = frame(&thing(""), Pass::Picture);
+    let [red, ..] = pixel(&plain, 160, 90);
+    assert!(red > 150, "{red}");
+    // An effect is done to what is drawn of it: its colors inverted, and not the black about it.
+    let turned = frame(
+        &thing("      fx channel.invert@2\n"),
+        Pass::Picture,
     );
-    assert!(
-        refused(&blurred).contains("an effect on a mesh"),
-        "{}",
-        refused(&blurred)
-    );
-    let masked = format!(
-        "{}      mask k1 ellipse=0.5,0.5,0.3,0.3\n",
-        mesh("thing", 1, "kind=box")
-    );
-    assert!(
-        refused(&masked).contains("a mask on a mesh"),
-        "{}",
-        refused(&masked)
-    );
+    let [r, g, _] = pixel(&turned, 160, 90);
+    assert!(g > r, "{r} {g}");
+    assert_eq!(pixel(&turned, 10, 10), [0, 0, 0]);
+    // A mask over the left half of the frame leaves its right half, in the picture and in
+    // the pass that says which pixels are its.
+    let masked = thing("      mask k1 rect=0,0,0.5,1\n");
+    for pass in [Pass::Picture, Pass::Ids] {
+        let cut = frame(&masked, pass);
+        assert!(lit(&cut, 130, 90), "{pass:?}");
+        assert!(!lit(&cut, 190, 90), "{pass:?}");
+    }
+    // It is still a mesh behind and before what else is in depth: a wall across it hides
+    // the same of it with the effect as without.
+    let behind = |more: &str| {
+        format!(
+            "{}{}",
+            thing(more),
+            "  track V2 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.2\n"
+        )
+    };
+    let [.., blue] = pixel(&frame(&behind("      fx channel.invert@2\n"), Pass::Picture), 160, 90);
+    assert!(blue > 150, "{blue}");
 }
 
 /// A glTF model of two flat parts, written three ways: a red sheet 2 across and 1 up, standing on

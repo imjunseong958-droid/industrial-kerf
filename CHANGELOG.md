@@ -110,7 +110,8 @@ on `main`; its section here becomes the release's notes on GitHub
   comes with the camera that saw it and what you add stands in it. It is
   placed, keyed, and parented as a clip in depth is, lit by the sequence's
   lights, and is in the ids and depth passes and in an agent's `look` with
-  `shows` as any clip is. It casts its shadow on other clips in depth, takes no effect or mask,
+  `shows` as any clip is. It casts its shadow on other clips in depth, takes effects and masks on
+  its picture as the camera sees it,
   and is drawn on the CPU.
 - A recipe can tell a model when something happens, and not only where and
   what: a `gen=signal@1` clip draws nothing and holds a number from 0 to 1

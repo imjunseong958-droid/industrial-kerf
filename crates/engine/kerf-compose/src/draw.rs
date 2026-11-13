@@ -1192,10 +1192,15 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
-        // It has no picture for a wipe to cross: an entrance fades it in.
-        let fade = shown
+        // Its picture is the one the camera sees of it, on the canvas: that is what a wipe
+        // crosses, a mask cuts, and an effect is done to.
+        let reveal = shown
             .reveal
-            .map_or(1.0, |(_, start, end)| progress(at, start, end));
+            .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
+        let fade = match reveal {
+            Some((Reveal::Dissolve, progress)) => progress,
+            _ => 1.0,
+        };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         if opacity <= 0.0 {
             return None;
@@ -1215,7 +1220,28 @@ impl Drawing {
         };
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-        let (picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
+            let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
+            picture.mul_coverage(&covered);
+        }
+        let frame = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let masks = mask::prepare(&clip.masks, frame, scale, time);
+        if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
+            picture.mul_coverage(&covered);
+        }
+        // A pass says which clip a pixel is of and how near it is, which no effect changes.
+        if self.pass == Pass::Picture && !plan.effects.is_empty() {
+            let placed = Placed {
+                sequence,
+                at,
+                scale,
+                to_output: Affine::IDENTITY,
+                per_source: scale,
+                env: false,
+            };
+            self.effects(&mut picture, plan, time, &placed, plan.effects.len());
+        }
         Some(three_d::Layer {
             picture,
             depth,
@@ -2437,13 +2463,6 @@ impl<'a> Builder<'a> {
         let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)))
             || matches!(source, Source::Mesh);
         if matches!(source, Source::Mesh) {
-            // It has no picture for either to be done to.
-            if clip.effects.iter().any(|effect| effect.enabled) {
-                return Err(unsupported(&clip.id, "an effect on a mesh"));
-            }
-            if !clip.masks.is_empty() {
-                return Err(unsupported(&clip.id, "a mask on a mesh"));
-            }
             three_d::mesh::check(clip).map_err(|why| {
                 ComposeError::Invalid(format!("clip `{}`: its mesh's file {why}", clip.id))
             })?;

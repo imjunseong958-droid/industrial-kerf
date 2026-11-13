@@ -257,7 +257,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `rotate_y`, `rotation`, and `scale` turn and size it, and it is keyed and parented as any clip is. The
   camera sees it and the lights light each side by the way it faces; with no light it is its color, flat.
   What is nearer at each pixel is in front, whichever track it is on, and it is in the ids and depth
-  passes and `look` with `shows` as any clip is. It casts its shadow on what a light with a `shadow` reaches past it, and none on itself; it takes no effect or mask, and is drawn
+  passes and `look` with `shows` as any clip is. It casts its shadow on what a light with a `shadow` reaches past it, and none on itself; its effects, its masks, and a wipe are of its picture as the camera sees it, across the frame, and it is drawn
   on the CPU. `set car kind=box width=0.9 height=0.25 length=0.4 color=#c02020 y=0.2 z=1 rotate_y=30`.
   `file="models/car.glb"` takes the mesh from a glTF file (`.glb`, or `.gltf` with its buffers beside it or
   inside it) in place of `kind`: every mesh of its scene at rest, each part in its material's color, or

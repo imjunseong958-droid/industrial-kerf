@@ -568,8 +568,10 @@ What is built for it, in this order, each measured before the next:
    its shadow on the clips in depth and the meshes a light reaches past it,
    and not on itself: a ray to the light is stopped by the first of its
    triangles it meets, found through a tree of boxes (`mesh::Standing`,
-   2026-11-13). *Not done:* it takes no effect and no mask (the compositor refuses them), a
-   transition's wipe is a fade on it, and the GPU does not draw it, so a
+   2026-11-13). Its effects, its masks, and a
+   transition's wipe are of its picture as the camera sees it, on the
+   canvas, after which it goes down among the clips in depth as before; a
+   pass draws the mask and no effect. *Not done:* the GPU does not draw it, so a
    frame with one is the CPU's. It was not handed to a model.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A recipe makes
