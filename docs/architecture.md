@@ -581,17 +581,22 @@ recipes, in `fixtures/shots/car`.
    that comes rigged and moving is the one thing in a guide that rigid
    shapes cannot be. Splats, for a set rebuilt from photographs, wait for
    those.
-3. **A take held to its guide by numbers.** Every row of the tables above
-   was judged by eye: place, path, size. The document has both halves of a
-   measure. `look` with `shows` says where a clip is on each frame of the
-   guide, and `track` follows a thing through a picture from points on it
-   (`kerf_track::roto`). So: follow the subject through the take from the
-   middle of its box in the guide's first frame, and say how far its box
-   in the take is from its box in the guide, frame by frame, as shares of
-   the frame. It needs no model and no server, and is tried first on the
-   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
-   what a person says of it, and choose between two.
-4. **Reading a picture back into what a guide is made of.** A pass goes from
+3. **Footage into the scene, and a picture read back.** What people do in
+   ComfyUI with a filmed shot is one loop, and Kerf wants the whole of it:
+   the shot is made into a scene, its set as a mesh or as splats and its
+   camera as a path; things are put into that scene, or the camera is moved
+   in it; the scene is drawn; and a model covers what was drawn. Kerf has
+   the last two. The first is a model's work, reached by a recipe whose
+   file is the scene (`generate model=<rebuilder> guide=shot.mp4
+   out={set.glb}`), and the second is the document's own, once it holds a
+   mesh (2): the rebuilt set is a mesh clip with the shot as its colors, the
+   camera a `gen=camera@1` clip keyed from the file or from Kerf's own solve
+   (`look` with `track`), and what is added stands in the same space, behind
+   and before the set's own surfaces, in the passes as in the picture. So
+   this waits only on 2, and on a glTF's camera and animation being read
+   with its mesh.
+
+   A pass goes from
    the document to a picture. The other way, from a picture to its depth,
    its normals, the color of its surfaces without their light, is what
    inverse rendering does (DiffusionRenderer, UniVidX, and in ComfyUI itself
@@ -604,7 +609,7 @@ recipes, in `fixtures/shots/car`.
      a guide comes from ([shots.md](shots.md#guides)), which so far is handed
      to a model as its picture.
    - *A take read back.* Its depth beside its guide's depth pass says how
-     well it followed, where 3 above says only where the subject went.
+     well it followed, where 4 below says only where the subject went.
    - *Light.* Normals and surface color of footage are what Kerf's own
      lights would need to fall on it. Not before the first two are measured:
      it would have the compositor draw a look, which the first rule is
@@ -615,6 +620,16 @@ recipes, in `fixtures/shots/car`.
    the model's weights are not (`LoadMoGeModel` lists none), so it was not
    run and no workflow is in the repository for it: one is written when it
    can be run.
+4. **A take held to its guide by numbers.** Every row of the tables above
+   was judged by eye: place, path, size. The document has both halves of a
+   measure. `look` with `shows` says where a clip is on each frame of the
+   guide, and `track` follows a thing through a picture from points on it
+   (`kerf_track::roto`). So: follow the subject through the take from the
+   middle of its box in the guide's first frame, and say how far its box
+   in the take is from its box in the guide, frame by frame, as shares of
+   the frame. It needs no model and no server, and is tried first on the
+   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
+   what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one
