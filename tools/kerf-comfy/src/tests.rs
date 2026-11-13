@@ -623,7 +623,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
 
     // The file asked for is the one fetched, by its kind: the cameras as text.
     let cameras = asking("cameras.txt", json!({}));
-    let (graph, said) = made(&cameras, "cameras-da3");
+    let (graph, said) = made(&cameras, "cameras");
     assert_eq!(std::fs::read(&cameras.out).unwrap(), b"its cameras");
     // The guide's own rate, each of its frames, and its size with its sides made even: not a
     // model's. It went up as it is, but for that.
@@ -647,14 +647,14 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         "depth.mp4",
         json!({"pose": "ray_pose", "resolution": "756"}),
     );
-    let (graph, _) = made(&depth, "cameras-da3");
+    let (graph, _) = made(&depth, "cameras");
     assert_eq!(std::fs::read(&depth.out).unwrap(), b"its depth");
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "ray_pose");
     assert_eq!(graph["4"]["inputs"]["resolution"], json!(756));
 
     // MoGe refines three times as it comes, and once where a line says so; `seconds` reads
     // the guide's first frames only.
-    let (graph, _) = made(&asking("moge.mp4", json!({})), "depth-moge");
+    let (graph, _) = made(&asking("moge.mp4", json!({})), "depth");
     assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
     assert_eq!(graph["5"]["inputs"]["output"], "depth");
     let mut short = asking(
@@ -662,7 +662,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         json!({"refine_steps": "1", "output": "normal_opengl"}),
     );
     short.seconds = Some(0.5);
-    let (graph, said) = made(&short, "depth-moge");
+    let (graph, said) = made(&short, "depth");
     assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
     assert_eq!(graph["5"]["inputs"]["output"], "normal_opengl");
     assert!(said.contains("for 6 frames of 322x180"), "{said}");
@@ -674,7 +674,7 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     let refused = make(
         &none,
         folder.path(),
-        &Workflow::named("depth-moge").unwrap(),
+        &Workflow::named("depth").unwrap(),
         &server,
         &Tools::find(),
         &patience(),

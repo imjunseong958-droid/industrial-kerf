@@ -472,20 +472,20 @@ where a later step reads what it makes. Four such workflows come with
 
 | Workflow | What it makes of its guide | As |
 |---|---|---|
-| `depth-moge` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
-| `set-moge` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
-| `depth-da3` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
-| `cameras-da3` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+| `depth` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
+| `set` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
+| `depth-whole` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
+| `cameras` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
 
-A workflow is named for what it makes, with the model that makes it after,
-and a recipe names neither: it says `model=depth`, the name the person's
+A workflow is named for what it makes, and says which model makes it in
+its `about`. A recipe names neither: it says `model=depth`, the name the person's
 file gives whichever reads depth for them, so that the recipe still reads
 when the model behind it is another.
 
 ```json
 {
-  "depth": { "run": ["/path/to/kerf-comfy", "--workflow", "depth-moge", "{request}"] },
-  "cameras": { "run": ["/path/to/kerf-comfy", "--workflow", "cameras-da3", "{request}"] }
+  "depth": { "run": ["/path/to/kerf-comfy", "--workflow", "depth", "{request}"] },
+  "cameras": { "run": ["/path/to/kerf-comfy", "--workflow", "cameras", "{request}"] }
 }
 ```
 
@@ -504,13 +504,13 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 `--describe` prints it, has no `size` and no `rate`, so `look` offers no
 `render` line for it: a guide is not drawn for it, it is given one.
 
-- **Which file is fetched goes by the name asked for.** `cameras-da3`
+- **Which file is fetched goes by the name asked for.** `cameras`
   saves a video and a text, and `out={cameras.txt}` takes the text.
 - **MoGe is asked as it comes**, refining three times. `refine_steps=1` took
   under half the time on the server it was measured on, for a depth 0.3%
   from the default's, and is for a very long shot.
 - **Depth Anything 3 finds a camera's path only with its weights as 32-bit
-  floats**, which `cameras-da3` sets on `LoadDA3Model`
+  floats**, which `cameras` sets on `LoadDA3Model`
   (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a
   dtype. `pose=ray_pose` finds the path from the model's rays in place of
   its camera decoder, three times as slowly.
@@ -524,7 +524,7 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   workflow reads 81 at most. Nothing in Kerf reads the file yet: bringing a
   path in as a `gen=camera@1` clip's keyframes is what a glTF's camera
   already has (`look` with `mesh`), and is next for this.
-- **A set comes without its camera.** `set-moge`'s mesh is as the frame's
+- **A set comes without its camera.** `set`'s mesh is as the frame's
   camera saw it, the camera at the file's own origin looking along its z
   backward, as a glTF camera does. The file holds no camera and no lens, so
   `look` with `mesh` has none to write.
