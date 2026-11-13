@@ -153,6 +153,9 @@ pub fn measure_program_with_progress(
     cancellation: &CancellationToken,
     mut on_progress: impl FnMut(f64),
 ) -> Result<Loudness> {
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     let heard = crate::ramps::with_sound(project);
     let compiled = compile_program(
         &heard,
@@ -164,6 +167,17 @@ pub fn measure_program_with_progress(
     )?;
     let duration = compiled.duration.seconds();
     let args = measure_args(&compiled.argv)?;
+    // The same command over the same files hears the same: what an earlier
+    // pass kept of it in the project is the measurement.
+    let kept = crate::qc::kept::sound_file(dir, &args);
+    let known = kept
+        .as_deref()
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str::<Loudness>(&text).ok());
+    if let Some(loudness) = known {
+        on_progress(1.0);
+        return Ok(loudness);
+    }
     let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     if dir.is_dir() {
         command.current_dir(dir);
@@ -191,6 +205,9 @@ pub fn measure_program_with_progress(
         return Err(EngineError::msg(
             "loudness measurement produced no samples (does this FFmpeg have the ebur128 filter?)",
         ));
+    }
+    if let (Some(file), Ok(text)) = (&kept, serde_json::to_string(&loudness)) {
+        crate::qc::kept::save_sound(file, &text);
     }
     on_progress(1.0);
     Ok(loudness)

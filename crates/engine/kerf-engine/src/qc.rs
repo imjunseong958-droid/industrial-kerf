@@ -7,7 +7,14 @@
 //! measures it with `signalstats` and `blackdetect` in one pass. Nothing is
 //! encoded or written.
 //!
+//! What is measured of a frame is kept in the project by what the frame
+//! depends on ([`kept`]), so a later pass draws and measures only the
+//! frames that have changed since, and gives what measuring them all
+//! would.
+//!
 //! Levels are 10-bit code values: legal Y′ is 64 to 940.
+
+pub(crate) mod kept;
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -128,6 +135,18 @@ pub struct FrameStats {
     pub brng: f64,
 }
 
+/// What is measured of a frame wherever it is in a program, which is all a
+/// verdict needs of it and what is kept of it between passes.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Measure {
+    ymin: f64,
+    ymax: f64,
+    yavg: f64,
+    brng: f64,
+    /// Black, as `blackdetect` counts a frame.
+    black: bool,
+}
+
 /// Run the picture QC pass over `sequence` of `project` (the first one
 /// when `None`). FFmpeg runs in `dir`, the project directory. The pass is
 /// stopped when `cancellation` is requested.
@@ -176,7 +195,73 @@ pub fn picture_qc_with_progress(
         ((f64::from(canvas.1) * scale).round() as u32).max(2),
     );
     let times = frame_times(rate, duration);
-    let args = qc_args(size, rate);
+    let total = times.len();
+    // A frame measured in an earlier pass is not drawn again: its number
+    // says it is the same picture.
+    let mut kept = kept::KeptFrames::open(dir, &qc_graph());
+    let keys: Vec<Option<u64>> = times
+        .iter()
+        .map(|at| compositor.frame_key(*at, scale))
+        .collect();
+    let mut measures: Vec<Option<Measure>> = keys
+        .iter()
+        .map(|key| key.and_then(|key| kept.get(key)))
+        .collect();
+    let changed: Vec<usize> = (0..total)
+        .filter(|index| measures[*index].is_none())
+        .collect();
+    let known = total - changed.len();
+    if !changed.is_empty() {
+        let measured = measure(
+            &compositor,
+            (scale, size),
+            changed.iter().map(|index| times[*index]).collect(),
+            dir,
+            cancellation,
+            |done| on_progress((known + done) as f64 / total as f64),
+        )?;
+        for (index, measure) in changed.iter().zip(measured) {
+            measures[*index] = Some(measure);
+            if let Some(key) = keys[*index] {
+                kept.put(key, measure);
+            }
+        }
+        kept.save(keys.iter().flatten().copied());
+    }
+    on_progress(1.0);
+    let measures: Vec<Measure> = measures.into_iter().flatten().collect();
+    let frames: Vec<FrameStats> = times
+        .iter()
+        .zip(&measures)
+        .map(|(at, measure)| FrameStats {
+            at: round(at.seconds()),
+            ymin: measure.ymin,
+            ymax: measure.ymax,
+            yavg: measure.yavg,
+            brng: measure.brng,
+        })
+        .collect();
+    let black: Vec<bool> = measures.iter().map(|measure| measure.black).collect();
+    Ok(analyze(
+        &frames,
+        &black_ranges(&black, rate),
+        rate.frame_duration().seconds(),
+        duration.seconds(),
+    ))
+}
+
+/// Draw the frames of `compositor` at `times`, at `scale` of its canvas
+/// (which makes them `size`), and measure each with FFmpeg, run in `dir`.
+/// `on_progress` hears how many are done.
+fn measure(
+    compositor: &Compositor,
+    (scale, size): (f64, (u32, u32)),
+    times: Vec<Time>,
+    dir: &Path,
+    cancellation: &CancellationToken,
+    mut on_progress: impl FnMut(usize),
+) -> Result<Vec<Measure>> {
+    let args = qc_args(size, compositor.rate());
     let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     if dir.is_dir() {
         command.current_dir(dir);
@@ -203,7 +288,7 @@ pub fn picture_qc_with_progress(
     });
     let total = times.len();
     let mut written = 0;
-    let drawn = crate::render::draw_in_order(
+    let mut drawn = crate::render::draw_in_order(
         total,
         DRAWERS,
         |index| compositor.frame(times[index], scale),
@@ -216,11 +301,18 @@ pub fn picture_qc_with_progress(
             }
             stdin.write_all(&frame.rgba)?;
             written += 1;
-            on_progress(written as f64 / total as f64);
+            on_progress(written);
             Ok(())
         },
         cancellation,
     );
+    if drawn.is_ok() {
+        // One white frame after the last, so that black which runs to the
+        // end is seen to end: FFmpeg says where black ends on the frame
+        // after it.
+        let white = vec![255_u8; size.0 as usize * size.1 as usize * 4];
+        drawn = stdin.write_all(&white).map_err(EngineError::from);
+    }
     drop(stdin);
     if drawn.is_err() {
         let _ = child.kill();
@@ -238,17 +330,50 @@ pub fn picture_qc_with_progress(
         Err(error) => return Err(error),
         Ok(()) => {}
     }
-    if parser.frames.is_empty() {
+    if parser.measured == 0 {
         return Err(EngineError::msg(
             "picture QC measured no frames (does this FFmpeg have signalstats?)",
         ));
     }
-    Ok(analyze(
-        &parser.frames,
-        &parser.black,
-        rate.frame_duration().seconds(),
-        duration.seconds(),
-    ))
+    if parser.measured < total {
+        return Err(EngineError::msg(format!(
+            "picture QC measured {} of {total} frames",
+            parser.measured
+        )));
+    }
+    let mut measures = parser.measures;
+    measures.truncate(total);
+    Ok(measures)
+}
+
+/// The stretches of black in a program at `rate` whose frames are black
+/// where `black` says, as FFmpeg's `blackdetect` reports them over the
+/// whole of it for [`BLACK_MIN_SECONDS`]: it counts in whole frames, the
+/// time base's, and ends black that runs to the end on the last frame.
+fn black_ranges(black: &[bool], rate: Rate) -> Vec<QcRange> {
+    let frame = f64::from(rate.den()) / f64::from(rate.num());
+    let least = (BLACK_MIN_SECONDS / frame) as usize;
+    let at = |index: usize| rate.time_of(index as i64).seconds();
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index < black.len() {
+        if !black[index] {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < black.len() && black[index] {
+            index += 1;
+        }
+        let end = if index < black.len() { index } else { index - 1 };
+        if end - start >= least {
+            ranges.push(QcRange {
+                start: at(start),
+                end: at(end),
+            });
+        }
+    }
+    ranges
 }
 
 /// The time of each frame of a program `duration` long at `rate`.
@@ -258,21 +383,32 @@ fn frame_times(rate: Rate, duration: Time) -> Vec<Time> {
     (0..count.max(1)).map(|index| rate.time_of(index)).collect()
 }
 
-/// FFmpeg's arguments: RGBA frames of `size` at `rate` on stdin, measured
-/// as 10-bit Rec.709 limited range, into nothing.
-fn qc_args(size: (u32, u32), rate: Rate) -> Vec<String> {
-    let stat = |key: &str| format!("metadata=mode=print:key=lavfi.signalstats.{key}");
-    let graph = [
+/// The filters that measure a frame: as 10-bit Rec.709 limited range, its
+/// levels, and whether it is black. Each frame is measured by itself, so
+/// they give the same for a frame whatever comes before it; every run of
+/// black is marked on its first frame and on the frame after its last,
+/// however short.
+fn qc_graph() -> String {
+    let print = |key: &str| format!("metadata=mode=print:key=lavfi.{key}");
+    [
         "scale=w=trunc(iw/2)*2:h=trunc(ih/2)*2:out_color_matrix=bt709:out_range=tv".to_owned(),
         "format=yuv422p10le".to_owned(),
         "signalstats=stat=brng".to_owned(),
-        stat("YMIN"),
-        stat("YMAX"),
-        stat("YAVG"),
-        stat("BRNG"),
-        format!("blackdetect=d={BLACK_MIN_SECONDS}:pix_th={BLACK_PIXEL}"),
+        print("signalstats.YMIN"),
+        print("signalstats.YMAX"),
+        print("signalstats.YAVG"),
+        print("signalstats.BRNG"),
+        format!("blackdetect=d=0:pix_th={BLACK_PIXEL}"),
+        print("black_start"),
+        print("black_end"),
     ]
-    .join(",");
+    .join(",")
+}
+
+/// FFmpeg's arguments: RGBA frames of `size` at `rate` on stdin, measured
+/// by [`qc_graph`], into nothing.
+fn qc_args(size: (u32, u32), rate: Rate) -> Vec<String> {
+    let graph = qc_graph();
     [
         "-hide_banner",
         "-nostats",
@@ -296,23 +432,40 @@ fn qc_args(size: (u32, u32), rate: Rate) -> Vec<String> {
     .into()
 }
 
-/// Reads `metadata` print lines and `blackdetect` lines.
+/// Reads `metadata` print lines: a frame's number, then what was measured
+/// of it.
 #[derive(Debug, Default)]
 struct StatsParser {
-    frames: Vec<FrameStats>,
-    black: Vec<QcRange>,
-    at: Option<f64>,
-    /// The last lines that were neither, for an error message.
+    /// By the order the frames went in.
+    measures: Vec<Measure>,
+    /// How many frames had their levels read.
+    measured: usize,
+    /// The frame the lines that follow are about.
+    frame: Option<usize>,
+    /// Where the black that has not ended yet began.
+    black_from: Option<usize>,
+    /// The last lines that were none of these, for an error message.
     tail: String,
 }
 
 impl StatsParser {
+    fn measure(&mut self, frame: usize) -> &mut Measure {
+        if self.measures.len() <= frame {
+            self.measures.resize(frame + 1, Measure::default());
+        }
+        &mut self.measures[frame]
+    }
+
     fn line(&mut self, line: &str) {
-        if let Some(index) = line.find("pts_time:") {
-            self.at = line[index + "pts_time:".len()..]
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse().ok());
+        if line.contains("pts_time:") {
+            // `frame:12   pts:12      pts_time:0.4`: the count is exact,
+            // where the time is rounded to six digits.
+            self.frame = line.find("frame:").and_then(|index| {
+                line[index + "frame:".len()..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse().ok())
+            });
             return;
         }
         if let Some(index) = line.find("lavfi.signalstats.") {
@@ -320,36 +473,34 @@ impl StatsParser {
             else {
                 return;
             };
-            let (Some(at), Ok(value)) = (self.at, value.trim().parse::<f64>()) else {
+            let (Some(frame), Ok(value)) = (self.frame, value.trim().parse::<f64>()) else {
                 return;
             };
-            // Each frame passes every printer in turn; a new time starts a
-            // new frame.
-            if self.frames.last().is_none_or(|frame| frame.at != at) {
-                self.frames.push(FrameStats {
-                    at,
-                    ..FrameStats::default()
-                });
-            }
-            let frame = self.frames.last_mut().expect("a frame was pushed");
+            self.measured = self.measured.max(frame + 1);
+            let measure = self.measure(frame);
             match key {
-                "YMIN" => frame.ymin = value,
-                "YMAX" => frame.ymax = value,
-                "YAVG" => frame.yavg = value,
-                "BRNG" => frame.brng = value,
+                "YMIN" => measure.ymin = value,
+                "YMAX" => measure.ymax = value,
+                "YAVG" => measure.yavg = value,
+                "BRNG" => measure.brng = value,
                 _ => {}
             }
             return;
         }
-        if line.contains("black_start:") {
-            let field = |name: &str| {
-                line.split_whitespace()
-                    .find_map(|token| token.strip_prefix(name))
-                    .and_then(|value| value.parse::<f64>().ok())
-            };
-            if let (Some(start), Some(end)) = (field("black_start:"), field("black_end:")) {
-                self.black.push(QcRange { start, end });
+        if line.contains("lavfi.black_start=") {
+            self.black_from = self.frame;
+            return;
+        }
+        if line.contains("lavfi.black_end=") {
+            if let (Some(from), Some(to)) = (self.black_from.take(), self.frame) {
+                for frame in from..to {
+                    self.measure(frame).black = true;
+                }
             }
+            return;
+        }
+        // What `blackdetect` says itself, which the marks above carry.
+        if line.contains("black_start:") {
             return;
         }
         self.tail.push_str(line);
@@ -727,31 +878,130 @@ mod tests {
             "[Parsed_metadata_7 @ 0x4] lavfi.signalstats.BRNG=0.25",
             "[Parsed_metadata_4 @ 0x1] frame:1    pts:1       pts_time:0.0416667",
             "[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YMIN=70",
-            "[Parsed_blackdetect_8 @ 0x5] black_start:2 black_end:3 black_duration:1",
+            "[Parsed_metadata_9 @ 0x7] frame:1    pts:1       pts_time:0.0416667",
+            "[Parsed_metadata_9 @ 0x7] lavfi.black_start=0.0416667",
+            // Past ten thousand seconds the time has one decimal left; the
+            // frame's number still tells one frame from the next.
+            "[Parsed_metadata_4 @ 0x1] frame:2    pts:2       pts_time:10000.1",
+            "[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YMIN=71",
+            "[Parsed_metadata_4 @ 0x1] frame:3    pts:3       pts_time:10000.1",
+            "[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YMIN=72",
+            "[Parsed_blackdetect_8 @ 0x5] black_start:0.0416667 black_end:10000.1 black_duration:1",
+            "[Parsed_metadata_10 @ 0x8] frame:3    pts:3       pts_time:10000.1",
+            "[Parsed_metadata_10 @ 0x8] lavfi.black_end=10000.1",
             "[out#0/null @ 0x6] video:0KiB audio:0KiB",
         ] {
             parser.line(line);
         }
-        assert_eq!(parser.frames.len(), 2);
+        assert_eq!(parser.measured, 4);
         assert_eq!(
-            parser.frames[0],
-            FrameStats {
-                at: 0.0,
+            parser.measures[0],
+            Measure {
                 ymin: 64.0,
                 ymax: 940.0,
                 yavg: 480.5,
-                brng: 0.25
+                brng: 0.25,
+                black: false,
             }
         );
-        assert_eq!(parser.frames[1].ymin, 70.0);
-        assert_eq!(
-            parser.black,
-            [QcRange {
-                start: 2.0,
-                end: 3.0
-            }]
-        );
+        let ymin: Vec<f64> = parser.measures.iter().map(|measure| measure.ymin).collect();
+        assert_eq!(ymin, [64.0, 70.0, 71.0, 72.0]);
+        let black: Vec<bool> = parser.measures.iter().map(|measure| measure.black).collect();
+        assert_eq!(black, [false, true, true, false]);
         assert!(parser.tail.contains("video:0KiB"));
+        assert!(!parser.tail.contains("black_start"));
+    }
+
+    /// What `blackdetect` itself reports for [`BLACK_MIN_SECONDS`] over
+    /// frames that are black where `black` says, at `rate`.
+    fn blackdetect_says(black: &[bool], rate: Rate) -> Option<Vec<QcRange>> {
+        let mut child = std::process::Command::new(resolve_ffmpeg_bin())
+            .args(["-hide_banner", "-nostats", "-f", "rawvideo", "-pix_fmt", "rgba"])
+            .args(["-s", "16x16", "-framerate", &rate_arg(rate), "-i", "pipe:0"])
+            .arg("-vf")
+            .arg(format!(
+                "format=yuv422p10le,blackdetect=d={BLACK_MIN_SECONDS}:pix_th={BLACK_PIXEL}"
+            ))
+            .args(["-f", "null", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let mut stdin = child.stdin.take()?;
+        for black in black {
+            let level = if *black { 0 } else { 255 };
+            let frame: Vec<u8> = [level, level, level, 255].repeat(16 * 16);
+            stdin.write_all(&frame).ok()?;
+        }
+        drop(stdin);
+        let output = child.wait_with_output().ok()?;
+        let field = |line: &str, name: &str| {
+            line.split_whitespace()
+                .find_map(|token| token.strip_prefix(name))
+                .and_then(|value| value.parse::<f64>().ok())
+        };
+        Some(
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .filter_map(|line| {
+                    Some(QcRange {
+                        start: field(line, "black_start:")?,
+                        end: field(line, "black_end:")?,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn black_is_reported_as_blackdetect_reports_it_over_the_whole_program() {
+        if std::process::Command::new(resolve_ffmpeg_bin())
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: FFmpeg is not installed");
+            return;
+        }
+        for rate in [
+            Rate::FPS_24,
+            Rate::new(25, 1).unwrap(),
+            Rate::new(30, 1).unwrap(),
+            Rate::new(30000, 1001).unwrap(),
+            Rate::new(24000, 1001).unwrap(),
+        ] {
+            let least = (BLACK_MIN_SECONDS * rate.fps()) as usize;
+            // Runs a frame short of counting, just counting and over, in
+            // the middle, at the start, and up to the end.
+            let run = |frames: usize| [vec![true; frames], vec![false; 3]].concat();
+            let mut cases: Vec<Vec<bool>> = Vec::new();
+            for end in [least - 1, least, least + 1, least + 2] {
+                let mut black = vec![false; 4];
+                for middle in [least - 1, least, least + 1] {
+                    black.extend(run(middle));
+                }
+                black.extend(vec![true; end]);
+                cases.push(black);
+            }
+            cases.push([run(least + 1), vec![false; 5]].concat());
+            cases.push(vec![true; least + 3]);
+            cases.push(vec![false; least + 3]);
+            for black in cases {
+                let Some(said) = blackdetect_says(&black, rate) else {
+                    eprintln!("skipping: FFmpeg did not run");
+                    return;
+                };
+                let ours = black_ranges(&black, rate);
+                assert_eq!(ours.len(), said.len(), "{rate}: {ours:?} and {said:?}");
+                for (ours, said) in ours.iter().zip(&said) {
+                    assert!(
+                        (ours.start - said.start).abs() < 1e-5 && (ours.end - said.end).abs() < 1e-5,
+                        "{rate}: {ours:?} and {said:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -769,7 +1019,9 @@ mod tests {
         let graph = at("-vf").expect("graph");
         assert!(graph.contains("out_range=tv") && graph.contains("yuv422p10le"));
         assert!(graph.contains("signalstats=stat=brng"));
-        assert!(graph.contains("blackdetect=d=0.5"));
+        // Every run of black, marked on the frames it starts and ends at.
+        assert!(graph.contains("blackdetect=d=0:"));
+        assert!(graph.ends_with("key=lavfi.black_start,metadata=mode=print:key=lavfi.black_end"));
         assert_eq!(args[args.len() - 3..], ["-f", "null", "-"]);
         assert_eq!(
             frame_times(Rate::FPS_24, Rate::FPS_24.time_of(48)).len(),
