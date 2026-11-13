@@ -567,6 +567,20 @@ recipes, in `fixtures/shots/car`.
    to start from, carried into Kerf's terms as the rest was, and without its
    materials. The first of it is the solids, which need no file and are
    enough to say whether the passes and `shows` hold for a mesh.
+
+   Where the shapes come from is not Kerf's to build. ComfyUI's 3D (What
+   others do) is fine in what it holds, not in how it draws: models that
+   make a mesh from a picture or from words, texture it, rig it, and
+   animate it. A recipe reaches them as it reaches any model, with a step
+   whose file is a mesh, `generate model=<maker> ref=car.png out={car.glb}`,
+   and the clip is of that file. So a guide is as fine as its meshes are,
+   and Kerf's drawing of them stays plain. Two things follow for what is
+   drawn, after the solids and a glTF read in: a mesh's own colors, its
+   texture drawn unlit, since they are what a thing is and not how it is
+   lit; and then a glTF's own animation, bones and all, since a character
+   that comes rigged and moving is the one thing in a guide that rigid
+   shapes cannot be. Splats, for a set rebuilt from photographs, wait for
+   those.
 3. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the
@@ -1131,6 +1145,16 @@ Since the survey: Export follows Deliver, the quality numbers are checked on rea
   model with a compositor's tools: a camera solved from a photograph, a 3D
   view to place a model in, relighting from depth and normals. Its premise is
   this document's: block the shot first, and let the model draw it.
+- **ComfyUI's 3D** (0.45, read from the nodes a server lists, not from its
+  code) is some 126 nodes: making a mesh from a picture or from words
+  (Trellis 2, Hunyuan3D, and hosted Tripo, Meshy and Rodin), rigging and
+  animating one, rebuilding a scene from a picture (MoGe, Depth Anything 3)
+  or as splats, mending and texturing meshes, and drawing them: a view of a
+  model that gives its picture, mask, normals and camera, and an orbit. What
+  is fine there is the assets and the models that make them. The drawing is
+  a plain one, since a model covers it. Kerf takes the assets, as files a
+  recipe makes, and builds none of the models (What directs a model, Next
+  2).
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in
