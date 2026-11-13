@@ -44,7 +44,9 @@ fn held(guide: &Project, take: &Project) -> Followed {
         // A model stretches a frame to its own nearest and farthest, and is not exact.
         let grey: Vec<u8> = picture
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| (f64::from(pixel[0]) * 0.8 + 20.0) as u8)
             .collect();
         following.frame(at, &grey);
