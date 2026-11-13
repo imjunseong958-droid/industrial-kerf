@@ -4,7 +4,7 @@
 blur.cross	blur.directional@2
 blur.radialfast	blur.radialzoom@1
 blur.vector	blur.directional@2
-blur.cameralens	blur.bokeh@1
+blur.cameralens	the prompt and references of the shot's recipe
 blur.camerashakedeblur	distort.warpstabilizer@2
 blur.fastbox	blur.gaussian@1
 blur.radial	blur.radialzoom@1
@@ -44,24 +44,24 @@ color.arbitrarymap	color.curves@1
 color.tritone	color.tint@2
 color.vibrance	color.lumetri@2
 distort.bezierwarp	distort.cornerpin@2
-distort.bendit	distort.wavewarp@2
-distort.bender	distort.wavewarp@2
-distort.blobbylize	distort.wavewarp@2
+distort.bendit	the prompt and references of the shot's recipe
+distort.bender	the prompt and references of the shot's recipe
+distort.blobbylize	the prompt and references of the shot's recipe
 distort.flomotion	
 distort.griddler	clips side by side, each scaled
 distort.pageturn	page-peel@1
 distort.powerpin	distort.cornerpin@2
-distort.ripplepulse	distort.wavewarp@2
+distort.ripplepulse	the prompt and references of the shot's recipe
 distort.slant	distort.transform@2
-distort.pullsmear	distort.wavewarp@2
+distort.pullsmear	the prompt and references of the shot's recipe
 distort.split	clips side by side, each scaled
 distort.split2	clips side by side, each scaled
 distort.tiler	clips side by side, each scaled
-distort.displacementmap	distort.wavewarp@2
+distort.displacementmap	the prompt and references of the shot's recipe
 distort.polar	vr.projection@1
 distort.reshape	distort.cornerpin@2
-distort.ripple	distort.wavewarp@2
-distort.smear	distort.wavewarp@2
+distort.ripple	the prompt and references of the shot's recipe
+distort.smear	the prompt and references of the shot's recipe
 distort.twirllegacy	
 distort.warp	distort.lens@2
 generate.advancedlightning	
@@ -69,15 +69,15 @@ generate.beam
 generate.gluegun	utility.stroke@1
 generate.lightburst	
 generate.lightrays	
-generate.lightsweep	light.leaks@1
+generate.lightsweep	the prompt and references of the shot's recipe
 generate.threads	generate.grid@2
 generate.eyedropperfill	generate.paintbucket@2
 generate.fill	a solid (gen=solid@1)
 generate.fractal	
 generate.radiowaves	a `gen=shape@1` clip
-generate.scribble	generate.writeon@2
+generate.scribble	a `gen=shape@1` clip with keyframes on `trim_end`
 generate.stroke	utility.stroke@1
-generate.vegas	light.wonderglow@1
+generate.vegas	the prompt and references of the shot's recipe
 vr.converter	vr.projection@1
 vr.spheretoplane	vr.projection@1
 key.simplewireremoval	noise.dustscratches@1
@@ -91,15 +91,15 @@ key.screen	key.ultra@1
 matte.mattechoker	matte.simplechoker@1
 matte.refinehard	matte.simplechoker@1
 matte.refinesoft	key.keycleaner@1
-noise.curlnoise	distort.wavewarp@2
+noise.curlnoise	the prompt and references of the shot's recipe
 noise.fractal	
 noise.matchgrain	noise.addgrain@1
 noise.medianlegacy	noise.median@2
 noise.noisealpha	noise.noise@2
 noise.noisehls	noise.noise@2
 noise.noisehlsauto	noise.noise@2
-noise.turbulent	distort.wavewarp@2
-perspective.3dglasses	light.rgbsplit@1
+noise.turbulent	the prompt and references of the shot's recipe
+perspective.3dglasses	the prompt and references of the shot's recipe
 perspective.beveledges	`depth=` and `bevel=` on a clip in depth
 perspective.cylinder	distort.lens@2
 perspective.environment	
@@ -128,23 +128,23 @@ stylize.blockload	stylize.mosaic@2
 stylize.burnfilm	burn-alpha@1
 stylize.glass	
 stylize.hextile	stylize.mosaic@2
-stylize.kaleida	distort.mirror@2
+stylize.kaleida	the prompt and references of the shot's recipe
 stylize.mrsmoothie	
 stylize.plastic	
 stylize.repetile	clips side by side, each scaled
-stylize.smooththreshold	stylize.posterize@2
-stylize.thresholdrgb	stylize.posterize@2
-stylize.cartoon	stylize.posterize@2
-stylize.glow	light.wonderglow@1
+stylize.smooththreshold	the prompt and references of the shot's recipe
+stylize.thresholdrgb	the prompt and references of the shot's recipe
+stylize.cartoon	the prompt and references of the shot's recipe
+stylize.glow	the prompt and references of the shot's recipe
 stylize.scatter	
 stylize.texturize	
-stylize.threshold	stylize.posterize@2
+stylize.threshold	the prompt and references of the shot's recipe
 text.numbers	text.burnin@1
 time.forcemotionblur	distort.transform@2
-time.widetime	time.echo@2
+time.widetime	the prompt and references of the shot's recipe
 time.pixelmotionblur	distort.transform@2
 time.timedifference	
-time.timedisplacement	time.echo@2
+time.timedisplacement	the prompt and references of the shot's recipe
 time.timewarp	the clip's speed
 transition.blockdissolve	mosaic@1
 transition.glasswipe	glass@1
@@ -175,12 +175,12 @@ stylize.coloremboss
 stylize.emboss	
 stylize.findedges	
 stylize.roughenedges	
-stylize.motiontile	distort.mirror@2
+stylize.motiontile	the prompt and references of the shot's recipe
 stylize.replicate	clips side by side, each scaled
 stylize.strobe	the look `look.flash`
-light.alphaglow	light.wonderglow@1
-light.echoglow	light.wonderglow@1
-light.edgeglow	light.wonderglow@1
+light.alphaglow	the prompt and references of the shot's recipe
+light.echoglow	the prompt and references of the shot's recipe
+light.edgeglow	the prompt and references of the shot's recipe
 light.lighting	a light on clips in depth, `gen=light@1`
 light.rays	
 generate.lensflare	
@@ -189,13 +189,13 @@ generate.cellpattern
 distort.bulge	distort.lens@2
 distort.spherize	distort.lens@2
 distort.twirl	
-distort.turbulentdisplace	distort.wavewarp@2
+distort.turbulentdisplace	the prompt and references of the shot's recipe
 perspective.longshadow	perspective.dropshadow@2
-vr.chromaticaberrations	light.rgbsplit@1
+vr.chromaticaberrations	the prompt and references of the shot's recipe
 vr.colorgradients	
-vr.digitalglitch	the look `look.glitch`
+vr.digitalglitch	the prompt and references of the shot's recipe
 vr.fractalnoise	
-vr.glow	light.wonderglow@1
+vr.glow	the prompt and references of the shot's recipe
 transform.move	keyframes on the clip's `x` and `y`
 transform.grow	keyframes on the clip's `scale`
 transform.shrink	keyframes on the clip's `scale`
@@ -208,3 +208,25 @@ perspective.bevelalpha	`depth=` and `bevel=` on a clip in depth
 generate.circle	a `gen=shape@1` clip
 generate.ellipse	a `gen=shape@1` clip
 utility.clone	clips side by side, each scaled
+# Cut when what is left was asked whether it is done to a made shot, the same
+# every time, or is how a shot looks (docs/architecture.md, What is looked at
+# again). Looks went with the effects they were made of.
+light.glint	the prompt and references of the shot's recipe
+light.leaks	the prompt and references of the shot's recipe
+light.rgbsplit	the prompt and references of the shot's recipe
+light.wonderglow	the prompt and references of the shot's recipe
+distort.wavewarp	the prompt and references of the shot's recipe
+distort.mirror	the prompt and references of the shot's recipe
+stylize.posterize	the prompt and references of the shot's recipe
+time.echo	the prompt and references of the shot's recipe
+blur.bokeh	the prompt and references of the shot's recipe, or a camera's `focus` on clips in depth
+blur.focus	the prompt and references of the shot's recipe, or `blur.gaussian@1` under a mask
+blur.compound	`blur.gaussian@1` under a mask
+blur.channel	
+blur.camera	blur.gaussian@1
+distort.offset	keyframes on the clip's `x` and `y`
+generate.writeon	a `gen=shape@1` clip with keyframes on `trim_end`
+look.vhs	the prompt and references of the shot's recipe
+look.glitch	the prompt and references of the shot's recipe
+look.dreamy	the prompt and references of the shot's recipe
+look.sparkle	the prompt and references of the shot's recipe

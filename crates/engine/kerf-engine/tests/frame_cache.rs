@@ -65,7 +65,7 @@ fn rendering_again_reads_what_was_drawn() {
     assert!(made.success());
     let project = parse_document(
         &format!(
-            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      fx color.lumetri@2 exposure=0.5\n      fx light.wonderglow@1\n    clip c2 media=m src=12f at=12f dur=12f\n      fx color.lumetri@2 exposure=0.2\n      fx light.wonderglow@1\n",
+            "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      fx color.lumetri@2 exposure=0.5\n      fx blur.unsharp@2\n    clip c2 media=m src=12f at=12f dur=12f\n      fx color.lumetri@2 exposure=0.2\n      fx blur.unsharp@2\n",
             source.display()
         ),
         Catalog::builtin(),

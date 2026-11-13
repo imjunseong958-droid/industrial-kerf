@@ -94,9 +94,6 @@ pub enum FxOp {
         channel: u32,
         blend: f32,
     },
-    Posterize {
-        n: f32,
-    },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
         rx: Vec<u32>,
@@ -127,18 +124,6 @@ pub enum FxOp {
     Resample(Resample),
     HFlip,
     VFlip,
-    Mirror {
-        cx: f32,
-        cy: f32,
-        nx: f32,
-        ny: f32,
-    },
-    /// Wrap-around shift (dx, dy already reduced into 0..w, 0..h), mixed with the original.
-    Offset {
-        dx: f32,
-        dy: f32,
-        blend: f32,
-    },
     /// ASC CDL on display-encoded colour (slope, offset, power, saturation).
     AscCdl {
         slope: [f32; 3],
@@ -333,9 +318,6 @@ impl FxOp {
                 channel: choice(e, "channel"),
                 blend: f(e, "blend", cx) / 100.0,
             },
-            "posterize" => FxOp::Posterize {
-                n: f(e, "levels", cx).max(2.0) - 1.0,
-            },
             "gaussian_blur" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
                 let dims = choice(e, "dimensions");
@@ -349,15 +331,6 @@ impl FxOp {
                     rx,
                     ry,
                     repeat: b(e, "repeat_edge"),
-                }
-            }
-            "camera_blur" => {
-                let r = f(e, "percent", cx) * cx.px_scale * 0.3;
-                let (rx, ry) = gaussian_boxes(w, h, r, r);
-                FxOp::Gaussian {
-                    rx,
-                    ry,
-                    repeat: true,
                 }
             }
             "directional_blur" => {
@@ -473,35 +446,6 @@ impl FxOp {
             }
             "horizontal_flip" => FxOp::HFlip,
             "vertical_flip" => FxOp::VFlip,
-            "mirror" => {
-                let img = Image {
-                    w,
-                    h,
-                    px: Vec::new(),
-                };
-                let c = point(e, "center", cx, &img);
-                let ang = (f(e, "angle", cx) as f64).to_radians();
-                FxOp::Mirror {
-                    cx: c.x as f32,
-                    cy: c.y as f32,
-                    nx: ang.cos() as f32,
-                    ny: ang.sin() as f32,
-                }
-            }
-            "offset" => {
-                let img = Image {
-                    w,
-                    h,
-                    px: Vec::new(),
-                };
-                let s = point(e, "shift", cx, &img);
-                let (dx, dy) = (s.x - w as f64 / 2.0, s.y - h as f64 / 2.0);
-                FxOp::Offset {
-                    dx: dx.rem_euclid(w.max(1) as f64) as f32,
-                    dy: dy.rem_euclid(h.max(1) as f64) as f32,
-                    blend: f(e, "blend", cx) / 100.0,
-                }
-            }
             "asc_cdl" => {
                 use crate::filmcraft::vfx::fv;
                 FxOp::AscCdl {
@@ -841,7 +785,6 @@ impl FxOp {
             FxOp::Levels { ib, iw, ob, ow, g } => fin(&[*ib, *iw, *ob, *ow, *g]),
             FxOp::Extract { lo, hi, soft, .. } => fin(&[*lo, *hi, *soft]),
             FxOp::Invert { blend, .. } => blend.is_finite(),
-            FxOp::Posterize { n } => n.is_finite(),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp {
@@ -863,8 +806,6 @@ impl FxOp {
                             .all(|v| v.is_finite() && v.abs() < 1e7)
                     })
             }
-            FxOp::Mirror { cx, cy, nx, ny } => fin(&[*cx, *cy, *nx, *ny]),
-            FxOp::Offset { dx, dy, blend } => fin(&[*dx, *dy, *blend]),
             FxOp::AscCdl {
                 slope,
                 offset,
@@ -1116,10 +1057,6 @@ impl FxOp {
                     });
                 }
             }
-            FxOp::Posterize { n } => {
-                let n = *n;
-                img.map_rgb(|c, _, _| dec(enc(c).map(|v| (v * n).round() / n)));
-            }
             FxOp::Gaussian { rx, ry, repeat } => {
                 crate::filmcraft::effects::box_blur(img, rx, ry, *repeat)
             }
@@ -1164,45 +1101,6 @@ impl FxOp {
                     let (a, bb) = img.px.split_at_mut((h - 1 - y) * w * 4);
                     a[y * w * 4..(y + 1) * w * 4].swap_with_slice(&mut bb[..w * 4]);
                 }
-            }
-            FxOp::Mirror { cx, cy, nx, ny } => {
-                let (c, n) = ((*cx as f64, *cy as f64), (*nx as f64, *ny as f64));
-                let src = img.clone();
-                let w = img.w;
-                img.px
-                    .par_chunks_mut(w * 4)
-                    .enumerate()
-                    .for_each(|(y, row)| {
-                        for x in 0..w {
-                            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-                            let d = (px - c.0) * n.0 + (py - c.1) * n.1;
-                            if d > 0.0 {
-                                let (rx, ry) = (px - 2.0 * d * n.0, py - 2.0 * d * n.1);
-                                row[x * 4..x * 4 + 4]
-                                    .copy_from_slice(&src.sample_bilinear(rx as f32, ry as f32));
-                            }
-                        }
-                    });
-            }
-            FxOp::Offset { dx, dy, blend } => {
-                let (dx, dy, blend) = (*dx as f64, *dy as f64, *blend);
-                let src = img.clone();
-                let (w, h) = (img.w as f64, img.h as f64);
-                let wi = img.w;
-                img.px
-                    .par_chunks_mut(wi * 4)
-                    .enumerate()
-                    .for_each(|(y, row)| {
-                        for x in 0..wi {
-                            let u = (x as f64 + 0.5 - dx).rem_euclid(w);
-                            let v = (y as f64 + 0.5 - dy).rem_euclid(h);
-                            let p = src.sample_bilinear_clamped(u as f32, v as f32);
-                            let o = src.get(x, y);
-                            for k in 0..4 {
-                                row[x * 4 + k] = p[k] + (o[k] - p[k]) * blend;
-                            }
-                        }
-                    });
             }
             FxOp::AscCdl {
                 slope,

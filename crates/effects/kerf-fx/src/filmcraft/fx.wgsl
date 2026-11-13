@@ -33,7 +33,6 @@ const OP_LEVELS: u32 = 10u;
 const OP_EXTRACT: u32 = 11u;
 const OP_INVERT: u32 = 12u;
 const OP_INVERT_ALPHA: u32 = 13u;
-const OP_POSTERIZE: u32 = 14u;
 const OP_ASC_CDL: u32 = 15u;
 const OP_CHANNEL_MIX: u32 = 16u;
 const OP_COLOR_REPLACE: u32 = 17u;
@@ -46,8 +45,6 @@ const OP_CROP: u32 = 24u;
 const OP_RESAMPLE: u32 = 25u;
 const OP_HFLIP: u32 = 26u;
 const OP_VFLIP: u32 = 27u;
-const OP_MIRROR: u32 = 28u;
-const OP_OFFSET: u32 = 29u;
 const OP_VIDEO_LIMITER: u32 = 30u;
 const OP_LUMETRI: u32 = 31u;
 const OP_LUMETRI_LOOK: u32 = 32u;
@@ -151,13 +148,6 @@ fn powf(x: f32, y: f32) -> f32 {
     return pow(x, y);
 }
 
-// `f32::round`: halves away from zero (WGSL `round` rounds them to even).
-fn round_away(x: f32) -> f32 {
-    let a = abs(x);
-    let f = floor(a);
-    let r = select(f, f + 1.0, a - f >= 0.5);
-    return select(r, -r, x < 0.0);
-}
 
 // `rem_euclid(1.0)`
 fn fract_euclid(x: f32) -> f32 {
@@ -388,11 +378,6 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
             if ch == 0u || ch == 2u { o.y = 1.0 - e.y; }
             if ch == 0u || ch == 3u { o.z = 1.0 - e.z; }
             return dec(o + (e - o) * blend);
-        }
-        case OP_POSTERIZE: {
-            let n = u.p0.x;
-            let e = enc(c) * n;
-            return dec(vec3(round_away(e.x), round_away(e.y), round_away(e.z)) / n);
         }
         case OP_ASC_CDL: {
             let e = enc(c);
@@ -680,27 +665,6 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
         }
         case OP_VFLIP: {
             return ld(vec2(p.x, s.y - 1 - p.y));
-        }
-        case OP_MIRROR: {
-            let c = u.p0.xy; let nrm = u.p0.zw;
-            let d = (pc.x - c.x) * nrm.x + (pc.y - c.y) * nrm.y;
-            if d > 0.0 {
-                return sample_bilinear(pc.x - 2.0 * d * nrm.x, pc.y - 2.0 * d * nrm.y);
-            }
-            return ld(p);
-        }
-        case OP_OFFSET: {
-            let w = f32(s.x); let h = f32(s.y);
-            // dx, dy in 0..w / 0..h, so the shifted coordinate is within (-w, w + 0.5)
-            var uu = pc.x - u.p0.x;
-            var vv = pc.y - u.p0.y;
-            if uu < 0.0 { uu += w; }
-            if uu >= w { uu -= w; }
-            if vv < 0.0 { vv += h; }
-            if vv >= h { vv -= h; }
-            let q = sample_clamped(uu, vv);
-            let o = ld(p);
-            return q + (o - q) * u.p0.z;
         }
         case OP_VIGNETTE: {
             let o = ld(p);

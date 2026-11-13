@@ -15,12 +15,7 @@ use std::fmt::Write as _;
 /// no longer reads.
 pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     // Blur & Sharpen
-    ("bokeh_blur", "blur.bokeh", 1, "Lens-shaped defocus whose bright spots bloom into shaped bokeh; dreamy backgrounds and night lights."),
-    ("camera_blur", "blur.camera", 1, "Out-of-focus blur as a camera lens makes it; soft backgrounds and focus pulls."),
-    ("channel_blur", "blur.channel", 2, "Blurs red, green, blue, or alpha separately; color fringing and glitchy softness."),
-    ("compound_blur", "blur.compound", 2, "Blurs more where another track is brighter (layer=V2); depth-of-field fakes and selective softness."),
     ("directional_blur", "blur.directional", 2, "Motion blur in one direction; fake fast motion and whip pans."),
-    ("focus_blur", "blur.focus", 1, "Keeps a band or circle sharp and blurs the rest; tilt-shift miniatures and spotlighting a subject."),
     ("reduce_interlace_flicker", "blur.reduceflicker", 1, "Softens vertically to stop thin lines flickering; fine stripes, small text, interlaced footage."),
     ("sharpen", "blur.sharpen", 2, "Sharpens edges; crisp up soft footage, kept subtle."),
     ("unsharp_mask", "blur.unsharp", 2, "Sharpens by contrast at edges; restores detail after scaling."),
@@ -48,11 +43,8 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("corner_pin", "distort.cornerpin", 2, "Moves the four corners; fit a picture into a screen or frame."),
     ("lens_distortion", "distort.lens", 2, "Barrel or pincushion lens curvature; fisheye looks, or undoing a wide lens."),
     ("magnify", "distort.magnify", 2, "A magnifying circle or square; zoom in on a detail."),
-    ("mirror", "distort.mirror", 2, "Mirrors the picture across a line; symmetric, surreal reflections."),
-    ("offset", "distort.offset", 2, "Shifts the picture with wraparound; seamless scrolls and glitch slides."),
     ("transform", "distort.transform", 2, "Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
-    ("wave_warp", "distort.wavewarp", 2, "Moving waves across the picture; flags, water, wobbling text."),
     // Generate
     ("checkerboard", "generate.checkerboard", 2, "A checkerboard; backgrounds and patterns."),
     ("four_color_gradient", "generate.fourcolor", 2, "A gradient from four colored points; backgrounds and color washes."),
@@ -60,7 +52,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("ramp", "generate.gradientramp", 2, "A linear or radial ramp between two colors; skies, backgrounds, shading."),
     ("grid", "generate.grid", 2, "Draws a grid of lines; layouts, tech overlays, and backgrounds."),
     ("paint_bucket", "generate.paintbucket", 2, "Fills a region from a point; recolor flat areas."),
-    ("write_on", "generate.writeon", 2, "Paints a stroke along the path its brush point takes over the clip; underlines and doodles."),
     // Immersive Video
     ("vr_blur", "vr.blur", 2, "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds."),
     ("vr_denoise", "vr.denoise", 2, "Reduces noise on a 360° frame without seams; cleaning VR footage."),
@@ -76,11 +67,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("luma_key", "key.luma", 1, "Keys out dark areas by brightness; footage shot against black, fire, sparks."),
     ("track_matte", "key.trackmatte", 1, "Shows the picture through another track's alpha or brightness (matte=V2); text filled with video, shaped reveals."),
     ("ultra_key", "key.ultra", 1, "A chroma key for green and blue screen with matte, spill, and color controls; studio footage."),
-    // Lights & Glows
-    ("glint", "light.glint", 1, "Star-shaped glints on the brightest spots; sparkle, jewelry, sunlight on water."),
-    ("light_leaks", "light.leaks", 1, "Animated warm light leaks washing over the picture; film, vlog, and nostalgic looks."),
-    ("rgb_split", "light.rgbsplit", 1, "Splits the red, green, and blue channels apart; glitch hits, chromatic aberration, music videos."),
-    ("wonder_glow", "light.wonderglow", 1, "A soft, rich glow from the highlights; dreamy, cinematic bloom."),
     // Noise & Grain
     ("median", "noise.median", 2, "A median filter; removes noise, painterly smoothing."),
     ("noise", "noise.noise", 2, "Adds random noise, in color or not; film texture and analog grit."),
@@ -88,14 +74,12 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("drop_shadow", "perspective.dropshadow", 2, "A drop shadow; separates text and cutouts from the background."),
     // Stylize
     ("mosaic", "stylize.mosaic", 2, "Pixelates into blocks; censoring and retro 8-bit."),
-    ("posterize", "stylize.posterize", 2, "Reduces the color levels; poster and pop-art looks."),
     // Text
     ("clip_name", "text.clipname", 1, "Burns the clip's name into the picture; review copies and versions."),
     ("metadata_burnin", "text.burnin", 1, "Burns timecode, the frame number, or the file name into the picture; review copies and slates."),
     ("simple_text", "text.simple", 1, "A line of text drawn on the clip itself, with a backing box; labels, quick captions, and lower thirds."),
     ("timecode", "text.timecode", 2, "Burns the timecode into the picture; review copies and slates."),
     // Time
-    ("echo", "time.echo", 2, "Blends earlier or later frames over the current one; trails, ghosting, and motion echoes."),
     ("posterize_time", "time.posterizetime", 2, "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement."),
     // Transform
     ("auto_reframe", "transform.autoreframe", 1, "Keeps the moving subject in frame when the sequence's aspect differs from the clip's; vertical and square versions."),
@@ -140,16 +124,15 @@ pub fn headroom(id: &str) -> Headroom {
         | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain" => {
             Headroom::Whole
         }
-        "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "light.glint" | "light.wonderglow"
-        | "vr.sharpen" => Headroom::Gamut,
+        "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "vr.sharpen" => Headroom::Gamut,
         "channel.invert" | "color.asccdl" | "color.autocolor" | "color.autocontrast" | "color.basic"
         | "color.autolevels" | "color.brightnesscontrast" | "color.changetocolor"
         | "color.channelmixer" | "color.colorbalance" | "color.curves" | "color.gamma"
         | "color.huesaturation" | "color.levels" | "color.photofilter" | "color.procamp"
         | "color.selectivecolor" | "color.shadowhighlight" | "color.tint" | "key.advancedspill"
         | "key.color" | "key.extract" | "key.keycleaner" | "key.logocutout" | "key.ultra"
-        | "key.unmult" | "light.leaks" | "look.film" | "look.flash" | "look.noir" | "look.vhs"
-        | "noise.noise" | "stylize.posterize" | "stylize.vignette" | "utility.cineon" => Headroom::PerPixel,
+        | "key.unmult" | "look.film" | "look.flash" | "look.noir" | "noise.noise"
+        | "stylize.vignette" | "utility.cineon" => Headroom::PerPixel,
         _ => Headroom::Keeps,
     }
 }
@@ -265,7 +248,6 @@ fn category(id: &str) -> &'static str {
         "distort" => "Distort",
         "generate" => "Generate",
         "key" => "Keying",
-        "light" => "Lights & Glows",
         "noise" => "Noise & Grain",
         "perspective" => "Perspective",
         "stylize" => "Stylize",
