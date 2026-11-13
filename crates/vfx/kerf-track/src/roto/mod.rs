@@ -167,7 +167,37 @@ fn fit_models(img: &[[f32; 3]], labels: &[u8]) -> (Gmm, Gmm) {
 
 /// Keep the foreground components (8-connected) that touch `seeds`; fill small background
 /// holes that touch neither the frame edge nor a background seed.
+///
+/// Only the box around the foreground is gone through, with the pixels around that box: every piece
+/// of foreground and every hole is in it, and background that reaches the pixels around it reaches
+/// the frame's edge, as background on the box's edge is taken to.
 fn clean(labels: &mut [u8], seeds: &[bool], bg_seeds: &[bool], w: usize, h: usize) {
+    let Some((left, top, right, bottom)) = matting::box_of(labels, w, h) else {
+        return;
+    };
+    let (x0, y0) = (left.saturating_sub(1), top.saturating_sub(1));
+    let (x1, y1) = ((right + 1).min(w), (bottom + 1).min(h));
+    if (x0, y0, x1, y1) == (0, 0, w, h) {
+        return clean_all(labels, seeds, bg_seeds, w, h);
+    }
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    fn within<T: Copy>(all: &[T], w: usize, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> Vec<T> {
+        let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0));
+        for y in y0..y1 {
+            out.extend_from_slice(&all[y * w + x0..y * w + x1]);
+        }
+        out
+    }
+    let around = (x0, y0, x1, y1);
+    let mut inner = within(labels, w, around);
+    clean_all(&mut inner, &within(seeds, w, around), &within(bg_seeds, w, around), cw, ch);
+    for (row, y) in inner.chunks_exact(cw).zip(y0..y1) {
+        labels[y * w + x0..y * w + x1].copy_from_slice(row);
+    }
+}
+
+/// [`clean`], going through every pixel of a `w` by `h` matte.
+fn clean_all(labels: &mut [u8], seeds: &[bool], bg_seeds: &[bool], w: usize, h: usize) {
     let n = w * h;
     let mut comp = vec![u32::MAX; n];
     let mut stack = vec![];
@@ -631,16 +661,29 @@ fn warped(previous: &Picture, matte: &[u8], next: &Picture, moved: [i64; 2]) -> 
 
 /// [`warped`], with its flow already found.
 fn warped_by(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2]) -> Vec<f32> {
+    let mut out = vec![0.0f32; w * h];
+    // The flow brings nothing of the matte to a pixel further from it than the flow goes anywhere:
+    // only the pixels within that of where the matte went are worked out, and the rest are off it.
+    let Some((left, top, right, bottom)) = matting::box_of(matte, w, h) else {
+        return out;
+    };
+    let furthest = flow.v.iter().flatten().fold(0.0f32, |most, v| most.max(v.abs()));
+    let margin = f64::from(furthest).ceil() as i64 + 2;
+    let within = |low: usize, high: usize, by: i64, most: usize| {
+        let from = (low as i64 + by - margin).clamp(0, most as i64) as usize;
+        let to = (high as i64 + by + margin).clamp(0, most as i64) as usize;
+        (from, to.max(from))
+    };
+    let ((x0, x1), (y0, y1)) = (within(left, right, moved[0], w), within(top, bottom, moved[1], h));
     let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
     // With the picture moved to where the subject went, what stayed behind has moved by that much, and
     // a block on the subject's edge may go with that rather than with the subject. Going by such a block
     // reads the matte from where the subject was, which drags it further than a cut in a band can bring
     // it back, so what is nearer to that than to the subject says nothing.
     let (went_x, went_y) = (moved[0] as f64, moved[1] as f64);
-    (0..w * h)
-        .into_par_iter()
-        .map(|i| {
-            let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+    out.par_chunks_mut(w.max(1)).enumerate().skip(y0).take(y1 - y0).for_each(|(row, values)| {
+        for (column, value) in values.iter_mut().enumerate().skip(x0).take(x1 - x0) {
+            let (x, y) = (column as f64 + 0.5, row as f64 + 0.5);
             let v = flow.at(x, y);
             let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
             let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) {
@@ -648,20 +691,20 @@ fn warped_by(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2])
             } else {
                 (vx, vy)
             };
-            matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64)
-        })
-        .collect()
+            *value = matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64);
+        }
+    });
+    out
 }
 
-/// Pixels deep inside a soft matte, more than `radius` from its edge, or else the matte itself.
-fn core_of(soft: &[f32], w: usize, h: usize, radius: f64) -> Vec<bool> {
-    let binary: Vec<u8> = soft.iter().map(|v| u8::from(*v >= 0.5)).collect();
-    let signed = matting::signed_distance(&binary, w, h);
+/// Pixels deep inside a matte, more than `radius` from its edge by its `signed` distance, or else the
+/// matte itself.
+fn core_of(matte: &[u8], signed: &[f32], radius: f64) -> Vec<bool> {
     let core: Vec<bool> = signed.iter().map(|d| f64::from(*d) > radius).collect();
     if core.contains(&true) {
         core
     } else {
-        binary.iter().map(|v| *v != 0).collect()
+        matte.iter().map(|v| *v != 0).collect()
     }
 }
 
@@ -763,15 +806,17 @@ fn next_matte(
     let flowed = binary(&soft);
     let agreed = from_model.filter(|found| iou(&binary(found), &flowed) >= 0.5);
     let mut labels = flowed;
-    let signed = matting::signed_distance(&labels, w, h);
+    // How far each pixel is from the warped matte's edge says both where the cut is free and what is
+    // deep enough inside to be held to: measured once, and only as far from the matte as either asks.
+    let signed = matting::signed_distance_near(&labels, w, h, reach);
     let free: Vec<bool> = signed.iter().map(|d| f64::from(d.abs()) <= reach).collect();
+    let seeds = core_of(&labels, &signed, reach);
     let hard = vec![0u8; w * h];
     let prior = match &agreed {
         Some(found) => (found.as_slice(), MODEL_PRIOR),
         None => (blurred.as_slice(), PRIOR),
     };
     cut(&next.rgb, w, h, &mut labels, &free, &hard, fg, bg, Some(prior));
-    let seeds = core_of(&soft, w, h, reach);
     clean(&mut labels, &seeds, &vec![false; w * h], w, h);
     (labels, moved)
 }

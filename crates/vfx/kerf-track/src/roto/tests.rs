@@ -1876,3 +1876,283 @@ fn a_rectangles_outline_reaches_its_corners() {
         assert!(kept <= 8, "{name}: {kept}");
     }
 }
+
+/// The warp as it was worked out before only the pixels the matte can come to were: every pixel.
+fn warped_everywhere(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2]) -> Vec<f32> {
+    let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
+    let (went_x, went_y) = (moved[0] as f64, moved[1] as f64);
+    (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+            let v = flow.at(x, y);
+            let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
+            let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) { (0.0, 0.0) } else { (vx, vy) };
+            matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64)
+        })
+        .collect()
+}
+
+/// The same numbers bit for bit, a `NaN` or a zero's sign included.
+fn same_bits(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits())
+}
+
+#[test]
+fn a_distance_measured_near_the_matte_is_the_distance_measured_everywhere() {
+    let (w, h) = (97, 61);
+    let disk = |cx: f64, cy: f64, r: f64| -> Vec<u8> {
+        (0..w * h)
+            .map(|i| u8::from(((i % w) as f64 - cx).hypot((i / w) as f64 - cy) < r))
+            .collect()
+    };
+    let both = |a: Vec<u8>, b: Vec<u8>| -> Vec<u8> { a.iter().zip(&b).map(|(a, b)| a | b).collect() };
+    let mut holed = disk(40.0, 30.0, 18.0);
+    for (at, inner) in disk(43.0, 28.0, 5.0).iter().enumerate() {
+        holed[at] &= 1 - inner;
+    }
+    let mattes = [
+        ("a disk", disk(40.0, 30.0, 12.0)),
+        ("a disk with a hole", holed),
+        ("a disk and a speck far from it", both(disk(20.0, 20.0, 9.0), disk(90.0, 55.0, 1.5))),
+        ("one over the frame's corner", disk(0.0, 0.0, 14.0)),
+        ("one over its far corner", disk(96.0, 60.0, 14.0)),
+        ("one pixel", disk(50.0, 30.0, 0.5)),
+        ("nothing", vec![0; w * h]),
+        ("everything", vec![1; w * h]),
+    ];
+    for (name, matte) in mattes {
+        let everywhere = matting::signed_distance(&matte, w, h);
+        for reach in [0.0, 3.0, 7.5, 24.0, 200.0] {
+            let near = matting::signed_distance_near(&matte, w, h, reach);
+            for (at, (near, all)) in near.iter().zip(&everywhere).enumerate() {
+                if *near == matting::FAR_OUTSIDE {
+                    // Not measured: outside, and further than was asked for.
+                    assert!(f64::from(*all) < -reach, "{name}, reach {reach}, pixel {at}: {all}");
+                } else {
+                    assert_eq!(near.to_bits(), all.to_bits(), "{name}, reach {reach}, pixel {at}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_matte_cleaned_in_its_box_is_the_matte_cleaned_everywhere() {
+    let (w, h) = (64, 48);
+    let mut seen = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move || {
+        seen ^= seen << 13;
+        seen ^= seen >> 7;
+        seen ^= seen << 17;
+        seen
+    };
+    for round in 0..400 {
+        // Blobs, holes in them, specks, and seeds of both kinds, anywhere, the frame's edge included.
+        let mut labels = vec![0u8; w * h];
+        let mut paint = |value: u8, most: u64, labels: &mut Vec<u8>| {
+            let (cx, cy, r) = ((next() % w as u64) as i64, (next() % h as u64) as i64, (next() % most) as i64);
+            for y in (cy - r).max(0)..(cy + r + 1).min(h as i64) {
+                for x in (cx - r).max(0)..(cx + r + 1).min(w as i64) {
+                    if (x - cx).pow(2) + (y - cy).pow(2) <= r * r {
+                        labels[y as usize * w + x as usize] = value;
+                    }
+                }
+            }
+        };
+        for _ in 0..(round % 4) {
+            paint(1, 14, &mut labels);
+        }
+        for _ in 0..(round % 5) {
+            paint(0, 4, &mut labels);
+        }
+        for _ in 0..(round % 3) {
+            paint(1, 2, &mut labels);
+        }
+        let mut seeds = vec![false; w * h];
+        let mut bg_seeds = vec![false; w * h];
+        for _ in 0..(round % 6) {
+            let at = (next() % (w * h) as u64) as usize;
+            seeds[at] = true;
+            bg_seeds[(next() % (w * h) as u64) as usize] = round % 2 == 0;
+        }
+        let (mut boxed, mut every) = (labels.clone(), labels.clone());
+        clean(&mut boxed, &seeds, &bg_seeds, w, h);
+        clean_all(&mut every, &seeds, &bg_seeds, w, h);
+        assert_eq!(boxed, every, "round {round}");
+    }
+}
+
+#[test]
+fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
+    // What each step gives, against the step as it was: the warp over every pixel, the distance over
+    // the whole frame twice, and the picture put in light a pixel at a time.
+    let size = (320, 200);
+    let radius = 40.0;
+    for (speed, alike) in [(3.0, false), (14.0, false), (40.0, false), (6.0, true)] {
+        let picture = |n: usize| {
+            let (w, h, rgba) = fast_scene(size, radius, speed, n, alike);
+            Picture::of(w, h, &rgba)
+        };
+        let center = fast_center(size, radius, speed, 0);
+        let hints = Hints {
+            inside: vec![[center[0] / size.0 as f64, center[1] / size.1 as f64]],
+            ..Hints::default()
+        };
+        let (w, h) = size;
+        let mut previous = picture(0);
+        let (mut matte, fg, bg) = first_matte(&previous, &hints, None).unwrap();
+        for frame in 1..6 {
+            let next = picture(frame);
+            let flow = block_flow(&next.image, &previous.image, 8, 4);
+            for moved in [[0, 0], [9, -4], [-30, 17]] {
+                assert!(
+                    same_bits(&warped_by(&flow, &matte, size, moved), &warped_everywhere(&flow, &matte, size, moved)),
+                    "the warp at {speed} px a frame, frame {frame}, moved {moved:?}"
+                );
+            }
+            // The core, from the one distance, against one measured over the whole frame for it.
+            let soft = warped_by(&flow, &matte, size, [0, 0]);
+            let flowed: Vec<u8> = soft.iter().map(|v| u8::from(*v >= 0.5)).collect();
+            let reach = band_of(size, [0, 0]);
+            let everywhere = matting::signed_distance(&flowed, w, h);
+            let near = matting::signed_distance_near(&flowed, w, h, reach);
+            let free = |signed: &[f32]| -> Vec<bool> { signed.iter().map(|d| f64::from(d.abs()) <= reach).collect() };
+            assert_eq!(free(&near), free(&everywhere), "where the cut is free, frame {frame}");
+            assert_eq!(
+                core_of(&flowed, &near, reach),
+                core_of(&flowed, &everywhere, reach),
+                "what is held to, frame {frame}"
+            );
+            // The cut cleaned in the box around it, against every pixel gone through.
+            let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
+            let mut uncleaned = flowed.clone();
+            cut(&next.rgb, w, h, &mut uncleaned, &free(&near), &vec![0u8; w * h], &fg, &bg, Some((&blurred, PRIOR)));
+            let seeds = core_of(&flowed, &near, reach);
+            let (mut boxed, mut every) = (uncleaned.clone(), uncleaned.clone());
+            clean(&mut boxed, &seeds, &vec![false; w * h], w, h);
+            clean_all(&mut every, &seeds, &vec![false; w * h], w, h);
+            assert_eq!(boxed, every, "the cleaning at {speed} px a frame, frame {frame}");
+            let (labels, _) = next_matte(&previous, &matte, &next, (&fg, &bg), None, false);
+            if moved_by(&previous, &matte, &next) == [0, 0] {
+                assert_eq!(labels, every, "the matte at {speed} px a frame, frame {frame}");
+            }
+            // The softness, against the picture in light pixel by pixel and the distance everywhere.
+            let edge = edge_of(&labels, w, h);
+            let traced = Edge::of(&edge, OUTLINE_CORNERS).unwrap();
+            let corners = Places::of(&traced, OUTLINE_CORNERS).first(&traced);
+            assert_eq!(
+                soft::measured(&next, &labels, &corners),
+                soft::measured_everywhere(&next, &labels, &corners),
+                "the softness at {speed} px a frame, frame {frame}"
+            );
+            matte = labels;
+            previous = next;
+        }
+    }
+}
+
+/// What a frame of following costs at the size `look` cuts out at, 960 across, and what of it each
+/// step takes: `cargo test -p kerf-track --release measure_a_frame -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_a_frame() {
+    let size = (960, 540);
+    let radius = 110.0;
+    let frames = 12;
+    let scene = |n: usize| fast_scene(size, radius, 5.0, n, false);
+    let center = fast_center(size, radius, 5.0, 0);
+    let hints = Hints {
+        inside: vec![[center[0] / size.0 as f64, center[1] / size.1 as f64]],
+        ..Hints::default()
+    };
+    let started = std::time::Instant::now();
+    let one = follow_object(1, &hints, None, |n| Some(scene(n)));
+    let first = started.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(one.lost_at, None);
+    let started = std::time::Instant::now();
+    let followed = follow_object(frames, &hints, None, |n| Some(scene(n)));
+    let all = started.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(followed.lost_at, None);
+    eprintln!(
+        "roto: {}x{}: the first frame {first:.0} ms, each after it {:.1} ms",
+        size.0,
+        size.1,
+        (all - first) / (frames - 1) as f64
+    );
+
+    // The steps of one frame, each by itself on the same pictures.
+    let (w, h) = size;
+    let picture = |n: usize| {
+        let (w, h, rgba) = scene(n);
+        Picture::of(w, h, &rgba)
+    };
+    let (previous, next) = (picture(0), picture(1));
+    let (matte, fg, bg) = first_matte(&previous, &hints, None).unwrap();
+    let time = |name: &str, run: &mut dyn FnMut()| {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            run();
+        }
+        eprintln!("roto:   {name}: {:.1} ms", started.elapsed().as_secs_f64() * 1000.0 / 5.0);
+    };
+    time("drawing the scene (the test's own)", &mut || {
+        std::hint::black_box(scene(1));
+    });
+    time("picture", &mut || {
+        std::hint::black_box(picture(1));
+    });
+    let flow = block_flow(&next.image, &previous.image, 8, 4);
+    time("flow", &mut || {
+        std::hint::black_box(block_flow(&next.image, &previous.image, 8, 4));
+    });
+    time("flow lost", &mut || {
+        std::hint::black_box(flow_lost(&previous, &matte, &next, &flow));
+    });
+    let soft = warped_by(&flow, &matte, (w, h), [0, 0]);
+    time("warp", &mut || {
+        std::hint::black_box(warped_by(&flow, &matte, (w, h), [0, 0]));
+    });
+    let reach = band_of((w, h), [0, 0]);
+    time("blur", &mut || {
+        std::hint::black_box(matting::gauss(&soft, w, h, (reach / 4.0).max(1.0)));
+    });
+    let labels: Vec<u8> = soft.iter().map(|v| u8::from(*v >= 0.5)).collect();
+    time("distance, over the whole frame", &mut || {
+        std::hint::black_box(matting::signed_distance(&labels, w, h));
+    });
+    time("distance, near the matte", &mut || {
+        std::hint::black_box(matting::signed_distance_near(&labels, w, h, reach));
+    });
+    let signed = matting::signed_distance_near(&labels, w, h, reach);
+    let free: Vec<bool> = signed.iter().map(|d| f64::from(d.abs()) <= reach).collect();
+    let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
+    let hard = vec![0u8; w * h];
+    time("cut", &mut || {
+        let mut labels = labels.clone();
+        cut(&next.rgb, w, h, &mut labels, &free, &hard, &fg, &bg, Some((&blurred, PRIOR)));
+        std::hint::black_box(labels);
+    });
+    let seeds = core_of(&labels, &signed, reach);
+    time("clean", &mut || {
+        let mut labels = labels.clone();
+        clean(&mut labels, &seeds, &vec![false; w * h], w, h);
+        std::hint::black_box(labels);
+    });
+    time("the whole next matte", &mut || {
+        std::hint::black_box(next_matte(&previous, &matte, &next, (&fg, &bg), None, false));
+    });
+    let (cut, _) = next_matte(&previous, &matte, &next, (&fg, &bg), None, false);
+    let edge = edge_of(&cut, w, h);
+    time("edge", &mut || {
+        std::hint::black_box(edge_of(&cut, w, h));
+    });
+    let traced = Edge::of(&edge, OUTLINE_CORNERS).unwrap();
+    let places = Places::of(&traced, OUTLINE_CORNERS);
+    let corners = places.first(&traced);
+    time("corners lined up", &mut || {
+        std::hint::black_box(places.aligned(&edge, &corners));
+    });
+    time("softness", &mut || {
+        std::hint::black_box(soft::measured(&next, &cut, &corners));
+    });
+}
