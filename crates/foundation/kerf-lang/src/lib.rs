@@ -14,7 +14,10 @@ mod reference;
 mod script;
 mod text;
 
-pub use captions::{caption_script, to_srt, to_vtt, Word};
+pub use captions::{
+    caption_characters, caption_script, to_srt, to_vtt, Word, CAPTION_GAP_FRAMES, READING_SPEED,
+    SHORT_CAPTION_SIXTHS,
+};
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
 pub use facts::{Breaks, Facts, NoFacts, Snap, Speech};
