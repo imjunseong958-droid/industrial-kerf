@@ -508,8 +508,12 @@ What is built for it, in this order, each measured before the next:
    with no kernels: a guide is small. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
-   farthest may want it stretched, which is `pass=relative` (2026-11-13),
-   not yet held beside `pass=depth` on a model. A pass has reached a
+   farthest may want it stretched, which is `pass=relative` (2026-11-13).
+   Held beside `pass=depth` on the travelling shot of Next 3, one take
+   each, it was followed as well over the frame (`order` 0.924 against
+   0.928) and no better for the crate (`held` 0.25 against 0.35): that
+   scene's depth has a wide range as it is, and a set that is far with one
+   thing near, where it should tell, was not tried. A pass has reached a
    model as its guide and come back as a take (Measured, below), and a
    line hands a model a picture and a pass at once by naming the second
    (`guide_depth=`, Next 5).
@@ -908,7 +912,11 @@ recipes, in `fixtures/shots/car`.
 
    *Not done:* one set of a whole shot with what moved left out; the two
    models' lenses reconciled, `look` finding the set's and using it, which
-   leaves the path found through another; splats.
+   leaves the path found through another; splats. Of those the server has
+   a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
+   a mesh clip reads and the compositor need draw none; what it has no
+   model for is rebuilding a scene as splats, only a thing, so none was
+   run.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -1016,7 +1024,7 @@ recipes, in `fixtures/shots/car`.
    1: the overlap of where the take has it with where it was asked for,
    less by how far its depth is off, and their mean for the take. Of the
    two takes above it is 0.31 for the picture-guided one and 0.35 for the
-   depth-guided one, where the first depth-guided take, with no crate, is
+   depth-guided one, 0.25 for one guided by `pass=relative`, where the first depth-guided take, with no crate, is
    0. The subjects are named and not guessed: by how much of the frame a
    clip has, four of the five sets were taken for subjects.
 
