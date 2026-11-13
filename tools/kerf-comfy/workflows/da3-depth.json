@@ -1,0 +1,42 @@
+{
+  "kerf-comfy": 1,
+  "about": "Depth Anything 3, a picture at a time: how near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter. normalization=min_max stretches each frame to its own nearest and farthest.",
+  "of": "guide",
+  "frames": { "most": 480, "step": 1 },
+  "size": [1920, 1080],
+  "multiple": 2,
+  "set": {
+    "model": "depth_anything_3_base.safetensors",
+    "resolution": 504,
+    "normalization": "v2_style"
+  },
+  "workflow": {
+    "1": { "class_type": "LoadVideo", "inputs": { "file": "{guide}" } },
+    "2": { "class_type": "GetVideoComponents", "inputs": { "video": ["1", 0] } },
+    "3": { "class_type": "LoadDA3Model", "inputs": { "model_name": "{model}", "weight_dtype": "default" } },
+    "4": {
+      "class_type": "DA3Inference",
+      "inputs": {
+        "da3_model": ["3", 0],
+        "image": ["2", 0],
+        "resolution": "{resolution}",
+        "resize_method": "upper_bound_resize",
+        "mode": "mono"
+      }
+    },
+    "5": {
+      "class_type": "DA3Render",
+      "inputs": {
+        "da3_geometry": ["4", 0],
+        "output": "depth",
+        "output.normalization": "{normalization}",
+        "output.apply_sky_clip": false
+      }
+    },
+    "6": { "class_type": "CreateVideo", "inputs": { "images": ["5", 0], "fps": "{fps}" } },
+    "7": {
+      "class_type": "SaveVideo",
+      "inputs": { "video": ["6", 0], "filename_prefix": "video/kerf", "format": "auto", "format.codec": "auto" }
+    }
+  }
+}

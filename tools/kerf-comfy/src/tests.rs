@@ -540,3 +540,148 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
         .iter()
         .any(|asked| asked.line == "POST /prompt"));
 }
+
+/// ComfyUI for a job that reads a guide and saves a video of it and a text.
+fn reader(asked: &Asked, _before: usize) -> (u16, Vec<u8>) {
+    match asked.line.as_str() {
+        "POST /upload/image" => {
+            json_answer(json!({"name": "kerf-guide.mp4", "subfolder": "", "type": "input"}))
+        }
+        "POST /prompt" => {
+            json_answer(json!({"prompt_id": "job-1", "number": 3, "node_errors": {}}))
+        }
+        "GET /history/job-1" => json_answer(json!({"job-1": {
+            "outputs": {
+                "1": {"images": [{"filename": "kerf-guide.mp4", "subfolder": "", "type": "input"}], "animated": [true]},
+                "7": {"images": [{"filename": "kerf_00001_.mp4", "subfolder": "video", "type": "output"}], "animated": [true]},
+                "8": {"text": ["{'extrinsics': tensor([[[[1.0, 0.0, 0.0, 0.0]]]])}"]},
+                "9": {"text": ["{'extrinsics': …}"], "files": [{"filename": "kerf-cameras_00001.txt", "subfolder": "", "type": "output"}]}
+            },
+            "status": {"status_str": "success", "completed": true, "messages": []}
+        }})),
+        "GET /view?filename=kerf_00001_.mp4&subfolder=video&type=output" => {
+            (200, b"its depth".to_vec())
+        }
+        "GET /view?filename=kerf-cameras_00001.txt&subfolder=&type=output" => {
+            (200, b"its cameras".to_vec())
+        }
+        other => (404, format!("nothing answers {other}").into_bytes()),
+    }
+}
+
+/// A guide of ten frames of 322x180 at 12 a second in `folder`, where FFmpeg is installed.
+fn guide(folder: &Path) -> Option<std::path::PathBuf> {
+    let file = folder.join("footage.mp4");
+    let made = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("testsrc=size=322x180:rate=12")
+        .args(["-frames:v", "10", "-pix_fmt", "yuv420p"])
+        .arg(&file)
+        .status();
+    matches!(made, Ok(status) if status.success()).then_some(file)
+}
+
+#[test]
+fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
+    let folder = tempfile::tempdir().unwrap();
+    let Some(footage) = guide(folder.path()) else {
+        eprintln!("skipping: ffmpeg is not installed");
+        return;
+    };
+    let asking = |out: &str, more: serde_json::Value| {
+        Request::parse(
+            &json!({
+                "kerf-request": 1, "model": "da3-views", "guide": footage,
+                "more": more, "out": folder.path().join(out),
+            })
+            .to_string(),
+        )
+        .unwrap()
+    };
+    let made = |request: &Request, workflow: &str| {
+        let (server, kept) = serve(reader);
+        let mut said = Vec::new();
+        make(
+            request,
+            folder.path(),
+            &Workflow::named(workflow).unwrap(),
+            &server,
+            &Tools::find(),
+            &patience(),
+            &AtomicBool::new(false),
+            &mut |line| said.push(line.to_owned()),
+        )
+        .unwrap();
+        let kept = kept.lock().unwrap();
+        let queued = kept
+            .iter()
+            .find(|asked| asked.line == "POST /prompt")
+            .unwrap();
+        let queued: serde_json::Value = serde_json::from_slice(&queued.body).unwrap();
+        (queued["prompt"].clone(), said.join("\n"))
+    };
+
+    // The file asked for is the one fetched, by its kind: the cameras as text.
+    let cameras = asking("cameras.txt", json!({}));
+    let (graph, said) = made(&cameras, "da3-multiview");
+    assert_eq!(std::fs::read(&cameras.out).unwrap(), b"its cameras");
+    // The guide's own rate, each of its frames, and its size with its sides made even: not a
+    // model's. It went up as it is, but for that.
+    assert!(
+        said.contains("for 10 frames of 322x180 at 12 a second"),
+        "{said}"
+    );
+    assert_eq!(graph["6"]["inputs"]["fps"], json!(12.0));
+    assert_eq!(graph["1"]["inputs"]["file"], "kerf-guide.mp4");
+    let sent = Tools::find()
+        .picture(&folder.path().join(GUIDE_SENT))
+        .unwrap();
+    assert_eq!((sent.size, sent.frames, sent.fps), ((322, 180), 10, 12.0));
+    // Depth Anything 3 finds a camera's path with its weights as 32-bit floats, and no other way.
+    assert_eq!(graph["3"]["inputs"]["weight_dtype"], "fp32");
+    assert_eq!(graph["4"]["inputs"]["mode"], "multiview");
+    assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "cam_dec");
+
+    // The same workflow's video, and a line's own values in its blanks.
+    let depth = asking(
+        "depth.mp4",
+        json!({"pose": "ray_pose", "resolution": "756"}),
+    );
+    let (graph, _) = made(&depth, "da3-multiview");
+    assert_eq!(std::fs::read(&depth.out).unwrap(), b"its depth");
+    assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "ray_pose");
+    assert_eq!(graph["4"]["inputs"]["resolution"], json!(756));
+
+    // MoGe refines three times as it comes, and once where a line says so; `seconds` reads
+    // the guide's first frames only.
+    let (graph, _) = made(&asking("moge.mp4", json!({})), "moge-depth");
+    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
+    assert_eq!(graph["5"]["inputs"]["output"], "depth");
+    let mut short = asking(
+        "short.mp4",
+        json!({"refine_steps": "1", "output": "normal_opengl"}),
+    );
+    short.seconds = Some(0.5);
+    let (graph, said) = made(&short, "moge-depth");
+    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
+    assert_eq!(graph["5"]["inputs"]["output"], "normal_opengl");
+    assert!(said.contains("for 6 frames of 322x180"), "{said}");
+
+    // With no guide there is nothing to make a file of, and nothing is asked of the server.
+    let mut none = asking("depth.mp4", json!({}));
+    none.guide = None;
+    let (server, kept) = serve(reader);
+    let refused = make(
+        &none,
+        folder.path(),
+        &Workflow::named("moge-depth").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(refused.contains("`guide=<file>`"), "{refused}");
+    assert!(kept.lock().unwrap().is_empty());
+}

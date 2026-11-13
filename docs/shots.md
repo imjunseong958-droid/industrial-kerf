@@ -423,7 +423,8 @@ in it, and what the model it runs makes: its rate, how many frames, how
 large. `wan-vace` comes with the program: Wan 2.1 VACE, which follows a guide
 video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
 takes a file too, and `tools/kerf-comfy/workflows/wan-vace.json` is the one to
-start from.
+start from. `kerf-comfy --list` names those that come with it; the others
+[read a picture back](#a-picture-read-back).
 
 | Blank | What fills it |
 |---|---|
@@ -459,6 +460,72 @@ says that one is running and for how long, not how far along it is; on
 Windows a making that is stopped ends the program outright, so its job stays
 on the server; and what it sends up and what the server saves stay on the
 server.
+
+### A picture read back
+
+A model can go the other way from a shot: from a picture in motion to what
+the picture is of, how near each pixel is, the shape of what it shows, where
+the camera was. To Kerf it is a model like any other, whose file is not a
+shot: `generate model=<reader> guide=<footage>`, with `out={depth.mp4}`
+where a later step reads what it makes. Four such workflows come with
+`kerf-comfy`, for the models ComfyUI has nodes for:
+
+| Workflow | What it makes of its guide | As |
+|---|---|---|
+| `moge-depth` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
+| `moge-set` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
+| `da3-depth` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
+| `da3-multiview` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+
+```json
+{
+  "moge": { "run": ["/path/to/kerf-comfy", "--workflow", "moge-depth", "{request}"] },
+  "da3-views": { "run": ["/path/to/kerf-comfy", "--workflow", "da3-multiview", "{request}"] }
+}
+```
+
+```text
+generate model=vace prompt="a red sports car drives along a wet street at dusk" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
+generate model=moge guide={take.mp4} out={depth.mp4}
+generate model=da3-views guide=../footage/shot.mp4 out={cameras.txt}
+```
+
+Such a workflow says `"of": "guide"` in place of a rate, and what it makes is
+of its guide frame for frame: the guide's own rate, each frame it has up to
+the workflow's `frames.most`, and its own size, each side made even, down to
+the workflow's `size` by area for a guide larger than that. `seconds=` reads
+that much of the guide from its start. The guide goes up as it is but for
+those, and with no `guide=` nothing is asked of the server. Its entry, as
+`--describe` prints it, has no `size` and no `rate`, so `look` offers no
+`render` line for it: a guide is not drawn for it, it is given one.
+
+- **Which file is fetched goes by the name asked for.** `da3-multiview`
+  saves a video and a text, and `out={cameras.txt}` takes the text.
+- **MoGe is asked as it comes**, refining three times. `refine_steps=1` took
+  under half the time on the server it was measured on, for a depth 0.3%
+  from the default's, and is for a very long shot.
+- **Depth Anything 3 finds a camera's path only with its weights as 32-bit
+  floats**, which `da3-multiview` sets on `LoadDA3Model`
+  (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a
+  dtype. `pose=ray_pose` finds the path from the model's rays in place of
+  its camera decoder, three times as slowly.
+- **The cameras are what ComfyUI prints of the model's answer**, there
+  being no node that writes them: a text holding `'extrinsics': tensor(…)`,
+  three rows of four numbers a frame, the way from the world to the camera
+  with x right, y down, and z ahead, and `'intrinsics': tensor(…)`, each
+  frame's lens in pixels of the size the model ran at (`resolution`, 504 on
+  its longer side), among the depth it also holds, cut short. PyTorch prints
+  a tensor whole up to a thousand numbers, which is 83 frames, so the
+  workflow reads 81 at most. Nothing in Kerf reads the file yet: bringing a
+  path in as a `gen=camera@1` clip's keyframes is what a glTF's camera
+  already has (`look` with `mesh`), and is next for this.
+- **A set comes without its camera.** `moge-set`'s mesh is as the frame's
+  camera saw it, the camera at the file's own origin looking along its z
+  backward, as a glTF camera does. The file holds no camera and no lens, so
+  `look` with `mesh` has none to write.
+
+What they took, and how a take read back holds beside its guide, is in
+[architecture.md](architecture.md#next) (Next, 3).
 
 ## Signals
 
@@ -555,6 +622,10 @@ steps:
   rough. The renderer's own passes, such as depth, are files like any other
   for a model that reads them.
 - **Footage**: a take of another shot, or something filmed, named as a file.
+  A model that follows depth is handed the footage's depth, which another
+  model reads from it first ([A picture read back](#a-picture-read-back)):
+  `generate model=moge guide=../footage/shot.mp4 out={depth.mp4}`, and then
+  `guide={depth.mp4}`.
 
 ### Passes
 

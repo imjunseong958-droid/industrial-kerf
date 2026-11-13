@@ -61,6 +61,23 @@ impl Tools {
             .ok_or_else(|| format!("ffprobe gave no length for the guide {}", file.display()))
     }
 
+    /// What `file`'s picture is: its size, its rate, and how many frames it has.
+    pub fn picture(&self, file: &Path) -> Result<Picture, String> {
+        let said = run(
+            Command::new(&self.ffprobe)
+                .args(["-v", "error", "-select_streams", "v:0", "-count_packets"])
+                .args([
+                    "-show_entries",
+                    "stream=width,height,r_frame_rate,nb_read_packets",
+                ])
+                .args(["-of", "default=noprint_wrappers=1"])
+                .arg(file),
+            &self.ffprobe,
+        )?;
+        Picture::parse(&said)
+            .ok_or_else(|| format!("ffprobe found no picture in the guide {}", file.display()))
+    }
+
     /// Write `guide` to `to` as the model takes it.
     pub fn conform(&self, guide: &Path, to: &Path, shape: &Shape) -> Result<(), String> {
         run(
@@ -72,6 +89,41 @@ impl Tools {
             &self.ffmpeg,
         )
         .map(drop)
+    }
+}
+
+/// A file's picture, as ffprobe says it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Picture {
+    pub size: (u32, u32),
+    pub fps: f64,
+    pub frames: u32,
+}
+
+impl Picture {
+    /// Read ffprobe's `name=value` lines.
+    fn parse(said: &str) -> Option<Self> {
+        let value = |name: &str| {
+            said.lines()
+                .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+        };
+        // A rate is two whole numbers: `24000/1001`.
+        let (over, under) = value("r_frame_rate")?.split_once('/')?;
+        let fps = over.parse::<f64>().ok()? / under.parse::<f64>().ok()?;
+        let picture = Self {
+            size: (
+                value("width")?.parse().ok()?,
+                value("height")?.parse().ok()?,
+            ),
+            fps,
+            frames: value("nb_read_packets")?.parse().ok()?,
+        };
+        (fps.is_finite()
+            && fps > 0.0
+            && picture.frames > 0
+            && picture.size.0 > 0
+            && picture.size.1 > 0)
+            .then_some(picture)
     }
 }
 
@@ -127,6 +179,20 @@ fn run(command: &mut Command, program: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_files_picture_is_read_from_what_ffprobe_says() {
+        let said = "width=832\nheight=480\nr_frame_rate=24000/1001\nnb_read_packets=65\n";
+        let picture = Picture::parse(said).unwrap();
+        assert_eq!((picture.size, picture.frames), ((832, 480), 65));
+        assert!((picture.fps - 23.976).abs() < 0.001);
+        // A file with no picture, or one ffprobe could not count, is none.
+        assert!(Picture::parse("").is_none());
+        assert!(
+            Picture::parse("width=832\nheight=480\nr_frame_rate=0/0\nnb_read_packets=N/A\n")
+                .is_none()
+        );
+    }
 
     #[test]
     fn a_guide_is_made_to_fit_the_model() {

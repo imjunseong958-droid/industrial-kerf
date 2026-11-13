@@ -57,6 +57,14 @@ on `main`; its section here becomes the release's notes on GitHub
   carry yet: it fits the guide to the model's size and rate, asks the server,
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
+- `kerf-comfy` comes with four workflows that read a picture back, for a
+  ComfyUI server with MoGe 3 and Depth Anything 3: `moge-depth` and
+  `da3-depth` make a video of how near each pixel of a guide is, `moge-set`
+  rebuilds a frame as a `.glb` mesh with the frame as its colors, and
+  `da3-multiview` writes where the camera was on each frame. Each is a model
+  to a recipe, `generate model=moge guide={take.mp4} out={depth.mp4}`, and
+  what it makes has its guide's own size, rate, and frames
+  ([docs/shots.md](docs/shots.md#a-picture-read-back)).
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`

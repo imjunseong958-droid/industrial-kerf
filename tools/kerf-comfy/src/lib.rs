@@ -125,8 +125,17 @@ pub fn make(
     say: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
     let blanks = workflow.blanks();
-    let fps = workflow.fps;
-    let (width, height) = workflow.size(request.size);
+    // A workflow that makes a file of its guide goes by the guide: its rate, its size, its frames.
+    let read = if workflow.of_guide() {
+        let guide = request.guide.as_deref().ok_or(
+            "this workflow makes a file of a guide, and the line gives none: `guide=<file>`",
+        )?;
+        Some(tools.picture(guide)?)
+    } else {
+        None
+    };
+    let fps = read.map_or(workflow.fps, |read| read.fps);
+    let (width, height) = workflow.size(request.size.or(read.map(|read| read.size)));
     if let Some((asked_width, asked_height)) =
         request.size.filter(|asked| *asked != (width, height))
     {
@@ -145,11 +154,20 @@ pub fn make(
         Some(guide) => Some((tools.seconds(guide)? * fps).round() as u32),
         None => None,
     };
-    let frames = workflow.frames(
-        request.seconds,
-        guide_frames.map(|frames| f64::from(frames) / fps),
-    );
-    if let Some(seconds) = request.seconds {
+    let frames = match read {
+        Some(read) => workflow.frames_of(read.frames, request.seconds, fps),
+        None => workflow.frames(
+            request.seconds,
+            guide_frames.map(|frames| f64::from(frames) / fps),
+        ),
+    };
+    if let Some(read) = read.filter(|read| read.frames > frames && request.seconds.is_none()) {
+        say(&format!(
+            "the guide is {} frames, and this workflow reads {frames} at once: the rest is left out",
+            read.frames
+        ));
+    }
+    if let Some(seconds) = request.seconds.filter(|_| read.is_none()) {
         if (seconds * fps).round() > f64::from(frames) {
             say(&format!(
                 "{seconds} s was asked; this model makes at most {frames} frames at {fps} a second, {:.2} s",
@@ -157,8 +175,15 @@ pub fn make(
             ));
         }
     }
-    let hold = workflow.frames.step;
-    if let Some(guide_frames) = guide_frames.filter(|guide_frames| guide_frames + hold < frames) {
+    // A file of a guide has the guide's frames and no more.
+    let hold = if read.is_some() {
+        0
+    } else {
+        workflow.frames.step
+    };
+    if let Some(guide_frames) =
+        guide_frames.filter(|guide_frames| read.is_none() && guide_frames + hold < frames)
+    {
         say(&format!(
             "the guide is {guide_frames} frames at {fps} a second, and {frames} are asked for: past its end the model has nothing to follow"
         ));

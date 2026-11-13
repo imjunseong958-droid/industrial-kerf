@@ -687,9 +687,66 @@ recipes, in `fixtures/shots/car`.
    sets `weight_dtype=fp32`**. Through the server's API a MoGe picture took
    2.0 s with the model's loading, and 0.5 s at `refine_steps=0`. MoGe's own
    package took 100 s a picture there, in its last refining step, and is not
-   what ComfyUI's nodes run. No workflow is in the repository yet for
-   either: it is the next thing written for this, and what it makes is then
-   measured from a recipe.
+   what ComfyUI's nodes run.
+
+   The workflows are in the repository since 2026-11-13, four that come
+   with `kerf-comfy` ([shots.md](shots.md#a-picture-read-back)):
+   `moge-depth`, `moge-set`, `da3-depth`, and `da3-multiview`. Each says
+   `"of": "guide"`: what it makes is of its guide frame for frame, at the
+   guide's own rate and size, where a model that makes a shot has a rate
+   and a size of its own. That, and fetching the file whose kind the line
+   asks for, is all `kerf-comfy` learned for them; the engine learned
+   nothing. Run from recipes of `fixtures/shots/car` on that server, each on
+   65 frames of 832x480, from the line being read to the file being there,
+   with the guide sent up and the model loaded:
+
+   | Recipe line | Took |
+   |---|---|
+   | `generate model=moge guide={take.mp4}` (`moge-depth`) | 64 to 68 s |
+   | the same with `refine_steps=1` | 30 s, its greys 0.3% from the default's |
+   | `generate model=moge-set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
+   | `generate model=da3 guide=…` (`da3-depth`) | 10 to 11 s |
+   | `generate model=da3-views guide=… out={cameras.txt}` (`da3-multiview`) | 10 to 11 s |
+   | for scale, `generate model=vace …`, the take itself | 94 s |
+
+   *A take read back* (`shots/readback.kerfrecipe`): the depth pass of the
+   car driving across, the take Wan VACE made of it with seed 7, and that
+   take's depth as MoGe read it. Held together frame by frame, over the
+   pixels the guide has a depth for, by a script kept out of the
+   repository:
+
+   | The take's depth, read by | Same order of near and far as the guide (rank correlation, 1 is all) | Sky the guide has no depth for, read as none |
+   |---|---|---|
+   | MoGe 3 | 0.993, never under 0.990 | all of it |
+   | MoGe 3, `refine_steps=1` | 0.993 | all of it |
+   | Depth Anything 3, a picture at a time | 0.996 | 4%: it gives a sky a distance |
+   | MoGe 3, the take played backward, which is the wrong take | 0.966 | all of it |
+   | MoGe 3, the guide of the other scene | 0.865, and -0.42 at its worst frame | all of it |
+
+   What it shows, and what it does not. The way works: a take's depth is a
+   file a recipe makes, the same size and frames as its guide's pass, and
+   the two can be held together. The number is of the whole frame, and
+   most of this frame is a road that is where it was whichever way the car
+   went, so the wrong take scores 0.966 where the right one scores 0.993:
+   it says that the ground and the sky held, and little of where the
+   subject is. That wants reading by the clip, which the ids pass says the
+   pixels of, and is 4 below. A depth pass and a model's reading also differ
+   in kind where they agree in order: Kerf's goes by the scene's own numbers
+   and holds still, and MoGe's stretches each frame to its own nearest and
+   farthest. It is one take of one scene, by a small model.
+
+   *A camera found* (`shots/views.kerfrecipe`): the camera going 75 degrees
+   round the parked car, drawn as its picture in flat colors, with
+   `da3-multiview`. It put the camera turning 7 degrees the wrong way over
+   the first quarter and then 43 the right way, where the guide's turns 74
+   one way throughout, with a lens of 37 degrees down the frame where the
+   guide's is 40. A sky and a road in two flat colors give it little to
+   hold, and footage was not tried: no filmed shot is in the repository.
+   What it wrote is a file and nothing reads it yet.
+
+   *Not done:* the camera path into a `gen=camera@1` clip; a set's own
+   camera and lens, which `moge-set`'s file does not hold; a rebuilt set
+   drawn in a sequence with something added to it; footage.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the
