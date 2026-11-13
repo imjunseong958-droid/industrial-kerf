@@ -787,7 +787,7 @@ recipes, in `fixtures/shots/car`.
    camera a set was seen by, come into the sequence the way a glTF's camera
    does. `look` with `mesh` takes `from`, a file that says where a camera
    was, in place of `camera`, one the file holds
-   ([shots.md](shots.md#a-picture-read-back)): what `cameras-da3` wrote, or
+   ([shots.md](shots.md#a-picture-read-back)): a path a model wrote, or
    a lens alone, which is a camera standing at the set's own origin. The
    compositor learned one thing for it, where a camera that is at a given
    place in a mesh file's space is in the sequence
@@ -795,13 +795,44 @@ recipes, in `fixtures/shots/car`.
    camera; reading the text is `kerf-mcp`'s (`camera_file.rs`). A path is in
    its own model's units and a set in another's, so how much of the set one
    of the path's units is is given (`scale`), and so is which of the path's
-   frames the set is of (`frame`). Tried on files the tests wrote, in the
-   form shots.md says ComfyUI prints: none a server made has been read yet.
+   frames the set is of (`frame`). The workflow that rebuilds a set writes
+   its lens as a file of its own (`out={lens.txt}`), and a fifth workflow,
+   `set-views`, makes a set from the same reading of the frames a path
+   comes from, so that the two are one size and `scale` is 1.
 
-   *Not done:* `set-moge` writing its lens to a file (the server's
-   `MoGeGeometryToFOV` gives it, and no workflow saves it yet); finding
-   `scale` rather than being told it; a rebuilt set drawn in a sequence
-   with something added to it; footage.
+   *The whole of it, once, on a filmed shot* (2026-11-13). Four seconds of
+   a walk along an overgrown railway, handheld, 65 frames at 16 a second
+   and 640x360, from Wikimedia Commons (*Walking Keage Incline*, Kamigata0,
+   CC BY-SA 4.0); it is not in the repository. One recipe read it back, in
+   1 min 45 s: a set and a path in one size, a set with its lens, and the
+   shot's depth.
+
+   | Step | What came of it |
+   |---|---|
+   | The set with its lens as a mesh clip, and the camera `look` wrote from `lens.txt` | The frame it was rebuilt from, drawn again: the stones, the hedge, and the sign where the footage has them. A lens of 39.9 degrees. |
+   | The set in the path's size, and the camera `look` wrote from `cameras.txt` | The footage's first, middle, and last frames, each drawn again with the stones where that frame has them: the camera turns 2 degrees and the set turns with it. 65 frames placed, in 3 to 11 keys a value. |
+   | A box added on the path, on a track under the camera's | Hidden by the set's ground where it is under it, by the pixel; `look` with `shows` says how much. |
+   | `render s1 {guide.mp4} pass=depth`, then the model that makes the shot | A red crate where the box is, on every frame, in a grassy scene of the model's own: 100 s. |
+   | That take's depth read back, and `look` with `follows` | In 4, below. |
+
+   What it shows, and what it does not. The way works from footage to a
+   take, with every step a line of a recipe or of `look`, and the numbers
+   that place a camera hold on a set a model made. Three things were found
+   on the way. A box set down by eye, to look as if it stood on the path,
+   was two frame heights off in the air behind it, where the same pixels
+   are: the picture did not say so and the depth pass did. A clip on a
+   track above the camera's is laid over the set and not sorted with it, so
+   what is added goes under the camera, which the lines `look` writes put
+   on top. And the server makes a set seen through the wrong lens from a
+   guide that is not the size its model runs at, so `set-views` sends its
+   guide at that size ([shots.md](shots.md#a-picture-read-back)). The set
+   that comes in the path's size is, as it comes, the near ground and
+   little else; with `confidence=0` it is the whole frame, sky and all, as
+   surfaces. It is one shot, in which the camera hardly moves, and one
+   small model.
+
+   *Not done:* a shot whose camera travels; finding `scale` between two
+   models' units rather than making both from one reading; splats.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -821,11 +852,25 @@ recipes, in `fixtures/shots/car`.
    | The guide's, played backward | 0.971 | 0.032 | 0.023 | 0.094 | 0.217 |
 
    The whole frame moves by a thirtieth, and the subject by six and ten
-   times. A depth a model read from a real take has not been through it
-   yet, so where a take that followed and one that did not part is not
-   known: it is read beside the frame's own `off` and the floor's until it
-   is. It needs a model to read the take's depth and nothing else, and
+   times. It needs a model to read the take's depth and nothing else, and
    draws the guide's two passes itself.
+
+   On the filmed shot of 3, with real takes and their depth read back by
+   a model, the box added to the set:
+
+   | The guide | `order` | `off`, the whole frame | the set | the box |
+   |---|---|---|---|---|
+   | The box standing on the path | 0.833 | 0.112 | 0.112 | 0.118 |
+   | The box in the air two frame heights behind, looking as if it stood there | 0.787 | 0.122 | 0.111 | 0.507, all of it nearer |
+
+   In both the take has a crate where the box is in the picture. Where the
+   box stood on the ground it is as far off as the frame is. Where the
+   guide had it far away and the model drew it standing on the near ground,
+   as it looked, it is four times the frame, and `farther` says which way.
+   So it reads a subject's depth and not only its place, and it is read
+   beside the frame's own `off`, which here is a tenth: the set has holes
+   and a sky as a surface, and the model drew trees there. Two takes of one
+   shot.
 
    What it does not say is where the subject went. For that the document
    has the other half: `look` with `shows` says where a clip is on each

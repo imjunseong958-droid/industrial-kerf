@@ -1,0 +1,91 @@
+{
+  "kerf-comfy": 1,
+  "about": "A guide's frames read together as views of one scene, and one of them rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. It is in the units of the camera path found of the same frames, so the two fit as they are. frame=<n> picks the frame, from 0; confidence=0 keeps every pixel. The camera that saw it is at the file's own origin, looking along its z backward. At most 81 frames.",
+  "of": "guide",
+  "frames": {
+    "most": 81,
+    "step": 1
+  },
+  "size": [
+    504,
+    284
+  ],
+  "multiple": 2,
+  "set": {
+    "model": "depth_anything_3_base.safetensors",
+    "resolution": 504,
+    "anchor": "saddle_balanced",
+    "pose": "cam_dec",
+    "frame": 0,
+    "decimation": 2,
+    "discontinuity": 0.04,
+    "confidence": 0.1
+  },
+  "workflow": {
+    "1": {
+      "class_type": "LoadVideo",
+      "inputs": {
+        "file": "{guide}"
+      }
+    },
+    "2": {
+      "class_type": "GetVideoComponents",
+      "inputs": {
+        "video": [
+          "1",
+          0
+        ]
+      }
+    },
+    "3": {
+      "class_type": "LoadDA3Model",
+      "inputs": {
+        "model_name": "{model}",
+        "weight_dtype": "fp32"
+      }
+    },
+    "4": {
+      "class_type": "DA3Inference",
+      "inputs": {
+        "da3_model": [
+          "3",
+          0
+        ],
+        "image": [
+          "2",
+          0
+        ],
+        "resolution": "{resolution}",
+        "resize_method": "upper_bound_resize",
+        "mode": "multiview",
+        "mode.ref_view_strategy": "{anchor}",
+        "mode.pose_method": "{pose}"
+      }
+    },
+    "5": {
+      "class_type": "DA3GeometryToMesh",
+      "inputs": {
+        "da3_geometry": [
+          "4",
+          0
+        ],
+        "batch_index": "{frame}",
+        "decimation": "{decimation}",
+        "discontinuity_threshold": "{discontinuity}",
+        "confidence_threshold": "{confidence}",
+        "use_sky_mask": true,
+        "texture": true
+      }
+    },
+    "6": {
+      "class_type": "SaveGLB",
+      "inputs": {
+        "mesh": [
+          "5",
+          0
+        ],
+        "filename_prefix": "3d/kerf"
+      }
+    }
+  }
+}

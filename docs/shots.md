@@ -467,15 +467,16 @@ A model can go the other way from a shot: from a picture in motion to what
 the picture is of, how near each pixel is, the shape of what it shows, where
 the camera was. To Kerf it is a model like any other, whose file is not a
 shot: `generate model=<reader> guide=<footage>`, with `out={depth.mp4}`
-where a later step reads what it makes. Four such workflows come with
+where a later step reads what it makes. Five such workflows come with
 `kerf-comfy`, for the models ComfyUI has nodes for:
 
 | Workflow | What it makes of its guide | As |
 |---|---|---|
 | `depth-moge` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
-| `set-moge` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
+| `set-moge` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
 | `depth-da3` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
 | `cameras-da3` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+| `set-views` | The frames together as views of one scene, and one of them rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
 
 A workflow is named for what it makes, with the model that makes it after,
 and a recipe names neither: it says `model=depth`, the name the person's
@@ -525,7 +526,18 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 - **A set comes without its camera.** `set-moge`'s mesh is as the frame's
   camera saw it, the camera at the file's own origin looking along its z
   backward, as a glTF camera does. The file holds no camera and no lens, so
-  `look` with `mesh` and `camera` has none to write.
+  `look` with `mesh` and `camera` has none to write. The lens comes as a
+  file of its own, one number (`out={lens.txt}`).
+- **A set and a path of one size come from one answer.** A set one model
+  rebuilt and a path another found are each in units of their own, and
+  nothing says how many of one are one of the other. `set-views` makes the
+  set from the same reading of the frames a path comes from, so the two
+  fit as they are.
+- **`set-views` sends its guide up at the size its model runs at**, 504 on
+  the longer side. The server's node makes the mesh over the guide's own
+  pixels with a lens measured in the model's, so a guide of another size
+  comes back as a set seen through the wrong lens: at 640x360 its ground
+  stood a quarter too wide.
 
 Both come into the sequence as a `gen=camera@1` clip, by `look` with `mesh`
 and `from` in place of `camera`: a file in the project's folder that says
@@ -541,8 +553,8 @@ being where its clip puts it, with as few keyframes as say it.
 
 | In `mesh` | Says |
 |---|---|
-| `from` | The file. What `cameras-da3` wrote is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
-| `frame` | The frame of `from` the set was rebuilt from (`set-moge`'s `frame=`), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
+| `from` | The file. What a model wrote of a shot's camera is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
+| `frame` | The frame of `from` the set was rebuilt from (the `frame=` its line gave), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
 | `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
 | `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
 | `as` | A camera clip to `set`, where a new one is not wanted. |
@@ -553,6 +565,12 @@ gets the middle one of them: a `gen=camera@1` has one lens, and what a
 model finds of a lens wavers by the frame, so a zoom does not come through.
 A path shorter than the mesh's clip holds still after its last frame, and
 is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
+
+What is added to the set then goes on a track under the camera's, which
+the lines `look` writes put on top: a clip above the camera is laid over
+the set and not sorted with it by depth. `look` with `shows` says how much
+of it the set hides, and so whether it stands on the set's ground or is in
+it.
 
 A take's depth read back is held to its guide by `look` with `follows`, the
 media that depth is, and `sequence`, the guide's:

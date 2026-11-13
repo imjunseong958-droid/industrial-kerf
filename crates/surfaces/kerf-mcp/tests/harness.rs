@@ -3433,7 +3433,7 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(none.contains("cannot be read"), "{none}");
     std::fs::write(directory.path().join("other.txt"), "a camera").unwrap();
     let other = said(json!({"mesh": {"clip": "set", "from": "other.txt"}}));
-    assert!(other.contains("cameras-da3"), "{other}");
+    assert!(other.contains("no camera a model wrote"), "{other}");
     let far = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "frame": 7}}));
     assert!(far.contains("no frame 7"), "{far}");
 }

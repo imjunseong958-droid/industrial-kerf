@@ -45,7 +45,7 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 5] = [
+pub const BUNDLED: [(&str, &str); 6] = [
     ("wan-vace", include_str!("../workflows/wan-vace.json")),
     ("depth-moge", include_str!("../workflows/depth-moge.json")),
     ("set-moge", include_str!("../workflows/set-moge.json")),
@@ -54,6 +54,7 @@ pub const BUNDLED: [(&str, &str); 5] = [
         "cameras-da3",
         include_str!("../workflows/cameras-da3.json"),
     ),
+    ("set-views", include_str!("../workflows/set-views.json")),
 ];
 
 /// What fills a workflow's blanks, by name.
@@ -528,7 +529,13 @@ mod tests {
             }
         }
         // One that makes a file of its guide reads a guide, and has no rate of its own.
-        for name in ["depth-moge", "set-moge", "depth-da3", "cameras-da3"] {
+        for name in [
+            "depth-moge",
+            "set-moge",
+            "depth-da3",
+            "cameras-da3",
+            "set-views",
+        ] {
             let workflow = Workflow::named(name).unwrap();
             assert!(
                 workflow.of_guide() && workflow.blanks().contains("guide"),
@@ -544,12 +551,14 @@ mod tests {
             assert!(!takes["about"].as_str().unwrap().is_empty(), "{name}");
         }
         // Depth Anything 3 finds a camera's path only with its weights as 32-bit floats.
-        let multiview = Workflow::named("cameras-da3").unwrap();
-        assert!(multiview
-            .graph
-            .values()
-            .any(|node| node["class_type"] == "LoadDA3Model"
-                && node["inputs"]["weight_dtype"] == "fp32"));
+        for name in ["cameras-da3", "set-views"] {
+            let multiview = Workflow::named(name).unwrap();
+            assert!(multiview
+                .graph
+                .values()
+                .any(|node| node["class_type"] == "LoadDA3Model"
+                    && node["inputs"]["weight_dtype"] == "fp32"));
+        }
         // MoGe refines three times unless a line says otherwise.
         let moge = Workflow::named("depth-moge").unwrap();
         assert_eq!(moge.takes()["more"]["refine_steps"], json!(3));

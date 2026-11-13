@@ -67,12 +67,15 @@ on `main`; its section here becomes the release's notes on GitHub
   ([docs/shots.md](docs/shots.md#a-picture-read-back)).
 - What a model reads back comes into the document. An agent's `look` with
   `mesh` and `from` writes a camera a model found as a `gen=camera@1` clip
-  with keyframes: the path `cameras-da3` wrote for a shot, or a lens alone
+  with keyframes: the path a model wrote for a shot, or a lens alone
   for the camera a rebuilt set was seen by, placed against the set's mesh
   clip. `look` with `follows` holds a take's depth, read back from it, to
   the guide its sequence draws, clip by clip: how far the take has each
   clip's pixels from where the guide has them in the order of near and
   far, which says of a take whether its subject is where the guide put it.
+  For these `kerf-comfy` writes the lens a rebuilt set was seen through
+  (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
+  in the units of the camera path found of the same frames.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`

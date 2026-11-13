@@ -1,7 +1,8 @@
 //! A camera a model found, read from the file it was written to.
 //!
-//! A model that reads a picture back says where the camera was: on each frame of a shot
-//! (`cameras-da3`), or for the one frame a set was rebuilt from. There is no format for it. What comes is what ComfyUI prints of the model's answer, PyTorch's tensors
+//! A model that reads a picture back says where the camera was: on each frame of a shot, or
+//! for the one frame a set was rebuilt from. There is no format for it. What comes is the
+//! model's answer as it is printed, tensors
 //! as text: `'extrinsics': tensor(…)`, three or four rows of four numbers a frame, the way
 //! from the world to the camera with x right, y down, and z ahead; and `'intrinsics':
 //! tensor(…)`, three rows of three a frame, the lens in pixels of the picture the model ran
@@ -60,7 +61,7 @@ pub(crate) fn read(text: &str, origin: usize, scale: f64) -> Result<Found, Strin
     let places = tensor(text, "extrinsics")?;
     let lenses = tensor(text, "intrinsics")?;
     if places.is_none() && lenses.is_none() {
-        return Err("it holds no `extrinsics` and no `intrinsics`, and is not one number: it is what `cameras-da3` writes of a camera, or a lens in degrees".to_owned());
+        return Err("it holds no `extrinsics` and no `intrinsics`, and is not one number: it is no camera a model wrote, and no lens in degrees".to_owned());
     }
     let fovs = match &lenses {
         Some(lenses) => lenses
@@ -187,7 +188,7 @@ fn tensor(text: &str, name: &str) -> Result<Option<Vec<Vec<Vec<f64>>>>, String> 
             return Ok(());
         }
         if number.starts_with("...") {
-            return Err(format!("`{name}` is cut short, as PyTorch prints more than a thousand numbers: it holds 83 frames at most, and `cameras-da3` reads 81"));
+            return Err(format!("`{name}` is cut short, as PyTorch prints more than a thousand numbers: it holds 83 frames at most"));
         }
         let read = number
             .parse()
@@ -234,7 +235,7 @@ mod tests {
         (0..3).all(|axis| (one[axis] - other[axis]).abs() < 1e-6)
     }
 
-    /// As ComfyUI prints what Depth Anything 3 answers: a camera that stands still, one a
+    /// As a model's answer is printed: a camera that stands still, one a
     /// unit to its right and a unit nearer, and one turned a quarter round to its right.
     const PRINTED: &str = "{'depth': tensor([[[0.5000, 0.5100, 0.5200,  ..., 0.9000]]]),\n 'extrinsics': tensor([[[[ 1.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00],\n          [ 0.0000e+00,  1.0000e+00,  0.0000e+00,  0.0000e+00],\n          [ 0.0000e+00,  0.0000e+00,  1.0000e+00,  0.0000e+00]],\n\n         [[ 1.0000e+00,  0.0000e+00,  0.0000e+00, -1.0000e+00],\n          [ 0.0000e+00,  1.0000e+00,  0.0000e+00,  0.0000e+00],\n          [ 0.0000e+00,  0.0000e+00,  1.0000e+00, -1.0000e+00]],\n\n         [[ 0.0000e+00,  0.0000e+00, -1.0000e+00,  0.0000e+00],\n          [ 0.0000e+00,  1.0000e+00,  0.0000e+00,  0.0000e+00],\n          [ 1.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00]]]], device='cuda:0'),\n 'intrinsics': tensor([[[[400.,   0., 252.],\n          [  0., 400., 142.],\n          [  0.,   0.,   1.]],\n\n         [[400.,   0., 252.],\n          [  0., 390., 142.],\n          [  0.,   0.,   1.]],\n\n         [[400.,   0., 252.],\n          [  0., 410., 142.],\n          [  0.,   0.,   1.]]]])}";
 
@@ -311,7 +312,7 @@ mod tests {
         assert!(read("200", 0, 1.0).is_err());
         assert!(read("a camera", 0, 1.0)
             .unwrap_err()
-            .contains("cameras-da3"));
+            .contains("no camera a model wrote"));
     }
 
     #[test]
