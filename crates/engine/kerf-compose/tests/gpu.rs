@@ -132,10 +132,6 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("adjusted masked", adjustment("      mask k1 ellipse=0.5,0.5,0.3,0.3 feather=20\n      fx blur.gaussian radius=16\n")),
         ("adjusted moved", adjustment("      set scale=0.5 x=0.1 rotation=10\n      fx channel.invert\n")),
         ("adjusted blended", adjustment("      set blend=screen opacity=0.7\n      fx color.basic exposure=0.5\n")),
-        ("glow", clip("      fx light.wonderglow threshold=30 radius=30\n")),
-        ("glint", clip("      fx light.glint threshold=60\n")),
-        ("split", clip("      fx light.rgbsplit amount=8\n")),
-        ("wave", clip("      fx distort.wavewarp height=8 width=60\n")),
         ("noise", clip("      fx noise.noise amount=30 grain_size=2\n")),
         ("color key", clip("      fx key.color color=#30c040 tolerance=120 feather=20\n")),
         ("luma key", clip("      fx key.luma threshold=70 cutoff=30\n")),
@@ -149,7 +145,6 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("lumetri curves", clip("      fx color.lumetri curve_luma=\"0,0 0.3,0.2 0.7,0.85 1,1\" curve_red=\"0,0 0.5,0.6 1,1\"\n")),
         ("lumetri hue curves", clip("      fx color.lumetri hue_vs_sat=\"0,0.5 0.33,0.8 0.66,0.3\" hue_vs_hue=\"0,0.5 0.5,0.6\"\n")),
         ("lumetri HSL", clip("      fx color.lumetri hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150 hsl_blur=20\n")),
-        ("leaks", clip("      fx light.leaks intensity=80\n")),
         ("grain", clip("      fx noise.addgrain tweaking/intensity=2\n")),
         ("look.film", clip("      fx look.film\n")),
         // As tracking a surface writes it: each corner across the picture, and moving.
@@ -192,11 +187,7 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("cineon to log", clip("      fx utility.cineon conversion=linear-to-log\n")),
     ]);
     for look in [
-        "look.dreamy",
-        "look.glitch",
-        "look.vhs",
         "look.noir",
-        "look.sparkle",
         "look.shake",
         "look.flash",
     ] {

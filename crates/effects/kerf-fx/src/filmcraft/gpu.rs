@@ -26,7 +26,6 @@ const OP_LEVELS: u32 = 10;
 const OP_EXTRACT: u32 = 11;
 const OP_INVERT: u32 = 12;
 const OP_INVERT_ALPHA: u32 = 13;
-const OP_POSTERIZE: u32 = 14;
 const OP_ASC_CDL: u32 = 15;
 const OP_CHANNEL_MIX: u32 = 16;
 const OP_COLOR_REPLACE: u32 = 17;
@@ -39,8 +38,6 @@ const OP_CROP: u32 = 24;
 const OP_RESAMPLE: u32 = 25;
 const OP_HFLIP: u32 = 26;
 const OP_VFLIP: u32 = 27;
-const OP_MIRROR: u32 = 28;
-const OP_OFFSET: u32 = 29;
 const OP_VIDEO_LIMITER: u32 = 30;
 const OP_LUMETRI: u32 = 31;
 const OP_LUMETRI_LOOK: u32 = 32;
@@ -160,7 +157,6 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::Invert { channel, blend } => {
             out.push(step(OP_INVERT, [*channel, 0, 0, 0], &[*blend]))
         }
-        FxOp::Posterize { n } => out.push(step(OP_POSTERIZE, [0; 4], &[*n])),
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
             boxes(ry, true, *repeat, &mut out);
@@ -212,8 +208,6 @@ fn steps(op: &FxOp) -> Vec<Step> {
         }
         FxOp::HFlip => out.push(step(OP_HFLIP, [0; 4], &[])),
         FxOp::VFlip => out.push(step(OP_VFLIP, [0; 4], &[])),
-        FxOp::Mirror { cx, cy, nx, ny } => out.push(step(OP_MIRROR, [0; 4], &[*cx, *cy, *nx, *ny])),
-        FxOp::Offset { dx, dy, blend } => out.push(step(OP_OFFSET, [0; 4], &[*dx, *dy, *blend])),
         FxOp::AscCdl {
             slope: s,
             offset: o,

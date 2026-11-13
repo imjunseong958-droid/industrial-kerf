@@ -144,19 +144,46 @@ What stays, and none of it because a model is weak:
   the third rule counts.
 - How 360° footage is assembled, and the little of a photo editor.
 
-What is looked at, among the 104 effects and generators left: those that
-make a look and nothing else. `light.glint`, `light.leaks`, `light.rgbsplit`
-and `light.wonderglow`, `distort.wavewarp`, and `stylize.posterize` are
-plainly that, and so are the looks made of them, `look.vhs`, `look.glitch`,
-`look.dreamy`, `look.sparkle`, and the leaks of `look.film`. The rest have
-not been gone through.
+What went, of the 104 effects and generators that were left, is 15, and
+with them four of the 33 looks and grades:
 
-It is done as the first cut was, and is not done yet: an audit of all of
-them, each said to stay or to go, with what is used in its place (a prompt, a
-reference, a grade, an effect that stays) and what names it now (a look, a
-skill, a preset); then the cut, with `retired.tsv` saying what to use
-instead. A document that names a cut effect is refused, so the list is a
-person's to agree to before anything goes.
+- *A look and nothing else* (8): Glint, Light Leaks, RGB Split, Wonder Glow,
+  Wave Warp, Mirror, Posterize, and Echo. A model's, by its prompt and its
+  references.
+- *How a lens saw the shot* (5): Bokeh Blur, Focus Blur, Compound Blur, and
+  Channel Blur, which are depth of field, tilt-shift, and fringing, and so a
+  model's; what an editor still softens exactly, a plate behind a title or
+  what a mask outlines, `blur.gaussian` does, and a camera's `focus` does on
+  clips in depth. Camera Blur was `blur.gaussian` by another name.
+- *What a clip or a shape does* (2): Offset (keyframes on `x` and `y`) and
+  Write-on (a `gen=shape` clip with keys on `trim_end`).
+- *The looks made of them*: `look.vhs`, `look.glitch`, `look.dreamy`, and
+  `look.sparkle`. `look.film` lost its leaks and is version 2: grain and
+  darkened corners, a finish.
+
+What was in doubt and stayed, each for one of the reasons above:
+
+- Every color effect, Color Pass, Leave Color, Tint, and Black & White among
+  them: what they do is a grade, and a grade is how shots are made to agree.
+- Noise beside Add Grain, and Vignette: finishes laid over a whole cut.
+- Invert (a matte, a scanned negative), Magnify (a callout), Stroke and Edge
+  Feather (cutouts), the flips, and Paint Bucket (a logo's flat color):
+  exact things done to a made shot.
+- Directional and Radial Zoom Blur: the whip, the shake, and the zoom through
+  a cut are made of them, and those are free at the edit.
+- Posterize Time, which is retiming; Transform, whose shutter blur a clip's
+  own keyframes do not draw; Bilateral Blur, Median, Sharpen, and Unsharp
+  Mask, which are retouching and restoration.
+- The looks that move a clip or a title or make a cut (shake, flash,
+  flash-cut, pop-in, slow-push, whip, wobble, zoom-pulse, zoom-through),
+  `look.noir`, which is a grade, and the 18 grades.
+
+So 89 effects are left, and 29 looks and grades. It was done as the first
+cut was: a document that names one of these is refused with what to use
+instead (`retired.tsv`), which for a look is the prompt and references of
+the shot's recipe. With the effects went their kernels (five of
+`vfx/kernels.wgsl` and three kinds of `FxOp`), about 2,300 lines in
+`kerf-fx`.
 
 Not decided here: the CPU's code as a second way to draw every frame (What
 others do, vork).
@@ -550,10 +577,8 @@ What comes after these, in the order it would be built, by the five rules
 at the top. The scene the measurements above were made on is kept, with its
 recipes, in `fixtures/shots/car`.
 
-1. **The second cut.** The audit of the effects and looks that are left,
-   and then the cut (What is looked at again). It comes first because it is
-   small, and because what is left after it is what the rest is built
-   beside.
+1. **The second cut**, which is done: 15 effects and four looks went (What
+   is looked at again). What is left is what the rest is built beside.
 2. **Geometry in the guide.** A clip whose picture is a mesh: read from a
    glTF file, or one of a few solids, a box, a ball, a cylinder. It is placed,
    keyed, and parented as any clip in depth is, seen by the sequence's
@@ -701,9 +726,9 @@ A 96-frame 1080p render with Lumetri, a masked and blended layer, and a title to
 **What the GPU draws:** media, nested sequences, solids, titles, captions; clips in depth with their
 lights, shadows, and solids; masks,
 crops, letterboxing, placing, opacity, wipes and dissolves, dips, 71 of the 72 transitions carried from FilmCraft (`kerf-fx/src/transitions/kernels.wgsl`), all 27 blend modes,
-adjustment layers; `color.basic`, `blur.gaussian`, the 29 kinds of operation in
-`FxOp` with Lumetri among them, and Wonder Glow, Glint, RGB Split, Wave Warp, Light Leaks, Add Grain, and
-Noise, Color, Luma, and Ultra Keys with their mattes cleaned up, Logo Cutout, Extract, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, the Cineon Converter, Lens Distortion, Magnify, Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid, and a Lumetri's curves, LUTs, HSL Secondary, and sharpening. So all 15 playful looks and all
+adjustment layers; `color.basic`, `blur.gaussian`, the 26 kinds of operation in
+`FxOp` with Lumetri among them, and Add Grain, and
+Noise, Color, Luma, and Ultra Keys with their mattes cleaned up, Logo Cutout, Extract, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, the Cineon Converter, Lens Distortion, Magnify, Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid, and a Lumetri's curves, LUTs, HSL Secondary, and sharpening. So all 11 playful looks and all
 18 grades stay on the GPU, including the transitions that are looks (Whip, Flash Cut, Zoom Through), since a look
 transition is layers rather than a mix.
 **What sends a frame to the CPU:** Morph Cut, whose optical flow would need both clips read back; every other
@@ -767,7 +792,7 @@ Three limits remain, in this order:
    |---|---|---|---|---|
    | Film (look) | 140 | 27 | 579 | 84 |
    | Add Grain | 59 | 14 | 233 | 36 |
-   | Light Leaks | 62 | 21 | 239 | 64 |
+   | Light Leaks, since cut | 62 | 21 | 239 | 64 |
    | Lumetri, luma curve | 54 | 14 | 192 | 31 |
    | Lumetri, hue vs sat | 69 | 14 | 239 | 31 |
    | Lumetri, LUT of 33 | 63 | 14 | 227 | 32 |
@@ -799,7 +824,7 @@ Three limits remain, in this order:
 
    | Effect | 1080p before | 1080p | 4K before | 4K | Peak memory at 4K, before and after |
    |---|---|---|---|---|---|
-   | Bokeh Blur, default amount 10 | 427 | 31 | 6251 | 127 | 1.10 GB, 1.03 GB |
+   | Bokeh Blur, since cut, default amount 10 | 427 | 31 | 6251 | 127 | 1.10 GB, 1.03 GB |
    | Bokeh Blur, amount 12 | | 32 | about 9000 | 148 | |
    | Bokeh Blur, amount 13 | | 32 | about 900 | 79 | |
    | Remove Grain | 184 | 138 | 667 | 435 | 1.95 GB, 1.53 GB |
@@ -844,7 +869,7 @@ Three limits remain, in this order:
    them into the master's signal or tone maps them for monitors. Lumetri grades in the sequence's
    own signal. Other effects written for 0 to 1 get the picture brought between 0 and 1 and put back,
    each pixel or the whole picture as `catalog::headroom` says: a color past BT.709 goes toward the gray of its own brightness until it fits and comes back around
-   the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. `time.echo` adds up what it is given as it is, below 0 and above 1, since adding and weighing need nothing brought under 1, and its Screen operator goes as ever between 0 and SDR white and adds what is past either, where it used to stop at white and multiply what was below 0. Light from `light.glint` adds to a color past BT.709 and leaves how far it stands past the rest, white light by the same in each channel. What changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
+   the brightness it has after the effect, on the CPU and the GPU, and the whole picture is lifted as well as scaled, which a filter over its pixels undoes exactly. What changes a pixel's channels apart (`stylize.posterize`, `color.autocolor`, an exposure that saturates) keeps the gamut but moves the hue of what lies far past it. ProRes and HEVC Main 10 carry HDR; H.264 is
    8-bit. `look` with `scopes` reads an HDR sequence by its PQ or HLG signal, with what that comes to in cd/m² and how much of it BT.709 cannot hold; so does the Finish tray, whose bridge draws that signal small again on a thread of its own while the scopes are in sight, since playback hands over only the 8-bit frame a monitor gets, and marks where SDR white falls. An HDR10 file (`hevc_hdr`) says what it was mastered on
    (P3 D65 at 1000 nits unless told otherwise) and its MaxCLL and MaxFALL, measured from the frames
    before encoding, which disk-kept frames make cheap; HLG carries its tags without them. Holding an effect costs GPU passes, measured with `examples/frame_bench.rs` on 4K ProRes in PQ on an M1 with 8 GB, ms a frame, decode included:
@@ -854,7 +879,7 @@ Three limits remain, in this order:
    | Placed, nothing else | 18.5 | 19.7 | 19.8 | 46.2 | 51.3 | 51.7 |
    | `color.basic`, each pixel held | 19.9 | 25.5 | 23.1 | 33.0 | 49.3 | 49.8 |
    | `blur.unsharp`, Gamut held | 27.0 | 30.9 | 31.3 | 69.7 | 87.2 | 86.4 |
-   | `light.wonderglow`, Gamut held | 60.5 | 69.3 | 65.9 | 211.7 | 224.2 | 218.1 |
+   | `light.wonderglow`, since cut, Gamut held | 60.5 | 69.3 | 65.9 | 211.7 | 224.2 | 218.1 |
 
    So a frame costs 1 ms at 1080p and 5 at 4K by being HDR, a held `color.basic` adds 3 to 6 ms at 1080p and 17 at 4K, and a Gamut effect 4 to 9 and 6 to 18. Handing VideoToolbox surfaces to the GPU without a copy was measured and left (`examples/upload_bench.rs`, an M1 with 8 GB), by the time a frame takes and not by the CPU it uses (see Playing). A 4K H.264 frame takes 4.5 ms to decode in software on all its cores, 1.4 to convert, and 4.7 to upload, 10.6 in all, against 14.5 ms just to decode it on a surface; 1080p takes 3.0 against 5.3, and 4K HEVC 14.2 against 14.6. Only 10-bit ProRes gains, 24 to 27 against 14.8, and more than that gain was its 16-bit RGBA. A frame for the GPU at its full size now goes up in the planes it decoded to where that comes out right, and a kernel (`planes.wgsl`) makes it RGB. At 8 bits it goes by libswscale's own whole-number arithmetic and so to the same bytes, for 4:2:0 and 4:2:2 on 64-bit ARM at the sizes its fast path takes; deeper footage comes within 3 of 255. Other formats and sizes, alpha, other machines' 8-bit footage, and footage scaled on decode still go up as RGBA. With a grade on it, on an M1, 4K ProRes 10-bit goes from 46 ms a frame to 34, past 24 fps, 4K H.264 from 34 to 27, and 1080p from 9.1 to 7.4. So there is no crate with an exception to the workspace's `forbid`. Footage scaled on decode still converts on the CPU, and a GPU scale from its planes was built and measured and left out (`KERF_BENCH_SIZE` in `examples/upload_bench.rs`, 4K H.264 on an M1 with 8 GB, ms a frame, converting and upload and kernels and bytes back). To 1920x1080, 7.3 through libswscale (9.4 in the compositor, whose copy and threads add to its converting) against 12.4 from planes, in two passes of libswscale's bicubic with its own coefficients; to 1728x972, 7.5 against 11.2; to 3456x1944, a clip at 0.9 in a 4K sequence, 21 (24 in the compositor) against 19. So it loses in the 1080p sequence it was meant for, where such a frame takes 14 ms in all, 70 fps, and gains 2 to 5 of 39 ms only near full size. Nor is it the same picture: a mean of 1.66 of 255 from libswscale's, 1.7% of pixels off by more than 2, and 9 at worst, which `tests/gpu.rs` would refuse, so it could only be used while playing, under frame keys of its own. What it would save is CPU: libswscale spends 19 ms of core time a frame across its threads to take 3 to 5.
 
@@ -1130,7 +1155,7 @@ Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
 **Settings and projects.** Done: the editor's settings carry a version, `settings/version`, and `migrateSettings` brings an older Kerf's up to it once at start, before anything reads them, and leaves a newer Kerf's alone (`settings_migration.cpp`, `settings_migration_test.cpp`). Version 1 drops the nine keys no code reads any more, and the model the editor wrote into every save before `c58bca5` (`claude-sonnet-4-20250514`, or `claude-3-5-sonnet-latest` from its menu), which held a person who never chose one to a retired model; a model someone chose stays. The Deliver panel's keys from before W3 are still read in place (`render_queue_view.cpp`), since they name a folder and not the path a migration would need. API keys live in the system keychain, macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (`kerf_secret`, `kerf-qt-bridge/src/secrets.rs`, through the `keyring` crate), and one left in plain QSettings moves there the next time the editor loads it; where the keychain cannot be reached, or refuses a key, they stay in QSettings as before (`secret_store.cpp`, `secret_store_test.cpp`). The Kerf Cloud token is kept there too (`cloud_session.rs`): one left in its 0600 file by an older Kerf moves into the keychain the first time the editor reads it, and where no keychain can be reached it stays in the file, as before (`docs/cloud.md`). Those tests take both ways with a keychain in memory and with `KERF_SECRETS=off`, and never touch a real one; `a_key_round_trips_through_the_real_keychain` and `real_keychain_keeps_the_token_out_of_the_file` do, and CI runs them on each system's own store: the login keychain on macOS, Credential Manager on Windows, and gnome-keyring's Secret Service on Linux (`rust-runtime.yml`, Test the system keychain). Credential Manager takes no value over 1280 UTF-16 units, so on Windows a key that long stays in QSettings and a token that long in the file. Fixed here: a key changed while the keychain refused it (locked, or a prompt denied) went to QSettings with the older one still in the keychain, and the next start read the older one and dropped the new; a key in QSettings is now taken first, since only a refused or an older Kerf's key is there (`aKeyTheKeychainRefusedWinsOverTheOneKeptBefore`). Fixed here: Windows sets no `HOME`, so the editor found no `cloud.json` there and Kerf Cloud said it was unavailable; it now takes `USERPROFILE`. A project is `kerf 1` and any other number is refused (`kerf-lang/src/doc.rs`), which is right until the first change to the format, and that change needs a reader of the old one. Fixed here: the editor offered retired Anthropic models and wrote one into new settings, so it overrode kerf-agent's `claude-opus-5-5` (`comments_test.cpp`).
 
-**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU: 45 of the 224 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). They were 101 of 262 until the 38 that make a look a model makes better, or do what a clip's own properties do, were cut (What these rules cut). None of the 33 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which to give a kernel first, and they go by what an editor needs exact and who writes it: Corner Pin, which tracking writes, then Drop Shadow, Rounded Crop, Spacer, and Mosaic, then Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, and the Cineon Converter, then Lens Distortion and Magnify, then Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid have theirs, and they were 63 before those (The engine). `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
+**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU: 39 of the 206 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). They were 101 of 262 until the 38 that make a look a model makes better, or do what a clip's own properties do, were cut (What these rules cut), and 45 of 224 until the second cut took 15 more, six of them among those with no kernel (What is looked at again). None of the 29 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which to give a kernel first, and they go by what an editor needs exact and who writes it: Corner Pin, which tracking writes, then Drop Shadow, Rounded Crop, Spacer, and Mosaic, then Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, and the Cineon Converter, then Lens Distortion and Magnify, then Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid have theirs, and they were 63 before those (The engine). `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
 
 **Delivery.** Done: a blocking note holds every delivery back, Deliver, the toolbar's Export and an agent's `render` alike, since kerfd refuses a `full` or `master` render while one is open (`review::delivery_held`; `a_blocking_note_holds_a_delivery_back_and_not_a_draft`, `exportWaitsForBlockingNotesAsDeliverDoes`). A QC error that no comment mirrors, past the bridge's cap of new QC comments, holds back only Deliver.
 

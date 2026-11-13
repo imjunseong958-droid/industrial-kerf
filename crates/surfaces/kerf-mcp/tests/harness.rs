@@ -1994,14 +1994,14 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
         "INVALID_ARGUMENTS"
     );
     // Effects are found by the look wanted, each saying when to use it.
-    let found = ok(&router, "look", json!({"effects": "cinematic glow"}));
+    let found = ok(&router, "look", json!({"effects": "film grain"}));
     let doc = found["effects"][0]["doc"].as_str().unwrap();
-    assert!(doc.contains("Glow") && doc.contains("cinematic"), "{found}");
+    assert!(doc.contains("Film") && doc.contains("grain"), "{found}");
     let retro = ok(&router, "look", json!({"effects": "retro tv transition"}));
     assert_eq!(retro["effects"][0]["id"], "tv-power", "{retro}");
     // An effect EffectCraft had says what replaced it.
     let gone = error(&router, "look", json!({"effect": "stylize.glow"}));
-    assert!(gone.to_string().contains("light.wonderglow@1"), "{gone}");
+    assert!(gone.to_string().contains("the prompt and references"), "{gone}");
     // A video editor's transitions are found by the moment too.
     let whip = ok(&router, "look", json!({"effects": "whip pan travel"}));
     assert_eq!(whip["effects"][0]["id"], "whip", "{whip}");

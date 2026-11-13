@@ -29,7 +29,6 @@ const SCENES: &[(&str, &str)] = &[
     ),
     ("unsharp", "      fx blur.unsharp amount=100 radius=3\n"),
     ("blur 40", "      fx blur.gaussian@1 radius=40\n"),
-    ("glow", "      fx light.wonderglow@1\n"),
     ("ultra key", "      fx key.ultra@1 key_color=#30c040\n"),
     (
         "radial zoom",
@@ -110,9 +109,8 @@ const SCENES: &[(&str, &str)] = &[
         "ultra soften",
         "      fx key.ultra@1 key_color=#30c040 setting=custom soften=20\n",
     ),
-    ("look film", "      fx look.film@1\n"),
+    ("look film", "      fx look.film@2\n"),
     ("add grain", "      fx noise.addgrain@1\n"),
-    ("leaks", "      fx light.leaks@1\n"),
     ("mosaic", "      fx stylize.mosaic@2 horizontal=60 vertical=34\n"),
     (
         "mosaic soft",
@@ -167,11 +165,6 @@ const SCENES: &[(&str, &str)] = &[
     ("photo filter", "      fx color.photofilter@1 density=50\n"),
     ("unmult", "      fx key.unmult@1\n"),
     ("cineon", "      fx utility.cineon@2\n"),
-    ("bokeh", "      fx blur.bokeh@1\n"),
-    // The widest iris that is gathered at full size, and the first gathered at half.
-    ("bokeh 12", "      fx blur.bokeh@1 amount=12\n"),
-    ("bokeh 13", "      fx blur.bokeh@1 amount=13\n"),
-    ("bokeh 60", "      fx blur.bokeh@1 amount=60\n"),
     ("remove grain", "      fx noise.removegrain@1\n"),
     // As tracking a surface writes it, its corners moving.
     (

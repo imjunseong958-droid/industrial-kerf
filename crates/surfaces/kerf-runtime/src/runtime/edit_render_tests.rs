@@ -94,10 +94,10 @@ fn keyframes_round_trip_through_typed_ops_and_the_timeline() {
     let state = ops(
         &mut runtime,
         json!([
-            {"op": "fx-add", "clip": "c1", "fx": "light.wonderglow",
+            {"op": "fx-add", "clip": "c1", "fx": "blur.unsharp",
              "params": {"radius": {"keys": [{"at": 0, "value": 10}, {"at": 12, "value": 40}]}}},
             {"op": "fx-set", "clip": "c1", "index": 0,
-             "params": {"intensity": {"keys": [{"at": 6, "value": 0.2}, {"at": 18, "value": 0.8, "interp": "ease-out"}]}}},
+             "params": {"amount": {"keys": [{"at": 6, "value": 0.2}, {"at": 18, "value": 0.8, "interp": "ease-out"}]}}},
             {"op": "mask-add", "clip": "c1", "rect": [0.25, 0.25, 0.75, 0.75],
              "params": {"feather": {"keys": [{"at": 0, "value": 0}, {"at": 48, "value": 20}]}}}
         ]),
@@ -107,7 +107,7 @@ fn keyframes_round_trip_through_typed_ops_and_the_timeline() {
     assert_eq!(c1["effects"][0]["params"]["radius"][1]["frame"], 12);
     assert_eq!(c1["effects"][0]["params"]["radius"][1]["value"], 40.0);
     assert_eq!(
-        c1["effects"][0]["params"]["intensity"][1]["interp"],
+        c1["effects"][0]["params"]["amount"][1]["interp"],
         "ease-out"
     );
     assert_eq!(c1["masks"][0]["params"]["feather"][1]["frame"], 48);

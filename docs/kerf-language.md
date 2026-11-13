@@ -42,8 +42,8 @@ center_y=0.5`. A sound parameter names a sound track whose sound the effect
 draws (`fx c1 add generate.audiowaveform audioLayer=A1`), and a mask
 parameter one of the clip's masks (`path=k1`). Kerf's own renderer runs them
 in stack order beside FilmCraft's effects. Any other id EffectCraft had is
-an error that names what to use instead (`stylize.glow` is
-`light.wonderglow@1` now).
+an error that names what to use instead (`blur.cross` is
+`blur.directional@2` now).
 
 `image.heal` and `image.clone` are strokes: `fx c1 add image.heal@1
 points="0.42,0.31 0.44,0.33" radius=0.02` takes out what is under it, from a place it finds, or one
@@ -80,7 +80,7 @@ second where it stands, with the amount's keys on each number it scales.
 
 Looks are the playful effects of a short-form editor written in the Kerf
 language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
-flashes, glitches, film and VHS looks, title pop-ins, and whips and zooms
+flashes, a film finish, title pop-ins, and whips and zooms
 through a cut. They are listed there too and written like any effect or
 transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
 from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
@@ -189,8 +189,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   hevc_hdr`) carry the HDR signal, the latter with HDR10's metadata for PQ; the monitor, stills,
   scopes, and H.264 files get it tone mapped to Rec.709. The program's own
   sequence decides this for what is nested in it. Effects keep highlights there, except
-  `color.videolimiter`, which limits on purpose, and the looks `look.flash`, `look.noir`, and
-  `look.vhs`. Colors wider than Rec.709 survive only effects that do not limit to 0 to 1.
+  `color.videolimiter`, which limits on purpose, and the looks `look.flash` and `look.noir`. Colors wider than Rec.709 survive only effects that do not limit to 0 to 1.
 - `mask` lines are a picture clip's masks, combined in order. The outline is
   one of `rect=left,top,right,bottom`, `ellipse=x,y,radius across,radius
   down`, or `points="x,y x,y …"` (with `closed=false` for an open path), in

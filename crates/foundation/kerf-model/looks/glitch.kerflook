@@ -1,7 +1,0 @@
-kerf-look 1
-look look.glitch version=1 name="Glitch" category="Digital" on=clip
-  doc "A digital glitch burst: the color channels split and the picture jumps; tech, gaming, and beat hits."
-  param amount number default=1 range=0..3 doc="How hard it glitches."
-  param hit time default=0f doc="When it glitches."
-  fx light.rgbsplit@1 amount={$hit:0 $hit+1f:40*$amount $hit+2f:5*$amount $hit+3f:25*$amount $hit+5f:0}
-  fx distort.offset@2 shift_x={$hit:0.5 $hit+1f:0.5+0.03*$amount $hit+2f:0.5-0.02*$amount $hit+3f:0.5}

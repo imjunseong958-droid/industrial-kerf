@@ -1,14 +1,14 @@
 # Effects, looks, and versions
 
 > Status: the plan at the end is in: versions, the built-in effects, looks
-> (the reader, the catalog layers, expansion, `flatten`, and 33 bundled
+> (the reader, the catalog layers, expansion, `flatten`, and 29 bundled
 > looks in `crates/foundation/kerf-model/looks`), presets that carry their looks, and
 > markers placed on new music's beats.
 
 Kerf draws with a small set of **built-in effects**: transitions, color,
 blur, keys, distortion, transform, and the few others an editor reaches for.
-Everything playful on top of them, the shakes, zoom pulses, flashes, and
-glitches of a short-form editor, is a **look**: a text file in the Kerf
+Everything playful on top of them, the shakes, zoom pulses, and flashes of
+a short-form editor, is a **look**: a text file in the Kerf
 language that combines built-in effects, keyframes, and masks behind a few
 parameters. Looks need no new Kerf build, can be shared like presets, and are
 written by people and agents alike.

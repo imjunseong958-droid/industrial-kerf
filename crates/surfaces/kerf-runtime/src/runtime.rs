@@ -2732,7 +2732,7 @@ mod tests {
         let added = ops(vec![
             EditOp::FxAdd {
                 clip: "c1".into(),
-                fx: "light.wonderglow".into(),
+                fx: "blur.unsharp".into(),
                 params: [("radius".to_owned(), json!(40))].into_iter().collect(),
                 index: None,
             },
@@ -2745,7 +2745,7 @@ mod tests {
         ])
         .unwrap();
         assert!(
-            added.contains("      fx light.wonderglow@1 radius=40\n      fx channel.invert@2\n"),
+            added.contains("      fx blur.unsharp@2 radius=40\n      fx channel.invert@2\n"),
             "{added}"
         );
         let set = ops(vec![EditOp::FxSet {
@@ -2756,7 +2756,7 @@ mod tests {
         }])
         .unwrap();
         assert!(
-            set.contains("      fx light.wonderglow@1 enabled=false\n"),
+            set.contains("      fx blur.unsharp@2 enabled=false\n"),
             "{set}"
         );
         let removed = ops(vec![EditOp::FxRemove {
@@ -2767,8 +2767,8 @@ mod tests {
         assert!(!removed.contains("channel.invert"), "{removed}");
         let error = ops(vec![EditOp::FxAdd {
             clip: "c1".into(),
-            fx: "light.wonderglow".into(),
-            params: [("intensity".to_owned(), json!("loud"))]
+            fx: "blur.unsharp".into(),
+            params: [("amount".to_owned(), json!("loud"))]
                 .into_iter()
                 .collect(),
             index: None,

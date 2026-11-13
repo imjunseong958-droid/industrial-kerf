@@ -516,7 +516,7 @@ mod tests {
     fn effects_are_ids_or_ids_with_parameters() {
         let crate::Command::EffectPreviews(request) = serde_json::from_value(json!({
             "type": "effect_previews", "clip": "c1", "at": 9.0, "width": 88, "key": "hover",
-            "effects": ["light.wonderglow", {"fx": "color.basic", "params": {"saturation": 0.8}, "key": "after"}],
+            "effects": ["blur.unsharp", {"fx": "color.basic", "params": {"saturation": 0.8}, "key": "after"}],
         }))
         .unwrap() else {
             panic!("expected effect_previews");
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(request.key.as_deref(), Some("hover"));
         assert_eq!(
             request.effects[0],
-            PreviewEffect::Id("light.wonderglow".into())
+            PreviewEffect::Id("blur.unsharp".into())
         );
         let PreviewEffect::Params { fx, params, key } = &request.effects[1] else {
             panic!("expected parameters");
@@ -567,27 +567,27 @@ mod tests {
 
     #[test]
     fn an_effect_with_parameters_takes_the_place_of_the_clips_own() {
-        let def = Catalog::builtin().fx("blur.camera").unwrap();
+        let def = Catalog::builtin().fx("blur.sharpen").unwrap();
         let own = Effect {
             fx: def.id.clone(),
             version: def.version,
             enabled: true,
-            params: Params::from([("percent".to_owned(), Param::Static(Value::Number(5.0)))]),
+            params: Params::from([("amount".to_owned(), Param::Static(Value::Number(5.0)))]),
         };
         let entry = PreviewEffect::Params {
-            fx: "blur.camera".into(),
-            params: json!({"percent": 40}).as_object().unwrap().clone(),
+            fx: "blur.sharpen".into(),
+            params: json!({"amount": 40}).as_object().unwrap().clone(),
             key: None,
         };
         let replaced = with_effect(std::slice::from_ref(&own), previewed(def, &entry), true);
         assert_eq!(replaced.len(), 1);
         assert_eq!(
-            replaced[0].params.get("percent"),
+            replaced[0].params.get("amount"),
             Some(&Param::Static(Value::Number(40.0)))
         );
         let added = with_effect(
             std::slice::from_ref(&own),
-            previewed(def, &PreviewEffect::Id("blur.camera".into())),
+            previewed(def, &PreviewEffect::Id("blur.sharpen".into())),
             false,
         );
         assert_eq!(added.len(), 2, "an id is shown added");
@@ -599,7 +599,7 @@ mod tests {
         assert_eq!(plan(catalog.fx("title").unwrap()), Some(Plan::Generator));
         assert_eq!(plan(catalog.fx("solid").unwrap()), Some(Plan::Generator));
         assert_eq!(plan(catalog.fx("adjustment").unwrap()), None);
-        for id in ["blur.gaussian", "blur.camera", "color.curves", "image.fill"] {
+        for id in ["blur.gaussian", "blur.sharpen", "color.curves", "image.fill"] {
             assert_eq!(plan(catalog.fx(id).unwrap()), Some(Plan::Effect), "{id}");
         }
         assert_eq!(plan(catalog.fx("look.shake").unwrap()), None);
