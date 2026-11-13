@@ -395,6 +395,9 @@ private:
     void paintNameBar(QPainter &p, const QRectF &bar, const QString &name, const QString &secondary, bool qc, bool fx,
                       bool shadow, const QColor &ink);
     void paintGainBand(QPainter &p, const QRectF &rect, const QJsonObject &clip);
+    // A signal clip's number along the clip, 0 at the bottom of `rect` and 1 at its top:
+    // the points of its curve, from the values the project gives for it.
+    static QPolygonF signalCurve(const QJsonArray &values, const QRectF &rect);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
     // The ruler's marker row: proposal bands, comment marks, sequence markers.
     void paintMarkerRow(QPainter &p, const QRect &dirty, int top);

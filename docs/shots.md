@@ -779,10 +779,13 @@ than that run together, and those that fall outside the signal clip are
 counted and left out. It reads onsets, where a sound starts, and not how
 loud it is.
 
+The editor shows a signal where its clip is, in the timeline: its number
+along the clip as a curve, 0 at the bottom and 1 at the top.
+
 Not here yet: a signal from how loud a sound is, as a voice swells, and from
-footage, such as how fast something moves. Nor is there a place in the editor
-to draw one under the picture: its keys are text, which an agent writes, or a
-person with `set`.
+footage, such as how fast something moves. Nor can one be drawn by hand in
+the editor: its keys are text, which an agent writes, or a person with
+`set`.
 
 ## Where a thing goes
 

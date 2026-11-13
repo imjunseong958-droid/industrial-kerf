@@ -1696,6 +1696,20 @@ void TimelineWidget::paintNameBar(QPainter &p, const QRectF &bar, const QString 
     p.drawStaticText(QPointF(x, top), rest);
 }
 
+QPolygonF TimelineWidget::signalCurve(const QJsonArray &values, const QRectF &rect) {
+    QPolygonF curve;
+    if (values.isEmpty() || rect.width() <= 0.0 || rect.height() <= 0.0) return curve;
+    const int last = int(values.size()) - 1;
+    for (int index = 0; index <= last; ++index) {
+        const double along = last == 0 ? 0.0 : double(index) / double(last);
+        const double value = std::clamp(values.at(index).toDouble(), 0.0, 1.0);
+        curve << QPointF(rect.left() + along * rect.width(), rect.bottom() - value * rect.height());
+    }
+    // One value is a level across the whole clip.
+    if (last == 0) curve << QPointF(rect.right(), curve.first().y());
+    return curve;
+}
+
 void TimelineWidget::paintGainBand(QPainter &p, const QRectF &rect, const QJsonObject &clip) {
     const QString id = clip.value(QStringLiteral("id")).toString();
     bool keyed = false;
@@ -1810,6 +1824,22 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
                          text.simplified(), {}, qc, false, false, C(tk::ink2));
     } else if (kind == ClipKind::Generator) {
+        // A signal draws nothing in the picture: what it is shows here, its number over
+        // its time, filled under as a sound's level is.
+        if (const QJsonArray signal = clip.value(QStringLiteral("signal")).toArray(); !signal.isEmpty() && rect.width() >= 4.0) {
+            const QRectF inside = rect.adjusted(0, 2, 0, -2);
+            QPolygonF curve = signalCurve(signal, inside);
+            QPolygonF under = curve;
+            under << QPointF(inside.right(), inside.bottom()) << QPointF(inside.left(), inside.bottom());
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setPen(Qt::NoPen);
+            p.setBrush(C(tk::overlay::waveformPeak));
+            p.drawPolygon(under);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(C(tk::overlay::waveformRms), 1.0));
+            p.drawPolyline(curve);
+            p.setRenderHint(QPainter::Antialiasing, false);
+        }
         if (rect.width() >= kNameBarFrom)
             paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
                          name, clipSecondary(clip, kind), qc, fx, false, C(tk::ink));

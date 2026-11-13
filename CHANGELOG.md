@@ -76,6 +76,8 @@ on `main`; its section here becomes the release's notes on GitHub
   For these `kerf-comfy` writes the lens a rebuilt set was seen through
   (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
   in the units of the camera path found of the same frames.
+- A signal clip shows its number in the timeline, as a curve along the
+  clip.
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.

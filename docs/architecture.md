@@ -1032,8 +1032,12 @@ recipes, in `fixtures/shots/car`.
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
 7. **A signal measured.** Still wanting a model that takes a number a frame.
-8. **In the editor**: somewhere to draw a signal's curve under the picture.
-   Choosing a take is in (2026-11-13): Takes, on a media in the bin, lists
+8. **In the editor**, both in (2026-11-13). A signal's curve is drawn
+   where its clip is, in the timeline under the picture: its number along
+   the clip, 0 at the bottom and 1 at the top, filled under as a sound's
+   level is, from values the timeline's view now carries for a signal
+   clip. It is seen and not yet drawn by hand: its keys are still text.
+   Choosing a take: Takes, on a media in the bin, lists
    the takes its recipe has made, which a snapshot's sources now carry,
    and has the media be another.
 
