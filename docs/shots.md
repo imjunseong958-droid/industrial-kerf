@@ -533,6 +533,20 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   nothing says how many of one are one of the other. `set-views` makes the
   set from the same reading of the frames a path comes from, so the two
   fit as they are.
+- **A set comes in the reading's own space.** The frames are read together
+  and anchored on one of them, which the model picks, and the mesh is in
+  that view's space, not the space of the frame `frame=` names. `look` with
+  `from` takes the set to be of the frame it is given, so the two meet when
+  the model's anchor is that frame and not when it is another. What a set
+  holds is what the model was sure of, so a dusk or a far scene it is
+  unsure of comes back as an empty mesh, which the server says plainly;
+  `confidence=0` then gives a set with the sky in it, whose depth pass is
+  flat, and such a guide is handed to a model as a picture rather than as
+  depth.
+- **A path that travels wants a smaller mesh clip.** A camera's `x`, `y`,
+  and `z` are at most 10 frame units. A path that goes further is refused
+  until the mesh's clip is made smaller, which shrinks the path with it and
+  draws the same picture.
 - **`set-views` sends its guide up at the size its model runs at**, 504 on
   the longer side. The server's node makes the mesh over the guide's own
   pixels with a lens measured in the model's, so a guide of another size

@@ -832,8 +832,66 @@ recipes, in `fixtures/shots/car`.
    surfaces. It is one shot, in which the camera hardly moves, and one
    small model.
 
-   *Not done:* a shot whose camera travels; finding `scale` between two
-   models' units rather than making both from one reading; splats.
+   *A shot whose camera travels* (2026-11-13). Four seconds filmed from a
+   car driving along a mountain road, 40 frames at 10 a second and
+   640x360, cut from the middle of a 4:3 shot, from Wikimedia Commons
+   (*Tracking shot Moelltal Strasse*, Jarlhelm, CC BY-SA 3.0); it is not in
+   the repository. The camera travels the length of the set and turns 15
+   degrees, where the walk above turned 2. One recipe read it back in 1
+   min 4 s, and the same steps followed.
+
+   | Step | What came of it |
+   |---|---|
+   | The set in the path's size, and the camera `look` wrote from `cameras.txt` | The road, the guardrail, the rock wall, and the far ridge where the footage has them, through the shot: the camera goes forward two thirds of the set's depth and pans 15 degrees, and what it passes grows as the footage has it grow. 40 frames placed, 17 to 40 keys a value. A lens of 38.8 degrees, found between 36.6 and 40.4. |
+   | A crate added on the road, on a track **above** the camera's | Drawn among the set's surfaces, where before this change it would have been laid over them: it is the lines `look` writes that put the camera on top (Motion). `look` with `shows` has it 1.3% of the frame at the start and 4.9% at the end, hidden nowhere: it stands on the near road. |
+   | `render s2 {guide.mp4} pass=depth`, then the model that makes the shot | A red crate where the box is, in a scene of the model's own that holds none of the guide's shape: 97 s. |
+   | The same with `render s2 {guide.mp4}`, the picture in place of the depth | The road, the ridge, and the crate where the guide has them, in colors of the model's own: 67 s. |
+   | Those takes' depth read back, and `look` with `follows` | In 4, below. |
+
+   What it shows, and what it does not. A camera a model found of a
+   travelling shot holds: the set stays where the footage has it over the
+   whole four seconds, which is what the walk could not show. Four things
+   were found on the way. **A path that travels wants a smaller mesh
+   clip**: a camera's `x`, `y`, and `z` are at most 10 frame units, and a
+   path that goes further than that is refused until the mesh's clip is
+   made smaller, which shrinks the path with it and draws the same picture.
+   **The set is only as good as the model's confidence**: on this dusk
+   footage the model is under 0.03 sure everywhere, and at the 0.1 it comes
+   with, and at 0.05 and 0.03, and at every `discontinuity` tried, the
+   server makes an empty mesh and says so; only `confidence=0` gives a set,
+   and that set has the sky as a surface. **A set with a sky is a flat
+   depth pass**, since the frame's near and far are then the ground and the
+   sky: the model drew a scene of its own from it (4, below), where the
+   same scene drawn as its picture it followed. So a set with no sky is
+   what a depth guide wants, and this footage cannot give one. **A set a
+   side-looking camera leaves is seen for a moment**: four seconds filmed
+   from a car driving through a town (*Driving through a small Cuban
+   town*, Mike, CC BY 3.0) rebuilt well at the confidence it comes with,
+   the near houses and street, but the camera goes sideways past it, and
+   the set the first frame gives fills the frame on no frame of the shot.
+   What a set is in is the reading's own space, anchored on a view the
+   model picks, and `from` with `frame` takes the set to be of the frame it
+   names; where the model's anchor is another frame, as it was here, the
+   path and the set do not meet. A shot that goes where it looks keeps its
+   set; one that looks across its travel wants a set a frame of its own.
+
+   *Only the crate changed* (2026-11-13). The same set, camera, prompt, and
+   seed, with the crate moved across the road and nothing else touched, as
+   a second sequence and a recipe of its own (`render s3 …`): what differs
+   in the take should be the crate. Over 65 frames, by the pixel, against
+   the frame's own levels: where either crate is, with a six-pixel margin,
+   11% of the frame, the two takes differ by 14.6 of 255 a pixel; over the
+   rest they differ by 4.5, a sixteenth of what is there. By the sum it is
+   29% of the difference against 71%, the rest of the frame being eight
+   times the area. Seen side by side the pictures are the one scene with
+   the crate in two places, and the difference is the two crates and a
+   faint drift in the sky. So a model can be given a change this small, and
+   this one keeps the rest of the picture to within a sixteenth; it is one
+   small model, and what a good one would hold is not measured here.
+
+   *Not done:* finding `scale` between two models' units rather than making
+   both from one reading; a set with no sky from footage whose model is
+   unsure of it; splats.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -872,6 +930,27 @@ recipes, in `fixtures/shots/car`.
    beside the frame's own `off`, which here is a tenth: the set has holes
    and a sky as a surface, and the model drew trees there. Two takes of one
    shot.
+
+   On the travelling shot of 3, three takes of the one scene, each with its
+   depth read back by a model, and in each the crate drawn where the box
+   is:
+
+   | The guide the model was given | `order` | `off`, the whole frame | the set | the crate |
+   |---|---|---|---|---|
+   | The set's depth, the set having a sky as a surface | -0.37 | 0.400 | 0.407 | 0.070 |
+   | The set's picture | 0.39 | 0.261 | 0.266 | 0.028 |
+   | The same, the crate moved across the road | 0.58 | 0.214 | 0.218 | 0.031 |
+
+   What it says. `order` tells the two apart at once: a guide whose depth
+   is flat, which a set with a sky gives, was not followed at all, and the
+   model's own scene ran the other way (-0.37); the same scene as a picture
+   was followed, and the whole frame moved by a quarter where the walk's
+   moved by a tenth, this scene being a far valley read through a small
+   model. The crate, which the guide draws plainly, is a tenth of that in
+   both: a subject holds where the ground around it does not. The two
+   picture-guided takes differ only in where the crate stood, and their
+   numbers differ by what one take of one model differs by, so neither
+   reading is of the move itself.
 
    What it does not say is where the subject went. For that the document
    has the other half: `look` with `shows` says where a clip is on each
