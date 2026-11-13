@@ -930,7 +930,16 @@ recipes, in `fixtures/shots/car`.
    the cost of the holes fewer sets leave, 17 to 32% of the frame.
 
    *Not done:* one set of a whole shot, whole and with nothing in it that
-   moved; the two
+   moved. Two ways to it with what is in reach were tried (2026-11-13) and
+   left. Joined on the server, four frames' sets come back as one mesh
+   with one picture, the first frame's, on all four, and fit the footage
+   worse than one frame's set (a picture error of 43.7 for 29.1). Shown at
+   once in Kerf, three frames' sets as three clips under the one camera,
+   the first frame's surfaces, stretched where that frame saw them
+   edge-on, stand in front of the later frames' from where those were
+   filmed. A whole set takes fusing the views, dropping what each sees
+   badly, which is a rebuilder's work; sets timed to the part of the shot
+   each was seen in stay the way. Also not done: the two
    models' lenses reconciled further than by their ratio along one way
    (letting the footage choose the stretch about that ratio was tried: it
    chose more, 2.2 for 1.68, for a picture error a hundredth less, and the
