@@ -924,7 +924,13 @@ recipes, in `fixtures/shots/car`.
    used together coarsely, and one reading is still the way to have them
    meet.
 
-   *Not done:* one set of a whole shot with what moved left out; the two
+   What moved is left out by time and not by a new kind of set: each
+   set's clip made to last only about its own frame, overlapping the next,
+   the car ahead is where it is on each frame and the smear is gone, at
+   the cost of the holes fewer sets leave, 17 to 32% of the frame.
+
+   *Not done:* one set of a whole shot, whole and with nothing in it that
+   moved; the two
    models' lenses reconciled further than by their ratio along one way;
    splats. Of those the server has
    a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`

@@ -567,7 +567,11 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   A set of a later frame, put in beside it, has the road again: five sets a
   second apart, each with every pixel, left 6 to 13% of the frame empty
   after the first, where one left 35 to 59%. What moved in the footage is
-  in each set where it then was.
+  in each set where it then was, so with every set shown throughout, a car
+  ahead is a smear along the road by the end. Have each set's clip last
+  only about its own frame, overlapping the next, and what moved is where
+  it is at each time and nowhere else; fewer sets then show at once, and
+  17 to 32% of the frame was empty.
 - **`set-views` sends its guide up at the size its model runs at**, 504 on
   the longer side. The server's node makes the mesh over the guide's own
   pixels with a lens measured in the model's, so a guide of another size
