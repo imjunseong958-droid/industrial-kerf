@@ -590,17 +590,36 @@ recipes, in `fixtures/shots/car`.
    triangles, a color a part. A recipe counts such a file among what a shot
    was made from only where its `needs` line names it; and no file a
    modeling program wrote was tried, only ones written by the tests.
-3. **A take held to its guide by numbers.** Every row of the tables above
-   was judged by eye: place, path, size. The document has both halves of a
-   measure. `look` with `shows` says where a clip is on each frame of the
-   guide, and `track` follows a thing through a picture from points on it
-   (`kerf_track::roto`). So: follow the subject through the take from the
-   middle of its box in the guide's first frame, and say how far its box
-   in the take is from its box in the guide, frame by frame, as shares of
-   the frame. It needs no model and no server, and is tried first on the
-   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
-   what a person says of it, and choose between two.
-4. **Reading a picture back into what a guide is made of.** A pass goes from
+
+   Where the shapes come from is not Kerf's to build. ComfyUI's 3D (What
+   others do) is fine in what it holds, not in how it draws: models that
+   make a mesh from a picture or from words, texture it, rig it, and
+   animate it. A recipe reaches them as it reaches any model, with a step
+   whose file is a mesh, `generate model=<maker> ref=car.png out={car.glb}`,
+   and the clip is of that file. So a guide is as fine as its meshes are,
+   and Kerf's drawing of them stays plain. Two things follow for what is
+   drawn, now that the solids and a glTF's triangles are in: a mesh's own colors, its
+   texture drawn unlit, since they are what a thing is and not how it is
+   lit; and then a glTF's own animation, bones and all, since a character
+   that comes rigged and moving is the one thing in a guide that rigid
+   shapes cannot be. Splats, for a set rebuilt from photographs, wait for
+   those.
+3. **Footage into the scene, and a picture read back.** What people do in
+   ComfyUI with a filmed shot is one loop, and Kerf wants the whole of it:
+   the shot is made into a scene, its set as a mesh or as splats and its
+   camera as a path; things are put into that scene, or the camera is moved
+   in it; the scene is drawn; and a model covers what was drawn. Kerf has
+   the last two. The first is a model's work, reached by a recipe whose
+   file is the scene (`generate model=<rebuilder> guide=shot.mp4
+   out={set.glb}`), and the second is the document's own, once it holds a
+   mesh (2): the rebuilt set is a mesh clip with the shot as its colors, the
+   camera a `gen=camera@1` clip keyed from the file or from Kerf's own solve
+   (`look` with `track`), and what is added stands in the same space, behind
+   and before the set's own surfaces, in the passes as in the picture. So
+   this waits only on 2, and on a glTF's camera and animation being read
+   with its mesh.
+
+   A pass goes from
    the document to a picture. The other way, from a picture to its depth,
    its normals, the color of its surfaces without their light, is what
    inverse rendering does (DiffusionRenderer, UniVidX, and in ComfyUI itself
@@ -613,7 +632,7 @@ recipes, in `fixtures/shots/car`.
      a guide comes from ([shots.md](shots.md#guides)), which so far is handed
      to a model as its picture.
    - *A take read back.* Its depth beside its guide's depth pass says how
-     well it followed, where 3 above says only where the subject went.
+     well it followed, where 4 below says only where the subject went.
    - *Light.* Normals and surface color of footage are what Kerf's own
      lights would need to fall on it. Not before the first two are measured:
      it would have the compositor draw a look, which the first rule is
@@ -624,6 +643,16 @@ recipes, in `fixtures/shots/car`.
    the model's weights are not (`LoadMoGeModel` lists none), so it was not
    run and no workflow is in the repository for it: one is written when it
    can be run.
+4. **A take held to its guide by numbers.** Every row of the tables above
+   was judged by eye: place, path, size. The document has both halves of a
+   measure. `look` with `shows` says where a clip is on each frame of the
+   guide, and `track` follows a thing through a picture from points on it
+   (`kerf_track::roto`). So: follow the subject through the take from the
+   middle of its box in the guide's first frame, and say how far its box
+   in the take is from its box in the guide, frame by frame, as shares of
+   the frame. It needs no model and no server, and is tried first on the
+   takes `fixtures/shots/car` makes. It is what lets an agent say of a take
+   what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one
@@ -1154,6 +1183,16 @@ Since the survey: Export follows Deliver, the quality numbers are checked on rea
   model with a compositor's tools: a camera solved from a photograph, a 3D
   view to place a model in, relighting from depth and normals. Its premise is
   this document's: block the shot first, and let the model draw it.
+- **ComfyUI's 3D** (0.45, read from the nodes a server lists, not from its
+  code) is some 126 nodes: making a mesh from a picture or from words
+  (Trellis 2, Hunyuan3D, and hosted Tripo, Meshy and Rodin), rigging and
+  animating one, rebuilding a scene from a picture (MoGe, Depth Anything 3)
+  or as splats, mending and texturing meshes, and drawing them: a view of a
+  model that gives its picture, mask, normals and camera, and an orbit. What
+  is fine there is the assets and the models that make them. The drawing is
+  a plain one, since a model covers it. Kerf takes the assets, as files a
+  recipe makes, and builds none of the models (What directs a model, Next
+  2).
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in
