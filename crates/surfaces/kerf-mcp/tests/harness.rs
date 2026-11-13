@@ -3438,6 +3438,74 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(far.contains("no frame 7"), "{far}");
 }
 
+/// Where a project has more than one sequence, the lines `look` writes for a new camera say
+/// which sequence they are for, and name the camera as no clip of any sequence is named.
+#[test]
+fn a_camera_from_a_file_is_written_for_its_meshes_sequence_among_several() {
+    // The first sequence has more tracks than the set's, and the cameras `camera1` and
+    // `camera2`; the set's own has a clip `camera4`.
+    let Some((directory, router)) = router_with(
+        "    clip camera1 gen=camera@1 at=0f dur=60f
+  track V2 video
+    clip camera2 gen=camera@1 at=0f dur=60f
+  track V3 video
+  track V4 video
+sequence s2 rate=30 size=320x180
+  track V1 video
+    clip set gen=mesh@1 at=30f dur=60f
+      set file=\"set.glb\" height=0.5
+  track V2 video
+    clip camera4 gen=camera@1 at=30f dur=60f
+",
+    ) else {
+        return;
+    };
+    set_with_a_camera(directory.path());
+    std::fs::write(directory.path().join("lens.txt"), "40\n").unwrap();
+    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    // The first track free in the set's sequence, and the first camera free in the project.
+    let placed = "x=0 y=0.25 z=1.37374 pan=0 tilt=0 roll=0 fov=40";
+    assert_eq!(
+        lens["script"],
+        format!("use s2\ntrack add V3 video\noverwrite gen=camera@1 at=30f dur=60f on=V3 as=camera3\nset camera3 {placed}"),
+        "{lens}"
+    );
+    // They run as they are, and in the set's sequence.
+    let script = lens["script"].as_str().unwrap();
+    let proposal = ok(&router, "edit", json!({"script": script}));
+    assert_eq!(proposal["preview"]["sequence"], "s2", "{proposal}");
+    // Without the line that says which sequence, they are refused and not run on another.
+    let (_, rest) = script.split_once('\n').unwrap();
+    let refused = error(&router, "edit", json!({"script": rest}));
+    assert!(message(&refused).contains("several sequences"), "{refused}");
+    // A path is written the same way.
+    let row = |x: f64| format!("[[1., 0., 0., {}], [0., 1., 0., 0.], [0., 0., 1., 0.]]", -x);
+    std::fs::write(
+        directory.path().join("cameras.txt"),
+        format!(
+            "{{'extrinsics': tensor([[{}, {}]]), 'intrinsics': tensor([[{lens}, {lens}]])}}",
+            row(0.0),
+            row(1.0),
+            lens = "[[100., 0., 50.], [0., 100., 50.], [0., 0., 1.]]"
+        ),
+    )
+    .unwrap();
+    let path = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "cameras.txt"}}));
+    let script = path["script"].as_str().unwrap();
+    assert!(
+        script.starts_with("use s2\ntrack add V3 video\noverwrite gen=camera@1 at=30f dur=60f on=V3 as=camera3\nset camera3 x={0f:0 1f:0.28125} "),
+        "{script}"
+    );
+    // Onto a camera there is, a clip's name is the project's, and no sequence is named.
+    let onto = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "lens.txt", "as": "camera4"}}),
+    );
+    assert_eq!(onto["script"], format!("set camera4 {placed}"), "{onto}");
+    ok(&router, "edit", json!({"script": onto["script"]}));
+}
+
 /// `look` says what a mesh's file holds, and writes a camera of it as a camera clip's keys.
 #[test]
 fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {
