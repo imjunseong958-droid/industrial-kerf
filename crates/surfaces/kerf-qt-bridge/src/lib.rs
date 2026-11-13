@@ -428,6 +428,9 @@ struct Shared {
     check_cancel: Mutex<Option<kerf_engine::CancellationToken>>,
     /// The makings running, by the media each makes: what cancels it.
     makings: Mutex<std::collections::BTreeMap<String, kerf_engine::CancellationToken>>,
+    /// The makings another program runs on this project that are shown, by the media each
+    /// makes: the take and the line last shown of it.
+    others_makings: Mutex<std::collections::BTreeMap<String, (u32, String)>>,
     /// The render queue the export thread works through.
     renders: queue::Queue,
     /// Loudness, media info and media index work.
@@ -646,6 +649,9 @@ fn runtime_worker(
         .ok()
         .map(|lease| lease.hold());
     while !shared.closed.load(Ordering::Relaxed) {
+        // What `kerf make` or an agent's own kerf-mcp is making of this project shows as the
+        // editor's own makings do.
+        media::follow_others_makings(&shared, std::process::id(), &tx);
         let command = match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(command) => command,
             Err(RecvTimeoutError::Timeout) => {
@@ -2305,6 +2311,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         check_busy: AtomicBool::new(false),
         check_cancel: Mutex::new(None),
         makings: Mutex::new(std::collections::BTreeMap::new()),
+        others_makings: Mutex::new(std::collections::BTreeMap::new()),
         renders: queue::Queue::default(),
         analysis: analysis::Analysis::default(),
     });

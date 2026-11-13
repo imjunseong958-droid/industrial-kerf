@@ -34,6 +34,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         check_busy: AtomicBool::new(false),
         check_cancel: Mutex::new(None),
         makings: Default::default(),
+        others_makings: Default::default(),
         renders: Default::default(),
         analysis: Default::default(),
     }

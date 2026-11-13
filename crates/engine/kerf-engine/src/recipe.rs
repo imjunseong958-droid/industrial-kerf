@@ -38,6 +38,7 @@
 
 pub mod model;
 pub mod takes;
+pub mod told;
 
 use crate::error::{EngineError, Result};
 use crate::render::{render_program_with_cancellation, RenderOptions};
@@ -48,6 +49,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub use takes::{take, takes, unmade, Take, Unmade};
+pub use told::{ask_to_stop, told, Going, Told};
 
 /// The first line of a recipe.
 const HEADER: &str = "kerf-recipe 1";
@@ -860,6 +862,9 @@ pub struct Made {
 /// order. Each line a program writes to stderr goes to `on_line`. The take
 /// is there only when every step has ended well and the last has written
 /// something: a failed run leaves no take, and the media as it was.
+///
+/// While it runs it says what it is doing where another program can see
+/// it ([`told`]), and stops when one asks it to ([`ask_to_stop`]).
 pub fn make(
     project: &kerf_model::Project,
     directory: &Path,
@@ -896,9 +901,13 @@ pub fn make(
         models,
         cancellation,
     };
-    let ran =
-        making_it
-            .run(&recipe, &mut on_line)
+    let telling = told::Telling::begin(directory, &plan.media, take, cancellation);
+    let made = (|| {
+        let ran = making_it
+            .run(&recipe, &mut |line| {
+                telling.say(line);
+                on_line(line);
+            })
             .and_then(|()| match std::fs::metadata(&making) {
                 Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(()),
                 _ => Err(EngineError::msg(format!(
@@ -906,17 +915,20 @@ pub fn make(
                     making.display()
                 ))),
             });
-    if let Err(error) = ran {
-        let _ = std::fs::remove_file(&making);
-        let _ = std::fs::remove_dir_all(&working);
-        return Err(error);
-    }
-    std::fs::rename(&making, place.file(take))?;
-    takes::record(&place, take, from)?;
-    Ok(Made {
-        take,
-        stored: place.stored(take),
-    })
+        if let Err(error) = ran {
+            let _ = std::fs::remove_file(&making);
+            let _ = std::fs::remove_dir_all(&working);
+            return Err(error);
+        }
+        std::fs::rename(&making, place.file(take))?;
+        takes::record(&place, take, from)?;
+        Ok(Made {
+            take,
+            stored: place.stored(take),
+        })
+    })();
+    telling.end(made.as_ref().map(|made| made.take));
+    made
 }
 
 /// One making under way: what it reads, where it runs, and what it writes.

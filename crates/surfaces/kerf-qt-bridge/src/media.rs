@@ -209,8 +209,63 @@ fn make_failed(tx: &SyncSender<Value>, id: &str, why: impl std::fmt::Display) {
     );
 }
 
+/// Show what other programs are making of this project, `kerf make` or an agent's own
+/// kerf-mcp, as a making of the editor's own shows: `media_making` when one begins and for
+/// each line it says, then `media_made`, `media_make_cancelled`, or an `error` that names
+/// the media. Each says what it is doing in the project's folder
+/// (`kerf_engine::recipe::told`); the ones `this_program` runs show by themselves. One that
+/// ended before it was ever shown is not news.
+pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &SyncSender<Value>) {
+    use kerf_engine::recipe::Going;
+    let told: Vec<kerf_engine::recipe::Told> = kerf_engine::recipe::told(&shared.directory)
+        .into_iter()
+        .filter(|told| told.pid != this_program)
+        .collect();
+    let Ok(mut shown) = shared.others_makings.lock() else {
+        return;
+    };
+    for told in &told {
+        let media = told.media.as_str();
+        match told.going {
+            Going::Making if !told.gone() => {
+                let now = (told.take, told.line.clone());
+                if shown.get(media) != Some(&now) {
+                    crate::emit(tx, making(media, told.take, &told.line));
+                    shown.insert(media.to_owned(), now);
+                }
+            }
+            _ if shown.remove(media).is_none() => {}
+            Going::Making => make_failed(tx, media, "the program making it has gone"),
+            Going::Made => crate::emit(
+                tx,
+                json!({"type": "media_made", "media": media, "take": told.take}),
+            ),
+            Going::Stopped => {
+                crate::emit(tx, json!({"type": "media_make_cancelled", "media": media}));
+            }
+            Going::Failed => make_failed(
+                tx,
+                media,
+                told.why.as_deref().unwrap_or("its program did not say why"),
+            ),
+        }
+    }
+    // One whose file went while it was shown: nothing says how it ended.
+    let lost: Vec<String> = shown
+        .keys()
+        .filter(|media| !told.iter().any(|told| &told.media == *media))
+        .cloned()
+        .collect();
+    for media in lost {
+        shown.remove(&media);
+        make_failed(tx, &media, "the program making it has gone");
+    }
+}
+
 /// Stop the making of media `id`: its step is asked to end, and it answers
-/// `media_make_cancelled` once it has. One that is not being made is an `error`.
+/// `media_make_cancelled` once it has. One another program is making is asked through the
+/// project's folder, and shows as stopped when that program says it has. One that is not
+/// being made is an `error`.
 pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &SyncSender<Value>) {
     let running = shared
         .makings
@@ -219,6 +274,7 @@ pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &SyncSender<Value>) {
         .and_then(|makings| makings.get(id).cloned());
     match running {
         Some(cancellation) => cancellation.cancel(),
+        None if kerf_engine::recipe::ask_to_stop(&shared.directory, id) => {}
         None => crate::error(tx, format!("{id} is not being made")),
     }
 }
@@ -508,6 +564,138 @@ mod tests {
         );
         assert_eq!(failed["media"], "m9");
         assert!(shared.makings.lock().unwrap().is_empty());
+    }
+
+    /// A recipe that says two lines, waits for `go` to be there, and writes its take; and the
+    /// project that has media `m1` made by it.
+    fn slow_recipe(directory: &Path) -> kerf_model::Project {
+        fs::create_dir_all(directory.join("shots")).unwrap();
+        fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            "kerf-recipe 1\nrun sh -c \"echo warming up >&2; while [ ! -e go ]; do sleep 0.05; done; echo writing >&2; printf take > {out}\"\n",
+        )
+        .unwrap();
+        kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Makings\"\nmedia m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=30 size=320x180\n",
+        )
+        .unwrap()
+    }
+
+    /// Make `m1` of `project` as another program would: on a thread, by the engine alone.
+    fn made_elsewhere(
+        directory: &Path,
+        project: &kerf_model::Project,
+        stop: &kerf_engine::CancellationToken,
+    ) -> std::thread::JoinHandle<Result<kerf_engine::recipe::Made, kerf_engine::EngineError>> {
+        let models = kerf_engine::recipe::model::Models::default();
+        let plan = kerf_engine::recipe::plan(project, directory, "m1", &models).unwrap();
+        let (directory, project, stop) = (directory.to_owned(), project.clone(), stop.clone());
+        std::thread::spawn(move || {
+            kerf_engine::recipe::make(&project, &directory, &plan, &models, &stop, |_| {})
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_making_another_program_runs_shows_and_stops_as_the_editors_own_does() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        let project = slow_recipe(dir);
+        let shared = Arc::new(shared(dir));
+        let (tx, events) = mpsc::sync_channel(64);
+        // This test is the editor, and the making is by another program: any but this one.
+        let editor = std::process::id() + 1;
+        let look = || follow_others_makings(&shared, editor, &tx);
+        let until = |what: &str, wanted: &dyn Fn(&Value) -> bool| -> Value {
+            crate::tests_support::wait(Duration::from_secs(20), || {
+                look();
+                events.try_iter().find(|event| wanted(event))
+            })
+            .unwrap_or_else(|| panic!("no event for {what}"))
+        };
+        look();
+        assert!(events.try_recv().is_err(), "nothing is being made");
+
+        let stop = kerf_engine::CancellationToken::new();
+        let making = made_elsewhere(dir, &project, &stop);
+        let began = until("the making", &|event| event["type"] == "media_making");
+        assert_eq!((began["media"].as_str(), began["take"].as_u64()), (Some("m1"), Some(1)));
+        until("its first line", &|event| event["line"] == "warming up");
+        // Shown once: looking again says nothing new.
+        look();
+        assert!(events.try_recv().is_err());
+        fs::write(dir.join("shots/go"), b"").unwrap();
+        let made = until("the take", &|event| event["type"] == "media_made");
+        assert_eq!(made, json!({"type": "media_made", "media": "m1", "take": 1}));
+        assert_eq!(making.join().unwrap().unwrap().take, 1);
+        assert!(shared.others_makings.lock().unwrap().is_empty());
+        look();
+        assert!(events.try_recv().is_err(), "it ended once");
+
+        // The next one is stopped from the editor's bin: the word reaches the other program.
+        fs::remove_file(dir.join("shots/go")).unwrap();
+        let making = made_elsewhere(dir, &project, &stop);
+        let began = until("the second making", &|event| event["type"] == "media_making");
+        assert_eq!(began["take"], 2);
+        cancel_make(&shared, "m1", &tx);
+        until("it to stop", &|event| event["type"] == "media_make_cancelled");
+        assert!(matches!(
+            making.join().unwrap(),
+            Err(kerf_engine::EngineError::Cancelled)
+        ));
+        // With nothing being made, stopping is the error it was.
+        cancel_make(&shared, "m1", &tx);
+        assert_eq!(events.try_recv().unwrap()["type"], "error");
+
+        // The editor's own makings are not shown twice: it is told of those as they go.
+        let making = made_elsewhere(dir, &project, &stop);
+        fs::write(dir.join("shots/go"), b"").unwrap();
+        let _ = making.join();
+        follow_others_makings(&shared, std::process::id(), &tx);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_making_whose_program_went_without_a_word_stops_showing() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(directory.path()));
+        let (tx, events) = mpsc::sync_channel(8);
+        let folder = directory.path().join(".kerf/cache/makings");
+        fs::create_dir_all(&folder).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let says = |at_ms: u64| {
+            fs::write(
+                folder.join("m4.json"),
+                json!({"media": "m4", "take": 2, "pid": 1, "going": "making", "line": "half way", "atMs": at_ms})
+                    .to_string(),
+            )
+            .unwrap();
+        };
+        says(now);
+        follow_others_makings(&shared, std::process::id(), &tx);
+        assert_eq!(
+            events.try_recv().unwrap(),
+            json!({"type": "media_making", "media": "m4", "take": 2, "line": "half way"})
+        );
+        // It has said nothing for a minute.
+        says(now - 60_000);
+        follow_others_makings(&shared, std::process::id(), &tx);
+        let gone = events.try_recv().unwrap();
+        assert_eq!((gone["type"].as_str(), gone["media"].as_str()), (Some("error"), Some("m4")));
+        assert!(gone["message"].as_str().unwrap().contains("has gone"), "{gone}");
+        follow_others_makings(&shared, std::process::id(), &tx);
+        assert!(events.try_recv().is_err());
+        // One that had ended before the editor ever looked is not news.
+        fs::write(
+            folder.join("m5.json"),
+            json!({"media": "m5", "take": 1, "pid": 1, "going": "made", "atMs": now}).to_string(),
+        )
+        .unwrap();
+        follow_others_makings(&shared, std::process::id(), &tx);
+        assert!(events.try_recv().is_err());
     }
 
     #[test]
