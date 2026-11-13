@@ -3232,6 +3232,55 @@ fn look_says_who_draws_a_frame_and_what_it_costs() {
     assert!(on_media.contains("program"), "{on_media}");
 }
 
+/// `look` says what shows of each clip on a frame, and what hides it.
+#[test]
+fn look_says_what_shows_of_each_clip_and_what_hides_it() {
+    // A floor higher than the foot of what stands on it, as a guide once had.
+    let Some((_directory, router)) = router_with(
+        "    clip sky gen=solid@1 at=0f dur=60f
+      set color=#88aaff
+  track V2 video
+    clip floor gen=solid@1 at=0f dur=60f
+      set color=#404040 three_d=true rotate_x=-80 y=0.1 z=0 scale=3
+  track V3 video
+    clip car gen=solid@1 at=0f dur=60f
+      set color=#ff0000 three_d=true scale=0.2 y=0.2 z=0.5
+  track V4 video
+    clip cam gen=camera@1 at=0f dur=60f
+",
+    ) else {
+        return;
+    };
+    let shows = ok(&router, "look", json!({"shows": true, "at": ["10f"]}));
+    assert_eq!(shows["sequence"], "s1", "{shows}");
+    let frame = &shows["frames"][0];
+    assert_eq!(frame["at"], "10f");
+    let clips = frame["clips"].as_array().unwrap();
+    assert_eq!(
+        clips.iter().map(|clip| &clip["clip"]).collect::<Vec<_>>(),
+        ["sky", "floor", "car"],
+        "{frame}"
+    );
+    let car = &clips[2];
+    assert!(car["hidden"].as_f64().unwrap() > 0.5, "{car}");
+    assert_eq!(car["by"][0]["clip"], "floor", "{car}");
+    assert_eq!(car["box"].as_array().map(Vec::len), Some(4), "{car}");
+    assert_eq!(clips[0]["edges"], json!(["left", "top", "right", "bottom"]));
+    assert!(
+        car.get("opacity").is_none() && car.get("edges").is_none(),
+        "{car}"
+    );
+    // Where it is not asked for sensibly, it says how.
+    let alone = message(&error(&router, "look", json!({"shows": true})));
+    assert!(alone.contains("`at`"), "{alone}");
+    let on_media = message(&error(
+        &router,
+        "look",
+        json!({"shows": true, "at": ["0f"], "media": "m1"}),
+    ));
+    assert!(on_media.contains("program"), "{on_media}");
+}
+
 /// Looking something up by what it does reaches what the clip properties and generators can do.
 #[test]
 fn look_finds_what_is_in_properties_and_parameters() {

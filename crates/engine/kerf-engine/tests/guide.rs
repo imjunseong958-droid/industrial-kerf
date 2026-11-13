@@ -117,3 +117,88 @@ fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     let [red, green, _] = pixel(&whole, 2, 45);
     assert!(red > 190 && green < 60, "the side is {red}, {green}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_pass_of_a_guide_is_a_file_of_its_own() {
+    use kerf_compose::{ComposeOptions, Compositor, Pass};
+    let folder = tempfile::tempdir().expect("a folder");
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrender s2 {ids.mp4} pass=ids\nrender s2 {depth.mp4} pass=depth\nrun cp {ids.mp4} {out}\n",
+    )
+    .unwrap();
+    // A backdrop out of depth, and a square in depth before it, lit from one side.
+    let project = parse_document(
+        "kerf 1\nproject name=\"guide\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         sequence s2 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip sky gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ff0000\n\
+         \x20 track V2 video\n\
+         \x20   clip square gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#00ff00 scale=0.5 three_d=true\n\
+         \x20 track V3 video\n\
+         \x20   clip sun gen=light@1 at=0f dur=12f\n\
+         \x20     set kind=directional x=1 z=0.2\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let none = Models::default();
+    let planned = plan(&project, directory, "m1", &none).expect("a plan");
+    assert!(
+        planned.steps[0].starts_with("Kerf renders the ids of sequence s2 to "),
+        "{}",
+        planned.steps[0]
+    );
+    assert!(
+        planned.steps[1].starts_with("Kerf renders the depth of sequence s2 to "),
+        "{}",
+        planned.steps[1]
+    );
+    make(
+        &project,
+        directory,
+        &planned,
+        &none,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("made");
+
+    // The colors an ids pass gives the sequence's clips are what its file holds.
+    let ids = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: Some("s2".to_owned()),
+            pass: Pass::Ids,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+    .ids();
+    assert_eq!(
+        ids.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        ["sky", "square"]
+    );
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 8);
+    let file = directory.join("shots/open.takes/001.work/ids.mp4");
+    assert_eq!(probe(&file, "v:0", "stream=nb_read_frames"), "12");
+    let (corner, middle) = (pixel(&file, 4, 4), pixel(&file, 80, 45));
+    assert!(near(corner, ids[0].1), "{corner:?} for {:?}", ids[0].1);
+    assert!(near(middle, ids[1].1), "{middle:?} for {:?}", ids[1].1);
+
+    // Depth: the square, at z=0 before a camera left where it is, is mid grey, whatever lights
+    // it, and what is out of depth is black.
+    let file = directory.join("shots/open.takes/001.work/depth.mp4");
+    let (corner, middle) = (pixel(&file, 4, 4), pixel(&file, 80, 45));
+    assert!(near(corner, [0, 0, 0]), "{corner:?}");
+    assert!(near(middle, [128, 128, 128]), "{middle:?}");
+}

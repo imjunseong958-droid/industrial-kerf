@@ -41,8 +41,12 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   of. Hold a peak for two of the model's frames, or it arrives lower. A
   model that does not read one is said to have no use for it in `notes`:
   leave it off the line.
-- Look at the guide's first, middle, and last frame before writing the
-  recipe: every clip in frame, nothing crossing by accident, the move plain.
+- Read the guide before writing the recipe, at its first, middle, and last
+  frame: `look` with `shows` and `at` says of each clip where it is (`box`),
+  what hides it (`hidden`, `by`), and which edges of the frame it reaches.
+  Mend a subject with a floor in its `by`, one with no `box`, which has left
+  the frame, and one at an edge it should not be at. Then look at the frames
+  themselves: nothing crossing by accident, the move plain.
 - The recipe is the `render` line and a `generate` line: the prompt,
   `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
   again. Write it with the edit, in `recipes`, beside the script that adds

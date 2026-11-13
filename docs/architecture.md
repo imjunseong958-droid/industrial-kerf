@@ -241,8 +241,9 @@ model's program can write its own entry for the person to keep, as
 `kerf-comfy --describe` does from its workflow, and no tool of an agent's
 starts one.
 
-Not here yet: passes of Kerf's own sequences (depth, normals, object ids) for
-a model that reads them, which a 3D renderer gives today; a way to choose a
+Passes of Kerf's own sequences are drawn: which clip each pixel is of, and
+how near it is (`render … pass=ids|depth`, `kerf_compose::Pass`). Not here
+yet: normals, which a 3D renderer gives today; a way to choose a
 take in the editor's own window, where `kerf takes` and the conversation do
 it; and a model reached without a program, such as Kerf Cloud hosting one.
 What comes of these, and in what order, is under [What directs a
@@ -411,16 +412,34 @@ What is built for it, in this order, each measured before the next:
    one. The first thing to learn is whether a take's event lands on the
    signal's frames, with a workflow whose strength or mask takes a number a
    frame.
-2. **Passes of Kerf's own sequences**: which clip each pixel is of, and how
-   far, first. Each pixel's ray already meets a known plane, so they cost
-   little to draw, and what ties one frame to the next has been found to
-   guide better than depth alone
-   ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)). Whether the
-   models in reach keep more of a guide given them is what building it is
-   for.
-3. **What `look` says of a scene in depth**: what shows on a frame, what
-   hides what, and what has left the frame, as it says a title's contrast.
-   This is what lets an agent block a shot without a person's eye.
+2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
+   is of, and how near it is (`render … pass=ids|depth`). What ties one
+   frame to the next has been found to guide better than depth alone
+   ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)), and an ids
+   pass does: a clip keeps its color as it moves. A pass is the picture's
+   own drawing with one thing changed: a clip's picture, once its masks and
+   effects have run and before it is placed, is filled with its color or
+   with a grey for how near each of its pixels is, which its plane says
+   exactly (`Drawing::as_pass`, `three_d::shade_by_depth`), and the scene is
+   seen with no lights and no focus. So what is in front is decided as it is
+   in the picture, by the pixel where clips cross. It is drawn on the CPU,
+   with no kernels: a guide is small. Depth is one over the distance, scaled
+   by the scene's own numbers and by nothing in the frame, so it holds still;
+   a model trained on depth stretched to each frame's own nearest and
+   farthest may want it stretched, which is not done. *Not measured against
+   a model*, and a line cannot yet hand a model a picture and a pass at once.
+3. **What `look` says of a scene in depth**, which is in: `look` with
+   `shows` and `at` (`kerf_engine::shows`). It draws the frame's ids pass,
+   and then each clip alone with the others made clear, so that what is
+   parented to them still moves with them; what the two differ by is what
+   hides a clip, and which clip. It says where each clip is, the share of it
+   hidden and by what, the edges of the frame it reaches, and what has left
+   the frame. The floor over a car that a guide once had reads as the car
+   more than half hidden, by the floor
+   (`a_floor_over_what_stands_on_it_is_said`). It is one small frame for
+   each clip that draws, at most 32 of them, and reads to about a hundredth
+   of the frame. A clip that is partly clear is read as not showing, and
+   said to be.
 4. **Meshes, if a measurement asks for them.** The rule above stands: no
    mesh renderer. A clip with depth is its outline pushed straight back, so
    what a camera sees going round it is a slab's side and not the thing's,
@@ -895,6 +914,8 @@ strongest of its ink, so a caption's outline counts and a title half over a high
 it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is asked for and not part of the fast check; the full QC has it as a row, Text contrast, after the eight of the Finish tray's mockup, in the last tenth of its progress, and it adds 0.36 s a clip at 1080p, for at most 40 clips spread over the sequence. The same frames say what the frame cuts off: Clipped text, the row after it, is a text whose box goes past an edge with its glyphs reaching that edge, so a box wider than its ink says nothing and text moved wholly off the frame has nothing left to cut; `look` gives those as `clipped`. Each of the two it used to miss takes one more frame of glyphs, about 0.04 s at 1080p against those 0.36 s, for only the clips it is about, so both are reported: a text whose box goes past an edge only between the three moments is read once more where it goes furthest with some of it left in the frame, its boxes costing no frames to work out; and a crop that does not move is read once with the crop off, and is said if it takes off any glyph. A crop that moves is a reveal, and a mask is drawn on purpose in a way a crop on a title seldom is, so those are taken as meant.
 
 An agent starts with nothing to go on but the reference, so what it is told has to carry it. `look` on a fresh folder says in `unplaced` what footage is there and not in the document, and `look` with `file` gives the `media add` line that adds one, measured from the file. A refused line says what to do: which tracks there are and the `track add` that makes the one it asked for, the name a slip of a letter or two was for, and, where a clip or a media exists only in a pending proposal, that proposal's id and that `extend` builds on it. An `extend` that names a version since replaced is refused with the newest version's id, since built on the old one it would leave out what was added after and become the newest all the same. So do `look` and `render` where a pending proposal has what the project does not. Set where nothing reads it, such as a `bevel` with no `depth` or a `focus` with no `aperture`, a value draws nothing and fails nothing, so the check says so, as information that fails no row (`no_effect`). And `look` with `cost` and `at` says who draws a frame, which clip and effect send it to the CPU, and what it costs at full size and at half, against a frame's share of the time. `effects` looks through generators' parameters and clip properties too, since nothing else would lead from "shadow" to `gen=light@1` or from "bevel" to `bevel=`.
+
+`look` with `shows` and `at` reads a frame as an eye would, for a scene whose text does not show what is wrong with it: of each clip that draws, where it is on the frame, how much of it other clips hide and which, the edges it reaches, and whether any of it is in the frame at all (What directs a model). It is asked for and not part of the check, since it draws a small frame for each clip.
 
 `look` with `media` and `facts` gives a fact sheet beside the index: what the camera does in each shot, from the one move, turn, and zoom that
 most of the picture agrees on between small frames four times a second (`kerf_track::shot`, so a subject crossing the frame is left out), and R128 loudness.

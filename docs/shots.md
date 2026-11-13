@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -541,8 +541,41 @@ steps:
   for a model that reads them.
 - **Footage**: a take of another shot, or something filmed, named as a file.
 
-Kerf does not draw depth, normals, or object ids of its own sequences as
-passes yet; a model that needs them takes them from a renderer.
+### Passes
+
+A picture leaves out what the document knows: which clip a pixel is of, and
+how far away it is. A `render` step draws either in place of the picture,
+from the same clips, placed and seen as the picture's are:
+
+```text
+render s2 {guide.mp4} size=832x480 rate=16
+render s2 {depth.mp4} pass=depth size=832x480 rate=16
+render s2 {ids.mp4} pass=ids size=832x480 rate=16
+```
+
+- **`pass=ids`**: every clip that draws, in one flat color of its own, over
+  black where there is none. A clip keeps its color from frame to frame, so
+  the file says which thing is which as the camera and the clips move. A
+  nested sequence is one clip. The colors go by the clips' order, the lowest
+  track first, so adding a clip below others gives those above it new ones.
+- **`pass=depth`**: how near each pixel is, as a grey: white at the camera,
+  mid grey where a clip at `z=0` stands before a camera left where it is,
+  and darker the farther, by one over the distance, as a model that reads
+  depth is given it. It goes by the scene's own numbers and by nothing in
+  the frame, so it holds still from one frame to the next. A clip out of
+  depth, such as a backdrop on the lowest track, has no distance and is
+  black, and so is where there is no clip.
+
+A pass has no lights, no focus, no adjustment layers, no dips, and no
+captions, and every clip is laid over what is behind it whatever its blend.
+It is drawn on the CPU. The sides of a clip with a `depth` take the grey of
+its face beside them, as they take its color, and not their own distance.
+
+A pass is a file as a guide is, and a model that follows one is handed it as
+its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
+workflow's to say. Handing one model a picture and a pass of it at once has
+no word on a `generate` line yet, and normals are not drawn. Neither pass has
+been made into a take by a model: none in reach reads one.
 
 ### A guide at the model's size and rate
 

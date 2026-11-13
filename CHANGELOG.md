@@ -64,6 +64,13 @@ on `main`; its section here becomes the release's notes on GitHub
   blank, a number for each frame the model makes; the workflow it comes with
   reads none yet. Changing a signal asks for the shot again; nothing else in
   its sequence does ([docs/shots.md](docs/shots.md#signals)).
+- A recipe's `render` line can draw a pass in place of the picture:
+  `pass=ids` gives every clip one flat color of its own, and `pass=depth`
+  how near each pixel is, for a model that follows one
+  ([docs/shots.md](docs/shots.md#passes)).
+- An agent's `look` with `shows` reads what shows of each clip on a frame:
+  where it is, what hides it, and what has left the frame. A floor drawn
+  over what stands on it is said before a making is asked for.
 - A recipe's `render` line takes a size and a rate
   (`render s2 {guide.mp4} size=832x480 rate=16`), so a guide is drawn as the
   model reads it and not at the sequence's own size and rate: a guide that

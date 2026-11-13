@@ -368,6 +368,23 @@ impl Scene {
         }
     }
 
+    /// The scene as a pass draws it: seen as it is, with nothing lit and nothing out of focus.
+    pub(super) fn bare(mut self) -> Self {
+        self.lights.clear();
+        self.casters.clear();
+        self.aperture = 0.0;
+        self
+    }
+
+    /// How near what is `ahead` along the camera's way is, as a depth pass says it, from 1 at the
+    /// camera toward 0 far away: a half where a clip at `z=0` stands before a camera left where it
+    /// is. It goes by one over the distance, as a model that reads depth is given it, and by no
+    /// more than the scene's own numbers, so that it holds still from frame to frame.
+    fn nearness(&self, ahead: f64) -> f32 {
+        let unit = self.height / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
+        (unit / (unit + ahead.max(0.0))) as f32
+    }
+
     /// Where the ray through the place `(x, y)` of the output picture meets `plane`, and how far along
     /// the camera's way that is: nowhere if it runs along the plane, or meets it no nearer than the
     /// camera sees or behind it.
@@ -603,6 +620,33 @@ impl Scene {
         }
         Some(sum)
     }
+}
+
+/// `picture`, a clip in depth's own, as a depth pass has it: each of its pixels as grey as it is near
+/// ([`Scene::nearness`]), where and as much as it was there. A solid's sides take what its face has
+/// beside them, as they take its color.
+pub(super) fn shade_by_depth(
+    scene: &Scene,
+    plan: &ClipPlan,
+    picture: &mut Image,
+    to_output: &Affine,
+    time: Time,
+) {
+    let (w, h) = (picture.w, picture.h);
+    let plane = Plane::of(scene, plan, (w as f64, h as f64), to_output, time);
+    picture
+        .px
+        .par_chunks_mut(4 * w.max(1))
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, pixel) in row.chunks_mut(4).enumerate() {
+                let at = plane.point(x as f64 + 0.5, y as f64 + 0.5);
+                let ahead = dot(minus(at, scene.eye), scene.forward);
+                // The grey is a display's, as a model reads a file, and the picture is light.
+                let grey = kerf_draw::color::to_linear(scene.nearness(ahead)) * pixel[3];
+                pixel[..3].fill(grey);
+            }
+        });
 }
 
 /// A clip's plane in the world: where its picture's first pixel is, and how far each of its pixels

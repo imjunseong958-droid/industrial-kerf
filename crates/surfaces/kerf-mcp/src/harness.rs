@@ -70,6 +70,7 @@ frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
+With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
@@ -299,6 +300,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "effect": {"type": "string", "description": "An effect, transition, generator, or clip property: every parameter of it, where the reference keeps a few of a generator that has many. Raster effects are listed by id only. Use alone."},
                     "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. Or a folder of it, such as `media` (`.` for the project's own): each footage file there the same way, in `files`, and in `script` the lines for those not in the document, to run as one edit. With no arguments `look` gives in `unplaced` the footage in the project's folder and in `media` not yet in the document. Use alone."},
                     "cost": {"type": "boolean", "description": "With `at`, program positions: who draws each frame and what it costs. `draws` is `gpu` or `cpu`, `because` says what sends it to the CPU, one line a cause, `ms` is a frame at full size and `msHalf` at half, against `frameMs`, a frame's share of the time. Playing, the editor draws smaller until frames keep up, and a frame the CPU draws takes every core."},
+                    "shows": {"type": "boolean", "description": "With `at`, program positions: what shows of each clip that draws there, in `frames`, each with `clips` from the lowest track up. `box` is where the clip would be with nothing before it, [left, top, right, bottom] in shares of the frame, absent when none of it is in the frame; `area` the share of the frame that is; `shows` the share of the frame it has as the frame is drawn; `hidden` the share of it other clips hide, and `by` which, each with its share, the most first; `edges` the edges of the frame it reaches, where it may go on past them; `opacity` where it is not wholly opaque, and such a clip is read as not showing. `empty` is the share of the frame no clip has. A nested sequence is one clip. A floor in `by` of what stands on it, a subject with no `box`, and a subject at an edge are what to mend. Read on a small frame, to about a hundredth of it. Not with `media`."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, guidance, or parameters match, best first, each with when to use it, and in `properties` the clip properties that do. Use alone, or with `area`."},
                     "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
@@ -436,6 +438,8 @@ struct LookInput {
     file: Option<String>,
     #[serde(default)]
     cost: bool,
+    #[serde(default)]
+    shows: bool,
 }
 
 /// What `look` says of a font: its faces, their axes and the OpenType features each has, or the
@@ -1303,6 +1307,75 @@ impl KerfMcpRouter {
         }))
     }
 
+    /// What shows of each clip on each frame at `at`.
+    fn frames_show(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        revision: u64,
+        at: &[String],
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, sequence)?;
+        let duration = sequence.duration();
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let mut frames = Vec::with_capacity(at.len());
+        for text in at {
+            let time = program_position(project, sequence, text)?;
+            if time.is_negative() || time >= duration {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "`{text}` is outside sequence `{}`{}",
+                        sequence.id,
+                        self.any_pending("proposal")
+                    ),
+                ));
+            }
+            let showing = kerf_engine::shows::showing(&resolved, Some(sequence.id.as_str()), time)
+                .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            let clips: Vec<Value> = showing
+                .clips
+                .iter()
+                .map(|shown| {
+                    let mut clip = json!({
+                        "clip": shown.clip,
+                        "area": shown.area,
+                        "shows": shown.shows,
+                        "hidden": shown.hidden,
+                    });
+                    if let Some(at) = shown.at {
+                        clip["box"] = json!(at);
+                    }
+                    if !shown.by.is_empty() {
+                        clip["by"] = shown
+                            .by
+                            .iter()
+                            .map(|(by, share)| json!({"clip": by, "share": share}))
+                            .collect();
+                    }
+                    if !shown.edges.is_empty() {
+                        clip["edges"] = json!(shown.edges);
+                    }
+                    if let Some(opacity) = shown.opacity {
+                        clip["opacity"] = json!(opacity);
+                    }
+                    clip
+                })
+                .collect();
+            let mut frame = json!({"at": text, "clips": clips, "empty": showing.empty});
+            if !showing.unread.is_empty() {
+                frame["unread"] = json!(showing.unread);
+            }
+            frames.push(frame);
+        }
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "frames": frames,
+        }))
+    }
+
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
@@ -1412,6 +1485,22 @@ impl KerfMcpRouter {
             }
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.frame_costs(&project, input.sequence.as_deref(), revision, &input.at);
+        }
+        if input.shows {
+            if input.media.is_some() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`shows` is of program frames, not with `media`",
+                ));
+            }
+            if input.at.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`shows` is of the frames at `at`: pass the positions to read",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.frames_show(&project, input.sequence.as_deref(), revision, &input.at);
         }
         if !input.sync.is_empty() {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;

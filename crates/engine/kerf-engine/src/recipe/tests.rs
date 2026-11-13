@@ -60,6 +60,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             to: "block.mp4".to_owned(),
             size: None,
             rate: None,
+            pass: Pass::Picture,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -107,14 +108,29 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 to: "guide.mp4".to_owned(),
                 size: Some((832, 480)),
                 rate: Some(Rate::new(16, 1).unwrap()),
+                pass: Pass::Picture,
             },
             Step::Render {
                 sequence: "s3".to_owned(),
                 to: "out".to_owned(),
                 size: Some((1280, 720)),
                 rate: Some(Rate::FPS_23_976),
+                pass: Pass::Picture,
             }
         ]
+    );
+    // A pass of the same sequence is another file of the recipe's, for a model that reads it.
+    let passes = Recipe::parse(
+        "kerf-recipe 1\nrender s2 {guide.mp4} size=832x480 rate=16\nrender s2 {ids.mp4} pass=ids size=832x480 rate=16\nrender s2 {out} pass=depth\n",
+    )
+    .unwrap();
+    let pass_of = |step: &Step| match step {
+        Step::Render { pass, .. } => *pass,
+        _ => panic!("a render step"),
+    };
+    assert_eq!(
+        passes.steps.iter().map(pass_of).collect::<Vec<_>>(),
+        [Pass::Picture, Pass::Ids, Pass::Depth]
     );
     // One model's picture can be the next one's first frame.
     let chained = Recipe::parse(
@@ -162,7 +178,9 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH` and `rate=<fps>`"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth`"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=normals")
+        .contains("`pass=normals` is not a pass Kerf draws: `ids`, which clip each pixel is of, or `depth`, how near it is"));
     assert!(
         wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
     );
