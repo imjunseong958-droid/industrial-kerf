@@ -909,6 +909,22 @@ impl Drawing {
                 .flatten()
                 .collect();
             scene.casters = casters;
+            // A mesh stands in a light's way by its triangles.
+            let standing = tracks
+                .iter()
+                .flat_map(|track| &track.shown)
+                .filter(|shown| shown.shows(at) && matches!(shown.plan.source, Source::Mesh))
+                .filter_map(|shown| {
+                    let time = at - shown.plan.clip.start;
+                    let opacity = number(&param(&shown.plan.clip, "opacity").value_at(time)) as f32;
+                    (opacity > 0.0).then(|| {
+                        let to_output = Affine::scale(scale, scale)
+                            .then_apply(&self.geometry(plan, &shown.plan, time));
+                        three_d::mesh::Standing::of(&scene, &shown.plan, &to_output, time, opacity)
+                    })
+                })
+                .collect();
+            scene.standing = standing;
         }
         for wanted in scene.environments() {
             let picture = plan

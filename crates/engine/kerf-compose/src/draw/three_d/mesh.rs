@@ -13,7 +13,11 @@
 //! A part in one flat color is lit by the scene's lights by the way each place faces. A part
 //! with colors of its own, a picture its file lays over it or a color at each corner, is drawn in
 //! them as they are, with no light: they are what the thing is, and a set rebuilt from a shot
-//! has the shot's light in them already. It casts no shadow, and is drawn on the CPU.
+//! has the shot's light in them already. It is drawn on the CPU.
+//!
+//! It stands in a light's way as a clip in depth does ([`Standing`]): a ray from a place to a
+//! light is stopped by the first of its triangles it meets, found through a tree of boxes
+//! about them, and not by the mesh the place is on.
 //!
 //! It is one of a few solids, a box, a ball, a cylinder, or the triangles of a glTF file
 //! ([`super::gltf`]), as tall as the clip says and in the file's own proportions. A file's
@@ -686,6 +690,192 @@ impl Nearest {
     }
 }
 
+/// The corners of `mesh` in the world, its clip being where `plane` is.
+fn in_world(mesh: &Mesh, plane: &Plane, size: (f64, f64)) -> (Vec<Vector>, [Vector; 3]) {
+    // The mesh's own space in the world: a frame height of it is the picture's height along each
+    // of the plane's ways, and as much back as a pixel of it is wide.
+    let ways = [
+        times(plane.across, size.1),
+        times(plane.down, size.1),
+        times(plane.normal, plane.pixel_size() * size.1),
+    ];
+    let points = mesh
+        .points
+        .iter()
+        .map(|point| {
+            let off = add(
+                add(times(ways[0], point[0]), times(ways[1], point[1])),
+                times(ways[2], point[2]),
+            );
+            add(plane.middle, off)
+        })
+        .collect();
+    (points, ways)
+}
+
+/// A mesh as what may stand in a light's way: its triangles in the world, in a tree of boxes
+/// so that a ray asks few of them.
+pub(in crate::draw) struct Standing {
+    pub clip: Id,
+    opacity: f32,
+    /// Each triangle as a corner and the two sides from it.
+    triangles: Vec<[Vector; 3]>,
+    /// The tree, the root first: a box, and either its two halves or a run of `triangles`.
+    boxes: Vec<Boxed>,
+}
+
+struct Boxed {
+    least: Vector,
+    most: Vector,
+    /// The first of its two halves, the other being the next; or a run of triangles.
+    inside: Inside,
+}
+
+enum Inside {
+    Halves(usize),
+    Triangles(usize, usize),
+}
+
+/// The most triangles a box of the tree holds without being halved.
+const LEAF: usize = 8;
+
+impl Standing {
+    /// The mesh clip `plan` at clip time `time`, where `to_output` puts it, as opaque as
+    /// `opacity`.
+    pub fn of(
+        scene: &Scene,
+        plan: &ClipPlan,
+        to_output: &Affine,
+        time: Time,
+        opacity: f32,
+    ) -> Self {
+        let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
+        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let plane = Plane::of(scene, plan, size, to_output, time);
+        let (points, _) = in_world(&mesh, &plane, size);
+        let mut corners: Vec<[Vector; 3]> = mesh
+            .triangles
+            .iter()
+            .map(|triangle| triangle.map(|corner| points[corner as usize]))
+            .collect();
+        let mut boxes = Vec::new();
+        let count = corners.len();
+        Self::halve(&mut corners, 0, count, &mut boxes);
+        Self {
+            clip: plan.clip.id.clone(),
+            opacity,
+            triangles: corners
+                .into_iter()
+                .map(|[a, b, c]| [a, minus(b, a), minus(c, a)])
+                .collect(),
+            boxes,
+        }
+    }
+
+    /// Put `corners[from..to]` in a box at the end of `boxes`, halved along its longest side
+    /// while it holds more than a few.
+    fn halve(corners: &mut [[Vector; 3]], from: usize, to: usize, boxes: &mut Vec<Boxed>) {
+        let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for corner in corners[from..to].iter().flatten() {
+            for axis in 0..3 {
+                least[axis] = least[axis].min(corner[axis]);
+                most[axis] = most[axis].max(corner[axis]);
+            }
+        }
+        let own = boxes.len();
+        boxes.push(Boxed {
+            least,
+            most,
+            inside: Inside::Triangles(from, to),
+        });
+        if to - from <= LEAF {
+            return;
+        }
+        let axis = (0..3)
+            .max_by(|a, b| (most[*a] - least[*a]).total_cmp(&(most[*b] - least[*b])))
+            .unwrap_or(0);
+        let middle = |triangle: &[Vector; 3]| triangle[0][axis] + triangle[1][axis] + triangle[2][axis];
+        let half = from + (to - from) / 2;
+        corners[from..to].select_nth_unstable_by(half - from, |a, b| middle(a).total_cmp(&middle(b)));
+        // The first half is the next box, and the second is whatever comes after all of it.
+        let first = boxes.len();
+        Self::halve(corners, from, half, boxes);
+        Self::halve(corners, half, to, boxes);
+        boxes[own].inside = Inside::Halves(first);
+    }
+
+    /// How much of a light gets past it to `at`, going along `way`, a unit long, for `reach`.
+    pub fn lets_through(&self, at: Vector, way: Vector, reach: f64) -> f32 {
+        if self.meets(at, way, reach) {
+            1.0 - self.opacity
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether a ray from `at` along `way` meets a triangle within `reach`.
+    fn meets(&self, at: Vector, way: Vector, reach: f64) -> bool {
+        // Not from the very place it starts, which may be on a triangle of another clip
+        // touching this one: a ten-thousandth of a pixel on, the world being in pixels.
+        let least = 1e-4f64;
+        let over = way.map(|side| 1.0 / if side.abs() < 1e-300 { 1e-300 } else { side });
+        let mut waiting = vec![0usize];
+        while let Some(index) = waiting.pop() {
+            let boxed = &self.boxes[index];
+            let (mut enters, mut leaves) = (least, reach);
+            for axis in 0..3 {
+                let (one, other) = (
+                    (boxed.least[axis] - at[axis]) * over[axis],
+                    (boxed.most[axis] - at[axis]) * over[axis],
+                );
+                enters = enters.max(one.min(other));
+                leaves = leaves.min(one.max(other));
+            }
+            if enters > leaves {
+                continue;
+            }
+            match boxed.inside {
+                Inside::Halves(first) => {
+                    waiting.push(first);
+                    waiting.push(self.after(first));
+                }
+                Inside::Triangles(from, to) => {
+                    for [corner, one, other] in &self.triangles[from..to] {
+                        let across = cross(way, *other);
+                        let facing = dot(*one, across);
+                        if facing.abs() < 1e-18 {
+                            continue;
+                        }
+                        let from = minus(at, *corner);
+                        let u = dot(from, across) / facing;
+                        if !(0.0..=1.0).contains(&u) {
+                            continue;
+                        }
+                        let beside = cross(from, *one);
+                        let v = dot(way, beside) / facing;
+                        if v < 0.0 || u + v > 1.0 {
+                            continue;
+                        }
+                        let along = dot(*other, beside) / facing;
+                        if along > least && along < reach {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// The box after the one at `index` and everything in it: its sibling.
+    fn after(&self, index: usize) -> usize {
+        match self.boxes[index].inside {
+            Inside::Triangles(..) => index + 1,
+            Inside::Halves(first) => self.after(self.after(first)),
+        }
+    }
+}
+
 /// The mesh of the clip of `plan` at clip time `time` as `scene` sees it on a picture of `(w, h)`,
 /// and how far along the camera's way it is at each pixel: infinite where it is not.
 pub(in crate::draw) fn draw(
@@ -699,24 +889,7 @@ pub(in crate::draw) fn draw(
     let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let plane = Plane::of(scene, plan, size, to_output, time);
-    // The mesh's own space in the world: a frame height of it is the picture's height along each
-    // of the plane's ways, and as much back as a pixel of it is wide.
-    let ways = [
-        times(plane.across, size.1),
-        times(plane.down, size.1),
-        times(plane.normal, plane.pixel_size() * size.1),
-    ];
-    let points: Vec<Vector> = mesh
-        .points
-        .iter()
-        .map(|point| {
-            let off = add(
-                add(times(ways[0], point[0]), times(ways[1], point[1])),
-                times(ways[2], point[2]),
-            );
-            add(plane.middle, off)
-        })
-        .collect();
+    let (points, ways) = in_world(&mesh, &plane, size);
     // The ways are square to each other, so a side faces along each by its length less.
     let normals: Vec<Vector> = mesh
         .normals

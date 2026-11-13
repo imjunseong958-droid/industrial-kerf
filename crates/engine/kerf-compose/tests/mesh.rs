@@ -357,6 +357,41 @@ fn a_clip_in_depth_casts_its_shadow_on_a_mesh() {
 }
 
 #[test]
+fn a_mesh_casts_its_shadow_on_a_mesh_and_on_a_clip_in_depth() {
+    // A light shining from the left, and a tall box standing between it and what it falls on:
+    // another box turned to show the light a side, or a clip in depth turned the same way.
+    let scene = |receiver: &str, shadow: &str, soft: &str| {
+        format!(
+            concat!(
+                "{}{}",
+                "  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n",
+                "      set kind=directional x=1 y=0 z=0 shadow={} {}\n",
+            ),
+            receiver,
+            mesh("post", 2, "kind=box width=0.1 height=0.8 length=0.4 x=-0.3 color=#ffffff"),
+            shadow,
+            soft
+        )
+    };
+    let boxed = mesh(
+        "thing",
+        1,
+        "kind=box width=0.3 height=0.3 length=0.3 rotate_y=45 color=#ffffff",
+    );
+    let wall = "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true rotate_y=45 scale=0.4\n";
+    for (receiver, x) in [(boxed.as_str(), 140), (wall, 150)] {
+        let lit = pixel(&frame(&scene(receiver, "0", ""), Pass::Picture), x, 90)[0];
+        let shadowed = pixel(&frame(&scene(receiver, "1", ""), Pass::Picture), x, 90)[0];
+        assert!(lit > 150 && shadowed < 20, "{lit} lit, {shadowed} in shadow at {x}");
+        // Half a shadow lets half the light by, and a light with a size is still stopped.
+        let half = pixel(&frame(&scene(receiver, "0.5", ""), Pass::Picture), x, 90)[0];
+        assert!(half > shadowed + 40 && half < lit - 20, "{half} between {shadowed} and {lit}");
+        let soft = pixel(&frame(&scene(receiver, "1", "size=2"), Pass::Picture), x, 90)[0];
+        assert!(soft < 20, "{soft} under a light with a size");
+    }
+}
+
+#[test]
 fn a_mesh_takes_no_effect_or_mask() {
     let refused = |body: &str| {
         let project = parse_document(

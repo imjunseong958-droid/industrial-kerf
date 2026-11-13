@@ -259,6 +259,8 @@ pub(super) struct Scene {
     lights: Vec<Light>,
     /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
     pub casters: Vec<Caster>,
+    /// The meshes that may be in a light's way, with them.
+    pub standing: Vec<mesh::Standing>,
     /// How far along the camera's way is in focus, in pixels, and how far what is far from that may
     /// spread: 0 for all of it sharp.
     focus: f64,
@@ -369,6 +371,7 @@ impl Scene {
             height,
             lights,
             casters: Vec::new(),
+            standing: Vec::new(),
             focus,
             aperture: read("aperture", 0.0) * height,
         }
@@ -378,6 +381,7 @@ impl Scene {
     pub(super) fn bare(mut self) -> Self {
         self.lights.clear();
         self.casters.clear();
+        self.standing.clear();
         self.aperture = 0.0;
         self
     }
@@ -488,7 +492,13 @@ impl Scene {
             .iter()
             .filter(|caster| caster.clip != *receiver)
             .map(|caster| caster.lets_through(at, way, reach))
-            .product::<f32>();
+            .product::<f32>()
+            * self
+                .standing
+                .iter()
+                .filter(|mesh| mesh.clip != *receiver)
+                .map(|mesh| mesh.lets_through(at, way, reach))
+                .product::<f32>();
         1.0 - shadow * (1.0 - through)
     }
 
@@ -532,6 +542,13 @@ impl Scene {
             }
             if all_alike <= 0.0 {
                 return 1.0 - shadow;
+            }
+        }
+        // A mesh has no one plane to say which rays can meet it, so each ray asks it.
+        for mesh in self.standing.iter().filter(|mesh| mesh.clip != *receiver) {
+            let rays = rays.get_or_insert_with(|| spiral().map(|at| off(at, radius)));
+            for (through, (way, reach)) in through.iter_mut().zip(rays.iter()) {
+                *through *= mesh.lets_through(at, *way, *reach);
             }
         }
         let through = all_alike * through.iter().sum::<f32>() / RAYS as f32;

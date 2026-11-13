@@ -564,8 +564,11 @@ What is built for it, in this order, each measured before the next:
    footage is; one run by the clip's time alone starts again at the new
    first frame, which is said in the language's reference. Its size and
    middle are taken at rest, so that an animation that carries it across a
-   room carries it across the frame. Morph targets are not read. *Not done:* it casts no
-   shadow, takes no effect and no mask (the compositor refuses them), a
+   room carries it across the frame. Morph targets are not read. It casts
+   its shadow on the clips in depth and the meshes a light reaches past it,
+   and not on itself: a ray to the light is stopped by the first of its
+   triangles it meets, found through a tree of boxes (`mesh::Standing`,
+   2026-11-13). *Not done:* it takes no effect and no mask (the compositor refuses them), a
    transition's wipe is a fade on it, and the GPU does not draw it, so a
    frame with one is the CPU's. It was not handed to a model.
 5. **A making that streams**, last. Models that answer in under a second
