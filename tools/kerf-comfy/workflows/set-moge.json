@@ -1,0 +1,46 @@
+{
+  "kerf-comfy": 1,
+  "about": "MoGe 3: a frame of a guide rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. frame=<n> picks the frame, from 0. The camera that saw it is at the file's own origin, looking along its z backward; the file holds no camera.",
+  "of": "guide",
+  "frames": { "most": 480, "step": 1 },
+  "size": [1920, 1080],
+  "multiple": 2,
+  "set": {
+    "model": "moge_3_vitl_fp16.safetensors",
+    "frame": 0,
+    "decimation": 2,
+    "discontinuity": 0.04,
+    "refine_steps": 3,
+    "resolution_level": 9
+  },
+  "workflow": {
+    "1": { "class_type": "LoadVideo", "inputs": { "file": "{guide}" } },
+    "2": { "class_type": "GetVideoComponents", "inputs": { "video": ["1", 0] } },
+    "3": { "class_type": "ImageFromBatch", "inputs": { "image": ["2", 0], "batch_index": "{frame}", "length": 1 } },
+    "4": { "class_type": "LoadMoGeModel", "inputs": { "model_name": "{model}" } },
+    "5": {
+      "class_type": "MoGeInference",
+      "inputs": {
+        "moge_model": ["4", 0],
+        "image": ["3", 0],
+        "resolution_level": "{resolution_level}",
+        "fov_x_degrees": 0.0,
+        "batch_size": 1,
+        "force_projection": true,
+        "apply_mask": true,
+        "refine_steps": "{refine_steps}"
+      }
+    },
+    "6": {
+      "class_type": "MoGePointMapToMesh",
+      "inputs": {
+        "moge_geometry": ["5", 0],
+        "batch_index": 0,
+        "decimation": "{decimation}",
+        "discontinuity_threshold": "{discontinuity}",
+        "texture": true
+      }
+    },
+    "7": { "class_type": "SaveGLB", "inputs": { "mesh": ["6", 0], "filename_prefix": "3d/kerf" } }
+  }
+}

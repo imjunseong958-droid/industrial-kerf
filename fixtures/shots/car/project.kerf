@@ -1,0 +1,42 @@
+kerf 1
+project name="The car on a road"
+media color path="shots/color.mp4" rate=16 dur=65f video=832x480 recipe="shots/color.kerfrecipe"
+media depth path="shots/depth.mp4" rate=16 dur=65f video=832x480 recipe="shots/depth.kerfrecipe"
+media ids path="shots/ids.mp4" rate=16 dur=65f video=832x480 recipe="shots/ids.kerfrecipe"
+media orbit path="shots/orbit.mp4" rate=16 dur=65f video=832x480 recipe="shots/orbit.kerfrecipe"
+media readback path="shots/readback.mp4" rate=16 dur=65f video=832x480 recipe="shots/readback.kerfrecipe"
+media views path="shots/views.mp4" rate=16 dur=65f video=832x480 recipe="shots/views.kerfrecipe"
+sequence s1 rate=24 size=1664x960
+  track V1 video
+sequence s2 rate=24 size=1664x960
+  track V1 video
+    clip sky gen=solid@1 at=0f dur=96f
+      set color=#7fa8d8
+  track V2 video
+    clip road gen=solid@1 at=0f dur=96f
+      set color=#404448 three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V3 video
+    clip body gen=shape@1 at=0f dur=96f
+      set kind=rect width=0.9 height=0.22 fill=#c02020 three_d=true depth=0.4 x={0f:-0.45 96f:0.45} y=0.84 z=2
+  track V4 video
+    clip cabin gen=shape@1 at=0f dur=96f
+      set kind=rect width=0.45 height=0.18 fill=#c02020 three_d=true depth=0.4 x={0f:-0.45 96f:0.45} y=0.64 z=2
+  track V5 video
+    clip cam gen=camera@1 at=0f dur=96f
+      set z={0f:0 96f:0.6} pan={0f:0 96f:10}
+sequence s3 rate=24 size=1664x960
+  track V1 video
+    clip parked_sky gen=solid@1 at=0f dur=96f
+      set color=#7fa8d8
+  track V2 video
+    clip parked_road gen=solid@1 at=0f dur=96f
+      set color=#404448 three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V3 video
+    clip parked_body gen=shape@1 at=0f dur=96f
+      set kind=rect width=0.9 height=0.22 fill=#c02020 three_d=true depth=0.4 y=0.84 z=2
+  track V4 video
+    clip parked_cabin gen=shape@1 at=0f dur=96f
+      set kind=rect width=0.45 height=0.18 fill=#c02020 three_d=true depth=0.4 y=0.64 z=2
+  track V5 video
+    clip parked_cam gen=camera@1 at=0f dur=96f
+      set x={0f:0 19f:0.504 38f:0.973 58f:1.376 77f:1.686 96f:1.88} z={0f:0 19f:0.115 38f:0.452 58f:0.988 77f:1.687 96f:2.501} pan={0f:0 96f:-75}

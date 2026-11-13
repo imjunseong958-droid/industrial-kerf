@@ -28,6 +28,12 @@
 //! A node that reads a file or a signal the request does not give is left
 //! out, and with it whatever cannot do without it, so one workflow serves a
 //! shot with a guide, with a reference, with both, or with neither.
+//!
+//! A workflow that reads a picture in motion and makes a file of it, its
+//! depth or the camera that filmed it, says `"of": "guide"` and needs no
+//! `fps`. What it makes is of its guide frame for frame: `{fps}` is the
+//! guide's own rate, `{frames}` each frame it has up to `frames.most`, and
+//! `{width}` and `{height}` its own size, down to `size` by area.
 
 use crate::request::{names_a_file, names_a_signal, names_what_is_handed};
 use serde::Deserialize;
@@ -39,7 +45,16 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 1] = [("wan-vace", include_str!("../workflows/wan-vace.json"))];
+pub const BUNDLED: [(&str, &str); 5] = [
+    ("wan-vace", include_str!("../workflows/wan-vace.json")),
+    ("depth-moge", include_str!("../workflows/depth-moge.json")),
+    ("set-moge", include_str!("../workflows/set-moge.json")),
+    ("depth-da3", include_str!("../workflows/depth-da3.json")),
+    (
+        "cameras-da3",
+        include_str!("../workflows/cameras-da3.json"),
+    ),
+];
 
 /// What fills a workflow's blanks, by name.
 pub type Values = BTreeMap<String, Value>;
@@ -64,7 +79,12 @@ pub struct Workflow {
     /// What it makes, in a line.
     #[serde(default)]
     pub about: String,
+    /// What it makes a file of, frame for frame: `guide`, or nothing for a
+    /// model that makes a shot at a rate and a size of its own.
+    #[serde(default)]
+    of: Option<String>,
     /// The rate the model makes frames at.
+    #[serde(default)]
     pub fps: f64,
     pub frames: Frames,
     /// The picture the model makes, and by its area the largest asked of it.
@@ -109,7 +129,10 @@ impl Workflow {
                 workflow.version
             ));
         }
-        if !(workflow.fps.is_finite() && workflow.fps > 0.0) {
+        if let Some(of) = workflow.of.as_deref().filter(|of| *of != "guide") {
+            return Err(format!("`of` is `guide` or is left out, not `{of}`"));
+        }
+        if !workflow.of_guide() && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
             return Err("`fps` is not a rate".to_owned());
         }
         if workflow.frames.most == 0 || workflow.frames.step == 0 {
@@ -126,6 +149,20 @@ impl Workflow {
             }
         }
         Ok(workflow)
+    }
+
+    /// Whether what it makes is of its guide, frame for frame, and not a
+    /// shot at a rate and a size of the model's own.
+    pub fn of_guide(&self) -> bool {
+        self.of.is_some()
+    }
+
+    /// The frames to read of a guide that has `guide` of them: each, up to
+    /// the most the workflow reads at once and to `seconds` of them at the
+    /// guide's `fps` where that is asked.
+    pub fn frames_of(&self, guide: u32, seconds: Option<f64>, fps: f64) -> u32 {
+        let asked = seconds.map_or(u32::MAX, |seconds| (seconds * fps).round().max(1.0) as u32);
+        guide.min(self.frames.most).min(asked).max(1)
     }
 
     /// The size to ask for: the one `asked`, or the model's own, with each
@@ -167,6 +204,29 @@ impl Workflow {
     /// has when the line does not.
     pub fn takes(&self) -> Value {
         let blanks = self.blanks();
+        if self.of_guide() {
+            // It has no rate and no size of its own to draw a guide at.
+            let mut takes = Map::new();
+            if !self.about.is_empty() {
+                takes.insert("about".to_owned(), Value::from(self.about.clone()));
+            }
+            takes.insert("of".to_owned(), Value::from("guide"));
+            takes.insert(
+                "frames".to_owned(),
+                serde_json::json!({"most": self.frames.most}),
+            );
+            takes.insert("reads".to_owned(), Value::from(vec!["guide"]));
+            let more: Map<String, Value> = self
+                .set
+                .iter()
+                .filter(|(name, _)| blanks.contains(*name))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            if !more.is_empty() {
+                takes.insert("more".to_owned(), Value::Object(more));
+            }
+            return Value::Object(takes);
+        }
         let most = self.frames(None, None);
         let mut reads: Vec<&str> = ["guide", "first", "last"]
             .into_iter()
@@ -467,6 +527,32 @@ mod tests {
                 );
             }
         }
+        // One that makes a file of its guide reads a guide, and has no rate of its own.
+        for name in ["depth-moge", "set-moge", "depth-da3", "cameras-da3"] {
+            let workflow = Workflow::named(name).unwrap();
+            assert!(
+                workflow.of_guide() && workflow.blanks().contains("guide"),
+                "{name}"
+            );
+            let takes = workflow.takes();
+            assert_eq!(takes["of"], "guide");
+            assert_eq!(takes["reads"], json!(["guide"]));
+            assert!(
+                takes.get("rate").is_none() && takes.get("size").is_none(),
+                "{name}"
+            );
+            assert!(!takes["about"].as_str().unwrap().is_empty(), "{name}");
+        }
+        // Depth Anything 3 finds a camera's path only with its weights as 32-bit floats.
+        let multiview = Workflow::named("cameras-da3").unwrap();
+        assert!(multiview
+            .graph
+            .values()
+            .any(|node| node["class_type"] == "LoadDA3Model"
+                && node["inputs"]["weight_dtype"] == "fp32"));
+        // MoGe refines three times unless a line says otherwise.
+        let moge = Workflow::named("depth-moge").unwrap();
+        assert_eq!(moge.takes()["more"]["refine_steps"], json!(3));
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("wan-vace"), "{missing}");
     }
@@ -528,6 +614,12 @@ mod tests {
             wrong(&whole(r#""workflow": {}"#).replace("\"step\": 4", "\"step\": 0"))
                 .contains("at least 1")
         );
+        // With no rate it makes a file of its guide, and of nothing else.
+        let of = |of: &str| {
+            whole(r#""workflow": {}"#).replace("\"fps\": 16", &format!("\"of\": \"{of}\""))
+        };
+        assert!(Workflow::parse(&of("guide")).unwrap().of_guide());
+        assert!(wrong(&of("first")).contains("`of` is `guide`"));
         // A graph saved from ComfyUI's canvas is not the one it exports for its API.
         assert!(wrong(&whole(r#""workflow": {"nodes": [], "links": []}"#))
             .contains("exports one for its API"));
@@ -565,6 +657,20 @@ mod tests {
         .unwrap();
         assert_eq!(odd.frames(None, None), 97);
         assert_eq!(odd.frames(Some(1.0), None), 25);
+    }
+
+    #[test]
+    fn a_file_of_a_guide_has_the_guides_frames_and_its_size() {
+        let reader = Workflow::named("depth-moge").unwrap();
+        // Each frame the guide has, up to what is asked and to the most read at once.
+        assert_eq!(reader.frames_of(65, None, 16.0), 65);
+        assert_eq!(reader.frames_of(65, Some(2.0), 16.0), 32);
+        assert_eq!(reader.frames_of(100_000, None, 24.0), reader.frames.most);
+        assert_eq!(reader.frames_of(0, None, 24.0), 1);
+        // The guide's own size, and one past the largest read comes down in its shape.
+        assert_eq!(reader.size(Some((832, 480))), (832, 480));
+        assert_eq!(reader.size(Some((3840, 2160))), (1920, 1080));
+        assert_eq!(reader.size(Some((853, 481))), (854, 482));
     }
 
     #[test]
