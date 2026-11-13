@@ -163,6 +163,26 @@ pub struct CameraPlace {
     pub fov: Option<f64>,
 }
 
+/// Where a camera is in the space of a mesh's file, which is glTF's: x to the right, y up, and
+/// z toward the viewer, in the file's own units. One the file does not hold: a set rebuilt
+/// from a frame was seen from its origin, along its z backward.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FileView {
+    pub eye: [f64; 3],
+    /// The way its picture's right is, and the way it looks: each of length 1.
+    pub right: [f64; 3],
+    pub forward: [f64; 3],
+}
+
+impl FileView {
+    /// The camera at the file's origin, looking along its z backward with its y up.
+    pub const ORIGIN: Self = Self {
+        eye: [0.0; 3],
+        right: [1.0, 0.0, 0.0],
+        forward: [0.0, 0.0, -1.0],
+    };
+}
+
 impl Compositor {
     pub fn new(
         project: &Project,
@@ -191,6 +211,14 @@ impl Compositor {
     /// its file's animation as far in as the clip has it. `None` outside the clip.
     pub fn mesh_camera(&self, clip: &str, camera: usize, at: Time) -> Option<CameraPlace> {
         self.drawing.mesh_camera(clip, camera, at)
+    }
+
+    /// Where a camera at `view` in the space of the file of the program's mesh clip `clip` is
+    /// at sequence time `at`, were it a camera of the sequence, the mesh being where its clip
+    /// puts it then: as [`Self::mesh_camera`], for a camera the file does not hold. Its `fov`
+    /// is none, a lens being no part of where a camera is.
+    pub fn mesh_view(&self, clip: &str, view: &FileView, at: Time) -> Option<CameraPlace> {
+        self.drawing.mesh_view(clip, view, at)
     }
 
     /// The canvas, made even as a render makes it.

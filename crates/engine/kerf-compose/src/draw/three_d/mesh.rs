@@ -381,11 +381,49 @@ pub(in crate::draw) fn camera(
         .and_then(|which| which.ok())
         .map(|which| (which, seconds_into(clip, def, &read, which, at)));
     let seen = read.seen_from(which, pose)?;
+    let fov = read.cameras[which].fov;
+    Some(placed(scene, plan, to_output, time, &read, &seen, fov))
+}
+
+/// Where a camera that is at `view` in the space of the file of the mesh clip of `plan` is at
+/// clip time `time`, as a `gen=camera@1` clip of the same sequence says it. It is a camera the
+/// file does not hold: the one a set was seen by, or one found from a shot's frames.
+pub(in crate::draw) fn view(
+    scene: &Scene,
+    plan: &ClipPlan,
+    to_output: &Affine,
+    time: Time,
+    view: &crate::FileView,
+) -> Option<crate::CameraPlace> {
+    let read = loaded(&file_of(&plan.clip)?).ok()?;
+    // glTF's y is up and its z toward the viewer, as the file's own points were.
+    let turned = |of: Vector| [of[0], -of[1], -of[2]];
+    let seen = super::gltf::Seen {
+        eye: turned(view.eye),
+        right: turned(view.right),
+        forward: turned(view.forward),
+    };
+    Some(placed(scene, plan, to_output, time, &read, &seen, None))
+}
+
+/// A camera `seen` in the space of a mesh clip's file, as a camera of the clip's sequence.
+fn placed(
+    scene: &Scene,
+    plan: &ClipPlan,
+    to_output: &Affine,
+    time: Time,
+    read: &super::gltf::Read,
+    seen: &super::gltf::Seen,
+    fov: Option<f64>,
+) -> crate::CameraPlace {
+    let clip = &plan.clip;
+    let def = Catalog::builtin().fx("mesh");
+    let at = clip.start + time;
     let height = generated(def, clip, "height", at)
         .and_then(|value| value.as_number())
         .unwrap_or(0.0)
         .max(0.0);
-    let (middle, _, tall) = fit(&read);
+    let (middle, _, tall) = fit(read);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let plane = Plane::of(scene, plan, size, to_output, time);
     let ways = [
@@ -412,15 +450,15 @@ pub(in crate::draw) fn camera(
     let roll = dot(right, level_down).atan2(dot(right, level_right));
     let (wide, tall) = (scene.center.0 * 2.0, scene.height);
     let back = tall / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
-    Some(crate::CameraPlace {
+    crate::CameraPlace {
         x: eye[0] / wide,
         y: eye[1] / tall,
         z: (eye[2] + back) / tall,
         pan: pan.to_degrees(),
         tilt: tilt.to_degrees(),
         roll: roll.to_degrees(),
-        fov: read.cameras[which].fov,
-    })
+        fov,
+    }
 }
 
 /// The file a `gen=mesh` clip reads its triangles from, when it names one.

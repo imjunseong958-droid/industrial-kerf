@@ -3326,6 +3326,118 @@ fn set_with_a_camera(folder: &std::path::Path) {
     std::fs::write(folder.join("set.glb"), file).unwrap();
 }
 
+/// `look` holds a media that is a take's depth to the guide a sequence draws, clip by clip. How
+/// far a take is off is `kerf-engine`'s to say (`tests/follows.rs`); this is that it is asked.
+#[test]
+fn look_holds_a_takes_depth_to_its_guide_by_the_clip() {
+    let Some((_directory, router)) = router_with(
+        "    clip sky gen=solid@1 at=0f dur=60f
+  track V2 video
+    clip road gen=solid@1 at=0f dur=60f
+      set three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V3 video
+    clip car gen=shape@1 at=0f dur=60f
+      set kind=rect width=0.5 height=0.3 three_d=true depth=0.4 y=0.8 z=2
+",
+    ) else {
+        return;
+    };
+    // The media is four seconds of a test picture, which is no depth of this scene: each
+    // clip in depth is read on the sequence's two seconds of it, and the sky is not.
+    let held = ok(&router, "look", json!({"follows": "m1"}));
+    assert_eq!(held["sequence"], "s1", "{held}");
+    assert_eq!(held["frames"], 60, "{held}");
+    let clips = held["clips"].as_array().unwrap();
+    let names: Vec<&str> = clips.iter().map(|clip| clip["clip"].as_str().unwrap()).collect();
+    assert_eq!(names, ["road", "car"], "{held}");
+    for clip in clips {
+        assert_eq!(clip["frames"], 60, "{clip}");
+        let off = clip["off"].as_f64().unwrap();
+        assert!(off > 0.05 && off < 1.0, "{clip}");
+        assert!(clip["worst"]["off"].as_f64().unwrap() >= off, "{clip}");
+    }
+    assert!(held["order"].as_f64().unwrap() < 0.9, "{held}");
+    let said = |input: Value| message(&error(&router, "look", input));
+    let none = said(json!({"follows": "take"}));
+    assert!(none.contains("no media `take`"), "{none}");
+    let with = said(json!({"follows": "m1", "at": ["0f"]}));
+    assert!(with.contains("used alone"), "{with}");
+}
+
+/// `look` writes a camera a model found, which a mesh's file does not hold, from the file that
+/// says where it was.
+#[test]
+fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
+    let Some((directory, router)) = router_with(
+        "    clip set gen=mesh@1 at=30f dur=60f
+      set file=\"set.glb\" height=0.5
+",
+    ) else {
+        return;
+    };
+    set_with_a_camera(directory.path());
+    // A lens alone is the camera a set was seen by: at its file's origin, which is half a
+    // unit under the middle of this one, a quarter of the frame's height.
+    std::fs::write(directory.path().join("lens.txt"), "40\n").unwrap();
+    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    assert_eq!(lens["moves"], false, "{lens}");
+    assert_eq!(lens["from"], json!({"frames": 1, "placed": 1, "fov": [40.0, 40.0]}));
+    assert_eq!(
+        lens["script"],
+        "track add V2 video\noverwrite gen=camera@1 at=30f dur=60f on=V2 as=camera1\nset camera1 x=0 y=0.25 z=1.37374 pan=0 tilt=0 roll=0 fov=40"
+    );
+    // A path: three frames, the camera going a unit to its right and then a unit back. At
+    // 15 frames a second each is two of the sequence's, and it holds still after.
+    let row = |x: f64, z: f64| {
+        format!("[[1., 0., 0., {}], [0., 1., 0., 0.], [0., 0., 1., {}]]", -x, -z)
+    };
+    std::fs::write(
+        directory.path().join("cameras.txt"),
+        format!(
+            "{{'extrinsics': tensor([[{}, {}, {}]]), 'intrinsics': tensor([[{lens}, {lens}, {lens}]])}}",
+            row(0.0, 0.0),
+            row(1.0, 0.0),
+            row(1.0, -1.0),
+            lens = "[[100., 0., 50.], [0., 100., 50.], [0., 0., 1.]]"
+        ),
+    )
+    .unwrap();
+    let path = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "cameras.txt", "rate": 15}}),
+    );
+    assert_eq!(path["moves"], true, "{path}");
+    assert_eq!(path["from"]["frames"], 3);
+    assert_eq!(path["from"]["placed"], 5);
+    assert!(path["note"].as_str().unwrap().contains("5 of the 60"), "{path}");
+    let script = path["script"].as_str().unwrap();
+    assert!(script.contains(" x={0f:0 2f:0.28125 4f:0.28125} "), "{script}");
+    assert!(script.contains(" z={0f:1.37374 2f:1.37374 4f:0.87374} "), "{script}");
+    assert!(script.ends_with(" fov=53.13"), "{script}");
+    ok(&router, "edit", json!({"script": script}));
+    // The set as the second frame saw it has that frame's camera at the origin, and twice
+    // the size has the path go twice as far.
+    let second = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "cameras.txt", "frame": 1, "scale": 2}}),
+    );
+    let script = second["script"].as_str().unwrap();
+    assert!(script.contains(" x={0f:-0.5625 1f:0 2f:0} "), "{script}");
+    // What cannot be done says why.
+    let said = |input: Value| message(&error(&router, "look", input));
+    let both = said(json!({"mesh": {"clip": "set", "camera": 0, "from": "lens.txt"}}));
+    assert!(both.contains("give one"), "{both}");
+    let none = said(json!({"mesh": {"clip": "set", "from": "nothing.txt"}}));
+    assert!(none.contains("cannot be read"), "{none}");
+    std::fs::write(directory.path().join("other.txt"), "a camera").unwrap();
+    let other = said(json!({"mesh": {"clip": "set", "from": "other.txt"}}));
+    assert!(other.contains("cameras-da3"), "{other}");
+    let far = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "frame": 7}}));
+    assert!(far.contains("no frame 7"), "{far}");
+}
+
 /// `look` says what a mesh's file holds, and writes a camera of it as a camera clip's keys.
 #[test]
 fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {

@@ -8,6 +8,7 @@ pub mod derivatives;
 pub mod encoder;
 pub mod error;
 pub mod ffmpeg;
+pub mod follows;
 pub mod index;
 pub mod loudness;
 pub mod probe;

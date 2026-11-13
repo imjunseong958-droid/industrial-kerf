@@ -521,16 +521,70 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   frame's lens in pixels of the size the model ran at (`resolution`, 504 on
   its longer side), among the depth it also holds, cut short. PyTorch prints
   a tensor whole up to a thousand numbers, which is 83 frames, so the
-  workflow reads 81 at most. Nothing in Kerf reads the file yet: bringing a
-  path in as a `gen=camera@1` clip's keyframes is what a glTF's camera
-  already has (`look` with `mesh`), and is next for this.
+  workflow reads 81 at most, and a file cut short is refused.
 - **A set comes without its camera.** `set-moge`'s mesh is as the frame's
   camera saw it, the camera at the file's own origin looking along its z
   backward, as a glTF camera does. The file holds no camera and no lens, so
-  `look` with `mesh` has none to write.
+  `look` with `mesh` and `camera` has none to write.
+
+Both come into the sequence as a `gen=camera@1` clip, by `look` with `mesh`
+and `from` in place of `camera`: a file in the project's folder that says
+where a camera the mesh's file does not hold was.
+
+```json
+{ "mesh": { "clip": "set", "from": "shots/views.takes/001.work/cameras.txt", "rate": 16 } }
+```
+
+It returns the lines to run with `edit`, as it does for a glTF's camera:
+the camera where the file has it on each frame of the mesh's clip, the mesh
+being where its clip puts it, with as few keyframes as say it.
+
+| In `mesh` | Says |
+|---|---|
+| `from` | The file. What `cameras-da3` wrote is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
+| `frame` | The frame of `from` the set was rebuilt from (`set-moge`'s `frame=`), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
+| `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
+| `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
+| `as` | A camera clip to `set`, where a new one is not wanted. |
+
+What comes back with the lines is `from`: its `frames`, how many of the
+clip's were `placed`, and the least and most `fov` it found. The camera
+gets the middle one of them: a `gen=camera@1` has one lens, and what a
+model finds of a lens wavers by the frame, so a zoom does not come through.
+A path shorter than the mesh's clip holds still after its last frame, and
+is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
+
+A take's depth read back is held to its guide by `look` with `follows`, the
+media that depth is, and `sequence`, the guide's:
+
+```json
+{ "follows": "readback", "sequence": "s2" }
+```
+
+The media's frames are the sequence's from its start, as a guide drawn at
+the model's rate has them. Each pixel the guide has a depth for is given
+its place in its frame's order of near and far, from 0 to 1, in the guide's
+depth pass and in the take, since order is what the two share: a pass goes
+by the scene's own numbers and a model stretches each frame to its own. For
+each clip the guide has in depth, by the pixels its ids pass gives that
+clip:
+
+| | Says |
+|---|---|
+| `off` | How far apart the two places are over the clip's pixels, as a mean over the `frames` it shows on. |
+| `farther` | The same with its direction kept: above 0 where the take has those pixels farther, as it does where the subject is not there and what was behind it is. |
+| `worst` | The frame it is most off on, from 0, and how far. |
+| `shows` | The share of the frame it has. |
+
+`off` at the top is the same over every pixel, and `order` the rank
+correlation of the whole frame, which a take with its subject elsewhere
+still has near 1 where most of the frame is ground. A subject's `off` is
+read beside the frame's and the floor's: a take that followed has them
+alike, and one that did not has the subject several times the floor
+(`kerf-engine/src/follows.rs`).
 
 What they took, and how a take read back holds beside its guide, is in
-[architecture.md](architecture.md#next) (Next, 3).
+[architecture.md](architecture.md#next) (Next, 3 and 4).
 
 ## Signals
 

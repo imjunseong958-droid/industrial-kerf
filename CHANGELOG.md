@@ -65,6 +65,14 @@ on `main`; its section here becomes the release's notes on GitHub
   to a recipe, `generate model=depth guide={take.mp4} out={depth.mp4}`, and
   what it makes has its guide's own size, rate, and frames
   ([docs/shots.md](docs/shots.md#a-picture-read-back)).
+- What a model reads back comes into the document. An agent's `look` with
+  `mesh` and `from` writes a camera a model found as a `gen=camera@1` clip
+  with keyframes: the path `cameras-da3` wrote for a shot, or a lens alone
+  for the camera a rebuilt set was seen by, placed against the set's mesh
+  clip. `look` with `follows` holds a take's depth, read back from it, to
+  the guide its sequence draws, clip by clip: how far the take has each
+  clip's pixels from where the guide has them in the order of near and
+  far, which says of a take whether its subject is where the guide put it.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`

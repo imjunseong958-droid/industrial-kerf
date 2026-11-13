@@ -25,6 +25,8 @@ models `depth` and `cameras` set up as `kerf-comfy`'s `depth-moge` and
   makes of it, and that take's depth as MoGe reads it, which is the media.
   The guide's own depth is `guide.mp4` in the take's `.work` folder, to hold
   beside it.
+  `look` with `{"follows": "readback", "sequence": "s2"}` says how far the
+  take is from the guide over the pixels of each clip.
 - `views`: the camera going round the parked car, with where Depth Anything
   3 puts the camera on each frame (`cameras.txt` in the `.work` folder) and
   the depth it agrees on across the frames, which is the media.
