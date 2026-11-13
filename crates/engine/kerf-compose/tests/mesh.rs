@@ -215,6 +215,71 @@ fn a_mesh_and_a_clip_in_depth_are_cut_where_they_meet() {
 }
 
 #[test]
+fn a_track_that_draws_nothing_does_not_part_the_clips_in_depth_it_is_between() {
+    const WALL: &str = concat!(
+        "    clip wall gen=solid@1 at=0f dur=24f\n",
+        "      set color=#c0c0c0 three_d=true scale=0.9 rotate_y=30\n",
+    );
+    const THING: &str = concat!(
+        "    clip thing gen=mesh@1 at=0f dur=24f\n",
+        "      set kind=box width=1 height=0.2 length=0.05 color=#ff0000\n",
+    );
+    // Tracks are drawn in the order they are written, the last on top.
+    let tracks = |clips: [&str; 3]| -> String {
+        clips
+            .iter()
+            .enumerate()
+            .map(|(index, clips)| format!("  track V{} video\n{clips}", index + 1))
+            .collect()
+    };
+    // The wall and the box that crosses it, with a track between them that has a camera, a
+    // light, a null, or nothing at this frame: they are cut where they meet as they are with
+    // the two on adjacent tracks, whichever is above, in the picture and in its depth.
+    let between = [
+        "    clip cam gen=camera@1 at=0f dur=24f\n",
+        "    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=1 y=0 z=0.3\n",
+        "    clip hold gen=null@1 at=0f dur=24f\n",
+        // A clip that is over before the frame looked at.
+        "    clip gone gen=solid@1 at=0f dur=2f\n",
+        "",
+    ];
+    for line in between {
+        // Not the ids pass here, whose colors go by the order clips are written in.
+        for pass in [Pass::Picture, Pass::Depth] {
+            for clips in [[WALL, line, THING], [THING, line, WALL]] {
+                // What stands between them put on top, where it parts nothing.
+                let wanted = frame(&tracks([clips[0], clips[2], line]), pass);
+                let drawn = frame(&tracks(clips), pass);
+                let off = drawn
+                    .rgba
+                    .iter()
+                    .zip(&wanted.rgba)
+                    .filter(|(a, b)| a.abs_diff(**b) > 1)
+                    .count();
+                assert_eq!(off, 0, "{pass:?} {clips:?}");
+            }
+        }
+    }
+    // The box before the wall on the left and behind it on the right, with a camera between
+    // and the wall on top.
+    let drawn = compositor(&tracks([THING, between[0], WALL]), Pass::Ids);
+    let ids = drawn.ids();
+    let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+    let frame = drawn.frame(Rate::FPS_24.time_of(3), 1.0);
+    let same = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
+    assert!(same(pixel(&frame, 115, 90), color("thing")));
+    assert!(same(pixel(&frame, 205, 90), color("wall")));
+    // What does draw between them still parts them: a flat clip is over what is under it and
+    // under what is over it, wherever those are in depth.
+    let flat = "    clip card gen=solid@1 at=0f dur=24f\n      set color=#0000ff scale=0.1\n";
+    let parted = compositor(&tracks([WALL, flat, THING]), Pass::Ids);
+    let ids = parted.ids();
+    let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+    let frame = parted.frame(Rate::FPS_24.time_of(3), 1.0);
+    assert!(same(pixel(&frame, 205, 90), color("thing")));
+}
+
+#[test]
 fn a_depth_pass_has_a_mesh_by_the_pixel() {
     let grey = |frame: &Frame, x: u32, y: u32| {
         let [r, g, b] = pixel(frame, x, y);

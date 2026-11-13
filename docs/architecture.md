@@ -821,9 +821,10 @@ recipes, in `fixtures/shots/car`.
    on the way. A box set down by eye, to look as if it stood on the path,
    was two frame heights off in the air behind it, where the same pixels
    are: the picture did not say so and the depth pass did. A clip on a
-   track above the camera's is laid over the set and not sorted with it, so
-   what is added goes under the camera, which the lines `look` writes put
-   on top. And the server makes a set seen through the wrong lens from a
+   track above the camera's was laid over the set and not sorted with it,
+   the camera's track parting the two, and the lines `look` writes put the
+   camera on top; a track that draws nothing no longer parts what is in
+   depth (Motion). And the server makes a set seen through the wrong lens from a
    guide that is not the size its model runs at, so `set-views` sends its
    guide at that size ([shots.md](shots.md#a-picture-read-back)). The set
    that comes in the path's size is, as it comes, the near ground and
@@ -1175,7 +1176,7 @@ Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with r
 word, set in variable fonts at any axis (`wght`, `wdth`, `slnt`, `opsz`, `ital`, which animate, in `glyf` or CFF2 outlines, with line height left at the font's own since none of those axes changes it by more than 0.7% in any of 50 variable faces tried), shapes whose outlines combine and offset (`fx shape.outline@1`, `offset`, on a sweep carried from
 EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
-perspective is true and lighting is per pixel, on the GPU where there is one (see below). Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
+perspective is true and lighting is per pixel, on the GPU where there is one (see below). Tracks that draw nothing at a frame, a camera's, a light's, a null's, a signal's, or one with no clip there, are not between the others: clips in depth on either side of one are adjacent (`a_track_that_draws_nothing_does_not_part_the_clips_in_depth_it_is_between`). Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
 reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: on the CPU at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
 carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.

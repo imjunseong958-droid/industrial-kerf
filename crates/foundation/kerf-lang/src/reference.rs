@@ -37,7 +37,7 @@ line, applied in order and atomically.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
   track, the highest over the rest: each part of a multicam wants its own.
 - `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
-- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
+- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross; a camera's or light's track between them parts nothing. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
