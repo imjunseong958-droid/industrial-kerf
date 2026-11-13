@@ -14,7 +14,8 @@ use std::time::SystemTime;
 use crate::derivatives::DerivativeCache;
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::{
-    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, video_decode_prefix,
+    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in,
+    video_decode_prefix,
 };
 use crate::resources::extract_job_count;
 
@@ -988,18 +989,33 @@ pub fn create_labelled_contact_sheet(
         ));
     }
     let rows = frame_paths.len().div_ceil(columns);
-    let pattern = parent.join("frame-%03d.jpg");
+    let mut pattern = parent.join("frame-%03d.jpg");
+    let mut output = output.to_path_buf();
     // Each label on its own frame, before they are laid out: white on a dark box, an
     // eleventh of the frame high.
     let mut labelled = String::new();
+    // The folder ffmpeg runs in when it draws labels: the font's.
+    let mut beside = None;
     if labels.len() == frame_paths.len() && font.is_file() && draws_text() {
-        let font = filter_text(&font.to_string_lossy());
-        for (index, label) in labels.iter().enumerate() {
-            labelled.push_str(&format!(
-                "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:y=w/40:\
-                 fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6,",
-                filter_text(label)
-            ));
+        if let (Some(name), Some(folder)) = (font.file_name(), font.parent()) {
+            // The font by its name alone, read from its folder. `drawtext` cannot be
+            // given every path: a filter's quotes hold no apostrophe, and on Windows it
+            // opens the font in the system's code page, where a folder named in hangul
+            // is not found.
+            if !folder.as_os_str().is_empty() {
+                pattern = std::path::absolute(&pattern)?;
+                output = std::path::absolute(&output)?;
+                beside = Some(folder);
+            }
+            let font = filter_text(&name.to_string_lossy());
+            for (index, label) in labels.iter().enumerate() {
+                labelled.push_str(&format!(
+                    "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:\
+                     y=w/40:fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:\
+                     boxborderw=6,",
+                    filter_text(label)
+                ));
+            }
         }
     }
     let args = vec![
@@ -1021,7 +1037,7 @@ pub fn create_labelled_contact_sheet(
         "-y".into(),
         output.to_string_lossy().into_owned(),
     ];
-    run(resolve_ffmpeg_bin(), &args)?;
+    run_in(resolve_ffmpeg_bin(), &args, beside)?;
     Ok(())
 }
 
@@ -1415,6 +1431,53 @@ pub fn cached_waveform_range(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // A temp folder is named for the person, and that is where a surface keeps the font:
+    // `drawtext` takes no apostrophe in a path, nor on Windows a name in hangul.
+    #[test]
+    fn a_sheets_labels_are_drawn_from_a_font_in_a_folder_of_any_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let frames = dir.path().join("frames");
+        fs::create_dir_all(&frames).unwrap();
+        let pattern = frames.join("frame-%03d.jpg").to_string_lossy().into_owned();
+        let made = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=1:duration=2",
+            "-start_number",
+            "0",
+            pattern.as_str(),
+        ]
+        .map(String::from);
+        run(resolve_ffmpeg_bin(), &made).unwrap();
+        let paths = ["frame-000.jpg", "frame-001.jpg"]
+            .map(|name| frames.join(name).to_string_lossy().into_owned());
+        let labels = ["00:00:00:15", "00:00:01:15"].map(String::from);
+        let sheet = |folder: &str| {
+            let folder = dir.path().join(folder);
+            fs::create_dir_all(&folder).unwrap();
+            let font = folder.join("font.ttf");
+            let inter = include_bytes!("../../../foundation/kerf-text/fonts/Inter-Medium.ttf");
+            fs::write(&font, inter).unwrap();
+            let sheet = folder.join("sheet.jpg");
+            create_labelled_contact_sheet(&paths, &sheet, 2, &labels, &font).unwrap();
+            fs::read(sheet).unwrap()
+        };
+        let plain = sheet("plain");
+        assert!(
+            sheet("O'Brien \u{c784}\u{c2dc}") == plain,
+            "the labels of a font in a folder with an apostrophe and hangul are not those of the same font in a plain one"
+        );
+        let bare = dir.path().join("bare.jpg");
+        create_contact_sheet(&paths, &bare, 2).unwrap();
+        if draws_text() {
+            assert!(plain != fs::read(bare).unwrap(), "no label was drawn");
+        }
+    }
 
     #[test]
     fn transparency_comes_from_the_pixel_format() {
