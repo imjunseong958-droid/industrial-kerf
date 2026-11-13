@@ -45,9 +45,10 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 7] = [
+pub const BUNDLED: [(&str, &str); 8] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
+    ("shot-into", include_str!("../workflows/shot-into.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),

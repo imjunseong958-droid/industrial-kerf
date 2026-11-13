@@ -1041,15 +1041,28 @@ recipes, in `fixtures/shots/car`.
    What is still not done is a set with what moved left out, and either
    reading on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
-5. **More than one guide on a line**, whose half in the document is in
-   (2026-11-13): a line names each guide beside the first by what it is
+5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is
    of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds
    them under `guides`, a take is held to each, and `kerf-comfy` sends one
    to the workflow blank of its name ([shots.md](shots.md#recipes)). A
+   It was run on the one model in reach, which reads a picture and a
+   mask of it (`kerf-comfy`'s `shot-into`): the footage of Next 3 with a
+   box's place in flat grey as the guide, the same box in white on black
+   as `guide_mask`, both drawn by Kerf through the camera a model found.
+   The take is the footage with a red container standing where the box
+   was put, on all 65 frames of a shot that travels: outside the mask it
+   is 7.3 of 255 from the footage, a grey a pixel, and inside it 49.1;
+   `placed` has the container 0.027 of a frame height from the box, 0.90
+   its size, with an `overlap` of 0.66, where the best take that made the
+   whole picture had 0.42. A box 1% of the frame was filled in from its
+   surroundings and no crate drawn; one of 2.7% was made. So what the
+   loop was for is done once, end to end: a thing put into a filmed shot
+   by where it stands in the scene. What is not in it: the set hiding the
+   thing, since the footage is a flat picture under it. A
    `generate` line handed a model one
    guide. A model that reads a picture and its depth, or depth and ids,
-   wants each named. No model in reach reads two, and Wan VACE takes one
-   control video, so this waits for one that does.
+   wants each named. No model in reach reads two of those, and Wan VACE takes one
+   control video, so a picture with its depth waits for one that does.
 6. **How a point moves, as a direction of its own**, whose half in the
    document is in (2026-11-13): `generate … moves=<clip>` puts a clip's
    place on each frame in the request, read from the frame as `shows`

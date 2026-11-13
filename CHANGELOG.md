@@ -83,6 +83,9 @@ on `main`; its section here becomes the release's notes on GitHub
   choosing another has the media be that take again.
 - A glTF file's morph targets are read: a face or a shape that the file
   reshapes by weights is reshaped as its animation has it.
+- `kerf-comfy` comes with `shot-into`: a shot that keeps its guide where a
+  second guide, `guide_mask`, is black and makes it anew where that is
+  white, which puts a thing into footage where the scene has it.
 - `kerf-comfy` hands a signal to a workflow as a grey video at a
   `{signal_video}` blank, for a node that reads a mask a frame, and comes
   with `shot-timed`: a shot that keeps its guide where a signal is 0 and

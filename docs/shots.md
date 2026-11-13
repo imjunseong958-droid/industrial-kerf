@@ -777,6 +777,12 @@ sequence, from the sequence's first, at the sequence's rate:
 
 What a signal does to the picture is the model's, not Kerf's. Kerf knows no
 model that reads one by name. Of the workflows that come with `kerf-comfy`
+one reads a second guide, `shot-into`: a shot that keeps its guide where
+`guide_mask` is black and makes it anew from the prompt where that is
+white, for a thing put into footage. Draw the guide with the thing's place
+in flat grey over the footage, and the mask as the same thing in white on
+black, each a sequence with the one camera
+(`generate model=into guide={guide.mp4} guide_mask={mask.mp4}`). And
 one reads a signal, `shot-timed`: a shot that follows its guide where the
 signal is 0 and is made anew from the prompt where it is 1, the signal
 reaching the model as a mask a frame. `shot` has no blank for one, so a
