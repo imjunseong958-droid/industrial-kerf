@@ -31,7 +31,15 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   cabin are two of them. Give it a light, or it is one flat color. With
   `file="car.glb"` it is a glTF model, `height` tall, a color a part; name
   the file on the recipe's `needs` line, so that replacing it asks for the
-  shot again.
+  shot again. A part the file gives a picture or corner colors is drawn in
+  them, and lights do not change it. `animation="Walk"` plays one of the
+  file's animations, by name or number, looping from the clip's start;
+  `seconds={0f:0 48f:1}` retimes it.
+- A file with a camera, a set rebuilt from a shot, is seen through it:
+  `look` with `mesh: {"clip": "set", "camera": "shot"}` returns the lines
+  that add that camera, and `mesh` alone lists the file's cameras and
+  animations. What is added then stands in the set, before or behind its
+  walls.
 - In depth x runs right, y down, and z away from the viewer, in frame
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a

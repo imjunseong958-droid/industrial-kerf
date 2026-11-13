@@ -586,6 +586,37 @@ impl Drawing {
         }
     }
 
+    /// The plan of the program's mesh clip `id`, and its sequence's.
+    fn mesh_plan(&self, id: &str) -> Option<(&SequencePlan, &ClipPlan)> {
+        let sequence = self.sequences.first()?;
+        sequence
+            .tracks
+            .iter()
+            .flat_map(|track| &track.shown)
+            .map(|shown| &shown.plan)
+            .find(|plan| plan.clip.id.as_str() == id && matches!(plan.source, Source::Mesh))
+            .map(|plan| (sequence, plan))
+    }
+
+    /// See [`Compositor::mesh_file`](crate::Compositor::mesh_file).
+    pub fn mesh_file(&self, id: &str) -> std::result::Result<crate::MeshFile, String> {
+        let (_, plan) = self.mesh_plan(id).ok_or("it is no mesh of this sequence")?;
+        three_d::mesh::holds(&plan.clip)
+    }
+
+    /// See [`Compositor::mesh_camera`](crate::Compositor::mesh_camera).
+    pub fn mesh_camera(&self, id: &str, camera: usize, at: Time) -> Option<crate::CameraPlace> {
+        let (sequence, plan) = self.mesh_plan(id)?;
+        let time = at - plan.clip.start;
+        if time.is_negative() || time >= plan.clip.duration {
+            return None;
+        }
+        let size = (sequence.width as usize, sequence.height as usize);
+        let scene = three_d::Scene::at(sequence, at, size);
+        let to_output = self.geometry(sequence, plan, time);
+        three_d::mesh::camera(&scene, plan, &to_output, time, camera)
+    }
+
     /// See [`Compositor::frame_key`](crate::Compositor::frame_key).
     pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
         let mut hash = DefaultHasher::new();

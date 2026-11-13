@@ -520,3 +520,611 @@ fn a_file_that_is_no_mesh_is_said_when_the_sequence_is_planned() {
     std::fs::write(folder.path().join("broken.glb"), b"glTF\x02\0\0\0").unwrap();
     assert!(from_file(folder.path(), "broken.glb", "", Pass::Picture).is_err());
 }
+
+/// A glTF file as it is written: its bytes, and the views and accessors onto them.
+#[derive(Default)]
+struct Writing {
+    bytes: Vec<u8>,
+    views: Vec<String>,
+    accessors: Vec<String>,
+}
+
+impl Writing {
+    /// `bytes` as a view of the file's buffer, and which view it is.
+    fn view(&mut self, bytes: &[u8]) -> usize {
+        while !self.bytes.len().is_multiple_of(4) {
+            self.bytes.push(0);
+        }
+        self.views.push(format!(
+            "{{\"buffer\":0,\"byteOffset\":{},\"byteLength\":{}}}",
+            self.bytes.len(),
+            bytes.len()
+        ));
+        self.bytes.extend(bytes);
+        self.views.len() - 1
+    }
+
+    fn accessor(&mut self, bytes: &[u8], component: u32, across: usize, more: &str) -> usize {
+        let view = self.view(bytes);
+        let kind = match across {
+            1 => "SCALAR",
+            2 => "VEC2",
+            3 => "VEC3",
+            4 => "VEC4",
+            _ => "MAT4",
+        };
+        let width = match component {
+            5121 => 1,
+            5123 => 2,
+            _ => 4,
+        };
+        self.accessors.push(format!(
+            "{{\"bufferView\":{view},\"componentType\":{component},\"count\":{},\"type\":\"{kind}\"{more}}}",
+            bytes.len() / width / across
+        ));
+        self.accessors.len() - 1
+    }
+
+    /// `values` as an accessor of floats, `across` to an element, and which accessor it is.
+    fn floats(&mut self, across: usize, values: &[f32]) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        self.accessor(&bytes, 5126, across, "")
+    }
+
+    fn shorts(&mut self, values: &[u16]) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        self.accessor(&bytes, 5123, 1, "")
+    }
+
+    /// Bytes from 0 to 255 read as shares of 255, `across` to an element.
+    fn shares(&mut self, across: usize, values: &[u8]) -> usize {
+        self.accessor(values, 5121, across, ",\"normalized\":true")
+    }
+
+    /// The file's JSON: `rest`, its other members, and what was written.
+    fn json(&self, rest: &str, uri: &str) -> String {
+        format!(
+            "{{\"asset\":{{\"version\":\"2.0\"}},{rest},\"buffers\":[{{{uri}\"byteLength\":{}}}],\"bufferViews\":[{}],\"accessors\":[{}]}}",
+            self.bytes.len(),
+            self.views.join(","),
+            self.accessors.join(",")
+        )
+    }
+
+    /// The file as a `.glb` named `name` in `folder`.
+    fn glb(&self, folder: &std::path::Path, name: &str, rest: &str) {
+        let mut json = self.json(rest, "").into_bytes();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let mut bytes = self.bytes.clone();
+        while !bytes.len().is_multiple_of(4) {
+            bytes.push(0);
+        }
+        let mut file = Vec::new();
+        file.extend(b"glTF");
+        file.extend(2u32.to_le_bytes());
+        file.extend((12 + 8 + json.len() as u32 + 8 + bytes.len() as u32).to_le_bytes());
+        file.extend((json.len() as u32).to_le_bytes());
+        file.extend(b"JSON");
+        file.extend(&json);
+        file.extend((bytes.len() as u32).to_le_bytes());
+        file.extend(b"BIN\0");
+        file.extend(&bytes);
+        std::fs::write(folder.join(name), file).unwrap();
+    }
+
+    /// The file as a `.gltf` named `name` in `folder`, with its bytes beside it.
+    fn gltf(&self, folder: &std::path::Path, name: &str, rest: &str) {
+        std::fs::write(folder.join(format!("{name}.bin")), &self.bytes).unwrap();
+        let json = self.json(rest, &format!("\"uri\":\"{name}.bin\","));
+        std::fs::write(folder.join(name), json).unwrap();
+    }
+
+    /// A sheet 2 across and 1 up, standing on the ground and facing the viewer, its corners from
+    /// the top left round by the top right: the accessors of where they are, and of its indices.
+    fn sheet(&mut self) -> (usize, usize) {
+        let corners = [-1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0];
+        (self.floats(3, &corners), self.shorts(&[0, 1, 2, 0, 2, 3]))
+    }
+}
+
+/// A PNG file of `width` by `height`, each pixel what `color` says, written with no packing.
+fn png(width: u32, height: u32, color: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xEDB8_8320 & (!(crc & 1)).wrapping_add(1));
+            }
+        }
+        !crc
+    }
+    let mut raw = Vec::new();
+    for y in 0..height {
+        raw.push(0);
+        for x in 0..width {
+            raw.extend(color(x, y));
+        }
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &raw {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut packed = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (index, block) in blocks.iter().enumerate() {
+        packed.push(u8::from(index + 1 == blocks.len()));
+        packed.extend((block.len() as u16).to_le_bytes());
+        packed.extend((!(block.len() as u16)).to_le_bytes());
+        packed.extend(*block);
+    }
+    packed.extend(((b << 16) | a).to_be_bytes());
+    let mut file = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        file.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        file.extend(&body);
+        file.extend(crc(&body).to_be_bytes());
+    };
+    let mut header = Vec::new();
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &packed);
+    chunk(b"IEND", &[]);
+    file
+}
+
+/// A sequence with a mesh read from the file `name` of `folder`, `height` 0.5, and `more` tracks.
+fn sheet_of(folder: &std::path::Path, name: &str, more: &str, pass: Pass) -> Frame {
+    posed(folder, name, "", more, pass)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .frame(Rate::FPS_24.time_of(3), 1.0)
+}
+
+/// The same for two seconds, with `set` said of the mesh as well.
+fn posed(
+    folder: &std::path::Path,
+    name: &str,
+    set: &str,
+    more: &str,
+    pass: Pass,
+) -> Result<Compositor, String> {
+    let mut project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip thing gen=mesh@1 at=0f dur=48f\n      set file=\"{name}\" height=0.5 {set}\n{more}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    project.resolve_paths(Catalog::builtin(), folder);
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass,
+            ..ComposeOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+const SUN: &str = "  track V2 video\n    clip sun gen=light@1 at=0f dur=24f\n      set kind=directional x=1 y=0 z=0.3\n";
+const SCENE: &str = "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}]";
+
+#[test]
+fn a_part_with_a_picture_is_drawn_in_it_with_no_light() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A picture in four: red and green above, blue and white below.
+    let quarters = png(8, 8, |x, y| match (x < 4, y < 4) {
+        (true, true) => [255, 0, 0],
+        (false, true) => [0, 255, 0],
+        (true, false) => [0, 0, 255],
+        (false, false) => [255, 255, 255],
+    });
+    let mut pictured = Writing::default();
+    let (points, indices) = pictured.sheet();
+    let normals = pictured.floats(3, &[0.0, 0.0, 1.0].repeat(4));
+    let places = pictured.floats(2, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+    let picture = pictured.view(&quarters);
+    pictured.glb(
+        folder.path(),
+        "pictured.glb",
+        &format!(
+            concat!(
+                "{},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{},\"NORMAL\":{},\"TEXCOORD_0\":{}}},",
+                "\"indices\":{},\"material\":0}}]}}],",
+                "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}],",
+                "\"textures\":[{{\"source\":0,\"sampler\":0}}],\"samplers\":[{{\"wrapS\":33071,\"wrapT\":33071}}],",
+                "\"images\":[{{\"bufferView\":{},\"mimeType\":\"image/png\"}}]",
+            ),
+            SCENE, points, normals, places, indices, picture
+        ),
+    );
+    // The same sheet with no picture, in its material's white.
+    let mut plain = Writing::default();
+    let (points, indices) = plain.sheet();
+    let normals = plain.floats(3, &[0.0, 0.0, 1.0].repeat(4));
+    plain.glb(
+        folder.path(),
+        "plain.glb",
+        &format!(
+            "{SCENE},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{points},\"NORMAL\":{normals}}},\"indices\":{indices},\"material\":0}}]}}],\"materials\":[{{}}]"
+        ),
+    );
+
+    // 180 across and 90 down about the middle, each quarter of the picture where it was laid.
+    let frame = sheet_of(folder.path(), "pictured.glb", "", Pass::Picture);
+    assert!(reaches(reach(&frame), [70, 45, 250, 135]), "{:?}", reach(&frame));
+    assert_eq!(pixel(&frame, 115, 67), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 205, 67), [0, 255, 0]);
+    assert_eq!(pixel(&frame, 115, 112), [0, 0, 255]);
+    assert_eq!(pixel(&frame, 205, 112), [255, 255, 255]);
+    // A light from the side dims the plain sheet, and leaves the picture as it is.
+    let lit = sheet_of(folder.path(), "pictured.glb", SUN, Pass::Picture);
+    assert!(lit == frame);
+    let plain_lit = sheet_of(folder.path(), "plain.glb", SUN, Pass::Picture);
+    assert_eq!(pixel(&sheet_of(folder.path(), "plain.glb", "", Pass::Picture), 115, 67), [255; 3]);
+    assert!(pixel(&plain_lit, 115, 67)[0] < 200, "{:?}", pixel(&plain_lit, 115, 67));
+    // In its passes it is the shape it is, whatever is laid over it.
+    for pass in [Pass::Ids, Pass::Depth] {
+        let with = sheet_of(folder.path(), "pictured.glb", "", pass);
+        assert!(with == sheet_of(folder.path(), "plain.glb", "", pass));
+        assert_eq!(pixel(&with, 115, 67), pixel(&with, 205, 112));
+    }
+}
+
+/// A JPEG of 16 by 16, all of it one orange: 224, 128, 32.
+const ORANGE: &[u8] = &[
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x00, 0x00, 0x01,
+    0x00, 0x01, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x0f, 0x4c, 0x61, 0x76, 0x63, 0x36, 0x33, 0x2e, 0x31,
+    0x2e, 0x31, 0x30, 0x32, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08, 0x08, 0x08, 0x07, 0x07, 0x07, 0x06, 0x06, 0x07, 0x07,
+    0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x09, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09, 0x0a, 0x0a, 0x0a,
+    0x0c, 0x0c, 0x0b, 0x0b, 0x0e, 0x0e, 0x0e, 0x11, 0x11, 0x14, 0xff, 0xc4, 0x00, 0x4c, 0x00, 0x01,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x05, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x06, 0x07, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00,
+    0x10, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xda, 0x00, 0x0c, 0x03,
+    0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0xa4, 0x02, 0x7e, 0x6e, 0xff, 0xd9,
+];
+
+#[test]
+fn a_picture_beside_the_file_is_read_and_one_far_off_is_read_small() {
+    let folder = tempfile::tempdir().expect("a folder");
+    std::fs::write(folder.path().join("an orange.jpg"), ORANGE).unwrap();
+    // Squares of black and white, a texel each: from far off they are an even grey.
+    let checks = png(256, 256, |x, y| [if (x + y) % 2 == 0 { 255 } else { 0 }; 3]);
+    std::fs::write(folder.path().join("checks.png"), checks).unwrap();
+    for (picture, name) in [("an%20orange.jpg", "orange.gltf"), ("checks.png", "checks.gltf")] {
+        let mut file = Writing::default();
+        let (points, indices) = file.sheet();
+        // With no normals told, and the picture laid twice across and twice down: it starts
+        // again.
+        let places = file.floats(2, &[0.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 2.0]);
+        file.gltf(
+            folder.path(),
+            name,
+            &format!(
+                concat!(
+                    "{},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{},\"TEXCOORD_0\":{}}},",
+                    "\"indices\":{},\"material\":0}}]}}],",
+                    "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}],",
+                    "\"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"{}\"}}]",
+                ),
+                SCENE, points, places, indices, picture
+            ),
+        );
+    }
+    let orange = sheet_of(folder.path(), "orange.gltf", "", Pass::Picture);
+    for (x, y) in [(75, 50), (160, 90), (245, 130)] {
+        let [r, g, b] = pixel(&orange, x, y);
+        assert!(
+            r.abs_diff(224) <= 3 && g.abs_diff(128) <= 3 && b.abs_diff(32) <= 3,
+            "{:?}",
+            pixel(&orange, x, y)
+        );
+    }
+    // 512 texels across 180 pixels and down 90 are noise if each place reads the picture as it
+    // is; read at the size they are on the screen they are grey, and half the light of white is
+    // 188.
+    let checks = sheet_of(folder.path(), "checks.gltf", "", Pass::Picture);
+    for y in 50..130 {
+        for x in 75..245 {
+            let grey = pixel(&checks, x, y)[0];
+            assert!(grey.abs_diff(188) <= 6, "{grey} at {x}, {y}");
+        }
+    }
+    // A picture that is none is said, with which.
+    std::fs::write(folder.path().join("checks.png"), b"\x89PNG and no more").unwrap();
+    std::fs::write(
+        folder.path().join("again.gltf"),
+        std::fs::read(folder.path().join("checks.gltf")).unwrap(),
+    )
+    .unwrap();
+    let said = from_file(folder.path(), "again.gltf", "", Pass::Picture)
+        .err()
+        .expect("no picture");
+    assert!(said.contains("its picture 0"), "{said}");
+}
+
+#[test]
+fn corners_given_colors_are_drawn_in_them_with_no_light() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    // Red on the left and blue on the right, as bytes, with how clear each is.
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let colors = file.shares(4, &[red, blue, blue, red].concat());
+    file.glb(
+        folder.path(),
+        "colored.glb",
+        &format!(
+            "{SCENE},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{points},\"COLOR_0\":{colors}}},\"indices\":{indices}}}]}}]"
+        ),
+    );
+    let frame = sheet_of(folder.path(), "colored.glb", SUN, Pass::Picture);
+    let [r, g, b] = pixel(&frame, 72, 90);
+    assert!(r > 250 && g == 0 && b < 40, "{:?}", pixel(&frame, 72, 90));
+    let [r, g, b] = pixel(&frame, 247, 90);
+    assert!(r < 40 && g == 0 && b > 250, "{:?}", pixel(&frame, 247, 90));
+    // Halfway it is half of each, in light: 188 of 255.
+    let [r, _, b] = pixel(&frame, 160, 90);
+    assert!(r.abs_diff(188) <= 2 && b.abs_diff(188) <= 2, "{r} {b}");
+    // The clip's color is for a part with none of its own.
+    let tinted = sheet_of(folder.path(), "colored.glb", "", Pass::Picture);
+    assert!(tinted == sheet_of(folder.path(), "colored.glb", SUN, Pass::Picture));
+}
+
+/// Where the sheet of `name` reaches at `frame`, with `set` said of its clip.
+fn reach_at(folder: &std::path::Path, name: &str, set: &str, frame: i64) -> [u32; 4] {
+    let drawn = posed(folder, name, set, "", Pass::Picture).unwrap_or_else(|error| panic!("{error}"));
+    reach(&drawn.frame(Rate::FPS_24.time_of(frame), 1.0))
+}
+
+#[test]
+fn a_files_animation_moves_its_nodes_as_the_clip_runs_or_as_its_seconds_say() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A sheet whose node goes half its own width to the right in a second, and one before it
+    // that is never asked for.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let away = file.floats(3, &[0.0, 0.0, 0.0, 0.0, 50.0, 0.0]);
+    file.glb(
+        folder.path(),
+        "slides.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"children\":[1]}},{{\"mesh\":0}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}},",
+                "{{\"name\":\"slide\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            points, indices, times, away, times, places
+        ),
+    );
+    let rest = [70, 45, 250, 135];
+    let by = |pixels: u32| [rest[0] + pixels, rest[1], rest[2] + pixels, rest[3]];
+    let at = |set: &str, frame: i64| reach_at(folder.path(), "slides.glb", set, frame);
+    // Asked for no animation, it is at rest however long the clip has run.
+    assert!(reaches(at("", 0), rest) && reaches(at("", 12), rest));
+    // Named, or numbered, it is as far into it as the clip has run: its own size is the one it
+    // has at rest, so half its width is 90 pixels.
+    assert!(reaches(at("animation=\"slide\"", 0), rest));
+    assert!(reaches(at("animation=\"slide\"", 12), by(45)), "{:?}", at("animation=\"slide\"", 12));
+    assert!(reaches(at("animation=\"1\"", 18), by(67)));
+    // Past its end it starts again, or stays at its end.
+    assert!(reaches(at("animation=\"slide\"", 36), by(45)));
+    // (There its right side is past the frame's.)
+    let held = at("animation=\"slide\" loop=false", 36);
+    assert!(held[0].abs_diff(160) <= 1 && held[2] == 320, "{held:?}");
+    // `seconds` says how far into it in place of the clip's time: held, or keyed at any speed
+    // and either way.
+    assert!(reaches(at("animation=\"slide\" seconds=0.5", 0), by(45)));
+    assert!(reaches(at("animation=\"slide\" seconds=0.5", 30), by(45)));
+    assert!(reaches(at("animation=\"slide\" seconds={0f:0 48f:1}", 12), by(22)));
+    assert!(reaches(at("animation=\"slide\" seconds={0f:1 24f:0}", 6), by(67)));
+    // In its passes it is where it is in the picture.
+    for pass in [Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "slides.glb", "animation=\"slide\"", "", pass).unwrap();
+        let there = reach(&drawn.frame(Rate::FPS_24.time_of(12), 1.0));
+        assert!(reaches(there, by(45)), "{there:?}");
+    }
+    // An animation the file has none of is said, with those it has.
+    let said = posed(folder.path(), "slides.glb", "animation=\"walk\"", "", Pass::Picture)
+        .err()
+        .expect("no such animation");
+    assert!(said.contains("has no animation `walk`: it has `0`, `slide`"), "{said}");
+}
+
+#[test]
+fn a_skin_bends_a_mesh_with_its_bones() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A sheet whose left corners are one bone's and whose right corners are another's, which
+    // goes up by the sheet's height in a second. Its corners go round from the top left.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let joints = file.accessor(&[0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 5121, 4, "");
+    let weights = file.floats(4, &[1.0, 0.0, 0.0, 0.0].repeat(4));
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    file.glb(
+        folder.path(),
+        "bends.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1,2]}}],",
+                "\"nodes\":[{{\"mesh\":0,\"skin\":0}},{{}},{{}}],\"skins\":[{{\"joints\":[1,2]}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{},\"JOINTS_0\":{},\"WEIGHTS_0\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"name\":\"lift\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":2,\"path\":\"translation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            points, joints, weights, indices, times, places
+        ),
+    );
+    for pass in [Pass::Picture, Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "bends.glb", "animation=\"lift\"", "", pass).unwrap();
+        // At rest it is the sheet: 180 across and 90 down about the middle.
+        let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
+        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        // A second in, its right side is its own height higher and its left where it was.
+        let bent = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
+        assert!(reaches(reach(&bent), [70, 0, 250, 135]), "{:?}", reach(&bent));
+        assert!(lit(&bent, 245, 20) && !lit(&bent, 245, 60));
+        assert!(lit(&bent, 75, 120) && !lit(&bent, 75, 30));
+    }
+}
+
+#[test]
+fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // The sheet, 2 across and 1 up about x and z at 0. A camera 5 from the sheet's middle and
+    // to its right, turned to look at it, that goes in a second to straight before it; and one
+    // a unit to the right of that place, tipped a quarter turn about its own line.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let times = file.floats(1, &[0.0, 1.0]);
+    let places = file.floats(3, &[3.0, 0.5, 4.0, 0.0, 0.5, 5.0]);
+    let (sin, cos) = (0.6f32.atan2(0.8) / 2.0).sin_cos();
+    let turns = file.floats(4, &[0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 1.0]);
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    file.glb(
+        folder.path(),
+        "seen.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1,2]}}],\"nodes\":[{{\"mesh\":0}},",
+                "{{\"camera\":0,\"translation\":[3,0.5,4],\"rotation\":[0,{},0,{}]}},",
+                "{{\"camera\":0,\"name\":\"tipped\",\"translation\":[1,0.5,5],\"rotation\":[0,0,{},{}]}}],",
+                "\"cameras\":[{{\"name\":\"main\",\"type\":\"perspective\",\"perspective\":{{\"yfov\":0.5,\"znear\":0.1}}}}],",
+                "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{}}}]}}],",
+                "\"animations\":[{{\"name\":\"move\",\"channels\":[",
+                "{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}},",
+                "{{\"sampler\":1,\"target\":{{\"node\":1,\"path\":\"rotation\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}},{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            sin, cos, half, half, points, indices, times, places, times, turns
+        ),
+    );
+    // Where the clip puts the mesh changes where the camera is said to be, and not what it sees.
+    for set in [
+        "animation=\"move\"",
+        "animation=\"move\" x=0.2 y=-0.1 z=0.7 rotate_y=30 rotate_x=10 scale=1.5",
+    ] {
+        let mesh = posed(folder.path(), "seen.glb", set, "", Pass::Picture).unwrap();
+        let held = mesh.mesh_file("thing").unwrap();
+        assert_eq!(held.animations, [("move".to_owned(), 1.0)]);
+        assert_eq!(held.playing, Some(0));
+        assert_eq!(held.size, [2.0, 1.0, 0.0]);
+        let names: Vec<&str> = held.cameras.iter().map(|camera| camera.name.as_str()).collect();
+        assert_eq!(names, ["main", "main"]);
+        let seen = |camera: usize, frame: i64| {
+            let at = Rate::FPS_24.time_of(frame);
+            let place = mesh.mesh_camera("thing", camera, at).expect("a camera");
+            let fov = place.fov.expect("a lens");
+            assert!((fov - 0.5f64.to_degrees()).abs() < 1e-9);
+            let camera = format!(
+                "  track V2 video\n    clip cam gen=camera@1 at=0f dur=48f\n      set x={} y={} z={} pan={} tilt={} roll={} fov={fov}\n",
+                place.x, place.y, place.z, place.pan, place.tilt, place.roll
+            );
+            let through = posed(folder.path(), "seen.glb", set, &camera, Pass::Picture).unwrap();
+            reach(&through.frame(at, 1.0))
+        };
+        // From the right, the sheet's near end is larger and its middle is the frame's: where
+        // the file's own numbers put its corners, by hand.
+        let from_right = seen(0, 0);
+        assert!(reaches(from_right, [110, 50, 224, 130]), "{set}: {from_right:?}");
+        // Straight on from 5 away through a lens of half a radian, it is 141 across and 70.5
+        // down about the middle.
+        let straight = seen(0, 24);
+        assert!(reaches(straight, [90, 55, 230, 125]), "{set}: {straight:?}");
+        // Tipped a quarter turn the way glTF turns, the sheet stands on end above the middle.
+        let tipped = seen(1, 0);
+        assert!(reaches(tipped, [125, 0, 195, 90]), "{set}: {tipped:?}");
+    }
+    // Outside its clip, and of a camera the file has not, there is nothing to say.
+    let mesh = posed(folder.path(), "seen.glb", "", "", Pass::Picture).unwrap();
+    assert!(mesh.mesh_camera("thing", 0, Rate::FPS_24.time_of(48)).is_none());
+    assert!(mesh.mesh_camera("thing", 2, Rate::FPS_24.time_of(0)).is_none());
+    assert!(mesh.mesh_file("nothing").is_err());
+}
+
+#[test]
+fn what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // A set of two walls a unit apart, the near one half as wide, with the camera that saw
+    // them from 5 before the near one.
+    let mut file = Writing::default();
+    let far = file.floats(3, &[-1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 0.0, -1.0, -1.0, 0.0, -1.0]);
+    let near = file.floats(3, &[-1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+    let indices = file.shorts(&[0, 1, 2, 0, 2, 3]);
+    file.glb(
+        folder.path(),
+        "set.glb",
+        &format!(
+            concat!(
+                "\"scene\":0,\"scenes\":[{{\"nodes\":[0,1]}}],",
+                "\"nodes\":[{{\"mesh\":0}},{{\"camera\":0,\"translation\":[0,0.5,5]}}],",
+                "\"cameras\":[{{\"type\":\"perspective\",\"perspective\":{{\"yfov\":0.5,\"znear\":0.1}}}}],",
+                "\"meshes\":[{{\"primitives\":[",
+                "{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":0}},",
+                "{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},\"material\":1}}]}}],",
+                "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,0,1,1]}}}},",
+                "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,1,0,1]}}}}]",
+            ),
+            far, indices, near, indices
+        ),
+    );
+    let set = posed(folder.path(), "set.glb", "", "", Pass::Picture).unwrap();
+    let place = set.mesh_camera("thing", 0, Rate::FPS_24.time_of(0)).unwrap();
+    // The set is a unit long and half the frame's height tall, so its walls are a quarter of
+    // the frame's height either side of its clip's z, the far one behind. A red ball between
+    // them, across the near wall's edge, on a track under the set's.
+    let with_ball = |z: f64, pass: Pass| {
+        let more = format!(
+            concat!(
+                "  track V2 video\n    clip ball gen=mesh@1 at=0f dur=48f\n",
+                "      set kind=ball width=0.2 height=0.2 length=0.2 color=#ff0000 z={}\n",
+                "  track V3 video\n    clip cam gen=camera@1 at=0f dur=48f\n",
+                "      set x={} y={} z={} pan={} tilt={} roll={} fov={}\n",
+            ),
+            z, place.x, place.y, place.z, place.pan, place.tilt, place.roll, place.fov.unwrap()
+        );
+        posed(folder.path(), "set.glb", "", &more, pass)
+            .unwrap()
+            .frame(Rate::FPS_24.time_of(0), 1.0)
+    };
+    // Between the walls: the near wall hides its left half, and it hides the far wall.
+    let between = with_ball(0.0, Pass::Picture);
+    assert_eq!(pixel(&between, 150, 90), [0, 255, 0]);
+    assert_eq!(pixel(&between, 170, 90), [255, 0, 0]);
+    // Before both, all of it shows; behind both, none of it.
+    let before = with_ball(-0.5, Pass::Picture);
+    assert_eq!(pixel(&before, 150, 90), [255, 0, 0]);
+    assert_eq!(pixel(&before, 170, 90), [255, 0, 0]);
+    let behind = with_ball(0.5, Pass::Picture);
+    assert_eq!(pixel(&behind, 150, 90), [0, 255, 0]);
+    assert_eq!(pixel(&behind, 170, 90), [0, 0, 255]);
+    // And so in the passes: where the ball shows it is its own clip, nearer than the far wall
+    // and farther than the near one.
+    let ids = with_ball(0.0, Pass::Ids);
+    assert_ne!(pixel(&ids, 170, 90), pixel(&ids, 150, 90));
+    assert_eq!(pixel(&ids, 150, 90), pixel(&ids, 190, 60));
+    let depth = with_ball(0.0, Pass::Depth);
+    let grey = |x: u32, y: u32| pixel(&depth, x, y)[0];
+    assert!(grey(150, 90) > grey(170, 90) && grey(170, 90) > grey(190, 60));
+}

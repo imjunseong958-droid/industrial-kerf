@@ -12,6 +12,7 @@ pub mod inbound;
 mod lint;
 mod making;
 mod media_facts;
+mod mesh_camera;
 pub mod permissions;
 mod presets;
 pub mod qc;
