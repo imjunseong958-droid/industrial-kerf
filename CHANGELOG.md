@@ -76,6 +76,10 @@ on `main`; its section here becomes the release's notes on GitHub
   For these `kerf-comfy` writes the lens a rebuilt set was seen through
   (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
   in the units of the camera path found of the same frames.
+- A recipe's `generate` line can hand a model where a thing goes:
+  `moves=<clip>` puts the clip's box on every frame in the request, read
+  from the picture, for a model that takes the way a thing goes as points.
+  A `kerf-comfy` workflow reads them at a `{moves}` blank.
 - `look` with `placed` says where a take has a clip's subject beside where
   its guide has it, in frame heights, read from the take's own picture with
   no model: how far off, which way, and how large the take drew it. It

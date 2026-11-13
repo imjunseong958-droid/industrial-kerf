@@ -56,6 +56,7 @@ but a file's name stand for themselves.
 | `first=`, `last=` | The first and the last frame. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
 | `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
+| `moves=` | Where a thing goes: a clip of the project, by its id, handed over as its place on every frame. As many as wanted. See [Where a thing goes](#where-a-thing-goes). |
 | `seconds=`, `size=WxH` | How long and how large. |
 | `seed=` | A whole number, for a model that gives the same file for the same seed. |
 | `out={name}` | Writes a file for a later step in place of the shot's own, so one model's picture can be the next one's `first=`. |
@@ -68,6 +69,8 @@ recipe names has to be inside the project.
 So a model is told three things, each its own way: **where** things are and
 how the camera moves, by a guide; **when** something happens and how much, by
 a signal; and **what** it all looks like, by the prompt and the references.
+A model that takes the way a thing goes as numbers of its own is handed
+that too, from the same clips (`moves=`).
 
 ## Making a shot
 
@@ -231,7 +234,10 @@ A take's record holds a hash of each thing it was made from:
 - each sequence it has Kerf render: that sequence, the sequences it nests,
   and the media lines they play;
 - each signal it hands a model, as the model is handed it: the numbers, and
-  nothing else of the sequence its clip is in.
+  nothing else of the sequence its clip is in;
+- the sequence of each clip it hands a model the way of (`moves=`), as for
+  one it renders: where a clip is on the frame is what its whole sequence
+  draws of it.
 
 A media wants making when one of those is no longer what its take was made
 from, and it says which: `look` lists it under `toMake` with
@@ -331,7 +337,7 @@ Beside `run`, a model's entry can say so under `takes`:
 | `size` | The picture it makes, width and height: the size a guide for it is drawn at, and the most a `size=` asks of it. |
 | `rate` | The frames a second it makes: the rate a guide for it is drawn at. |
 | `seconds` | The longest shot it makes at once. |
-| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref` and `signal`. An empty list is a model that takes a prompt alone. |
+| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref`, `signal` and `moves`. An empty list is a model that takes a prompt alone. |
 | `more` | The other names a line can set for it, each with the value it has when the line does not. |
 
 Each is there only where the person says it, and anything else under `takes`
@@ -431,6 +437,7 @@ start from. `kerf-comfy --list` names those that come with it; the others
 | `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
 | `{width}`, `{height}`, `{frames}`, `{fps}` | What `size=` and `seconds=` come to for this model. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
+| `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
 
@@ -772,6 +779,43 @@ Not here yet: a signal from how loud a sound is, as a voice swells, and from
 footage, such as how fast something moves. Nor is there a place in the editor
 to draw one under the picture: its keys are text, which an agent writes, or a
 person with `set`.
+
+## Where a thing goes
+
+A guide shows a model where things are, as a picture it follows. Some models
+take the way a thing goes as numbers of their own, a point for each frame,
+and make the picture go that way. The document has those numbers: a clip is
+where its sequence draws it. A `generate` line names the clip, and the
+request holds its place on each frame of its sequence, from the first:
+
+```text
+generate model=led prompt="a crate on a street" first={first.png} moves=crate
+```
+
+```json
+"moves": [{ "name": "crate", "rate": 16.0, "frame": [640, 360],
+            "places": [[0.4701, 0.5602, 0.0286, 0.0648], null] }]
+```
+
+- A place is the middle of the clip's box across and down the sequence's
+  frame, and the box's width and height, each from 0 to 1. It is read from
+  the frame and not from the clip's own numbers, as `look` with `shows`
+  reads it, so a camera that moves, a parent, and what stands before the
+  clip are all in it. On a frame the clip does not show on it is `null`.
+- `frame` is the sequence's size. A guide of another shape has its sides
+  cut off, so a share across the sequence is not the same share across the
+  model's picture; a model's program brings one to the other, as
+  `kerf-comfy` does at a `{moves}` blank.
+- A clip that draws nothing, a camera or a light, is nowhere and is refused.
+  A model whose `reads` has no `moves` is said to have no use for it, and
+  the making goes on.
+- A take is held to the clip's whole sequence, as to one it renders: moving
+  the clip, the camera, or what hides it asks for the shot again.
+
+No workflow that comes with `kerf-comfy` reads it, and none was run: the
+server the rest was measured on has the nodes that take point tracks and
+not the weights. What is in is the document's side, to the request and to a
+workflow's blank.
 
 ## Guides
 

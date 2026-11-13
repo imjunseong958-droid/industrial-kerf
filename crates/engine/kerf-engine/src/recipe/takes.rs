@@ -25,7 +25,7 @@
 //! trimming, moving, grading, or titling a made shot never asks for it
 //! again.
 
-use super::{signal::Signal, stored, within, Recipe};
+use super::{moves::Moves, signal::Signal, stored, within, Recipe};
 use crate::error::{EngineError, Result};
 use kerf_model::{Content, Media, Project};
 use serde::{Deserialize, Serialize};
@@ -275,6 +275,14 @@ pub(crate) fn from(
         from.insert(
             format!("sequence {sequence}"),
             sequence_hash(project, directory, sequence),
+        );
+    }
+    // Where a clip goes is what its sequence draws of it, so a take is held to that sequence.
+    for clip in recipe.moves() {
+        let sequence = Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
+        from.insert(
+            format!("sequence {sequence}"),
+            sequence_hash(project, directory, &sequence),
         );
     }
     for signal in recipe.signals() {

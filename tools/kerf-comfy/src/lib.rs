@@ -256,6 +256,26 @@ pub fn make(
             signal.name
         ));
     }
+    // Where clips go, as one list of tracks in the pixels and frames asked for.
+    if !request.moves.is_empty() {
+        if blanks.contains(request::MOVES) {
+            values.insert(
+                request::MOVES.to_owned(),
+                json!(request::tracks(&request.moves, frames, fps, (width, height))),
+            );
+            say(&format!(
+                "handed where {} goes as {frames} points each",
+                request
+                    .moves
+                    .iter()
+                    .map(|clip| format!("`{}`", clip.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        } else {
+            unread.push(format!("`{}`", request::MOVES));
+        }
+    }
     if !unread.is_empty() {
         say(&format!(
             "this workflow reads no {}: left out",

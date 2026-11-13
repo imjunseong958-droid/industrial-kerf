@@ -1012,7 +1012,14 @@ recipes, in `fixtures/shots/car`.
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one
    control video, so this waits for one that does.
-6. **How a point moves, as a direction of its own.** ComfyUI has nodes for
+6. **How a point moves, as a direction of its own**, whose half in the
+   document is in (2026-11-13): `generate … moves=<clip>` puts a clip's
+   place on each frame in the request, read from the frame as `shows`
+   reads it, and `kerf-comfy` fills a workflow's `{moves}` blank with them
+   as tracks of points in the model's pixels
+   ([shots.md](shots.md#where-a-thing-goes), `recipe/moves.rs`). On the
+   travelling shot the crate's 65 places are the boxes `shows` gives. No
+   model was run with them: the weights are still not on the server. ComfyUI has nodes for
    Wan-Move, which follows paths of points given as coordinates
    (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
    reads and what the document says outright, so its path is there to hand

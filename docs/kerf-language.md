@@ -320,6 +320,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   from 0 to 1. A recipe's `generate … signal=swell` hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
   not, or is turned off, it is 0. Changing it asks for the shot again. See [shots.md](shots.md#signals).
+  `generate … moves=<clip>` hands a model where any clip that draws is on each frame, its box in
+  shares of the frame, for a model that takes the way a thing goes as points
+  ([shots.md](shots.md#where-a-thing-goes)).
 - Printing is deterministic and omits defaults. Printing with annotations
   appends comments with each clip's end and source out; parsing ignores them.
 

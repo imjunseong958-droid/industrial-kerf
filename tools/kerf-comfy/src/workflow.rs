@@ -244,6 +244,9 @@ impl Workflow {
         if signals > 0 {
             reads.push("signal");
         }
+        if blanks.contains(crate::request::MOVES) {
+            reads.push(crate::request::MOVES);
+        }
         let more: Map<String, Value> = self
             .set
             .iter()

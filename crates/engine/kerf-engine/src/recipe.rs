@@ -40,6 +40,7 @@
 //! opening or drawing a project.
 
 pub mod model;
+pub mod moves;
 pub mod signal;
 pub mod takes;
 pub mod told;
@@ -50,6 +51,7 @@ use crate::sidecar::{self, CancellationToken};
 use kerf_compose::Pass;
 use kerf_model::Rate;
 use model::{Ask, Models, Source};
+use moves::Moves;
 use signal::Signal;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -196,6 +198,24 @@ impl Recipe {
             Step::Generate(ask) => Some(ask.model.as_str()),
             _ => None,
         })
+    }
+
+    /// The clips whose way across the frame its steps hand a model, by their ids, each
+    /// once.
+    pub fn moves(&self) -> Vec<&str> {
+        let mut moves: Vec<&str> = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Generate(ask) => Some(&ask.moves),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        moves.sort_unstable();
+        moves.dedup();
+        moves
     }
 
     /// The signals its steps hand a model: clips of the project, by their
@@ -697,6 +717,9 @@ pub fn plan(
     for signal in recipe.signals() {
         Signal::read(project, signal).map_err(EngineError::msg)?;
     }
+    for clip in recipe.moves() {
+        Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
+    }
     for model in recipe.models() {
         models.command(model)?;
     }
@@ -875,6 +898,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 ("last", ask.last.is_some()),
                 ("ref", !ask.references.is_empty()),
                 (model::SIGNAL, !ask.signals.is_empty()),
+                (model::MOVES, !ask.moves.is_empty()),
             ];
             for (name, _) in given
                 .iter()
@@ -1079,6 +1103,19 @@ impl Making<'_> {
                         .map(|signal| Signal::read(self.project, signal))
                         .collect::<std::result::Result<Vec<_>, _>>()
                         .map_err(EngineError::msg)?;
+                    let moves = if ask.moves.is_empty() {
+                        Vec::new()
+                    } else {
+                        // Where a clip is is read from the frame, which wants its media.
+                        let mut resolved = self.project.clone();
+                        resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
+                        on_line("reading where what moves goes");
+                        ask.moves
+                            .iter()
+                            .map(|clip| Moves::read(&resolved, clip))
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(EngineError::msg)?
+                    };
                     let asked = ask.request(
                         &|file| {
                             within(self.folder, file, "file the recipe needs")
@@ -1086,6 +1123,7 @@ impl Making<'_> {
                         },
                         &|name| self.file_for(name),
                         &signals,
+                        &moves,
                     )?;
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
                     let words = self.models.command(&ask.model)?;
