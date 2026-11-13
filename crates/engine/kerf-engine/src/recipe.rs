@@ -157,7 +157,7 @@ impl Recipe {
                 }
                 "needs" | "run" | "render" | "generate" => {
                     return Err(wrong(format!(
-                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth]`, or `generate model=<name> prompt=\"…\" …`"
+                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth|relative]`, or `generate model=<name> prompt=\"…\" …`"
                     )))
                 }
                 other => {
@@ -328,13 +328,13 @@ fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>
             Some(("pass", value)) => {
                 pass = Pass::parse(value).ok_or_else(|| {
                     format!(
-                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, or `depth`, how near it is"
+                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, or `relative`, the same stretched to each frame's own nearest and farthest"
                     )
                 })?;
             }
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth|relative`"
                 ))
             }
         }

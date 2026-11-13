@@ -121,6 +121,42 @@ fn a_depth_pass_is_lighter_the_nearer() {
 }
 
 #[test]
+fn a_relative_depth_pass_is_stretched_to_its_frames_own_nearest_and_farthest() {
+    let (depth, relative) = (frame(SCENE, Pass::Depth), frame(SCENE, Pass::Relative));
+    let grey = |frame: &Frame, x: u32, y: u32| pixel(frame, x, y)[0];
+    let all = |frame: &Frame| -> Vec<u8> {
+        frame
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[0])
+            .filter(|grey| *grey > 0)
+            .collect()
+    };
+    // It reaches white at the nearest and stops just above black at the farthest, where the
+    // pass by the scene's own numbers does neither.
+    let (own, stretched) = (all(&depth), all(&relative));
+    assert_eq!(stretched.len(), own.len());
+    assert_eq!(*stretched.iter().max().unwrap(), 255);
+    assert_eq!(*stretched.iter().min().unwrap(), 1);
+    assert!(*own.iter().max().unwrap() < 255 && *own.iter().min().unwrap() > 2);
+    // What is not in depth is black in both, and the order of near and far is the same.
+    assert_eq!(grey(&relative, 10, 5), 0);
+    let places = [(160, 90), (118, 90), (160, 150), (160, 175)];
+    for pair in places.windows(2) {
+        let nearer = |frame: &Frame| grey(frame, pair[0].0, pair[0].1) > grey(frame, pair[1].0, pair[1].1);
+        assert_eq!(nearer(&depth), nearer(&relative), "{pair:?}");
+    }
+    // It is a pass of its own, by name and by number.
+    assert_eq!(Pass::parse("relative"), Some(Pass::Relative));
+    assert_eq!(Pass::Relative.name(), "relative");
+    let at = Rate::FPS_24.time_of(3);
+    let key = |pass| compositor(SCENE, pass).frame_key(at, 1.0);
+    assert!(key(Pass::Relative).is_some() && key(Pass::Relative) != key(Pass::Depth));
+}
+
+#[test]
 fn a_pass_holds_still_and_is_kept_apart_from_the_picture() {
     // The same scene drawn twice is the same pass to the byte, and its number is its own.
     let at = Rate::FPS_24.time_of(3);

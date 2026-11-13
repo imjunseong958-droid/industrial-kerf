@@ -431,11 +431,11 @@ impl Drawing {
                 let [r, g, b, _] = premultiplied(color);
                 flat(picture, [r, g, b]);
             }
-            Pass::Depth if plan.three_d => {
+            Pass::Depth | Pass::Relative if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
                 three_d::shade_by_depth(&scene, plan, picture, to_output, at - plan.clip.start);
             }
-            Pass::Depth => flat(picture, [0.0; 3]),
+            Pass::Depth | Pass::Relative => flat(picture, [0.0; 3]),
         }
     }
 
@@ -579,10 +579,14 @@ impl Drawing {
                 pixel[..3].copy_from_slice(&sdr);
             });
         }
+        let mut rgba = image.to_rgba8_over_black();
+        if self.pass == Pass::Relative {
+            stretch_to_its_own(&mut rgba);
+        }
         Frame {
             width: image.w as u32,
             height: image.h as u32,
-            rgba: image.to_rgba8_over_black(),
+            rgba,
         }
     }
 
@@ -1216,7 +1220,7 @@ impl Drawing {
                 let [r, g, b, _] = premultiplied(color);
                 three_d::mesh::Shade::Flat([r, g, b])
             }
-            Pass::Depth => three_d::mesh::Shade::Near,
+            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
         };
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
@@ -1782,6 +1786,30 @@ fn caption_on(
     let text = caption_text(caption, caption_size(sequence, scale));
     text::draw(&mut image, &text, [w as f32 / 2.0, h as f32 * 0.95], 1.0);
     image
+}
+
+/// A depth pass's greys stretched to the nearest and the farthest it has, as they are
+/// written: what is in depth goes from one above black, the farthest, to white, the
+/// nearest, and what is not stays black. A frame with one distance alone is white there.
+fn stretch_to_its_own(rgba: &mut [u8]) {
+    let (mut least, mut most) = (u8::MAX, 0u8);
+    for pixel in rgba.as_chunks::<4>().0.iter().filter(|pixel| pixel[0] > 0) {
+        (least, most) = (least.min(pixel[0]), most.max(pixel[0]));
+    }
+    if most == 0 {
+        return;
+    }
+    let span = f64::from(most - least).max(1.0);
+    rgba.par_chunks_mut(4).for_each(|pixel| {
+        if pixel[0] > 0 {
+            let grey = if most > least {
+                (1.0 + f64::from(pixel[0] - least) / span * 254.0).round() as u8
+            } else {
+                u8::MAX
+            };
+            pixel[..3].fill(grey);
+        }
+    });
 }
 
 /// What a sequence is being drawn at: when, how large, and, with clips in depth, how they are seen.

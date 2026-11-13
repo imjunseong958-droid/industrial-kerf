@@ -63,6 +63,12 @@ pub enum Pass {
     /// camera left where it is, and darker the farther, black where nothing is in depth. A clip
     /// out of depth has no distance, and is black.
     Depth,
+    /// [`Self::Depth`] with each frame stretched to its own nearest and farthest: the
+    /// farthest of what is in depth just above black and the nearest white, as a model that
+    /// reads depth from a picture gives it, and as one trained on such depth expects it.
+    /// It does not hold still: the same place is another grey as what is in the frame
+    /// changes.
+    Relative,
 }
 
 impl Pass {
@@ -72,6 +78,7 @@ impl Pass {
             "picture" => Some(Self::Picture),
             "ids" => Some(Self::Ids),
             "depth" => Some(Self::Depth),
+            "relative" => Some(Self::Relative),
             _ => None,
         }
     }
@@ -82,6 +89,7 @@ impl Pass {
             Self::Picture => "picture",
             Self::Ids => "ids",
             Self::Depth => "depth",
+            Self::Relative => "relative",
         }
     }
 }

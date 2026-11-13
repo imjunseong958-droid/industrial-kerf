@@ -81,6 +81,9 @@ on `main`; its section here becomes the release's notes on GitHub
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.
+- A guide can be drawn as depth stretched to each frame's own nearest and
+  farthest, `render … pass=relative`, as a model that reads depth from a
+  picture gives it; `pass=depth` still goes by the scene's own numbers.
 - A `generate` line can hand a model more than one guide, each by what it
   is of: `guide={picture.mp4} guide_depth={depth.mp4}`.
 - A recipe's `generate` line can hand a model where a thing goes:

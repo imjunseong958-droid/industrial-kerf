@@ -495,7 +495,7 @@ What is built for it, in this order, each measured before the next:
    signal's frames, with a workflow whose strength or mask takes a number a
    frame.
 2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
-   is of, and how near it is (`render … pass=ids|depth`). What ties one
+   is of, and how near it is (`render … pass=ids|depth|relative`). What ties one
    frame to the next has been found to guide better than depth alone
    ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)), and an ids
    pass does: a clip keeps its color as it moves. A pass is the picture's
@@ -508,9 +508,11 @@ What is built for it, in this order, each measured before the next:
    with no kernels: a guide is small. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
-   farthest may want it stretched, which is not done. A pass has reached a
-   model as its guide and come back as a take (Measured, below); a line
-   cannot yet hand a model a picture and a pass at once.
+   farthest may want it stretched, which is `pass=relative` (2026-11-13),
+   not yet held beside `pass=depth` on a model. A pass has reached a
+   model as its guide and come back as a take (Measured, below), and a
+   line hands a model a picture and a pass at once by naming the second
+   (`guide_depth=`, Next 5).
 3. **What `look` says of a scene in depth**, which is in: `look` with
    `shows` and `at` (`kerf_engine::shows`). It draws the frame's ids pass,
    and then each clip alone with the others made clear, so that what is
