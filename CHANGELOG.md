@@ -63,7 +63,9 @@ on `main`; its section here becomes the release's notes on GitHub
   comes to on each frame. `kerf-comfy` gives it to a workflow at a `{signal}`
   blank, a number for each frame the model makes; the workflow it comes with
   reads none yet. Changing a signal asks for the shot again; nothing else in
-  its sequence does ([docs/shots.md](docs/shots.md#signals)).
+  its sequence does ([docs/shots.md](docs/shots.md#signals)). An agent's
+  `look` with `signal` writes a signal's keys from the onsets of a sound on
+  the timeline, so that what a model is told happens on its beats.
 - A recipe's `render` line can draw a pass in place of the picture:
   `pass=ids` gives every clip one flat color of its own, and `pass=depth`
   how near each pixel is, for a model that follows one

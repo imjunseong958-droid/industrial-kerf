@@ -38,7 +38,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   `gen=signal@1` clip on a track of its own in the guide's sequence, from
   `at=0f` for the shot's length, with `value` keyed 0 to 1, and
   `signal=<clip>` on the `generate` line. The prompt says what the number is
-  of. Hold a peak for two of the model's frames, or it arrives lower. A
+  of. Where the moments are a sound's, music's beats or what was recorded,
+  `look` with `signal` writes the keys from the clip that plays it. Hold a
+  peak for two of the model's frames, or it arrives lower. A
   model that does not read one is said to have no use for it in `notes`:
   leave it off the line.
 - Read the guide before writing the recipe, at its first, middle, and last

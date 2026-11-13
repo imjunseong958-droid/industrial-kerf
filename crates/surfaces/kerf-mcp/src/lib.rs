@@ -16,6 +16,7 @@ pub mod permissions;
 mod presets;
 pub mod qc;
 mod qc_full;
+mod signal;
 mod text_lint;
 
 pub use making::{answer_make_requests, make_requests, MakingEvent, MakingWatcher};

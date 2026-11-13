@@ -407,7 +407,9 @@ What is built for it, in this order, each measured before the next:
 
 1. **Signals**, which are in: `gen=signal@1`, and `signal=` on a `generate`
    line (`recipe/signal.rs`). Held by tests from the clip to the numbers a
-   workflow's node is given. *Not measured against a model:* none in reach
+   workflow's node is given. `look` with `signal` writes one's keys from the
+   onsets of a sound on the timeline (`kerf-mcp/src/signal.rs`), which is how
+   a signal is taken from music where Adobe's is. *Not measured against a model:* none in reach
    reads one, and the workflow that comes with `kerf-comfy` has no blank for
    one. The first thing to learn is whether a take's event lands on the
    signal's frames, with a workflow whose strength or mask takes a number a

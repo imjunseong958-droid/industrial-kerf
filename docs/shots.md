@@ -520,11 +520,25 @@ node that takes a list of numbers, a frame each
 ([A model on a ComfyUI server](#a-model-on-a-comfyui-server)); what it does
 there, a strength, a mask's weight, a motion scale, is the workflow's to say.
 
-Not here yet: a signal read from sound, such as the beats of a track or a
-voice's loudness, and from footage, such as how fast something moves. Both
-would be `look` writing these keyframes, as `track` writes a camera's. Nor
-is there a place in the editor to draw one under the picture: its keys are
-text, which an agent writes, or a person with `set`.
+A signal's moments can be a sound's. An agent's `look` with `signal` reads
+the onsets of the sound a clip on the timeline plays, the beats of a track
+or a ball on a floor, and gives the line that has a signal clip of the same
+sequence be 1 for a few frames from each and 0 between:
+
+```text
+look {"signal": {"of": "a1", "clip": "bounce", "hold": 3}}
+  → set bounce value={0f:0:hold 12f:1:hold 15f:0:hold 36f:1:hold 39f:0:hold}
+```
+
+`hold` is how many frames each lasts, 3 unless said; onsets nearer each other
+than that run together, and those that fall outside the signal clip are
+counted and left out. It reads onsets, where a sound starts, and not how
+loud it is.
+
+Not here yet: a signal from how loud a sound is, as a voice swells, and from
+footage, such as how fast something moves. Nor is there a place in the editor
+to draw one under the picture: its keys are text, which an agent writes, or a
+person with `set`.
 
 ## Guides
 

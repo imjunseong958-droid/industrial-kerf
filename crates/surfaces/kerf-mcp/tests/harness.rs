@@ -3281,6 +3281,56 @@ fn look_says_what_shows_of_each_clip_and_what_hides_it() {
     assert!(on_media.contains("program"), "{on_media}");
 }
 
+/// `look` writes a signal's keys from the onsets of a sound on the timeline, and the edit that
+/// runs them has the signal follow it.
+#[test]
+fn look_writes_a_signals_keys_from_a_sounds_onsets() {
+    // The footage's tone starts on its first frame, which the clip plays a second in.
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00
+  track V2 video
+    clip cue gen=signal@1 at=0f dur=120f
+  track A1 audio
+    clip a1 media=m1 at=00:00:01:00 dur=00:00:02:00
+",
+    ) else {
+        return;
+    };
+    let read = ok(
+        &router,
+        "look",
+        json!({"signal": {"of": "a1", "clip": "cue"}}),
+    );
+    assert_eq!(
+        read["script"], "set cue value={0f:0:hold 30f:1:hold 33f:0:hold}",
+        "{read}"
+    );
+    assert_eq!((&read["onsets"], &read["outside"]), (&json!(1), &json!(0)));
+    // A longer hold, for a model that makes fewer frames.
+    let held = ok(
+        &router,
+        "look",
+        json!({"signal": {"of": "a1", "clip": "cue", "hold": 6}}),
+    );
+    assert_eq!(
+        held["script"],
+        "set cue value={0f:0:hold 30f:1:hold 36f:0:hold}"
+    );
+    // The line is one an edit runs, and the document then holds the keys.
+    ok(&router, "edit", json!({"script": read["script"]}));
+    // What cannot be read is said.
+    let wrong = |arguments: Value| message(&error(&router, "look", arguments));
+    assert!(wrong(json!({"signal": {"of": "a1", "clip": "c1"}})).contains("is not a signal"));
+    assert!(wrong(json!({"signal": {"of": "cue", "clip": "cue"}})).contains("plays no media"));
+    assert!(wrong(json!({"signal": {"of": "a9", "clip": "cue"}})).contains("no clip `a9`"));
+    assert!(
+        wrong(json!({"signal": {"of": "a1", "clip": "cue", "hold": 0}})).contains("from 1 to 240")
+    );
+    assert!(
+        wrong(json!({"signal": {"of": "a1", "clip": "cue"}, "at": ["0f"]})).contains("used alone")
+    );
+}
+
 /// Looking something up by what it does reaches what the clip properties and generators can do.
 #[test]
 fn look_finds_what_is_in_properties_and_parameters() {
