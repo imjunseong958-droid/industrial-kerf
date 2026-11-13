@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "MoGe 3: a frame of a guide rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. frame=<n> picks the frame, from 0. The camera that saw it is at the file's own origin, looking along its z backward; the file holds no camera, and out={lens.txt} is its lens, degrees down the frame.",
+  "about": "A frame of a guide rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. frame=<n> picks the frame, from 0. The camera that saw it is at the file's own origin, looking along its z backward; the file holds no camera, and out={lens.txt} is its lens, degrees down the frame.",
   "of": "guide",
   "frames": { "most": 480, "step": 1 },
   "size": [1920, 1080],

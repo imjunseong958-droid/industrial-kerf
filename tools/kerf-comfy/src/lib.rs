@@ -6,7 +6,7 @@
 //! on a ComfyUI server:
 //!
 //! ```json
-//! { "vace": { "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"] } }
+//! { "shot": { "run": ["kerf-comfy", "--workflow", "shot", "{request}"] } }
 //! ```
 //!
 //! It fits the guide to the model ([`guide`]), sends up the files the

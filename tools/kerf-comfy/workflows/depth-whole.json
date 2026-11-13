@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "Depth Anything 3, a picture at a time: how near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter. normalization=min_max stretches each frame to its own nearest and farthest.",
+  "about": "How near each pixel of a guide is, a picture at a time, the sky too, as a grey video of the guide's own size, rate, and frames, nearer whiter. normalization=min_max stretches each frame to its own nearest and farthest.",
   "of": "guide",
   "frames": { "most": 480, "step": 1 },
   "size": [1920, 1080],

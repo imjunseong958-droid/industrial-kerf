@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "Depth Anything 3, a guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}), or the depth it then agrees on across the frames, as a video (out={depth.mp4}). At most 81 frames.",
+  "about": "A guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}), or the depth it then agrees on across the frames, as a video (out={depth.mp4}). At most 81 frames.",
   "of": "guide",
   "frames": { "most": 81, "step": 1 },
   "size": [1920, 1080],

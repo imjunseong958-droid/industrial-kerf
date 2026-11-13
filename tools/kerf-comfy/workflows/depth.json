@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "MoGe 3: how near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter, each frame stretched to its own nearest and farthest. output=normal_opengl gives which way each pixel faces, output=mask what is not sky. refine_steps=1 is 2.5 times as fast, for a very long shot.",
+  "about": "How near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter, each frame stretched to its own nearest and farthest. output=normal_opengl gives which way each pixel faces, output=mask what is not sky. refine_steps=1 is 2.5 times as fast, for a very long shot.",
   "of": "guide",
   "frames": { "most": 480, "step": 1 },
   "size": [1920, 1080],

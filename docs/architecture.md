@@ -747,7 +747,7 @@ recipes, in `fixtures/shots/car`.
    | `generate model=set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
    | `generate model=depth-whole guide=…` | 10 to 11 s |
    | `generate model=cameras guide=… out={cameras.txt}` | 10 to 11 s |
-   | for scale, `generate model=vace …`, the take itself | 94 s |
+   | for scale, `generate model=shot …`, the take itself | 94 s |
 
    *A take read back* (`shots/readback.kerfrecipe`): the depth pass of the
    car driving across, the take Wan VACE made of it with seed 7, and that

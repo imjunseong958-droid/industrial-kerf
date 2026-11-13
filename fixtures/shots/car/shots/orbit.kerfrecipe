@@ -1,4 +1,4 @@
 kerf-recipe 1
 # The camera goes 75 degrees round the car, parked.
 render s3 {guide.mp4} pass=depth size=832x480 rate=16
-generate model=vace prompt="the camera circles around a red sports car parked on a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
+generate model=shot prompt="the camera circles around a red sports car parked on a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
