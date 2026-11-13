@@ -89,9 +89,29 @@ jobs:
       # Asked of the whole workspace, here and in the step after, so the tests
       # built above are the ones run: asked of one package, cargo builds its
       # dependencies again with that package's features alone.
+      #
+      # The daemon's command returns before the daemon is on the bus: it
+      # wakes the command, and only then unlocks the keyring and takes
+      # org.freedesktop.secrets. A test that calls before it has makes the
+      # bus start a second daemon from the name's service file. Where that
+      # one cannot find the first (no XDG_RUNTIME_DIR, and the first one's
+      # GNOME_KEYRING_CONTROL goes to /dev/null) it becomes the secret
+      # service itself, and has no password: its keyring is locked, the
+      # prompt it asks for has no display, and the write fails. With the
+      # tests already built they start 0.3 s after the daemon, which was
+      # once too soon (NoReply, 10 Nov). So the tests wait for the name to
+      # have an owner; asking who owns a name starts nothing.
       - name: Test the system keychain
         run: |
-          dbus-run-session -- sh -c 'printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null && cargo test --workspace --lib real_keychain -- --ignored'
+          dbus-run-session -- sh -e -c '
+            printf kerf | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            tries=0
+            until dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets | grep -q "boolean true"; do
+              tries=$((tries + 1))
+              [ "$tries" -lt 300 ] || { echo "gnome-keyring never took org.freedesktop.secrets" >&2; exit 1; }
+              sleep 0.1
+            done
+            cargo test --workspace --lib real_keychain -- --ignored'
       # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
       # of a GPU: looks, grades and transitions stay on the GPU. Only this
       # runs on llvmpipe; its pow and exp are a byte off color.basic's.
