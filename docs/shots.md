@@ -394,7 +394,7 @@ under the model's name. It reads the workflow and asks no server:
 {
   "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"],
   "takes": {
-    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone.",
+    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
     "size": [832, 480],
     "rate": 16,
     "seconds": 5.0625,
@@ -590,12 +590,11 @@ its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
 workflow's to say. Handing one model a picture and a pass of it at once has
 no word on a `generate` line yet, and normals are not drawn.
 
-Wan 2.1 VACE, the model `kerf-comfy` comes with a workflow for, follows a
-depth pass, and made the better take of it: where a guide in flat colors had
-it keep the guide's boxes, the same scene's depth had it draw the car, in
-the same place and on the same path. An ids pass it could make nothing of:
-that one is what `look` with `shows` reads a frame by, and what a model
-trained on one would be given
+Which kind a model follows is the model's, and its entry's `about` says. A
+model that covers a render is handed the picture. Wan 2.1 VACE 1.3B, the
+small model `kerf-comfy` comes with a workflow for, made more of a depth
+pass than of a picture in flat colors, and nothing of an ids pass, which is
+what `look` with `shows` reads a frame by
 ([architecture.md](architecture.md#measured)).
 
 ### A guide at the model's size and rate

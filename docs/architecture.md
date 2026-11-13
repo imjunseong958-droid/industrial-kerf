@@ -45,17 +45,21 @@ signal's frames are the cut's. What draws from them stays apart: a
 compositor for what has to be exact, a guide renderer for what has to be
 fast, and a model for the picture.
 
-Four rules follow, and the rest of this document should be read by them:
+Five rules follow, and the rest of this document should be read by them:
 
 - **The compositor assembles; it does not stylize.** An effect that makes a
   look or an image a model would make better has no claim on a kernel, and
   what Kerf's own model already does (keyframes, clips in depth, shapes) is
   not done a second time as an effect. What an editor needs exact stays:
   color correction, keys and mattes, tracking, restoration, retouching, text.
-- **Kerf builds no mesh renderer and no model.** A scene with geometry is a
-  renderer's, reached by a recipe's `run`; clips in depth, cameras, and
-  lights stay as the guide that needs nothing installed, and are not made
-  more exact than a guide needs.
+- **Kerf draws a guide, not a finished picture, and builds no model.** What
+  a guide shows is what the shot has, so a guide holds real shapes: clips in
+  depth, cameras and lights now, and rigid geometry next (What directs a
+  model). What it leaves out is what a model draws over it: materials, light
+  that bounces, hair, water. What bends or breaks, a character or a cloth,
+  is a renderer's, reached by a recipe's `run`. This rule said until
+  2026-11-13 that Kerf builds no mesh renderer; the fifth rule is why it
+  changed.
 - **The speed that counts is from an intent to an accepted shot.** That is
   how many makings a shot takes, times how long a model takes, which no
   kernel shortens. What Kerf can do is make a guide show at once, say which
@@ -68,6 +72,13 @@ Four rules follow, and the rest of this document should be read by them:
   to say more (which clip a pixel is of, how far it is, where it went) before
   it is made to look better. Models change by the season; what directed a
   shot should still read when they have.
+- **The model assumed is a good one.** Kerf is designed for a model that
+  keeps what a guide shows, its places, paths, shapes, and camera, and draws
+  the picture over it well: a 3D render covered by a model is how such shots
+  are made. The model on hand for a test may be small and poor. What it
+  makes shows that the way from the document to a take works, and decides
+  nothing of the design: no effect is kept and no geometry left out because
+  a small model drew badly.
 
 ### What these rules cut
 
@@ -108,6 +119,44 @@ the grid (The engine).
 The six 360° effects that are left (projection, rotation, placing, and
 seam-safe blur, denoise, and sharpen) stay: they are how 360° footage is
 assembled, not how it is made to look, and Kerf keeps editing it.
+
+### What is looked at again
+
+The first cut went by the effects that had no kernel. A second goes by the
+fifth rule, and asks one thing of every effect and look that is left: is it
+done to a made shot, the same every time, or is it how a shot looks? The
+first stays. The second is a model's, by its prompt and its references, or a
+grade's.
+
+What stays, and none of it because a model is weak:
+
+- *What makes shots agree.* A model gives each shot a look of its own, and a
+  cut wants them the same: color correction and grades, grain and a vignette
+  laid over a whole cut as a finish, lens correction, stabilizing,
+  restoration.
+- *What has to be exact.* Text and logos, and what is done to them in depth;
+  keys, mattes, masks, and what tracking writes, by which exact things are
+  laid on a made shot.
+- *What reads a picture.* Tracking, cutting out, solving a camera, scopes. A
+  take is held to its guide by them (What directs a model, Next).
+- *What is free at the edit.* A change to a look a model made costs a making.
+  Cuts, transitions, retiming, and sound cost nothing and play at once, which
+  the third rule counts.
+- How 360° footage is assembled, and the little of a photo editor.
+
+What is looked at, among the 104 effects and generators left: those that
+make a look and nothing else. `light.glint`, `light.leaks`, `light.rgbsplit`
+and `light.wonderglow`, `distort.wavewarp`, and `stylize.posterize` are
+plainly that, and so are the looks made of them, `look.vhs`, `look.glitch`,
+`look.dreamy`, `look.sparkle`, and the leaks of `look.film`. The rest have
+not been gone through.
+
+It is done as the first cut was, and is not done yet: an audit of all of
+them, each said to stay or to go, with what is used in its place (a prompt, a
+reference, a grade, an effect that stays) and what names it now (a look, a
+skill, a preset); then the cut, with `retired.tsv` saying what to use
+instead. A document that names a cut effect is refused, so the list is a
+person's to agree to before anything goes.
 
 Not decided here: the CPU's code as a second way to draw every frame (What
 others do, vork).
@@ -372,7 +421,9 @@ What was decided of it:
   is wanted is kept by leaving its guide as it is.
 
 This is one scene, one seed and a small model. What a larger one keeps of a
-guide is not known from it, and depth or normal passes wait on that.
+guide is not known from it. By the fifth rule at the top, what was decided
+here of how fine a guide has to be is of that model, and is no reason to
+leave shapes out of a guide (What directs a model, 4).
 
 Left as it is: what `kerf-comfy --describe` lists under `more`
 includes the server's file names, which a person may want out of what an
@@ -396,9 +447,10 @@ writes the scene. It should not, and the 3D guide stays and grows.
   clips laid end to end that should have stood together. Writing in three
   dimensions stopped being hard; checking did not.
 - *What makes a 3D engine large is what a model now draws.* Materials,
-  light that bounces, smoke, water. A guide wanted an outline and nothing
-  finer (above), so a renderer of Kerf's own would be large where it adds
-  nothing.
+  light that bounces, smoke, water: a renderer of Kerf's own that drew them
+  would be large where it adds nothing. Shapes are not among them. A model
+  that covers a render keeps the render's shapes, so those a guide has to
+  have (4).
 - *Color, keys, sound, retiming, and text are not in space.* They are done
   to a frame or along time, and they are what has to be exact. Nothing is
   gained by placing them in a scene.
@@ -428,8 +480,8 @@ What is built for it, in this order, each measured before the next:
    with no kernels: a guide is small. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
-   farthest may want it stretched, which is not done. A depth pass handed
-   to a model as its guide made the better take (Measured, below); a line
+   farthest may want it stretched, which is not done. A pass has reached a
+   model as its guide and come back as a take (Measured, below); a line
    cannot yet hand a model a picture and a pass at once.
 3. **What `look` says of a scene in depth**, which is in: `look` with
    `shows` and `at` (`kerf_engine::shows`). It draws the frame's ids pass,
@@ -444,15 +496,13 @@ What is built for it, in this order, each measured before the next:
    of the frame. A clip that is partly clear is read as not showing, and
    said to be.
 
-4. **Meshes, if a measurement asks for them.** The first one did not
-   (Measured, below). The rule above stands: no mesh renderer. A clip with depth is its outline pushed straight back, so
-   what a camera sees going round it is a slab's side and not the thing's,
-   and that is the one place a guide of clips may fall short.
-   A shot whose camera goes a quarter of the way round a car, guided once by
-   Kerf's clips and once by a renderer's boxes through `run`, says whether
-   the take differs. If it does, what comes is a guide's worth: boxes,
-   spheres, a glTF read in, flat shading, and the passes of 2, with no
-   materials.
+4. **Geometry in the guide**, which is next (Next, 2). By the fifth rule
+   what a guide shows is what the shot has: a model covers a render and
+   keeps its shapes, so a car that is two boxes is a shot of two boxes. A
+   clip with depth is its outline pushed straight back, one profile of a
+   thing, and a thing has more than one. No measurement is waited for: this
+   was to be decided by what a small model made of a camera going round, and
+   the fifth rule says such a take decides nothing.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A recipe makes
    files in steps, and a draft that is not kept wants a way of its own: the
@@ -477,24 +527,18 @@ along a wet city street at dusk"; 65 frames at 832x480. A making took 78 to
 | `pass=ids` | 7 | The place and path of a faint outline with tail lights; the picture nearly black |
 | `pass=depth`, the camera going 75 degrees round the car, parked | 7 | The car in its place, seen from its side and then from behind as the camera went round. The scenery did not turn with it |
 
-What was decided of it:
+What it shows, and what it does not. The model is a small one kept for
+tests, so by the fifth rule how its takes look decides nothing of the
+design.
 
-- *A guide for a model that follows depth is its depth pass.* Both kept
-  where the car was and where it went. Depth left the model to draw the
-  thing, and color had it keep the guide's own shapes: the boxes that a
-  guide of 11 November's stayed as. With depth the color of a thing comes
-  from the prompt alone, and a backdrop out of depth is black, which the
-  model made a sky of. The `model-shot` skill says so.
-- *An ids pass is not a guide for this model.* It is what `look` reads a
-  frame by (3, above), and what a model trained on it would be given.
-- *The solids were enough for the car; the world had nothing to show the
-  move by.* Under a camera going round it the car turned as its solids did,
-  two outlines pushed back, which is what 4 doubted. What did not follow
-  was everything else: a road that is one gradient and a sky with no depth
-  say nothing of a camera's move, so the model held its scenery still. What
-  a guide wants first is things standing around its subject, not finer
-  geometry. This was not set beside a renderer's boxes, none being
-  installed where it was run, and it is one take.
+- *The way works.* A pass drawn from the document reached a model as its
+  guide through a recipe, and came back as a take, each time it was asked.
+- *Which kind of guide a model follows is the model's.* This one made more
+  of depth than of the picture, and nothing of ids. A model that covers a
+  render is handed the picture. So it is said with the model, in what its
+  entry says it is `about`, and is no rule of the skill's.
+- *With the camera going round, the car turned and the scenery did not.*
+  Written down, and nothing is decided by it.
 - *Signals are still not measured.* This model has no input that takes a
   number a frame, and it is the only one on that server.
 
@@ -502,11 +546,28 @@ This is one scene, two seeds and a small model, as before.
 
 #### Next
 
-What comes after these, in the order it would be built. The scene the
-measurements above were made on is kept, with its recipes, in
-`fixtures/shots/car`.
+What comes after these, in the order it would be built, by the five rules
+at the top. The scene the measurements above were made on is kept, with its
+recipes, in `fixtures/shots/car`.
 
-1. **A take held to its guide by numbers.** Every row of the tables above
+1. **The second cut.** The audit of the effects and looks that are left,
+   and then the cut (What is looked at again). It comes first because it is
+   small, and because what is left after it is what the rest is built
+   beside.
+2. **Geometry in the guide.** A clip whose picture is a mesh: read from a
+   glTF file, or one of a few solids, a box, a ball, a cylinder. It is placed,
+   keyed, and parented as any clip in depth is, seen by the sequence's
+   camera, and in the ids and depth passes and in `look` with `shows` as any
+   clip is, since those go by a clip and not by how it is drawn. It is drawn
+   in one flat color a part, with the scene's lights, which is all a model
+   covering it wants of it. Rigid only: what bends or breaks stays a
+   renderer's through `run`, or footage. To draw it, the planes' rays do not
+   do: it wants triangles and a depth for each pixel. EffectCraft's
+   `render/three_d/adv` at `5c54866` is such a rasterizer and is the place
+   to start from, carried into Kerf's terms as the rest was, and without its
+   materials. The first of it is the solids, which need no file and are
+   enough to say whether the passes and `shows` hold for a mesh.
+3. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the
    guide, and `track` follows a thing through a picture from points on it
@@ -516,7 +577,7 @@ measurements above were made on is kept, with its recipes, in
    the frame. It needs no model and no server, and is tried first on the
    takes `fixtures/shots/car` makes. It is what lets an agent say of a take
    what a person says of it, and choose between two.
-2. **Reading a picture back into what a guide is made of.** A pass goes from
+4. **Reading a picture back into what a guide is made of.** A pass goes from
    the document to a picture. The other way, from a picture to its depth,
    its normals, the color of its surfaces without their light, is what
    inverse rendering does (DiffusionRenderer, UniVidX, and in ComfyUI itself
@@ -529,7 +590,7 @@ measurements above were made on is kept, with its recipes, in
      a guide comes from ([shots.md](shots.md#guides)), which so far is handed
      to a model as its picture.
    - *A take read back.* Its depth beside its guide's depth pass says how
-     well it followed, where 1 above says only where the subject went.
+     well it followed, where 3 above says only where the subject went.
    - *Light.* Normals and surface color of footage are what Kerf's own
      lights would need to fall on it. Not before the first two are measured:
      it would have the compositor draw a look, which the first rule is
@@ -540,24 +601,19 @@ measurements above were made on is kept, with its recipes, in
    the model's weights are not (`LoadMoGeModel` lists none), so it was not
    run and no workflow is in the repository for it: one is written when it
    can be run.
-3. **A scene that says nothing of its camera's move is said to.** The guide
-   with the camera going round had a road and a sky and nothing else, and
-   the model held its scenery still. Where a camera moves and nothing but
-   the subject and one plane are in depth, `look` with `shows`, or the check,
-   says so: the fault is in the document, and is found there.
-4. **More than one guide on a line.** A `generate` line hands a model one
+5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one
    control video, so this waits for one that does.
-5. **How a point moves, as a direction of its own.** ComfyUI has nodes for
+6. **How a point moves, as a direction of its own.** ComfyUI has nodes for
    Wan-Move, which follows paths of points given as coordinates
    (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
    reads and what the document says outright, so its path is there to hand
    over, as a signal's numbers are. The weights were not on the server. It
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
-6. **A signal measured.** Still wanting a model that takes a number a frame.
-7. **In the editor**: somewhere to draw a signal's curve under the picture,
+7. **A signal measured.** Still wanting a model that takes a number a frame.
+8. **In the editor**: somewhere to draw a signal's curve under the picture,
    and to choose a take.
 
 Every effect the compositor runs on the CPU comes through that one interface,
