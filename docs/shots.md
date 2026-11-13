@@ -529,10 +529,25 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   `look` with `mesh` and `camera` has none to write. The lens comes as a
   file of its own, one number (`out={lens.txt}`).
 - **A set and a path of one size come from one answer.** A set one model
-  rebuilt and a path another found are each in units of their own, and
-  nothing says how many of one are one of the other. `set-views` makes the
-  set from the same reading of the frames a path comes from, so the two
-  fit as they are.
+  rebuilt and a path another found are each in units of their own.
+  `set-views` makes the set from the same reading of the frames a path
+  comes from, so the two fit as they are; for two that do not, `look`
+  finds the size from the footage (`fits`, below).
+- **A set of that reading is in the space of the frame the path counts
+  from**, whichever frame it shows. Read together, the frames are placed
+  from one of them, which the model picks and which is seldom the first:
+  of 65 frames filmed from a car it was frame 36. The path has that frame's
+  camera at its origin, not turned, and a set rebuilt of frame 0 is where
+  frame 36 would see it. So for such a set `frame` is the path's `anchor`,
+  which `look` returns, and not the frame the set is of; a shot that hardly
+  moves hides the difference, and one that travels draws nothing without
+  it. Sets of several frames are all in that one space.
+- **A set of one frame is what the camera leaves.** What a frame rebuilds
+  is what it saw, nearest best, and a camera that travels is past the near
+  ground of its first frame within a second. As it comes (`confidence=0.1`)
+  a set of frame 0 was off the picture by the middle of a four-second
+  drive; with `confidence=0` it held the far houses to the end and no road.
+  A set of a later frame, put in beside it, has the road again.
 - **`set-views` sends its guide up at the size its model runs at**, 504 on
   the longer side. The server's node makes the mesh over the guide's own
   pixels with a lens measured in the model's, so a guide of another size
@@ -554,9 +569,11 @@ being where its clip puts it, with as few keyframes as say it.
 | In `mesh` | Says |
 |---|---|
 | `from` | The file. What a model wrote of a shot's camera is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
-| `frame` | The frame of `from` the set was rebuilt from (the `frame=` its line gave), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
+| `frame` | The frame of `from` whose camera is at the mesh's own origin, 0 unless given, the others being where they were from it. For a set one model rebuilt of a frame alone (`set`), that frame, the `frame=` its line gave. For a set of the path's own reading (`set-views`), the path's `anchor`, whichever frame the set shows. |
 | `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
 | `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
+| `fits` | In place of `scale`: the media the path is the camera of, to find the size from. |
+| `lens` | A lens for the camera, degrees down the picture, in place of the one `from` has: the lens a set's own model found (`out={lens.txt}`), where the two models do not agree on it. |
 | `as` | A camera clip to `set`, where a new one is not wanted. |
 
 What comes back with the lines is `from`: its `frames`, how many of the
@@ -564,7 +581,34 @@ clip's were `placed`, and the least and most `fov` it found. The camera
 gets the middle one of them: a `gen=camera@1` has one lens, and what a
 model finds of a lens wavers by the frame, so a zoom does not come through.
 A path shorter than the mesh's clip holds still after its last frame, and
-is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
+is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`. `anchor` is
+the frame a path counts its places from, and a `note` says so where `frame`
+is another.
+
+**A size found.** A set of one model and a path of another are each in
+units of their own. With `fits`, `look` finds how many of the set's one of
+the path's is, from the footage and with no model
+(`kerf-mcp/src/set_scale.rs`): the set carries its frame as its colors, so
+seen from where the path has the camera on another frame it is a picture
+of that frame, at the right size and at no other. It is drawn through the
+path at 49 sizes from a sixty-fourth to sixty-four, on the four frames
+furthest from `frame`, each held to the footage's own frame over the
+pixels the set covers, and then more finely about the best.
+
+```json
+{ "mesh": { "clip": "set", "from": "cameras.txt", "frame": 0, "fits": "footage", "lens": 22.8 } }
+```
+
+| In `fit` | Says |
+|---|---|
+| `scale` | The size found, which the lines returned are written at. |
+| `error` | How far the set's picture is from the footage there, of 255 a pixel, over what the set covers. |
+| `sure` | How many times worse half or twice that size is. Near 1, any size fits as well: the camera turns and does not travel, or the set is of another frame than `frame`, and a `note` says so. |
+| `frames` | The frames of the path it was read on. |
+
+It takes a camera that travels, and about ten seconds. Where the two
+models do not agree on the lens no one size is right on every frame, and
+`sure` is low: read it as the nearest, and look at the frames.
 
 What is added to the set then goes on a track of its own, over the
 camera's or under it: the lines `look` writes put the camera on top, and a
@@ -602,6 +646,41 @@ still has near 1 where most of the frame is ground. A subject's `off` is
 read beside the frame's and the floor's: a take that followed has them
 alike, and one that did not has the subject several times the floor
 (`kerf-engine/src/follows.rs`).
+
+`follows` reads depth, so it does not say where the subject is: a crate a
+model drew a tenth of the frame to one side reads as the ground behind it,
+and a take with no crate at all can have the right depth where one was
+asked for. Where the take has it is `look` with `placed`, which reads the
+take's own picture and needs no model:
+
+```json
+{ "placed": { "take": "take", "clip": "crate" }, "sequence": "s2" }
+```
+
+`take` is the media whose picture is the take, and `clip` a clip the guide
+draws. The guide's ids pass gives the box around the clip on each frame, as
+`shows` does. The subject is found on the frame the guide shows most of it
+on, in that box with half as much room again on each side, and followed
+from there to both ends (`kerf_track::roto`), once in the take and once in
+the guide's own picture, and it is those two boxes that are held together:
+what a box followed in a picture adds to the box of an ids pass, its soft
+edge and what is hidden of it, is then in both
+(`kerf-engine/src/placed.rs`).
+
+| | Says |
+|---|---|
+| `off` | How far the middle of the take's box is from the middle of the guide's, in frame heights, as a mean over `frames`. |
+| `across`, `down` | The same with its direction: above 0 where the take has it to the right, or lower. |
+| `size` | How large the take drew it beside the guide, by the sides of the two boxes: above 1 larger. |
+| `worst` | The frame it is furthest off on, from 0, and how far. |
+| `shown`, `frames` | How many frames the guide shows the clip on, and on how many of them it was followed in both pictures. |
+| `from`, `read` | The frame it was found on, and the first and last it was followed on. |
+
+A take that has nothing to follow where the guide has the subject is
+followed on a frame or two, or refused: read `frames` beside `shown` before
+`off`, a `note` saying so where they differ. The tracker goes by color and
+edges and is not told what the subject is, so it holds what the picture
+shows apart from its ground.
 
 What they took, and how a take read back holds beside its guide, is in
 [architecture.md](architecture.md#next) (Next, 3 and 4).

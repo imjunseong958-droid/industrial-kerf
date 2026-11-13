@@ -794,8 +794,9 @@ recipes, in `fixtures/shots/car`.
    (`Compositor::mesh_view`), which is `mesh_camera` without the file's own
    camera; reading the text is `kerf-mcp`'s (`camera_file.rs`). A path is in
    its own model's units and a set in another's, so how much of the set one
-   of the path's units is is given (`scale`), and so is which of the path's
-   frames the set is of (`frame`). The workflow that rebuilds a set writes
+   of the path's units is is given (`scale`), or found from the footage
+   (`fits`, below), and so is which of the path's frames has its camera at
+   the set's origin (`frame`). The workflow that rebuilds a set writes
    its lens as a file of its own (`out={lens.txt}`), and a fifth workflow,
    `set-views`, makes a set from the same reading of the frames a path
    comes from, so that the two are one size and `scale` is 1.
@@ -832,8 +833,69 @@ recipes, in `fixtures/shots/car`.
    surfaces. It is one shot, in which the camera hardly moves, and one
    small model.
 
-   *Not done:* a shot whose camera travels; finding `scale` between two
-   models' units rather than making both from one reading; splats.
+   *A shot whose camera travels* (2026-11-13). Four seconds filmed from a
+   car driving down a street between houses in daylight, 65 frames at 16 a
+   second and 640x360, cut from the middle of a dashboard camera's frame to
+   leave out the dashboard, from Wikimedia Commons (*On the Road: Driving
+   through Kranj*, Renato Lozinšek, CC BY 3.0); it is not in the
+   repository. The camera goes 2.5 of the path's units down the street and
+   pans 6 degrees, where the walk above turned 2 and went nowhere. One
+   recipe read it back in 1 min 42 s: a set and a path of one reading, a
+   set and its lens by the other model, and the shot's depth.
+
+   | Step | What came of it |
+   |---|---|
+   | The set of frame 0 in the path's size, and the camera `look` wrote with `frame` 0, as for the walk | Nothing: every frame black. The path counts its places from frame 36, which the model picked, and the set of frame 0 is in that frame's space; taken to be in frame 0's, the camera starts past it and drives away. |
+   | The same with `frame` 36, the path's `anchor` | Frame 0 drawn again where the footage has it. By the middle of the shot the camera is past all of it: as it comes (`confidence=0.1`) a set is the near ground. |
+   | The set of frame 0 with `confidence=0` | The whole frame as surfaces. At frames 32 and 64 the far houses and the building on the right stand where the footage has them and as large, and the road is gone. |
+   | Sets of frames 32 and 64 beside it, each a mesh clip of its own on a track over the camera's | The road, the kerb, the stone wall, and the houses where the footage has them on frames 0, 32, and 64. All three are in the one space, so each was made as tall as its file is beside the first one's and moved until its file's origin, which `look` with a lens alone places, was the first one's. |
+   | A crate on the pavement at the end of the wall, on a track over the camera's and the sets' | 0.2% of the frame at the start and 1.6% at the end, a third of it hidden by the sets' surfaces at the start and none at the end (`look` with `shows`), by the pixel: the three sets and the crate are one run in depth across the camera's track (Motion). |
+   | `render s2 {guide.mp4} pass=depth`, then the model that makes the shot | A street of yellow stone walls that keeps the guide's shapes and its holes, with no crate to be told from the wall: 94 s. |
+   | The same with the guide drawn as its picture | The houses, the road, and a wooden crate where the box is: 66 s. |
+   | Those takes read back, held to the guide | In 4, below. |
+
+   What it shows, and what it does not. A camera a model found of a
+   travelling shot holds through the whole of it, once the set is taken to
+   be where the path has it: four seconds down a street, and the houses
+   stay on the houses. Three things were found on the way. **A set of the
+   path's own reading is in the space of the frame the path counts from**,
+   and not of the frame it shows; the walk, whose camera stood nearly
+   still, could not show the difference, and here it was the whole picture.
+   `look` now returns that frame as `anchor` and says so where `frame` is
+   another, and what the workflow says of itself was wrong and is put
+   right. **A set of one frame is what the camera leaves**, so a travelling
+   shot wants sets of several frames, which the one space allows; putting
+   them together took four numbers a set by hand, and is not a line of
+   `look` yet. **The two models do not agree on the lens**: the path's has
+   37.2 degrees down the frame, between 36.4 and 38.1, and the one that
+   rebuilds a frame alone has 22.8, of the same footage. The sets have
+   holes where a surface turns from the camera, a third to a half of the
+   frame, and the model that makes the shot kept them as black.
+
+   *A size found for two models* (2026-11-13). With `fits`, `look` finds
+   how much of a set one of a path's units is from the footage, with no
+   model ([shots.md](shots.md#a-picture-read-back),
+   `kerf-mcp/src/set_scale.rs`): the set is drawn through the path at a run
+   of sizes on the four frames furthest from the set's own, and held to
+   the footage by the pixel. On the shot above, each in about ten seconds:
+
+   | The set | The size found | The picture's error there, of 255 | `sure`: half or twice the size, over that |
+   |---|---|---|---|
+   | Of the path's own reading, where the size is 1 | 0.956 | 29.1 | 1.57 |
+   | Of the other model, seen through its own lens of 22.8 degrees | 20.1 | 46.8 | 1.13 |
+   | Of the other model, through the path's lens of 37.2 | 3.24 | 44.5 | 1.04, which is no finding |
+
+   Where the answer is known it is found to within a twentieth. For the
+   two models it is 20.1, and with the camera written at that size frame 0
+   is the footage's, and at frames 32 and 64 the houses stand near where
+   the footage has them with the camera a little short of where it went:
+   the two disagree on the lens by more than a half, so no one size is
+   right on every frame, which `sure` at 1.13 says. Through the wrong lens
+   the fit is flat and is said to be. So two models can be used together
+   coarsely, and one reading is still the way to have them meet.
+
+   *Not done:* sets of several frames put together by `look`; a set with
+   no holes; the two models' lenses reconciled; splats.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -873,13 +935,41 @@ recipes, in `fixtures/shots/car`.
    and a sky as a surface, and the model drew trees there. Two takes of one
    shot.
 
-   What it does not say is where the subject went. For that the document
-   has the other half: `look` with `shows` says where a clip is on each
-   frame of the guide, and `track` follows a thing through a picture from
-   points on it (`kerf_track::roto`). So: follow the subject through the
-   take from the middle of its box in the guide's first frame, and say how
-   far its box in the take is from its box in the guide, frame by frame, as
-   shares of the frame. Not done. Either is what lets an agent say of a
+   What it does not say is where the subject is, and that is the other
+   half, which is in: `look` with `placed`
+   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/placed.rs`).
+   The guide's ids pass gives the box around a clip on each frame, as
+   `shows` does; the subject is found on the frame the guide shows most of
+   it on and followed from there to both ends (`kerf_track::roto`), in the
+   take and in the guide's own picture, and the two boxes are held
+   together in frame heights. It reads the take's picture, so it needs no
+   model. Following the guide's own picture as well came of measuring: held
+   to the box of the ids pass, the guide's own picture was 0.030 off and
+   1.40 times the size, a tracker's box being wider than a pass's by its
+   edge and by what the set hides of the crate.
+
+   On the travelling shot of 3, the crate, 65 frames:
+
+   | The take | `follows`: `order` | `off`, the frame | `off`, the crate | `placed`: frames followed | `off` | `across` | `size` |
+   |---|---|---|---|---|---|---|---|
+   | The guide's own picture, through an encoder | | | | 65 | 0.006 | 0.001 | 1.04 |
+   | The same moved 40 pixels of 832 to the right, which is 0.083 | | | | 65 | 0.085 | 0.085 | 1.05 |
+   | Guided by the sets' picture | 0.859 | 0.109 | 0.068 | 62 | 0.024 | 0.017 | 1.23 |
+   | Guided by the sets' depth | 0.912 | 0.080 | 0.029 | 1 | | | |
+
+   What it says. `placed` measures a move as the move it is: 0.085 for
+   0.083, over a floor of 0.006. The picture-guided take has its crate
+   0.024 of a frame height from where it was asked for, four times the
+   floor and a quarter of a crate's width, and drew it a fifth larger. The
+   depth-guided take is the better by `follows`, on the whole frame and on
+   the crate's pixels alike, and has no crate: it was followed on one frame
+   of 65, since what the model drew there is wall. So the two are read
+   together. Depth by the clip says the shape was kept; the place says
+   there is a thing there to find; and a take can pass either alone. One
+   shot and one small model, again, and a subject that is 1% of the frame.
+
+   What is still not done is one number for the two together, and either
+   read on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,

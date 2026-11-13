@@ -3364,6 +3364,46 @@ fn look_holds_a_takes_depth_to_its_guide_by_the_clip() {
     assert!(with.contains("used alone"), "{with}");
 }
 
+/// `look` says where a take has the subject of one of its guide's clips. How far that is is
+/// `kerf-engine`'s to say (`tests/placed.rs`); this is that it is asked.
+#[test]
+fn look_says_where_a_take_has_a_clips_subject() {
+    let Some((_directory, router)) = router_with(
+        "    clip sky gen=solid@1 at=0f dur=60f
+      set color=#88aaff
+  track V2 video
+    clip road gen=solid@1 at=0f dur=60f
+      set three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V3 video
+    clip car gen=shape@1 at=0f dur=60f
+      set kind=rect width=0.5 height=0.3 fill=#c02020 three_d=true depth=0.4 y=0.8 z=2
+",
+    ) else {
+        return;
+    };
+    // The media is a test picture, which is no take of this scene: whatever is where the
+    // guide has the car is followed, or nothing is and that is said.
+    let response = router.call("look", json!({"placed": {"take": "m1", "clip": "car"}}));
+    if response["ok"] == true {
+        let placed = &response["result"];
+        assert_eq!(placed["sequence"], "s1", "{placed}");
+        assert_eq!(placed["clip"], "car", "{placed}");
+        assert_eq!(placed["shown"], 60, "{placed}");
+        assert!(placed["frames"].as_u64().unwrap() <= 60, "{placed}");
+        assert!(placed["off"].as_f64().unwrap() >= 0.0, "{placed}");
+    } else {
+        let nothing = message(&response["error"]);
+        assert!(nothing.contains("nothing to follow"), "{nothing}");
+    }
+    let said = |input: Value| message(&error(&router, "look", input));
+    let none = said(json!({"placed": {"take": "take", "clip": "car"}}));
+    assert!(none.contains("no media `take`"), "{none}");
+    let other = said(json!({"placed": {"take": "m1", "clip": "truck"}}));
+    assert!(other.contains("draws no clip `truck`"), "{other}");
+    let with = said(json!({"placed": {"take": "m1", "clip": "car"}, "at": ["0f"]}));
+    assert!(with.contains("used alone"), "{with}");
+}
+
 /// `look` writes a camera a model found, which a mesh's file does not hold, from the file that
 /// says where it was.
 #[test]
@@ -3425,6 +3465,13 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     );
     let script = second["script"].as_str().unwrap();
     assert!(script.contains(" x={0f:-0.5625 1f:0 2f:0} "), "{script}");
+    // The path counts its places from its first frame, which is said, and said again where
+    // another frame is asked for: a set of the same reading is in the first one's space.
+    assert_eq!(path["from"]["anchor"], 0, "{path}");
+    assert!(!path["note"].as_str().unwrap().contains("counts its places"), "{path}");
+    let note = second["note"].as_str().unwrap();
+    assert!(note.contains("counts its places from frame 0, and `frame` is 1"), "{note}");
+    assert!(note.contains("holds still after"), "{note}");
     // What cannot be done says why.
     let said = |input: Value| message(&error(&router, "look", input));
     let both = said(json!({"mesh": {"clip": "set", "camera": 0, "from": "lens.txt"}}));
@@ -3436,6 +3483,19 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(other.contains("no camera a model wrote"), "{other}");
     let far = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "frame": 7}}));
     assert!(far.contains("no frame 7"), "{far}");
+    // A size is given, or found from the footage the path is of, and not both; and there is
+    // none to find for a camera that stands still.
+    let both = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "scale": 2, "fits": "m1"}}));
+    assert!(both.contains("give one"), "{both}");
+    let none = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "fits": "footage"}}));
+    assert!(none.contains("no media `footage`"), "{none}");
+    let still = said(json!({"mesh": {"clip": "set", "from": "lens.txt", "fits": "m1"}}));
+    assert!(still.contains("no `extrinsics`") || still.contains("does not move"), "{still}");
+    let wide = said(json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 200}}));
+    assert!(wide.contains("between 0 and 180"), "{wide}");
+    // A lens given is the camera's, whatever the file's is.
+    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 25}}));
+    assert!(lens["script"].as_str().unwrap().ends_with(" fov=25"), "{lens}");
 }
 
 /// Where a project has more than one sequence, the lines `look` writes for a new camera say

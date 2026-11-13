@@ -76,6 +76,17 @@ on `main`; its section here becomes the release's notes on GitHub
   For these `kerf-comfy` writes the lens a rebuilt set was seen through
   (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
   in the units of the camera path found of the same frames.
+- `look` with `placed` says where a take has a clip's subject beside where
+  its guide has it, in frame heights, read from the take's own picture with
+  no model: how far off, which way, and how large the take drew it. It
+  goes with `follows`, which says how a take's depth holds and not whether
+  the subject is there.
+- `look` with `mesh` and `from` finds the size of a camera path against a
+  set another model rebuilt, from the footage both are of (`fits`), and
+  takes a `lens` for the camera. It also says which frame a path counts its
+  places from (`anchor`): a set made of the path's own reading is in that
+  frame's space, whichever frame it shows, and without it a travelling
+  shot's set was drawn from the wrong place.
 - Clips in depth are sorted, and cut where they cross, across a track that
   draws nothing: a camera, a light, or a null on a track between two 3D
   clips, or an empty track there, no longer has the upper one laid over the

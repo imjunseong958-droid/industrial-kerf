@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A guide's frames read together as views of one scene, and one of them rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. It is in the units of the camera path found of the same frames, so the two fit as they are. frame=<n> picks the frame, from 0; confidence=0 keeps every pixel. The camera that saw it is at the file's own origin, looking along its z backward. At most 81 frames.",
+  "about": "A guide's frames read together as views of one scene, and one of them rebuilt as a mesh, a .glb with the frame as its colors, for a gen=mesh clip. It is in the units and the space of the camera path found of the same frames, so the two fit as they are: what is at the file's own origin, looking along its z backward, is the camera of the frame that path counts from, not of the frame rebuilt. frame=<n> picks the frame, from 0; confidence=0 keeps every pixel. At most 81 frames.",
   "of": "guide",
   "frames": {
     "most": 81,

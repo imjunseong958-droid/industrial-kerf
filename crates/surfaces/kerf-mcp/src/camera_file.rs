@@ -23,6 +23,11 @@ pub(crate) struct Found {
     pub views: Vec<FileView>,
     /// How much each frame's lens sees down its picture, in degrees.
     pub fovs: Vec<f64>,
+    /// The frame the file counts its places from: the one whose camera is at the file's own
+    /// origin, not turned. A model that reads frames together as views of one scene picks
+    /// one of them, not always the first, and what it rebuilds of any of them is in that
+    /// one's space. None where no frame is there, or the file has no places.
+    pub anchor: Option<usize>,
 }
 
 impl Found {
@@ -88,6 +93,7 @@ pub(crate) fn read(text: &str, origin: usize, scale: f64) -> Result<Found, Strin
         return Ok(Found {
             views: vec![FileView::ORIGIN; fovs.len()],
             fovs,
+            anchor: None,
         });
     };
     if places.len() != fovs.len() {
@@ -111,6 +117,12 @@ pub(crate) fn read(text: &str, origin: usize, scale: f64) -> Result<Found, Strin
             _ => Err("its `extrinsics` are not three rows of four a frame".to_owned()),
         })
         .collect::<Result<Vec<([Vector; 3], Vector)>, String>>()?;
+    let anchor = cameras.iter().position(|(turn, moved)| {
+        let still = moved.iter().all(|side| side.abs() < 1e-6);
+        still && (0..3).all(|row| (0..3).all(|column| {
+            (turn[row][column] - f64::from(u8::from(row == column))).abs() < 1e-6
+        }))
+    });
     let Some((turn, moved)) = cameras.get(origin) else {
         return Err(format!(
             "it has {} frames, from 0, and no frame {origin}",
@@ -144,7 +156,11 @@ pub(crate) fn read(text: &str, origin: usize, scale: f64) -> Result<Found, Strin
             }
         })
         .collect();
-    Ok(Found { views, fovs })
+    Ok(Found {
+        views,
+        fovs,
+        anchor,
+    })
 }
 
 fn lens_alone(fov: f64) -> Result<Found, String> {
@@ -156,6 +172,7 @@ fn lens_alone(fov: f64) -> Result<Found, String> {
     Ok(Found {
         views: vec![FileView::ORIGIN],
         fovs: vec![fov],
+        anchor: None,
     })
 }
 
@@ -243,6 +260,8 @@ mod tests {
     fn a_printed_path_is_read_into_a_files_space() {
         let found = read(PRINTED, 0, 1.0).expect("a path");
         assert_eq!(found.views.len(), 3);
+        // The first is where the file counts from.
+        assert_eq!(found.anchor, Some(0));
         assert!(
             near(found.views[0].eye, [0.0; 3]) && near(found.views[0].forward, [0.0, 0.0, -1.0])
         );
@@ -293,6 +312,12 @@ mod tests {
             found.views[0]
         );
         assert!(read(PRINTED, 3, 1.0).unwrap_err().contains("no frame 3"));
+        // Whichever frame is put at the origin, the file counts from the one it counts from,
+        // and a file whose every camera is somewhere counts from none.
+        assert_eq!(found.anchor, Some(0));
+        let moved = PRINTED.replacen("0.0000e+00],\n          [ 0.0000e+00,  1.0000e+00", "5.0000e-01],\n          [ 0.0000e+00,  1.0000e+00", 1);
+        assert_ne!(moved, PRINTED);
+        assert_eq!(read(&moved, 0, 1.0).expect("a path").anchor, None);
     }
 
     #[test]
