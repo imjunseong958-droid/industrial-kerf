@@ -58,10 +58,10 @@ on `main`; its section here becomes the release's notes on GitHub
   and writes the take
   ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
 - `kerf-comfy` comes with four workflows that read a picture back, for a
-  ComfyUI server with MoGe 3 and Depth Anything 3: `depth-moge` and
-  `depth-da3` make a video of how near each pixel of a guide is, `set-moge`
+  ComfyUI server with MoGe 3 and Depth Anything 3: `depth` and
+  `depth-whole` make a video of how near each pixel of a guide is, `set`
   rebuilds a frame as a `.glb` mesh with the frame as its colors, and
-  `cameras-da3` writes where the camera was on each frame. Each is a model
+  `cameras` writes where the camera was on each frame. Each is a model
   to a recipe, `generate model=depth guide={take.mp4} out={depth.mp4}`, and
   what it makes has its guide's own size, rate, and frames
   ([docs/shots.md](docs/shots.md#a-picture-read-back)).
