@@ -92,6 +92,8 @@ on `main`; its section here becomes the release's notes on GitHub
   no model: how far off, which way, and how large the take drew it. It
   goes with `follows`, which says how a take's depth holds and not whether
   the subject is there.
+- `look` with `held` reads a take's depth and the place of its subjects at
+  once and gives the take one number, to choose between takes by.
 - `look` with `mesh` and `from` finds the size of a camera path against a
   set another model rebuilt, from the footage both are of (`fits`), and
   takes a `lens` for the camera, or finds the set's own from the footage.

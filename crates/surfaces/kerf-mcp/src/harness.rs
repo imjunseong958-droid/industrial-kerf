@@ -71,7 +71,7 @@ says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
-With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say. \
+With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say; with `held`, both at once and one number for the take. \
 With `signal`, the keys of a signal clip from the onsets of a sound on the timeline, so that what a model is told happens on its beats. \
 With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
 With `proposal` it shows what a pending proposal would make: its document, \
@@ -304,6 +304,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. Or a folder of it, such as `media` (`.` for the project's own): each footage file there the same way, in `files`, and in `script` the lines for those not in the document, to run as one edit. With no arguments `look` gives in `unplaced` the footage in the project's folder and in `media` not yet in the document. Use alone."},
                     "cost": {"type": "boolean", "description": "With `at`, program positions: who draws each frame and what it costs. `draws` is `gpu` or `cpu`, `because` says what sends it to the CPU, one line a cause, `ms` is a frame at full size and `msHalf` at half, against `frameMs`, a frame's share of the time. Playing, the editor draws smaller until frames keep up, and a frame the CPU draws takes every core."},
                     "mesh": {"type": "object", "description": "What the glTF file of a `gen=mesh@1` clip holds: `triangles`; `size`, how wide, tall, and long it is at rest for a `height` of 1; `animations`, each with its `name`, `number`, and `seconds`, and `playing`, the one the clip's `animation=` names; `cameras`, each with its `name`, `number`, and `fov`. With `camera`, a name or a number of those, it returns `script`: that camera as a `gen=camera@1` clip over the mesh's clip (or `set` on the camera clip `as` names), where the file has it on each frame, the mesh being where its clip puts it and its animation as far in as the clip plays it. Through it the mesh is seen as the file's camera sees it, and what is added to the sequence stands in the same space. `moves` says whether it has keyframes. With `beside`, another mesh clip of the sequence whose file is in the same space, as sets a model rebuilt of several frames of one reading are, it returns `script`: the `height`, `x`, `y`, and `z` that put this clip's file where that one's is, so that the two are one set; neither clip turned or keyed. Used without `camera` or `from`. Ask again after moving or retiming the mesh's clip. For a camera the file does not hold, `from` in place of `camera`: a file in the project's folder that says where one was, as a model wrote it. A model that finds a shot's camera writes it on each frame, as `extrinsics` and `intrinsics`; a file that is one number is a lens alone, degrees down the picture, for the camera a set was seen by, which is at the set's own origin. `frame` is the frame of `from` the mesh was rebuilt from, 0 unless given, whose camera is put at the mesh's origin; `rate` how many frames of `from` a second has, the sequence's unless given; `scale` how much of the mesh's file one of `from`'s units is, 1 unless given, a path and a set from two models not being the same size; or `fits`, the media `from` is the camera of, finds it with no model: the set is drawn through the path at a run of sizes, on a few frames far from `frame`, and held to the footage's own frames, and `fit` says the `scale` found, the `error` there of 255 a pixel, and `sure`, how many times worse half or twice that size is, near 1 where the camera does not travel far enough to say. With no `lens` given it first finds the set's own, the one through which the set seen from `frame` is that frame of the footage again (`fit.lens`: `fov`, `error`, `sure`), and the camera gets it where it is sure. `lens` gives the camera a lens other than `from`'s, degrees down the picture: the one a set's own model found, where the two differ. It returns `from`: its `frames`, how many of the clip's were `placed`, the least and most `fov` it has, of which the camera gets the middle one, and `anchor`, the frame a path counts its places from. A set made of the same reading as the path is in that frame's space whichever frame it shows, so `frame` is the `anchor` for it; a `note` says so where they differ. Used alone.", "properties": {"clip": {"type": "string"}, "camera": {"type": ["string", "integer"]}, "from": {"type": "string"}, "frame": {"type": "integer", "minimum": 0}, "rate": {"type": "number", "exclusiveMinimum": 0}, "scale": {"type": "number", "exclusiveMinimum": 0}, "beside": {"type": "string"}, "fits": {"type": "string"}, "lens": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180}, "as": {"type": "string"}}, "required": ["clip"]},
+                    "held": {"type": "object", "description": "A take held to its guide in one reading, to choose between takes by: `take`, the media whose picture is the take, `depth`, the media that is its depth as a model read it back, and `clips`, the guide's clips that are its subjects. It is `follows` of the depth and, for each subject, `placed` of the take: `clips`, each with its `depth` (`off`, `farther`), its `place` (`overlap`, `off`, `size`, `frames` of `shown`), and `held`, the overlap of where it is with where it was asked for, less by how far its depth is off, from 0 to 1; and at the top `held`, the mean of them, with `order` and `off` of the whole frame. A subject the take has nothing of is held 0. Used alone, or with `sequence`.", "properties": {"take": {"type": "string"}, "depth": {"type": "string"}, "clips": {"type": "array", "items": {"type": "string"}}}, "required": ["take", "depth", "clips"]},
                     "placed": {"type": "object", "description": "Where a take has one clip's subject beside where its guide has it, read from the take's own picture with no model: `take`, the media whose picture is the take, and `clip`, a clip the guide `sequence` draws, the first unless given. The guide's ids pass gives the box around the clip on each frame, as `shows` does; in the take the subject is found on the frame the guide shows most of it on (`from`), in that box with room around it, and followed to both ends. `off` is how far the middles of the two boxes are apart, in frame heights, as a mean over the `frames` it was followed on, of the `shown` the guide has it on; `across` and `down` the same with their direction, above 0 where the take has it to the right, or lower; `size`, how large the take drew it beside the guide, above 1 larger; `worst`, the frame it is furthest off on; `overlap`, how much of the two boxes is in both, of what is in either, as a mean over every frame the guide shows it on with a frame it was not followed on as none, which is the one number to choose between takes by: 1 where the take has the subject where and as large as asked on every frame, 0 where it has none; `read`, the first and last frame it was followed on. Read it beside `follows`, which says how a take's depth holds and not where the subject is. Used alone, or with `sequence`.", "properties": {"take": {"type": "string"}, "clip": {"type": "string"}}, "required": ["take", "clip"]},
                     "follows": {"type": "string", "description": "A media whose picture is a take's depth, as a model read it back (`generate model=depth guide={take.mp4}`): how it holds beside the guide `sequence` draws, the first unless given, the media's frames being the sequence's from its start. Each pixel has a place in its frame's order of near and far, from 0 to 1, in the guide's depth pass and in the take. `clips` is each clip the guide has in depth, by the pixels the ids pass gives it: `off`, how far apart those places are over its pixels, as a mean over the `frames` it shows on; `farther`, the same with its direction, above 0 where the take has those pixels farther, as it does where the subject is not there and what was behind it is; `worst`, the frame it is most off on, from 0; `shows`, its share of the frame. `off` at the top is the same over every pixel, and `order` the rank correlation of the whole frame, which a take with its subject elsewhere still has near 1 where most of the frame is ground. Read a subject's `off` beside the frame's and the floor's. Used alone, or with `sequence`."},
                     "signal": {"type": "object", "description": "A signal's keys from a sound: `of` is a clip that plays a media with sound, music or what was recorded, and `clip` a `gen=signal@1` clip of the same sequence. It returns `script`, a `set <clip> value={…}` line to run with `edit`, which has the signal at 1 for `hold` frames (3 unless given) from each sound onset of `of` that falls in the signal clip and 0 between, onsets nearer than that running together; `onsets`, how many it placed, and `outside`, how many of the sound's fall outside the clip. Hold for as long as two of the model's frames last. Used alone.", "properties": {"of": {"type": "string"}, "clip": {"type": "string"}, "hold": {"type": "integer", "minimum": 1}}, "required": ["of", "clip"]},
@@ -453,6 +454,19 @@ struct LookInput {
     follows: Option<String>,
     /// A take and a clip of its guide, to say where the take has the clip's subject.
     placed: Option<PlacedInput>,
+    /// A take's picture and its depth read back, to hold both to the guide at once.
+    held: Option<HeldInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeldInput {
+    /// The media whose picture is the take.
+    take: String,
+    /// The media whose picture is the take's depth, as a model read it back.
+    depth: String,
+    /// The guide's clips that are its subjects, which the take is held to by their place.
+    clips: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1497,6 +1511,92 @@ impl KerfMcpRouter {
         }))
     }
 
+    /// A take held to its guide by its depth and by where its subjects are, in one reading.
+    fn take_held(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        revision: u64,
+        input: &HeldInput,
+    ) -> Result<Value, McpError> {
+        let followed = self.take_follows(project, sequence, revision, &input.depth)?;
+        // The subjects are named: a set or a ground is where it is whatever the take did,
+        // and which clips are which is the scene's to say and not their size's.
+        if input.clips.is_empty() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`held` names in `clips` the guide's clips that are its subjects, as [\"crate\"]",
+            ));
+        }
+        let mut clips = Vec::new();
+        let mut sum = 0.0;
+        for name in &input.clips {
+            let Some(clip) = followed["clips"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|clip| clip["clip"] == name.as_str())
+            else {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "the guide has no clip `{name}` in depth: `clips` are clips in depth that `follows` reads"
+                    ),
+                ));
+            };
+            let name = name.clone();
+            let placed = self.take_placed(
+                project,
+                sequence,
+                revision,
+                &PlacedInput {
+                    take: input.take.clone(),
+                    clip: name.clone(),
+                },
+            );
+            // A subject the take has nothing of is not an error here: it is held not at all.
+            let (place, overlap) = match placed {
+                Ok(placed) => {
+                    let overlap = placed["overlap"].as_f64().unwrap_or(0.0);
+                    (
+                        json!({
+                            "overlap": overlap,
+                            "off": placed["off"],
+                            "size": placed["size"],
+                            "frames": placed["frames"],
+                            "shown": placed["shown"],
+                        }),
+                        overlap,
+                    )
+                }
+                Err(error) if error.code == "MEDIA_FAILED" => (json!({"overlap": 0.0}), 0.0),
+                Err(error) => return Err(error),
+            };
+            let off = clip["off"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+            let held = ((overlap * (1.0 - off)) * 1e4).round() / 1e4;
+            sum += held;
+            clips.push(json!({
+                "clip": name,
+                "held": held,
+                "shows": clip["shows"],
+                "depth": {"off": clip["off"], "farther": clip["farther"]},
+                "place": place,
+            }));
+        }
+        let mut result = json!({
+            "revision": revision,
+            "sequence": followed["sequence"],
+            "take": input.take,
+            "depth": input.depth,
+            "frames": followed["frames"],
+            "order": followed["order"],
+            "off": followed["off"],
+            "clips": clips,
+        });
+        result["held"] = json!(((sum / input.clips.len() as f64) * 1e4).round() / 1e4);
+        Ok(result)
+    }
+
     /// Where a take has the subject of one of its guide's clips.
     fn take_placed(
         &self,
@@ -2107,6 +2207,16 @@ impl KerfMcpRouter {
             }
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.take_follows(&project, input.sequence.as_deref(), revision, take);
+        }
+        if let Some(held) = &input.held {
+            if input.media.is_some() || !input.at.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`held` names a take and its depth, and is used alone, or with `sequence` or `proposal`",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.take_held(&project, input.sequence.as_deref(), revision, held);
         }
         if let Some(placed) = &input.placed {
             if input.media.is_some() || !input.at.is_empty() {

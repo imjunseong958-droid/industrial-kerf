@@ -1009,9 +1009,17 @@ recipes, in `fixtures/shots/car`.
    it then was, a smear along the road by the last frame, and both takes
    drew things there, the depth-guided one a second crate.
 
-   What is still not done is one number for depth and place together, a
-   set with what moved left out, and either reading
-   on more than a shot or two. Either is what lets an agent say of a
+   *One number for a take.* `look` with `held` reads both at once, of the
+   clips named as the guide's subjects, and gives each a number from 0 to
+   1: the overlap of where the take has it with where it was asked for,
+   less by how far its depth is off, and their mean for the take. Of the
+   two takes above it is 0.31 for the picture-guided one and 0.35 for the
+   depth-guided one, where the first depth-guided take, with no crate, is
+   0. The subjects are named and not guessed: by how much of the frame a
+   clip has, four of the five sets were taken for subjects.
+
+   What is still not done is a set with what moved left out, and either
+   reading on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
 5. **More than one guide on a line**, whose half in the document is in
    (2026-11-13): a line names each guide beside the first by what it is

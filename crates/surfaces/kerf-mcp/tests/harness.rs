@@ -3395,7 +3395,25 @@ fn look_says_where_a_take_has_a_clips_subject() {
         let nothing = message(&response["error"]);
         assert!(nothing.contains("nothing to follow"), "{nothing}");
     }
+    // Both readings at once, of the clips named as subjects: the car is held by its depth
+    // and its place, from 0 to 1, with one number for the take.
+    let held = ok(&router, "look", json!({"held": {"take": "m1", "depth": "m1", "clips": ["car"]}}));
+    assert_eq!(held["frames"], 60, "{held}");
+    let subjects = held["clips"].as_array().unwrap();
+    assert_eq!(subjects.len(), 1, "{held}");
+    assert_eq!(subjects[0]["clip"], "car", "{held}");
+    let one = subjects[0]["held"].as_f64().unwrap();
+    assert!((0.0..=1.0).contains(&one), "{held}");
+    assert_eq!(held["held"].as_f64().unwrap(), one, "{held}");
+    assert!(subjects[0]["depth"]["off"].as_f64().unwrap() > 0.0, "{held}");
+    assert!(subjects[0]["place"]["overlap"].as_f64().unwrap() <= 1.0, "{held}");
     let said = |input: Value| message(&error(&router, "look", input));
+    let no_depth = said(json!({"held": {"take": "m1", "depth": "depths", "clips": ["car"]}}));
+    assert!(no_depth.contains("no media `depths`"), "{no_depth}");
+    let flat = said(json!({"held": {"take": "m1", "depth": "m1", "clips": ["sky"]}}));
+    assert!(flat.contains("no clip `sky` in depth"), "{flat}");
+    let nobody = said(json!({"held": {"take": "m1", "depth": "m1", "clips": []}}));
+    assert!(nobody.contains("its subjects"), "{nobody}");
     let none = said(json!({"placed": {"take": "take", "clip": "car"}}));
     assert!(none.contains("no media `take`"), "{none}");
     let other = said(json!({"placed": {"take": "m1", "clip": "truck"}}));

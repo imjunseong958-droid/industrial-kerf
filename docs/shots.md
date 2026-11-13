@@ -703,6 +703,20 @@ followed on a frame or two, or refused: read `frames` beside `shown` before
 edges and is not told what the subject is, so it holds what the picture
 shows apart from its ground.
 
+Both at once, to choose between takes by, is `look` with `held`: the
+take, its depth read back, and the guide's clips that are its subjects.
+
+```json
+{ "held": { "take": "take", "depth": "readback", "clips": ["crate"] }, "sequence": "s2" }
+```
+
+It is `follows` of the depth and `placed` of each subject, and for each a
+`held` from 0 to 1: the `overlap` of where the take has it with where it
+was asked for, less by how far its depth is `off`. The `held` at the top is
+the mean over the subjects. A subject the take has nothing of is held 0,
+whatever its depth: a set is not named, since it is where it is whatever
+the take did.
+
 What they took, and how a take read back holds beside its guide, is in
 [architecture.md](architecture.md#next) (Next, 3 and 4).
 
