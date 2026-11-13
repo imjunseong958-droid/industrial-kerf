@@ -194,15 +194,27 @@ pub fn small_grey_frames(
     size: (u32, u32),
     each: impl FnMut(f64, &[u8]),
 ) -> Result<()> {
-    grey_frames_with(resolve_ffmpeg_bin(), src, rate, size, each)
+    frames_with(resolve_ffmpeg_bin(), src, rate, size, "gray", 1, each)
 }
 
-/// [`small_grey_frames`] with the FFmpeg at `ffmpeg`.
-fn grey_frames_with(
+/// [`small_grey_frames`] in color, four bytes a pixel.
+pub fn small_color_frames(
+    src: &Path,
+    rate: u32,
+    size: (u32, u32),
+    each: impl FnMut(f64, &[u8]),
+) -> Result<()> {
+    frames_with(resolve_ffmpeg_bin(), src, rate, size, "rgba", 4, each)
+}
+
+/// [`small_grey_frames`] with the FFmpeg at `ffmpeg`, in `format`, which is `bytes` a pixel.
+fn frames_with(
     ffmpeg: &str,
     src: &Path,
     rate: u32,
     (width, height): (u32, u32),
+    format: &str,
+    bytes: usize,
     mut each: impl FnMut(f64, &[u8]),
 ) -> Result<()> {
     let mut child = crate::ffmpeg::hidden_command(ffmpeg)
@@ -210,7 +222,7 @@ fn grey_frames_with(
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(src)
         .args(["-map", "0:v:0", "-vf"])
-        .arg(format!("fps={rate},scale={width}:{height},format=gray"))
+        .arg(format!("fps={rate},scale={width}:{height},format={format}"))
         .args(["-f", "rawvideo", "-"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -220,10 +232,10 @@ fn grey_frames_with(
     // its stdout, and neither would end.
     let errors = crate::sidecar::drain_stderr(&mut child);
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let mut grey = vec![0u8; (width * height) as usize];
+    let mut picture = vec![0u8; (width * height) as usize * bytes];
     let mut frame = 0u64;
-    while std::io::Read::read_exact(&mut stdout, &mut grey).is_ok() {
-        each(frame as f64 / f64::from(rate), &grey);
+    while std::io::Read::read_exact(&mut stdout, &mut picture).is_ok() {
+        each(frame as f64 / f64::from(rate), &picture);
         frame += 1;
     }
     drop(stdout);
@@ -411,7 +423,10 @@ mod tests {
         let ffmpeg = fake.to_string_lossy().into_owned();
         std::thread::spawn(move || {
             let mut frames = 0;
-            let result = grey_frames_with(&ffmpeg, Path::new("in.mp4"), 2, (4, 2), |_, _| frames += 1);
+            let result =
+                frames_with(&ffmpeg, Path::new("in.mp4"), 2, (4, 2), "gray", 1, |_, _| {
+                    frames += 1;
+                });
             let _ = send.send((result.is_ok(), frames));
         });
         let finished = receive.recv_timeout(std::time::Duration::from_secs(20));

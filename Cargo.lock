@@ -1803,6 +1803,7 @@ dependencies = [
  "kerf-lang",
  "kerf-model",
  "kerf-playback",
+ "kerf-track",
  "libc",
  "mimalloc",
  "rayon",

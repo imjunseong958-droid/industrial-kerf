@@ -616,6 +616,33 @@ read beside the frame's and the floor's: a take that followed has them
 alike, and one that did not has the subject several times the floor
 (`kerf-engine/src/follows.rs`).
 
+What `follows` cannot say is where the subject went: a subject drawn a
+third of the frame to one side is read as what was behind it, and not as a
+thing that moved. That is `look` with `went`, the other half, which reads
+the take's own picture and so needs no model:
+
+```json
+{ "went": { "take": "color", "clip": "box" }, "sequence": "s2" }
+```
+
+The guide's ids pass says where the clip is on each frame, and the subject
+is followed through the take from the middle of that box on the first frame
+it shows (`kerf_track::roto`, `kerf-engine/src/went.rs`).
+
+| | Says |
+|---|---|
+| `off` | How far the middle of its box in the take is from the middle of its box in the guide, the frame being one wide and one tall, as a mean over the `frames` read. |
+| `across`, `down` | The same with their direction: above 0 where the take has it to the right of the guide, or lower. |
+| `wide` | How wide the take drew it beside the guide: 1 the same, above 1 larger, as a nearer thing is. |
+| `worst` | The frame it is furthest off on, from 0, and how far. |
+| `lost` | The frame the subject could no longer be followed in, where there is one. |
+
+A take that has nothing where the guide starts the subject loses it at
+once, and one that takes it past the frame's edge loses it at the end;
+either says so, so read `off` beside `frames` and `lost`, since a reading
+of one frame is no reading. A tracker holds a subject the picture shows
+plainly and a mesh a model drew over; it is not told what the subject is.
+
 What they took, and how a take read back holds beside its guide, is in
 [architecture.md](architecture.md#next) (Next, 3 and 4).
 

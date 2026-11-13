@@ -3438,6 +3438,90 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(far.contains("no frame 7"), "{far}");
 }
 
+/// `look` says where a take took a clip's subject, beside where the guide has it. How far it
+/// went is `kerf-engine`'s to say (`tests/went.rs`); this is that it is asked.
+#[test]
+fn look_says_where_a_take_took_a_clips_subject() {
+    let Some((directory, router)) = router_with(
+        "    clip back gen=solid@1 at=0f dur=60f
+      set color=#303030
+  track V2 video
+    clip square gen=shape@1 at=0f dur=60f
+      set kind=rect width=0.3 height=0.4 fill=#ffffff x={0f:-0.25 60f:0.25}
+",
+    ) else {
+        return;
+    };
+    // A take of it: a white square on the same grey, set down where the guide's own ids
+    // pass has the square on its first frame and left there, so the guide moves on and the
+    // take does not.
+    let shown = ok(&router, "look", json!({"shows": true, "at": ["0f", "59f"]}));
+    let box_at = |frame: usize| -> [f64; 4] {
+        let clips = shown["frames"][frame]["clips"].as_array().unwrap();
+        let square = clips.iter().find(|clip| clip["clip"] == "square").unwrap();
+        let box_ = square["box"].as_array().unwrap();
+        std::array::from_fn(|side| box_[side].as_f64().unwrap())
+    };
+    let (first, last) = (box_at(0), box_at(1));
+    assert!(last[0] > first[0] + 0.2, "the guide takes it right: {shown}");
+    let made = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-f", "lavfi", "-i", "color=c=0x303030:size=320x180:rate=30:duration=2"])
+        .args([
+            "-vf",
+            &format!(
+                "noise=alls=8:allf=t,drawbox=x={}:y={}:w={}:h={}:color=white:t=fill",
+                (first[0] * 320.0).round(),
+                (first[1] * 180.0).round(),
+                ((first[2] - first[0]) * 320.0).round(),
+                ((first[3] - first[1]) * 180.0).round(),
+            ),
+        ])
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(directory.path().join("take.mp4"))
+        .status()
+        .expect("ffmpeg runs");
+    assert!(made.success());
+    let revision = router.runtime().get_document(false).unwrap().0;
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "media add take path=\"take.mp4\" rate=30 dur=60f video=320x180"}),
+    );
+    router
+        .runtime()
+        .accept_proposal(staged["proposal"].as_str().unwrap(), "ui", "accept-take", revision)
+        .unwrap();
+    let went = ok(
+        &router,
+        "look",
+        json!({"went": {"take": "take", "clip": "square"}}),
+    );
+    assert_eq!(went["sequence"], "s1", "{went}");
+    assert_eq!(went["clip"], "square", "{went}");
+    assert_eq!(went["take"], "take", "{went}");
+    assert_eq!(went["frames"], 60, "{went}");
+    assert!(went.get("lost").is_none(), "{went}");
+    // The take left the square behind, so it is off by half of what the guide moved it,
+    // to the left of it and no higher, and worst at the end; it drew it the same size.
+    let off = went["off"].as_f64().unwrap();
+    assert!(off > 0.1 && off < 0.4, "{went}");
+    assert!(went["across"].as_f64().unwrap() < -0.1, "{went}");
+    assert!(went["down"].as_f64().unwrap().abs() < 0.05, "{went}");
+    assert!(went["worst"]["frame"].as_u64().unwrap() > 40, "{went}");
+    assert!((went["wide"].as_f64().unwrap() - 1.0).abs() < 0.3, "{went}");
+    assert!(went["shows"].as_f64().unwrap() > 0.01, "{went}");
+    assert!(went["worst"]["off"].as_f64().unwrap() >= went["off"].as_f64().unwrap(), "{went}");
+    // What cannot be done says why.
+    let said = |input: Value| message(&error(&router, "look", input));
+    let none = said(json!({"went": {"take": "nothing", "clip": "square"}}));
+    assert!(none.contains("no media `nothing`"), "{none}");
+    let hidden = said(json!({"went": {"take": "take", "clip": "nobody"}}));
+    assert!(hidden.contains("draws nothing"), "{hidden}");
+    let with = said(json!({"went": {"take": "take", "clip": "square"}, "at": ["0f"]}));
+    assert!(with.contains("used alone"), "{with}");
+}
+
 /// Where a project has more than one sequence, the lines `look` writes for a new camera say
 /// which sequence they are for, and name the camera as no clip of any sequence is named.
 #[test]

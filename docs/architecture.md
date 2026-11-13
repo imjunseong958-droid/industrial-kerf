@@ -952,14 +952,38 @@ recipes, in `fixtures/shots/car`.
    numbers differ by what one take of one model differs by, so neither
    reading is of the move itself.
 
-   What it does not say is where the subject went. For that the document
-   has the other half: `look` with `shows` says where a clip is on each
-   frame of the guide, and `track` follows a thing through a picture from
-   points on it (`kerf_track::roto`). So: follow the subject through the
-   take from the middle of its box in the guide's first frame, and say how
-   far its box in the take is from its box in the guide, frame by frame, as
-   shares of the frame. Not done. Either is what lets an agent say of a
-   take what a person says of it, and choose between two.
+   Where the subject went is the other half, and is in: `look` with `went`
+   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/went.rs`).
+   The guide's ids pass says where the clip is on each frame, and the
+   subject is followed through the take's own picture from the middle of
+   that box on the first frame it shows (`kerf_track::roto`), so it needs
+   no model. What the two boxes' middles differ by, the frame being one
+   wide and one tall, is `off`, with `across` and `down` for its direction
+   and `wide` for how large the take drew it; a subject the take does not
+   have where the guide starts it is lost at once, and said to be.
+
+   On the three takes of the travelling shot above, the crate added to the
+   set:
+
+   | The take | `off` | `across` | `wide` | frames read |
+   |---|---|---|---|---|
+   | Guided by the set's depth | 0.007 | 0.001 | 1.02 | 64 |
+   | Guided by the set's picture | 0.013 | -0.012 | 1.30 | 37, then lost at the frame's edge |
+   | The same with the crate moved | 0.010 | 0.006 | 0.97 | 62, then lost at the frame's edge |
+
+   All three put the crate within about a hundredth of the frame of where
+   the guide has it, and the two readings say different things of the same
+   take: the depth-guided one, which followed the scene's depth not at all
+   (`order` -0.37), still drew the crate where it was asked for. So `off`
+   by the clip and `off` by the place are to be read together, and a take
+   can hold a subject's place while holding nothing else. The tracker
+   follows what the picture shows plainly; a crate drawn large at the end
+   of a travelling shot leaves the frame, and the reading says where it
+   stopped rather than going on without it.
+
+   What is still not done is a scale for the two together, and both read on
+   more than one shot of one small model. Either is what lets an agent say
+   of a take what a person says of it, and choose between two.
 5. **More than one guide on a line.** A `generate` line hands a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one

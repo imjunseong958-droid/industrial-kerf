@@ -73,9 +73,17 @@ on `main`; its section here becomes the release's notes on GitHub
   the guide its sequence draws, clip by clip: how far the take has each
   clip's pixels from where the guide has them in the order of near and
   far, which says of a take whether its subject is where the guide put it.
-  For these `kerf-comfy` writes the lens a rebuilt set was seen through
-  (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
-  in the units of the camera path found of the same frames.
+  `look` with `went` says the other half, where the take took one clip's
+  subject: it follows the subject through the take's own picture from where
+  the guide has it on the first frame, and says how far the two are apart,
+  which way, and how much larger the take drew it. For these `kerf-comfy`
+  writes the lens a rebuilt set was seen through (`out={lens.txt}`), and
+  has a workflow, `set-views`, that rebuilds a set in the units of the
+  camera path found of the same frames.
+- A clip in depth is sorted and cut against the clips in depth around it
+  even where a track that draws nothing stands between them, as a camera's
+  or a light's does: a thing added to a scene on a track above the camera
+  now goes down among the set's surfaces instead of being laid over them.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`

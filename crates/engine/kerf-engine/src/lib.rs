@@ -24,13 +24,16 @@ pub mod still;
 pub mod sync;
 pub mod transcription;
 pub mod unheard;
+pub mod went;
 
 pub use encoder::{
     encoder_args, parse_encoder_capabilities, select_video_encoder, EncoderCapabilities,
     EncoderCapability, EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions, VideoCodec,
 };
 pub use error::{EngineError, Result};
-pub use index::{cached_media_index, media_index, small_grey_frames, MediaIndex, Peak, Tempo};
+pub use index::{
+    cached_media_index, media_index, small_color_frames, small_grey_frames, MediaIndex, Peak, Tempo,
+};
 pub use loudness::{measure_file, measure_program, Loudness};
 pub use probe::{
     cached_exact_frames, cached_filmstrip, cached_waveform, cached_waveform_range,
