@@ -615,11 +615,33 @@ recipes, in `fixtures/shots/car`.
      it would have the compositor draw a look, which the first rule is
      against.
    What it takes is a workflow for `kerf-comfy` and nothing else: load the
-   guide, `MoGeInference`, `MoGeRender` with `depth`, save. On the server
-   the measurements were made with, ComfyUI 0.45, those nodes are there and
-   the model's weights are not (`LoadMoGeModel` lists none), so it was not
-   run and no workflow is in the repository for it: one is written when it
-   can be run.
+   guide, `MoGeInference`, `MoGeRender` with `depth`, save. The server the
+   measurements were made with, ComfyUI 0.45, has had the weights since
+   2026-11-13: `moge_3_vitl_fp16.safetensors` and
+   `depth_anything_3_base.safetensors`, in `models/geometry_estimation/`.
+   `LoadMoGeModel` and `LoadDA3Model` read only files packed for ComfyUI,
+   which is why their lists were empty while the models' own files were
+   there. What was found on it, by the person who keeps the server, on an
+   MI250, and not run from Kerf:
+
+   | Model | Setting | A picture takes | |
+   |---|---|---|---|
+   | MoGe 3, 1500x1000 | `refine_steps=3`, as it comes | 1.0 s, 5.2 s the first time | |
+   | | `refine_steps=1` | 0.4 s | depth 0.11% from the default's, at the median |
+   | | `refine_steps=0` | 0.1 s | 0.22% |
+   | Depth Anything 3, one picture at a time (`mono`) | as it comes | 0.6 s | |
+   | Depth Anything 3, a camera's path from many frames (`multiview`) | as it comes, or `bf16` | fails, on a dtype | |
+   | | `weight_dtype=fp32` on `LoadDA3Model` | 1.0 s, with `cam_dec` | the one to use |
+   | | `pose_method=ray_pose` | 3.0 s | |
+
+   So MoGe is used as it comes, with `refine_steps=1` only for a very long
+   shot, and **a workflow that has Depth Anything 3 find a camera's path
+   sets `weight_dtype=fp32`**. Through the server's API a MoGe picture took
+   2.0 s with the model's loading, and 0.5 s at `refine_steps=0`. MoGe's own
+   package took 100 s a picture there, in its last refining step, and is not
+   what ComfyUI's nodes run. No workflow is in the repository yet for
+   either: it is the next thing written for this, and what it makes is then
+   measured from a recipe.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The document has both halves of a
    measure. `look` with `shows` says where a clip is on each frame of the
