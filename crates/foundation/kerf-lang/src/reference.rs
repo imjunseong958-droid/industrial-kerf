@@ -101,7 +101,7 @@ may write: `kerf-recipe 1`, then a line each of `needs <file> …`, `run <progra
 `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth]` (Kerf draws a sequence as a guide, without sound: give
 a model's size and rate, and the picture fills that size, the excess cut off evenly; `pass=ids` draws each clip in one
 flat color of its own, `pass=depth` how near each pixel is, for a model that follows one), and `generate model=<name> prompt="…"
-[guide=|first=|last=|ref=<file>] [signal=<clip>] [moves=<clip>] [seconds=<n>] [size=WxH] [seed=<n>]`. A guide says where,
+[guide=|guide_<name>=|first=|last=|ref=<file>] [signal=<clip>] [moves=<clip>] [seconds=<n>] [size=WxH] [seed=<n>]`. A guide says where,
 the prompt what, and a signal when: a `gen=signal@1` clip, from the shot's first frame, whose `value={0f:0 12f:1}`
 (0 to 1) the model is handed frame by frame, for the models whose `reads` has `signal`; `moves=` hands one a clip's box on each frame, for those with `moves`. `{out}` is the media's file, which the
 last step writes; another `{name}` is a file one step makes and a later one reads. A person runs it. Each

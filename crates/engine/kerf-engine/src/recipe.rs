@@ -892,6 +892,11 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
             }
         }
         if let Some(reads) = &takes.reads {
+            let named: Vec<String> = ask
+                .guides
+                .iter()
+                .map(|(name, _)| format!("guide_{name}"))
+                .collect();
             let given = [
                 ("guide", ask.guide.is_some()),
                 ("first", ask.first.is_some()),
@@ -899,7 +904,10 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 ("ref", !ask.references.is_empty()),
                 (model::SIGNAL, !ask.signals.is_empty()),
                 (model::MOVES, !ask.moves.is_empty()),
-            ];
+            ]
+            .into_iter()
+            .chain(named.iter().map(|name| (name.as_str(), true)))
+            .collect::<Vec<_>>();
             for (name, _) in given
                 .iter()
                 .filter(|(name, given)| *given && !reads.iter().any(|read| read == name))

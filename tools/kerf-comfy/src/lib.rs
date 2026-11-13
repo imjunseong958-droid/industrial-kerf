@@ -216,8 +216,13 @@ pub fn make(
             continue;
         }
         let given = request.file(&name).expect("the request names it");
-        let fitted = work.join(GUIDE_SENT);
-        let file = if name == "guide" {
+        // Every guide is brought to the size, rate, and frames asked for, each to a file
+        // of its own.
+        let fitted = match request::guide_named(&name) {
+            Some(of) => work.join(format!("guide_{of}.comfy.mp4")),
+            None => work.join(GUIDE_SENT),
+        };
+        let file = if name == "guide" || request::guide_named(&name).is_some() {
             let shape = Shape {
                 size: (width, height),
                 fps,

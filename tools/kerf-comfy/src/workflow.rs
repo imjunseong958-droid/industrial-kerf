@@ -233,6 +233,13 @@ impl Workflow {
             .into_iter()
             .filter(|name| blanks.contains(*name))
             .collect();
+        // A guide beside the first, by its own name.
+        reads.extend(
+            blanks
+                .iter()
+                .filter(|name| crate::request::guide_named(name).is_some())
+                .map(String::as_str),
+        );
         let references = blanks
             .iter()
             .filter(|name| name.starts_with("ref") && names_a_file(name))

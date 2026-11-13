@@ -81,6 +81,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.
+- A `generate` line can hand a model more than one guide, each by what it
+  is of: `guide={picture.mp4} guide_depth={depth.mp4}`.
 - A recipe's `generate` line can hand a model where a thing goes:
   `moves=<clip>` puts the clip's box on every frame in the request, read
   from the picture, for a model that takes the way a thing goes as points.

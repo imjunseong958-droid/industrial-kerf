@@ -53,6 +53,7 @@ but a file's name stand for themselves.
 | `model=` | The model, by the name the person's models file gives it. |
 | `prompt="…"` | What the file should show. |
 | `guide=` | A picture in motion to follow: a blocking, a rough render, an earlier take. |
+| `guide_<name>=` | Another picture in motion to follow, by what it is of, for a model that reads more than one: `guide_depth={depth.mp4}` beside the picture, or `guide_ids=`. A name is lowercase letters and digits, each given once; the request holds them under `guides`. |
 | `first=`, `last=` | The first and the last frame. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
 | `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
@@ -341,7 +342,7 @@ Beside `run`, a model's entry can say so under `takes`:
 | `size` | The picture it makes, width and height: the size a guide for it is drawn at, and the most a `size=` asks of it. |
 | `rate` | The frames a second it makes: the rate a guide for it is drawn at. |
 | `seconds` | The longest shot it makes at once. |
-| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref`, `signal` and `moves`. An empty list is a model that takes a prompt alone. |
+| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref`, `signal` and `moves`, and a guide beside the first by its name, as `guide_depth`. An empty list is a model that takes a prompt alone. |
 | `more` | The other names a line can set for it, each with the value it has when the line does not. |
 
 Each is there only where the person says it, and anything else under `takes`
@@ -440,6 +441,7 @@ start from. `kerf-comfy --list` names those that come with it; the others
 |---|---|
 | `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
 | `{width}`, `{height}`, `{frames}`, `{fps}` | What `size=` and `seconds=` come to for this model. |
+| `{guide_depth}`, `{guide_ids}` … | A guide the line gives beside the first, by its name: sent up as `{guide}` is, brought to the size, rate, and frames asked for. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
 | `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |

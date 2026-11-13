@@ -366,6 +366,7 @@ fn a_request_says_where_every_file_is() {
             "model": "dawn",
             "prompt": "a boat",
             "guide": "/project/shots/open.takes/001.work/guide.mp4",
+            "guides": {},
             "first": "/project/refs/boat.png",
             "last": null,
             "references": [],
@@ -488,6 +489,51 @@ fn with_a_mover() -> Project {
 }
 
 #[test]
+fn a_line_hands_a_model_more_than_one_guide_each_by_its_name() {
+    let made = ["picture.mp4".to_owned(), "depth.mp4".to_owned()];
+    let words = [
+        "model=dawn",
+        "prompt=a boat",
+        "guide={picture.mp4}",
+        "guide_depth={depth.mp4}",
+        "guide_ids=../passes/ids.mp4",
+    ]
+    .map(str::to_owned);
+    let ask = Ask::parse(&words, &made).unwrap();
+    assert_eq!(
+        ask.guides,
+        [
+            ("depth".to_owned(), Source::Made("depth.mp4".to_owned())),
+            ("ids".to_owned(), Source::File("../passes/ids.mp4".to_owned())),
+        ]
+    );
+    assert_eq!(
+        ask.shown(),
+        "prompt \"a boat\", guide {picture.mp4}, guide_depth {depth.mp4}, guide_ids ../passes/ids.mp4"
+    );
+    // Each is a file the take is held to, and is in the request under its name.
+    assert_eq!(ask.sources().count(), 3);
+    let request = ask
+        .request(
+            &|file| Ok(Path::new("/project/shots").join(file)),
+            &|name| Path::new("/work").join(name),
+            &[],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(request["guide"], "/work/picture.mp4");
+    assert_eq!(
+        request["guides"],
+        serde_json::json!({"depth": "/work/depth.mp4", "ids": "/project/shots/../passes/ids.mp4"})
+    );
+    // A name is given once, and is letters and digits; anything else is the model's own.
+    let twice = ["model=dawn", "guide_depth=a.mp4", "guide_depth=b.mp4"].map(str::to_owned);
+    assert!(Ask::parse(&twice, &[]).unwrap_err().contains("given twice"));
+    let other = Ask::parse(&["model=dawn", "guide_Scale=2"].map(str::to_owned), &[]).unwrap();
+    assert!(other.guides.is_empty() && other.more.contains_key("guide_Scale"));
+}
+
+#[test]
 fn a_line_hands_a_model_where_a_clip_goes() {
     let project = with_a_mover();
     let words = ["model=dawn", "prompt=a ball", "moves=ball"].map(str::to_owned);
@@ -557,7 +603,8 @@ fn a_plan_reads_a_recipes_signals() {
         r#"{
             "shot": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}},
             "cued": {"run": ["b", "{request}"], "takes": {"reads": ["guide", "signal"]}},
-            "led": {"run": ["c", "{request}"], "takes": {"reads": ["moves"]}}
+            "led": {"run": ["c", "{request}"], "takes": {"reads": ["moves"]}},
+            "two": {"run": ["d", "{request}"], "takes": {"reads": ["guide", "guide_depth"]}}
         }"#,
     );
     let planned = |project: &Project, steps: &str| {
@@ -596,6 +643,16 @@ fn a_plan_reads_a_recipes_signals() {
         .unwrap_err()
         .to_string();
     assert_eq!(missing, "`moves=bat`: no clip `bat`");
+    // A second guide is read by a model that says it reads one of that name.
+    std::fs::write(directory.join("shots/d.mp4"), "").unwrap();
+    let both = "render s2 {g.mp4}\ngenerate model=two guide={g.mp4} guide_depth=d.mp4";
+    assert!(planned(&moving, both).unwrap().notes.is_empty());
+    assert_eq!(
+        planned(&moving, "render s2 {g.mp4}\ngenerate model=shot guide={g.mp4} guide_depth=d.mp4")
+            .unwrap()
+            .notes,
+        ["model `shot` has no use for `guide_depth=`: of what a line hands it, it reads guide"]
+    );
     // A signal that is not there stops the plan, as a sequence that is not does.
     let missing = planned(&waves, "generate model=cued signal=surge")
         .unwrap_err()

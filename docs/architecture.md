@@ -1013,7 +1013,12 @@ recipes, in `fixtures/shots/car`.
    set with what moved left out, and either reading
    on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
-5. **More than one guide on a line.** A `generate` line hands a model one
+5. **More than one guide on a line**, whose half in the document is in
+   (2026-11-13): a line names each guide beside the first by what it is
+   of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds
+   them under `guides`, a take is held to each, and `kerf-comfy` sends one
+   to the workflow blank of its name ([shots.md](shots.md#recipes)). A
+   `generate` line handed a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two, and Wan VACE takes one
    control video, so this waits for one that does.

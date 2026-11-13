@@ -20,6 +20,9 @@ pub struct Request {
     /// A picture in motion to follow.
     #[serde(default)]
     pub guide: Option<PathBuf>,
+    /// More pictures in motion to follow, each under what it is of: `depth`, `ids`.
+    #[serde(default)]
+    pub guides: BTreeMap<String, PathBuf>,
     /// The first and the last frame.
     #[serde(default)]
     pub first: Option<PathBuf>,
@@ -212,9 +215,11 @@ impl Request {
             "guide" => self.guide.as_deref(),
             "first" => self.first.as_deref(),
             "last" => self.last.as_deref(),
-            other => {
-                reference(other).and_then(|index| self.references.get(index).map(PathBuf::as_path))
-            }
+            other => match guide_named(other) {
+                Some(of) => self.guides.get(of).map(PathBuf::as_path),
+                None => reference(other)
+                    .and_then(|index| self.references.get(index).map(PathBuf::as_path)),
+            },
         }
     }
 
@@ -225,6 +230,7 @@ impl Request {
             .filter(|name| self.file(name).is_some())
             .map(str::to_owned)
             .collect();
+        names.extend(self.guides.keys().map(|of| format!("guide_{of}")));
         names.extend((0..self.references.len()).map(|index| match index {
             0 => "ref".to_owned(),
             index => format!("ref{}", index + 1),
@@ -235,6 +241,16 @@ impl Request {
 
 /// Which reference `name` is, counting from 0: `ref` is the first, `ref2`
 /// the second.
+/// What a guide beside the first is of, where `name` is one's: `depth` of `guide_depth`.
+pub fn guide_named(name: &str) -> Option<&str> {
+    name.strip_prefix("guide_").filter(|of| {
+        !of.is_empty()
+            && of
+                .chars()
+                .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
+    })
+}
+
 fn reference(name: &str) -> Option<usize> {
     match name.strip_prefix("ref")? {
         "" => Some(0),
@@ -248,7 +264,9 @@ fn reference(name: &str) -> Option<usize> {
 
 /// Whether `name` is one a request gives a file under.
 pub fn names_a_file(name: &str) -> bool {
-    matches!(name, "guide" | "first" | "last") || reference(name).is_some()
+    matches!(name, "guide" | "first" | "last")
+        || reference(name).is_some()
+        || guide_named(name).is_some()
 }
 
 /// The name a request's signal has, counting from 0: `signal` is the
@@ -376,6 +394,20 @@ mod tests {
             assert!(!names_a_signal(name), "{name}");
         }
         assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
+    }
+
+    #[test]
+    fn a_guide_beside_the_first_is_a_file_under_its_own_name() {
+        let request = Request::parse(
+            r#"{"kerf-request": 1, "model": "two", "prompt": "", "guide": "/w/picture.mp4",
+                "guides": {"depth": "/w/depth.mp4", "ids": "/w/ids.mp4"}, "out": "/w/out"}"#,
+        )
+        .unwrap();
+        assert_eq!(request.files(), ["guide", "guide_depth", "guide_ids"]);
+        assert_eq!(request.file("guide_depth"), Some(Path::new("/w/depth.mp4")));
+        assert_eq!(request.file("guide_normals"), None);
+        assert!(names_a_file("guide_depth") && names_what_is_handed("guide_ids"));
+        assert!(!names_a_file("guide_") && !names_a_file("guide_Depth") && !names_a_file("guides"));
     }
 
     #[test]

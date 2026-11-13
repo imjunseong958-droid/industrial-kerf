@@ -90,6 +90,10 @@ pub struct Ask {
     pub prompt: String,
     /// A picture in motion to follow: a blocking, a rough render, a take.
     pub guide: Option<Source>,
+    /// More pictures in motion to follow, each by what it is of: a model that reads a
+    /// picture and its depth, or depth and which clip each pixel is of, is handed each
+    /// under its name (`guide_depth=`, `guide_ids=`).
+    pub guides: Vec<(String, Source)>,
     /// The first and the last frame.
     pub first: Option<Source>,
     pub last: Option<Source>,
@@ -118,6 +122,7 @@ impl Ask {
             model: String::new(),
             prompt: String::new(),
             guide: None,
+            guides: Vec::new(),
             first: None,
             last: None,
             references: Vec::new(),
@@ -145,6 +150,13 @@ impl Ask {
                 "model" => ask.model = value.to_owned(),
                 "prompt" => ask.prompt = value.to_owned(),
                 "guide" => ask.guide = Some(source(value)?),
+                named if named.strip_prefix("guide_").is_some_and(names_a_guide) => {
+                    let name = named["guide_".len()..].to_owned();
+                    if ask.guides.iter().any(|(given, _)| *given == name) {
+                        return Err(format!("`{named}=` is given twice"));
+                    }
+                    ask.guides.push((name, source(value)?));
+                }
                 "first" => ask.first = Some(source(value)?),
                 "last" => ask.last = Some(source(value)?),
                 "ref" => ask.references.push(source(value)?),
@@ -206,6 +218,7 @@ impl Ask {
     pub fn sources(&self) -> impl Iterator<Item = &Source> {
         self.guide
             .iter()
+            .chain(self.guides.iter().map(|(_, source)| source))
             .chain(&self.first)
             .chain(&self.last)
             .chain(&self.references)
@@ -218,6 +231,9 @@ impl Ask {
             |name: &str, source: &Source| parts.push(format!("{name} {}", source.shown()));
         if let Some(guide) = &self.guide {
             named("guide", guide);
+        }
+        for (name, guide) in &self.guides {
+            named(&format!("guide_{name}"), guide);
         }
         if let Some(first) = &self.first {
             named("first", first);
@@ -274,6 +290,11 @@ impl Ask {
             "model": self.model,
             "prompt": self.prompt,
             "guide": optional(&self.guide)?,
+            "guides": self
+                .guides
+                .iter()
+                .map(|(name, source)| Ok((name.clone(), place(source)?)))
+                .collect::<Result<serde_json::Map<String, Value>>>()?,
             "first": optional(&self.first)?,
             "last": optional(&self.last)?,
             "references": self.references.iter().map(place).collect::<Result<Vec<_>>>()?,
@@ -290,6 +311,15 @@ impl Ask {
 
 /// The files a `generate` line hands a model, by the names it gives them.
 pub const FILES: [&str; 4] = ["guide", "first", "last", "ref"];
+
+/// Whether `name` is what a guide beside the first is named by, after `guide_`: lowercase
+/// letters and digits, as a workflow's blank is.
+pub fn names_a_guide(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
+}
 
 /// The name a `generate` line hands a model a signal by.
 pub const SIGNAL: &str = "signal";
@@ -362,12 +392,15 @@ impl Takes {
                             reads
                                 .iter()
                                 .all(|read| {
-                                    FILES.contains(&read.as_str()) || read == SIGNAL || read == MOVES
+                                    FILES.contains(&read.as_str())
+                                        || read == SIGNAL
+                                        || read == MOVES
+                                        || read.strip_prefix("guide_").is_some_and(names_a_guide)
                                 })
                         })
                         .ok_or_else(|| {
                             format!(
-                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}, {MOVES}",
+                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}, {MOVES}, and a guide by what it is of, as `guide_depth`",
                                 FILES.join(", ")
                             )
                         })?;
