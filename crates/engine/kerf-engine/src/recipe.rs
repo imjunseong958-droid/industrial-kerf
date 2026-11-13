@@ -82,6 +82,8 @@ pub enum Step {
         size: Option<(u32, u32)>,
         rate: Option<Rate>,
         pass: Pass,
+        /// A clip of the sequence drawn alone, white on black, in place of a pass.
+        matte: Option<String>,
     },
     /// A model asked for a file.
     Generate(Box<Ask>),
@@ -140,7 +142,7 @@ impl Recipe {
                             words[1]
                         ))
                     })?;
-                    let (size, rate, pass) = drawn_at(&words[2..]).map_err(wrong)?;
+                    let (size, rate, pass, matte) = drawn_at(&words[2..]).map_err(wrong)?;
                     made.push(to.clone());
                     recipe.steps.push(Step::Render {
                         sequence: words.swap_remove(0),
@@ -148,6 +150,7 @@ impl Recipe {
                         size,
                         rate,
                         pass,
+                        matte,
                     });
                 }
                 "generate" if !words.is_empty() => {
@@ -303,9 +306,12 @@ pub(crate) fn size_of(value: &str) -> Option<Size> {
         .filter(|(width, height): &Size| *width > 0 && *height > 0)
 }
 
-/// The size, the rate, and the pass the words after `render <sequence> {name}` name.
-fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>, Pass), String> {
-    let (mut size, mut rate, mut pass) = (None, None, Pass::Picture);
+/// What the words after `render <sequence> {name}` name: the size, the rate, the pass, and
+/// the clip a matte is of.
+type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>);
+
+fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
+    let (mut size, mut rate, mut pass, mut matte) = (None, None, Pass::Picture, None);
     for word in words {
         match word.split_once('=') {
             Some(("size", value)) => {
@@ -332,14 +338,18 @@ fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>
                     )
                 })?;
             }
+            Some(("matte", value)) if !value.is_empty() => matte = Some(value.to_owned()),
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth|relative|normals`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"
                 ))
             }
         }
     }
-    Ok((size, rate, pass))
+    if matte.is_some() && pass != Pass::Picture {
+        return Err("`matte=` is one clip in white on black, in place of a pass: give one of the two".to_owned());
+    }
+    Ok((size, rate, pass, matte))
 }
 
 /// The names in braces an argument holds: `out` and `guide.mp4` of
@@ -743,10 +753,12 @@ pub fn plan(
                 size,
                 rate,
                 pass,
+                matte,
             } => {
-                let what = match pass {
-                    Pass::Picture => String::new(),
-                    pass => format!("the {} of ", pass.name()),
+                let what = match (pass, matte) {
+                    (_, Some(clip)) => format!("the matte of `{clip}` in "),
+                    (Pass::Picture, None) => String::new(),
+                    (pass, None) => format!("the {} of ", pass.name()),
                 };
                 let mut at = Vec::new();
                 if let Some((width, height)) = size {
@@ -1079,6 +1091,7 @@ impl Making<'_> {
                     size,
                     rate,
                     pass,
+                    matte,
                 } => {
                     let mut resolved = self.project.clone();
                     resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
@@ -1092,6 +1105,7 @@ impl Making<'_> {
                             size: *size,
                             rate: *rate,
                             pass: *pass,
+                            matte: matte.clone(),
                             // What a step makes is for a model to follow, or a shot of its
                             // own: a picture, with no sound.
                             sound: false,

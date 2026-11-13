@@ -99,6 +99,8 @@ pub(crate) struct Drawing {
     files: Files,
     /// What is drawn of the program.
     pass: Pass,
+    /// The color of the one clip a matte is of, as an ids pass writes it.
+    matte: Option<[u8; 3]>,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
 }
@@ -328,7 +330,14 @@ struct Reveals {
 
 impl Drawing {
     pub fn new(project: &Project, catalog: &Catalog, options: &ComposeOptions) -> Result<Self> {
-        let (sequence, pass) = (options.sequence.as_deref(), options.pass);
+        // A matte is the ids pass with one clip's color made white.
+        let (sequence, pass) = (
+            options.sequence.as_deref(),
+            match options.matte {
+                Some(_) => Pass::Ids,
+                None => options.pass,
+            },
+        );
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
         let project = &expanded;
@@ -372,6 +381,19 @@ impl Drawing {
                 ids.push((id.clone(), id_color(ids.len())));
             }
         }
+        let matte = match &options.matte {
+            None => None,
+            Some(name) => Some(
+                ids.iter()
+                    .find(|(id, _)| id.as_str() == name)
+                    .map(|(_, color)| [color.r, color.g, color.b])
+                    .ok_or_else(|| {
+                        ComposeError::Invalid(format!(
+                            "a matte is of a clip that draws, and the sequence has no such clip `{name}`"
+                        ))
+                    })?,
+            ),
+        };
         Ok(Self {
             hdr: HdrOutput::new(top.color),
             sequences,
@@ -388,6 +410,7 @@ impl Drawing {
             disk: options.frame_folder.as_deref().map(crate::disk::open),
             files,
             pass,
+            matte,
             ids,
         })
     }
@@ -588,6 +611,12 @@ impl Drawing {
         if self.pass == Pass::Relative {
             stretch_to_its_own(&mut rgba);
         }
+        if let Some(color) = self.matte {
+            rgba.par_chunks_mut(4).for_each(|pixel| {
+                let its = color.iter().zip(pixel.iter()).all(|(a, b)| a.abs_diff(*b) <= 6);
+                pixel[..3].fill(if its { u8::MAX } else { 0 });
+            });
+        }
         Frame {
             width: image.w as u32,
             height: image.h as u32,
@@ -654,6 +683,7 @@ impl Drawing {
         if self.pass != Pass::Picture {
             self.pass.hash(&mut hash);
         }
+        self.matte.hash(&mut hash);
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }

@@ -119,6 +119,10 @@ pub struct ComposeOptions {
     pub frame_folder: Option<std::path::PathBuf>,
     /// What is drawn: the picture, unless it says otherwise.
     pub pass: Pass,
+    /// A clip of the sequence to draw alone as a matte, in place of any pass: white where a
+    /// pixel is that clip's, as [`Pass::Ids`] has it, and black everywhere else, so what
+    /// stands before the clip is cut out of it.
+    pub matte: Option<String>,
 }
 
 /// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn

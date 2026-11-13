@@ -61,6 +61,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             size: None,
             rate: None,
             pass: Pass::Picture,
+            matte: None,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -109,6 +110,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 size: Some((832, 480)),
                 rate: Some(Rate::new(16, 1).unwrap()),
                 pass: Pass::Picture,
+                matte: None,
             },
             Step::Render {
                 sequence: "s3".to_owned(),
@@ -116,9 +118,21 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 size: Some((1280, 720)),
                 rate: Some(Rate::FPS_23_976),
                 pass: Pass::Picture,
+                matte: None,
             }
         ]
     );
+    // A matte is one clip of the sequence in white on black, and is asked for in place of a
+    // pass.
+    let matte = Recipe::parse("kerf-recipe 1\nrender s2 {out} matte=crate size=832x480\n").unwrap();
+    assert!(matches!(
+        &matte.steps[0],
+        Step::Render { matte: Some(clip), pass: Pass::Picture, .. } if clip == "crate"
+    ));
+    assert!(Recipe::parse("kerf-recipe 1\nrender s2 {out} matte=crate pass=ids\n")
+        .unwrap_err()
+        .to_string()
+        .contains("give one of the two"));
     // A pass of the same sequence is another file of the recipe's, for a model that reads it.
     let passes = Recipe::parse(
         "kerf-recipe 1\nrender s2 {guide.mp4} size=832x480 rate=16\nrender s2 {ids.mp4} pass=ids size=832x480 rate=16\nrender s2 {out} pass=depth\n",
@@ -178,7 +192,7 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth|relative|normals`"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"));
     assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=albedo")
         .contains("`pass=albedo` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`"));
     assert!(

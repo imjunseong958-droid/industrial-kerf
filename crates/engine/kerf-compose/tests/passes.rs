@@ -183,6 +183,38 @@ fn a_normals_pass_says_which_way_each_pixel_faces() {
 }
 
 #[test]
+fn a_matte_is_one_clip_in_white_with_what_stands_before_it_cut_out() {
+    let matte = |clip: &str| {
+        let project = parse_document(
+            &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"),
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                matte: Some(clip.to_owned()),
+                ..ComposeOptions::default()
+            },
+        )
+    };
+    let wall = matte("wall").expect("a wall").frame(Rate::FPS_24.time_of(3), 1.0);
+    // The wall is white where it shows, and the box before it is a hole in it.
+    assert_eq!(pixel(&wall, 118, 90), [255, 255, 255]);
+    assert_eq!(pixel(&wall, 160, 90), [0, 0, 0]);
+    assert_eq!(pixel(&wall, 10, 5), [0, 0, 0]);
+    // Every pixel is one or the other.
+    assert!(wall.rgba.as_chunks::<4>().0.iter().all(|p| p[0] == 0 || p[0] == 255));
+    let box_ = matte("box").expect("a box").frame(Rate::FPS_24.time_of(3), 1.0);
+    assert_eq!(pixel(&box_, 160, 90), [255, 255, 255]);
+    assert_eq!(pixel(&box_, 118, 90), [0, 0, 0]);
+    // A clip that draws nothing has no matte, and neither has one that is not there.
+    assert!(matte("cam").is_err() && matte("nobody").is_err());
+}
+
+#[test]
 fn a_pass_holds_still_and_is_kept_apart_from_the_picture() {
     // The same scene drawn twice is the same pass to the byte, and its number is its own.
     let at = Rate::FPS_24.time_of(3);

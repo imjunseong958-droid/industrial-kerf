@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals] [matte=<clip>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -779,10 +779,16 @@ What a signal does to the picture is the model's, not Kerf's. Kerf knows no
 model that reads one by name. Of the workflows that come with `kerf-comfy`
 one reads a second guide, `shot-into`: a shot that keeps its guide where
 `guide_mask` is black and makes it anew from the prompt where that is
-white, for a thing put into footage. Draw the guide with the thing's place
-in flat grey over the footage, and the mask as the same thing in white on
-black, each a sequence with the one camera
-(`generate model=into guide={guide.mp4} guide_mask={mask.mp4}`). And
+white, for a thing put into footage. The guide is the footage as it is,
+and the mask the thing in white on black, drawn from the sequence that
+holds it, its camera, and the set that hides it:
+
+```text
+render s2 {mask.mp4} matte=crate size=832x480 rate=16
+generate model=into prompt="a red shipping container on the street" guide=../footage/shot.mp4 guide_mask={mask.mp4}
+```
+
+And
 one reads a signal, `shot-timed`: a shot that follows its guide where the
 signal is 0 and is made anew from the prompt where it is 1, the signal
 reaching the model as a mask a frame. `shot` has no blank for one, so a
@@ -901,6 +907,10 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   the frame, so it holds still from one frame to the next. A clip out of
   depth, such as a backdrop on the lowest track, has no distance and is
   black, and so is where there is no clip.
+- **`matte=<clip>`**, in place of a pass: that one clip in white on black,
+  as much of it as shows, so what stands before it is cut out of it. It is
+  the mask a model is handed to make a thing anew in one place
+  (`guide_mask={mask.mp4}`).
 - **`pass=normals`**: which way each pixel faces, as a color, in the
   camera's own space: to the right as red, up as green, and toward the
   camera as blue, each from -1 to 1 as black to full, as a normal map has

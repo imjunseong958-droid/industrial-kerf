@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, or a part of a picture made again. Draw the guide with what is to be made in flat grey, and the mask as the same thing in white on black.",
+  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, or a part of a picture made again. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it.",
   "fps": 16,
   "frames": {
     "most": 81,
@@ -101,7 +101,7 @@
         "batch_size": 1,
         "strength": "{strength}",
         "control_video": [
-          "7",
+          "21",
           0
         ],
         "control_masks": [
@@ -231,6 +231,35 @@
           0
         ],
         "channel": "red"
+      }
+    },
+    "20": {
+      "class_type": "EmptyImage",
+      "inputs": {
+        "width": "{width}",
+        "height": "{height}",
+        "batch_size": 1,
+        "color": 8421504
+      }
+    },
+    "21": {
+      "class_type": "ImageCompositeMasked",
+      "inputs": {
+        "destination": [
+          "7",
+          0
+        ],
+        "source": [
+          "20",
+          0
+        ],
+        "x": 0,
+        "y": 0,
+        "resize_source": false,
+        "mask": [
+          "19",
+          0
+        ]
       }
     }
   }

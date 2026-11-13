@@ -98,7 +98,7 @@ intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
 A media a renderer or a model makes names its recipe (`recipe="shots/open.kerfrecipe"`), a text file you
 may write: `kerf-recipe 1`, then a line each of `needs <file> …`, `run <program> <arguments>`,
-`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals]` (Kerf draws a sequence as a guide, without sound: give
+`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` (Kerf draws a sequence as a guide, without sound: give
 a model's size and rate, and the picture fills that size, the excess cut off evenly; `pass=ids` draws each clip in one
 flat color of its own, `pass=depth` how near each pixel is, for a model that follows one), and `generate model=<name> prompt="…"
 [guide=|guide_<name>=|first=|last=|ref=<file>] [signal=<clip>] [moves=<clip>] [seconds=<n>] [size=WxH] [seed=<n>]`. A guide says where,

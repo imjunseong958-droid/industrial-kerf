@@ -83,6 +83,9 @@ on `main`; its section here becomes the release's notes on GitHub
   choosing another has the media be that take again.
 - A glTF file's morph targets are read: a face or a shape that the file
   reshapes by weights is reshaped as its animation has it.
+- A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
+  where that clip shows and black elsewhere, with what stands before it cut
+  out, which is the mask a model is handed to make a thing in one place.
 - `kerf-comfy` comes with `shot-led`: a shot whose subject goes where a
   clip of the project goes, the clip's box on each frame handed over as a
   layout (`moves=<clip>`), with no picture of the scene.

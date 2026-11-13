@@ -1061,8 +1061,13 @@ recipes, in `fixtures/shots/car`.
    whole picture had 0.42. A box 1% of the frame was filled in from its
    surroundings and no crate drawn; one of 2.7% was made. So what the
    loop was for is done once, end to end: a thing put into a filmed shot
-   by where it stands in the scene. What is not in it: the set hiding the
-   thing, since the footage is a flat picture under it. A
+   by where it stands in the scene. The set hides the thing in a second
+   making: `render … matte=<clip>` draws one clip in white on black, as
+   much of it as shows among the sets, and the workflow takes the footage
+   as it is and greys the masked place itself. That take has a box where
+   the matte is, cut by the wall's end, and brown where a red one was
+   asked for: the smaller and more ragged the place, the less this model
+   draws what the prompt says there. A
    `generate` line handed a model one
    guide. A model that reads a picture and its depth, or depth and ids,
    wants each named. No model in reach reads two of those, and Wan VACE takes one
