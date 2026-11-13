@@ -382,19 +382,19 @@ kerf-comfy`); the packages do not carry it.
 
 ```json
 {
-  "vace": { "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"] }
+  "shot": { "run": ["/path/to/kerf-comfy", "--workflow", "shot", "{request}"] }
 }
 ```
 
-`kerf-comfy --workflow wan-vace --describe` prints that entry whole, with
+`kerf-comfy --workflow shot --describe` prints that entry whole, with
 [what the model takes](#what-a-model-takes) as its workflow has it, to put
 under the model's name. It reads the workflow and asks no server:
 
 ```json
 {
-  "run": ["/path/to/kerf-comfy", "--workflow", "wan-vace", "{request}"],
+  "run": ["/path/to/kerf-comfy", "--workflow", "shot", "{request}"],
   "takes": {
-    "about": "Wan 2.1 VACE: a shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
+    "about": "A shot that follows a guide video, a reference picture, both, or the prompt alone. Of a guide it follows depth best: draw it with pass=depth.",
     "size": [832, 480],
     "rate": 16,
     "seconds": 5.0625,
@@ -420,9 +420,9 @@ another file), which is yours and outside any project:
 
 A workflow is a ComfyUI graph, as ComfyUI exports it for its API, with blanks
 in it, and what the model it runs makes: its rate, how many frames, how
-large. `wan-vace` comes with the program: Wan 2.1 VACE, which follows a guide
+large. `shot` comes with the program, for a model that follows a guide
 video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
-takes a file too, and `tools/kerf-comfy/workflows/wan-vace.json` is the one to
+takes a file too, and `tools/kerf-comfy/workflows/shot.json` is the one to
 start from. `kerf-comfy --list` names those that come with it; the others
 [read a picture back](#a-picture-read-back).
 
@@ -472,13 +472,13 @@ where a later step reads what it makes. Four such workflows come with
 
 | Workflow | What it makes of its guide | As |
 |---|---|---|
-| `depth` | MoGe 3: how near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
-| `set` | MoGe 3: one frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
-| `depth-whole` | Depth Anything 3, a picture at a time: how near each pixel is. It gives a sky a distance, where MoGe gives it none. | a video |
-| `cameras` | Depth Anything 3, the frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
+| `depth` | How near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
+| `set` | One frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. | a `.glb` |
+| `depth-whole` | How near each pixel is, a picture at a time, by another model: it gives a sky a distance, where `depth` gives it none. | a video |
+| `cameras` | The frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
 
-A workflow is named for what it makes, and says which model makes it in
-its `about`. A recipe names neither: it says `model=depth`, the name the person's
+A workflow is named for what it makes, and the model it runs is in its
+graph. A recipe names neither: it says `model=depth`, the name the person's
 file gives whichever reads depth for them, so that the recipe still reads
 when the model behind it is another.
 
@@ -490,7 +490,7 @@ when the model behind it is another.
 ```
 
 ```text
-generate model=vace prompt="a red sports car drives along a wet street at dusk" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
+generate model=shot prompt="a red sports car drives along a wet street at dusk" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
 generate model=depth guide={take.mp4} out={depth.mp4}
 generate model=cameras guide=../footage/shot.mp4 out={cameras.txt}
 ```
@@ -506,11 +506,11 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 
 - **Which file is fetched goes by the name asked for.** `cameras`
   saves a video and a text, and `out={cameras.txt}` takes the text.
-- **MoGe is asked as it comes**, refining three times. `refine_steps=1` took
+- **`depth` asks its model as it comes**, refining three times. `refine_steps=1` took
   under half the time on the server it was measured on, for a depth 0.3%
   from the default's, and is for a very long shot.
-- **Depth Anything 3 finds a camera's path only with its weights as 32-bit
-  floats**, which `cameras` sets on `LoadDA3Model`
+- **A camera's path is found only with the model's weights as 32-bit
+  floats**, which `cameras` sets where it loads them
   (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a
   dtype. `pose=ray_pose` finds the path from the model's rays in place of
   its camera decoder, three times as slowly.
@@ -668,8 +668,8 @@ workflow's to say. Handing one model a picture and a pass of it at once has
 no word on a `generate` line yet, and normals are not drawn.
 
 Which kind a model follows is the model's, and its entry's `about` says. A
-model that covers a render is handed the picture. Wan 2.1 VACE 1.3B, the
-small model `kerf-comfy` comes with a workflow for, made more of a depth
+model that covers a render is handed the picture. The
+small model `kerf-comfy`'s `shot` is written for made more of a depth
 pass than of a picture in flat colors, and nothing of an ids pass, which is
 what `look` with `shows` reads a frame by
 ([architecture.md](architecture.md#measured)).

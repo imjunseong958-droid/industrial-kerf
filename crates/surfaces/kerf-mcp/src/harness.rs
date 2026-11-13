@@ -4236,8 +4236,8 @@ sequence s1 rate=24 size=1920x1080
         std::fs::write(
             &file,
             r#"{
-                "vace": {
-                    "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"],
+                "shot": {
+                    "run": ["kerf-comfy", "--workflow", "shot", "{request}"],
                     "takes": {
                         "about": "follows a guide",
                         "size": [832, 480],
@@ -4265,7 +4265,7 @@ sequence s1 rate=24 size=1920x1080
                 // A rate that is not whole is written as a line writes it.
                 {"name": "ntsc", "rate": 23.976, "reads": ["guide"],
                  "guide": "render <sequence> {guide.mp4} rate=23.976"},
-                {"name": "vace", "about": "follows a guide", "size": "832x480", "rate": 16.0,
+                {"name": "shot", "about": "follows a guide", "size": "832x480", "rate": 16.0,
                  "seconds": 5.0625, "reads": ["guide", "ref"], "more": {"steps": 20},
                  "frames": {"most": 81, "step": 4},
                  "guide": "render <sequence> {guide.mp4} size=832x480 rate=16"},

@@ -7,7 +7,7 @@
 //! `~/.kerf/models.json` names it for a model (`docs/shots.md`):
 //!
 //! ```json
-//! { "vace": { "run": ["kerf-comfy", "--workflow", "wan-vace", "{request}"] } }
+//! { "shot": { "run": ["kerf-comfy", "--workflow", "shot", "{request}"] } }
 //! ```
 //!
 //! `kerf-comfy --workflow NAME|FILE --describe` prints that entry for a
