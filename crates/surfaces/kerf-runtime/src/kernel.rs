@@ -137,6 +137,17 @@ impl Facts for CachedFacts {
         }
     }
 
+    /// Where the sound the transcripts kept reads as speech and they have no
+    /// words. Nothing is transcribed.
+    fn unheard(&self, media: &Media) -> Vec<(f64, f64)> {
+        let path = self.directory.join(&media.path);
+        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        kerf_engine::unheard_speech(&path.to_string_lossy(), &cache)
+            .into_iter()
+            .map(|stretch| (stretch.start, stretch.end))
+            .collect()
+    }
+
     /// Where the media index made on import found pauses and cuts. Nothing
     /// is indexed here.
     fn breaks(&self, media: &Media) -> Option<Breaks> {

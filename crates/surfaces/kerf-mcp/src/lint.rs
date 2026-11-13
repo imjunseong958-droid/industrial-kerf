@@ -27,6 +27,7 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         flash_frames(sequence, &mut findings);
         slivers(project, sequence, facts, &mut findings);
         cuts_in_words(project, sequence, facts, &mut findings);
+        speech_unheard(project, sequence, facts, &mut findings);
         text_lint::text(sequence, &mut findings);
         text_lint::captions(sequence, &mut findings);
         does_nothing(sequence, &mut findings);
@@ -614,6 +615,74 @@ fn cuts_in_words(
     }
 }
 
+/// What a stretch that sounds like speech and has no words is called: information, since a
+/// transcriber leaving something out is not the cut's fault, and what reads as speech may be a beat.
+pub(crate) const SPEECH_UNHEARD: &str = "speech.unheard";
+/// How much of such a stretch a clip has to play for it to be said, in seconds.
+const UNHEARD_PLAYED: f64 = 1.0;
+
+/// Sound clips that play a stretch of their media that sounds like speech and that its
+/// transcripts have no words for: what a caption or a cut made from the transcript would miss.
+fn speech_unheard(
+    project: &Project,
+    sequence: &Sequence,
+    facts: &dyn Facts,
+    findings: &mut Vec<Finding>,
+) {
+    let mut known: std::collections::HashMap<Id, Vec<(f64, f64)>> = std::collections::HashMap::new();
+    let clock = Clock::of_sequence(sequence);
+    for track in sequence
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio && track.enabled && !track.muted)
+    {
+        for clip in track.clips.iter().filter(|clip| clip.enabled) {
+            let Content::Media { media, speed, .. } = &clip.content else {
+                continue;
+            };
+            let (Some(media), Some((source_in, source_out))) =
+                (project.media(media.as_str()), clip.source_range())
+            else {
+                continue;
+            };
+            if speed.is_reverse() {
+                continue;
+            }
+            let unheard = known
+                .entry(media.id.clone())
+                .or_insert_with(|| facts.unheard(media));
+            for (from, to) in unheard.iter() {
+                let (from, to) = (from.max(source_in.seconds()), to.min(source_out.seconds()));
+                if to - from < UNHEARD_PLAYED {
+                    continue;
+                }
+                let at = |seconds: f64| {
+                    let source = Time::from_seconds(seconds).unwrap_or(source_in);
+                    sequence.rate.round(clip.played_at(source).unwrap_or(clip.start))
+                };
+                let (start, end) = (at(from), at(to));
+                let mut finding = Finding::new(
+                    Severity::Info,
+                    SPEECH_UNHEARD,
+                    Some(clip.id.as_str()),
+                    format!(
+                        "clip `{}` sounds like speech from {} to {} and the transcript of `{}` has no words there; \
+                         the transcriber may have missed it, so listen before trusting captions or cuts made from it",
+                        clip.id,
+                        clock.print_position(start),
+                        clock.print_position(end),
+                        media.id,
+                    ),
+                )
+                .during(sequence, start, end);
+                finding.value = Some(((to - from) * 10.0).round() / 10.0);
+                finding.unit = Some("s".to_owned());
+                findings.push(finding);
+            }
+        }
+    }
+}
+
 /// Merge spans into sorted, disjoint spans.
 fn union(spans: impl Iterator<Item = (Time, Time)>) -> Vec<(Time, Time)> {
     let mut spans: Vec<_> = spans.filter(|(from, to)| to > from).collect();
@@ -674,11 +743,14 @@ sequence s1 rate=24 size=1920x1080
 ";
 
     /// What every media's transcripts heard and its index found.
+    #[derive(Default)]
     struct Known {
         words: Vec<Word>,
         /// The seconds of each media those transcripts cover.
         covered: Vec<(f64, f64)>,
         cuts: Vec<f64>,
+        /// The seconds of each media that sound like speech and have no words.
+        unheard: Vec<(f64, f64)>,
     }
 
     impl Facts for Known {
@@ -694,6 +766,10 @@ sequence s1 rate=24 size=1920x1080
                 pauses: Vec::new(),
                 cuts: self.cuts.clone(),
             })
+        }
+
+        fn unheard(&self, _: &Media) -> Vec<(f64, f64)> {
+            self.unheard.clone()
         }
     }
 
@@ -726,11 +802,52 @@ sequence s1 rate=24 size=1920x1080
                 .collect(),
             covered: covered.to_vec(),
             cuts: cuts.to_vec(),
+            unheard: Vec::new(),
         };
         findings(&project, &known)
             .into_iter()
             .map(|finding| (finding.code, finding.message))
             .collect()
+    }
+
+    #[test]
+    fn speech_a_transcript_has_no_words_for_is_said_where_a_clip_plays_it() {
+        // a1 plays 0–4 s of m1 and a2 plays 10–14 s of it at 4–8 s of the sequence. The transcripts
+        // have no words for 2.5–3.75 s, 9–11.5 s and 30–40 s of what sounds like speech.
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        let known = Known {
+            covered: vec![(0.0, 60.0)],
+            unheard: vec![(2.5, 3.75), (9.0, 11.5), (30.0, 40.0)],
+            ..Known::default()
+        };
+        let found: Vec<Finding> = findings(&project, &known)
+            .into_iter()
+            .filter(|finding| finding.code == SPEECH_UNHEARD)
+            .collect();
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].severity, Severity::Info);
+        assert_eq!(found[0].entity.as_deref(), Some("a1"));
+        assert!(
+            found[0]
+                .message
+                .starts_with("clip `a1` sounds like speech from 00:00:02:12 to 00:00:03:18 and the transcript of `m1` has no words there"),
+            "{found:?}"
+        );
+        // Of 9–11.5 s, a2 plays what is after 10 s, a second and a half, from where it starts.
+        assert_eq!(found[1].entity.as_deref(), Some("a2"));
+        assert!(found[1].message.contains("from 00:00:04:00 to 00:00:05:12"), "{found:?}");
+        assert_eq!(found[1].value, Some(1.5));
+        // What no clip plays, or plays less than a second of, is nobody's to hear.
+        let little = Known {
+            covered: vec![(0.0, 60.0)],
+            unheard: vec![(3.5, 4.5), (30.0, 40.0)],
+            ..Known::default()
+        };
+        assert!(findings(&project, &little).iter().all(|finding| finding.code != SPEECH_UNHEARD));
+        // It is information: the check is as valid as it was.
+        let report = crate::qc::CheckReport::new(findings(&project, &known), crate::qc::ROWS);
+        assert!(report.valid);
     }
 
     #[test]

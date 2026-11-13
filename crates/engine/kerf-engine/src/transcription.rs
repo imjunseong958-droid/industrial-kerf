@@ -1045,7 +1045,7 @@ fn settle_words(transcript: &mut Transcript, audio: &Path) {
 
 /// The samples of `[from, to)` seconds of a 16-bit mono WAV file at the
 /// transcription rate, as the cache keeps a transcript's sound.
-fn wav_samples(path: &Path, from: f64, to: f64) -> Option<Vec<i16>> {
+pub(crate) fn wav_samples(path: &Path, from: f64, to: f64) -> Option<Vec<i16>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path).ok()?;
     let mut header = [0u8; 12];
