@@ -30,7 +30,7 @@ use kerf_draw::correct::Correction;
 use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::source::{premultiplied, PictureSource, SourceRun};
 use kerf_draw::text::{self, Justify, Text};
-use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
+use kerf_draw::{mask, wipe, Affine, Blend, Image, Rect, Vec2};
 use kerf_fx::filmcraft::{self, catalog::Headroom};
 use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::time::format_timecode;
@@ -99,6 +99,8 @@ pub(crate) struct Drawing {
     files: Files,
     /// What is drawn of the program.
     pass: Pass,
+    /// The color of the one clip a matte is of, as an ids pass writes it.
+    matte: Option<[u8; 3]>,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
 }
@@ -328,7 +330,14 @@ struct Reveals {
 
 impl Drawing {
     pub fn new(project: &Project, catalog: &Catalog, options: &ComposeOptions) -> Result<Self> {
-        let (sequence, pass) = (options.sequence.as_deref(), options.pass);
+        // A matte is the ids pass with one clip's color made white.
+        let (sequence, pass) = (
+            options.sequence.as_deref(),
+            match options.matte {
+                Some(_) => Pass::Ids,
+                None => options.pass,
+            },
+        );
         // Looks draw as the built-ins they stand for.
         let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
         let project = &expanded;
@@ -372,6 +381,19 @@ impl Drawing {
                 ids.push((id.clone(), id_color(ids.len())));
             }
         }
+        let matte = match &options.matte {
+            None => None,
+            Some(name) => Some(
+                ids.iter()
+                    .find(|(id, _)| id.as_str() == name)
+                    .map(|(_, color)| [color.r, color.g, color.b])
+                    .ok_or_else(|| {
+                        ComposeError::Invalid(format!(
+                            "a matte is of a clip that draws, and the sequence has no such clip `{name}`"
+                        ))
+                    })?,
+            ),
+        };
         Ok(Self {
             hdr: HdrOutput::new(top.color),
             sequences,
@@ -388,6 +410,7 @@ impl Drawing {
             disk: options.frame_folder.as_deref().map(crate::disk::open),
             files,
             pass,
+            matte,
             ids,
         })
     }
@@ -431,11 +454,16 @@ impl Drawing {
                 let [r, g, b, _] = premultiplied(color);
                 flat(picture, [r, g, b]);
             }
-            Pass::Depth if plan.three_d => {
+            Pass::Depth | Pass::Relative if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
                 three_d::shade_by_depth(&scene, plan, picture, to_output, at - plan.clip.start);
             }
-            Pass::Depth => flat(picture, [0.0; 3]),
+            Pass::Depth | Pass::Relative => flat(picture, [0.0; 3]),
+            Pass::Normals if plan.three_d => {
+                let scene = three_d::Scene::at(sequence, at, size);
+                three_d::shade_by_facing(&scene, plan, picture, to_output, at - plan.clip.start);
+            }
+            Pass::Normals => flat(picture, [0.0; 3]),
         }
     }
 
@@ -579,10 +607,20 @@ impl Drawing {
                 pixel[..3].copy_from_slice(&sdr);
             });
         }
+        let mut rgba = image.to_rgba8_over_black();
+        if self.pass == Pass::Relative {
+            stretch_to_its_own(&mut rgba);
+        }
+        if let Some(color) = self.matte {
+            rgba.par_chunks_mut(4).for_each(|pixel| {
+                let its = color.iter().zip(pixel.iter()).all(|(a, b)| a.abs_diff(*b) <= 6);
+                pixel[..3].fill(if its { u8::MAX } else { 0 });
+            });
+        }
         Frame {
             width: image.w as u32,
             height: image.h as u32,
-            rgba: image.to_rgba8_over_black(),
+            rgba,
         }
     }
 
@@ -645,6 +683,7 @@ impl Drawing {
         if self.pass != Pass::Picture {
             self.pass.hash(&mut hash);
         }
+        self.matte.hash(&mut hash);
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }
@@ -803,7 +842,12 @@ impl Drawing {
         canvas
     }
 
-    /// The tracks to draw, with adjacent ones showing clips in depth put far to near.
+    /// The tracks to draw, with adjacent ones showing clips in depth put far to near. Adjacent
+    /// among those that put something on the canvas at `at`: a track of a camera, a light, a
+    /// null, or a signal, and one with no clip then, is left out, so that the clips in depth
+    /// under it and over it are one run, sorted and cut where they cross as if it were not
+    /// there. A camera sees the whole sequence from whichever track it is on, and where it is
+    /// put should not change what is before what.
     fn in_order<'p>(
         &self,
         plan: &'p SequencePlan,
@@ -814,7 +858,7 @@ impl Drawing {
         let mut tracks: Vec<&TrackPlan> = plan
             .tracks
             .iter()
-            .filter(|track| track.drawn(angle))
+            .filter(|track| track.drawn(angle) && !track.idle(at))
             .collect();
         fn in_depth(track: &TrackPlan, at: Time) -> Option<&ClipPlan> {
             track
@@ -904,6 +948,22 @@ impl Drawing {
                 .flatten()
                 .collect();
             scene.casters = casters;
+            // A mesh stands in a light's way by its triangles.
+            let standing = tracks
+                .iter()
+                .flat_map(|track| &track.shown)
+                .filter(|shown| shown.shows(at) && matches!(shown.plan.source, Source::Mesh))
+                .filter_map(|shown| {
+                    let time = at - shown.plan.clip.start;
+                    let opacity = number(&param(&shown.plan.clip, "opacity").value_at(time)) as f32;
+                    (opacity > 0.0).then(|| {
+                        let to_output = Affine::scale(scale, scale)
+                            .then_apply(&self.geometry(plan, &shown.plan, time));
+                        three_d::mesh::Standing::of(&scene, &shown.plan, &to_output, time, opacity)
+                    })
+                })
+                .collect();
+            scene.standing = standing;
         }
         for wanted in scene.environments() {
             let picture = plan
@@ -1171,10 +1231,15 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
-        // It has no picture for a wipe to cross: an entrance fades it in.
-        let fade = shown
+        // Its picture is the one the camera sees of it, on the canvas: that is what a wipe
+        // crosses, a mask cuts, and an effect is done to.
+        let reveal = shown
             .reveal
-            .map_or(1.0, |(_, start, end)| progress(at, start, end));
+            .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
+        let fade = match reveal {
+            Some((Reveal::Dissolve, progress)) => progress,
+            _ => 1.0,
+        };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         if opacity <= 0.0 {
             return None;
@@ -1190,11 +1255,33 @@ impl Drawing {
                 let [r, g, b, _] = premultiplied(color);
                 three_d::mesh::Shade::Flat([r, g, b])
             }
-            Pass::Depth => three_d::mesh::Shade::Near,
+            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
+            Pass::Normals => three_d::mesh::Shade::Facing,
         };
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-        let (picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
+            let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
+            picture.mul_coverage(&covered);
+        }
+        let frame = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let masks = mask::prepare(&clip.masks, frame, scale, time);
+        if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
+            picture.mul_coverage(&covered);
+        }
+        // A pass says which clip a pixel is of and how near it is, which no effect changes.
+        if self.pass == Pass::Picture && !plan.effects.is_empty() {
+            let placed = Placed {
+                sequence,
+                at,
+                scale,
+                to_output: Affine::IDENTITY,
+                per_source: scale,
+                env: false,
+            };
+            self.effects(&mut picture, plan, time, &placed, plan.effects.len());
+        }
         Some(three_d::Layer {
             picture,
             depth,
@@ -1737,6 +1824,30 @@ fn caption_on(
     image
 }
 
+/// A depth pass's greys stretched to the nearest and the farthest it has, as they are
+/// written: what is in depth goes from one above black, the farthest, to white, the
+/// nearest, and what is not stays black. A frame with one distance alone is white there.
+fn stretch_to_its_own(rgba: &mut [u8]) {
+    let (mut least, mut most) = (u8::MAX, 0u8);
+    for pixel in rgba.as_chunks::<4>().0.iter().filter(|pixel| pixel[0] > 0) {
+        (least, most) = (least.min(pixel[0]), most.max(pixel[0]));
+    }
+    if most == 0 {
+        return;
+    }
+    let span = f64::from(most - least).max(1.0);
+    rgba.par_chunks_mut(4).for_each(|pixel| {
+        if pixel[0] > 0 {
+            let grey = if most > least {
+                (1.0 + f64::from(pixel[0] - least) / span * 254.0).round() as u8
+            } else {
+                u8::MAX
+            };
+            pixel[..3].fill(grey);
+        }
+    });
+}
+
 /// What a sequence is being drawn at: when, how large, and, with clips in depth, how they are seen.
 #[derive(Clone, Copy)]
 struct Moment<'a> {
@@ -1951,6 +2062,17 @@ impl TrackPlan {
             Some(angle) => self.id == *angle,
             None => self.shows,
         }
+    }
+
+    /// Whether it puts nothing on the canvas at `at`: no dip, and no clip but those that draw
+    /// nothing.
+    fn idle(&self, at: Time) -> bool {
+        !self.dips.iter().any(|dip| dip.shows(at))
+            && self
+                .shown
+                .iter()
+                .filter(|shown| shown.shows(at))
+                .all(|shown| matches!(shown.plan.source, Source::Nothing))
     }
 
     /// The transition mixing its clip `index` at `at`.
@@ -2405,13 +2527,6 @@ impl<'a> Builder<'a> {
         let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)))
             || matches!(source, Source::Mesh);
         if matches!(source, Source::Mesh) {
-            // It has no picture for either to be done to.
-            if clip.effects.iter().any(|effect| effect.enabled) {
-                return Err(unsupported(&clip.id, "an effect on a mesh"));
-            }
-            if !clip.masks.is_empty() {
-                return Err(unsupported(&clip.id, "a mask on a mesh"));
-            }
             three_d::mesh::check(clip).map_err(|why| {
                 ComposeError::Invalid(format!("clip `{}`: its mesh's file {why}", clip.id))
             })?;
@@ -2752,18 +2867,6 @@ fn param(clip: &Clip, name: &str) -> Param {
                 .unwrap_or(Value::Number(0.0)),
         )
     })
-}
-
-/// An effect parameter's number at clip time `time`, or its default.
-fn effect_number(effect: &Effect, name: &str, time: Time) -> f64 {
-    match effect.params.get(name) {
-        Some(param) => number(&param.value_at(time)),
-        None => Catalog::builtin()
-            .fx(effect.fx.as_str())
-            .and_then(|def| def.find(name))
-            .and_then(|def| def.default.as_number())
-            .unwrap_or(0.0),
-    }
 }
 
 fn static_number(

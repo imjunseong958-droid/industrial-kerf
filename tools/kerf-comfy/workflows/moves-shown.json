@@ -1,0 +1,17 @@
+{
+  "kerf-comfy": 1,
+  "about": "Where clips go, as the points a model is handed (moves=<clip>), drawn over the guide: what a model that follows points is told, to look at before or beside a take. It runs no model.",
+  "of": "guide",
+  "frames": { "most": 81, "step": 1 },
+  "size": [832, 480],
+  "multiple": 16,
+  "workflow": {
+    "1": { "class_type": "LoadVideo", "inputs": { "file": "{guide}" } },
+    "2": { "class_type": "GetVideoComponents", "inputs": { "video": ["1", 0] } },
+    "3": { "class_type": "PrimitiveStringMultiline", "inputs": { "value": "{moves}" } },
+    "4": { "class_type": "WanMoveTracksFromCoords", "inputs": { "track_coords": ["3", 0] } },
+    "5": { "class_type": "WanMoveVisualizeTracks", "inputs": { "images": ["2", 0], "tracks": ["4", 0], "line_resolution": 24, "circle_size": 12, "opacity": 0.75, "line_width": 16 } },
+    "6": { "class_type": "CreateVideo", "inputs": { "images": ["5", 0], "fps": "{fps}" } },
+    "7": { "class_type": "SaveVideo", "inputs": { "video": ["6", 0], "filename_prefix": "video/kerf", "format": "auto", "format.codec": "auto" } }
+  }
+}

@@ -63,6 +63,18 @@ pub enum Pass {
     /// camera left where it is, and darker the farther, black where nothing is in depth. A clip
     /// out of depth has no distance, and is black.
     Depth,
+    /// [`Self::Depth`] with each frame stretched to its own nearest and farthest: the
+    /// farthest of what is in depth just above black and the nearest white, as a model that
+    /// reads depth from a picture gives it, and as one trained on such depth expects it.
+    /// It does not hold still: the same place is another grey as what is in the frame
+    /// changes.
+    Relative,
+    /// Which way each pixel faces, as a color, in the camera's own space: to the right as
+    /// red, up as green, and toward the camera as blue, each from -1 to 1 as black to
+    /// full, as a normal map has them. A surface seen from behind faces whoever sees it. A
+    /// clip in depth is flat, so it is one color; a mesh has the way each place of it
+    /// faces. What is not in depth is black.
+    Normals,
 }
 
 impl Pass {
@@ -72,6 +84,8 @@ impl Pass {
             "picture" => Some(Self::Picture),
             "ids" => Some(Self::Ids),
             "depth" => Some(Self::Depth),
+            "relative" => Some(Self::Relative),
+            "normals" => Some(Self::Normals),
             _ => None,
         }
     }
@@ -82,6 +96,8 @@ impl Pass {
             Self::Picture => "picture",
             Self::Ids => "ids",
             Self::Depth => "depth",
+            Self::Relative => "relative",
+            Self::Normals => "normals",
         }
     }
 }
@@ -103,6 +119,10 @@ pub struct ComposeOptions {
     pub frame_folder: Option<std::path::PathBuf>,
     /// What is drawn: the picture, unless it says otherwise.
     pub pass: Pass,
+    /// A clip of the sequence to draw alone as a matte, in place of any pass: white where a
+    /// pixel is that clip's, as [`Pass::Ids`] has it, and black everywhere else, so what
+    /// stands before the clip is cut out of it.
+    pub matte: Option<String>,
 }
 
 /// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn

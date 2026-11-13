@@ -1,0 +1,44 @@
+{
+  "kerf-comfy": 1,
+  "about": "A scene kept as splats, a .ply, .spz, .splat, or .ksplat file, rebuilt as a mesh, a .glb with the splats' colors, for a gen=mesh clip. The file is the line's ref=. The mesh is in the file's own units, turned to look along its z backward with y up, so a camera the scene was filmed from is where it was. resolution=<n> is how fine the surface is, up to 768; solid=true closes a single object, where false, as it comes, leaves a scene open.",
+  "of": "ref",
+  "frames": { "most": 1, "step": 1 },
+  "size": [16, 16],
+  "set": {
+    "resolution": 384,
+    "kernel": 5,
+    "smooth": 3,
+    "level": 0.4,
+    "min_component": 500,
+    "min_opacity": 0.1,
+    "color_sharpen": 2.0,
+    "solid": false
+  },
+  "workflow": {
+    "1": {
+      "class_type": "Load3D",
+      "inputs": {
+        "model_file": "{ref}",
+        "image": { "image": "{no_picture}", "mask": "{no_picture}", "normal": "{no_picture}", "camera_info": {}, "recording": "" },
+        "width": 16,
+        "height": 16
+      }
+    },
+    "2": { "class_type": "File3DToSplat", "inputs": { "model_3d": ["1", 6] } },
+    "3": {
+      "class_type": "SplatToMesh",
+      "inputs": {
+        "splat": ["2", 0],
+        "resolution": "{resolution}",
+        "kernel": "{kernel}",
+        "smooth": "{smooth}",
+        "level": "{level}",
+        "min_component": "{min_component}",
+        "min_opacity": "{min_opacity}",
+        "color_sharpen": "{color_sharpen}",
+        "solid": "{solid}"
+      }
+    },
+    "4": { "class_type": "SaveGLB", "inputs": { "mesh": ["3", 0], "filename_prefix": "3d/kerf" } }
+  }
+}

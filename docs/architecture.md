@@ -319,10 +319,10 @@ model's program can write its own entry for the person to keep, as
 starts one.
 
 Passes of Kerf's own sequences are drawn: which clip each pixel is of, and
-how near it is (`render … pass=ids|depth`, `kerf_compose::Pass`). Not here
-yet: normals, which a 3D renderer gives today; a way to choose a
-take in the editor's own window, where `kerf takes` and the conversation do
-it; and a model reached without a program, such as Kerf Cloud hosting one.
+how near it is, and which way it faces (`render …
+pass=ids|depth|relative|normals`, `kerf_compose::Pass`), and a take is
+chosen in the editor's own window (Takes, on a media in the bin). Not here
+yet: a model reached without a program, such as Kerf Cloud hosting one.
 What comes of these, and in what order, is under [What directs a
 model](#what-directs-a-model).
 
@@ -495,7 +495,7 @@ What is built for it, in this order, each measured before the next:
    signal's frames, with a workflow whose strength or mask takes a number a
    frame.
 2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
-   is of, and how near it is (`render … pass=ids|depth`). What ties one
+   is of, and how near it is (`render … pass=ids|depth|relative|normals`). What ties one
    frame to the next has been found to guide better than depth alone
    ([Diffusion as Shader](https://arxiv.org/abs/2501.03847)), and an ids
    pass does: a clip keeps its color as it moves. A pass is the picture's
@@ -508,9 +508,15 @@ What is built for it, in this order, each measured before the next:
    with no kernels: a guide is small. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
-   farthest may want it stretched, which is not done. A pass has reached a
-   model as its guide and come back as a take (Measured, below); a line
-   cannot yet hand a model a picture and a pass at once.
+   farthest may want it stretched, which is `pass=relative` (2026-11-13).
+   Held beside `pass=depth` on the travelling shot of Next 3, one take
+   each, it was followed as well over the frame (`order` 0.924 against
+   0.928) and no better for the crate (`held` 0.25 against 0.35): that
+   scene's depth has a wide range as it is, and a set that is far with one
+   thing near, where it should tell, was not tried. A pass has reached a
+   model as its guide and come back as a take (Measured, below), and a
+   line hands a model a picture and a pass at once by naming the second
+   (`guide_depth=`, Next 5).
 3. **What `look` says of a scene in depth**, which is in: `look` with
    `shows` and `at` (`kerf_engine::shows`). It draws the frame's ids pass,
    and then each clip alone with the others made clear, so that what is
@@ -564,10 +570,22 @@ What is built for it, in this order, each measured before the next:
    footage is; one run by the clip's time alone starts again at the new
    first frame, which is said in the language's reference. Its size and
    middle are taken at rest, so that an animation that carries it across a
-   room carries it across the frame. Morph targets are not read. *Not done:* it casts no
-   shadow, takes no effect and no mask (the compositor refuses them), a
-   transition's wipe is a fade on it, and the GPU does not draw it, so a
-   frame with one is the CPU's. It was not handed to a model.
+   room carries it across the frame. Morph targets are read (2026-11-13):
+   how far each takes a corner, by the weights its mesh has at rest or an
+   animation gives them, and not how they turn the way a corner faces. It casts
+   its shadow on the clips in depth and the meshes a light reaches past it,
+   and not on itself: a ray to the light is stopped by the first of its
+   triangles it meets, found through a tree of boxes (`mesh::Standing`,
+   2026-11-13). Its effects, its masks, and a
+   transition's wipe are of its picture as the camera sees it, on the
+   canvas, after which it goes down among the clips in depth as before; a
+   pass draws the mask and no effect. Its triangles are the CPU's, and a
+   frame with one stays on the GPU all the same (2026-11-13): the mesh's
+   picture and how far off it is at each pixel are handed over and laid
+   among the rest by depth, to within 1 of 255 of the CPU's frame on a
+   software GPU; a frame whose lights cast shadows or shine from a
+   picture is still the CPU's. It has been handed to a model: the crate of
+   Next 3 is one, in the guide of every take there.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A recipe makes
    files in steps, and a draft that is not kept wants a way of its own: the
@@ -604,8 +622,9 @@ design.
   entry says it is `about`, and is no rule of the skill's.
 - *With the camera going round, the car turned and the scenery did not.*
   Written down, and nothing is decided by it.
-- *Signals are still not measured.* This model has no input that takes a
-  number a frame, and it is the only one on that server.
+- *Signals were not measured here.* This model has no input that takes a
+  number a frame, and it is the only one on that server; it does take a
+  mask a frame, by which one was measured later (Next, 7).
 
 This is one scene, two seeds and a small model, as before.
 
@@ -794,8 +813,9 @@ recipes, in `fixtures/shots/car`.
    (`Compositor::mesh_view`), which is `mesh_camera` without the file's own
    camera; reading the text is `kerf-mcp`'s (`camera_file.rs`). A path is in
    its own model's units and a set in another's, so how much of the set one
-   of the path's units is is given (`scale`), and so is which of the path's
-   frames the set is of (`frame`). The workflow that rebuilds a set writes
+   of the path's units is is given (`scale`), or found from the footage
+   (`fits`, below), and so is which of the path's frames has its camera at
+   the set's origin (`frame`). The workflow that rebuilds a set writes
    its lens as a file of its own (`out={lens.txt}`), and a fifth workflow,
    `set-views`, makes a set from the same reading of the frames a path
    comes from, so that the two are one size and `scale` is 1.
@@ -821,9 +841,10 @@ recipes, in `fixtures/shots/car`.
    on the way. A box set down by eye, to look as if it stood on the path,
    was two frame heights off in the air behind it, where the same pixels
    are: the picture did not say so and the depth pass did. A clip on a
-   track above the camera's is laid over the set and not sorted with it, so
-   what is added goes under the camera, which the lines `look` writes put
-   on top. And the server makes a set seen through the wrong lens from a
+   track above the camera's was laid over the set and not sorted with it,
+   the camera's track parting the two, and the lines `look` writes put the
+   camera on top; a track that draws nothing no longer parts what is in
+   depth (Motion). And the server makes a set seen through the wrong lens from a
    guide that is not the size its model runs at, so `set-views` sends its
    guide at that size ([shots.md](shots.md#a-picture-read-back)). The set
    that comes in the path's size is, as it comes, the near ground and
@@ -831,8 +852,119 @@ recipes, in `fixtures/shots/car`.
    surfaces. It is one shot, in which the camera hardly moves, and one
    small model.
 
-   *Not done:* a shot whose camera travels; finding `scale` between two
-   models' units rather than making both from one reading; splats.
+   *A shot whose camera travels* (2026-11-13). Four seconds filmed from a
+   car driving down a street between houses in daylight, 65 frames at 16 a
+   second and 640x360, cut from the middle of a dashboard camera's frame to
+   leave out the dashboard, from Wikimedia Commons (*On the Road: Driving
+   through Kranj*, Renato Lozinšek, CC BY 3.0); it is not in the
+   repository. The camera goes 2.5 of the path's units down the street and
+   pans 6 degrees, where the walk above turned 2 and went nowhere. One
+   recipe read it back in 1 min 42 s: a set and a path of one reading, a
+   set and its lens by the other model, and the shot's depth.
+
+   | Step | What came of it |
+   |---|---|
+   | The set of frame 0 in the path's size, and the camera `look` wrote with `frame` 0, as for the walk | Nothing: every frame black. The path counts its places from frame 36, which the model picked, and the set of frame 0 is in that frame's space; taken to be in frame 0's, the camera starts past it and drives away. |
+   | The same with `frame` 36, the path's `anchor` | Frame 0 drawn again where the footage has it. By the middle of the shot the camera is past all of it: as it comes (`confidence=0.1`) a set is the near ground. |
+   | The set of frame 0 with `confidence=0` | The whole frame as surfaces. At frames 32 and 64 the far houses and the building on the right stand where the footage has them and as large, and the road is gone. |
+   | Sets of frames 32 and 64 beside it, each a mesh clip of its own on a track over the camera's | The road, the kerb, the stone wall, and the houses where the footage has them on frames 0, 32, and 64. All three are in the one space, so each was made as tall as its file is beside the first one's and moved until its file's origin, which `look` with a lens alone places, was the first one's. |
+   | A crate on the pavement at the end of the wall, on a track over the camera's and the sets' | 0.2% of the frame at the start and 1.6% at the end, a third of it hidden by the sets' surfaces at the start and none at the end (`look` with `shows`), by the pixel: the three sets and the crate are one run in depth across the camera's track (Motion). |
+   | `render s2 {guide.mp4} pass=depth`, then the model that makes the shot | A street of yellow stone walls that keeps the guide's shapes and its holes, with no crate to be told from the wall: 94 s. |
+   | The same with the guide drawn as its picture | The houses, the road, and a wooden crate where the box is: 66 s. |
+   | Those takes read back, held to the guide | In 4, below. |
+
+   What it shows, and what it does not. A camera a model found of a
+   travelling shot holds through the whole of it, once the set is taken to
+   be where the path has it: four seconds down a street, and the houses
+   stay on the houses. Three things were found on the way. **A set of the
+   path's own reading is in the space of the frame the path counts from**,
+   and not of the frame it shows; the walk, whose camera stood nearly
+   still, could not show the difference, and here it was the whole picture.
+   `look` now returns that frame as `anchor` and says so where `frame` is
+   another, and what the workflow says of itself was wrong and is put
+   right. **A set of one frame is what the camera leaves**, so a travelling
+   shot wants sets of several frames, which the one space allows, and
+   `look` with `mesh` and `beside` writes the line that puts one where
+   another is (it was four numbers a set by hand the first time). Five
+   sets a second apart, each with every pixel, leave 6 to 13% of the frame
+   empty after the first frame, where the set of frame 0 alone left 35 to
+   59%; what moved in the footage, a car ahead, is in each set where it
+   then was. **The two models do not agree on the lens**: the path's has
+   37.2 degrees down the frame, between 36.4 and 38.1, and the one that
+   rebuilds a frame alone has 22.8, of the same footage. The sets have
+   holes where a surface turns from the camera, a third to a half of the
+   frame, and the model that makes the shot kept them as black.
+
+   *A size found for two models* (2026-11-13). With `fits`, `look` finds
+   how much of a set one of a path's units is from the footage, with no
+   model ([shots.md](shots.md#a-picture-read-back),
+   `kerf-mcp/src/set_scale.rs`): the set is drawn through the path at a run
+   of sizes on the four frames furthest from the set's own, and held to
+   the footage by the pixel. On the shot above, each in about ten seconds:
+
+   | The set | The size found | The picture's error there, of 255 | `sure`: half or twice the size, over that |
+   |---|---|---|---|
+   | Of the path's own reading, where the size is 1 | 0.956 | 29.1 | 1.57 |
+   | Of the other model, with no lens given: `look` finds 22.7 from frame 0 of the footage, 6.3 times surer than a quarter either way, where the model's own file says 22.8 | 20.0 | 46.8 | 1.12 |
+   | Of the other model, seen through its own lens of 22.8 degrees | 20.1 | 46.8 | 1.13 |
+   | The same, the path's travel along the way the set was seen made 1.68 times longer, by the two lenses (`deep`) | 17.9 | 45.2 | 1.21 |
+   | Of the other model, through the path's lens of 37.2 | 3.24 | 44.5 | 1.04, which is no finding |
+
+   Where the answer is known it is found to within a twentieth. For the
+   two models it is 20.1, and with the camera written at that size frame 0
+   is the footage's, and at frames 32 and 64 the houses stand near where
+   the footage has them with the camera a little short of where it went:
+   the two disagree on the lens by more than a half, so no one size is
+   right on every frame, which `sure` at 1.13 says. Through the wrong lens
+   the fit is flat and is said to be. Making the path's forward travel
+   longer by the ratio of the two lenses, since a set through a narrower
+   lens is that much deeper, has the houses larger at frames 32 and 64, as
+   the footage has them, and still not to the pixel; `look` does that
+   where it finds the set's lens is not the path's. So two models can be
+   used together coarsely, and one reading is still the way to have them
+   meet.
+
+   What moved is left out by time and not by a new kind of set: each
+   set's clip made to last only about its own frame, overlapping the next,
+   the car ahead is where it is on each frame and the smear is gone, at
+   the cost of the holes fewer sets leave, 17 to 32% of the frame.
+
+   *Not done:* one set of a whole shot, whole and with nothing in it that
+   moved. Two ways to it with what is in reach were tried (2026-11-13) and
+   left. Joined on the server, four frames' sets come back as one mesh
+   with one picture, the first frame's, on all four, and fit the footage
+   worse than one frame's set (a picture error of 43.7 for 29.1). Shown at
+   once in Kerf, three frames' sets as three clips under the one camera,
+   the first frame's surfaces, stretched where that frame saw them
+   edge-on, stand in front of the later frames' from where those were
+   filmed. With those surfaces dropped (`discontinuity=0.01`), four
+   frames' sets at once cover more of the frame than one (0.33 to 0.64 of
+   it on five frames, for 0.05 to 0.19) and match the footage worse where
+   they draw (a mean difference of 63 to 85 of 255, for 47 to 66): the
+   road goes with the stretched surfaces, and the same house stands in
+   several places, a frame's set not lying quite where another's does. A whole set takes fusing the views, dropping what each sees
+   badly, which is a rebuilder's work; sets timed to the part of the shot
+   each was seen in stay the way. Also not done: the two
+   models' lenses reconciled further than by their ratio along one way
+   (letting the footage choose the stretch about that ratio was tried: it
+   chose more, 2.2 for 1.68, for a picture error a hundredth less, and the
+   houses at the last frame were no nearer their size in the footage, so
+   the ratio is kept); splats. Of those the server has
+   a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
+   a mesh clip reads and the compositor need draw none; what it has no
+   model for is rebuilding a scene as splats, only a thing. So the half
+   that needs no model is in (2026-11-13): `set-splats`, a workflow of
+   `kerf-comfy`, takes a scene kept as splats, whatever made it, as a
+   line's `ref=`, and has the server's nodes make the mesh a `gen=mesh@1`
+   clip reads. Run on a scene written by hand as 14,300 splats, a floor, a
+   wall, and a red box of side 1 three units ahead, it gave a `.glb` of
+   554,166 corners in 13 s whose box is within 0.06 of the one written
+   on every side (x -0.56 to 0.56 for -0.5 to 0.5, y -0.94 to 0.06 for -1
+   to 0, z -3.56 to -2.44 for -3.5 to -2.5: fatter by a splat's width),
+   the floor within 0.05, in the file's units and turned to Kerf's axes,
+   so a camera at the origin sees the box ahead of it on the floor before
+   the wall, looked at. Splats of a filmed scene were not tried: nothing
+   in reach makes them.
 4. **A take held to its guide by numbers.** Every row of the tables above
    was judged by eye: place, path, size. The whole frame's rank correlation
    (3) does not replace the eye: the wrong take scored 0.966. What does is
@@ -872,28 +1004,167 @@ recipes, in `fixtures/shots/car`.
    and a sky as a surface, and the model drew trees there. Two takes of one
    shot.
 
-   What it does not say is where the subject went. For that the document
-   has the other half: `look` with `shows` says where a clip is on each
-   frame of the guide, and `track` follows a thing through a picture from
-   points on it (`kerf_track::roto`). So: follow the subject through the
-   take from the middle of its box in the guide's first frame, and say how
-   far its box in the take is from its box in the guide, frame by frame, as
-   shares of the frame. Not done. Either is what lets an agent say of a
+   What it does not say is where the subject is, and that is the other
+   half, which is in: `look` with `placed`
+   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/placed.rs`).
+   The guide's ids pass gives the box around a clip on each frame, as
+   `shows` does; the subject is found on the frame the guide shows most of
+   it on and followed from there to both ends (`kerf_track::roto`), in the
+   take and in the guide's own picture, and the two boxes are held
+   together in frame heights. It reads the take's picture, so it needs no
+   model. Following the guide's own picture as well came of measuring: held
+   to the box of the ids pass, the guide's own picture was 0.030 off and
+   1.40 times the size, a tracker's box being wider than a pass's by its
+   edge and by what the set hides of the crate.
+
+   On the travelling shot of 3, the crate, 65 frames:
+
+   | The take | `follows`: `order` | `off`, the frame | `off`, the crate | `placed`: frames followed | `off` | `across` | `size` |
+   |---|---|---|---|---|---|---|---|
+   | The guide's own picture, through an encoder | | | | 65 | 0.006 | 0.001 | 1.04 |
+   | The same moved 40 pixels of 832 to the right, which is 0.083 | | | | 65 | 0.085 | 0.085 | 1.05 |
+   | Guided by the sets' picture | 0.859 | 0.109 | 0.068 | 62 | 0.024 | 0.017 | 1.23 |
+   | Guided by the sets' depth | 0.912 | 0.080 | 0.029 | 1 | | | |
+
+   What it says. `placed` measures a move as the move it is: 0.085 for
+   0.083, over a floor of 0.006. The picture-guided take has its crate
+   0.024 of a frame height from where it was asked for, four times the
+   floor and a quarter of a crate's width, and drew it a fifth larger. The
+   depth-guided take is the better by `follows`, on the whole frame and on
+   the crate's pixels alike, and has no crate: it was followed on one frame
+   of 65, since what the model drew there is wall. So the two are read
+   together. Depth by the clip says the shape was kept; the place says
+   there is a thing there to find; and a take can pass either alone. One
+   shot and one small model, again, and a subject that is 1% of the frame.
+
+   *One number for the place*, and the guide with fewer holes. `placed`
+   also gives `overlap`: how much of the two boxes is in both, of what is
+   in either, as a mean over every frame the guide shows the clip on, with
+   a frame the subject was not followed on as none. So it falls for a
+   subject that is aside, for one drawn another size, and for one that is
+   not there, and is what two takes are chosen between by. With the five
+   sets of 3 in the guide, which leave a tenth of the frame empty where
+   the three left a third to a half, both takes were made again, the
+   prompt and the seed as they were:
+
+   | The take | `follows`: `order` | `off`, the frame | `placed`: frames followed, of 65 | `off` | `size` | `overlap` |
+   |---|---|---|---|---|---|---|
+   | The guide's own picture, through an encoder | | | 65 | 0.006 | 1.00 | 0.90 |
+   | The same moved 0.083 to the right | | | 65 | 0.091 | 1.00 | 0.22 |
+   | Guided by the five sets' picture | 0.893 | 0.100 | 32 | 0.027 | 1.16 | 0.35 |
+   | Guided by the five sets' depth | 0.928 | 0.079 | 44 | 0.038 | 0.82 | 0.38 |
+   | The first picture-guided take, held to this guide | | | 62 | 0.054 | 0.96 | 0.42 |
+   | The first depth-guided take, which had no crate | | | 1 | | | 0.002 |
+
+   What it says. A guide with fewer holes is followed better by both
+   (`order` 0.859 to 0.893 and 0.912 to 0.928), and the depth-guided take
+   is now a street with a road and houses where it was walls about a void,
+   with a crate where one was asked for on two thirds of the frames. No
+   take has the crate as the guide has it: the best is 0.42 where the
+   guide's own picture is 0.90, and the take with nothing there is 0.002,
+   so the number orders them as the eye does. It also shows what a set of
+   several frames costs: the car ahead in the footage is in each set where
+   it then was, a smear along the road by the last frame, and both takes
+   drew things there, the depth-guided one a second crate.
+
+   *One number for a take.* `look` with `held` reads both at once, of the
+   clips named as the guide's subjects, and gives each a number from 0 to
+   1: the overlap of where the take has it with where it was asked for,
+   less by how far its depth is off, and their mean for the take. Of the
+   two takes above it is 0.31 for the picture-guided one and 0.35 for the
+   depth-guided one, 0.25 for one guided by `pass=relative`, where the first depth-guided take, with no crate, is
+   0. The subjects are named and not guessed: by how much of the frame a
+   clip has, four of the five sets were taken for subjects.
+
+   What is still not done is a set with what moved left out, and either
+   reading on more than a shot or two. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
-5. **More than one guide on a line.** A `generate` line hands a model one
+5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is
+   of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds
+   them under `guides`, a take is held to each, and `kerf-comfy` sends one
+   to the workflow blank of its name ([shots.md](shots.md#recipes)). A
+   It was run on the one model in reach, which reads a picture and a
+   mask of it (`kerf-comfy`'s `shot-into`): the footage of Next 3 with a
+   box's place in flat grey as the guide, the same box in white on black
+   as `guide_mask`, both drawn by Kerf through the camera a model found.
+   The take is the footage with a red container standing where the box
+   was put, on all 65 frames of a shot that travels: outside the mask it
+   is 7.3 of 255 from the footage, a grey a pixel, and inside it 49.1;
+   `placed` has the container 0.027 of a frame height from the box, 0.90
+   its size, with an `overlap` of 0.66, where the best take that made the
+   whole picture had 0.42. A box 1% of the frame was filled in from its
+   surroundings and no crate drawn; one of 2.7% was made. So what the
+   loop was for is done once, end to end: a thing put into a filmed shot
+   by where it stands in the scene. The set hides the thing in a second
+   making: `render … matte=<clip>` draws one clip in white on black, as
+   much of it as shows among the sets, and the workflow takes the footage
+   as it is and greys the masked place itself. That take has a box where
+   the matte is, cut by the wall's end, and brown where a red one was
+   asked for: the smaller and more ragged the place, the less this model
+   draws what the prompt says there. A
+   `generate` line handed a model one
    guide. A model that reads a picture and its depth, or depth and ids,
-   wants each named. No model in reach reads two, and Wan VACE takes one
-   control video, so this waits for one that does.
-6. **How a point moves, as a direction of its own.** ComfyUI has nodes for
+   wants each named. No model in reach reads two of those, and Wan VACE takes one
+   control video, so a picture with its depth waits for one that does.
+6. **How a point moves, as a direction of its own**, which is in
+   (2026-11-13): `generate … moves=<clip>` puts a clip's
+   place on each frame in the request, read from the frame as `shows`
+   reads it, and `kerf-comfy` fills a workflow's `{moves}` blank with them
+   as tracks of points in the model's pixels
+   ([shots.md](shots.md#where-a-thing-goes), `recipe/moves.rs`). On the
+   travelling shot the crate's 65 places are the boxes `shows` gives. The
+   model that follows points is still not on the server, so it was run on
+   the one that is, which follows a layout: `kerf-comfy` draws the boxes
+   as a video, white with each box's edge in black (`{moves_video}`), and
+   its workflow `shot-led` hands the model that and the prompt, with no
+   picture of the scene at all. The take is a street of the model's own
+   with a red container that goes where the box goes, small at the left
+   at the start and large at the right at the end, on all 65 frames:
+   `placed` has it 0.040 of a frame height from the box, 0.002 across and
+   0.027 down, 1.14 times its size, with an `overlap` of 0.57. So where a
+   thing goes is a direction a model follows by itself, apart from what
+   the scene looks like, and the document says it by naming a clip. ComfyUI has nodes for
    Wan-Move, which follows paths of points given as coordinates
    (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
    reads and what the document says outright, so its path is there to hand
-   over, as a signal's numbers are. The weights were not on the server. It
+   over, as a signal's numbers are. The weights were not on the server. The node
+   that reads the points is, and was run (2026-11-13): `moves-shown` has it
+   read what `kerf-comfy` fills `{moves}` with and draws the points over a
+   guide. Over the take `shot-led` made, the crate's point is on the
+   container on the frames looked at, so the text Kerf hands is the text
+   the node reads, in the model's pixels; what is untried is the model. It
    would be the fourth row of the table at the top: where, when, what, and
    how each thing goes.
-7. **A signal measured.** Still wanting a model that takes a number a frame.
-8. **In the editor**: somewhere to draw a signal's curve under the picture,
-   and to choose a take.
+7. **A signal measured** (2026-11-13), on the one model in reach, which
+   takes no number a frame and does take a mask a frame. `kerf-comfy`
+   hands a signal to a workflow as a grey video, each frame as light as
+   the signal is then (`{signal_video}`), and a workflow that comes with
+   it, `shot-timed`, has the model keep its guide where the signal is 0
+   and make the frame anew where it is 1. On the travelling shot of 3,
+   the sets' picture as the guide, a signal that steps at the middle
+   frame, and how far each frame of the take is from its guide, in grey
+   of 255, by a script kept out of the repository:
+
+   | The signal | Frames where it is 0 | Frames where it is 1 | The two, frame by frame (correlation) |
+   |---|---|---|---|
+   | 0 for the first 32 frames, then 1 | 7.6 from the guide | 17.1 | 0.93 |
+   | 1 for the first 32 frames, then 0 | 6.8 | 12.1 | 0.84 |
+
+   The take leaves its guide where the signal says and when it says, the
+   other way round as readily, and begins three frames before the step:
+   the model makes four frames as one. So a number over time reaches a
+   model and is followed, and what it does there is a workflow's to say;
+   here it is how much of the guide is kept. Still wanting is a model
+   that takes the number itself, for what a mask cannot say: how fast,
+   how bright, how much.
+8. **In the editor**, both in (2026-11-13). A signal's curve is drawn
+   where its clip is, in the timeline under the picture: its number along
+   the clip, 0 at the bottom and 1 at the top, filled under as a sound's
+   level is, from values the timeline's view now carries for a signal
+   clip. It is seen and not yet drawn by hand: its keys are still text.
+   Choosing a take: Takes, on a media in the bin, lists
+   the takes its recipe has made, which a snapshot's sources now carry,
+   and has the media be another.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -906,15 +1177,20 @@ compositor asks no effect which kind it is. The editor's effect previews run
 the same code on one decoded picture (`kerf_compose::effects_on_picture`), in
 the order of the stack.
 
-Still to come, each a place that runs effects its own way and so asks the
-catalog what draws one (`Engine`):
+Two places ran effects their own way and asked a table what draws one, and
+no longer do (2026-11-13):
 
-- **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) names the effects with
-  kernels by id. A kernel belongs on the same interface as the CPU's code.
+- **The GPU's plan** (`kerf-compose/src/draw/gpu.rs`) named the effects with
+  kernels by id. An effect of `kerf-fx` now says what it is on the GPU beside
+  what it is on the CPU (`kerf_fx::picture::KernelEffect`, found by the same
+  id), and the plan asks it: none, or none as it is set, is the CPU's frame.
 - **Playback of plain cuts** (`kerf-playback/src/timeline.rs`) runs EffectCraft
-  effects itself on the frames it decodes.
+  effects itself on the frames it decodes, and asked the catalog's `Engine`
+  which those are. It asks the crate that runs them (`kerf_fx::is_raster`).
 
-`Engine` goes when the last of these does. How an effect meets an HDR picture
+`Engine` is left as which table a definition was read from, which the
+language's reference lists effects by and a look is told apart by; nothing
+that draws asks it. How an effect meets an HDR picture
 (`filmcraft::catalog::headroom`) and whether it leaves a picture alone are
 still tables by id beside the interface.
 
@@ -1175,7 +1451,7 @@ Has: keyframes (hold, linear, easings, Bezier curves), transforms, titles with r
 word, set in variable fonts at any axis (`wght`, `wdth`, `slnt`, `opsz`, `ital`, which animate, in `glyf` or CFF2 outlines, with line height left at the font's own since none of those axes changes it by more than 0.7% in any of 50 variable faces tried), shapes whose outlines combine and offset (`fx shape.outline@1`, `offset`, on a sweep carried from
 EffectCraft's `path`) with trimmed and tapered strokes, and particles worked out from their birth (`kerf-motion`, so any frame
 can be drawn first), generators, 15 playful looks, and clips in depth with cameras and lights (`draw/three_d.rs`): each pixel's ray meets the clip's plane, so
-perspective is true and lighting is per pixel, on the GPU where there is one (see below). Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; a run where none cross
+perspective is true and lighting is per pixel, on the GPU where there is one (see below). Where two adjacent clips in depth cross, their run goes down pixel by pixel, nearest last, with the pixels on the line shared; adjacent is among the tracks that put something on the canvas at that frame, so a camera's track, a light's, a null's, or an empty one between two does not part them (`Drawing::in_order`), where until 2026-11-13 it did, and a box on a track over the camera's was laid over a set it stood behind; a run where none cross
 takes the same path as ever, and a crossing costs 3 ms more at 1080p and 5 ms more at 4K than the same two apart. A light with a `shadow` sends a ray from each pixel back to itself through the other clips,
 reading each one's alpha where it passes, which is exact where a shadow map would be a sampled copy. With a `size` the light is a disc or an angle, and 32 rays go across it on one fixed spiral, each reading as much of a clip's alpha as its share of the light covers (from a summed table, or from just its rectangle on an opaque clip), so the same pixel gets the same rays on every frame and the edge has no steps. Where the four rays around the light say a clip cannot matter, or hides it all, no ray goes: on the CPU at 1080p a hard shadow takes 50 ms and a soft one 72 to 140, at 4K 200 and 290 to 570. A camera with an `aperture` blurs each clip alone by its plane's distance from `focus` at each pixel (`draw/focus.rs`,
 carried from EffectCraft's progressive blur with a round iris), so a sharp clip keeps its edge over a soft one.

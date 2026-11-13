@@ -38,7 +38,7 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals] [matte=<clip>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
@@ -53,9 +53,11 @@ but a file's name stand for themselves.
 | `model=` | The model, by the name the person's models file gives it. |
 | `prompt="…"` | What the file should show. |
 | `guide=` | A picture in motion to follow: a blocking, a rough render, an earlier take. |
+| `guide_<name>=` | Another picture in motion to follow, by what it is of, for a model that reads more than one: `guide_depth={depth.mp4}` beside the picture, or `guide_ids=`. A name is lowercase letters and digits, each given once; the request holds them under `guides`. |
 | `first=`, `last=` | The first and the last frame. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
 | `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
+| `moves=` | Where a thing goes: a clip of the project, by its id, handed over as its place on every frame. As many as wanted. See [Where a thing goes](#where-a-thing-goes). |
 | `seconds=`, `size=WxH` | How long and how large. |
 | `seed=` | A whole number, for a model that gives the same file for the same seed. |
 | `out={name}` | Writes a file for a later step in place of the shot's own, so one model's picture can be the next one's `first=`. |
@@ -68,6 +70,8 @@ recipe names has to be inside the project.
 So a model is told three things, each its own way: **where** things are and
 how the camera moves, by a guide; **when** something happens and how much, by
 a signal; and **what** it all looks like, by the prompt and the references.
+A model that takes the way a thing goes as numbers of its own is handed
+that too, from the same clips (`moves=`).
 
 ## Making a shot
 
@@ -213,6 +217,10 @@ kerf takes m3            # the takes, a * on the one the media is
 kerf takes m3 --use 1    # have the media be take 1 again
 ```
 
+In the editor it is **Takes** on the media in the bin: every take there is
+a file of, the one the media is ticked, and choosing another has the media
+be it.
+
 An agent sees the same with `look` and `media`, where each take the media is
 not has the line that has the media be it, as `use`:
 `media replace m3 path="shots/open.takes/001.mp4" rate=16 dur=65f video=832x480 recipe="shots/open.kerfrecipe"`.
@@ -231,7 +239,10 @@ A take's record holds a hash of each thing it was made from:
 - each sequence it has Kerf render: that sequence, the sequences it nests,
   and the media lines they play;
 - each signal it hands a model, as the model is handed it: the numbers, and
-  nothing else of the sequence its clip is in.
+  nothing else of the sequence its clip is in;
+- the sequence of each clip it hands a model the way of (`moves=`), as for
+  one it renders: where a clip is on the frame is what its whole sequence
+  draws of it.
 
 A media wants making when one of those is no longer what its take was made
 from, and it says which: `look` lists it under `toMake` with
@@ -331,7 +342,7 @@ Beside `run`, a model's entry can say so under `takes`:
 | `size` | The picture it makes, width and height: the size a guide for it is drawn at, and the most a `size=` asks of it. |
 | `rate` | The frames a second it makes: the rate a guide for it is drawn at. |
 | `seconds` | The longest shot it makes at once. |
-| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref` and `signal`. An empty list is a model that takes a prompt alone. |
+| `reads` | What a `generate` line hands it that it has a use for, of `guide`, `first`, `last`, `ref`, `signal` and `moves`, and a guide beside the first by its name, as `guide_depth`. An empty list is a model that takes a prompt alone. |
 | `more` | The other names a line can set for it, each with the value it has when the line does not. |
 
 Each is there only where the person says it, and anything else under `takes`
@@ -430,7 +441,10 @@ start from. `kerf-comfy --list` names those that come with it; the others
 |---|---|
 | `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
 | `{width}`, `{height}`, `{frames}`, `{fps}` | What `size=` and `seconds=` come to for this model. |
+| `{guide_depth}`, `{guide_ids}` … | A guide the line gives beside the first, by its name: sent up as `{guide}` is, brought to the size, rate, and frames asked for. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
+| `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
+| `{signal_video}`, `{signal2_video}` … | The same signal as a picture in motion: a grey video of the size and frames asked for, each frame as light all over as the signal is then, sent up as a file is. For a node that reads a mask a frame, which a list of numbers does not reach. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
 
@@ -477,6 +491,17 @@ where a later step reads what it makes. Five such workflows come with
 | `depth-whole` | How near each pixel is, a picture at a time, by another model: it gives a sky a distance, where `depth` gives it none. | a video |
 | `cameras` | The frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
 | `set-views` | The frames together as views of one scene, and one of them rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
+
+One more reads a file that is not a picture. `set-splats` takes a scene
+kept as splats (`ref=<scene.ply>`, or `.spz`, `.splat`, `.ksplat`) and makes
+the mesh of it a `gen=mesh@1` clip reads, a `.glb` with the splats' colors:
+`generate model=<name> ref=sets/scene.ply out={set.glb}`. It runs no model,
+only the server's own nodes, so whatever made the splats, the set comes to
+Kerf the same way. The mesh is in the file's units, turned from a splat
+file's axes (y down, z forward) to Kerf's, so the camera the scene was
+filmed from is where it was. `resolution=<n>` is how fine the surface is,
+384 as it comes and up to 768; `solid=true` closes a single thing, where a
+scene is left open.
 
 A workflow is named for what it makes, and the model it runs is in its
 graph. A recipe names neither: it says `model=depth`, the name the person's
@@ -529,10 +554,35 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   `look` with `mesh` and `camera` has none to write. The lens comes as a
   file of its own, one number (`out={lens.txt}`).
 - **A set and a path of one size come from one answer.** A set one model
-  rebuilt and a path another found are each in units of their own, and
-  nothing says how many of one are one of the other. `set-views` makes the
-  set from the same reading of the frames a path comes from, so the two
-  fit as they are.
+  rebuilt and a path another found are each in units of their own.
+  `set-views` makes the set from the same reading of the frames a path
+  comes from, so the two fit as they are; for two that do not, `look`
+  finds the size from the footage (`fits`, below).
+- **A set of that reading is in the space of the frame the path counts
+  from**, whichever frame it shows. Read together, the frames are placed
+  from one of them, which the model picks and which is seldom the first:
+  of 65 frames filmed from a car it was frame 36. The path has that frame's
+  camera at its origin, not turned, and a set rebuilt of frame 0 is where
+  frame 36 would see it. So for such a set `frame` is the path's `anchor`,
+  which `look` returns, and not the frame the set is of; a shot that hardly
+  moves hides the difference, and one that travels draws nothing without
+  it. Sets of several frames are all in that one space, and `look` with
+  `mesh` and `beside` puts one where another is: `{"mesh": {"clip":
+  "set32", "beside": "set"}}` returns the `height`, `x`, `y`, and `z` that
+  make the two one set, the clips standing still and not turned.
+- **A set of one frame is what the camera leaves.** What a frame rebuilds
+  is what it saw, nearest best, and a camera that travels is past the near
+  ground of its first frame within a second. As it comes (`confidence=0.1`)
+  a set of frame 0 was off the picture by the middle of a four-second
+  drive; with `confidence=0` it held the far houses to the end and no road.
+  A set of a later frame, put in beside it, has the road again: five sets a
+  second apart, each with every pixel, left 6 to 13% of the frame empty
+  after the first, where one left 35 to 59%. What moved in the footage is
+  in each set where it then was, so with every set shown throughout, a car
+  ahead is a smear along the road by the end. Have each set's clip last
+  only about its own frame, overlapping the next, and what moved is where
+  it is at each time and nowhere else; fewer sets then show at once, and
+  17 to 32% of the frame was empty.
 - **`set-views` sends its guide up at the size its model runs at**, 504 on
   the longer side. The server's node makes the mesh over the guide's own
   pixels with a lens measured in the model's, so a guide of another size
@@ -554,9 +604,11 @@ being where its clip puts it, with as few keyframes as say it.
 | In `mesh` | Says |
 |---|---|
 | `from` | The file. What a model wrote of a shot's camera is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
-| `frame` | The frame of `from` the set was rebuilt from (the `frame=` its line gave), 0 unless given. Its camera is put at the mesh's origin, and the others where they were from it. |
+| `frame` | The frame of `from` whose camera is at the mesh's own origin, 0 unless given, the others being where they were from it. For a set one model rebuilt of a frame alone (`set`), that frame, the `frame=` its line gave. For a set of the path's own reading (`set-views`), the path's `anchor`, whichever frame the set shows. |
 | `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
 | `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
+| `fits` | In place of `scale`: the media the path is the camera of, to find the size from. |
+| `lens` | A lens for the camera, degrees down the picture, in place of the one `from` has: the lens a set's own model found (`out={lens.txt}`), where the two models do not agree on it. With `fits` it need not be given: the set's own lens is found from the footage first. |
 | `as` | A camera clip to `set`, where a new one is not wanted. |
 
 What comes back with the lines is `from`: its `frames`, how many of the
@@ -564,13 +616,45 @@ clip's were `placed`, and the least and most `fov` it found. The camera
 gets the middle one of them: a `gen=camera@1` has one lens, and what a
 model finds of a lens wavers by the frame, so a zoom does not come through.
 A path shorter than the mesh's clip holds still after its last frame, and
-is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`.
+is said to. Read by hand it is `kerf-mcp/src/camera_file.rs`. `anchor` is
+the frame a path counts its places from, and a `note` says so where `frame`
+is another.
 
-What is added to the set then goes on a track under the camera's, which
-the lines `look` writes put on top: a clip above the camera is laid over
-the set and not sorted with it by depth. `look` with `shows` says how much
-of it the set hides, and so whether it stands on the set's ground or is in
-it.
+**A size found.** A set of one model and a path of another are each in
+units of their own. With `fits`, `look` finds how many of the set's one of
+the path's is, from the footage and with no model
+(`kerf-mcp/src/set_scale.rs`): the set carries its frame as its colors, so
+seen from where the path has the camera on another frame it is a picture
+of that frame, at the right size and at no other. It is drawn through the
+path at 49 sizes from a sixty-fourth to sixty-four, on the four frames
+furthest from `frame`, each held to the footage's own frame over the
+pixels the set covers, and then more finely about the best.
+
+```json
+{ "mesh": { "clip": "set", "from": "cameras.txt", "frame": 0, "fits": "footage" } }
+```
+
+| In `fit` | Says |
+|---|---|
+| `lens` | The set's own lens, found first where none is given: the one through which the set, seen from `frame`, is that frame of the footage again, with its `error` and `sure`. A set is rebuilt along the rays of the lens its model took the frame to have, so only through that lens does it draw its frame; where it is sure (1.1 or more) the camera gets it, and else the path's. |
+| `deep` | How many times further the path's travel along the way the set was seen is made, where the set's lens is not the path's: a set through a narrower lens is deeper by the halves of the two, and a path that goes forward in it goes that much further. 1 where the lenses are one. |
+| `scale` | The size found, which the lines returned are written at. |
+| `error` | How far the set's picture is from the footage there, of 255 a pixel, over what the set covers. |
+| `sure` | How many times worse half or twice that size is. Near 1, any size fits as well: the camera turns and does not travel, or the set is of another frame than `frame`, and a `note` says so. |
+| `frames` | The frames of the path it was read on. |
+
+It takes a camera that travels, and about ten seconds. Where the two
+models do not agree on the lens the path is stretched along the way the
+set was seen (`deep`), which brings the frames nearer and not to the
+pixel, and `sure` stays low: look at the frames.
+
+What is added to the set then goes on a track of its own, over the
+camera's or under it: the lines `look` writes put the camera on top, and a
+camera's track does not come between what is in depth either side of it,
+so the set hides what is behind its surfaces wherever the camera's clip
+is. A track with a flat clip between the two does part them. `look` with
+`shows` says how much of what is added the set hides, and so whether it
+stands on the set's ground or is in it.
 
 A take's depth read back is held to its guide by `look` with `follows`, the
 media that depth is, and `sequence`, the guide's:
@@ -600,6 +684,56 @@ still has near 1 where most of the frame is ground. A subject's `off` is
 read beside the frame's and the floor's: a take that followed has them
 alike, and one that did not has the subject several times the floor
 (`kerf-engine/src/follows.rs`).
+
+`follows` reads depth, so it does not say where the subject is: a crate a
+model drew a tenth of the frame to one side reads as the ground behind it,
+and a take with no crate at all can have the right depth where one was
+asked for. Where the take has it is `look` with `placed`, which reads the
+take's own picture and needs no model:
+
+```json
+{ "placed": { "take": "take", "clip": "crate" }, "sequence": "s2" }
+```
+
+`take` is the media whose picture is the take, and `clip` a clip the guide
+draws. The guide's ids pass gives the box around the clip on each frame, as
+`shows` does. The subject is found on the frame the guide shows most of it
+on, in that box with half as much room again on each side, and followed
+from there to both ends (`kerf_track::roto`), once in the take and once in
+the guide's own picture, and it is those two boxes that are held together:
+what a box followed in a picture adds to the box of an ids pass, its soft
+edge and what is hidden of it, is then in both
+(`kerf-engine/src/placed.rs`).
+
+| | Says |
+|---|---|
+| `off` | How far the middle of the take's box is from the middle of the guide's, in frame heights, as a mean over `frames`. |
+| `across`, `down` | The same with its direction: above 0 where the take has it to the right, or lower. |
+| `size` | How large the take drew it beside the guide, by the sides of the two boxes: above 1 larger. |
+| `worst` | The frame it is furthest off on, from 0, and how far. |
+| `overlap` | How much of the two boxes is in both, of what is in either, as a mean over every frame the guide shows the clip on, a frame it was not followed on counting as none. 1 where the take has the subject where and as large as asked throughout, 0 where it has none: the one number to choose between two takes by. The guide's own picture through an encoder read 0.90, and moved a crate's width aside 0.22. |
+| `shown`, `frames` | How many frames the guide shows the clip on, and on how many of them it was followed in both pictures. |
+| `from`, `read` | The frame it was found on, and the first and last it was followed on. |
+
+A take that has nothing to follow where the guide has the subject is
+followed on a frame or two, or refused: read `frames` beside `shown` before
+`off`, a `note` saying so where they differ. The tracker goes by color and
+edges and is not told what the subject is, so it holds what the picture
+shows apart from its ground.
+
+Both at once, to choose between takes by, is `look` with `held`: the
+take, its depth read back, and the guide's clips that are its subjects.
+
+```json
+{ "held": { "take": "take", "depth": "readback", "clips": ["crate"] }, "sequence": "s2" }
+```
+
+It is `follows` of the depth and `placed` of each subject, and for each a
+`held` from 0 to 1: the `overlap` of where the take has it with where it
+was asked for, less by how far its depth is `off`. The `held` at the top is
+the mean over the subjects. A subject the take has nothing of is held 0,
+whatever its depth: a set is not named, since it is where it is whatever
+the take did.
 
 What they took, and how a take read back holds beside its guide, is in
 [architecture.md](architecture.md#next) (Next, 3 and 4).
@@ -657,10 +791,26 @@ sequence, from the sequence's first, at the sequence's rate:
   has it whole: three frames at 24 for a model at 16.
 
 What a signal does to the picture is the model's, not Kerf's. Kerf knows no
-model that reads one by name, and the workflow that comes with `kerf-comfy`
-has no blank for one, so a line that names a signal for it is told that it
-is left out. A workflow of your own takes one at a `{signal}` blank, in a
-node that takes a list of numbers, a frame each
+model that reads one by name. Of the workflows that come with `kerf-comfy`
+one reads a second guide, `shot-into`: a shot that keeps its guide where
+`guide_mask` is black and makes it anew from the prompt where that is
+white, for a thing put into footage. The guide is the footage as it is,
+and the mask the thing in white on black, drawn from the sequence that
+holds it, its camera, and the set that hides it:
+
+```text
+render s2 {mask.mp4} matte=crate size=832x480 rate=16
+generate model=into prompt="a red shipping container on the street" guide=../footage/shot.mp4 guide_mask={mask.mp4}
+```
+
+And
+one reads a signal, `shot-timed`: a shot that follows its guide where the
+signal is 0 and is made anew from the prompt where it is 1, the signal
+reaching the model as a mask a frame. `shot` has no blank for one, so a
+line that names a signal for it is told that it is left out. A workflow of
+your own takes one at a `{signal}` blank, in a node that takes a list of
+numbers, a frame each, or at `{signal_video}`, as a grey video of the
+frames asked for, in a node that reads a mask or a picture a frame
 ([A model on a ComfyUI server](#a-model-on-a-comfyui-server)); what it does
 there, a strength, a mask's weight, a motion scale, is the workflow's to say.
 
@@ -679,10 +829,58 @@ than that run together, and those that fall outside the signal clip are
 counted and left out. It reads onsets, where a sound starts, and not how
 loud it is.
 
+The editor shows a signal where its clip is, in the timeline: its number
+along the clip as a curve, 0 at the bottom and 1 at the top.
+
 Not here yet: a signal from how loud a sound is, as a voice swells, and from
-footage, such as how fast something moves. Nor is there a place in the editor
-to draw one under the picture: its keys are text, which an agent writes, or a
-person with `set`.
+footage, such as how fast something moves. Nor can one be drawn by hand in
+the editor: its keys are text, which an agent writes, or a person with
+`set`.
+
+## Where a thing goes
+
+A guide shows a model where things are, as a picture it follows. Some models
+take the way a thing goes as numbers of their own, a point for each frame,
+and make the picture go that way. The document has those numbers: a clip is
+where its sequence draws it. A `generate` line names the clip, and the
+request holds its place on each frame of its sequence, from the first:
+
+```text
+generate model=led prompt="a crate on a street" first={first.png} moves=crate
+```
+
+```json
+"moves": [{ "name": "crate", "rate": 16.0, "frame": [640, 360],
+            "places": [[0.4701, 0.5602, 0.0286, 0.0648], null] }]
+```
+
+- A place is the middle of the clip's box across and down the sequence's
+  frame, and the box's width and height, each from 0 to 1. It is read from
+  the frame and not from the clip's own numbers, as `look` with `shows`
+  reads it, so a camera that moves, a parent, and what stands before the
+  clip are all in it. On a frame the clip does not show on it is `null`.
+- `frame` is the sequence's size. A guide of another shape has its sides
+  cut off, so a share across the sequence is not the same share across the
+  model's picture; a model's program brings one to the other, as
+  `kerf-comfy` does at a `{moves}` blank.
+- A clip that draws nothing, a camera or a light, is nowhere and is refused.
+  A model whose `reads` has no `moves` is said to have no use for it, and
+  the making goes on.
+- A take is held to the clip's whole sequence, as to one it renders: moving
+  the clip, the camera, or what hides it asks for the shot again.
+
+A workflow reads it at `{moves}`, as tracks of points, or at
+`{moves_video}`, as a layout: a video of the size and frames asked for,
+white, with each clip's box outlined in black where it is on that frame.
+`shot-led`, which comes with `kerf-comfy`, hands a model that layout and the
+prompt and no picture of the scene: the subject the prompt names goes where
+the clip goes. The server the rest was measured on has the nodes that take
+point tracks and not the weights, so `{moves}` itself was not run on a
+model. What was run is the node that reads them: `moves-shown`, which comes
+with `kerf-comfy` too, has it read `{moves}` and draws the points over a
+guide (`generate model=<name> guide=<take> moves=<clip>`), with no model.
+It is what a model that follows points is told, to look at before a take or
+over one.
 
 ## Guides
 
@@ -728,6 +926,24 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   the frame, so it holds still from one frame to the next. A clip out of
   depth, such as a backdrop on the lowest track, has no distance and is
   black, and so is where there is no clip.
+- **`matte=<clip>`**, in place of a pass: that one clip in white on black,
+  as much of it as shows, so what stands before it is cut out of it. It is
+  the mask a model is handed to make a thing anew in one place
+  (`guide_mask={mask.mp4}`).
+- **`pass=normals`**: which way each pixel faces, as a color, in the
+  camera's own space: to the right as red, up as green, and toward the
+  camera as blue, each from -1 to 1 as black to full, as a normal map has
+  them (the one a model that reads a picture back calls `normal_opengl`).
+  A clip in depth is flat and so one color; a mesh has the way each place
+  of it faces; a surface seen from behind faces whoever sees it. What is
+  not in depth is black.
+- **`pass=relative`**: the same as `pass=depth`, each frame stretched to its own nearest
+  and farthest: white at the nearest thing in the frame and one step above
+  black at the farthest, as a model that reads depth from a picture gives
+  it and as one trained on such depth expects it. It does not hold still:
+  a place is another grey when something nearer comes into the frame. It
+  is what to try where a scene's own depth comes out flat, a far set with
+  one thing near.
 
 A pass has no lights, no focus, no adjustment layers, no dips, and no
 captions, and every clip is laid over what is behind it whatever its blend.
@@ -736,8 +952,9 @@ its face beside them, as they take its color, and not their own distance.
 
 A pass is a file as a guide is, and a model that follows one is handed it as
 its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
-workflow's to say. Handing one model a picture and a pass of it at once has
-no word on a `generate` line yet, and normals are not drawn.
+workflow's to say. One model is handed a picture and a pass of it at once
+by naming the second, `guide={picture.mp4} guide_depth={depth.mp4}`
+([Recipes](#recipes)).
 
 Which kind a model follows is the model's, and its entry's `about` says. A
 model that covers a render is handed the picture. The

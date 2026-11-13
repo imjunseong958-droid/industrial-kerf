@@ -32,6 +32,27 @@ use kerf_model::{
 };
 use serde_json::{json, Map, Value as Json};
 
+/// [`timeline_json`] with, on each source its recipe has made takes of, `takes`: each one's
+/// `number`, its `path` as the document would name it, and whether it is the one the
+/// source is (`chosen`), for an editor to offer them.
+pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path) -> Json {
+    let mut value = timeline_json(project);
+    let sources = value["sources"].as_array_mut().into_iter().flatten();
+    for (source, media) in sources.zip(&project.media) {
+        let takes = kerf_engine::recipe::takes::listed(directory, media);
+        if !takes.is_empty() {
+            source["takes"] = takes
+                .into_iter()
+                .map(|(number, path, chosen)| json!({"number": number, "path": path, "chosen": chosen}))
+                .collect();
+        }
+    }
+    value
+}
+
+/// The most points a signal's curve is sent as: a long clip is read every few frames.
+const SIGNAL_POINTS: usize = 512;
+
 pub(crate) fn timeline_json(project: &Project) -> Json {
     let mut value = json!({
         "name": project.name,
@@ -243,6 +264,29 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                 _ => fx.to_string(),
             };
             object.entry("name").or_insert_with(|| json!(name));
+            // A signal draws nothing, so what there is to show of it is its number: what
+            // it comes to along the clip, for an editor to draw as a curve.
+            if fx.as_str() == kerf_model::SIGNAL {
+                let length = frames(rate, clip.duration).max(1);
+                let step = (length as usize).div_ceil(SIGNAL_POINTS).max(1);
+                let read = |frame: i64| {
+                    match params
+                        .get(kerf_model::SIGNAL_VALUE)
+                        .map(|value| value.value_at(rate.time_of(frame)))
+                    {
+                        Some(Value::Number(number)) if number.is_finite() => {
+                            (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
+                        }
+                        _ => 0.0,
+                    }
+                };
+                let mut values: Vec<f64> = (0..length).step_by(step).map(read).collect();
+                // Its last frame too, so that the curve ends where the clip does.
+                if (length - 1) % step as i64 != 0 {
+                    values.push(read(length - 1));
+                }
+                object.insert("signal".into(), json!(values));
+            }
         }
         Content::Caption { text } => {
             object.insert("kind".into(), json!("caption"));
@@ -451,6 +495,54 @@ fn value_json(value: &Value) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_signal_clip_carries_what_its_number_comes_to() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x120 audio=48000\n  track V1 video\n    clip swell gen=signal@1 at=2f dur=5f\n      set value={0f:0 4f:1}\n    clip held gen=signal@1 at=10f dur=2000f\n      set value=0.5\n    clip plain gen=solid@1 at=3000f dur=5f\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_json(&project);
+        let clips = value["tracks"][0]["clips"].as_array().unwrap();
+        // A value a frame of the clip, from its own first.
+        assert_eq!(clips[0]["signal"], json!([0.0, 0.25, 0.5, 0.75, 1.0]));
+        // A long one is read every few frames, its last among them.
+        let held = clips[1]["signal"].as_array().unwrap();
+        assert!(held.len() <= SIGNAL_POINTS + 1 && held.len() > 400, "{}", held.len());
+        assert!(held.iter().all(|value| *value == 0.5));
+        // What is no signal has none.
+        assert!(clips[2].get("signal").is_none());
+    }
+
+    #[test]
+    fn a_source_lists_the_takes_its_recipe_has_made() {
+        let folder = tempfile::tempdir().unwrap();
+        let directory = folder.path();
+        std::fs::create_dir_all(directory.join("shots/open.takes")).unwrap();
+        std::fs::write(directory.join("shots/open.kerfrecipe"), "kerf-recipe 1\n").unwrap();
+        for take in ["001.mp4", "002.mp4", "002.take.json", "003.take.json"] {
+            std::fs::write(directory.join("shots/open.takes").join(take), "").unwrap();
+        }
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\nmedia m1 path=\"shots/open.takes/002.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\nmedia m2 path=\"plain.mp4\" rate=24 dur=1s video=160x120\nsequence s1 rate=24 size=160x120 audio=48000\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_with_takes(&project, directory);
+        // Those there is a file of, the one the media is marked; a record alone is no take.
+        assert_eq!(
+            value["sources"][0]["takes"],
+            json!([
+                {"number": 1, "path": "shots/open.takes/001.mp4", "chosen": false},
+                {"number": 2, "path": "shots/open.takes/002.mp4", "chosen": true},
+            ])
+        );
+        // A source with no recipe has none, and says nothing of them.
+        assert!(value["sources"][1].get("takes").is_none());
+    }
 
     #[test]
     fn every_sequence_is_listed_with_its_format() {

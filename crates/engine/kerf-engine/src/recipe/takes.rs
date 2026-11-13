@@ -25,7 +25,7 @@
 //! trimming, moving, grading, or titling a made shot never asks for it
 //! again.
 
-use super::{signal::Signal, stored, within, Recipe};
+use super::{moves::Moves, signal::Signal, stored, within, Recipe};
 use crate::error::{EngineError, Result};
 use kerf_model::{Content, Media, Project};
 use serde::{Deserialize, Serialize};
@@ -277,6 +277,14 @@ pub(crate) fn from(
             sequence_hash(project, directory, sequence),
         );
     }
+    // Where a clip goes is what its sequence draws of it, so a take is held to that sequence.
+    for clip in recipe.moves() {
+        let sequence = Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
+        from.insert(
+            format!("sequence {sequence}"),
+            sequence_hash(project, directory, &sequence),
+        );
+    }
     for signal in recipe.signals() {
         from.insert(
             format!("signal {signal}"),
@@ -450,6 +458,30 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
             }
         })
         .collect())
+}
+
+/// The takes of `media` there are files of, in the order they were made, each with its
+/// number, its path as a document names it, and whether it is the one the media's line
+/// names. It reads the takes' folder and nothing else, so it can be asked often: what has
+/// changed since each was made is [`takes`]'s to say.
+pub fn listed(directory: &Path, media: &Media) -> Vec<(u32, String, bool)> {
+    let Some(place) = media
+        .recipe
+        .as_deref()
+        .and_then(|name| Place::of(directory, name, &media.path).ok())
+    else {
+        return Vec::new();
+    };
+    place
+        .numbers()
+        .into_iter()
+        .filter(|take| place.file(*take).is_file())
+        .map(|take| {
+            let stored = place.stored(take);
+            let chosen = Path::new(&media.path) == Path::new(&stored);
+            (take, stored, chosen)
+        })
+        .collect()
 }
 
 /// The take numbered `number` among `media`'s, or an error that says which

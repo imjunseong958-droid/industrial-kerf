@@ -237,6 +237,8 @@ pub struct RenderOptions {
     pub sound: bool,
     /// What of the sequence is drawn: its picture, or a pass of it for a model that reads one.
     pub pass: kerf_compose::Pass,
+    /// A clip of the sequence to draw alone, white on black, in place of the picture.
+    pub matte: Option<String>,
 }
 
 /// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
@@ -351,6 +353,7 @@ impl Default for RenderOptions {
             rate: None,
             sound: true,
             pass: kerf_compose::Pass::Picture,
+            matte: None,
         }
     }
 }
@@ -922,6 +925,7 @@ where
             // Rendering again after a small edit draws only what it changed.
             frame_folder: kerf_compose::default_frame_folder(),
             pass: opts.pass,
+            matte: opts.matte.clone(),
             ..Default::default()
         },
     )?;

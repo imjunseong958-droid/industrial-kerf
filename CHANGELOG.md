@@ -76,6 +76,61 @@ on `main`; its section here becomes the release's notes on GitHub
   For these `kerf-comfy` writes the lens a rebuilt set was seen through
   (`out={lens.txt}`), and has a workflow, `set-views`, that rebuilds a set
   in the units of the camera path found of the same frames.
+- A signal clip shows its number in the timeline, as a curve along the
+  clip.
+- A media's takes are in the editor: **Takes**, on the media in the bin,
+  lists every take its recipe has made, with the one it is ticked, and
+  choosing another has the media be that take again.
+- A glTF file's morph targets are read: a face or a shape that the file
+  reshapes by weights is reshaped as its animation has it.
+- A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
+  where that clip shows and black elsewhere, with what stands before it cut
+  out, which is the mask a model is handed to make a thing in one place.
+- `kerf-comfy` comes with `set-splats`: a scene kept as splats (`ref=scene.ply`)
+  becomes the mesh a mesh clip reads, on the server's own nodes, with no model.
+  And with `moves-shown`, which draws the points `moves=<clip>` hands a model
+  over a guide.
+- `kerf-comfy` comes with `shot-led`: a shot whose subject goes where a
+  clip of the project goes, the clip's box on each frame handed over as a
+  layout (`moves=<clip>`), with no picture of the scene.
+- `kerf-comfy` comes with `shot-into`: a shot that keeps its guide where a
+  second guide, `guide_mask`, is black and makes it anew where that is
+  white, which puts a thing into footage where the scene has it.
+- `kerf-comfy` hands a signal to a workflow as a grey video at a
+  `{signal_video}` blank, for a node that reads a mask a frame, and comes
+  with `shot-timed`: a shot that keeps its guide where a signal is 0 and
+  is made anew where it is 1.
+- A guide can be drawn as which way each pixel faces, `render …
+  pass=normals`: a normal map in the camera's space, of clips in depth and
+  of meshes.
+- A guide can be drawn as depth stretched to each frame's own nearest and
+  farthest, `render … pass=relative`, as a model that reads depth from a
+  picture gives it; `pass=depth` still goes by the scene's own numbers.
+- A `generate` line can hand a model more than one guide, each by what it
+  is of: `guide={picture.mp4} guide_depth={depth.mp4}`.
+- A recipe's `generate` line can hand a model where a thing goes:
+  `moves=<clip>` puts the clip's box on every frame in the request, read
+  from the picture, for a model that takes the way a thing goes as points.
+  A `kerf-comfy` workflow reads them at a `{moves}` blank.
+- `look` with `placed` says where a take has a clip's subject beside where
+  its guide has it, in frame heights, read from the take's own picture with
+  no model: how far off, which way, and how large the take drew it. It
+  goes with `follows`, which says how a take's depth holds and not whether
+  the subject is there.
+- `look` with `held` reads a take's depth and the place of its subjects at
+  once and gives the take one number, to choose between takes by.
+- `look` with `mesh` and `from` finds the size of a camera path against a
+  set another model rebuilt, from the footage both are of (`fits`), and
+  takes a `lens` for the camera, or finds the set's own from the footage.
+  With `beside` it puts one mesh's file where another's is, for sets
+  rebuilt of several frames of one reading. It also says which frame a path counts its
+  places from (`anchor`): a set made of the path's own reading is in that
+  frame's space, whichever frame it shows, and without it a travelling
+  shot's set was drawn from the wrong place.
+- Clips in depth are sorted, and cut where they cross, across a track that
+  draws nothing: a camera, a light, or a null on a track between two 3D
+  clips, or an empty track there, no longer has the upper one laid over the
+  lower whatever their depth. A track with a flat clip still parts them.
 - A guide can hold solid things: a `gen=mesh@1` clip is a box, a ball, or a
   cylinder (`kind=`, with `width`, `height`, and `length` in frame heights,
   and a `color`), or with `file="car.glb"` a glTF model at rest, `height`
@@ -89,8 +144,10 @@ on `main`; its section here becomes the release's notes on GitHub
   comes with the camera that saw it and what you add stands in it. It is
   placed, keyed, and parented as a clip in depth is, lit by the sequence's
   lights, and is in the ids and depth passes and in an agent's `look` with
-  `shows` as any clip is. It casts no shadow yet, takes no effect or mask,
-  and is drawn on the CPU.
+  `shows` as any clip is. It casts its shadow on other clips in depth, takes effects and masks on
+  its picture as the camera sees it,
+  and no longer sends its whole frame to the CPU: its triangles are drawn
+  there and laid among the rest on the GPU, where no light casts a shadow.
 - A recipe can tell a model when something happens, and not only where and
   what: a `gen=signal@1` clip draws nothing and holds a number from 0 to 1
   that you keyframe, and `generate … signal=<clip>` hands the model what it

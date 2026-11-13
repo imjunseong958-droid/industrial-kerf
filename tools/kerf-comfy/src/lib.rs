@@ -42,6 +42,9 @@ const ASKED: [&str; 6] = ["prompt", "seed", "width", "height", "frames", "fps"];
 /// request.
 const GUIDE_SENT: &str = "guide.comfy.mp4";
 const GRAPH_SENT: &str = "workflow.comfy.json";
+/// The blank a small black picture on the server fills, for a node that will not run
+/// without pictures it does not read.
+const NO_PICTURE: &str = "no_picture";
 
 /// How often a server that does not answer, or does not know the job, is
 /// asked again before that is taken as its answer.
@@ -134,6 +137,12 @@ pub fn make(
     } else {
         None
     };
+    if workflow.of_file() && request.references.is_empty() {
+        return Err(
+            "this workflow makes a file of a file, and the line gives none: `ref=<file>`"
+                .to_owned(),
+        );
+    }
     let fps = read.map_or(workflow.fps, |read| read.fps);
     let (width, height) = workflow.size(request.size.or(read.map(|read| read.size)));
     if let Some((asked_width, asked_height)) =
@@ -209,6 +218,15 @@ pub fn make(
         ("fps".to_owned(), json!(fps)),
     ]);
 
+    if blanks.contains(NO_PICTURE) {
+        let file = work.join("no_picture.comfy.png");
+        tools.black(&file)?;
+        let bytes = std::fs::read(&file)
+            .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+        let sent = server.upload(&file, &format!("kerf-{}.png", hash(&bytes)))?;
+        values.insert(NO_PICTURE.to_owned(), json!(sent));
+    }
+
     // The files the workflow reads go up, each named by what it holds.
     for name in request.files() {
         if !blanks.contains(&name) {
@@ -216,8 +234,13 @@ pub fn make(
             continue;
         }
         let given = request.file(&name).expect("the request names it");
-        let fitted = work.join(GUIDE_SENT);
-        let file = if name == "guide" {
+        // Every guide is brought to the size, rate, and frames asked for, each to a file
+        // of its own.
+        let fitted = match request::guide_named(&name) {
+            Some(of) => work.join(format!("guide_{of}.comfy.mp4")),
+            None => work.join(GUIDE_SENT),
+        };
+        let file = if name == "guide" || request::guide_named(&name).is_some() {
             let shape = Shape {
                 size: (width, height),
                 fps,
@@ -246,15 +269,69 @@ pub fn make(
     // The signals the workflow reads, each as a number for every frame asked for.
     for (index, signal) in request.signals.iter().enumerate() {
         let name = signal_named(index);
-        if !blanks.contains(&name) {
+        let as_video = request::signal_video_named(index);
+        if !blanks.contains(&name) && !blanks.contains(&as_video) {
             unread.push(format!("`{name}`"));
             continue;
         }
-        values.insert(name, json!(signal.text(frames, fps)));
+        if blanks.contains(&as_video) {
+            // As a grey video of the frames asked for, for a node that reads a mask a frame.
+            let file = work.join(format!("{as_video}.comfy.mp4"));
+            tools.levels(&signal.over(frames, fps), (width, height), fps, &file)?;
+            let bytes = std::fs::read(&file)
+                .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+            let sent = server.upload(&file, &format!("kerf-{}.mp4", hash(&bytes)))?;
+            values.insert(as_video, json!(sent));
+            say(&format!(
+                "handed signal `{}` as a video of {frames} frames",
+                signal.name
+            ));
+        }
+        if blanks.contains(&name) {
+            values.insert(name, json!(signal.text(frames, fps)));
+            say(&format!(
+                "handed signal `{}` as {frames} values",
+                signal.name
+            ));
+        }
+    }
+    // Where clips go, as one list of tracks in the pixels and frames asked for.
+    if !request.moves.is_empty() && blanks.contains(request::MOVES_VIDEO) {
+        // As a layout a model follows: white, with each clip's box where it is on each frame.
+        let file = work.join("moves_video.comfy.mp4");
+        let drawn = request::layout(&request.moves, frames, fps, (width, height));
+        tools.greys(&drawn, (width, height), fps, &file)?;
+        let bytes = std::fs::read(&file)
+            .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+        let sent = server.upload(&file, &format!("kerf-{}.mp4", hash(&bytes)))?;
+        values.insert(request::MOVES_VIDEO.to_owned(), json!(sent));
         say(&format!(
-            "handed signal `{}` as {frames} values",
-            signal.name
+            "handed where {} goes as a layout of {frames} frames",
+            request
+                .moves
+                .iter()
+                .map(|clip| format!("`{}`", clip.name))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
+    } else if !request.moves.is_empty() {
+        if blanks.contains(request::MOVES) {
+            values.insert(
+                request::MOVES.to_owned(),
+                json!(request::tracks(&request.moves, frames, fps, (width, height))),
+            );
+            say(&format!(
+                "handed where {} goes as {frames} points each",
+                request
+                    .moves
+                    .iter()
+                    .map(|clip| format!("`{}`", clip.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        } else {
+            unread.push(format!("`{}`", request::MOVES));
+        }
     }
     if !unread.is_empty() {
         say(&format!(
@@ -273,9 +350,13 @@ pub fn make(
     let id = server.queue(&graph)?;
     // Not where the server is: what is said here reaches whoever asked for the making, an agent
     // among them, and the server is the person's to name.
-    say(&format!(
-        "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"
-    ));
+    if workflow.of_file() {
+        say(&format!("asked the server for a file of the file: job {id}"));
+    } else {
+        say(&format!(
+            "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"
+        ));
+    }
 
     let started = Instant::now();
     let mut told = (String::new(), Instant::now());

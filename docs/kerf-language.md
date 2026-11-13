@@ -151,7 +151,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 
   `needs` names the files it reads; `run` is a program and its arguments,
   quoted where they hold spaces, run as it is named and never through a shell;
-  `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth]` has Kerf
+  `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` has Kerf
   draw a sequence of the project, with no sound, at its own size and rate or
   at the ones named, as a guide for a model is, and its picture or, with
   `pass=`, which clip each pixel is of or how near it is; and
@@ -243,7 +243,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `bevel_profile=round` makes the cut a quarter of a circle, so that the way it faces turns from the side to the face across its width and lights shade it as a curve; `flat`, as it is when not said, is the 45-degree cut. A bevel is as wide on each side of a clip scaled unevenly. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
   light showing, clips are unlit. Give a point light some `z`, or it lies in the plane of what is at 0. Adjacent 3D tracks draw far to near,
-  and two clips that cross are each cut where they meet, with nothing to say: a clip in a transition or a dip keeps its place whole.
+  and two clips that cross are each cut where they meet, with nothing to say: a clip in a transition or a dip keeps its place whole. A track that draws nothing at a frame, a camera's, a light's, a null's, or an empty one, does not come between the 3D tracks either side of it; a flat clip's does, and what is over it is laid over it.
   `gen=light@1 shadow=0.8` has other clips in depth block that much of the light, by how opaque they are where
   its ray meets them, wherever their tracks are and whichever way they are turned: 0, the default, is none, it animates, and an ambient light
   takes no notice. `size` softens a shadow's edges: a point light is a disc that many frame heights across, a directional one fills that many degrees, 0, the default, is a hard edge, and it animates (`size={0f:0 24f:5}`). The further what casts it is from what it falls on, the softer. `kind=environment image=V3` wraps the picture on track V3, hidden or not, around everything as a panorama, its middle straight ahead of the camera and its top straight up, and each surface gets what the way it faces can see: colored, soft, and never shining, since clips have no gloss, and blocked by nothing. With no `image` it is ambient light. `gen=camera@1 focus=0.5 aperture=0.05` keeps the `z` it names sharp, and blurs each clip by how far
@@ -257,8 +257,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `rotate_y`, `rotation`, and `scale` turn and size it, and it is keyed and parented as any clip is. The
   camera sees it and the lights light each side by the way it faces; with no light it is its color, flat.
   What is nearer at each pixel is in front, whichever track it is on, and it is in the ids and depth
-  passes and `look` with `shows` as any clip is. It casts no shadow, takes no effect or mask, and is drawn
-  on the CPU. `set car kind=box width=0.9 height=0.25 length=0.4 color=#c02020 y=0.2 z=1 rotate_y=30`.
+  passes and `look` with `shows` as any clip is. It casts its shadow on what a light with a `shadow` reaches past it, and none on itself; its effects, its masks, and a wipe are of its picture as the camera sees it, across the frame, and its triangles are drawn
+  on the CPU, the rest of its frame staying on the GPU where no light casts a shadow. `set car kind=box width=0.9 height=0.25 length=0.4 color=#c02020 y=0.2 z=1 rotate_y=30`.
   `file="models/car.glb"` takes the mesh from a glTF file (`.glb`, or `.gltf` with its buffers beside it or
   inside it) in place of `kind`: every mesh of its scene at rest, each part in its material's color, or
   `color` where it has none, `height` tall in its own proportions. A part with colors of its own, a picture
@@ -273,7 +273,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   backward. Trimming a clip's head keeps keyframes with what they were over, so a keyed `seconds` shows
   what it showed; with no `seconds` the animation starts again at the clip's new first frame. Its size
   and its middle are those it has at rest, so what an animation moves, moves from there. Morph targets
-  are not read, nor more than four bones to a corner.
+  reshape it by the weights its animation gives them; more than four bones to a corner are not read.
   `look` with `mesh: {"clip": "set"}` says what the file holds, its animations and cameras by name, and
   with `"camera": "shot"` writes that camera as a `gen=camera@1` clip, `set camera1 x={…} y={…} z={…}
   pan={…} tilt={…} roll={…} fov=28.6`: where the file has it on each frame of the mesh's clip, so that
@@ -320,6 +320,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   from 0 to 1. A recipe's `generate … signal=swell` hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
   not, or is turned off, it is 0. Changing it asks for the shot again. See [shots.md](shots.md#signals).
+  `generate … guide_depth={depth.mp4}` hands a model a second guide by what it is of.
+  `generate … moves=<clip>` hands a model where any clip that draws is on each frame, its box in
+  shares of the frame, for a model that takes the way a thing goes as points
+  ([shots.md](shots.md#where-a-thing-goes)).
 - Printing is deterministic and omits defaults. Printing with annotations
   appends comments with each clip's end and source out; parsing ignores them.
 

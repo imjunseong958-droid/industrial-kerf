@@ -40,6 +40,7 @@
 //! opening or drawing a project.
 
 pub mod model;
+pub mod moves;
 pub mod signal;
 pub mod takes;
 pub mod told;
@@ -50,6 +51,7 @@ use crate::sidecar::{self, CancellationToken};
 use kerf_compose::Pass;
 use kerf_model::Rate;
 use model::{Ask, Models, Source};
+use moves::Moves;
 use signal::Signal;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -80,6 +82,8 @@ pub enum Step {
         size: Option<(u32, u32)>,
         rate: Option<Rate>,
         pass: Pass,
+        /// A clip of the sequence drawn alone, white on black, in place of a pass.
+        matte: Option<String>,
     },
     /// A model asked for a file.
     Generate(Box<Ask>),
@@ -138,7 +142,7 @@ impl Recipe {
                             words[1]
                         ))
                     })?;
-                    let (size, rate, pass) = drawn_at(&words[2..]).map_err(wrong)?;
+                    let (size, rate, pass, matte) = drawn_at(&words[2..]).map_err(wrong)?;
                     made.push(to.clone());
                     recipe.steps.push(Step::Render {
                         sequence: words.swap_remove(0),
@@ -146,6 +150,7 @@ impl Recipe {
                         size,
                         rate,
                         pass,
+                        matte,
                     });
                 }
                 "generate" if !words.is_empty() => {
@@ -155,7 +160,7 @@ impl Recipe {
                 }
                 "needs" | "run" | "render" | "generate" => {
                     return Err(wrong(format!(
-                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth]`, or `generate model=<name> prompt=\"…\" …`"
+                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals]`, or `generate model=<name> prompt=\"…\" …`"
                     )))
                 }
                 other => {
@@ -196,6 +201,24 @@ impl Recipe {
             Step::Generate(ask) => Some(ask.model.as_str()),
             _ => None,
         })
+    }
+
+    /// The clips whose way across the frame its steps hand a model, by their ids, each
+    /// once.
+    pub fn moves(&self) -> Vec<&str> {
+        let mut moves: Vec<&str> = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Generate(ask) => Some(&ask.moves),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        moves.sort_unstable();
+        moves.dedup();
+        moves
     }
 
     /// The signals its steps hand a model: clips of the project, by their
@@ -283,9 +306,12 @@ pub(crate) fn size_of(value: &str) -> Option<Size> {
         .filter(|(width, height): &Size| *width > 0 && *height > 0)
 }
 
-/// The size, the rate, and the pass the words after `render <sequence> {name}` name.
-fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>, Pass), String> {
-    let (mut size, mut rate, mut pass) = (None, None, Pass::Picture);
+/// What the words after `render <sequence> {name}` name: the size, the rate, the pass, and
+/// the clip a matte is of.
+type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>);
+
+fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
+    let (mut size, mut rate, mut pass, mut matte) = (None, None, Pass::Picture, None);
     for word in words {
         match word.split_once('=') {
             Some(("size", value)) => {
@@ -308,18 +334,22 @@ fn drawn_at(words: &[String]) -> std::result::Result<(Option<Size>, Option<Rate>
             Some(("pass", value)) => {
                 pass = Pass::parse(value).ok_or_else(|| {
                     format!(
-                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, or `depth`, how near it is"
+                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`, the same stretched to each frame's own nearest and farthest, or `normals`, which way it faces"
                     )
                 })?;
             }
+            Some(("matte", value)) if !value.is_empty() => matte = Some(value.to_owned()),
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"
                 ))
             }
         }
     }
-    Ok((size, rate, pass))
+    if matte.is_some() && pass != Pass::Picture {
+        return Err("`matte=` is one clip in white on black, in place of a pass: give one of the two".to_owned());
+    }
+    Ok((size, rate, pass, matte))
 }
 
 /// The names in braces an argument holds: `out` and `guide.mp4` of
@@ -697,6 +727,9 @@ pub fn plan(
     for signal in recipe.signals() {
         Signal::read(project, signal).map_err(EngineError::msg)?;
     }
+    for clip in recipe.moves() {
+        Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
+    }
     for model in recipe.models() {
         models.command(model)?;
     }
@@ -720,10 +753,12 @@ pub fn plan(
                 size,
                 rate,
                 pass,
+                matte,
             } => {
-                let what = match pass {
-                    Pass::Picture => String::new(),
-                    pass => format!("the {} of ", pass.name()),
+                let what = match (pass, matte) {
+                    (_, Some(clip)) => format!("the matte of `{clip}` in "),
+                    (Pass::Picture, None) => String::new(),
+                    (pass, None) => format!("the {} of ", pass.name()),
                 };
                 let mut at = Vec::new();
                 if let Some((width, height)) = size {
@@ -869,13 +904,22 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
             }
         }
         if let Some(reads) = &takes.reads {
+            let named: Vec<String> = ask
+                .guides
+                .iter()
+                .map(|(name, _)| format!("guide_{name}"))
+                .collect();
             let given = [
                 ("guide", ask.guide.is_some()),
                 ("first", ask.first.is_some()),
                 ("last", ask.last.is_some()),
                 ("ref", !ask.references.is_empty()),
                 (model::SIGNAL, !ask.signals.is_empty()),
-            ];
+                (model::MOVES, !ask.moves.is_empty()),
+            ]
+            .into_iter()
+            .chain(named.iter().map(|name| (name.as_str(), true)))
+            .collect::<Vec<_>>();
             for (name, _) in given
                 .iter()
                 .filter(|(name, given)| *given && !reads.iter().any(|read| read == name))
@@ -1047,6 +1091,7 @@ impl Making<'_> {
                     size,
                     rate,
                     pass,
+                    matte,
                 } => {
                     let mut resolved = self.project.clone();
                     resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
@@ -1060,6 +1105,7 @@ impl Making<'_> {
                             size: *size,
                             rate: *rate,
                             pass: *pass,
+                            matte: matte.clone(),
                             // What a step makes is for a model to follow, or a shot of its
                             // own: a picture, with no sound.
                             sound: false,
@@ -1079,6 +1125,19 @@ impl Making<'_> {
                         .map(|signal| Signal::read(self.project, signal))
                         .collect::<std::result::Result<Vec<_>, _>>()
                         .map_err(EngineError::msg)?;
+                    let moves = if ask.moves.is_empty() {
+                        Vec::new()
+                    } else {
+                        // Where a clip is is read from the frame, which wants its media.
+                        let mut resolved = self.project.clone();
+                        resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
+                        on_line("reading where what moves goes");
+                        ask.moves
+                            .iter()
+                            .map(|clip| Moves::read(&resolved, clip))
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(EngineError::msg)?
+                    };
                     let asked = ask.request(
                         &|file| {
                             within(self.folder, file, "file the recipe needs")
@@ -1086,6 +1145,7 @@ impl Making<'_> {
                         },
                         &|name| self.file_for(name),
                         &signals,
+                        &moves,
                     )?;
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
                     let words = self.models.command(&ask.model)?;

@@ -18,6 +18,7 @@ pub mod permissions;
 mod presets;
 pub mod qc;
 mod qc_full;
+mod set_scale;
 mod signal;
 mod text_lint;
 

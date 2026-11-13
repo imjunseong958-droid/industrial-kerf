@@ -48,7 +48,7 @@
 //!                        "reads": ["guide", "ref"] } } }
 //! ```
 
-use super::signal::Signal;
+use super::{moves::Moves, signal::Signal};
 use crate::error::{EngineError, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -90,6 +90,10 @@ pub struct Ask {
     pub prompt: String,
     /// A picture in motion to follow: a blocking, a rough render, a take.
     pub guide: Option<Source>,
+    /// More pictures in motion to follow, each by what it is of: a model that reads a
+    /// picture and its depth, or depth and which clip each pixel is of, is handed each
+    /// under its name (`guide_depth=`, `guide_ids=`).
+    pub guides: Vec<(String, Source)>,
     /// The first and the last frame.
     pub first: Option<Source>,
     pub last: Option<Source>,
@@ -101,6 +105,9 @@ pub struct Ask {
     /// Numbers over time that say when what the prompt asks for happens:
     /// signal clips of the project, by their ids.
     pub signals: Vec<String>,
+    /// What goes where: clips of the project, by their ids, each handed over as its place
+    /// on every frame.
+    pub moves: Vec<String>,
     /// Anything else the line says, which only that model reads.
     pub more: BTreeMap<String, String>,
     /// The file it writes: `out`, or the name of one a later step reads.
@@ -115,6 +122,7 @@ impl Ask {
             model: String::new(),
             prompt: String::new(),
             guide: None,
+            guides: Vec::new(),
             first: None,
             last: None,
             references: Vec::new(),
@@ -122,6 +130,7 @@ impl Ask {
             size: None,
             seed: None,
             signals: Vec::new(),
+            moves: Vec::new(),
             more: BTreeMap::new(),
             out: "out".to_owned(),
         };
@@ -141,6 +150,13 @@ impl Ask {
                 "model" => ask.model = value.to_owned(),
                 "prompt" => ask.prompt = value.to_owned(),
                 "guide" => ask.guide = Some(source(value)?),
+                named if named.strip_prefix("guide_").is_some_and(names_a_guide) => {
+                    let name = named["guide_".len()..].to_owned();
+                    if ask.guides.iter().any(|(given, _)| *given == name) {
+                        return Err(format!("`{named}=` is given twice"));
+                    }
+                    ask.guides.push((name, source(value)?));
+                }
                 "first" => ask.first = Some(source(value)?),
                 "last" => ask.last = Some(source(value)?),
                 "ref" => ask.references.push(source(value)?),
@@ -174,6 +190,13 @@ impl Ask {
                     )
                 }
                 "signal" => ask.signals.push(value.to_owned()),
+                "moves" if value.is_empty() => {
+                    return Err(
+                        "`moves=` names a clip of the project whose way across the frame a model is handed, such as `moves=car`"
+                            .to_owned(),
+                    )
+                }
+                "moves" => ask.moves.push(value.to_owned()),
                 "out" => {
                     ask.out = super::whole(value).ok_or_else(|| {
                         format!("`out={value}` names the file it makes in braces, such as `{{first.png}}`")
@@ -195,6 +218,7 @@ impl Ask {
     pub fn sources(&self) -> impl Iterator<Item = &Source> {
         self.guide
             .iter()
+            .chain(self.guides.iter().map(|(_, source)| source))
             .chain(&self.first)
             .chain(&self.last)
             .chain(&self.references)
@@ -207,6 +231,9 @@ impl Ask {
             |name: &str, source: &Source| parts.push(format!("{name} {}", source.shown()));
         if let Some(guide) = &self.guide {
             named("guide", guide);
+        }
+        for (name, guide) in &self.guides {
+            named(&format!("guide_{name}"), guide);
         }
         if let Some(first) = &self.first {
             named("first", first);
@@ -227,6 +254,7 @@ impl Ask {
             parts.push(format!("seed {seed}"));
         }
         parts.extend(self.signals.iter().map(|signal| format!("signal {signal}")));
+        parts.extend(self.moves.iter().map(|clip| format!("moves {clip}")));
         parts.extend(
             self.more
                 .iter()
@@ -237,13 +265,14 @@ impl Ask {
 
     /// The request a model's program reads, with every file where it is:
     /// `file` says where one of the project is, and `made` where one a step
-    /// made is, the one this writes among them. `signals` are the ones it
+    /// made is, the one this writes among them. `signals` and `moves` are the ones it
     /// names, read from the project.
     pub(crate) fn request(
         &self,
         file: &dyn Fn(&str) -> Result<PathBuf>,
         made: &dyn Fn(&str) -> PathBuf,
         signals: &[Signal],
+        moves: &[Moves],
     ) -> Result<Value> {
         let place = |source: &Source| -> Result<Value> {
             Ok(Value::String(
@@ -261,6 +290,11 @@ impl Ask {
             "model": self.model,
             "prompt": self.prompt,
             "guide": optional(&self.guide)?,
+            "guides": self
+                .guides
+                .iter()
+                .map(|(name, source)| Ok((name.clone(), place(source)?)))
+                .collect::<Result<serde_json::Map<String, Value>>>()?,
             "first": optional(&self.first)?,
             "last": optional(&self.last)?,
             "references": self.references.iter().map(place).collect::<Result<Vec<_>>>()?,
@@ -268,6 +302,7 @@ impl Ask {
             "size": self.size.map(|(width, height)| [width, height]),
             "seed": self.seed,
             "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
+            "moves": moves.iter().map(Moves::asked).collect::<Vec<_>>(),
             "more": self.more,
             "out": made(&self.out).to_string_lossy(),
         }))
@@ -277,8 +312,20 @@ impl Ask {
 /// The files a `generate` line hands a model, by the names it gives them.
 pub const FILES: [&str; 4] = ["guide", "first", "last", "ref"];
 
+/// Whether `name` is what a guide beside the first is named by, after `guide_`: lowercase
+/// letters and digits, as a workflow's blank is.
+pub fn names_a_guide(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
+}
+
 /// The name a `generate` line hands a model a signal by.
 pub const SIGNAL: &str = "signal";
+
+/// The name a `generate` line hands a model a clip's way across the frame by.
+pub const MOVES: &str = "moves";
 
 /// What a model takes, as the person's models file says it under `takes`.
 /// Each part is there only where the file says it.
@@ -344,11 +391,16 @@ impl Takes {
                         .filter(|reads: &Vec<String>| {
                             reads
                                 .iter()
-                                .all(|read| FILES.contains(&read.as_str()) || read == SIGNAL)
+                                .all(|read| {
+                                    FILES.contains(&read.as_str())
+                                        || read == SIGNAL
+                                        || read == MOVES
+                                        || read.strip_prefix("guide_").is_some_and(names_a_guide)
+                                })
                         })
                         .ok_or_else(|| {
                             format!(
-                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}",
+                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}, {MOVES}, and a guide by what it is of, as `guide_depth`",
                                 FILES.join(", ")
                             )
                         })?;

@@ -259,6 +259,8 @@ pub(super) struct Scene {
     lights: Vec<Light>,
     /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
     pub casters: Vec<Caster>,
+    /// The meshes that may be in a light's way, with them.
+    pub standing: Vec<mesh::Standing>,
     /// How far along the camera's way is in focus, in pixels, and how far what is far from that may
     /// spread: 0 for all of it sharp.
     focus: f64,
@@ -369,6 +371,7 @@ impl Scene {
             height,
             lights,
             casters: Vec::new(),
+            standing: Vec::new(),
             focus,
             aperture: read("aperture", 0.0) * height,
         }
@@ -378,6 +381,7 @@ impl Scene {
     pub(super) fn bare(mut self) -> Self {
         self.lights.clear();
         self.casters.clear();
+        self.standing.clear();
         self.aperture = 0.0;
         self
     }
@@ -488,7 +492,13 @@ impl Scene {
             .iter()
             .filter(|caster| caster.clip != *receiver)
             .map(|caster| caster.lets_through(at, way, reach))
-            .product::<f32>();
+            .product::<f32>()
+            * self
+                .standing
+                .iter()
+                .filter(|mesh| mesh.clip != *receiver)
+                .map(|mesh| mesh.lets_through(at, way, reach))
+                .product::<f32>();
         1.0 - shadow * (1.0 - through)
     }
 
@@ -534,8 +544,33 @@ impl Scene {
                 return 1.0 - shadow;
             }
         }
+        // A mesh has no one plane to say which rays can meet it, so each ray asks it.
+        for mesh in self.standing.iter().filter(|mesh| mesh.clip != *receiver) {
+            let rays = rays.get_or_insert_with(|| spiral().map(|at| off(at, radius)));
+            for (through, (way, reach)) in through.iter_mut().zip(rays.iter()) {
+                *through *= mesh.lets_through(at, *way, *reach);
+            }
+        }
         let through = all_alike * through.iter().sum::<f32>() / RAYS as f32;
         1.0 - shadow * (1.0 - through)
+    }
+
+    /// The way a surface at `at` faces, `normal` a unit long, as a normals pass writes it:
+    /// toward whoever sees it, in the camera's space, to the right, up, and toward the
+    /// camera as red, green, and blue. The color is a display's, as a model reads a file,
+    /// and the picture is light.
+    pub(super) fn facing(&self, at: Vector, normal: Vector) -> [f32; 3] {
+        let seen = if dot(minus(self.eye, at), normal) < 0.0 {
+            times(normal, -1.0)
+        } else {
+            normal
+        };
+        [
+            dot(seen, self.right),
+            -dot(seen, self.down),
+            -dot(seen, self.forward),
+        ]
+        .map(|side| kerf_draw::color::to_linear((0.5 + 0.5 * side.clamp(-1.0, 1.0)) as f32))
     }
 
     /// A point of the output picture on the plane z = 0, in the world.
@@ -653,6 +688,25 @@ pub(super) fn shade_by_depth(
                 pixel[..3].fill(grey);
             }
         });
+}
+
+/// A clip in depth as which way it faces: one color, a plane facing one way all over.
+pub(super) fn shade_by_facing(
+    scene: &Scene,
+    plan: &ClipPlan,
+    picture: &mut Image,
+    to_output: &Affine,
+    time: Time,
+) {
+    let (w, h) = (picture.w, picture.h);
+    let plane = Plane::of(scene, plan, (w as f64, h as f64), to_output, time);
+    let color = scene.facing(plane.point(w as f64 / 2.0, h as f64 / 2.0), plane.normal);
+    picture.px.par_chunks_mut(4).for_each(|pixel| {
+        let alpha = pixel[3];
+        for (channel, color) in pixel[..3].iter_mut().zip(color) {
+            *channel = color * alpha;
+        }
+    });
 }
 
 /// A clip's plane in the world: where its picture's first pixel is, and how far each of its pixels

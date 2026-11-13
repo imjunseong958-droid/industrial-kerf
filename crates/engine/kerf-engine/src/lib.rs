@@ -11,6 +11,7 @@ pub mod ffmpeg;
 pub mod follows;
 pub mod index;
 pub mod loudness;
+pub mod placed;
 pub mod probe;
 pub mod proxy;
 pub mod qc;

@@ -1,0 +1,266 @@
+{
+  "kerf-comfy": 1,
+  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, or a part of a picture made again. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it.",
+  "fps": 16,
+  "frames": {
+    "most": 81,
+    "step": 4
+  },
+  "size": [
+    832,
+    480
+  ],
+  "multiple": 16,
+  "set": {
+    "negative": "blurry, low quality, static, text, watermark",
+    "steps": 20,
+    "cfg": 6.0,
+    "shift": 8.0,
+    "strength": 1.0,
+    "cache": 0.2,
+    "sampler": "uni_pc",
+    "scheduler": "simple",
+    "unet": "wan2.1_vace_1.3B_fp16.safetensors",
+    "vae": "wan_2.1_vae.safetensors",
+    "text_encoder": "umt5_xxl_fp16.safetensors"
+  },
+  "workflow": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "{unet}",
+        "weight_dtype": "default"
+      }
+    },
+    "2": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "{text_encoder}",
+        "type": "wan"
+      }
+    },
+    "3": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{vae}"
+      }
+    },
+    "4": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "2",
+          0
+        ],
+        "text": "{prompt}"
+      }
+    },
+    "5": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "2",
+          0
+        ],
+        "text": "{negative}"
+      }
+    },
+    "6": {
+      "class_type": "LoadVideo",
+      "inputs": {
+        "file": "{guide}"
+      }
+    },
+    "7": {
+      "class_type": "GetVideoComponents",
+      "inputs": {
+        "video": [
+          "6",
+          0
+        ]
+      }
+    },
+    "9": {
+      "class_type": "WanVaceToVideo",
+      "inputs": {
+        "positive": [
+          "4",
+          0
+        ],
+        "negative": [
+          "5",
+          0
+        ],
+        "vae": [
+          "3",
+          0
+        ],
+        "width": "{width}",
+        "height": "{height}",
+        "length": "{frames}",
+        "batch_size": 1,
+        "strength": "{strength}",
+        "control_video": [
+          "21",
+          0
+        ],
+        "control_masks": [
+          "19",
+          0
+        ]
+      }
+    },
+    "10": {
+      "class_type": "ModelSamplingSD3",
+      "inputs": {
+        "model": [
+          "1",
+          0
+        ],
+        "shift": "{shift}"
+      }
+    },
+    "11": {
+      "class_type": "EasyCache",
+      "inputs": {
+        "model": [
+          "10",
+          0
+        ],
+        "reuse_threshold": "{cache}",
+        "start_percent": 0.15,
+        "end_percent": 0.95,
+        "verbose": false
+      }
+    },
+    "12": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "11",
+          0
+        ],
+        "positive": [
+          "9",
+          0
+        ],
+        "negative": [
+          "9",
+          1
+        ],
+        "latent_image": [
+          "9",
+          2
+        ],
+        "seed": "{seed}",
+        "steps": "{steps}",
+        "cfg": "{cfg}",
+        "sampler_name": "{sampler}",
+        "scheduler": "{scheduler}",
+        "denoise": 1.0
+      }
+    },
+    "13": {
+      "class_type": "TrimVideoLatent",
+      "inputs": {
+        "samples": [
+          "12",
+          0
+        ],
+        "trim_amount": [
+          "9",
+          3
+        ]
+      }
+    },
+    "14": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "13",
+          0
+        ],
+        "vae": [
+          "3",
+          0
+        ]
+      }
+    },
+    "15": {
+      "class_type": "CreateVideo",
+      "inputs": {
+        "images": [
+          "14",
+          0
+        ],
+        "fps": "{fps}"
+      }
+    },
+    "16": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": [
+          "15",
+          0
+        ],
+        "filename_prefix": "video/kerf",
+        "format": "auto",
+        "format.codec": "auto"
+      }
+    },
+    "17": {
+      "class_type": "LoadVideo",
+      "inputs": {
+        "file": "{guide_mask}"
+      }
+    },
+    "18": {
+      "class_type": "GetVideoComponents",
+      "inputs": {
+        "video": [
+          "17",
+          0
+        ]
+      }
+    },
+    "19": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": [
+          "18",
+          0
+        ],
+        "channel": "red"
+      }
+    },
+    "20": {
+      "class_type": "EmptyImage",
+      "inputs": {
+        "width": "{width}",
+        "height": "{height}",
+        "batch_size": 1,
+        "color": 8421504
+      }
+    },
+    "21": {
+      "class_type": "ImageCompositeMasked",
+      "inputs": {
+        "destination": [
+          "7",
+          0
+        ],
+        "source": [
+          "20",
+          0
+        ],
+        "x": 0,
+        "y": 0,
+        "resize_source": false,
+        "mask": [
+          "19",
+          0
+        ]
+      }
+    }
+  }
+}

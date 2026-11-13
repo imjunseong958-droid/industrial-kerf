@@ -27,7 +27,52 @@ pub fn effects() -> impl Iterator<Item = &'static dyn PictureEffect> {
     all().values().map(|effect| &**effect as &dyn PictureEffect)
 }
 
-type Boxed = Box<dyn PictureEffect + Send>;
+/// Where and when a kernel of one of this crate's effects would run: what the compositor
+/// knows of a clip's picture before any of it is drawn.
+pub struct KernelRun<'a> {
+    /// The time in the clip, and the sequence's timecode then.
+    pub at: Time,
+    pub timecode: &'a str,
+    /// The picture's size, how many of its pixels a source pixel is, and how many a canvas
+    /// pixel is.
+    pub size: (usize, usize),
+    pub per_source: f64,
+    pub per_canvas: f64,
+    /// A number of the clip's and the effect's own, for what is drawn by chance.
+    pub seed: u32,
+    pub working: kerf_color::WorkingSpace,
+    pub clip_name: &'a str,
+    pub frame_rate: f64,
+    pub files: &'a Files,
+    /// A picture track's place from 1, by its id.
+    pub track: &'a dyn Fn(&str) -> Option<usize>,
+}
+
+/// What an effect is on the GPU.
+pub enum OnGpu {
+    /// It changes nothing as it is set, and there is nothing to run.
+    Nothing,
+    Effect(instance::GpuEffect),
+    Correct(Correction),
+}
+
+/// An effect of this crate as the GPU runs it, beside how the CPU does: the same effect,
+/// found by the same id, so that what plans a frame for the GPU asks the effect and not a
+/// table of names.
+pub trait KernelEffect: PictureEffect {
+    /// Its kernel for `effect` as `run` has it: none where it has none, or none for these
+    /// settings, and the frame is the CPU's.
+    fn on_gpu(&self, _effect: &Effect, _run: &KernelRun) -> Option<OnGpu> {
+        None
+    }
+}
+
+/// This crate's effect with the catalog id `id`, as the GPU runs it.
+pub fn kernel(id: &str) -> Option<&'static dyn KernelEffect> {
+    all().get(id).map(|effect| &**effect as &dyn KernelEffect)
+}
+
+type Boxed = Box<dyn KernelEffect + Send>;
 
 fn all() -> &'static HashMap<&'static str, Boxed> {
     static ALL: OnceLock<HashMap<&'static str, Boxed>> = OnceLock::new();
@@ -61,6 +106,29 @@ impl PictureEffect for Correct {
     }
 }
 
+impl KernelEffect for Correct {
+    fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
+        let correction = Correction::new(&|name| number(effect, name, run.at));
+        Some(if correction.is_identity() {
+            OnGpu::Nothing
+        } else {
+            OnGpu::Correct(correction)
+        })
+    }
+}
+
+/// A number parameter of `effect` at `at`, or the catalog's when it sets none.
+fn number(effect: &Effect, name: &str, at: Time) -> f64 {
+    match effect.params.get(name) {
+        Some(param) => param.value_at(at).as_number().unwrap_or(0.0),
+        None => kerf_model::Catalog::builtin()
+            .fx(effect.fx.as_str())
+            .and_then(|def| def.find(name))
+            .and_then(|def| def.default.as_number())
+            .unwrap_or(0.0),
+    }
+}
+
 /// `blur.gaussian`.
 struct Gaussian;
 
@@ -73,6 +141,21 @@ impl PictureEffect for Gaussian {
         // Half the radius, in canvas pixels, as the render graph blurred.
         let sigma = (run.number(effect, "radius") / 2.0 * run.per_canvas) as f32;
         blur::gaussian(picture, sigma, sigma, true);
+    }
+}
+
+impl KernelEffect for Gaussian {
+    fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
+        let sigma = (number(effect, "radius", run.at) / 2.0 * run.per_canvas) as f32;
+        let (across, down) = blur::gaussian_radii(run.size.0, run.size.1, sigma, sigma);
+        let radii = |radii: Vec<usize>| radii.into_iter().map(|r| r as u32).collect();
+        Some(OnGpu::Effect(instance::GpuEffect::Op(
+            crate::filmcraft::gpufx::FxOp::Gaussian {
+                rx: radii(across),
+                ry: radii(down),
+                repeat: true,
+            },
+        )))
     }
 }
 
@@ -97,6 +180,23 @@ impl PictureEffect for Kept {
             host: run.host,
         };
         kept::apply(picture, effect, &run);
+    }
+}
+
+impl KernelEffect for Kept {
+    fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
+        let kernel = match self.0 {
+            "blur.radialzoom" => kept::radial_zoom_kernel(effect, run.at, run.size, run.per_source)?,
+            "noise.addgrain" => {
+                kept::grain_kernel(effect, run.at, run.size, run.per_source, run.seed)?
+            }
+            "color.curves" | "color.huesaturation" | "color.photofilter"
+            | "color.selectivecolor" | "key.unmult" => {
+                kept::color_kernel(effect, run.at, run.size, run.per_source)?
+            }
+            _ => return None,
+        };
+        Some(OnGpu::Effect(instance::GpuEffect::Kernel(kernel)))
     }
 }
 
@@ -137,6 +237,34 @@ impl PictureEffect for Carried {
             frame_rate: run.frame_rate,
         };
         instance::apply(picture, &instance, &run);
+    }
+}
+
+impl KernelEffect for Carried {
+    fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
+        let on = Picture {
+            size: run.size,
+            per_source: run.per_source as f32,
+        };
+        let Some(instance) = instance::instance(effect, run.at, on, run.track) else {
+            return Some(OnGpu::Nothing);
+        };
+        // One that reads the clip's other frames reads them on the CPU.
+        if vfx::is_temporal(&instance.effect) {
+            return None;
+        }
+        let library = instance::luts(effect, run.files);
+        let told = instance::Run {
+            working: run.working,
+            at: run.at,
+            per_source: run.per_source as f32,
+            timecode: run.timecode,
+            clip_name: run.clip_name,
+            library: library.as_ref(),
+            env: None,
+            frame_rate: run.frame_rate,
+        };
+        instance::gpu_effect(&instance, &told, run.size).map(OnGpu::Effect)
     }
 }
 

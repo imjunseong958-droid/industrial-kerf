@@ -355,6 +355,10 @@ private:
     QString mediaPath(const QString &mediaId) const;
     // The recipe `mediaId` names (recipe= on its media line), or empty.
     QString mediaRecipe(const QString &mediaId) const;
+    // The takes a media's recipe has made, as the project lists them: each one's number,
+    // its path, and whether it is the one the media is.
+    QJsonArray mediaTakes(const QString &mediaId) const;
+    void useTake(const QString &mediaId, int take, const QString &path);
     // Ask the bridge what making `mediaId` from its recipe would run; it
     // answers media_make_plan and runs nothing.
     void makeMedia(const QString &mediaId);

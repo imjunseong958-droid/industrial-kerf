@@ -214,6 +214,64 @@ fn a_mesh_and_a_clip_in_depth_are_cut_where_they_meet() {
     }
 }
 
+/// The wall and the box of [`across`], each on a track of its own.
+fn wall_on(track: u32) -> String {
+    format!(
+        "  track V{track} video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#c0c0c0 three_d=true scale=0.9 rotate_y=30\n"
+    )
+}
+
+fn box_on(track: u32) -> String {
+    format!(
+        "  track V{track} video\n    clip thing gen=mesh@1 at=0f dur=24f\n      set kind=box width=1 height=0.2 length=0.05 color=#ff0000\n"
+    )
+}
+
+#[test]
+fn a_track_that_draws_nothing_between_two_in_depth_does_not_part_them() {
+    let same = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
+    let drawn = |body: &str| {
+        let drawn = compositor(body, Pass::Ids);
+        let ids = drawn.ids();
+        let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+        (
+            drawn.frame(Rate::FPS_24.time_of(3), 1.0),
+            color("wall"),
+            color("thing"),
+        )
+    };
+    let between = [
+        // A camera, as the lines `look` writes for a mesh put one: on a track of its own.
+        "  track V2 video\n    clip seen gen=camera@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip lamp gen=light@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip hand gen=null@1 at=0f dur=24f\n",
+        // A track with nothing on it, and one whose clip is over by the frame drawn.
+        "  track V2 video\n",
+        "  track V2 video\n    clip early gen=solid@1 at=0f dur=2f\n      set color=#00ff00\n",
+    ];
+    for middle in between {
+        for wall_under in [true, false] {
+            let body = if wall_under {
+                format!("{}{middle}{}", wall_on(1), box_on(3))
+            } else {
+                format!("{}{middle}{}", box_on(1), wall_on(3))
+            };
+            let (frame, wall, thing) = drawn(&body);
+            // The box before the wall on the left and behind it on the right, by the pixel,
+            // whichever of the two is on the track above.
+            assert!(same(pixel(&frame, 115, 90), thing), "{middle} {wall_under}");
+            assert!(same(pixel(&frame, 205, 90), wall), "{middle} {wall_under}");
+        }
+    }
+    // A track that does draw still parts them: what is over a flat picture is laid over it,
+    // and over what is under it.
+    let flat = "  track V2 video\n    clip card gen=solid@1 at=0f dur=24f\n      set color=#00ff00 scale=0.1 y=-0.4\n";
+    let (frame, wall, _) = drawn(&format!("{}{flat}{}", box_on(1), wall_on(3)));
+    assert!(same(pixel(&frame, 115, 90), wall));
+    let (frame, _, thing) = drawn(&format!("{}{flat}{}", wall_on(1), box_on(3)));
+    assert!(same(pixel(&frame, 205, 90), thing));
+}
+
 #[test]
 fn a_depth_pass_has_a_mesh_by_the_pixel() {
     let grey = |frame: &Frame, x: u32, y: u32| {
@@ -247,6 +305,22 @@ fn a_depth_pass_has_a_mesh_by_the_pixel() {
     assert_eq!(drawn.frame(at, 1.0), drawn.frame(at, 1.0));
     let picture = compositor(&across(1, 2), Pass::Picture);
     assert!(!picture.draws_on_gpu(at, 1.0));
+}
+
+#[test]
+fn a_normals_pass_has_a_mesh_by_the_way_each_place_faces() {
+    // A ball: its middle faces the camera, its left side the left, and its top up.
+    let ball = frame(
+        &mesh("thing", 1, "kind=ball width=0.6 height=0.6 length=0.6"),
+        Pass::Normals,
+    );
+    let [across, up, toward] = pixel(&ball, 160, 90);
+    assert!(across.abs_diff(128) <= 6 && up.abs_diff(128) <= 6 && toward > 245, "{across} {up} {toward}");
+    assert!(pixel(&ball, 115, 90)[0] < 40, "{:?}", pixel(&ball, 115, 90));
+    assert!(pixel(&ball, 205, 90)[0] > 215, "{:?}", pixel(&ball, 205, 90));
+    assert!(pixel(&ball, 160, 45)[1] > 215, "{:?}", pixel(&ball, 160, 45));
+    assert!(pixel(&ball, 160, 135)[1] < 40, "{:?}", pixel(&ball, 160, 135));
+    assert_eq!(pixel(&ball, 20, 20), [0, 0, 0]);
 }
 
 #[test]
@@ -299,39 +373,78 @@ fn a_clip_in_depth_casts_its_shadow_on_a_mesh() {
 }
 
 #[test]
-fn a_mesh_takes_no_effect_or_mask() {
-    let refused = |body: &str| {
-        let project = parse_document(
-            &format!(
-                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+fn a_mesh_casts_its_shadow_on_a_mesh_and_on_a_clip_in_depth() {
+    // A light shining from the left, and a tall box standing between it and what it falls on:
+    // another box turned to show the light a side, or a clip in depth turned the same way.
+    let scene = |receiver: &str, shadow: &str, soft: &str| {
+        format!(
+            concat!(
+                "{}{}",
+                "  track V3 video\n    clip sun gen=light@1 at=0f dur=24f\n",
+                "      set kind=directional x=1 y=0 z=0 shadow={} {}\n",
             ),
-            Catalog::builtin(),
+            receiver,
+            mesh("post", 2, "kind=box width=0.1 height=0.8 length=0.4 x=-0.3 color=#ffffff"),
+            shadow,
+            soft
         )
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-        Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default())
-            .err()
-            .map(|error| error.to_string())
-            .unwrap_or_default()
     };
-    let blurred = format!(
-        "{}      fx blur.gaussian@1 radius=4\n",
-        mesh("thing", 1, "kind=box")
+    let boxed = mesh(
+        "thing",
+        1,
+        "kind=box width=0.3 height=0.3 length=0.3 rotate_y=45 color=#ffffff",
     );
-    assert!(
-        refused(&blurred).contains("an effect on a mesh"),
-        "{}",
-        refused(&blurred)
+    let wall = "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#ffffff three_d=true rotate_y=45 scale=0.4\n";
+    for (receiver, x) in [(boxed.as_str(), 140), (wall, 150)] {
+        let lit = pixel(&frame(&scene(receiver, "0", ""), Pass::Picture), x, 90)[0];
+        let shadowed = pixel(&frame(&scene(receiver, "1", ""), Pass::Picture), x, 90)[0];
+        assert!(lit > 150 && shadowed < 20, "{lit} lit, {shadowed} in shadow at {x}");
+        // Half a shadow lets half the light by, and a light with a size is still stopped.
+        let half = pixel(&frame(&scene(receiver, "0.5", ""), Pass::Picture), x, 90)[0];
+        assert!(half > shadowed + 40 && half < lit - 20, "{half} between {shadowed} and {lit}");
+        let soft = pixel(&frame(&scene(receiver, "1", "size=2"), Pass::Picture), x, 90)[0];
+        assert!(soft < 20, "{soft} under a light with a size");
+    }
+}
+
+#[test]
+fn a_mesh_takes_effects_and_masks_on_its_picture_as_the_camera_sees_it() {
+    let thing = |more: &str| {
+        format!(
+            "{}{more}",
+            mesh("thing", 1, "kind=box width=0.5 height=0.5 length=0.1 color=#ff0000")
+        )
+    };
+    let plain = frame(&thing(""), Pass::Picture);
+    let [red, ..] = pixel(&plain, 160, 90);
+    assert!(red > 150, "{red}");
+    // An effect is done to what is drawn of it: its colors inverted, and not the black about it.
+    let turned = frame(
+        &thing("      fx channel.invert@2\n"),
+        Pass::Picture,
     );
-    let masked = format!(
-        "{}      mask k1 ellipse=0.5,0.5,0.3,0.3\n",
-        mesh("thing", 1, "kind=box")
-    );
-    assert!(
-        refused(&masked).contains("a mask on a mesh"),
-        "{}",
-        refused(&masked)
-    );
+    let [r, g, _] = pixel(&turned, 160, 90);
+    assert!(g > r, "{r} {g}");
+    assert_eq!(pixel(&turned, 10, 10), [0, 0, 0]);
+    // A mask over the left half of the frame leaves its right half, in the picture and in
+    // the pass that says which pixels are its.
+    let masked = thing("      mask k1 rect=0,0,0.5,1\n");
+    for pass in [Pass::Picture, Pass::Ids] {
+        let cut = frame(&masked, pass);
+        assert!(lit(&cut, 130, 90), "{pass:?}");
+        assert!(!lit(&cut, 190, 90), "{pass:?}");
+    }
+    // It is still a mesh behind and before what else is in depth: a wall across it hides
+    // the same of it with the effect as without.
+    let behind = |more: &str| {
+        format!(
+            "{}{}",
+            thing(more),
+            "  track V2 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.2\n"
+        )
+    };
+    let [.., blue] = pixel(&frame(&behind("      fx channel.invert@2\n"), Pass::Picture), 160, 90);
+    assert!(blue > 150, "{blue}");
 }
 
 /// A glTF model of two flat parts, written three ways: a red sheet 2 across and 1 up, standing on
@@ -987,6 +1100,70 @@ fn a_skin_bends_a_mesh_with_its_bones() {
         assert!(lit(&bent, 245, 20) && !lit(&bent, 245, 60));
         assert!(lit(&bent, 75, 120) && !lit(&bent, 75, 30));
     }
+}
+
+#[test]
+fn a_morph_target_reshapes_a_mesh_by_its_weight() {
+    let folder = tempfile::tempdir().expect("a folder");
+    // The sheet, and a target that takes its two right corners up by the sheet's height.
+    // Its corners go round from the top left: the second and third are on the right.
+    let mut file = Writing::default();
+    let (points, indices) = file.sheet();
+    let lifted = file.floats(
+        3,
+        &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    );
+    let times = file.floats(1, &[0.0, 1.0]);
+    let weights = file.floats(1, &[0.0, 1.0]);
+    let written = |file: &mut Writing, name: &str, rest: &str| {
+        let animations = format!(
+            concat!(
+                "\"animations\":[{{\"name\":\"lift\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"weights\"}}}}],",
+                "\"samplers\":[{{\"input\":{},\"output\":{}}}]}}]",
+            ),
+            times, weights
+        );
+        std::mem::take(file).glb(
+            folder.path(),
+            name,
+            &format!(
+                concat!(
+                    "\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],",
+                    "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":{}}},\"indices\":{},",
+                    "\"targets\":[{{\"POSITION\":{}}}]}}]{}}}],{}",
+                ),
+                points, indices, lifted, rest, animations
+            ),
+        );
+    };
+    let mut again = Writing {
+        bytes: file.bytes.clone(),
+        views: file.views.clone(),
+        accessors: file.accessors.clone(),
+    };
+    written(&mut file, "morph.glb", "");
+    written(&mut again, "half.glb", ",\"weights\":[0.5]");
+    // With the animation, it is the sheet at its start and has its right side its own
+    // height higher a second in, in the picture and in the passes.
+    for pass in [Pass::Picture, Pass::Ids, Pass::Depth] {
+        let drawn = posed(folder.path(), "morph.glb", "animation=\"lift\"", "", pass).unwrap();
+        let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
+        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        let lifted = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
+        assert!(reaches(reach(&lifted), [70, 0, 250, 135]), "{:?}", reach(&lifted));
+        assert!(lit(&lifted, 245, 20) && !lit(&lifted, 245, 60));
+        // Half a second in it is half way.
+        let half = drawn.frame(Rate::FPS_24.time_of(12), 1.0);
+        assert!(lit(&half, 245, 60) && !lit(&half, 245, 100), "{:?}", reach(&half));
+    }
+    // With no animation named it is as its mesh's own weights have it: half way.
+    let still = posed(folder.path(), "half.glb", "", "", Pass::Ids).unwrap();
+    let frame = still.frame(Rate::FPS_24.time_of(0), 1.0);
+    // It is half as tall again at rest, and is fitted to its clip as it is at rest: its
+    // right side up, its left side down.
+    assert!(reaches(reach(&frame), [100, 45, 220, 135]), "{:?}", reach(&frame));
+    assert!(lit(&frame, 215, 60) && !lit(&frame, 215, 120), "{:?}", reach(&frame));
+    assert!(lit(&frame, 105, 120) && !lit(&frame, 105, 60), "{:?}", reach(&frame));
 }
 
 #[test]

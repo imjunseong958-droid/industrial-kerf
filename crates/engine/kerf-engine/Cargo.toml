@@ -22,6 +22,7 @@ kerf-core = { path = "../../engine/kerf-core" }
 kerf-fx = { path = "../../effects/kerf-fx" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-track = { path = "../../vfx/kerf-track" }
 hex = "0.4"
 mimalloc = { version = "0.1", default-features = false }
 rayon = "1"

@@ -331,6 +331,20 @@ QString MainWindow::mediaRecipe(const QString &mediaId) const {
     return {};
 }
 
+QJsonArray MainWindow::mediaTakes(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() == mediaId) return source.value(QStringLiteral("takes")).toArray();
+    }
+    return {};
+}
+
+void MainWindow::useTake(const QString &mediaId, int take, const QString &path) {
+    // A take is a file of the project already: the media's line names it, as a making's does.
+    if (execute(QStringLiteral("media.replace"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("path"), path}}))
+        addActivity(QStringLiteral("import"), QStringLiteral("Using take %1 of %2").arg(take).arg(mediaId));
+}
+
 void MainWindow::makeMedia(const QString &mediaId) {
     execute(QStringLiteral("media.make"), QJsonObject{{QStringLiteral("media"), mediaId}});
 }
@@ -435,6 +449,30 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
             make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first").arg(mediaId, recipe)
                                                : m_commands->reason(QStringLiteral("media.make")));
             connect(make, &QAction::triggered, this, [this, mediaId] { makeMedia(mediaId); });
+        }
+        if (const QJsonArray takes = mediaTakes(mediaId); !takes.isEmpty()) {
+            // Every take is kept: the one the media is is ticked, and another is chosen here.
+            auto *chosen = new QMenu(QStringLiteral("Takes"), menu);
+            chosen->setObjectName(QStringLiteral("binTakes"));
+            chosen->setToolTipsVisible(true);
+            const bool can = m_commands->isEnabled(QStringLiteral("media.replace")) && !m_making.contains(mediaId);
+            for (const QJsonValue &value : takes) {
+                const QJsonObject take = value.toObject();
+                const int number = take.value(QStringLiteral("number")).toInt();
+                const QString path = take.value(QStringLiteral("path")).toString();
+                const bool is = take.value(QStringLiteral("chosen")).toBool();
+                QAction *use = chosen->addAction(QStringLiteral("Take %1").arg(number));
+                use->setObjectName(QStringLiteral("binTake%1").arg(number));
+                use->setCheckable(true);
+                use->setChecked(is);
+                use->setEnabled(can && !is);
+                use->setToolTip(is ? QStringLiteral("%1 is this take").arg(mediaId)
+                                : can ? QStringLiteral("Have %1 be %2 again; its clips keep their timing, and it is undone as any edit").arg(mediaId, path)
+                                      : m_making.contains(mediaId) ? QStringLiteral("%1 is being made").arg(mediaId)
+                                                                   : m_commands->reason(QStringLiteral("media.replace")));
+                connect(use, &QAction::triggered, this, [this, mediaId, number, path] { useTake(mediaId, number, path); });
+            }
+            menu->addMenu(chosen);
         }
         QAction *reveal = menu->addAction(QStringLiteral("Reveal in Finder"));
         reveal->setObjectName(QStringLiteral("binReveal"));

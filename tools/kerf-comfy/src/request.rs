@@ -20,6 +20,9 @@ pub struct Request {
     /// A picture in motion to follow.
     #[serde(default)]
     pub guide: Option<PathBuf>,
+    /// More pictures in motion to follow, each under what it is of: `depth`, `ids`.
+    #[serde(default)]
+    pub guides: BTreeMap<String, PathBuf>,
     /// The first and the last frame.
     #[serde(default)]
     pub first: Option<PathBuf>,
@@ -37,11 +40,158 @@ pub struct Request {
     /// Numbers over time that say when what the prompt asks for happens.
     #[serde(default)]
     pub signals: Vec<Signal>,
+    /// Where clips of the guide go, frame by frame.
+    #[serde(default)]
+    pub moves: Vec<Moves>,
     /// Anything else the `generate` line said, as it was written.
     #[serde(default)]
     pub more: BTreeMap<String, String>,
     /// The file to write.
     pub out: PathBuf,
+}
+
+/// Where a clip goes, as a request holds it: for each frame of its sequence the middle of
+/// its box across and down the frame and the box's width and height, from 0 to 1, or
+/// nothing on a frame it does not show on.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Moves {
+    /// The clip it is, by its id.
+    pub name: String,
+    /// The frames a second its places are at.
+    pub rate: f64,
+    /// How wide and tall its sequence is, which its places are shares of: none is the
+    /// shape of whatever is made.
+    #[serde(default)]
+    pub frame: Option<(u32, u32)>,
+    pub places: Vec<Option<[f64; 4]>>,
+}
+
+impl Moves {
+    /// The middle of its box on each of `frames` frames at `fps` a second, in pixels of a
+    /// picture `width` by `height`: on a frame it does not show on, where it is on the
+    /// nearest frame it does. A sequence of another shape fills the picture as its guide
+    /// does, what is over cut off evenly. None where it shows on no frame.
+    pub fn points(&self, frames: u32, fps: f64, (width, height): (u32, u32)) -> Option<Vec<[f64; 2]>> {
+        let shown: Vec<usize> = (0..self.places.len())
+            .filter(|frame| self.places[*frame].is_some())
+            .collect();
+        if shown.is_empty() {
+            return None;
+        }
+        let last = self.places.len() - 1;
+        Some(
+            (0..frames)
+                .map(|frame| {
+                    let own = ((f64::from(frame) * self.rate / fps).round() as usize).min(last);
+                    let nearest = shown
+                        .iter()
+                        .min_by_key(|frame| frame.abs_diff(own))
+                        .copied()
+                        .unwrap_or(own);
+                    let [x, y, ..] = self.places[nearest].unwrap_or_default();
+                    let (wide, tall) = self
+                        .frame
+                        .map_or((f64::from(width), f64::from(height)), |(wide, tall)| {
+                            (f64::from(wide), f64::from(tall))
+                        });
+                    let fills = (f64::from(width) / wide).max(f64::from(height) / tall);
+                    let pixel = |share: f64, own: f64, side: u32| {
+                        (((share - 0.5) * own * fills + f64::from(side) / 2.0) * 10.0).round() / 10.0
+                    };
+                    [pixel(x, wide, width), pixel(y, tall, height)]
+                })
+                .collect(),
+        )
+    }
+}
+
+/// What a workflow's `{moves}` blank is filled with: each clip's points as a track, a list
+/// of `{"x": …, "y": …}` a frame, the tracks in a list, as text a node reads coordinates
+/// from.
+pub fn tracks(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
+    let tracks: Vec<Vec<serde_json::Value>> = moves
+        .iter()
+        .filter_map(|clip| clip.points(frames, fps, size))
+        .map(|points| {
+            points
+                .into_iter()
+                .map(|[x, y]| serde_json::json!({"x": x, "y": y}))
+                .collect()
+        })
+        .collect();
+    serde_json::Value::from(tracks).to_string()
+}
+
+/// The name a workflow reads where clips go under.
+pub const MOVES: &str = "moves";
+
+/// The blank that takes where clips go as a picture in motion, in place of points: a video
+/// of the frames asked for, white, with each clip's box drawn on it in black where it is on
+/// that frame, as a layout a model follows.
+pub const MOVES_VIDEO: &str = "moves_video";
+
+impl Moves {
+    /// Its box on each of `frames` frames at `fps` a second, in pixels of a picture `width`
+    /// by `height`, left, top, right, bottom: none on a frame it does not show on. A
+    /// sequence of another shape fills the picture as its guide does.
+    pub fn boxes(&self, frames: u32, fps: f64, (width, height): (u32, u32)) -> Vec<Option<[f64; 4]>> {
+        let Some(last) = self.places.len().checked_sub(1) else {
+            return vec![None; frames as usize];
+        };
+        let (wide, tall) = self
+            .frame
+            .map_or((f64::from(width), f64::from(height)), |(wide, tall)| {
+                (f64::from(wide), f64::from(tall))
+            });
+        let fills = (f64::from(width) / wide).max(f64::from(height) / tall);
+        (0..frames)
+            .map(|frame| {
+                let own = ((f64::from(frame) * self.rate / fps).round() as usize).min(last);
+                let [x, y, w, h] = self.places[own]?;
+                let across = |share: f64| (share - 0.5) * wide * fills + f64::from(width) / 2.0;
+                let down = |share: f64| (share - 0.5) * tall * fills + f64::from(height) / 2.0;
+                Some([
+                    across(x - w / 2.0),
+                    down(y - h / 2.0),
+                    across(x + w / 2.0),
+                    down(y + h / 2.0),
+                ])
+            })
+            .collect()
+    }
+}
+
+/// The frames of a `{moves_video}`: each `width` by `height` bytes of grey, white with every
+/// clip's box on that frame outlined in black.
+pub fn layout(moves: &[Moves], frames: u32, fps: f64, (width, height): (u32, u32)) -> Vec<Vec<u8>> {
+    let boxes: Vec<Vec<Option<[f64; 4]>>> = moves
+        .iter()
+        .map(|clip| clip.boxes(frames, fps, (width, height)))
+        .collect();
+    // As thick as a model's own annotator draws a box: a hundredth of the frame's height.
+    let line = (i64::from(height) / 100).max(2);
+    let (wide, tall) = (i64::from(width), i64::from(height));
+    (0..frames as usize)
+        .map(|frame| {
+            let mut picture = vec![255u8; (width * height) as usize];
+            for [left, top, right, bottom] in boxes.iter().filter_map(|clip| clip[frame]) {
+                let (left, top) = (left.round() as i64, top.round() as i64);
+                let (right, bottom) = (right.round() as i64, bottom.round() as i64);
+                for y in top.max(0)..bottom.min(tall) {
+                    for x in left.max(0)..right.min(wide) {
+                        let edge = x < left + line
+                            || x >= right - line
+                            || y < top + line
+                            || y >= bottom - line;
+                        if edge {
+                            picture[(y * wide + x) as usize] = 0;
+                        }
+                    }
+                }
+            }
+            picture
+        })
+        .collect()
 }
 
 /// A signal as a request holds it: a number from 0 to 1 for each frame of
@@ -134,9 +284,11 @@ impl Request {
             "guide" => self.guide.as_deref(),
             "first" => self.first.as_deref(),
             "last" => self.last.as_deref(),
-            other => {
-                reference(other).and_then(|index| self.references.get(index).map(PathBuf::as_path))
-            }
+            other => match guide_named(other) {
+                Some(of) => self.guides.get(of).map(PathBuf::as_path),
+                None => reference(other)
+                    .and_then(|index| self.references.get(index).map(PathBuf::as_path)),
+            },
         }
     }
 
@@ -147,6 +299,7 @@ impl Request {
             .filter(|name| self.file(name).is_some())
             .map(str::to_owned)
             .collect();
+        names.extend(self.guides.keys().map(|of| format!("guide_{of}")));
         names.extend((0..self.references.len()).map(|index| match index {
             0 => "ref".to_owned(),
             index => format!("ref{}", index + 1),
@@ -157,6 +310,16 @@ impl Request {
 
 /// Which reference `name` is, counting from 0: `ref` is the first, `ref2`
 /// the second.
+/// What a guide beside the first is of, where `name` is one's: `depth` of `guide_depth`.
+pub fn guide_named(name: &str) -> Option<&str> {
+    name.strip_prefix("guide_").filter(|of| {
+        !of.is_empty()
+            && of
+                .chars()
+                .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
+    })
+}
+
 fn reference(name: &str) -> Option<usize> {
     match name.strip_prefix("ref")? {
         "" => Some(0),
@@ -170,7 +333,9 @@ fn reference(name: &str) -> Option<usize> {
 
 /// Whether `name` is one a request gives a file under.
 pub fn names_a_file(name: &str) -> bool {
-    matches!(name, "guide" | "first" | "last") || reference(name).is_some()
+    matches!(name, "guide" | "first" | "last")
+        || reference(name).is_some()
+        || guide_named(name).is_some()
 }
 
 /// The name a request's signal has, counting from 0: `signal` is the
@@ -182,8 +347,16 @@ pub fn signal_named(index: usize) -> String {
     }
 }
 
-/// Whether `name` is one a request gives a signal under.
+/// The blank that takes a signal as a picture in motion, in place of numbers: a grey video
+/// of the frames asked for, as light on each frame as the signal is then, for a node that
+/// reads a mask a frame. `signal_video` for the first, `signal2_video` for the second.
+pub fn signal_video_named(index: usize) -> String {
+    format!("{}_video", signal_named(index))
+}
+
+/// Whether `name` is one a request gives a signal under, as numbers or as a video.
 pub fn names_a_signal(name: &str) -> bool {
+    let name = name.strip_suffix("_video").unwrap_or(name);
     match name.strip_prefix("signal") {
         Some("") => true,
         Some(number) => number.parse::<usize>().is_ok_and(|number| number >= 2),
@@ -194,7 +367,7 @@ pub fn names_a_signal(name: &str) -> bool {
 /// Whether `name` is one a request hands something under, a file or a
 /// signal: a blank of that name is filled only by a request that has it.
 pub fn names_what_is_handed(name: &str) -> bool {
-    names_a_file(name) || names_a_signal(name)
+    names_a_file(name) || names_a_signal(name) || name == MOVES || name == MOVES_VIDEO
 }
 
 #[cfg(test)]
@@ -298,6 +471,63 @@ mod tests {
             assert!(!names_a_signal(name), "{name}");
         }
         assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
+        // As a video it is the same signal under another blank.
+        assert_eq!(signal_video_named(0), "signal_video");
+        assert_eq!(signal_video_named(1), "signal2_video");
+        assert!(names_a_signal("signal_video") && names_a_signal("signal3_video"));
+        assert!(!names_a_signal("signal1_video") && !names_a_signal("video"));
+    }
+
+    #[test]
+    fn a_guide_beside_the_first_is_a_file_under_its_own_name() {
+        let request = Request::parse(
+            r#"{"kerf-request": 1, "model": "two", "prompt": "", "guide": "/w/picture.mp4",
+                "guides": {"depth": "/w/depth.mp4", "ids": "/w/ids.mp4"}, "out": "/w/out"}"#,
+        )
+        .unwrap();
+        assert_eq!(request.files(), ["guide", "guide_depth", "guide_ids"]);
+        assert_eq!(request.file("guide_depth"), Some(Path::new("/w/depth.mp4")));
+        assert_eq!(request.file("guide_normals"), None);
+        assert!(names_a_file("guide_depth") && names_what_is_handed("guide_ids"));
+        assert!(!names_a_file("guide_") && !names_a_file("guide_Depth") && !names_a_file("guides"));
+    }
+
+    #[test]
+    fn where_a_clip_goes_is_a_track_of_points_in_the_models_pixels() {
+        // Four frames at 8 a second, the clip gone on the last, for a model that makes
+        // eight at 16 on a picture 200 by 100.
+        let ball: Moves = serde_json::from_str(
+            r#"{"name": "ball", "rate": 8.0, "places": [[0.25, 0.5, 0.1, 0.1], [0.5, 0.5, 0.1, 0.1], [0.75, 0.4, 0.1, 0.1], null]}"#,
+        )
+        .unwrap();
+        let points = ball.points(8, 16.0, (200, 100)).unwrap();
+        assert_eq!(points.len(), 8);
+        assert_eq!(points[0], [50.0, 50.0]);
+        assert_eq!(points[2], [100.0, 50.0]);
+        // Where it is gone it stays where it was last.
+        assert_eq!(points[7], [150.0, 40.0]);
+        let text = tracks(std::slice::from_ref(&ball), 2, 8.0, (200, 100));
+        assert_eq!(text, r#"[[{"x":50.0,"y":50.0},{"x":100.0,"y":50.0}]]"#);
+        // From a sequence wider than the picture, the sides are cut off: a quarter across
+        // a frame twice as wide as it is tall is the left edge of a square.
+        let wide = Moves { frame: Some((400, 200)), ..ball.clone() };
+        assert_eq!(wide.points(1, 8.0, (100, 100)).unwrap()[0], [0.0, 50.0]);
+        // As a layout: its box on each frame, and a picture white but for the box's edge.
+        let boxes = ball.boxes(4, 8.0, (200, 100));
+        let first = boxes[0].unwrap().map(f64::round);
+        assert_eq!(first, [40.0, 45.0, 60.0, 55.0]);
+        assert_eq!(boxes[3], None);
+        let drawn = layout(std::slice::from_ref(&ball), 4, 8.0, (200, 100));
+        assert_eq!(drawn.len(), 4);
+        assert_eq!(drawn[0][45 * 200 + 40], 0);
+        assert_eq!(drawn[0][50 * 200 + 50], 255);
+        assert_eq!(drawn[0][10 * 200 + 10], 255);
+        assert!(drawn[3].iter().all(|grey| *grey == 255));
+        assert!(names_what_is_handed(MOVES_VIDEO));
+        // One that shows on no frame is no track.
+        let none = Moves { places: vec![None; 3], ..ball };
+        assert_eq!(tracks(&[none], 2, 8.0, (200, 100)), "[]");
+        assert!(names_what_is_handed(MOVES));
     }
 
     #[test]

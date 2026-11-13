@@ -61,6 +61,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             size: None,
             rate: None,
             pass: Pass::Picture,
+            matte: None,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -109,6 +110,7 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 size: Some((832, 480)),
                 rate: Some(Rate::new(16, 1).unwrap()),
                 pass: Pass::Picture,
+                matte: None,
             },
             Step::Render {
                 sequence: "s3".to_owned(),
@@ -116,9 +118,21 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 size: Some((1280, 720)),
                 rate: Some(Rate::FPS_23_976),
                 pass: Pass::Picture,
+                matte: None,
             }
         ]
     );
+    // A matte is one clip of the sequence in white on black, and is asked for in place of a
+    // pass.
+    let matte = Recipe::parse("kerf-recipe 1\nrender s2 {out} matte=crate size=832x480\n").unwrap();
+    assert!(matches!(
+        &matte.steps[0],
+        Step::Render { matte: Some(clip), pass: Pass::Picture, .. } if clip == "crate"
+    ));
+    assert!(Recipe::parse("kerf-recipe 1\nrender s2 {out} matte=crate pass=ids\n")
+        .unwrap_err()
+        .to_string()
+        .contains("give one of the two"));
     // A pass of the same sequence is another file of the recipe's, for a model that reads it.
     let passes = Recipe::parse(
         "kerf-recipe 1\nrender s2 {guide.mp4} size=832x480 rate=16\nrender s2 {ids.mp4} pass=ids size=832x480 rate=16\nrender s2 {out} pass=depth\n",
@@ -178,9 +192,9 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, and `pass=ids|depth`"));
-    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=normals")
-        .contains("`pass=normals` is not a pass Kerf draws: `ids`, which clip each pixel is of, or `depth`, how near it is"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"));
+    assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=albedo")
+        .contains("`pass=albedo` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`"));
     assert!(
         wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
     );
@@ -356,6 +370,7 @@ fn a_request_says_where_every_file_is() {
             },
             &|name| Path::new("/project/shots/open.takes/001.work").join(name),
             &[],
+            &[],
         )
         .unwrap();
     assert_eq!(
@@ -365,6 +380,7 @@ fn a_request_says_where_every_file_is() {
             "model": "dawn",
             "prompt": "a boat",
             "guide": "/project/shots/open.takes/001.work/guide.mp4",
+            "guides": {},
             "first": "/project/refs/boat.png",
             "last": null,
             "references": [],
@@ -372,6 +388,7 @@ fn a_request_says_where_every_file_is() {
             "size": [1280, 720],
             "seed": 7,
             "signals": [],
+            "moves": [],
             "more": {"strength": "0.6"},
             "out": "/project/shots/open.takes/001.work/out",
         })
@@ -450,8 +467,10 @@ fn a_line_hands_a_model_its_signals() {
             &|_| unreachable!(),
             &|name| Path::new("/work").join(name),
             &signals,
+            &[],
         )
         .unwrap();
+    assert_eq!(request["moves"], serde_json::json!([]));
     assert_eq!(
         request["signals"],
         serde_json::json!([{
@@ -467,6 +486,127 @@ fn a_line_hands_a_model_its_signals() {
     );
 }
 
+/// A sky, and a small square that goes from the left of the frame to the right over half a
+/// second and is gone for the rest.
+fn with_a_mover() -> Project {
+    project(
+        "media m1 path=\"shots/open.json\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence s2 rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip sky gen=solid@1 at=0f dur=24f\n\
+         \x20 track V2 video\n\
+         \x20   clip ball gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ff0000 scale=0.25 x={0f:-0.25 11f:0.25}\n\
+         \x20 track V3 video\n\
+         \x20   clip eye gen=camera@1 at=0f dur=24f\n",
+    )
+}
+
+#[test]
+fn a_line_hands_a_model_more_than_one_guide_each_by_its_name() {
+    let made = ["picture.mp4".to_owned(), "depth.mp4".to_owned()];
+    let words = [
+        "model=dawn",
+        "prompt=a boat",
+        "guide={picture.mp4}",
+        "guide_depth={depth.mp4}",
+        "guide_ids=../passes/ids.mp4",
+    ]
+    .map(str::to_owned);
+    let ask = Ask::parse(&words, &made).unwrap();
+    assert_eq!(
+        ask.guides,
+        [
+            ("depth".to_owned(), Source::Made("depth.mp4".to_owned())),
+            ("ids".to_owned(), Source::File("../passes/ids.mp4".to_owned())),
+        ]
+    );
+    assert_eq!(
+        ask.shown(),
+        "prompt \"a boat\", guide {picture.mp4}, guide_depth {depth.mp4}, guide_ids ../passes/ids.mp4"
+    );
+    // Each is a file the take is held to, and is in the request under its name.
+    assert_eq!(ask.sources().count(), 3);
+    let request = ask
+        .request(
+            &|file| Ok(Path::new("/project/shots").join(file)),
+            &|name| Path::new("/work").join(name),
+            &[],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(request["guide"], "/work/picture.mp4");
+    assert_eq!(
+        request["guides"],
+        serde_json::json!({"depth": "/work/depth.mp4", "ids": "/project/shots/../passes/ids.mp4"})
+    );
+    // A name is given once, and is letters and digits; anything else is the model's own.
+    let twice = ["model=dawn", "guide_depth=a.mp4", "guide_depth=b.mp4"].map(str::to_owned);
+    assert!(Ask::parse(&twice, &[]).unwrap_err().contains("given twice"));
+    let other = Ask::parse(&["model=dawn", "guide_Scale=2"].map(str::to_owned), &[]).unwrap();
+    assert!(other.guides.is_empty() && other.more.contains_key("guide_Scale"));
+}
+
+#[test]
+fn a_line_hands_a_model_where_a_clip_goes() {
+    let project = with_a_mover();
+    let words = ["model=dawn", "prompt=a ball", "moves=ball"].map(str::to_owned);
+    let ask = Ask::parse(&words, &[]).unwrap();
+    assert_eq!(ask.moves, ["ball"]);
+    assert_eq!(ask.shown(), "prompt \"a ball\", moves ball");
+    let ball = Moves::read(&project, "ball").unwrap();
+    assert_eq!((ball.name.as_str(), ball.rate, ball.places.len()), ("ball", 24.0, 24));
+    // A quarter of the frame each way, its middle going from a quarter across to three
+    // quarters, and nowhere once its clip is over.
+    let [x, y, wide, tall] = ball.places[0].unwrap();
+    assert!((x - 0.25).abs() < 0.01 && (y - 0.5).abs() < 0.01, "{:?}", ball.places[0]);
+    assert!((wide - 0.25).abs() < 0.01 && (tall - 0.25).abs() < 0.01, "{:?}", ball.places[0]);
+    let [x, ..] = ball.places[11].unwrap();
+    assert!((x - 0.75).abs() < 0.01, "{:?}", ball.places[11]);
+    assert_eq!(ball.places[12], None);
+    assert!(!ball.still());
+    let request = ask
+        .request(
+            &|_| unreachable!(),
+            &|name| Path::new("/work").join(name),
+            &[],
+            std::slice::from_ref(&ball),
+        )
+        .unwrap();
+    assert_eq!(request["moves"][0]["name"], "ball");
+    assert_eq!(request["moves"][0]["frame"], serde_json::json!([160, 120]));
+    assert_eq!(request["moves"][0]["places"][12], serde_json::Value::Null);
+    assert_eq!(request["moves"][0]["places"].as_array().unwrap().len(), 24);
+    // The sky is on every frame where it was, which says nothing of where anything goes.
+    assert!(Moves::read(&project, "sky").unwrap().still());
+    // What draws nothing is nowhere, and what is not there is said.
+    let nowhere = Moves::read(&project, "eye").unwrap_err();
+    assert!(nowhere.contains("draws nothing"), "{nowhere}");
+    assert_eq!(
+        Moves::sequence_of(&project, "bat").unwrap_err(),
+        "`moves=bat`: no clip `bat`"
+    );
+    let unnamed = Ask::parse(&["model=dawn", "moves="].map(str::to_owned), &[]).unwrap_err();
+    assert!(unnamed.contains("`moves=` names a clip"), "{unnamed}");
+}
+
+#[test]
+fn a_take_is_held_to_the_sequence_a_clip_moves_in() {
+    let folder = tempfile::tempdir().unwrap();
+    let recipe =
+        Recipe::parse("kerf-recipe 1\ngenerate model=dawn prompt=\"a ball\" moves=ball\n").unwrap();
+    assert_eq!(recipe.moves(), ["ball"]);
+    let from = takes::from(
+        &with_a_mover(),
+        folder.path(),
+        Path::new("shots"),
+        "kerf-recipe 1\n",
+        &recipe,
+    )
+    .unwrap();
+    assert_eq!(from.keys().collect::<Vec<_>>(), ["recipe", "sequence s2"]);
+}
+
 #[test]
 fn a_plan_reads_a_recipes_signals() {
     let folder = tempfile::tempdir().unwrap();
@@ -476,7 +616,9 @@ fn a_plan_reads_a_recipes_signals() {
         directory,
         r#"{
             "shot": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}},
-            "cued": {"run": ["b", "{request}"], "takes": {"reads": ["guide", "signal"]}}
+            "cued": {"run": ["b", "{request}"], "takes": {"reads": ["guide", "signal"]}},
+            "led": {"run": ["c", "{request}"], "takes": {"reads": ["moves"]}},
+            "two": {"run": ["d", "{request}"], "takes": {"reads": ["guide", "guide_depth"]}}
         }"#,
     );
     let planned = |project: &Project, steps: &str| {
@@ -498,6 +640,32 @@ fn a_plan_reads_a_recipes_signals() {
             .unwrap()
             .notes,
         ["model `shot` has no use for `signal=`: of what a line hands it, it reads guide"]
+    );
+    // The same of where a clip goes: read by one model, of no use to another, and stopping
+    // the plan where the clip is not there.
+    let moving = with_a_mover();
+    let plan = planned(&moving, "generate model=led prompt=\"a ball\" moves=ball").unwrap();
+    assert!(plan.notes.is_empty(), "{:?}", plan.notes);
+    assert!(plan.steps[0].ends_with("moves ball"), "{}", plan.steps[0]);
+    assert_eq!(
+        planned(&moving, "generate model=shot prompt=\"a ball\" moves=ball")
+            .unwrap()
+            .notes,
+        ["model `shot` has no use for `moves=`: of what a line hands it, it reads guide"]
+    );
+    let missing = planned(&moving, "generate model=led moves=bat")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(missing, "`moves=bat`: no clip `bat`");
+    // A second guide is read by a model that says it reads one of that name.
+    std::fs::write(directory.join("shots/d.mp4"), "").unwrap();
+    let both = "render s2 {g.mp4}\ngenerate model=two guide={g.mp4} guide_depth=d.mp4";
+    assert!(planned(&moving, both).unwrap().notes.is_empty());
+    assert_eq!(
+        planned(&moving, "render s2 {g.mp4}\ngenerate model=shot guide={g.mp4} guide_depth=d.mp4")
+            .unwrap()
+            .notes,
+        ["model `shot` has no use for `guide_depth=`: of what a line hands it, it reads guide"]
     );
     // A signal that is not there stops the plan, as a sequence that is not does.
     let missing = planned(&waves, "generate model=cued signal=surge")

@@ -119,6 +119,24 @@ private slots:
     // The heads' target toggles choose where Insert and Overwrite put the
     // bin's media (MainWindow::sourceTargets); a kind switched off is not
     // edited.
+    void aSignalClipShowsItsNumberAsACurve() {
+        // Its values go across the clip from its first frame to its last, 0 at the bottom
+        // of it and 1 at the top.
+        const QRectF rect(10, 20, 100, 40);
+        const QPolygonF curve = TimelineWidget::signalCurve(QJsonArray{0.0, 0.5, 1.0, 2.0, 0.25}, rect);
+        QCOMPARE(curve.size(), 5);
+        QCOMPARE(curve.at(0), QPointF(10, 60));
+        QCOMPARE(curve.at(1), QPointF(35, 40));
+        QCOMPARE(curve.at(2), QPointF(60, 20));
+        // Past 1 is 1.
+        QCOMPARE(curve.at(3), QPointF(85, 20));
+        QCOMPARE(curve.at(4), QPointF(110, 50));
+        // One value is a level across the clip, and none is no curve.
+        const QPolygonF level = TimelineWidget::signalCurve(QJsonArray{0.5}, rect);
+        QCOMPARE(level, (QPolygonF{QPointF(10, 40), QPointF(110, 40)}));
+        QVERIFY(TimelineWidget::signalCurve(QJsonArray{}, rect).isEmpty());
+    }
+
     void targetTogglesChooseWhereSourceEditsLand() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
