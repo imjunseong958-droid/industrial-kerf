@@ -237,6 +237,15 @@ pub(crate) fn lens(seen: &Seen, view: &FileView, footage: &[u8]) -> Option<(f64,
     Some((fov, error, beside / error.max(1e-9)))
 }
 
+/// How many times further a set is along the way it was seen than a path of the same shot
+/// takes it to be, the set's model having taken the frame to be through a lens of `set`
+/// degrees and the path's through `path`: a picture through a narrower lens is of things
+/// further off, by the halves of the two lenses.
+pub(crate) fn deeper(path: f64, set: f64) -> f64 {
+    let half = |fov: f64| (fov.clamp(1.0, 179.0).to_radians() / 2.0).tan();
+    half(path) / half(set)
+}
+
 /// The size at which `seen`, drawn through `views(scale)` on `frames`, is most like
 /// `footage`, which holds the footage's picture on each of those frames at [`Seen::size`].
 pub(crate) fn fit(
@@ -572,6 +581,14 @@ mod tests {
         let turned = beside(&scene("rotate_y=30"), 0, "second", "first").unwrap_err();
         assert!(turned.contains("stands still and square"), "{turned}");
         assert!(beside(&scene(""), 0, "second", "nobody").is_err());
+    }
+
+    #[test]
+    fn a_set_through_a_narrower_lens_is_deeper_than_its_path_takes_it_to_be() {
+        assert_eq!(deeper(40.0, 40.0), 1.0);
+        // Half the lens is about twice as far, and the other way round.
+        assert!((deeper(40.0, 20.0) - 2.064).abs() < 0.001);
+        assert!((deeper(20.0, 40.0) * deeper(40.0, 20.0) - 1.0).abs() < 1e-12);
     }
 
     #[test]

@@ -621,14 +621,16 @@ pixels the set covers, and then more finely about the best.
 | In `fit` | Says |
 |---|---|
 | `lens` | The set's own lens, found first where none is given: the one through which the set, seen from `frame`, is that frame of the footage again, with its `error` and `sure`. A set is rebuilt along the rays of the lens its model took the frame to have, so only through that lens does it draw its frame; where it is sure (1.1 or more) the camera gets it, and else the path's. |
+| `deep` | How many times further the path's travel along the way the set was seen is made, where the set's lens is not the path's: a set through a narrower lens is deeper by the halves of the two, and a path that goes forward in it goes that much further. 1 where the lenses are one. |
 | `scale` | The size found, which the lines returned are written at. |
 | `error` | How far the set's picture is from the footage there, of 255 a pixel, over what the set covers. |
 | `sure` | How many times worse half or twice that size is. Near 1, any size fits as well: the camera turns and does not travel, or the set is of another frame than `frame`, and a `note` says so. |
 | `frames` | The frames of the path it was read on. |
 
 It takes a camera that travels, and about ten seconds. Where the two
-models do not agree on the lens no one size is right on every frame, and
-`sure` is low: read it as the nearest, and look at the frames.
+models do not agree on the lens the path is stretched along the way the
+set was seen (`deep`), which brings the frames nearer and not to the
+pixel, and `sure` stays low: look at the frames.
 
 What is added to the set then goes on a track of its own, over the
 camera's or under it: the lines `look` writes put the camera on top, and a

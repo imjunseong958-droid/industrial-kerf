@@ -899,6 +899,7 @@ recipes, in `fixtures/shots/car`.
    | Of the path's own reading, where the size is 1 | 0.956 | 29.1 | 1.57 |
    | Of the other model, with no lens given: `look` finds 22.7 from frame 0 of the footage, 6.3 times surer than a quarter either way, where the model's own file says 22.8 | 20.0 | 46.8 | 1.12 |
    | Of the other model, seen through its own lens of 22.8 degrees | 20.1 | 46.8 | 1.13 |
+   | The same, the path's travel along the way the set was seen made 1.68 times longer, by the two lenses (`deep`) | 17.9 | 45.2 | 1.21 |
    | Of the other model, through the path's lens of 37.2 | 3.24 | 44.5 | 1.04, which is no finding |
 
    Where the answer is known it is found to within a twentieth. For the
@@ -907,12 +908,17 @@ recipes, in `fixtures/shots/car`.
    the footage has them with the camera a little short of where it went:
    the two disagree on the lens by more than a half, so no one size is
    right on every frame, which `sure` at 1.13 says. Through the wrong lens
-   the fit is flat and is said to be. So two models can be used together
-   coarsely, and one reading is still the way to have them meet.
+   the fit is flat and is said to be. Making the path's forward travel
+   longer by the ratio of the two lenses, since a set through a narrower
+   lens is that much deeper, has the houses larger at frames 32 and 64, as
+   the footage has them, and still not to the pixel; `look` does that
+   where it finds the set's lens is not the path's. So two models can be
+   used together coarsely, and one reading is still the way to have them
+   meet.
 
    *Not done:* one set of a whole shot with what moved left out; the two
-   models' lenses reconciled, `look` finding the set's and using it, which
-   leaves the path found through another; splats. Of those the server has
+   models' lenses reconciled further than by their ratio along one way;
+   splats. Of those the server has
    a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
    a mesh clip reads and the compositor need draw none; what it has no
    model for is rebuilding a scene as splats, only a thing, so none was
