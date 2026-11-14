@@ -634,6 +634,13 @@ private slots:
         QCOMPARE(picture->picture().duration, 18.0);
         QCOMPARE(picture->pictureRect().size(), QSize(440, 248));
         QVERIFY(!picture->poster().isNull());
+        // The picture says what the cut is: the card keeps to its title, Reject and Accept.
+        QVERIFY(card->titleLabel()->isVisible());
+        QVERIFY(!card->changesLink()->isVisible());
+        QVERIFY(!card->watchButton()->isVisible());
+        QVERIFY(!card->previewBox()->isVisible());
+        QVERIFY(!card->scriptButton()->isVisible());
+        QVERIFY(card->acceptButton()->isVisible() && card->rejectButton()->isVisible());
 
         QTest::mouseClick(picture, Qt::LeftButton, {}, picture->pictureRect().center());
         QVERIFY(window.m_shell->panes().picture && window.m_shell->panes().timeline);

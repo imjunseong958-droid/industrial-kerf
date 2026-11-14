@@ -13,6 +13,8 @@
 //
 // A first cut Kerf made has its picture at the top: each clip's poster, the
 // length, and a play mark. Pressing it opens the stage, which grows out of it.
+// With a picture the card keeps to its title, its versions when it has more
+// than one, Reject and Accept.
 //
 // Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
 // guest mode the buttons give way to "Waiting for the editor".

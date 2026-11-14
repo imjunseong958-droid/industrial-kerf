@@ -509,6 +509,7 @@ void ProposalCard::setVersions(const QList<VersionItem> &versions, const QString
     m_version->setText(QStringLiteral("v%1").arg(shownVersion));
     m_version->setFixedSize(m_version->sizeHint());
     m_version->setVisible(versions.size() > 1);
+    updateParts();
 }
 
 void ProposalCard::showVersionMenu() {
@@ -573,7 +574,7 @@ void ProposalCard::setScriptShown(bool shown) {
         const QSignalBlocker blocker(m_script);
         m_script->setChecked(shown);
     }
-    m_diff->parentWidget()->setVisible(shown && m_open && !m_settled);
+    m_diff->parentWidget()->setVisible(shown && m_open && !m_settled && m_picture->picture().isEmpty());
     updateGeometry();
 }
 
@@ -644,15 +645,23 @@ void ProposalCard::setPicture(const CutPicture &picture) {
 void ProposalCard::updateParts() {
     const bool card = !m_settled;
     const bool marked = m_pinned && !m_compact;
+    // With its picture a cut says what it is: the card keeps to its title and what
+    // to do with it.
+    const bool pictured = !m_picture->picture().isEmpty();
     m_layout->setContentsMargins(card ? 12 : 0, card ? (marked ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
     m_pinHeader->setVisible(card && marked);
-    m_picture->setVisible(card && !m_picture->picture().isEmpty());
+    m_picture->setVisible(card && pictured);
+    // And it is as wide as its picture.
+    setMaximumWidth(card && pictured ? tokens::layout::cardPictureWidest + 24 : QWIDGETSIZE_MAX);
     m_title->setVisible(card);
-    m_second->setVisible(card);
-    m_changes->setVisible(card && m_open);
-    m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked());
-    m_footer->setVisible(card && (m_open || m_compact));
-    m_watchBox->setVisible(card && (m_open || m_compact) && m_hasWatch);
+    m_second->setVisible(card && (!pictured || m_versions.size() > 1));
+    m_changesLink->setVisible(!pictured);
+    m_changes->setVisible(card && m_open && !pictured);
+    m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked() && !pictured);
+    m_footer->setVisible(card && (m_open || m_compact || pictured));
+    m_watchBox->setVisible(card && (m_open || m_compact) && m_hasWatch && !pictured);
+    m_preview->setVisible(!pictured);
+    m_script->setVisible(!pictured);
     m_settledLabel->setVisible(m_settled);
     m_reject->setVisible(!m_guest);
     m_accept->setVisible(!m_guest);
