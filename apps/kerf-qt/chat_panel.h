@@ -16,6 +16,7 @@
 
 #include "test_friends.h"
 #include "comment_row.h"
+#include "proposal_card.h"
 #include "review_model.h"
 #include "stage_motion.h"
 
@@ -145,6 +146,21 @@ public:
     QString previewProposal() const { return m_previewProposal; }
     // A proposal accepted or rejected from this panel: its card settles to one line.
     void markSettledHere(const QString &proposalId, bool accepted);
+    // The picture of the cut a proposal (or its version) makes, for its card;
+    // an empty one when it has none to show.
+    void setPictureSource(std::function<CutPicture(const QString &)> source) { m_pictureSource = std::move(source); }
+    // The posters may have come since the cards were made: their pictures again.
+    void refreshPictures();
+    // The proposal whose cut the stage shows, opened from its card; empty when none.
+    void setStageProposal(const QString &proposalId);
+    QString stageProposal() const { return m_stageProposal; }
+    // Lays the list out for the panel's size now, not when its posted requests
+    // come: where things will be once a move has settled.
+    void layOutNow() { syncContent(); }
+    // While the window moves to a new arrangement: the width the panel will have
+    // when it is there, which the list is laid out at meanwhile; 0 lets it go.
+    void holdWidth(int width);
+    int heldWidth() const { return m_heldWidth; }
 
     // ---- threads -----------------------------------------------------------
     QList<ThreadWidget *> threadWidgets() const;
@@ -237,9 +253,12 @@ public:
     // The footage Kerf chooses from, in the list under the latest row; none takes
     // it away.
     void setFootage(const QList<FootageTile> &tiles);
-    // While Kerf builds a first cut, the card waits for it to be done; the picture
-    // and the timeline are showing it.
-    void setHoldingProposals(bool holding);
+    // The first cut Kerf is making now: its card is in Kerf's row of the turn, at
+    // work, until it is done; then it is the proposal's card, which shows it is
+    // done. Empty when none.
+    void setBuildingProposal(const QString &proposalId);
+    QString buildingProposal() const { return m_building; }
+    ProposalCard *buildingCard() const { return m_buildingCard.data(); }
     // What one asks as a bubble and what Kerf says as plain text; the cards small,
     // their changes folded.
     void setConversationLook(bool on);
@@ -275,6 +294,8 @@ signals:
     void previewRequested(const QString &proposalId, bool on);
     // A card's Watch what changed.
     void changedPartsRequested(const QString &proposalId);
+    // A card's picture was pressed: the stage, for that cut.
+    void pictureRequested(const QString &proposalId);
     // A card's Versions menu chose the version it shows.
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     void postRequested();
@@ -329,7 +350,13 @@ private:
     QWidget *buildSearch();
     void scheduleRebuild();
     void syncContent();
+    // Lays the list out again from the review. A thread whose widgets would come
+    // out the same as last time keeps them; only what changed is made again.
     void rebuild();
+    // Everything a thread's widgets are made from, beyond what all of them share.
+    QByteArray threadKey(const ReviewModel::Thread &thread, bool first) const;
+    // A timeline as a number that changes when it does, worked out once.
+    static size_t timelineHash(const QJsonObject &timeline);
     CommentRow *buildRow(const ReviewModel::Comment &comment, const ReviewModel::Thread &thread, bool root);
     ProposalCard *buildCard(const ReviewModel::Proposal &proposal, const ReviewModel::Thread &thread);
     QList<ReviewModel::ClipChange> versionChanges(const ReviewModel::Proposal &proposal, const QString &versionId) const;
@@ -359,6 +386,9 @@ private:
     bool m_connected = false;
     bool m_placed = false;
     std::function<ProposalChange(const QString &)> m_describer;
+    std::function<CutPicture(const QString &)> m_pictureSource;
+    QString m_stageProposal;
+    bool onStage(const ReviewModel::Proposal &proposal) const;
     std::function<QString(double)> m_reviewLink;
     QJsonArray m_steps;
     QStringList m_models;
@@ -399,8 +429,23 @@ private:
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
     QList<ThreadWidget *> m_threads;
+    QPointer<ThreadWidget> m_welcomeThread;
     FootageSheet *m_footage = nullptr;
-    bool m_holdingProposals = false;
+    // The threads' widgets as last made, by thread id, with what they were made from,
+    // and what all of them share.
+    QHash<QString, QByteArray> m_threadKeys;
+    QByteArray m_sharedKey;
+    // Threads local rows went into: they are made again, without them, next time.
+    QSet<QString> m_touched;
+    size_t m_timelineHash = 0;
+    size_t m_namedHash = 0;
+    mutable QHash<QString, size_t> m_proposalHashes;
+    int m_heldWidth = 0;
+    QString m_building;
+    QPointer<ProposalCard> m_buildingCard;
+    // The cut Kerf last finished, and when.
+    QString m_justBuilt;
+    qint64 m_builtAt = -1;
     bool m_conversationLook = false;
     QWidget *m_stash = nullptr;
     CommentRow *m_welcomeRow = nullptr;

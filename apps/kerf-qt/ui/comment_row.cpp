@@ -636,7 +636,7 @@ void CommentRow::build() {
     m_bodyLayout->addWidget(m_nameLine);
 
     // The text, 2 under the name line.
-    m_body = new QLabel;
+    m_body = new ui::WrapLabel;
     m_body->setObjectName(QStringLiteral("commentBody"));
     m_body->setFont(tokens::font(tokens::reading));
     m_body->setWordWrap(true);
@@ -897,7 +897,9 @@ void CommentRow::updateSteps() {
         QLabel *number = makeLabel(monoSmall, ink3);
         number->setText(QString::number(index + 1));
         number->setFixedHeight(20);
-        QLabel *text = makeLabel(control, ink2);
+        auto *text = new ui::WrapLabel;
+        text->setFont(tokens::font(control));
+        setInk(text, ink2);
         text->setFixedHeight(QWIDGETSIZE_MAX);
         text->setMinimumHeight(20);
         text->setWordWrap(true);

@@ -9,6 +9,8 @@
 #include "command_registry.h"
 #include "design_tokens.h"
 #include "main_window.h"
+#include "media_artwork.h"
+#include "proposal_card.h"
 #include "project_panel.h"
 #include "timeline_widget.h"
 #include "ui/components.h"
@@ -69,6 +71,16 @@ void expectFilled(const stage::Rects &r, const QSize &window, const char *what) 
                      r.conversation.width() * r.conversation.height() + r.timeline.width() * r.timeline.height();
     QCOMPARE(area, content.width() * content.height());
     QVERIFY2(r.slot.isEmpty() || r.slot.contains(r.picture), what);
+}
+
+// An empty program, and Kerf proposing a first cut of it.
+QJsonObject proposingAFirstCut() {
+    QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+    QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+    timeline.insert(QStringLiteral("tracks"), QJsonArray{});
+    snapshot.insert(QStringLiteral("timeline"), timeline);
+    snapshot.insert(QStringLiteral("duration"), 0.0);
+    return snapshot;
 }
 
 QJsonObject snapshotOf(const QSize &canvas) {
@@ -595,6 +607,130 @@ private slots:
         window.close();
     }
 
+    // While Kerf makes a first cut, its card is in Kerf's row of the turn, at work,
+    // with nothing to do yet; done, the proposal's card shows that it is done.
+    void aCutAtWorkIsItsCardInTheTurn() {
+        QSettings().remove(QStringLiteral("layout"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const QJsonObject proposing = proposingAFirstCut();
+        window.applySnapshot(proposing);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        fakeArtwork(window.m_artwork);
+        emit window.m_artwork->changed();
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        ProposalCard *building = window.m_chat->buildingCard();
+        QVERIFY(building);
+        QCOMPARE(window.m_chat->buildingProposal(), QStringLiteral("p7"));
+        QVERIFY(window.m_chat->turnKerfRow(false)->isAncestorOf(building));
+        QVERIFY(building->isVisible() && building->picture()->isVisible());
+        QVERIFY(building->picture()->isWorking());
+        QVERIFY(building->lineTitle()->isVisible());
+        QVERIFY(!building->acceptButton()->isVisible() && !building->rejectButton()->isVisible());
+        // Only the one at work: the proposal's own thread waits for it.
+        QCOMPARE(window.m_chat->cards().size(), 1);
+        // At work the picture is the newest clip placed.
+        QCOMPARE(building->picture()->poster().cacheKey(), building->picture()->picture().frames.constLast().poster.cacheKey());
+        // Another look at the same cut keeps the same card.
+        window.applySnapshot(proposing);
+        QCOMPARE(window.m_chat->buildingCard(), building);
+
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(window.m_chat->buildingProposal().isEmpty());
+        QVERIFY(!window.m_chat->buildingCard());
+        ProposalCard *card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card);
+        QVERIFY(!card->picture()->isWorking());
+        QVERIFY(card->picture()->isFinishing());
+        QVERIFY(card->acceptButton()->isVisible() && card->rejectButton()->isVisible());
+        window.close();
+    }
+
+    // A cut Kerf makes stays in the conversation as its card's picture; pressing
+    // it opens the stage out of it, and closing the stage puts it back.
+    void aCutKerfMadeOpensFromItsCard() {
+        QSettings().remove(QStringLiteral("layout"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const QJsonObject proposing = proposingAFirstCut();
+        window.applySnapshot(proposing);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        ProposalCard *card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card);
+        CardPicture *picture = card->picture();
+        // No poster yet, no picture; it comes with them.
+        QVERIFY(!picture->isVisible());
+        fakeArtwork(window.m_artwork);
+        emit window.m_artwork->changed();
+        QCoreApplication::processEvents();
+        QVERIFY(picture->isVisible());
+        QCOMPARE(picture->picture().frames.size(), 2);
+        QCOMPARE(picture->picture().duration, 18.0);
+        QCOMPARE(picture->pictureRect().size(), QSize(440, 248));
+        QCOMPARE(picture->pictureRect().topLeft(), QPoint(tokens::layout::cardRing, tokens::layout::cardRing));
+        QVERIFY(!picture->poster().isNull());
+        // The picture says what the cut is: the card keeps to its title, Reject and
+        // Accept, on one line under it.
+        QVERIFY(!card->titleLabel()->isVisible());
+        QVERIFY(card->lineTitle()->isVisible());
+        QCOMPARE(card->lineTitle()->text(), card->titleLabel()->text());
+        QCOMPARE(card->lineTitle()->y(), card->acceptButton()->y());
+        QVERIFY(!card->changesLink()->isVisible());
+        QVERIFY(!card->watchButton()->isVisible());
+        QVERIFY(!card->previewBox()->isVisible());
+        QVERIFY(!card->scriptButton()->isVisible());
+        QVERIFY(card->acceptButton()->isVisible() && card->rejectButton()->isVisible());
+
+        QTest::mouseClick(picture, Qt::LeftButton, {}, picture->pictureRect().center());
+        QVERIFY(window.m_shell->panes().picture && window.m_shell->panes().timeline);
+        QCOMPARE(window.m_chat->stageProposal(), QStringLiteral("p7"));
+        card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card->picture()->onStage());
+        // Pressed again while the stage has it, it asks for nothing.
+        QSignalSpy asked(window.m_chat, &ChatPanel::pictureRequested);
+        QTest::mouseClick(card->picture(), Qt::LeftButton, {}, card->picture()->pictureRect().center());
+        QCOMPARE(asked.count(), 0);
+
+        // The stage closes back into the card.
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        QVERIFY(!window.cardPictureHome().isEmpty());
+        window.m_panelButton->click();
+        QVERIFY(window.m_shell->isMoving());
+        QVERIFY(window.m_chat->stageProposal().isEmpty());
+        QWidget *stagePicture = window.m_shell->m_picture;
+        QRect last;
+        while (window.m_shell->isMoving()) {
+            if (stagePicture->isVisible()) last = stagePicture->geometry();
+            QTest::qWait(10);
+        }
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(!card->picture()->onStage());
+        const QRect home = window.toShell(card->picture(), card->picture()->pictureRect());
+        QVERIFY2((last.center() - home.center()).manhattanLength() < 60, "the picture goes back into its card");
+        QVERIFY(last.width() < home.width() * 2);
+
+        // Accepted, the program has the cut and its card no picture.
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        QVERIFY(window.cutPicture(QStringLiteral("p7")).isEmpty());
+        // Nor does the program open the stage now that it is left closed.
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        QSettings().remove(QStringLiteral("layout"));
+        window.close();
+    }
+
     void thePaneButtonsAndTheTransportFollowTheCommands() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -974,6 +1110,47 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!window.m_shell->isMoving(), 3000);
         QVERIFY(!window.m_timelinePanel->isVisible());
         QCOMPARE(inWindow(window.m_viewer, &window), window.m_shell->rects().slot.translated(window.m_shell->pos()));
+        window.close();
+    }
+
+    // While the window moves to a new arrangement the conversation's list is laid
+    // out once, at the width it is going to, not again in every frame, and the
+    // timeline, which only travels, is shown from a picture of it; once there,
+    // both are themselves again.
+    void aMoveLaysTheConversationOutOnce() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        QWidget *content = window.m_chat->listContent();
+        window.m_panelButton->click();
+        QVERIFY(window.m_shell->isMoving());
+        const int held = window.m_chat->heldWidth();
+        QCOMPARE(held, window.m_shell->rects().conversation.width());
+        const int width = content->width();
+        // The timeline only travels: a picture of it is shown in its place, and it
+        // is not drawn meanwhile.
+        QWidget *still = window.m_shell->m_still;
+        QVERIFY(still && still->isVisible());
+        QVERIFY(!window.m_timelinePanel->updatesEnabled());
+        int seen = 0;
+        while (window.m_shell->isMoving()) {
+            QCOMPARE(content->width(), width);
+            if (window.m_shell->m_still) QCOMPARE(window.m_shell->m_still->geometry(), window.m_timelinePanel->geometry());
+            ++seen;
+            QTest::qWait(16);
+        }
+        QVERIFY(seen > 2);
+        QCOMPARE(window.m_chat->heldWidth(), 0);
+        QVERIFY(!window.m_shell->m_still);
+        QVERIFY(window.m_timelinePanel->updatesEnabled());
+        QCOMPARE(content->width(), window.m_chat->list()->viewport()->width());
+        // The composer kept to where it was all along.
+        QVERIFY(window.m_chat->composerWidget()->isVisible());
         window.close();
     }
 

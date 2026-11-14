@@ -11,12 +11,18 @@
 //   - … / + …                                         (Script: the diff)
 //   [□ Preview] [Script]          [Reject] [Accept]   (open: the footer)
 //
+// A first cut Kerf made has its picture at the top: each clip's poster, the
+// length, and a play mark. Pressing it opens the stage, which grows out of it.
+// With a picture the card keeps to its title, beside Reject and Accept under
+// the picture, and its versions when it has more than one.
+//
 // Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
 // guest mode the buttons give way to "Waiting for the editor".
 
 #include "test_friends.h"
 
 #include <QAbstractButton>
+#include <QHash>
 #include <QFrame>
 #include <QImage>
 #include <QList>
@@ -24,6 +30,8 @@
 #include <QStringList>
 
 class QHBoxLayout;
+class QPainter;
+class QTimer;
 class QLabel;
 class QVBoxLayout;
 
@@ -49,6 +57,90 @@ protected:
     void paintEvent(QPaintEvent *) override;
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override { update(); }
+};
+
+// What a cut looks like, for its card: the poster of each clip from where it
+// starts, how long it is, and its shape.
+struct CutPicture {
+    struct Frame {
+        double at = 0.0;
+        QImage poster;
+    };
+    QList<Frame> frames; // in time order
+    double duration = 0.0;
+    double aspect = 16.0 / 9.0;
+    bool isEmpty() const { return frames.isEmpty() || duration <= 0.0; }
+};
+
+// A cut's picture on its card. Moving over it runs through the cut's clips;
+// pressing it asks for the stage. While the stage shows it, it says so.
+//
+// While Kerf makes the cut, light runs round it, the picture is a little dim and
+// becomes each clip as it is placed, and a line of light runs under it. Done, the
+// ring lights once and goes out, the picture lightens and it says Done.
+class CardPicture final : public QAbstractButton {
+    Q_OBJECT
+public:
+    explicit CardPicture(QWidget *parent = nullptr);
+    void setPicture(const CutPicture &picture);
+    // Kerf is making it.
+    void setWorking(bool working);
+    bool isWorking() const { return m_working; }
+    // Kerf finished it `ago` ms ago: it shows that it is done, from there on.
+    void setFinished(qint64 ago);
+    bool isFinishing() const;
+    // The time every card's light keeps, so one made again goes on where the last was.
+    static qint64 clock();
+    const CutPicture &picture() const { return m_picture; }
+    void setOnStage(bool on);
+    bool onStage() const { return m_onStage; }
+    // Where the picture is drawn, in this widget: what the stage grows out of.
+    QRect pictureRect() const;
+    // The poster it shows now.
+    QImage poster() const;
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override;
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void enterEvent(QEnterEvent *) override { update(); }
+    void leaveEvent(QEvent *) override;
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+
+private:
+    QRect boxFor(int width) const;
+    void followTicks();
+    void tick();
+    // A poster as it is drawn at `size`: filled, cropped, ready to draw again and again.
+    QImage readyAt(const QImage &poster, const QSize &size) const;
+    void paintPicture(QPainter &p, const QRectF &box, qreal work) const;
+    void paintMarks(QPainter &p, const QRectF &box, qreal opacity) const;
+    QRectF chipRect(const QRectF &box) const;
+    // The rim the light runs along, as points evenly spaced round it.
+    const QList<QPointF> &rim() const;
+    // The light's head and tail at `turn` (0 to 1), as short runs of the rim.
+    QList<QPolygonF> comet(qreal turn) const;
+    CutPicture m_picture;
+    bool m_onStage = false;
+    bool m_working = false;
+    qint64 m_finishedAt = -1;
+    // The still that showed the clip before the newest, and when that began to show.
+    QImage m_before;
+    qint64 m_turnedAt = -1;
+    QTimer *m_ticker = nullptr;
+    mutable QHash<qint64, QImage> m_ready;
+    // The picture as it is when nothing in it moves, drawn once, and what it was drawn for.
+    QImage m_still;
+    QString m_stillKey;
+    mutable QList<QPointF> m_rim;
+    mutable QRect m_rimFor;
+    // Where the light was last drawn, to be put back.
+    QRegion m_lit;
+    // How far through the cut the pointer is, 0 to 1; below 0 when it is not over it.
+    qreal m_scrub = -1.0;
 };
 
 class ProposalCard final : public QFrame {
@@ -116,11 +208,19 @@ public:
     // Small: what to do with it stays when its changes are folded, and watching
     // is the first thing it offers.
     void setCompact(bool compact);
+    // The cut's picture; an empty one takes it away.
+    void setPicture(const CutPicture &picture);
+    // Kerf is making the cut: its picture is at work, and it offers nothing to do yet.
+    void setBuilding(bool building);
+    bool isBuilding() const { return m_building; }
+    CardPicture *picture() const { return m_picture; }
     bool isSettled() const { return m_settled; }
 
     QWidget *pinHeader() const { return m_pinHeader; }
     QLabel *pinHeaderText() const { return m_pinText; }
     QLabel *titleLabel() const { return m_title; }
+    // The title on the actions' line, which a card with a picture has instead.
+    QLabel *lineTitle() const { return m_lineTitle; }
     ChatExpander *changesLink() const { return m_changesLink; }
     VersionButton *versionButton() const { return m_version; }
     QWidget *changesBox() const { return m_changes; }
@@ -145,6 +245,8 @@ signals:
     void scriptToggled(bool shown);
     void previewToggled(bool on);
     void watchRequested();
+    // The picture was pressed.
+    void pictureRequested();
     void versionChosen(const QString &proposalId);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
@@ -155,6 +257,7 @@ protected:
 
 private:
     bool m_compact = false;
+    bool m_building = false;
     void updateParts();
 
     QString m_id;
@@ -170,6 +273,7 @@ private:
     QVBoxLayout *m_layout = nullptr;
     QWidget *m_pinHeader = nullptr;
     QLabel *m_pinText = nullptr;
+    CardPicture *m_picture = nullptr;
     QLabel *m_title = nullptr;
     QWidget *m_second = nullptr;
     ChatExpander *m_changesLink = nullptr;
@@ -182,6 +286,7 @@ private:
     QLabel *m_colourParams = nullptr;
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
+    QLabel *m_lineTitle = nullptr;
     ui::Button *m_watch = nullptr;
     QWidget *m_watchBox = nullptr;
     bool m_hasWatch = false;

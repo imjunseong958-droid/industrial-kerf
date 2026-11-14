@@ -93,8 +93,13 @@ void MainWindow::buildAgentViews() {
     m_viewer->setWorkChip(m_workChip);
     // The picture is not rescaled in each frame while the stage moves, and flights
     // wait for the timeline to have reached where they land.
-    connect(m_shell, &StageShell::transitionStarted, this, [this] { m_viewer->setStageMoving(true); });
+    connect(m_shell, &StageShell::transitionStarted, this, [this] {
+        m_viewer->setStageMoving(true);
+        // The conversation is laid out once, at the width it is going to.
+        m_chat->holdWidth(m_shell->rects().conversation.width());
+    });
     connect(m_shell, &StageShell::transitionFinished, this, [this] {
+        m_chat->holdWidth(0);
         m_viewer->setStageMoving(false);
         flushFlights();
     });
@@ -336,7 +341,8 @@ void MainWindow::quietenCutPreview() {
     m_stageWiring->previewChip()->setSuppressed(quiet || m_changeReel->isActive());
     // The reel's strip already says it is getting the picture.
     m_stageWiring->hud()->setQuiet(quiet || m_cutRendering || m_changeReel->isActive());
-    m_chat->setHoldingProposals(quiet);
+    // The cut it is making is its card in the conversation, at work.
+    m_chat->setBuildingProposal(quiet ? m_proposalId : QString());
     if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
 }
 
@@ -387,8 +393,6 @@ void MainWindow::followLiveProposal() {
         for (const ReviewModel::ClipChange &change : proposal->changes) placed += !change.removed && !m_timeline->isAudioLane(change.track);
         m_chat->setTurnStatus(placed == 1 ? QStringLiteral("Cutting · 1 clip") : QStringLiteral("Cutting · %1 clips").arg(placed));
     }
-    // Back from an export, the stage opens again for what comes next.
-    if (keys != before && m_followKerf && !m_panesFollowContent && !m_shell->panes().panelOpen()) revealPanel(true, true);
     // The new ones fly to where they land, once the timeline is there.
     for (const ReviewModel::ClipChange &change : proposal->changes)
         if (!change.removed && !before.contains(QStringLiteral("%1@%2").arg(change.clip).arg(change.newEnd))) m_pendingFlights << change;

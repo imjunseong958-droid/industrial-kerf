@@ -38,6 +38,8 @@
 #include <QColor>
 #include <QWidget>
 
+#include <functional>
+
 class QVariantAnimation;
 
 namespace kerf {
@@ -119,6 +121,9 @@ public:
     // `pictureOrigin`, in this widget's coordinates: where the picture grows
     // from, when it opens.
     void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect());
+    // Where the picture goes back into as it closes with no origin given, asked
+    // once the regions have their new places (empty: it slides away).
+    void setPictureHome(std::function<QRect()> home) { m_pictureHome = std::move(home); }
     // The layer flights are drawn on, over everything but the bars.
     void setMotion(QWidget *motion);
     // How much of the room lies over the timeline, 0 to 1, eased there after
@@ -167,6 +172,9 @@ private:
     void transition(const QRect &pictureOrigin = QRect());
     // Stops the move under way, if there is one, and says so.
     bool stopMoves();
+    // The timeline's picture during a move, if it is shown from one; gone with it.
+    void releaseStill();
+    QPointer<QWidget> m_still;
     // What a move leaves behind it, however it ended.
     void settle();
     // What the picture's shadow falls on; empty when it is not painted.
@@ -201,6 +209,7 @@ private:
     QWidget *m_seamSheet = nullptr;
     double m_aspect = 16.0 / 9.0;
     stage::Panes m_panes;
+    std::function<QRect()> m_pictureHome;
     Sheet m_sheet = Sheet::None;
 };
 

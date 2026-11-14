@@ -158,6 +158,26 @@ const QPixmap &shadowTile(qreal ratio) {
     return tile;
 }
 
+// A region as it was when a move began, shown in its place while it travels:
+// one picture copied in each frame, not all that is in it drawn again.
+class Still final : public QWidget {
+public:
+    Still(QWidget *parent, const QPixmap &picture) : QWidget(parent), m_picture(picture) {
+        setObjectName(QStringLiteral("stageStill"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QPainter p(this);
+        p.drawPixmap(event->rect(), m_picture, QRectF(QPointF(event->rect().topLeft()) * m_picture.devicePixelRatio(),
+                                                      QSizeF(event->rect().size()) * m_picture.devicePixelRatio()).toRect());
+    }
+
+private:
+    QPixmap m_picture;
+};
+
 // The room's colour over a region, as much as `level`.
 class Veil final : public QWidget {
 public:
@@ -325,7 +345,16 @@ void StageShell::setMotion(QWidget *motion) {
     place();
 }
 
+void StageShell::releaseStill() {
+    if (!m_still) return;
+    m_still->hide();
+    m_still->deleteLater();
+    m_still = nullptr;
+    if (m_timeline) m_timeline->setUpdatesEnabled(true);
+}
+
 bool StageShell::stopMoves() {
+    releaseStill();
     if (!m_moves) return false;
     m_moves->stop();
     m_moves->deleteLater();
@@ -334,6 +363,7 @@ bool StageShell::stopMoves() {
 }
 
 void StageShell::settle() {
+    releaseStill();
     // Gone with what it lay over.
     if (m_timeline && !m_timeline->isVisible()) static_cast<Veil *>(m_veil)->hold(0.0);
     emit transitionFinished();
@@ -353,6 +383,10 @@ void StageShell::transition(const QRect &pictureOrigin) {
     for (QWidget *region : regions)
         if (region) before.append({region, region->isVisible() ? region->geometry() : QRect()});
     place();
+    // Where a picture that closes goes back to, now that the regions are where
+    // they are going: what it names, else its home.
+    QRect back = pictureOrigin;
+    if (!back.isValid() && m_pictureHome && m_picture && !m_picture->isVisible()) back = m_pictureHome();
     QList<Move> moves;
     for (const auto &[region, from] : std::as_const(before)) {
         const bool shown = region->isVisible();
@@ -374,7 +408,7 @@ void StageShell::transition(const QRect &pictureOrigin) {
             // The picture goes back into what it names, if anything.
             move.to = region == m_sidebar                          ? from.translated(-from.width(), 0)
                       : region == m_timeline                       ? from.translated(0, 48)
-                      : region == m_picture && pictureOrigin.isValid() ? pictureOrigin
+                      : region == m_picture && back.isValid()      ? back
                       : region == m_picture                        ? from.translated(48, 0)
                                                                    : from;
             region->show();
@@ -391,6 +425,20 @@ void StageShell::transition(const QRect &pictureOrigin) {
         return;
     }
     for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn}) seam->hide();
+    // The timeline only travels, in or out or along: shown from a picture of it
+    // for the move, rather than drawn again, with all its controls, in each frame.
+    for (const Move &move : std::as_const(moves)) {
+        if (move.widget != m_timeline || move.from.size() != move.to.size() || move.from.isEmpty()) continue;
+        const QPixmap picture = m_timeline->grab();
+        if (picture.isNull()) break;
+        m_still = new Still(this, picture);
+        m_still->setGeometry(move.from);
+        m_still->stackUnder(m_veil);
+        m_still->show();
+        // Still there, as far as anything asks: only not drawn while its picture is.
+        m_timeline->setUpdatesEnabled(false);
+        break;
+    }
     m_moves = new QVariantAnimation(this);
     m_moves->setDuration(duration);
     m_moves->setStartValue(0.0);
@@ -403,7 +451,10 @@ void StageShell::transition(const QRect &pictureOrigin) {
             const auto mix = [at](int a, int b) { return int(std::lround(a + (b - a) * at)); };
             move.widget->setGeometry(mix(move.from.left(), move.to.left()), mix(move.from.top(), move.to.top()),
                                      mix(move.from.width(), move.to.width()), mix(move.from.height(), move.to.height()));
-            if (move.widget == m_timeline) m_veil->setGeometry(m_timeline->geometry());
+            if (move.widget == m_timeline) {
+                m_veil->setGeometry(m_timeline->geometry());
+                if (m_still) m_still->setGeometry(m_timeline->geometry());
+            }
         }
         updateRoom();
     });

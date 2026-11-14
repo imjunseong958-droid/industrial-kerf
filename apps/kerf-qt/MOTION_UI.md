@@ -36,8 +36,10 @@ repeating their numbers, so changing a value does not make it wrong.
 | Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
-| Picture arrives | The first clip or proposal | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
-| Cut builds | Each new clip in a proposal | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
+| Picture arrives | A project opens with clips on its timeline | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `MainWindow::growStage`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
+| Cut at work | Kerf makes a first cut | Its card is in Kerf's row of the turn: light runs round the picture, which sits a little back and crossfades to each clip as it is placed, with Cutting on it and a line of light under it. Done, the ring lights once and goes out, the picture lightens, Done shows and fades, then the play mark and the length | `ChatPanel::setBuildingProposal`, `CardPicture::setWorking`, `CardPicture::setFinished`, `quietenCutPreview` | `aCutAtWorkIsItsCardInTheTurn` |
+| Cut card | A first cut Kerf made is pressed | The picture grows out of the card as the conversation gives way and the timeline comes in; the card says it is on the stage. Closed, the picture goes back into the card. Moving over the card runs through its clips | `CardPicture`, `MainWindow::openCutFromCard`, `MainWindow::growStage`, `MainWindow::cardPictureHome`, `StageShell::setPictureHome` | `aCutKerfMadeOpensFromItsCard` |
+| Cut builds | Each new clip in a proposal, with the stage open | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
 | First cut shows | A proposal on an empty program | Timeline shows it, read-only; the picture takes its format and renders it | `MainWindow::showProposedCut` | `aFirstCutShowsOnTheTimelineUntilItIsTheProgram`, `aProposedCutBringsItsOwnFormat` |
 | Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview` | none |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
@@ -53,7 +55,8 @@ Look here before writing a new animation.
 
 | You want | Use |
 |---|---|
-| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to |
+| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to; `StageShell::setPictureHome` for where it returns to when no origin is given |
+| The stage to grow out of something, with a stand-in until its frame | `MainWindow::growStage` |
 | Something to travel across regions | `StageMotion::fly` with a `Flight` |
 | Something to hold a place until the real thing comes | `Flight::stays`, ended by `releaseStaying` |
 | A stand-in for the picture | `Flight::fit`, so it shows footage as the render will |
@@ -97,6 +100,17 @@ with it. So:
 - **Every start has its end**, also when cut short: `transitionFinished` always follows
   `transitionStarted`.
 - Avoid a new `QGraphicsEffect` on a large region: it draws all of it again each frame.
+- **Frames that keep coming are drawn as they come.** While playing, each frame is
+  sampled straight onto the screen, and the last is drawn at its best once they stop
+  (`ViewerWidget::setFrame`, `tokens::motion::frameStream`). A still watched for long,
+  as the before side of the wipe, is made at its size once.
+- **What only travels is shown from a picture of it.** While the regions move, the
+  timeline, which keeps its size, is shown from a picture taken as the move begins
+  (`StageShell`'s still), and is not drawn again until the move ends.
+- **Draw an icon once.** `icons::paint` keeps each icon it has filled, at its size,
+  colour and place within a pixel, and copies it from then on.
+- **Away from the picture's corners, keep to its rect.** Rounding the clip costs a pass
+  over the whole picture, so what is drawn again in its middle is kept inside its rect.
 
 To measure, from the repository root:
 
@@ -106,6 +120,9 @@ KERF_MOTION_COSTS=1 QT_SCALE_FACTOR=2 target/qt/kerf-qt-tests -platform offscree
 
 This reads a frame's paint and the process's CPU, on the offscreen platform, so it
 compares one build with another and leaves out putting the frame on a display.
+`whatAConversationCosts`, run the same way, times the window's own parts as a
+conversation grows: the conversation made again, a comment arriving, a snapshot taken
+in, and each region drawn whole.
 
 ## Known limits
 
@@ -116,5 +133,5 @@ compares one build with another and leaves out putting the frame on a display.
 - Stand-ins are posters, so they are soft until the render arrives.
 - Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
   it costs, not how it looks. Only a real window shows that.
-- The conversation lays its text out again in each frame it changes width
-  (about 2 ms a frame, more with a long conversation).
+- While the regions move, the conversation's list keeps the width it is going to
+  (`ChatPanel::holdWidth`): its text wraps once, at the start, not in each frame.

@@ -126,15 +126,52 @@ pub fn extract_job_count() -> usize {
     budget().extract_parallelism
 }
 
+/// Whether an encode tries the machine's own encoder. Asked for (`prefer_hardware`, or
+/// `KERF_ENCODER=hardware`) it does; left to Kerf it does, but not on a Mac in a virtual machine,
+/// whose VideoToolbox can wait for ever as its decoding does (see
+/// [`crate::ffmpeg::runs_in_a_guest`]).
 pub fn should_try_hardware_encode(prefer_hardware: bool, force_software: bool) -> bool {
+    tries_hardware(
+        budget().hardware_encode,
+        prefer_hardware,
+        force_software,
+        crate::ffmpeg::runs_in_a_guest,
+    )
+}
+
+fn tries_hardware(
+    policy: HardwareEncodePolicy,
+    prefer_hardware: bool,
+    force_software: bool,
+    in_a_guest: impl Fn() -> bool,
+) -> bool {
     if force_software {
         return false;
     }
     if prefer_hardware {
         return true;
     }
-    match budget().hardware_encode {
+    match policy {
         HardwareEncodePolicy::Never => false,
-        HardwareEncodePolicy::Auto | HardwareEncodePolicy::Always => true,
+        HardwareEncodePolicy::Always => true,
+        HardwareEncodePolicy::Auto => !in_a_guest(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_guest_encodes_in_software_unless_hardware_is_asked_for() {
+        use HardwareEncodePolicy::{Always, Auto, Never};
+        let tries =
+            |policy, prefer, force, guest: bool| tries_hardware(policy, prefer, force, || guest);
+        assert!(tries(Auto, false, false, false));
+        assert!(!tries(Auto, false, false, true));
+        assert!(tries(Always, false, false, true));
+        assert!(tries(Auto, true, false, true));
+        assert!(!tries(Never, false, false, false));
+        assert!(!tries(Always, true, true, false));
     }
 }

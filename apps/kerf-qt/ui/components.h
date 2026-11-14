@@ -30,7 +30,9 @@
 #include <QColor>
 #include <QElapsedTimer>
 #include <QFont>
+#include <QHash>
 #include <QKeySequence>
+#include <QLabel>
 #include <QList>
 #include <QMargins>
 #include <QPointer>
@@ -610,6 +612,22 @@ private:
 // trackpad and keys). A 12 pt fade covers the top only when a child of the
 // content is cut by the top edge, and a 32 pt fade the bottom while there is
 // more below (the mockup's #list.ft / .fb masks), in the colour behind it.
+// A label whose text wraps, that remembers how tall it is at the widths it has
+// been asked about. A plain QLabel lays its text out again each time a layout
+// asks, and a list asks every row whenever anything in it changes.
+class WrapLabel final : public QLabel {
+public:
+    explicit WrapLabel(QWidget *parent = nullptr);
+    int heightForWidth(int width) const override;
+
+protected:
+    void changeEvent(QEvent *event) override;
+
+private:
+    mutable QString m_measured;
+    mutable QHash<int, int> m_heights;
+};
+
 class FadeScrollArea final : public QScrollArea {
     Q_OBJECT
 

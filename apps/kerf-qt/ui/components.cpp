@@ -1506,6 +1506,32 @@ void ThinProgress::paintEvent(QPaintEvent *) {
     p.fillRect(fillRect(), color(accent));
 }
 
+// ================================================================ WrapLabel
+
+WrapLabel::WrapLabel(QWidget *parent) : QLabel(parent) { setWordWrap(true); }
+
+int WrapLabel::heightForWidth(int width) const {
+    // What it says, as it is set: another text, another height.
+    const QString shown = text();
+    if (shown != m_measured) {
+        m_measured = shown;
+        m_heights.clear();
+    }
+    const auto known = m_heights.constFind(width);
+    if (known != m_heights.constEnd()) return *known;
+    const int height = QLabel::heightForWidth(width);
+    if (m_heights.size() >= 8) m_heights.clear();
+    m_heights.insert(width, height);
+    return height;
+}
+
+void WrapLabel::changeEvent(QEvent *event) {
+    // Its face or its margins change how it wraps.
+    if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange || event->type() == QEvent::ContentsRectChange)
+        m_heights.clear();
+    QLabel::changeEvent(event);
+}
+
 // ================================================================ FadeScrollArea
 
 namespace {
