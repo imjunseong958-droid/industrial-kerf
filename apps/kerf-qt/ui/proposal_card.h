@@ -30,6 +30,7 @@
 #include <QStringList>
 
 class QHBoxLayout;
+class QPainter;
 class QTimer;
 class QLabel;
 class QVBoxLayout;
@@ -115,15 +116,29 @@ private:
     void tick();
     // A poster as it is drawn at `size`: filled, cropped, ready to draw again and again.
     QImage readyAt(const QImage &poster, const QSize &size) const;
+    void paintPicture(QPainter &p, const QRectF &box, qreal work) const;
+    void paintMarks(QPainter &p, const QRectF &box, qreal opacity) const;
+    QRectF chipRect(const QRectF &box) const;
+    // The rim the light runs along, as points evenly spaced round it.
+    const QList<QPointF> &rim() const;
+    // The light's head and tail at `turn` (0 to 1), as short runs of the rim.
+    QList<QPolygonF> comet(qreal turn) const;
     CutPicture m_picture;
     bool m_onStage = false;
     bool m_working = false;
     qint64 m_finishedAt = -1;
-    // What it showed before the newest clip, and when that began to show.
+    // The still that showed the clip before the newest, and when that began to show.
     QImage m_before;
     qint64 m_turnedAt = -1;
     QTimer *m_ticker = nullptr;
     mutable QHash<qint64, QImage> m_ready;
+    // The picture as it is when nothing in it moves, drawn once, and what it was drawn for.
+    QImage m_still;
+    QString m_stillKey;
+    mutable QList<QPointF> m_rim;
+    mutable QRect m_rimFor;
+    // Where the light was last drawn, to be put back.
+    QRegion m_lit;
     // How far through the cut the pointer is, 0 to 1; below 0 when it is not over it.
     qreal m_scrub = -1.0;
 };

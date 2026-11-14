@@ -109,6 +109,9 @@ KERF_MOTION_COSTS=1 QT_SCALE_FACTOR=2 target/qt/kerf-qt-tests -platform offscree
 
 This reads a frame's paint and the process's CPU, on the offscreen platform, so it
 compares one build with another and leaves out putting the frame on a display.
+`whatAConversationCosts`, run the same way, times the window's own parts as a
+conversation grows: the conversation made again, a comment arriving, a snapshot taken
+in, and each region drawn whole.
 
 ## Known limits
 

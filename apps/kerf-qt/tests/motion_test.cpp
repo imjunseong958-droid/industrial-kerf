@@ -6,6 +6,8 @@
 
 #include "chat_panel.h"
 #include "main_window.h"
+#include "proposal_card.h"
+#include "ui/wiring/review_wiring.h"
 #include "timeline_widget.h"
 #include "ui/components.h"
 #include "ui/stage_motion.h"
@@ -184,6 +186,32 @@ private slots:
         window.m_workChip->setVisible(false);
         run("before/after wipe", 1500, [&] { window.m_viewer->setCompareFrame(footageFrame(QSize(960, 540), 3)); });
         window.m_viewer->setCompareFrame(QImage());
+        // A first cut at work, as its card in the conversation: the ring, a clip
+        // turning, and the finish.
+        window.m_shell->setPanes(closed);
+        QTest::qWait(1000);
+        window.m_chat->setBuildingProposal(QStringLiteral("p7"));
+        QTest::qWait(400);
+        if (ProposalCard *card = window.m_chat->buildingCard()) {
+            CutPicture cut;
+            cut.duration = 18.0;
+            cut.frames << CutPicture::Frame{0.0, frame} << CutPicture::Frame{6.0, footageFrame(QSize(1920, 1080), 3)};
+            card->setPicture(cut);
+            QTest::qWait(800);
+            run("card at work: the ring", 1500, [] {});
+            run("card at work: a clip turns", 800, [&] {
+                cut.frames << CutPicture::Frame{12.0, footageFrame(QSize(1920, 1080), 5)};
+                card->setPicture(cut);
+            });
+            run("card: done", 2600, [&] {
+                card->picture()->setWorking(false);
+                card->picture()->setFinished(0);
+            });
+            run("card: done, at rest", 500, [] {});
+        }
+        window.m_chat->setBuildingProposal(QString());
+        window.m_shell->setPanes(open);
+        QTest::qWait(1000);
         run("playback: 24 fps of frames", 1500, [&] {
             auto *timer = new QTimer(&window);
             int seed = 1;
@@ -205,6 +233,89 @@ private slots:
             timer->start(41);
         });
         QTest::qWait(1000);
+        window.close();
+    }
+
+    // What the window's own parts cost as a conversation grows: the conversation
+    // made again, a snapshot taken in, one comment arriving, and the timeline drawn.
+    void whatAConversationCosts() {
+        if (qEnvironmentVariableIsEmpty("KERF_MOTION_COSTS")) QSKIP("A measurement, run on request");
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject snapshot = snapshotOf(QSize(1920, 1080));
+        window.applySnapshot(snapshot);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto settle = [] { for (int i = 0; i < 4; ++i) QCoreApplication::processEvents(); };
+        const auto ms = [](const std::function<void()> &work, int times) {
+            QList<double> took;
+            for (int i = 0; i < times; ++i) {
+                QElapsedTimer clock;
+                clock.start();
+                work();
+                took << clock.nsecsElapsed() / 1e6;
+            }
+            std::sort(took.begin(), took.end());
+            return took.at(took.size() / 2);
+        };
+        const QJsonObject you{{"kind", "person"}, {"name", "Ana Ruiz"}, {"id", "ana@kerf.test"}};
+        const QJsonObject kerf{{"kind", "kerf"}, {"name", "Kerf"}};
+        const auto record = [](const QString &id, const QString &parent, const QJsonObject &author, int minute, const QString &body) {
+            return QJsonObject{{"id", id}, {"parent", parent.isEmpty() ? QJsonValue() : QJsonValue(parent)}, {"author", author}, {"body", body},
+                               {"tags", QJsonArray{}}, {"blocking", false}, {"resolved", false},
+                               {"created", QStringLiteral("2026-11-14T%1:%2:00Z").arg(8 + minute / 60, 2, 10, QLatin1Char('0')).arg(minute % 60, 2, 10, QLatin1Char('0'))},
+                               {"revision", 22}};
+        };
+        for (const int turns : {10, 50, 150}) {
+            QJsonArray items;
+            for (int i = 0; i < turns; ++i) {
+                items << record(QStringLiteral("c%1").arg(i), QString(), you, i * 2, QStringLiteral("Tighten the interview at the harbor and let the music breathe, round %1").arg(i));
+                items << record(QStringLiteral("c%1r").arg(i), QStringLiteral("c%1").arg(i), kerf, i * 2 + 1,
+                                QStringLiteral("Trimmed the intro and tightened the second interview; the music now ducks under the voice and the title lands on the beat. Round %1.").arg(i));
+            }
+            window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", items}});
+            settle();
+            const double rebuild = ms([&] { window.m_chat->rebuild(); }, 5);
+            QJsonArray more = items;
+            more << record(QStringLiteral("new"), QString(), you, turns * 2 + 1, QStringLiteral("One more note"));
+            const double arrives = ms([&] {
+                static int flip = 0;
+                window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", (flip++ % 2) ? items : more}});
+                settle();
+            }, 6);
+            const double takesIn = ms([&] {
+                static int revision = 40;
+                QJsonObject changed = snapshot;
+                changed.insert(QStringLiteral("revision"), ++revision);
+                QJsonObject proposal = changed.value(QStringLiteral("pendingProposal")).toObject();
+                proposal.insert(QStringLiteral("script"), QStringLiteral("trim v1b out -%1f\n").arg(revision));
+                changed.insert(QStringLiteral("pendingProposal"), proposal);
+                QJsonArray proposals = changed.value(QStringLiteral("proposals")).toArray();
+                QJsonObject listed = proposals.at(0).toObject();
+                listed.insert(QStringLiteral("script"), proposal.value(QStringLiteral("script")));
+                proposals.replace(0, listed);
+                changed.insert(QStringLiteral("proposals"), proposals);
+                window.applySnapshot(changed);
+                window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", changed}});
+                settle();
+            }, 6);
+            const double same = ms([&] { window.applySnapshot(snapshot); settle(); }, 6);
+            std::printf("%3d turns: conversation made again %6.1f ms   a comment arrives %6.1f ms   a changed snapshot %6.1f ms   the same snapshot %5.1f ms   rows %d\n",
+                        turns, rebuild, arrives, takesIn, same, int(window.m_chat->rows().size()));
+            std::fflush(stdout);
+        }
+        stage::Panes open = window.m_shell->panes();
+        open.picture = open.timeline = true;
+        window.m_shell->setPanes(open);
+        QTest::qWait(1200);
+        const double timeline = ms([&] { window.m_timeline->repaint(); }, 9);
+        const double viewer = ms([&] { window.m_viewer->repaint(); }, 9);
+        const double chat = ms([&] { window.m_chat->repaint(); }, 9);
+        const double whole = ms([&] { window.repaint(); }, 5);
+        std::printf("drawn whole: timeline %.2f ms   picture %.2f ms   conversation %.2f ms   window %.2f ms\n", timeline, viewer, chat, whole);
+        std::fflush(stdout);
         window.close();
     }
 
