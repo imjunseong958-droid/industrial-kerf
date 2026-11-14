@@ -13,8 +13,8 @@
 //
 // A first cut Kerf made has its picture at the top: each clip's poster, the
 // length, and a play mark. Pressing it opens the stage, which grows out of it.
-// With a picture the card keeps to its title, its versions when it has more
-// than one, Reject and Accept.
+// With a picture the card keeps to its title, beside Reject and Accept under
+// the picture, and its versions when it has more than one.
 //
 // Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
 // guest mode the buttons give way to "Waiting for the editor".
@@ -174,6 +174,8 @@ public:
     QWidget *pinHeader() const { return m_pinHeader; }
     QLabel *pinHeaderText() const { return m_pinText; }
     QLabel *titleLabel() const { return m_title; }
+    // The title on the actions' line, which a card with a picture has instead.
+    QLabel *lineTitle() const { return m_lineTitle; }
     ChatExpander *changesLink() const { return m_changesLink; }
     VersionButton *versionButton() const { return m_version; }
     QWidget *changesBox() const { return m_changes; }
@@ -238,6 +240,7 @@ private:
     QLabel *m_colourParams = nullptr;
     QLabel *m_diff = nullptr;
     QWidget *m_footer = nullptr;
+    QLabel *m_lineTitle = nullptr;
     ui::Button *m_watch = nullptr;
     QWidget *m_watchBox = nullptr;
     bool m_hasWatch = false;

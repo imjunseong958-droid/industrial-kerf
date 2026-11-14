@@ -142,6 +142,25 @@ private:
     ProposalCard::Change m_change;
 };
 
+// A line of text that ends in an ellipsis when it has less room than it needs.
+class LineLabel final : public QLabel {
+public:
+    LineLabel() {
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        setMinimumWidth(0);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        const QFontMetricsF metrics(font());
+        p.setFont(font());
+        p.setPen(palette().color(QPalette::WindowText));
+        const QString shown = metrics.elidedText(text(), Qt::ElideRight, width());
+        p.drawText(QPointF(0, (height() - metrics.height()) / 2 + metrics.ascent()), shown);
+    }
+};
+
 QWidget *spaced(QWidget *child, int top) {
     auto *box = new QWidget;
     auto *layout = new QVBoxLayout(box);
@@ -422,6 +441,14 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     auto *footer = new QHBoxLayout(m_footer);
     footer->setContentsMargins(0, 8, 0, 0);
     footer->setSpacing(8);
+    m_lineTitle = new LineLabel;
+    m_lineTitle->setObjectName(QStringLiteral("proposalLineTitle"));
+    m_lineTitle->setFont(tokens::font(bodyName));
+    m_lineTitle->setFixedHeight(24);
+    setInk(m_lineTitle, ink);
+    m_lineTitle->hide();
+    // It has the line's room; the stretch after Script has the rest.
+    footer->addWidget(m_lineTitle, 100);
     m_watch = new ui::Button(QString(), ui::Button::Kind::Secondary);
     m_watch->setObjectName(QStringLiteral("proposalWatch"));
     m_watch->setTip(QStringLiteral("Play only what this proposal changes"));
@@ -479,6 +506,8 @@ void ProposalCard::setPinned(bool pinned, bool blocking) {
 
 void ProposalCard::setTitle(const QString &title) {
     m_title->setText(title);
+    m_lineTitle->setText(title);
+    ui::setTip(m_lineTitle, title);
     setAccessibleName(title);
 }
 
@@ -653,7 +682,11 @@ void ProposalCard::updateParts() {
     m_picture->setVisible(card && pictured);
     // And it is as wide as its picture.
     setMaximumWidth(card && pictured ? tokens::layout::cardPictureWidest + 24 : QWIDGETSIZE_MAX);
-    m_title->setVisible(card);
+    m_title->setVisible(card && !pictured);
+    m_lineTitle->setVisible(card && pictured);
+    // Under a picture the line comes right after it.
+    m_footer->layout()->setContentsMargins(0, pictured ? 0 : 8, 0, 0);
+    m_footer->setFixedHeight(pictured ? 24 : 24 + 8);
     m_second->setVisible(card && (!pictured || m_versions.size() > 1));
     m_changesLink->setVisible(!pictured);
     m_changes->setVisible(card && m_open && !pictured);
