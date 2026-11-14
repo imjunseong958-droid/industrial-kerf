@@ -731,7 +731,8 @@ recipes, in `fixtures/shots/car`.
    (correlation 0.93, and 0.84 the other way round). Still wanting is a
    model that takes the number itself, for what a mask cannot say.
 8. **In the editor**, both in: a signal's curve is drawn in its clip in
-   the timeline, seen and not yet drawn by hand, and Takes, on a media in
+   the timeline, and drawn by hand there, Option-drag across the clip
+   writing its `value` as the fewest keys that say the line, and Takes, on a media in
    the bin, has the media be another of its recipe's takes.
 
 Every effect the compositor runs on the CPU comes through that one interface,

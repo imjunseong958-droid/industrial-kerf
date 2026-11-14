@@ -1028,6 +1028,22 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
         emit clipSelectionExtended(hit.id, event->modifiers() & Qt::ControlModifier);
         return;
     }
+    // Option-drag across a signal clip draws its number.
+    if (m_tool == TimelineTool::Selection && (event->modifiers() & Qt::AltModifier)) {
+        QJsonObject clip;
+        for (const QJsonValue &value : rowTrack(hit.row).value(QStringLiteral("clips")).toArray())
+            if (value.toObject().value(QStringLiteral("id")).toString() == hit.id) clip = value.toObject();
+        if (!clip.value(QStringLiteral("signal")).toArray().isEmpty()) {
+            m_signalDraw = SignalDraw{};
+            m_signalDraw.clip = hit.id;
+            m_signalDraw.bounds = hit.rect.toAlignedRect();
+            m_signalDraw.frames = std::max(1, int(std::llround(hit.duration * m_fps)));
+            setCursor(Qt::CrossCursor);
+            emit clipSelected(hit.id);
+            drawSignalTo(event->position());
+            return;
+        }
+    }
     // A sound clip's rubber band: its keys and its line take the press.
     if (int key = -1; m_tool == TimelineTool::Selection && bandAt(pos, hit, &key)) {
         const bool addKey = (event->modifiers() & Qt::AltModifier) && key < 0;
@@ -1072,7 +1088,60 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     emit clipSelected(hit.id);
 }
 
+void TimelineWidget::drawSignalTo(const QPointF &position) {
+    const QRectF inside = QRectF(m_signalDraw.bounds).adjusted(0, 2, 0, -2);
+    if (inside.width() <= 0.0 || inside.height() <= 0.0) return;
+    const int last = m_signalDraw.frames - 1;
+    const int frame = std::clamp(int(std::lround((position.x() - inside.left()) / inside.width() * last)), 0, last);
+    const double value = std::clamp(1.0 - (position.y() - inside.top()) / inside.height(), 0.0, 1.0);
+    // Every frame the pointer passed since the last one is on the line between the two.
+    if (const int from = m_signalDraw.last; from >= 0 && from != frame) {
+        const double start = m_signalDraw.drawn.value(from);
+        const int step = frame > from ? 1 : -1;
+        for (int at = from + step; at != frame; at += step)
+            m_signalDraw.drawn.insert(at, start + (value - start) * double(at - from) / double(frame - from));
+    }
+    m_signalDraw.drawn.insert(frame, value);
+    m_signalDraw.last = frame;
+    refreshLanes(m_signalDraw.bounds);
+}
+
+QJsonArray TimelineWidget::signalKeys(const QMap<int, double> &drawn, double within) {
+    QJsonArray keys;
+    if (drawn.isEmpty()) return keys;
+    const QList<int> frames = drawn.keys();
+    const auto key = [&](int frame) {
+        return QJsonObject{{QStringLiteral("at"), frame},
+                           {QStringLiteral("value"), std::round(drawn.value(frame) * 1000.0) / 1000.0},
+                           {QStringLiteral("interp"), QStringLiteral("linear")}};
+    };
+    // Kept from the first frame on: a frame is a key when the line from the last key to
+    // the next frame would pass some frame between by more than `within`.
+    int kept = 0;
+    keys.append(key(frames.at(0)));
+    for (int next = 2; next < frames.size(); ++next) {
+        const double a = drawn.value(frames.at(kept));
+        const double b = drawn.value(frames.at(next));
+        const double span = frames.at(next) - frames.at(kept);
+        bool misses = false;
+        for (int between = kept + 1; between < next && !misses; ++between) {
+            const double on = a + (b - a) * (frames.at(between) - frames.at(kept)) / span;
+            misses = std::abs(on - drawn.value(frames.at(between))) > within;
+        }
+        if (misses) {
+            kept = next - 1;
+            keys.append(key(frames.at(kept)));
+        }
+    }
+    if (frames.size() > 1) keys.append(key(frames.last()));
+    return keys;
+}
+
 void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
+    if (!m_signalDraw.clip.isEmpty()) {
+        drawSignalTo(event->position());
+        return;
+    }
     if (!m_band.clip.isEmpty()) {
         const qreal dy = event->position().y() - m_band.pressY;
         const QRect bounds = clipBounds(m_band.clip);
@@ -1186,6 +1255,14 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
+    if (!m_signalDraw.clip.isEmpty()) {
+        const SignalDraw draw = std::exchange(m_signalDraw, SignalDraw{});
+        unsetCursor();
+        refreshLanes(draw.bounds);
+        // A click draws nothing: a number wants at least two frames to be a line.
+        if (draw.drawn.size() >= 2) emit signalDrawn(draw.clip, QJsonObject{{QStringLiteral("keys"), signalKeys(draw.drawn)}});
+        return;
+    }
     if (!m_band.clip.isEmpty()) {
         finishBandDrag();
         return;
@@ -1838,6 +1915,16 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(C(tk::overlay::waveformRms), 1.0));
             p.drawPolyline(curve);
+            // What is being drawn over it, until the document has it.
+            if (m_signalDraw.clip == clip.value(QStringLiteral("id")).toString() && !m_signalDraw.drawn.isEmpty()) {
+                QPolygonF drawn;
+                const double last = std::max(1, m_signalDraw.frames - 1);
+                for (auto at = m_signalDraw.drawn.constBegin(); at != m_signalDraw.drawn.constEnd(); ++at)
+                    drawn << QPointF(inside.left() + inside.width() * at.key() / last, inside.bottom() - inside.height() * at.value());
+                p.setPen(QPen(C(tk::ink), 1.5));
+                if (drawn.size() == 1) p.drawPoint(drawn.first());
+                else p.drawPolyline(drawn);
+            }
             p.setRenderHint(QPainter::Antialiasing, false);
         }
         if (rect.width() >= kNameBarFrom)
