@@ -489,11 +489,8 @@ What is built for it, in this order, each measured before the next:
    line (`recipe/signal.rs`). Held by tests from the clip to the numbers a
    workflow's node is given. `look` with `signal` writes one's keys from the
    onsets of a sound on the timeline (`kerf-mcp/src/signal.rs`), which is how
-   a signal is taken from music where Adobe's is. *Not measured against a model:* none in reach
-   reads one, and the workflow that comes with `kerf-comfy` has no blank for
-   one. The first thing to learn is whether a take's event lands on the
-   signal's frames, with a workflow whose strength or mask takes a number a
-   frame.
+   a signal is taken from music where Adobe's is. Measured against a model as a mask a frame (Next, 7): a take leaves
+   its guide on the signal's frames.
 2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
    is of, and how near it is (`render … pass=ids|depth|relative|normals`). What ties one
    frame to the next has been found to guide better than depth alone
@@ -513,7 +510,12 @@ What is built for it, in this order, each measured before the next:
    each, it was followed as well over the frame (`order` 0.924 against
    0.928) and no better for the crate (`held` 0.25 against 0.35): that
    scene's depth has a wide range as it is, and a set that is far with one
-   thing near, where it should tell, was not tried. A pass has reached a
+   thing near, where it should tell, told the same (2026-11-14): the sets
+   moved eight units off, 1% of the frame, and the crate near, `relative`
+   was followed a little better over the frame (`order` 0.880 against
+   0.857) and held the crate less well (`held` 0.52 against 0.59, the
+   crate a third too large). So `pass=depth` stays what a guide is drawn
+   as. A pass has reached a
    model as its guide and come back as a take (Measured, below), and a
    line hands a model a picture and a pass at once by naming the second
    (`guide_depth=`, Next 5).

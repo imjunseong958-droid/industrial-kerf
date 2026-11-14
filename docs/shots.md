@@ -533,9 +533,11 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 
 - **Which file is fetched goes by the name asked for.** `cameras`
   saves a video and a text, and `out={cameras.txt}` takes the text.
-- **`depth` asks its model as it comes**, refining three times. `refine_steps=1` took
-  under half the time on the server it was measured on, for a depth 0.3%
-  from the default's, and is for a very long shot.
+- **`depth` refines once**, where its model comes refining three times.
+  Three took over twice the time on the server it was measured on (67 s
+  for 29 s, 65 frames of a take), for a depth a grey of 255 from this
+  one's, at the mean; `refine_steps=3` asks for it. A set of one frame
+  takes 6 s either way, so `set` is left as its model comes.
 - **A camera's path is found only with the model's weights as 32-bit
   floats**, which `cameras` sets where it loads them
   (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a

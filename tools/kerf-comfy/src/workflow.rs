@@ -612,9 +612,10 @@ mod tests {
                 .any(|node| node["class_type"] == "LoadDA3Model"
                     && node["inputs"]["weight_dtype"] == "fp32"));
         }
-        // Depth is refined three times unless a line says otherwise.
+        // Depth is refined once unless a line says otherwise: three times, as the model
+        // comes, takes over twice as long for a grey's difference.
         let depth = Workflow::named("depth").unwrap();
-        assert_eq!(depth.takes()["more"]["refine_steps"], json!(3));
+        assert_eq!(depth.takes()["more"]["refine_steps"], json!(1));
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("shot"), "{missing}");
     }
