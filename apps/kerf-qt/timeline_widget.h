@@ -21,10 +21,12 @@
 #include <QBoxLayout>
 #include <QHash>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMap>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -288,6 +290,9 @@ signals:
     // The rubber band dragged: a clip's gain, a level in dB or
     // {keys: [{at: frame, value, interp}]}.
     void gainRequested(const QString &clipId, const QJsonValue &gain);
+    // Option-drag across a signal clip: its number drawn by hand, as
+    // {keys: [{at: frame of the clip, value, interp}]}.
+    void signalDrawn(const QString &clipId, const QJsonValue &value);
     // A comment's mark on the ruler clicked.
     void commentMarkActivated(const QString &commentId);
     void toolChanged(TimelineTool tool);
@@ -398,6 +403,10 @@ private:
     // A signal clip's number along the clip, 0 at the bottom of `rect` and 1 at its top:
     // the points of its curve, from the values the project gives for it.
     static QPolygonF signalCurve(const QJsonArray &values, const QRectF &rect);
+    // The keys that say a number drawn by hand, `drawn` by frame of its clip: its ends
+    // and each frame the line between the keys kept so far would miss by more than
+    // `within`.
+    static QJsonArray signalKeys(const QMap<int, double> &drawn, double within = 0.02);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
     // The ruler's marker row: proposal bands, comment marks, sequence markers.
     void paintMarkerRow(QPainter &p, const QRect &dirty, int top);
@@ -567,6 +576,16 @@ private:
     bool m_addLaneVisible = false;
     bool m_snapping = true;
     BandDrag m_band;
+    // A signal's number being drawn: its clip, where it is, and what is drawn so far.
+    struct SignalDraw {
+        QString clip;
+        QRect bounds;
+        int frames = 0;
+        int last = -1;
+        QMap<int, double> drawn;
+    };
+    SignalDraw m_signalDraw;
+    void drawSignalTo(const QPointF &position);
     TimelineTool m_tool = TimelineTool::Selection;
     QPointF m_feedbackPoint;
     QPixmap m_laneCache;

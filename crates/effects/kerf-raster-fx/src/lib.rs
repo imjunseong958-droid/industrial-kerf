@@ -30,6 +30,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub use kerf_raster::Image;
+/// The box passes a Gaussian blur is made of here, for a kernel that makes the same ones.
+pub use util::box_radii;
 pub use noise::GrainLook;
 // What a kernel reads of these effects' numbers, as the effects themselves read them.
 pub use color2::{sc_param_id, Curve, SC_IDS};

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Industrial Kerf for Linux as a folder that runs on its own, packed as
 # target/package-linux/<name>.tar.xz with its sha256, and the same folder as <name>.deb,
-# which apt installs (scripts/package-kerf-linux-deb.sh). bin/ holds the editor, kerfd, kerf,
+# which apt installs (scripts/package-kerf-linux-deb.sh), and as <name>.rpm, which dnf
+# does (scripts/package-kerf-linux-rpm.sh). bin/ holds the editor, kerfd, kerf,
 # kerf-mcp, ffmpeg and ffprobe; lib/ every library they load that a desktop Linux does not
 # have of its own (Qt and its ICU, FFmpeg, the xcb utilities, xkbcommon), found through each
 # one's RPATH, $ORIGIN/../lib; plugins/ the Qt plugins, which bin/qt.conf points Qt to. What
@@ -236,3 +237,7 @@ echo "$out/$name.tar.xz"
 # The same folder as a .deb, whose Depends are what the folder takes from the system.
 # Installing it takes root: scripts/check-kerf-linux-deb.sh does, in package.yml.
 scripts/package-kerf-linux-deb.sh "$stage" "$out/$name.deb"
+
+# And as an .rpm, whose Requires are the same libraries as rpm names them.
+# scripts/check-kerf-linux-rpm.sh installs it, in package.yml.
+scripts/package-kerf-linux-rpm.sh "$stage" "$out/$name.rpm"

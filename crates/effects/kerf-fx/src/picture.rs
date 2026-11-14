@@ -187,11 +187,20 @@ impl KernelEffect for Kept {
     fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
         let kernel = match self.0 {
             "blur.radialzoom" => kept::radial_zoom_kernel(effect, run.at, run.size, run.per_source)?,
+            "key.keycleaner" => {
+                kept::key_cleaner_kernel(effect, run.at, run.size, run.per_source)?
+            }
+            "matte.simplechoker" => {
+                kept::choker_kernel(effect, run.at, run.size, run.per_source)?
+            }
+            "distort.opticscompensation" => {
+                kept::optics_kernel(effect, run.at, run.size, run.per_source)?
+            }
             "noise.addgrain" => {
                 kept::grain_kernel(effect, run.at, run.size, run.per_source, run.seed)?
             }
             "color.curves" | "color.huesaturation" | "color.photofilter"
-            | "color.selectivecolor" | "key.unmult" => {
+            | "color.selectivecolor" | "key.unmult" | "key.advancedspill" => {
                 kept::color_kernel(effect, run.at, run.size, run.per_source)?
             }
             _ => return None,

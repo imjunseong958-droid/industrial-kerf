@@ -489,11 +489,8 @@ What is built for it, in this order, each measured before the next:
    line (`recipe/signal.rs`). Held by tests from the clip to the numbers a
    workflow's node is given. `look` with `signal` writes one's keys from the
    onsets of a sound on the timeline (`kerf-mcp/src/signal.rs`), which is how
-   a signal is taken from music where Adobe's is. *Not measured against a model:* none in reach
-   reads one, and the workflow that comes with `kerf-comfy` has no blank for
-   one. The first thing to learn is whether a take's event lands on the
-   signal's frames, with a workflow whose strength or mask takes a number a
-   frame.
+   a signal is taken from music where Adobe's is. Measured against a model as a mask a frame (Next, 7): a take leaves
+   its guide on the signal's frames.
 2. **Passes of Kerf's own sequences**, which are in: which clip each pixel
    is of, and how near it is (`render … pass=ids|depth|relative|normals`). What ties one
    frame to the next has been found to guide better than depth alone
@@ -513,7 +510,12 @@ What is built for it, in this order, each measured before the next:
    each, it was followed as well over the frame (`order` 0.924 against
    0.928) and no better for the crate (`held` 0.25 against 0.35): that
    scene's depth has a wide range as it is, and a set that is far with one
-   thing near, where it should tell, was not tried. A pass has reached a
+   thing near, where it should tell, told the same (2026-11-14): the sets
+   moved eight units off, 1% of the frame, and the crate near, `relative`
+   was followed a little better over the frame (`order` 0.880 against
+   0.857) and held the crate less well (`held` 0.52 against 0.59, the
+   crate a third too large). So `pass=depth` stays what a guide is drawn
+   as. A pass has reached a
    model as its guide and come back as a take (Measured, below), and a
    line hands a model a picture and a pass at once by naming the second
    (`guide_depth=`, Next 5).
@@ -673,498 +675,78 @@ recipes, in `fixtures/shots/car`.
    shapes cannot be, which is in too: CesiumMan walked and Fox turned its
    head, looked at by hand. Splats, for a set rebuilt from photographs, wait for
    those.
-3. **Footage into the scene, and a picture read back.** What people do in
-   ComfyUI with a filmed shot is one loop, and Kerf wants the whole of it:
-   the shot is made into a scene, its set as a mesh or as splats and its
-   camera as a path; things are put into that scene, or the camera is moved
-   in it; the scene is drawn; and a model covers what was drawn. Kerf has
-   the last two. The first is a model's work, reached by a recipe whose
-   file is the scene (`generate model=<rebuilder> guide=shot.mp4
-   out={set.glb}`), and the second is the document's own, once it holds a
-   mesh (2): the rebuilt set is a mesh clip with the shot as its colors, the
-   camera a `gen=camera@1` clip keyed from the file or from Kerf's own solve
-   (`look` with `track`), and what is added stands in the same space, behind
-   and before the set's own surfaces, in the passes as in the picture. So
-   this waited only on 2, and on a glTF's camera and animation being read
-   with its mesh, and both are (2026-11-13). `look` with `mesh` says what a
-   mesh clip's file holds, its animations and its cameras, and with `camera`
-   writes one of them as a `gen=camera@1` clip (`Compositor::mesh_camera`,
-   `kerf-mcp/src/mesh_camera.rs`): where the file has the camera on each
-   frame of the mesh's clip, the mesh being where its clip puts it and its
-   animation as far in as the clip plays it, so that the mesh seen through
-   it is the mesh as the file's camera saw it, wherever the clip stands,
-   and with as few keyframes as say it. It is the document's camera from
-   then on: nothing ties it to the file, and it is asked for again when the
-   mesh's clip is moved or retimed. A glTF camera has one lens for the whole
-   of a file, so a zoom does not come through, and one with no perspective
-   is refused. What is added then goes down among the set's surfaces by the
-   pixel, as any two meshes do
-   (`what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it`). *Not
-   done:* no rebuilder was run, so no set a model made from a shot was read,
-   only files the tests wrote and Khronos's samples; and splats.
+3. **Footage into the scene, and a picture read back**, which is in but
+   for a whole set ([the record](docs/shots-measured.md)). A filmed shot is made into a
+   scene by models a recipe reaches: its set as a mesh clip with the shot
+   as its colors, its camera as a `gen=camera@1` clip `look` with `mesh`
+   writes from a path or a lens (`from`), and what is added stands among
+   the set's surfaces by the pixel. The other way, a take's depth is a
+   file a recipe makes, to hold beside its guide's pass. Seven workflows
+   of `kerf-comfy` read a picture back or make a set
+   ([shots.md](shots.md#a-picture-read-back)). Run on two filmed shots,
+   one whose camera travels 2.5 units down a street. What it came to:
+   - A set of the path's own reading is in the space of the frame the
+     path counts from (`anchor`), not of the frame it shows.
+   - A set of one frame is what the camera leaves: five, each placed
+     `beside` the first, leave 6 to 13% of the frame empty for 35 to 59%,
+     and each lasting only about its own frame leaves out what moved.
+   - `look` with `fits` finds a set's size in a path's units from the
+     footage: 0.956 where it is 1. Two models that disagree on the lens
+     meet coarsely, the path's forward travel stretched by their ratio.
+   - A scene kept as splats becomes a set on the server's own nodes
+     (`set-splats`), within 0.06 of a scene written by hand.
 
-   A pass goes from
-   the document to a picture. The other way, from a picture to its depth,
-   its normals, the color of its surfaces without their light, is what
-   inverse rendering does (DiffusionRenderer, UniVidX, and in ComfyUI itself
-   MoGe and Marigold), which people call unrendering. In Kerf it is no engine
-   code: a model's program whose file is a pass, as any model's is a shot,
-   `generate model=<reader> guide=<footage> out={depth.mp4}`, with the next
-   step's model following that file. Three uses, in the order they pay:
-   - *Footage as a guide.* A filmed shot's depth has a model make it again
-     in another look, with where everything is kept. This is the third place
-     a guide comes from ([shots.md](shots.md#guides)), which so far is handed
-     to a model as its picture.
-   - *A take read back.* Its depth beside its guide's depth pass says how
-     well it followed, where 4 below says only where the subject went.
-   - *Light.* Normals and surface color of footage are what Kerf's own
-     lights would need to fall on it. Not before the first two are measured:
-     it would have the compositor draw a look, which the first rule is
-     against.
-   What it takes is a workflow for `kerf-comfy` and nothing else: load the
-   guide, `MoGeInference`, `MoGeRender` with `depth`, save. The server the
-   measurements were made with, ComfyUI 0.45, has had the weights since
-   2026-11-13: `moge_3_vitl_fp16.safetensors` and
-   `depth_anything_3_base.safetensors`, in `models/geometry_estimation/`.
-   `LoadMoGeModel` and `LoadDA3Model` read only files packed for ComfyUI,
-   which is why their lists were empty while the models' own files were
-   there. What was found on it, by the person who keeps the server, on an
-   MI250, and not run from Kerf:
-
-   | Model | Setting | A picture takes | |
-   |---|---|---|---|
-   | MoGe 3, 1500x1000 | `refine_steps=3`, as it comes | 1.0 s, 5.2 s the first time | |
-   | | `refine_steps=1` | 0.4 s | depth 0.11% from the default's, at the median |
-   | | `refine_steps=0` | 0.1 s | 0.22% |
-   | Depth Anything 3, one picture at a time (`mono`) | as it comes | 0.6 s | |
-   | Depth Anything 3, a camera's path from many frames (`multiview`) | as it comes, or `bf16` | fails, on a dtype | |
-   | | `weight_dtype=fp32` on `LoadDA3Model` | 1.0 s, with `cam_dec` | the one to use |
-   | | `pose_method=ray_pose` | 3.0 s | |
-
-   So MoGe is used as it comes, with `refine_steps=1` only for a very long
-   shot, and **a workflow that has Depth Anything 3 find a camera's path
-   sets `weight_dtype=fp32`**. Through the server's API a MoGe picture took
-   2.0 s with the model's loading, and 0.5 s at `refine_steps=0`. MoGe's own
-   package took 100 s a picture there, in its last refining step, and is not
-   what ComfyUI's nodes run.
-
-   The workflows are in the repository since 2026-11-13, four that come
-   with `kerf-comfy` ([shots.md](shots.md#a-picture-read-back)):
-   `depth`, `set`, `depth-whole`, and `cameras`. Each says
-   `"of": "guide"`: what it makes is of its guide frame for frame, at the
-   guide's own rate and size, where a model that makes a shot has a rate
-   and a size of its own. That, and fetching the file whose kind the line
-   asks for, is all `kerf-comfy` learned for them; the engine learned
-   nothing. Run from recipes of `fixtures/shots/car` on that server, each on
-   65 frames of 832x480, from the line being read to the file being there,
-   with the guide sent up and the model loaded:
-
-   | Recipe line | Took |
-   |---|---|
-   | `generate model=depth guide={take.mp4}` | 64 to 68 s |
-   | the same with `refine_steps=1` | 30 s, its greys 0.3% from the default's |
-   | `generate model=set guide=… out={set.glb}`, one frame | 3 s, a mesh of 97,000 corners with the frame as its texture |
-   | `generate model=depth-whole guide=…` | 10 to 11 s |
-   | `generate model=cameras guide=… out={cameras.txt}` | 10 to 11 s |
-   | for scale, `generate model=shot …`, the take itself | 94 s |
-
-   *A take read back* (`shots/readback.kerfrecipe`): the depth pass of the
-   car driving across, the take Wan VACE made of it with seed 7, and that
-   take's depth as MoGe read it. Held together frame by frame, over the
-   pixels the guide has a depth for, by a script kept out of the
-   repository:
-
-   | The take's depth, read by | Same order of near and far as the guide (rank correlation, 1 is all) | Sky the guide has no depth for, read as none |
-   |---|---|---|
-   | MoGe 3 | 0.993, never under 0.990 | all of it |
-   | MoGe 3, `refine_steps=1` | 0.993 | all of it |
-   | Depth Anything 3, a picture at a time | 0.996 | 4%: it gives a sky a distance |
-   | MoGe 3, the take played backward, which is the wrong take | 0.966 | all of it |
-   | MoGe 3, the guide of the other scene | 0.865, and -0.42 at its worst frame | all of it |
-
-   What it shows, and what it does not. The way works: a take's depth is a
-   file a recipe makes, the same size and frames as its guide's pass, and
-   the two can be held together. The number is of the whole frame, and
-   most of this frame is a road that is where it was whichever way the car
-   went, so the wrong take scores 0.966 where the right one scores 0.993:
-   it says that the ground and the sky held, and little of where the
-   subject is. That wants reading by the clip, which the ids pass says the
-   pixels of, and is 4 below. A depth pass and a model's reading also differ
-   in kind where they agree in order: Kerf's goes by the scene's own numbers
-   and holds still, and MoGe's stretches each frame to its own nearest and
-   farthest. It is one take of one scene, by a small model.
-
-   *A camera found* (`shots/views.kerfrecipe`): the camera going 75 degrees
-   round the parked car, drawn as its picture in flat colors, with
-   `cameras`. It put the camera turning 7 degrees the wrong way over
-   the first quarter and then 43 the right way, where the guide's turns 74
-   one way throughout, with a lens of 37 degrees down the frame where the
-   guide's is 40. A sky and a road in two flat colors give it little to
-   hold, and footage was not tried: no filmed shot is in the repository.
-
-   *A camera the mesh's file does not hold.* A path such as that, and the
-   camera a set was seen by, come into the sequence the way a glTF's camera
-   does. `look` with `mesh` takes `from`, a file that says where a camera
-   was, in place of `camera`, one the file holds
-   ([shots.md](shots.md#a-picture-read-back)): a path a model wrote, or
-   a lens alone, which is a camera standing at the set's own origin. The
-   compositor learned one thing for it, where a camera that is at a given
-   place in a mesh file's space is in the sequence
-   (`Compositor::mesh_view`), which is `mesh_camera` without the file's own
-   camera; reading the text is `kerf-mcp`'s (`camera_file.rs`). A path is in
-   its own model's units and a set in another's, so how much of the set one
-   of the path's units is is given (`scale`), or found from the footage
-   (`fits`, below), and so is which of the path's frames has its camera at
-   the set's origin (`frame`). The workflow that rebuilds a set writes
-   its lens as a file of its own (`out={lens.txt}`), and a fifth workflow,
-   `set-views`, makes a set from the same reading of the frames a path
-   comes from, so that the two are one size and `scale` is 1.
-
-   *The whole of it, once, on a filmed shot* (2026-11-13). Four seconds of
-   a walk along an overgrown railway, handheld, 65 frames at 16 a second
-   and 640x360, from Wikimedia Commons (*Walking Keage Incline*, Kamigata0,
-   CC BY-SA 4.0); it is not in the repository. One recipe read it back, in
-   1 min 45 s: a set and a path in one size, a set with its lens, and the
-   shot's depth.
-
-   | Step | What came of it |
-   |---|---|
-   | The set with its lens as a mesh clip, and the camera `look` wrote from `lens.txt` | The frame it was rebuilt from, drawn again: the stones, the hedge, and the sign where the footage has them. A lens of 39.9 degrees. |
-   | The set in the path's size, and the camera `look` wrote from `cameras.txt` | The footage's first, middle, and last frames, each drawn again with the stones where that frame has them: the camera turns 2 degrees and the set turns with it. 65 frames placed, in 3 to 11 keys a value. |
-   | A box added on the path, on a track under the camera's | Hidden by the set's ground where it is under it, by the pixel; `look` with `shows` says how much. |
-   | `render s1 {guide.mp4} pass=depth`, then the model that makes the shot | A red crate where the box is, on every frame, in a grassy scene of the model's own: 100 s. |
-   | That take's depth read back, and `look` with `follows` | In 4, below. |
-
-   What it shows, and what it does not. The way works from footage to a
-   take, with every step a line of a recipe or of `look`, and the numbers
-   that place a camera hold on a set a model made. Three things were found
-   on the way. A box set down by eye, to look as if it stood on the path,
-   was two frame heights off in the air behind it, where the same pixels
-   are: the picture did not say so and the depth pass did. A clip on a
-   track above the camera's was laid over the set and not sorted with it,
-   the camera's track parting the two, and the lines `look` writes put the
-   camera on top; a track that draws nothing no longer parts what is in
-   depth (Motion). And the server makes a set seen through the wrong lens from a
-   guide that is not the size its model runs at, so `set-views` sends its
-   guide at that size ([shots.md](shots.md#a-picture-read-back)). The set
-   that comes in the path's size is, as it comes, the near ground and
-   little else; with `confidence=0` it is the whole frame, sky and all, as
-   surfaces. It is one shot, in which the camera hardly moves, and one
-   small model.
-
-   *A shot whose camera travels* (2026-11-13). Four seconds filmed from a
-   car driving down a street between houses in daylight, 65 frames at 16 a
-   second and 640x360, cut from the middle of a dashboard camera's frame to
-   leave out the dashboard, from Wikimedia Commons (*On the Road: Driving
-   through Kranj*, Renato Lozinšek, CC BY 3.0); it is not in the
-   repository. The camera goes 2.5 of the path's units down the street and
-   pans 6 degrees, where the walk above turned 2 and went nowhere. One
-   recipe read it back in 1 min 42 s: a set and a path of one reading, a
-   set and its lens by the other model, and the shot's depth.
-
-   | Step | What came of it |
-   |---|---|
-   | The set of frame 0 in the path's size, and the camera `look` wrote with `frame` 0, as for the walk | Nothing: every frame black. The path counts its places from frame 36, which the model picked, and the set of frame 0 is in that frame's space; taken to be in frame 0's, the camera starts past it and drives away. |
-   | The same with `frame` 36, the path's `anchor` | Frame 0 drawn again where the footage has it. By the middle of the shot the camera is past all of it: as it comes (`confidence=0.1`) a set is the near ground. |
-   | The set of frame 0 with `confidence=0` | The whole frame as surfaces. At frames 32 and 64 the far houses and the building on the right stand where the footage has them and as large, and the road is gone. |
-   | Sets of frames 32 and 64 beside it, each a mesh clip of its own on a track over the camera's | The road, the kerb, the stone wall, and the houses where the footage has them on frames 0, 32, and 64. All three are in the one space, so each was made as tall as its file is beside the first one's and moved until its file's origin, which `look` with a lens alone places, was the first one's. |
-   | A crate on the pavement at the end of the wall, on a track over the camera's and the sets' | 0.2% of the frame at the start and 1.6% at the end, a third of it hidden by the sets' surfaces at the start and none at the end (`look` with `shows`), by the pixel: the three sets and the crate are one run in depth across the camera's track (Motion). |
-   | `render s2 {guide.mp4} pass=depth`, then the model that makes the shot | A street of yellow stone walls that keeps the guide's shapes and its holes, with no crate to be told from the wall: 94 s. |
-   | The same with the guide drawn as its picture | The houses, the road, and a wooden crate where the box is: 66 s. |
-   | Those takes read back, held to the guide | In 4, below. |
-
-   What it shows, and what it does not. A camera a model found of a
-   travelling shot holds through the whole of it, once the set is taken to
-   be where the path has it: four seconds down a street, and the houses
-   stay on the houses. Three things were found on the way. **A set of the
-   path's own reading is in the space of the frame the path counts from**,
-   and not of the frame it shows; the walk, whose camera stood nearly
-   still, could not show the difference, and here it was the whole picture.
-   `look` now returns that frame as `anchor` and says so where `frame` is
-   another, and what the workflow says of itself was wrong and is put
-   right. **A set of one frame is what the camera leaves**, so a travelling
-   shot wants sets of several frames, which the one space allows, and
-   `look` with `mesh` and `beside` writes the line that puts one where
-   another is (it was four numbers a set by hand the first time). Five
-   sets a second apart, each with every pixel, leave 6 to 13% of the frame
-   empty after the first frame, where the set of frame 0 alone left 35 to
-   59%; what moved in the footage, a car ahead, is in each set where it
-   then was. **The two models do not agree on the lens**: the path's has
-   37.2 degrees down the frame, between 36.4 and 38.1, and the one that
-   rebuilds a frame alone has 22.8, of the same footage. The sets have
-   holes where a surface turns from the camera, a third to a half of the
-   frame, and the model that makes the shot kept them as black.
-
-   *A size found for two models* (2026-11-13). With `fits`, `look` finds
-   how much of a set one of a path's units is from the footage, with no
-   model ([shots.md](shots.md#a-picture-read-back),
-   `kerf-mcp/src/set_scale.rs`): the set is drawn through the path at a run
-   of sizes on the four frames furthest from the set's own, and held to
-   the footage by the pixel. On the shot above, each in about ten seconds:
-
-   | The set | The size found | The picture's error there, of 255 | `sure`: half or twice the size, over that |
-   |---|---|---|---|
-   | Of the path's own reading, where the size is 1 | 0.956 | 29.1 | 1.57 |
-   | Of the other model, with no lens given: `look` finds 22.7 from frame 0 of the footage, 6.3 times surer than a quarter either way, where the model's own file says 22.8 | 20.0 | 46.8 | 1.12 |
-   | Of the other model, seen through its own lens of 22.8 degrees | 20.1 | 46.8 | 1.13 |
-   | The same, the path's travel along the way the set was seen made 1.68 times longer, by the two lenses (`deep`) | 17.9 | 45.2 | 1.21 |
-   | Of the other model, through the path's lens of 37.2 | 3.24 | 44.5 | 1.04, which is no finding |
-
-   Where the answer is known it is found to within a twentieth. For the
-   two models it is 20.1, and with the camera written at that size frame 0
-   is the footage's, and at frames 32 and 64 the houses stand near where
-   the footage has them with the camera a little short of where it went:
-   the two disagree on the lens by more than a half, so no one size is
-   right on every frame, which `sure` at 1.13 says. Through the wrong lens
-   the fit is flat and is said to be. Making the path's forward travel
-   longer by the ratio of the two lenses, since a set through a narrower
-   lens is that much deeper, has the houses larger at frames 32 and 64, as
-   the footage has them, and still not to the pixel; `look` does that
-   where it finds the set's lens is not the path's. So two models can be
-   used together coarsely, and one reading is still the way to have them
-   meet.
-
-   What moved is left out by time and not by a new kind of set: each
-   set's clip made to last only about its own frame, overlapping the next,
-   the car ahead is where it is on each frame and the smear is gone, at
-   the cost of the holes fewer sets leave, 17 to 32% of the frame.
-
-   *Not done:* one set of a whole shot, whole and with nothing in it that
-   moved. Two ways to it with what is in reach were tried (2026-11-13) and
-   left. Joined on the server, four frames' sets come back as one mesh
-   with one picture, the first frame's, on all four, and fit the footage
-   worse than one frame's set (a picture error of 43.7 for 29.1). Shown at
-   once in Kerf, three frames' sets as three clips under the one camera,
-   the first frame's surfaces, stretched where that frame saw them
-   edge-on, stand in front of the later frames' from where those were
-   filmed. With those surfaces dropped (`discontinuity=0.01`), four
-   frames' sets at once cover more of the frame than one (0.33 to 0.64 of
-   it on five frames, for 0.05 to 0.19) and match the footage worse where
-   they draw (a mean difference of 63 to 85 of 255, for 47 to 66): the
-   road goes with the stretched surfaces, and the same house stands in
-   several places, a frame's set not lying quite where another's does. A whole set takes fusing the views, dropping what each sees
-   badly, which is a rebuilder's work; sets timed to the part of the shot
-   each was seen in stay the way. Also not done: the two
-   models' lenses reconciled further than by their ratio along one way
-   (letting the footage choose the stretch about that ratio was tried: it
-   chose more, 2.2 for 1.68, for a picture error a hundredth less, and the
-   houses at the last frame were no nearer their size in the footage, so
-   the ratio is kept); splats. Of those the server has
-   a node that makes a mesh of one, so a workflow can hand Kerf the `.glb`
-   a mesh clip reads and the compositor need draw none; what it has no
-   model for is rebuilding a scene as splats, only a thing. So the half
-   that needs no model is in (2026-11-13): `set-splats`, a workflow of
-   `kerf-comfy`, takes a scene kept as splats, whatever made it, as a
-   line's `ref=`, and has the server's nodes make the mesh a `gen=mesh@1`
-   clip reads. Run on a scene written by hand as 14,300 splats, a floor, a
-   wall, and a red box of side 1 three units ahead, it gave a `.glb` of
-   554,166 corners in 13 s whose box is within 0.06 of the one written
-   on every side (x -0.56 to 0.56 for -0.5 to 0.5, y -0.94 to 0.06 for -1
-   to 0, z -3.56 to -2.44 for -3.5 to -2.5: fatter by a splat's width),
-   the floor within 0.05, in the file's units and turned to Kerf's axes,
-   so a camera at the origin sees the box ahead of it on the floor before
-   the wall, looked at. Splats of a filmed scene were not tried: nothing
-   in reach makes them.
-4. **A take held to its guide by numbers.** Every row of the tables above
-   was judged by eye: place, path, size. The whole frame's rank correlation
-   (3) does not replace the eye: the wrong take scored 0.966. What does is
-   the same two depths read by the clip, which is in: `look` with `follows`
-   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/follows.rs`).
-   The guide's ids pass says which pixels are a clip's, and over those it
-   says how far the take's order of near and far is from the guide's, as a
-   share of the frame's order, with the direction kept: where a subject is
-   not where the guide has it, what was behind it is there, and is farther.
-   On the scene of `fixtures/shots/car`, 64 frames, with no model: the
-   guide's own depth pass handed back as the take, and the same played
-   backward, each through an encoder as a take is.
-
-   | The take's depth | `order`, the whole frame | `off`, the whole frame | the road | the car's body | its cabin |
-   |---|---|---|---|---|---|
-   | The guide's own | 0.999 | 0.009 | 0.008 | 0.016 | 0.021 |
-   | The guide's, played backward | 0.971 | 0.032 | 0.023 | 0.094 | 0.217 |
-
-   The whole frame moves by a thirtieth, and the subject by six and ten
-   times. It needs a model to read the take's depth and nothing else, and
-   draws the guide's two passes itself.
-
-   On the filmed shot of 3, with real takes and their depth read back by
-   a model, the box added to the set:
-
-   | The guide | `order` | `off`, the whole frame | the set | the box |
-   |---|---|---|---|---|
-   | The box standing on the path | 0.833 | 0.112 | 0.112 | 0.118 |
-   | The box in the air two frame heights behind, looking as if it stood there | 0.787 | 0.122 | 0.111 | 0.507, all of it nearer |
-
-   In both the take has a crate where the box is in the picture. Where the
-   box stood on the ground it is as far off as the frame is. Where the
-   guide had it far away and the model drew it standing on the near ground,
-   as it looked, it is four times the frame, and `farther` says which way.
-   So it reads a subject's depth and not only its place, and it is read
-   beside the frame's own `off`, which here is a tenth: the set has holes
-   and a sky as a surface, and the model drew trees there. Two takes of one
-   shot.
-
-   What it does not say is where the subject is, and that is the other
-   half, which is in: `look` with `placed`
-   ([shots.md](shots.md#a-picture-read-back), `kerf-engine/src/placed.rs`).
-   The guide's ids pass gives the box around a clip on each frame, as
-   `shows` does; the subject is found on the frame the guide shows most of
-   it on and followed from there to both ends (`kerf_track::roto`), in the
-   take and in the guide's own picture, and the two boxes are held
-   together in frame heights. It reads the take's picture, so it needs no
-   model. Following the guide's own picture as well came of measuring: held
-   to the box of the ids pass, the guide's own picture was 0.030 off and
-   1.40 times the size, a tracker's box being wider than a pass's by its
-   edge and by what the set hides of the crate.
-
-   On the travelling shot of 3, the crate, 65 frames:
-
-   | The take | `follows`: `order` | `off`, the frame | `off`, the crate | `placed`: frames followed | `off` | `across` | `size` |
-   |---|---|---|---|---|---|---|---|
-   | The guide's own picture, through an encoder | | | | 65 | 0.006 | 0.001 | 1.04 |
-   | The same moved 40 pixels of 832 to the right, which is 0.083 | | | | 65 | 0.085 | 0.085 | 1.05 |
-   | Guided by the sets' picture | 0.859 | 0.109 | 0.068 | 62 | 0.024 | 0.017 | 1.23 |
-   | Guided by the sets' depth | 0.912 | 0.080 | 0.029 | 1 | | | |
-
-   What it says. `placed` measures a move as the move it is: 0.085 for
-   0.083, over a floor of 0.006. The picture-guided take has its crate
-   0.024 of a frame height from where it was asked for, four times the
-   floor and a quarter of a crate's width, and drew it a fifth larger. The
-   depth-guided take is the better by `follows`, on the whole frame and on
-   the crate's pixels alike, and has no crate: it was followed on one frame
-   of 65, since what the model drew there is wall. So the two are read
-   together. Depth by the clip says the shape was kept; the place says
-   there is a thing there to find; and a take can pass either alone. One
-   shot and one small model, again, and a subject that is 1% of the frame.
-
-   *One number for the place*, and the guide with fewer holes. `placed`
-   also gives `overlap`: how much of the two boxes is in both, of what is
-   in either, as a mean over every frame the guide shows the clip on, with
-   a frame the subject was not followed on as none. So it falls for a
-   subject that is aside, for one drawn another size, and for one that is
-   not there, and is what two takes are chosen between by. With the five
-   sets of 3 in the guide, which leave a tenth of the frame empty where
-   the three left a third to a half, both takes were made again, the
-   prompt and the seed as they were:
-
-   | The take | `follows`: `order` | `off`, the frame | `placed`: frames followed, of 65 | `off` | `size` | `overlap` |
-   |---|---|---|---|---|---|---|
-   | The guide's own picture, through an encoder | | | 65 | 0.006 | 1.00 | 0.90 |
-   | The same moved 0.083 to the right | | | 65 | 0.091 | 1.00 | 0.22 |
-   | Guided by the five sets' picture | 0.893 | 0.100 | 32 | 0.027 | 1.16 | 0.35 |
-   | Guided by the five sets' depth | 0.928 | 0.079 | 44 | 0.038 | 0.82 | 0.38 |
-   | The first picture-guided take, held to this guide | | | 62 | 0.054 | 0.96 | 0.42 |
-   | The first depth-guided take, which had no crate | | | 1 | | | 0.002 |
-
-   What it says. A guide with fewer holes is followed better by both
-   (`order` 0.859 to 0.893 and 0.912 to 0.928), and the depth-guided take
-   is now a street with a road and houses where it was walls about a void,
-   with a crate where one was asked for on two thirds of the frames. No
-   take has the crate as the guide has it: the best is 0.42 where the
-   guide's own picture is 0.90, and the take with nothing there is 0.002,
-   so the number orders them as the eye does. It also shows what a set of
-   several frames costs: the car ahead in the footage is in each set where
-   it then was, a smear along the road by the last frame, and both takes
-   drew things there, the depth-guided one a second crate.
-
-   *One number for a take.* `look` with `held` reads both at once, of the
-   clips named as the guide's subjects, and gives each a number from 0 to
-   1: the overlap of where the take has it with where it was asked for,
-   less by how far its depth is off, and their mean for the take. Of the
-   two takes above it is 0.31 for the picture-guided one and 0.35 for the
-   depth-guided one, 0.25 for one guided by `pass=relative`, where the first depth-guided take, with no crate, is
-   0. The subjects are named and not guessed: by how much of the frame a
-   clip has, four of the five sets were taken for subjects.
-
-   What is still not done is a set with what moved left out, and either
-   reading on more than a shot or two. Either is what lets an agent say of a
-   take what a person says of it, and choose between two.
-5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is
-   of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds
-   them under `guides`, a take is held to each, and `kerf-comfy` sends one
-   to the workflow blank of its name ([shots.md](shots.md#recipes)). A
-   It was run on the one model in reach, which reads a picture and a
-   mask of it (`kerf-comfy`'s `shot-into`): the footage of Next 3 with a
-   box's place in flat grey as the guide, the same box in white on black
-   as `guide_mask`, both drawn by Kerf through the camera a model found.
-   The take is the footage with a red container standing where the box
-   was put, on all 65 frames of a shot that travels: outside the mask it
-   is 7.3 of 255 from the footage, a grey a pixel, and inside it 49.1;
-   `placed` has the container 0.027 of a frame height from the box, 0.90
-   its size, with an `overlap` of 0.66, where the best take that made the
-   whole picture had 0.42. A box 1% of the frame was filled in from its
-   surroundings and no crate drawn; one of 2.7% was made. So what the
-   loop was for is done once, end to end: a thing put into a filmed shot
-   by where it stands in the scene. The set hides the thing in a second
-   making: `render … matte=<clip>` draws one clip in white on black, as
-   much of it as shows among the sets, and the workflow takes the footage
-   as it is and greys the masked place itself. That take has a box where
-   the matte is, cut by the wall's end, and brown where a red one was
-   asked for: the smaller and more ragged the place, the less this model
-   draws what the prompt says there. A
-   `generate` line handed a model one
-   guide. A model that reads a picture and its depth, or depth and ids,
-   wants each named. No model in reach reads two of those, and Wan VACE takes one
-   control video, so a picture with its depth waits for one that does.
+   *Not done:* one set of a whole shot with nothing in it that moved
+   (joined on the server, shown at once, and with stretched surfaces
+   dropped were each tried and fit the footage worse than sets timed to
+   their part of the shot: it takes fusing the views, a rebuilder's work);
+   splats made of a filmed scene, which nothing in reach makes; the two
+   lenses reconciled further than by their ratio.
+4. **A take held to its guide by numbers**, which is in
+   ([the record](docs/shots-measured.md)). `look` with `follows` holds a take's depth to its
+   guide's by the clip, `placed` follows a clip's subject in the take and
+   in the guide's own picture and holds the two boxes together, and `held`
+   gives a take one number of both. `placed` measures a move of 0.083 as
+   0.085 over a floor of 0.006, and its `overlap` orders takes as the eye
+   does: 0.90 for the guide's own picture, 0.42 for the best take that made
+   the whole picture, 0.002 for one with nothing there. The two are read
+   together, since a take can pass either alone. On a third scene, the
+   car of `fixtures/shots/car`, the place does not order takes as the eye
+   did (2026-11-14): the take that kept the guide's boxes as boxes has the
+   body at an `overlap` of 0.72, the one that made a car of them 0.40,
+   since a car is a quarter larger than its box, and the nearly black one
+   0.52. So `overlap` says how nearly what is there is the box that was
+   asked for, which is what was wanted of a crate and not of a car drawn
+   from two solids; it chooses between takes of one guide, and is no
+   judge of which guide made the better picture. On a second filmed shot
+   the two halves parted the other way: a picture-guided take with its
+   crate in place (`overlap` 0.86) and its depth read against the guide's
+   through the set's holes, and a depth-guided one that kept the depth
+   and stood its crate elsewhere.
+5. **More than one guide on a line**, which is in
+   ([the record](docs/shots-measured.md)): `guide_<name>=`, each sent to the workflow blank
+   of its name. `shot-into` reads the footage and a mask and puts a thing
+   into the footage where a box stands in the scene, on all 65 frames of
+   the travelling shot, the rest 7 of 255 from what it was (`overlap`
+   0.66); `render … matte=<clip>` draws the mask with what the set hides
+   cut out. A picture with its depth waits for a model that reads both.
 6. **How a point moves, as a direction of its own**, which is in
-   (2026-11-13): `generate … moves=<clip>` puts a clip's
-   place on each frame in the request, read from the frame as `shows`
-   reads it, and `kerf-comfy` fills a workflow's `{moves}` blank with them
-   as tracks of points in the model's pixels
-   ([shots.md](shots.md#where-a-thing-goes), `recipe/moves.rs`). On the
-   travelling shot the crate's 65 places are the boxes `shows` gives. The
-   model that follows points is still not on the server, so it was run on
-   the one that is, which follows a layout: `kerf-comfy` draws the boxes
-   as a video, white with each box's edge in black (`{moves_video}`), and
-   its workflow `shot-led` hands the model that and the prompt, with no
-   picture of the scene at all. The take is a street of the model's own
-   with a red container that goes where the box goes, small at the left
-   at the start and large at the right at the end, on all 65 frames:
-   `placed` has it 0.040 of a frame height from the box, 0.002 across and
-   0.027 down, 1.14 times its size, with an `overlap` of 0.57. So where a
-   thing goes is a direction a model follows by itself, apart from what
-   the scene looks like, and the document says it by naming a clip. ComfyUI has nodes for
-   Wan-Move, which follows paths of points given as coordinates
-   (`WanMoveTracksFromCoords`). A clip's place on each frame is what `shows`
-   reads and what the document says outright, so its path is there to hand
-   over, as a signal's numbers are. The weights were not on the server. The node
-   that reads the points is, and was run (2026-11-13): `moves-shown` has it
-   read what `kerf-comfy` fills `{moves}` with and draws the points over a
-   guide. Over the take `shot-led` made, the crate's point is on the
-   container on the frames looked at, so the text Kerf hands is the text
-   the node reads, in the model's pixels; what is untried is the model. It
-   would be the fourth row of the table at the top: where, when, what, and
-   how each thing goes.
-7. **A signal measured** (2026-11-13), on the one model in reach, which
-   takes no number a frame and does take a mask a frame. `kerf-comfy`
-   hands a signal to a workflow as a grey video, each frame as light as
-   the signal is then (`{signal_video}`), and a workflow that comes with
-   it, `shot-timed`, has the model keep its guide where the signal is 0
-   and make the frame anew where it is 1. On the travelling shot of 3,
-   the sets' picture as the guide, a signal that steps at the middle
-   frame, and how far each frame of the take is from its guide, in grey
-   of 255, by a script kept out of the repository:
-
-   | The signal | Frames where it is 0 | Frames where it is 1 | The two, frame by frame (correlation) |
-   |---|---|---|---|
-   | 0 for the first 32 frames, then 1 | 7.6 from the guide | 17.1 | 0.93 |
-   | 1 for the first 32 frames, then 0 | 6.8 | 12.1 | 0.84 |
-
-   The take leaves its guide where the signal says and when it says, the
-   other way round as readily, and begins three frames before the step:
-   the model makes four frames as one. So a number over time reaches a
-   model and is followed, and what it does there is a workflow's to say;
-   here it is how much of the guide is kept. Still wanting is a model
-   that takes the number itself, for what a mask cannot say: how fast,
-   how bright, how much.
-8. **In the editor**, both in (2026-11-13). A signal's curve is drawn
-   where its clip is, in the timeline under the picture: its number along
-   the clip, 0 at the bottom and 1 at the top, filled under as a sound's
-   level is, from values the timeline's view now carries for a signal
-   clip. It is seen and not yet drawn by hand: its keys are still text.
-   Choosing a take: Takes, on a media in the bin, lists
-   the takes its recipe has made, which a snapshot's sources now carry,
-   and has the media be another.
+   ([the record](docs/shots-measured.md)): `generate … moves=<clip>` hands a clip's place on
+   each frame, as a layout (`shot-led`, `overlap` 0.57) or as tracks of
+   points with a picture to start from (`shot-moved`, 0.60). One track
+   says where and not how large (0.48, a third too large), so a clip is
+   five, its box's middle and toward its corners. Nothing is said of the
+   rest of the scene, which stays about where the first frame has it. It
+   is the fourth row of the table at the top: where, when, what, and how
+   each thing goes.
+7. **A signal measured** ([the record](docs/shots-measured.md)): handed as a mask a frame
+   (`shot-timed`), a take leaves its guide where the signal says and when
+   (correlation 0.93, and 0.84 the other way round). Still wanting is a
+   model that takes the number itself, for what a mask cannot say.
+8. **In the editor**, both in: a signal's curve is drawn in its clip in
+   the timeline, and drawn by hand there, Option-drag across the clip
+   writing its `value` as the fewest keys that say the line, and Takes, on a media in
+   the bin, has the media be another of its recipe's takes.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -1319,7 +901,11 @@ Three limits remain, in this order:
 
    Last of this round, what generates a picture over the clip's, to put behind a title or lay over a frame: Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid. The 4-Color Gradient and the Grid are from one source, for which `Num` got a remainder, and as `f32` they come to the CPU's very values. The other three are by hand: a Ramp works out in 64 bits how far along a pixel is; a Gradient scatters by a hash of 64 bits of where a pixel is, which the kernels already had for Light Leaks; and a Checkerboard's squares go by whole numbers, odd and even, and it goes over the picture in one of six ways. Held per value (4.0e-7 at worst of the 2e-3 allowed) and per frame (a mean of at most 0.008 of 255, no pixel off by more than 2), and in an HDR sequence, on llvmpipe, and not timed: `frame_bench` has `four colors`, `grid`, `ramp`, `gradient`, and `checkerboard`.
 
-   That is 18 kernels, and 45 of the catalog's 224 where there were 63. Eight take their arithmetic from one source and ten are by hand, and what decided each was whether its arithmetic, written over `Num`, could come to the CPU's very values: where the CPU works in 64 bits, reads another pixel or a table, or counts in whole numbers, it could not, and a kernel by hand held within a tolerance is what the rest already are. `kerf-kernel` is 1,472 lines for it, from 875. What the one source gave here is not fewer lines but a test with no GPU: the CPU's code stays where it is, so nothing is saved in writing, and each kernel from the source is held to that code to the bit on every machine, where a kernel by hand is held to it only where there is a GPU. The same round has `the_kernels_are_wgsl`, which reads all the kernels' WGSL with naga and no GPU: twice a name WGSL keeps for itself (`from`) stopped every kernel building, which on a machine with no GPU nothing else would have said. What is left without a kernel reads other frames, another track, the whole picture's statistics, or text, or is restoration, retouching, or 360°, and was not in this round.
+   Then a 360° frame turned, seen through another field of view, or with a flat picture put on it (VR Rotate Sphere, VR Projection, VR Plane to Sphere; 2026-11-14): each pixel is a way on the sphere, turned, and read where it then points, in each view of a frame that holds two. By hand, for Corner Pin's reason, and with one thing said another way: the CPU takes a latitude by an arcsine, which in 32 bits loses half its digits near a pole, 6e-3 at worst where 2e-3 is allowed, so the kernel takes it by the arctangent of the same triangle. Held per value and per frame, and in an HDR sequence, on llvmpipe, and not timed: `frame_bench` has `sphere` and `plane to sphere`. Optics Compensation, kept from EffectCraft, followed: a lens's curve put in or taken out, between a pass that encodes the picture for it and one that decodes it, as Radial Zoom Blur goes; a picture that grows to keep its stretched corners is still the CPU's. Held per value (within 4e-3, as Radial Zoom Blur is) and per frame, on llvmpipe; `frame_bench` has `optics`. And the Advanced Spill Suppressor where it is told its key (its Ultra method), a pixel at a time in the one pass that goes there and back, as the other kept color tools go; its other method finds the key by adding up the whole picture and stays the CPU's, which is what it is set to as it comes. And the Simple Choker drawing a matte in: the least alpha within its radius along a row and then down a column, at the whole pixels either side of what is asked at once, and the picture put under the matte between the two; spreading a matte grows the picture and finds colors for what was clear, and stays the CPU's. And the Key Cleaner: the picture blurred by the box passes a Gaussian is, a soft edge's color taken toward it, and the matte given its contrast, between the passes that go there and back; with Reduce Chatter it stays the CPU's.
+
+   33 of the catalog's 207 send a frame to the CPU at their defaults, from 39, and those stay there, by decision (2026-11-14). Each is an algorithm of the CPU's: it measures the whole picture before it changes a pixel (the three Auto color tools, Shadow/Highlight, Remove Grain, the Advanced Spill Suppressor finding its own key, Dust & Scratches' and Median's sorting), reads other frames or works out a motion (Warp Stabilizer, Rolling Shutter Repair, Reduce Interlace Flicker, Posterize Time, Auto Reframe, Auto Align, Morph Cut), searches for what to paint (Fill, Heal, Clone, Warp, Paint Bucket, Stroke, Upscale), draws text or sound (the four text effects, the two audio visualizers), reads another track (Track Matte), blurs a 360° frame by a width that changes with every row (VR Blur, Sharpen, De-Noise), or weighs every pixel around each one (Bilateral Blur). No look or grade reaches one, which `catalog_cost` holds.
+
+   Before that round it was 18 kernels, and 45 of the catalog's 224 where there were 63. Eight take their arithmetic from one source and ten are by hand, and what decided each was whether its arithmetic, written over `Num`, could come to the CPU's very values: where the CPU works in 64 bits, reads another pixel or a table, or counts in whole numbers, it could not, and a kernel by hand held within a tolerance is what the rest already are. `kerf-kernel` is 1,472 lines for it, from 875. What the one source gave here is not fewer lines but a test with no GPU: the CPU's code stays where it is, so nothing is saved in writing, and each kernel from the source is held to that code to the bit on every machine, where a kernel by hand is held to it only where there is a GPU. The same round has `the_kernels_are_wgsl`, which reads all the kernels' WGSL with naga and no GPU: twice a name WGSL keeps for itself (`from`) stopped every kernel building, which on a machine with no GPU nothing else would have said. What is left without a kernel reads other frames, another track, the whole picture's statistics, or text, or is restoration, retouching, or 360°, and was not in this round.
 
    Three effects cost seconds a frame or close to it, at their defaults, and no look or grade reaches them. Each stayed on the CPU and got a better algorithm, as the numbers below decided. With the same bench, median frame in ms, and for the fills a box as wide as its share of the frame:
 
@@ -1644,7 +1230,7 @@ That loudness is the media's own. `look` with `loudness` gives the sequence's, a
 
 Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
-**Packaging.** Done: a Windows zip that runs on its own, checked by running it with nothing else on PATH, and its GPL source (`scripts/package-kerf-windows.ps1`, `.github/workflows/package.yml`), and a macOS app that carries Qt, FFmpeg and every Homebrew library it loads, checked to load nothing from outside itself and run with nothing of Homebrew's on PATH, with the source of each formula it carries (`scripts/package-kerf-macos.sh`, `collect-kerf-macos-sources.sh`). A published release is checked as someone downloads it: `verify-release.yml` fetches its Windows zip and macOS app onto fresh runners with no FFmpeg or Qt, on macOS with Homebrew moved out of reach, unpacks them, and runs `check-kerf-windows.ps1` and `check-kerf-macos.sh`, the checks the packaging scripts run on what they pack: ffmpeg, ffprobe, `kerf --version`, `kerfd --endpoint` and the editor's start window, with nothing else on PATH. Since a runner's System32 has the C++ runtime that a package might leave out, and a build machine names its Qt's plugins in `QT_PLUGIN_PATH` (install-qt-action sets it, and the checks now clear it), the Windows check lists each library the running editor loaded, which has to be the package's or Windows' own; on macOS dyld names each library loaded (`DYLD_PRINT_LIBRARIES`), which has to be inside the app or macOS's. It also holds that each package has its sha256 and source beside it, and that the checks fail a package with a library taken out. The Package workflow runs it on each release it publishes, and by hand it takes a tag. Fixed here: the Windows package was checked on the machine that built it with `QT_PLUGIN_PATH` naming that machine's Qt, so the packaged editor loaded its platform and style plugins from there and not from the package; the zip itself carries both and, on a fresh runner, loads them (v0.1.0, run 42586335808), so the check was what was wrong. And kerfd, kerf and the editor looked for ffmpeg and ffprobe on `PATH` and in Homebrew, not beside themselves, so on a Mac without Homebrew's FFmpeg the app's own went unused and media imported without a probe, at a made-up size, rate and length; Windows was spared only because a Windows program looks in its own folder first. They now look beside themselves after `KERF_FFMPEG` (`kerf-engine/src/ffmpeg.rs`), the checks have the package's kerfd import a clip its own ffmpeg made and read it back at 320x240, 25 fps and 2 s, and 0.1.1 carries the fix. Verify release on v0.1.0 fails that check on macOS. And the macOS app kept rpaths into Homebrew (the editor's into Homebrew's Qt, two libraries' into the Cellar) and Qt's plugins one to a `lib` folder beside the app, where dyld would look for an `@rpath` library before the app's own; only rpaths inside the app stay now. The Windows release also has an installer, from the same folder (`apps/kerf-qt/packaging/windows/kerf.iss`, Inno Setup): per user, with no administrator, into `%LOCALAPPDATA%\Programs\Industrial Kerf`, with a Start menu entry, `kerf://` registered under `HKCU\Software\Classes` so a review link opens the editor, and an uninstaller. `check-kerf-windows-installer.ps1` installs it silently on the runner, runs the installed copy through `check-kerf-windows.ps1`, finds the Start menu entry and the scheme as Explorer resolves it (`AssocQueryString`), follows a `kerf://` link through the shell and finds the installed editor started with it, then uninstalls and finds each of those gone; the Package workflow runs it on what it builds and Verify release on a published one. Not signed, so SmartScreen asks before it runs. Windows starts an editor for each followed link, as it does any program a link opens, and on Windows and Linux one started for links alone hands them to the editor already open and ends, so the link raises that editor as macOS's does; with none open, or none answering within two seconds, it opens them itself (`link_inbox.cpp`, `link_inbox_test.cpp`). The inbox is a local socket only the user's own processes can reach (`QLocalServer::UserAccessOption`), named by an id the user's settings keep, so another user can neither work the name out nor take it first, and on Linux it is in the user's own runtime folder; the one handing over lets the other come to the front (`AllowSetForegroundWindow`). Qt Network is linked on Windows and Linux only for it; macOS gets the link in the running app. Linux has a package too, a folder packed as a `.tar.xz` (`scripts/package-kerf-linux.sh`, built on Ubuntu 24.04 with the Qt and the BtbN FFmpeg the other two use): the programs in `bin/`, and in `lib/` each library they load in turn that is not one the system has to provide (`apps/kerf-qt/packaging/linux/system-libraries.txt`: glibc, libstdc++, X11 and libxcb, OpenGL, fontconfig, D-Bus, GLib, ALSA, Kerberos, OpenSSL), with an RPATH of `$ORIGIN/../lib`, which comes before `LD_LIBRARY_PATH`. `check-kerf-linux.sh` holds every library a binary names to be carried or on that list, runs the tools, the kerfd import and the editor's start window on Xvfb with nothing on `PATH` and no library or Qt plugin path, and fails if `LD_DEBUG` shows Qt, a Qt plugin, ICU, FFmpeg or anything the package carries loaded from outside it. Verify release runs it on a fresh runner and in a Debian 13 container, each with only that list installed. Fixed here: the fresh runner was given Xvfb alone, and its image has no `libOpenGL.so.0` or `libEGL.so.1`, which every desktop has and the list names, so v0.1.1's first verification failed there with the package itself sound (its build machine and the Debian run have them). Its source adds the source of each Ubuntu package it carries a library of (`collect-kerf-linux-sources.sh`). It carries the xcb platform only (Wayland desktops run it through XWayland), and runs only where glibc and libstdc++ are as new as Ubuntu 24.04's. A folder registers nothing of itself, so it carries `install-desktop-entry.sh` (`apps/kerf-qt/packaging/linux/`), which for the user alone writes a desktop entry that runs the folder's editor with a link and makes it the default for `x-scheme-handler/kerf` in `mimeapps.list`; `check-kerf-linux.sh` runs it in a scratch home, has GLib's `gio` name Kerf for `kerf://` and follow a link to the editor, and removes it, and a release from before it is checked without it. What Kerf runs on, by decision: Macs with Apple silicon, Windows x64 and Linux x86-64. Intel Macs are left out on purpose: Apple has sold none since 2023 and names macOS 26 the last macOS for them, an editor leans on Metal and VideoToolbox, where they are weakest, and it keeps one macOS build. Windows 11 on Arm can run the x64 build through Windows' emulation, and the installer lets it (`ArchitecturesAllowed=x64compatible`; Windows 10 on Arm runs no x64 program and is refused); no Arm machine has tried it. The macOS app needs macOS 26, also by decision: read from the v0.1.1 app's load commands (`minos`), the editor, FFmpeg and the other Homebrew libraries it carries, bottled for the runner's macOS 26, say 26.0, Homebrew's Qt frameworks 14.4, and the Rust programs 11.0. Going lower would take building it on an older macOS's runner, or the libraries from source, and is not worth it. Fixed here: `Info.plist` named no `LSMinimumSystemVersion`, so an older macOS refused v0.1.1 without saying why; `package-kerf-macos.sh` now writes 26.0 there (only the package, so an editor built on a developer's older Mac still opens), and `check-kerf-macos.sh` fails when any Mach-O file in the app needs a newer macOS than it names, as one built on a newer runner would, which the Package workflow shows on a copy that says 11.0. Kerf has an icon of its own, drawn once in `apps/kerf-qt/resources/icon/industrial-kerf.svg` and rendered by `tools/kerf-icon` to the PNG, `.ico` and `.icns` files beside it, which are in the repository so that no build needs a renderer; `cargo test -p kerf-icon` renders it again and fails when a file has drifted from the SVG. The editor sets it on its windows (`ui/app_icon.cpp`, `QApplication::setWindowIcon`; not on macOS, where the Dock shows the app's own); `kerf-qt.exe` carries the `.ico` as a resource (`kerf-qt.rc`), from which Explorer, the taskbar, the Start menu entry and `kerf://` links take it, and the installer wears it (`SetupIconFile`); the macOS app has the `.icns` in `Resources`, named by `CFBundleIconFile`, with its tile at macOS's 824 of 1024; and the Linux package carries the PNGs in `icons/`, which `install-desktop-entry.sh` installs into the user's hicolor theme for the entry's `Icon=industrial-kerf` and `--remove` takes out. The checks hold each: `check-kerf-windows.ps1` reads the first icon group in `kerf-qt.exe` and wants 16, 32, 48 and 256 pixels in it, `check-kerf-windows-installer.ps1` that links take their icon from the installed editor and that the installer's is the editor's, `check-kerf-macos.sh` that the file `Info.plist` names is in `Resources` and unpacks with `iconutil` to every size, which the Package workflow shows on a copy without it, and `check-kerf-linux.sh` that each size is found in the scratch home as a PNG of that size and gone after `--remove`. A release from before 0.1.2 has no icon and is checked without it. Its clip holds five photographs, all CC0 (`apps/kerf-qt/resources/icon/README.md`). Nobody has yet looked at it in a real Dock, taskbar or application menu. Linux has a `.deb` too, for Debian 13, Ubuntu 24.04 and what comes from them, made from the same folder (`scripts/package-kerf-linux-deb.sh`): the folder in `/opt/industrial-kerf`, the desktop entry in `/usr/share/applications` with `kerf://` in its `MimeType` (`packaging/linux/industrial-kerf.desktop`, held to the one `install-desktop-entry.sh` writes), the icon in the system's hicolor theme, and `kerf-qt`, `kerf`, `kerfd` and `kerf-mcp` on `PATH` as links into it, each finding the rest beside the file it really is; ffmpeg and ffprobe stay off `PATH`, where the distribution's own may be. It has no maintainer scripts: the desktop's own triggers read the entry and the icons. Its Depends are not written by hand: `dpkg-shlibdeps` reads out of the binaries which of the build machine's packages provide each library they name and the package does not carry, with the versions their symbols ask for, so apt brings what a bare system lacks and refuses one whose glibc is older than 2.39 rather than leave the editor not to start; OpenSSL and the Vulkan loader, loaded only when first used, are Recommends. `check-kerf-linux-deb.sh` installs it with apt, without the Recommends, finds every library its binaries name before anything else is installed, runs `check-kerf-linux.sh` on the installed folder, has kerfd started through its link import a clip and the editor through its link open its start window, finds the entry, the icon at each size and GLib naming Kerf for `kerf://` for a user who has set nothing, follows a link to the installed editor, and removes it and finds no file of it, nor its claim on `kerf://`, left. The Package workflow runs that in bare `ubuntu:24.04` and `debian:trixie` containers on what it builds, and shows it failing a `.deb` with `libopengl0` taken out of its Depends; Verify release runs it on a published one. Found here: FFmpeg's libavcodec, as BtbN builds it, has glibc's resolver built in and names nine of glibc's private symbols (`__resolv_context_get`, `__res_iclose`, `errno` and others; read from v0.1.1's), for which `dpkg-shlibdeps` allows the build machine's glibc alone, so the `.deb` keeps only the oldest glibc it asks for. The package runs on Debian 13's glibc 2.41, but a glibc that drops one of those would stop the folder and the `.deb` alike from loading FFmpeg, and nothing but a run on it would say so. Nobody has yet installed it from a desktop's software centre. Missing: an apt repository, so a newer Kerf comes as the download the editor's notice points to and not through `apt upgrade`; an rpm; and an AppImage.
+**Packaging.** Done: a Windows zip that runs on its own, checked by running it with nothing else on PATH, and its GPL source (`scripts/package-kerf-windows.ps1`, `.github/workflows/package.yml`), and a macOS app that carries Qt, FFmpeg and every Homebrew library it loads, checked to load nothing from outside itself and run with nothing of Homebrew's on PATH, with the source of each formula it carries (`scripts/package-kerf-macos.sh`, `collect-kerf-macos-sources.sh`). A published release is checked as someone downloads it: `verify-release.yml` fetches its Windows zip and macOS app onto fresh runners with no FFmpeg or Qt, on macOS with Homebrew moved out of reach, unpacks them, and runs `check-kerf-windows.ps1` and `check-kerf-macos.sh`, the checks the packaging scripts run on what they pack: ffmpeg, ffprobe, `kerf --version`, `kerfd --endpoint` and the editor's start window, with nothing else on PATH. Since a runner's System32 has the C++ runtime that a package might leave out, and a build machine names its Qt's plugins in `QT_PLUGIN_PATH` (install-qt-action sets it, and the checks now clear it), the Windows check lists each library the running editor loaded, which has to be the package's or Windows' own; on macOS dyld names each library loaded (`DYLD_PRINT_LIBRARIES`), which has to be inside the app or macOS's. It also holds that each package has its sha256 and source beside it, and that the checks fail a package with a library taken out. The Package workflow runs it on each release it publishes, and by hand it takes a tag. Fixed here: the Windows package was checked on the machine that built it with `QT_PLUGIN_PATH` naming that machine's Qt, so the packaged editor loaded its platform and style plugins from there and not from the package; the zip itself carries both and, on a fresh runner, loads them (v0.1.0, run 42586335808), so the check was what was wrong. And kerfd, kerf and the editor looked for ffmpeg and ffprobe on `PATH` and in Homebrew, not beside themselves, so on a Mac without Homebrew's FFmpeg the app's own went unused and media imported without a probe, at a made-up size, rate and length; Windows was spared only because a Windows program looks in its own folder first. They now look beside themselves after `KERF_FFMPEG` (`kerf-engine/src/ffmpeg.rs`), the checks have the package's kerfd import a clip its own ffmpeg made and read it back at 320x240, 25 fps and 2 s, and 0.1.1 carries the fix. Verify release on v0.1.0 fails that check on macOS. And the macOS app kept rpaths into Homebrew (the editor's into Homebrew's Qt, two libraries' into the Cellar) and Qt's plugins one to a `lib` folder beside the app, where dyld would look for an `@rpath` library before the app's own; only rpaths inside the app stay now. The Windows release also has an installer, from the same folder (`apps/kerf-qt/packaging/windows/kerf.iss`, Inno Setup): per user, with no administrator, into `%LOCALAPPDATA%\Programs\Industrial Kerf`, with a Start menu entry, `kerf://` registered under `HKCU\Software\Classes` so a review link opens the editor, and an uninstaller. `check-kerf-windows-installer.ps1` installs it silently on the runner, runs the installed copy through `check-kerf-windows.ps1`, finds the Start menu entry and the scheme as Explorer resolves it (`AssocQueryString`), follows a `kerf://` link through the shell and finds the installed editor started with it, then uninstalls and finds each of those gone; the Package workflow runs it on what it builds and Verify release on a published one. Not signed, so SmartScreen asks before it runs. Windows starts an editor for each followed link, as it does any program a link opens, and on Windows and Linux one started for links alone hands them to the editor already open and ends, so the link raises that editor as macOS's does; with none open, or none answering within two seconds, it opens them itself (`link_inbox.cpp`, `link_inbox_test.cpp`). The inbox is a local socket only the user's own processes can reach (`QLocalServer::UserAccessOption`), named by an id the user's settings keep, so another user can neither work the name out nor take it first, and on Linux it is in the user's own runtime folder; the one handing over lets the other come to the front (`AllowSetForegroundWindow`). Qt Network is linked on Windows and Linux only for it; macOS gets the link in the running app. Linux has a package too, a folder packed as a `.tar.xz` (`scripts/package-kerf-linux.sh`, built on Ubuntu 24.04 with the Qt and the BtbN FFmpeg the other two use): the programs in `bin/`, and in `lib/` each library they load in turn that is not one the system has to provide (`apps/kerf-qt/packaging/linux/system-libraries.txt`: glibc, libstdc++, X11 and libxcb, OpenGL, fontconfig, D-Bus, GLib, ALSA, Kerberos, OpenSSL), with an RPATH of `$ORIGIN/../lib`, which comes before `LD_LIBRARY_PATH`. `check-kerf-linux.sh` holds every library a binary names to be carried or on that list, runs the tools, the kerfd import and the editor's start window on Xvfb with nothing on `PATH` and no library or Qt plugin path, and fails if `LD_DEBUG` shows Qt, a Qt plugin, ICU, FFmpeg or anything the package carries loaded from outside it. Verify release runs it on a fresh runner and in a Debian 13 container, each with only that list installed. Fixed here: the fresh runner was given Xvfb alone, and its image has no `libOpenGL.so.0` or `libEGL.so.1`, which every desktop has and the list names, so v0.1.1's first verification failed there with the package itself sound (its build machine and the Debian run have them). Its source adds the source of each Ubuntu package it carries a library of (`collect-kerf-linux-sources.sh`). It carries the xcb platform only (Wayland desktops run it through XWayland), and runs only where glibc and libstdc++ are as new as Ubuntu 24.04's. A folder registers nothing of itself, so it carries `install-desktop-entry.sh` (`apps/kerf-qt/packaging/linux/`), which for the user alone writes a desktop entry that runs the folder's editor with a link and makes it the default for `x-scheme-handler/kerf` in `mimeapps.list`; `check-kerf-linux.sh` runs it in a scratch home, has GLib's `gio` name Kerf for `kerf://` and follow a link to the editor, and removes it, and a release from before it is checked without it. What Kerf runs on, by decision: Macs with Apple silicon, Windows x64 and Linux x86-64. Intel Macs are left out on purpose: Apple has sold none since 2023 and names macOS 26 the last macOS for them, an editor leans on Metal and VideoToolbox, where they are weakest, and it keeps one macOS build. Windows 11 on Arm can run the x64 build through Windows' emulation, and the installer lets it (`ArchitecturesAllowed=x64compatible`; Windows 10 on Arm runs no x64 program and is refused); no Arm machine has tried it. The macOS app needs macOS 26, also by decision: read from the v0.1.1 app's load commands (`minos`), the editor, FFmpeg and the other Homebrew libraries it carries, bottled for the runner's macOS 26, say 26.0, Homebrew's Qt frameworks 14.4, and the Rust programs 11.0. Going lower would take building it on an older macOS's runner, or the libraries from source, and is not worth it. Fixed here: `Info.plist` named no `LSMinimumSystemVersion`, so an older macOS refused v0.1.1 without saying why; `package-kerf-macos.sh` now writes 26.0 there (only the package, so an editor built on a developer's older Mac still opens), and `check-kerf-macos.sh` fails when any Mach-O file in the app needs a newer macOS than it names, as one built on a newer runner would, which the Package workflow shows on a copy that says 11.0. Kerf has an icon of its own, drawn once in `apps/kerf-qt/resources/icon/industrial-kerf.svg` and rendered by `tools/kerf-icon` to the PNG, `.ico` and `.icns` files beside it, which are in the repository so that no build needs a renderer; `cargo test -p kerf-icon` renders it again and fails when a file has drifted from the SVG. The editor sets it on its windows (`ui/app_icon.cpp`, `QApplication::setWindowIcon`; not on macOS, where the Dock shows the app's own); `kerf-qt.exe` carries the `.ico` as a resource (`kerf-qt.rc`), from which Explorer, the taskbar, the Start menu entry and `kerf://` links take it, and the installer wears it (`SetupIconFile`); the macOS app has the `.icns` in `Resources`, named by `CFBundleIconFile`, with its tile at macOS's 824 of 1024; and the Linux package carries the PNGs in `icons/`, which `install-desktop-entry.sh` installs into the user's hicolor theme for the entry's `Icon=industrial-kerf` and `--remove` takes out. The checks hold each: `check-kerf-windows.ps1` reads the first icon group in `kerf-qt.exe` and wants 16, 32, 48 and 256 pixels in it, `check-kerf-windows-installer.ps1` that links take their icon from the installed editor and that the installer's is the editor's, `check-kerf-macos.sh` that the file `Info.plist` names is in `Resources` and unpacks with `iconutil` to every size, which the Package workflow shows on a copy without it, and `check-kerf-linux.sh` that each size is found in the scratch home as a PNG of that size and gone after `--remove`. A release from before 0.1.2 has no icon and is checked without it. Its clip holds five photographs, all CC0 (`apps/kerf-qt/resources/icon/README.md`). Nobody has yet looked at it in a real Dock, taskbar or application menu. Linux has a `.deb` too, for Debian 13, Ubuntu 24.04 and what comes from them, made from the same folder (`scripts/package-kerf-linux-deb.sh`): the folder in `/opt/industrial-kerf`, the desktop entry in `/usr/share/applications` with `kerf://` in its `MimeType` (`packaging/linux/industrial-kerf.desktop`, held to the one `install-desktop-entry.sh` writes), the icon in the system's hicolor theme, and `kerf-qt`, `kerf`, `kerfd` and `kerf-mcp` on `PATH` as links into it, each finding the rest beside the file it really is; ffmpeg and ffprobe stay off `PATH`, where the distribution's own may be. It has no maintainer scripts: the desktop's own triggers read the entry and the icons. Its Depends are not written by hand: `dpkg-shlibdeps` reads out of the binaries which of the build machine's packages provide each library they name and the package does not carry, with the versions their symbols ask for, so apt brings what a bare system lacks and refuses one whose glibc is older than 2.39 rather than leave the editor not to start; OpenSSL and the Vulkan loader, loaded only when first used, are Recommends. `check-kerf-linux-deb.sh` installs it with apt, without the Recommends, finds every library its binaries name before anything else is installed, runs `check-kerf-linux.sh` on the installed folder, has kerfd started through its link import a clip and the editor through its link open its start window, finds the entry, the icon at each size and GLib naming Kerf for `kerf://` for a user who has set nothing, follows a link to the installed editor, and removes it and finds no file of it, nor its claim on `kerf://`, left. The Package workflow runs that in bare `ubuntu:24.04` and `debian:trixie` containers on what it builds, and shows it failing a `.deb` with `libopengl0` taken out of its Depends; Verify release runs it on a published one. Found here: FFmpeg's libavcodec, as BtbN builds it, has glibc's resolver built in and names nine of glibc's private symbols (`__resolv_context_get`, `__res_iclose`, `errno` and others; read from v0.1.1's), for which `dpkg-shlibdeps` allows the build machine's glibc alone, so the `.deb` keeps only the oldest glibc it asks for. The package runs on Debian 13's glibc 2.41, but a glibc that drops one of those would stop the folder and the `.deb` alike from loading FFmpeg, and nothing but a run on it would say so. Nobody has yet installed it from a desktop's software centre. Linux has an `.rpm` too, for Fedora and what installs rpms as it does, from the same folder and with what the `.deb` adds (`scripts/package-kerf-linux-rpm.sh`). Its Requires are read out of the binaries, since rpm's own reading would name what the folder carries as wanted from the system: each library a binary names that `lib/` does not carry, by the name every rpm distribution provides it under (`libX11.so.6()(64bit)`), and the newest version of the C library's symbols any asks for, so dnf brings what a bare system lacks and refuses a C library that is too old. `check-kerf-linux-rpm.sh` asks of it what the `.deb`'s check asks, installed by dnf without its Recommends in a bare `fedora` container, which the Package workflow runs on what it builds. Missing: an apt or dnf repository, so a newer Kerf comes as the download the editor's notice points to and not through an upgrade; openSUSE and others that install rpms were not tried; and an AppImage.
 
 **Signing.** Missing on both. macOS gets an ad-hoc signature (`codesign --sign -` in `install-kerf-local.sh`), with no Developer ID, hardened runtime, entitlements or notarization, so Gatekeeper refuses a downloaded copy; nothing signs the Windows zip (no `signtool`).
 
@@ -1656,7 +1242,7 @@ Surveyed on 2026-11-08 at `3a175ca`. Each line names what shows it.
 
 **Settings and projects.** Done: the editor's settings carry a version, `settings/version`, and `migrateSettings` brings an older Kerf's up to it once at start, before anything reads them, and leaves a newer Kerf's alone (`settings_migration.cpp`, `settings_migration_test.cpp`). Version 1 drops the nine keys no code reads any more, and the model the editor wrote into every save before `c58bca5` (`claude-sonnet-4-20250514`, or `claude-3-5-sonnet-latest` from its menu), which held a person who never chose one to a retired model; a model someone chose stays. The Deliver panel's keys from before W3 are still read in place (`render_queue_view.cpp`), since they name a folder and not the path a migration would need. API keys live in the system keychain, macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (`kerf_secret`, `kerf-qt-bridge/src/secrets.rs`, through the `keyring` crate), and one left in plain QSettings moves there the next time the editor loads it; where the keychain cannot be reached, or refuses a key, they stay in QSettings as before (`secret_store.cpp`, `secret_store_test.cpp`). The Kerf Cloud token is kept there too (`cloud_session.rs`): one left in its 0600 file by an older Kerf moves into the keychain the first time the editor reads it, and where no keychain can be reached it stays in the file, as before (`docs/cloud.md`). Those tests take both ways with a keychain in memory and with `KERF_SECRETS=off`, and never touch a real one; `a_key_round_trips_through_the_real_keychain` and `real_keychain_keeps_the_token_out_of_the_file` do, and CI runs them on each system's own store: the login keychain on macOS, Credential Manager on Windows, and gnome-keyring's Secret Service on Linux (`rust-runtime.yml`, Test the system keychain). Credential Manager takes no value over 1280 UTF-16 units, so on Windows a key that long stays in QSettings and a token that long in the file. Fixed here: a key changed while the keychain refused it (locked, or a prompt denied) went to QSettings with the older one still in the keychain, and the next start read the older one and dropped the new; a key in QSettings is now taken first, since only a refused or an older Kerf's key is there (`aKeyTheKeychainRefusedWinsOverTheOneKeptBefore`). Fixed here: Windows sets no `HOME`, so the editor found no `cloud.json` there and Kerf Cloud said it was unavailable; it now takes `USERPROFILE`. A project is `kerf 1` and any other number is refused (`kerf-lang/src/doc.rs`), which is right until the first change to the format, and that change needs a reader of the old one. Fixed here: the editor offered retired Anthropic models and wrote one into new settings, so it overrode kerf-agent's `claude-opus-5-5` (`comments_test.cpp`).
 
-**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Missing: effects that still send a frame to the CPU: 39 of the 206 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). They were 101 of 262 until the 38 that make a look a model makes better, or do what a clip's own properties do, were cut (What these rules cut), and 45 of 224 until the second cut took 15 more, six of them among those with no kernel (What is looked at again). None of the 29 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which to give a kernel first, and they go by what an editor needs exact and who writes it: Corner Pin, which tracking writes, then Drop Shadow, Rounded Crop, Spacer, and Mosaic, then Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, and the Cineon Converter, then Lens Distortion and Magnify, then Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid have theirs, and they were 63 before those (The engine). `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
+**Engine.** Done, and measured: the GPU path and its parity with the CPU (The engine, Kernels). Left on the CPU by decision, as algorithms of its own (The engine, More of the frame on the GPU): 33 of the 207 video effects, generators and transitions at their defaults (`kerf-compose/tests/catalog_cost.rs` lists them with why). They were 101 of 262 until the 38 that make a look a model makes better, or do what a clip's own properties do, were cut (What these rules cut), and 45 of 224 until the second cut took 15 more, six of them among those with no kernel (What is looked at again). None of the 29 looks and grades reaches one, and of the transitions only Morph Cut does, which the test holds; nothing in `skills/`, the presets or the agent's reference applies one either. So no use in the repository says which to give a kernel first, and they go by what an editor needs exact and who writes it: Corner Pin, which tracking writes, then Drop Shadow, Rounded Crop, Spacer, and Mosaic, then Curves, Hue/Saturation, Selective Color, Photo Filter, Unmult, and the Cineon Converter, then Lens Distortion and Magnify, then Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid have theirs, and they were 63 before those (The engine). `KERF_GPU=software` lets Mesa's llvmpipe stand in for a GPU, to check kernels where there is none; on it 378 of the 379 tests in `kerf-gpu`, `kerf-compose`, `kerf-engine` and `kerf-kernel` pass, and `every_scene_draws_as_the_cpu_draws_it` fails only on `color.basic`, every pixel within 2 of 255 but 0.9 off on average against the 0.6 it allows, from llvmpipe's `pow` and `exp`. CI's Linux job runs the catalog's list on llvmpipe, but not the parity tests, which it could only pass by loosening that one; and no timing comes from it. The quality numbers for roto under blur, `image.fill`, Bokeh Blur and Remove Grain are now checked on real footage too (Real footage); real film grain is still untried. A title turns its font's OpenType features on and off by tag, `features="tnum ss01 -liga salt=2"`: tabular figures, a slashed zero, fractions, small capitals where the font has them, stylistic sets and alternates, over what the font has on by itself (`kerf_model::parse_features`, `TextStyle::features`, which harfrust shapes by). A title that names what is no feature is refused when the document reads; `look` with `font` names the features each face has; the check measures a title with them, since tabular figures widen a row of Inter's 1s by more than half (`a_title_is_measured_with_its_features`), and says as information when the font has not the one asked for (`no_effect`). Captions, and text set by an effect, take none yet, and the FFmpeg graph draws no title that names any, as it draws none that sets an axis. The editor was not run with it: its Inspector shows a generator's text parameters as a line of text, and nobody has seen this one there. Text still has no colour glyphs, hinting or hyphenation (`kerf-text/README.md`).
 
 **Delivery.** Done: a blocking note holds every delivery back, Deliver, the toolbar's Export and an agent's `render` alike, since kerfd refuses a `full` or `master` render while one is open (`review::delivery_held`; `a_blocking_note_holds_a_delivery_back_and_not_a_draft`, `exportWaitsForBlockingNotesAsDeliverDoes`). A QC error that no comment mirrors, past the bridge's cap of new QC comments, holds back only Deliver.
 

@@ -4,7 +4,8 @@ name: Package
 # complete source of each, kept as this run's artifacts: the Windows zip and installer
 # (scripts/package-kerf-windows.ps1) and their source (collect-kerf-windows-sources.sh),
 # the macOS app (package-kerf-macos.sh) and its source (collect-kerf-macos-sources.sh),
-# and the Linux tar.xz and .deb (package-kerf-linux.sh, package-kerf-linux-deb.sh) and
+# and the Linux tar.xz, .deb and .rpm (package-kerf-linux.sh, package-kerf-linux-deb.sh,
+# package-kerf-linux-rpm.sh) and
 # their source (collect-kerf-linux-sources.sh). All carry a GPL build of FFmpeg: publish
 # each with its source. By hand (Actions > Package > Run workflow), and when what makes them
 # changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
@@ -31,6 +32,8 @@ on:
       - "scripts/check-kerf-linux.sh"
       - "scripts/package-kerf-linux-deb.sh"
       - "scripts/check-kerf-linux-deb.sh"
+      - "scripts/package-kerf-linux-rpm.sh"
+      - "scripts/check-kerf-linux-rpm.sh"
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
@@ -55,6 +58,8 @@ on:
       - "scripts/check-kerf-linux.sh"
       - "scripts/package-kerf-linux-deb.sh"
       - "scripts/check-kerf-linux-deb.sh"
+      - "scripts/package-kerf-linux-rpm.sh"
+      - "scripts/check-kerf-linux-rpm.sh"
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "tools/kerf-guide/**"
@@ -287,7 +292,7 @@ jobs:
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libclang-dev libasound2-dev pkg-config patchelf xvfb xauth dpkg-dev \
+            libclang-dev libasound2-dev pkg-config patchelf xvfb xauth dpkg-dev rpm \
             libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-xinput0 \
@@ -303,7 +308,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build, pack and run the package, and make the .deb
+      - name: Build, pack and run the package, and make the .deb and the .rpm
         run: scripts/package-kerf-linux.sh
       # The .deb where nothing of a desktop is installed yet, on each distribution it is
       # for: apt has to bring all it needs from its Depends alone, and then it runs,
@@ -339,6 +344,12 @@ jobs:
           grep -q 'libOpenGL.so.0' "$RUNNER_TEMP/short.log" || { cat "$RUNNER_TEMP/short.log" >&2; exit 1; }
           echo "Failed, as it should: $(tail -n 1 "$RUNNER_TEMP/short.log")"
           rm -rf "$short" "$RUNNER_TEMP/short.deb"
+      # The .rpm likewise, where dnf has to bring all it needs from its Requires alone.
+      - name: Install the .rpm on Fedora, follow a link and remove it
+        run: |
+          rpm="$(readlink -f target/package-linux/*.rpm)"
+          docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$rpm:/industrial-kerf.rpm:ro" fedora:latest \
+            /scripts/check-kerf-linux-rpm.sh /industrial-kerf.rpm
       # The source takes several GB; the build's own are no longer needed.
       - name: Free the build's space
         run: rm -rf target/release target/qt-linux
@@ -352,6 +363,8 @@ jobs:
             target/package-linux/*.tar.xz.sha256
             target/package-linux/*.deb
             target/package-linux/*.deb.sha256
+            target/package-linux/*.rpm
+            target/package-linux/*.rpm.sha256
           compression-level: 0
           retention-days: 90
           if-no-files-found: error

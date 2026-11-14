@@ -4310,6 +4310,36 @@ mod tests {
     }
 
     #[test]
+    fn a_signals_number_drawn_by_hand_is_its_clips_keyed_value() {
+        let (mut runtime, directory) = kernel_runtime("signal-drawn");
+        runtime
+            .apply_script_request(
+                "ui",
+                "add",
+                "track add V2 video\noverwrite gen=signal@1 at=0f dur=48f on=V2 as=swell\n",
+                0,
+            )
+            .unwrap();
+        // What the timeline sends when a number is drawn across a signal clip.
+        let drawn: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "set", "clip": "swell", "props": {"value": {"keys": [
+                {"at": 0, "value": 0.25, "interp": "linear"},
+                {"at": 24, "value": 1.0, "interp": "linear"},
+                {"at": 47, "value": 0.0, "interp": "linear"}
+            ]}}}
+        ]))
+        .unwrap();
+        runtime.apply_ops_request("ui", "draw", drawn, 1).unwrap();
+        let document = runtime.document(false);
+        assert!(
+            document.contains("set value={0f:0.25 24f:1 47f:0}"),
+            "{document}"
+        );
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn set_renames_a_clip_and_an_empty_name_restores_its_own() {
         let (mut runtime, directory) = kernel_runtime("rename");
         let rename: Vec<EditOp> = serde_json::from_value(json!([

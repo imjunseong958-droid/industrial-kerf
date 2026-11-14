@@ -137,6 +137,65 @@ private slots:
         QVERIFY(TimelineWidget::signalCurve(QJsonArray{}, rect).isEmpty());
     }
 
+    // Option-drag across a signal clip draws its number: the frames the pointer passed
+    // become keys of the clip's `value`, as few as say the line.
+    void aSignalsNumberIsDrawnByHand() {
+        // A straight rise is its two ends; a corner is a key.
+        QMap<int, double> line;
+        for (int frame = 0; frame <= 10; ++frame) line.insert(frame, frame / 10.0);
+        QCOMPARE(TimelineWidget::signalKeys(line).size(), 2);
+        QMap<int, double> corner = line;
+        for (int frame = 11; frame <= 20; ++frame) corner.insert(frame, 1.0);
+        const QJsonArray keys = TimelineWidget::signalKeys(corner);
+        QCOMPARE(keys.size(), 3);
+        QCOMPARE(keys.at(1).toObject().value("at").toInt(), 10);
+        QCOMPARE(keys.at(1).toObject().value("value").toDouble(), 1.0);
+        QVERIFY(TimelineWidget::signalKeys({}).isEmpty());
+
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject clip{{"id", "swell"}, {"name", "Signal"}, {"kind", "generator"}, {"generator", "signal"},
+                               {"timelineStart", 1.0}, {"duration", 4.0}, {"signal", QJsonArray{0.0, 1.0}}};
+        const QJsonObject timelineJson{{"fps", 25.0}, {"duration", 10.0},
+                                       {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"name", "V1"}, {"clips", QJsonArray{clip}}}}}};
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 10}, {"timeline", timelineJson}});
+        TimelineWidget &timeline = *window.m_timeline;
+        timeline.resize(1100, 400);
+        timeline.setScale(100.0);
+        timeline.setAllTrackHeights(kLargeTrackHeight);
+        const QRect bounds = timeline.clipBounds(QStringLiteral("swell"));
+        QVERIFY(bounds.width() > 100);
+        QSignalSpy drawn(&timeline, &TimelineWidget::signalDrawn);
+        const auto send = [&](QEvent::Type type, const QPoint &at, Qt::MouseButtons held) {
+            QMouseEvent event(type, QPointF(at), timeline.mapToGlobal(QPointF(at)), Qt::LeftButton, held, Qt::AltModifier);
+            QApplication::sendEvent(&timeline, &event);
+        };
+        // From the bottom at its start to the top at its middle and across to its end.
+        const QPoint start(bounds.left() + 1, bounds.bottom() - 2);
+        const QPoint middle(bounds.center().x(), bounds.top() + 2);
+        const QPoint end(bounds.right() - 1, bounds.top() + 2);
+        send(QEvent::MouseButtonPress, start, Qt::LeftButton);
+        send(QEvent::MouseMove, middle, Qt::LeftButton);
+        send(QEvent::MouseMove, end, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, end, Qt::NoButton);
+        QCOMPARE(drawn.count(), 1);
+        QCOMPARE(drawn[0][0].toString(), QStringLiteral("swell"));
+        const QJsonArray written = drawn[0][1].toJsonValue().toObject().value("keys").toArray();
+        QCOMPARE(written.size(), 3);
+        QCOMPARE(written.first().toObject().value("at").toInt(), 0);
+        QVERIFY(written.first().toObject().value("value").toDouble() < 0.1);
+        QVERIFY(std::abs(written.at(1).toObject().value("at").toInt() - 50) <= 2);
+        QVERIFY(written.at(1).toObject().value("value").toDouble() > 0.9);
+        QCOMPARE(written.last().toObject().value("at").toInt(), 99);
+        // Sent as a typed set of the clip's value.
+        const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
+        QCOMPARE(op.value("clip").toString(), QStringLiteral("swell"));
+        QCOMPARE(op.value("props").toObject().value("value").toObject().value("keys").toArray(), written);
+        // The clip did not move.
+        QCOMPARE(timeline.clipBounds(QStringLiteral("swell")), bounds);
+    }
+
     void targetTogglesChooseWhereSourceEditsLand() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));

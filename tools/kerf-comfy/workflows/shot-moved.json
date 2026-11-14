@@ -1,0 +1,228 @@
+{
+  "kerf-comfy": 1,
+  "about": "A shot that starts as a picture and whose subject goes where a clip of the guide's sequence goes: the clip's box on each frame is handed over as five tracks of points, its middle and toward its corners (moves=<clip>), the picture as the first frame (first=<picture>), and the prompt says what is in it. It reads no guide: the picture and the points are all it is told of the scene. It is made in 4 steps, by weights added to the model's for that.",
+  "fps": 16,
+  "frames": {
+    "most": 81,
+    "step": 4
+  },
+  "size": [
+    832,
+    480
+  ],
+  "multiple": 16,
+  "set": {
+    "negative": "blurry, low quality, static, text, watermark",
+    "steps": 4,
+    "cfg": 1.0,
+    "shift": 5.0,
+    "strength": 1.0,
+    "sampler": "uni_pc",
+    "scheduler": "simple",
+    "unet": "Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors",
+    "vae": "wan_2.1_vae.safetensors",
+    "text_encoder": "umt5_xxl_fp16.safetensors",
+    "vision": "clip_vision_h.safetensors",
+    "lora": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+  },
+  "workflow": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "{unet}",
+        "weight_dtype": "default"
+      }
+    },
+    "2": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "{text_encoder}",
+        "type": "wan"
+      }
+    },
+    "3": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{vae}"
+      }
+    },
+    "4": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "2",
+          0
+        ],
+        "text": "{prompt}"
+      }
+    },
+    "5": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "2",
+          0
+        ],
+        "text": "{negative}"
+      }
+    },
+    "6": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{first}"
+      }
+    },
+    "7": {
+      "class_type": "CLIPVisionLoader",
+      "inputs": {
+        "clip_name": "{vision}"
+      }
+    },
+    "8": {
+      "class_type": "CLIPVisionEncode",
+      "inputs": {
+        "clip_vision": [
+          "7",
+          0
+        ],
+        "image": [
+          "6",
+          0
+        ],
+        "crop": "none"
+      }
+    },
+    "17": {
+      "class_type": "PrimitiveStringMultiline",
+      "inputs": {
+        "value": "{moves_box}"
+      }
+    },
+    "18": {
+      "class_type": "WanMoveTracksFromCoords",
+      "inputs": {
+        "track_coords": [
+          "17",
+          0
+        ]
+      }
+    },
+    "9": {
+      "class_type": "WanMoveTrackToVideo",
+      "inputs": {
+        "positive": [
+          "4",
+          0
+        ],
+        "negative": [
+          "5",
+          0
+        ],
+        "vae": [
+          "3",
+          0
+        ],
+        "strength": "{strength}",
+        "width": "{width}",
+        "height": "{height}",
+        "length": "{frames}",
+        "batch_size": 1,
+        "start_image": [
+          "6",
+          0
+        ],
+        "tracks": [
+          "18",
+          0
+        ],
+        "clip_vision_output": [
+          "8",
+          0
+        ]
+      }
+    },
+    "10": {
+      "class_type": "ModelSamplingSD3",
+      "inputs": {
+        "model": [
+          "19",
+          0
+        ],
+        "shift": "{shift}"
+      }
+    },
+    "12": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "10",
+          0
+        ],
+        "positive": [
+          "9",
+          0
+        ],
+        "negative": [
+          "9",
+          1
+        ],
+        "latent_image": [
+          "9",
+          2
+        ],
+        "seed": "{seed}",
+        "steps": "{steps}",
+        "cfg": "{cfg}",
+        "sampler_name": "{sampler}",
+        "scheduler": "{scheduler}",
+        "denoise": 1.0
+      }
+    },
+    "14": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "12",
+          0
+        ],
+        "vae": [
+          "3",
+          0
+        ]
+      }
+    },
+    "15": {
+      "class_type": "CreateVideo",
+      "inputs": {
+        "images": [
+          "14",
+          0
+        ],
+        "fps": "{fps}"
+      }
+    },
+    "16": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": [
+          "15",
+          0
+        ],
+        "filename_prefix": "video/kerf",
+        "format": "auto",
+        "format.codec": "auto"
+      }
+    },
+    "19": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {
+        "model": [
+          "1",
+          0
+        ],
+        "lora_name": "{lora}",
+        "strength_model": 1.0
+      }
+    }
+  }
+}

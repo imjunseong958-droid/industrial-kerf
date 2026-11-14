@@ -95,6 +95,11 @@ jobs:
             grep -qxF "$deb.sha256" assets.txt || missing+="$deb.sha256"$'\n'
             grep -qxF "${deb%.deb}.tar.xz" assets.txt || missing+="${deb%.deb}.tar.xz"$'\n'
           done
+          # The .rpm, from 0.1.2, likewise.
+          for rpm in $(grep -E -- '-linux-x64\.rpm$' assets.txt || true); do
+            grep -qxF "$rpm.sha256" assets.txt || missing+="$rpm.sha256"$'\n'
+            grep -qxF "${rpm%.rpm}.tar.xz" assets.txt || missing+="${rpm%.rpm}.tar.xz"$'\n'
+          done
           if [ -n "$missing" ]; then
             printf '%s has no:\n%s' "$TAG" "$missing" >&2
             exit 1
@@ -258,7 +263,8 @@ jobs:
           for try in $(seq 1 10); do
             gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir "$folder" --clobber \
               --pattern '*-linux-x64.tar.xz' --pattern '*-linux-x64.tar.xz.sha256' \
-              --pattern '*-linux-x64.deb' --pattern '*-linux-x64.deb.sha256' && break
+              --pattern '*-linux-x64.deb' --pattern '*-linux-x64.deb.sha256' \
+              --pattern '*-linux-x64.rpm' --pattern '*-linux-x64.rpm.sha256' && break
             [ "$try" -lt 10 ] || { echo "Could not download the release $TAG" >&2; exit 1; }
             sleep 30
           done
@@ -268,6 +274,12 @@ jobs:
           if [ -n "$deb" ]; then
             (cd "$folder" && sha256sum -c ./*-linux-x64.deb.sha256)
             echo "DEB=$deb" >> "$GITHUB_ENV"
+          fi
+          # The .rpm, from 0.1.2.
+          rpm="$(find "$folder" -name '*-linux-x64.rpm' | head -n 1)"
+          if [ -n "$rpm" ]; then
+            (cd "$folder" && sha256sum -c ./*-linux-x64.rpm.sha256)
+            echo "RPM=$rpm" >> "$GITHUB_ENV"
           fi
           mkdir -p "$RUNNER_TEMP/unpacked"
           tar -xJf "$folder"/*-linux-x64.tar.xz -C "$RUNNER_TEMP/unpacked"
@@ -316,6 +328,16 @@ jobs:
               /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb
             echo "::endgroup::"
           done
+      # The .rpm as dnf installs it, likewise.
+      - name: Install the .rpm on Fedora, follow a link and remove it
+        if: env.PACKAGE != ''
+        run: |
+          if [ -z "${RPM:-}" ]; then
+            echo "$TAG has no .rpm"
+            exit 0
+          fi
+          docker run --rm -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" -v "$RPM:/industrial-kerf.rpm:ro" fedora:latest \
+            /scripts/check-kerf-linux-rpm.sh /industrial-kerf.rpm
       - name: The check fails a package missing a library
         if: env.PACKAGE != ''
         run: |

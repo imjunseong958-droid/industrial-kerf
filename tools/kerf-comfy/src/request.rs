@@ -71,7 +71,19 @@ impl Moves {
     /// picture `width` by `height`: on a frame it does not show on, where it is on the
     /// nearest frame it does. A sequence of another shape fills the picture as its guide
     /// does, what is over cut off evenly. None where it shows on no frame.
-    pub fn points(&self, frames: u32, fps: f64, (width, height): (u32, u32)) -> Option<Vec<[f64; 2]>> {
+    pub fn points(&self, frames: u32, fps: f64, size: (u32, u32)) -> Option<Vec<[f64; 2]>> {
+        self.points_at([0.0, 0.0], frames, fps, size)
+    }
+
+    /// A point of its box on each frame, as [`Moves::points`] gives its middle: `at` is how
+    /// far from the middle toward the right and bottom edges, 1 being on them.
+    pub fn points_at(
+        &self,
+        at: [f64; 2],
+        frames: u32,
+        fps: f64,
+        (width, height): (u32, u32),
+    ) -> Option<Vec<[f64; 2]>> {
         let shown: Vec<usize> = (0..self.places.len())
             .filter(|frame| self.places[*frame].is_some())
             .collect();
@@ -88,7 +100,8 @@ impl Moves {
                         .min_by_key(|frame| frame.abs_diff(own))
                         .copied()
                         .unwrap_or(own);
-                    let [x, y, ..] = self.places[nearest].unwrap_or_default();
+                    let [x, y, w, h] = self.places[nearest].unwrap_or_default();
+                    let (x, y) = (x + at[0] * w / 2.0, y + at[1] * h / 2.0);
                     let (wide, tall) = self
                         .frame
                         .map_or((f64::from(width), f64::from(height)), |(wide, tall)| {
@@ -109,9 +122,30 @@ impl Moves {
 /// of `{"x": …, "y": …}` a frame, the tracks in a list, as text a node reads coordinates
 /// from.
 pub fn tracks(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
+    tracks_at(&[[0.0, 0.0]], moves, frames, fps, size)
+}
+
+/// Where in a clip's box the tracks of a `{moves_box}` are: its middle, and four points
+/// toward its corners, far enough in to be on what the box holds.
+const IN_A_BOX: [[f64; 2]; 5] = [
+    [0.0, 0.0],
+    [-0.7, -0.7],
+    [0.7, -0.7],
+    [-0.7, 0.7],
+    [0.7, 0.7],
+];
+
+/// What a workflow's `{moves_box}` blank is filled with: tracks as `{moves}` has them, five
+/// a clip, its middle and four points toward its corners, so that how large the clip is on
+/// each frame is said with where it is.
+pub fn tracks_of_boxes(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
+    tracks_at(&IN_A_BOX, moves, frames, fps, size)
+}
+
+fn tracks_at(at: &[[f64; 2]], moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
     let tracks: Vec<Vec<serde_json::Value>> = moves
         .iter()
-        .filter_map(|clip| clip.points(frames, fps, size))
+        .flat_map(|clip| at.iter().filter_map(move |at| clip.points_at(*at, frames, fps, size)))
         .map(|points| {
             points
                 .into_iter()
@@ -129,6 +163,10 @@ pub const MOVES: &str = "moves";
 /// of the frames asked for, white, with each clip's box drawn on it in black where it is on
 /// that frame, as a layout a model follows.
 pub const MOVES_VIDEO: &str = "moves_video";
+
+/// The blank that takes where clips go as five tracks of points a clip, its box's middle
+/// and four points toward its corners.
+pub const MOVES_BOX: &str = "moves_box";
 
 impl Moves {
     /// Its box on each of `frames` frames at `fps` a second, in pixels of a picture `width`
@@ -367,7 +405,7 @@ pub fn names_a_signal(name: &str) -> bool {
 /// Whether `name` is one a request hands something under, a file or a
 /// signal: a blank of that name is filled only by a request that has it.
 pub fn names_what_is_handed(name: &str) -> bool {
-    names_a_file(name) || names_a_signal(name) || name == MOVES || name == MOVES_VIDEO
+    names_a_file(name) || names_a_signal(name) || name == MOVES || name == MOVES_VIDEO || name == MOVES_BOX
 }
 
 #[cfg(test)]
@@ -527,6 +565,19 @@ mod tests {
         // One that shows on no frame is no track.
         let none = Moves { places: vec![None; 3], ..ball };
         assert_eq!(tracks(&[none], 2, 8.0, (200, 100)), "[]");
+        // With its box, a clip is five tracks: its middle, then toward each corner.
+        let boxed = Moves {
+            name: "box".to_owned(),
+            rate: 8.0,
+            frame: None,
+            places: vec![Some([0.5, 0.5, 0.2, 0.4])],
+        };
+        let said: serde_json::Value =
+            serde_json::from_str(&tracks_of_boxes(&[boxed], 1, 8.0, (200, 100))).unwrap();
+        assert_eq!(said.as_array().unwrap().len(), 5);
+        assert_eq!(said[0][0], serde_json::json!({"x": 100.0, "y": 50.0}));
+        assert_eq!(said[1][0], serde_json::json!({"x": 86.0, "y": 36.0}));
+        assert_eq!(said[4][0], serde_json::json!({"x": 114.0, "y": 64.0}));
         assert!(names_what_is_handed(MOVES));
     }
 

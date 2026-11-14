@@ -78,6 +78,7 @@ on `main`; its section here becomes the release's notes on GitHub
   in the units of the camera path found of the same frames.
 - A signal clip shows its number in the timeline, as a curve along the
   clip.
+- Option-drag across a signal clip in the timeline draws its number by hand.
 - A media's takes are in the editor: **Takes**, on the media in the bin,
   lists every take its recipe has made, with the one it is ticked, and
   choosing another has the media be that take again.
@@ -86,6 +87,21 @@ on `main`; its section here becomes the release's notes on GitHub
 - A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
   where that clip shows and black elsewhere, with what stands before it cut
   out, which is the mask a model is handed to make a thing in one place.
+- An `.rpm` for Fedora: `sudo dnf install ./Industrial-Kerf-…-linux-x64.rpm`
+  installs Kerf with what it needs from the system, as the `.deb` does on
+  Debian and Ubuntu; `sudo dnf remove industrial-kerf` takes it away.
+- Optics Compensation is drawn on the GPU, but where it grows the picture,
+  the Advanced Spill Suppressor with its Ultra method, the Simple Choker
+  where it draws a matte in, and the Key Cleaner.
+- VR Rotate Sphere, VR Projection and VR Plane to Sphere are drawn on the
+  GPU, so a 360° frame turned or re-projected no longer sends each frame to
+  the CPU.
+- `kerf-comfy`'s `depth` reads a take's depth in under half the time: it
+  refines once, for a depth a grey of 255 from before. `refine_steps=3` is
+  as it was.
+- `kerf-comfy` comes with `shot-moved`: a shot that starts as a picture
+  (`first=`) and whose subject goes where a clip goes (`moves=<clip>`), the
+  clip's box handed to a model as tracks of points.
 - `kerf-comfy` comes with `set-splats`: a scene kept as splats (`ref=scene.ply`)
   becomes the mesh a mesh clip reads, on the server's own nodes, with no model.
   And with `moves-shown`, which draws the points `moves=<clip>` hands a model

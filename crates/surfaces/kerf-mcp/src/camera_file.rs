@@ -26,9 +26,14 @@ pub(crate) struct Found {
     /// The frame the file counts its places from: the one whose camera is at the file's own
     /// origin, not turned. A model that reads frames together as views of one scene picks
     /// one of them, not always the first, and what it rebuilds of any of them is in that
-    /// one's space. None where no frame is there, or the file has no places.
+    /// one's space. It is the frame nearest there, since a model may leave it a little off.
+    /// None where no frame is there, or the file has no places.
     pub anchor: Option<usize>,
 }
+
+/// How near the file's origin, and how little turned, a frame's camera is for the file to be
+/// counting from it: each number of its place and its turning within this of none.
+const ANCHOR_WITHIN: f64 = 2e-3;
 
 impl Found {
     /// The lens of the middle of them, by size: a camera clip has one, and what a model
@@ -117,12 +122,23 @@ pub(crate) fn read(text: &str, origin: usize, scale: f64) -> Result<Found, Strin
             _ => Err("its `extrinsics` are not three rows of four a frame".to_owned()),
         })
         .collect::<Result<Vec<([Vector; 3], Vector)>, String>>()?;
-    let anchor = cameras.iter().position(|(turn, moved)| {
-        let still = moved.iter().all(|side| side.abs() < 1e-6);
-        still && (0..3).all(|row| (0..3).all(|column| {
-            (turn[row][column] - f64::from(u8::from(row == column))).abs() < 1e-6
-        }))
-    });
+    // The frame nearest the file's origin and least turned, where one is there to within what
+    // a path settles to: a model that balances its views about one of them leaves that one a
+    // few ten-thousandths off, and a path's own steps are larger.
+    let off = |(turn, moved): &([Vector; 3], Vector)| {
+        let turned = (0..3)
+            .flat_map(|row| (0..3).map(move |column| (row, column)))
+            .map(|(row, column)| (turn[row][column] - f64::from(u8::from(row == column))).abs())
+            .fold(0.0, f64::max);
+        moved.iter().fold(turned, |most, side| most.max(side.abs()))
+    };
+    let anchor = cameras
+        .iter()
+        .map(off)
+        .enumerate()
+        .filter(|(_, off)| *off < ANCHOR_WITHIN)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(frame, _)| frame);
     let Some((turn, moved)) = cameras.get(origin) else {
         return Err(format!(
             "it has {} frames, from 0, and no frame {origin}",
@@ -318,6 +334,10 @@ mod tests {
         let moved = PRINTED.replacen("0.0000e+00],\n          [ 0.0000e+00,  1.0000e+00", "5.0000e-01],\n          [ 0.0000e+00,  1.0000e+00", 1);
         assert_ne!(moved, PRINTED);
         assert_eq!(read(&moved, 0, 1.0).expect("a path").anchor, None);
+        // A frame a few ten-thousandths off the origin is still the one it counts from.
+        let nearly = PRINTED.replacen("0.0000e+00],\n          [ 0.0000e+00,  1.0000e+00", "3.0000e-04],\n          [ 0.0000e+00,  1.0000e+00", 1);
+        assert_ne!(nearly, PRINTED);
+        assert_eq!(read(&nearly, 0, 1.0).expect("a path").anchor, Some(0));
     }
 
     #[test]

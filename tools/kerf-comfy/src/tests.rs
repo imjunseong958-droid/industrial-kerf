@@ -652,18 +652,18 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "ray_pose");
     assert_eq!(graph["4"]["inputs"]["resolution"], json!(756));
 
-    // Depth is refined three times as it comes, and once where a line says so; `seconds` reads
-    // the guide's first frames only.
+    // Depth is refined once as it comes, and three times where a line says so; `seconds`
+    // reads the guide's first frames only.
     let (graph, _) = made(&asking("near.mp4", json!({})), "depth");
-    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
+    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
     assert_eq!(graph["5"]["inputs"]["output"], "depth");
     let mut short = asking(
         "short.mp4",
-        json!({"refine_steps": "1", "output": "normal_opengl"}),
+        json!({"refine_steps": "3", "output": "normal_opengl"}),
     );
     short.seconds = Some(0.5);
     let (graph, said) = made(&short, "depth");
-    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
+    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
     assert_eq!(graph["5"]["inputs"]["output"], "normal_opengl");
     assert!(said.contains("for 6 frames of 322x180"), "{said}");
 

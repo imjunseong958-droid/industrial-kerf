@@ -104,6 +104,152 @@ pub fn radial_zoom_kernel(
     })
 }
 
+/// Optics Compensation as a kernel, with its parameters read as [`apply`] reads them, or `None`
+/// for what stays on the CPU: a picture that grows to keep its stretched corners (`resize`).
+pub fn optics_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    use std::f64::consts::FRAC_PI_2;
+    let spec = spec("distort.opticscompensation")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let fov = values.f("fieldOfView").clamp(0.0, 179.0).to_radians();
+    if fov < 1e-6 {
+        return Some(Kernel::Nothing);
+    }
+    let reverse = values.b("reverseLensDistortion");
+    let optimal = values.b("optimalPixels");
+    if reverse && !optimal && values.e("resize") > 0 {
+        return None;
+    }
+    let (lw, lh) = (size.0 as f64, size.1 as f64);
+    let reach = match values.e("fovOrientation") {
+        1 => lh * 0.5,
+        2 => lw.hypot(lh) * 0.5,
+        _ => lw * 0.5,
+    }
+    .max(1.0);
+    let half = fov * 0.5;
+    let focal = reach / half.tan();
+    let center = values.v2("viewCenter").map(|v| v * per_source);
+    let fit = if optimal {
+        let far = [(0.0, 0.0), (lw, 0.0), (0.0, lh), (lw, lh)]
+            .iter()
+            .map(|p| (p.0 - center[0]).hypot(p.1 - center[1]))
+            .fold(1.0, f64::max);
+        if reverse {
+            let th = (far / reach * half).min(FRAC_PI_2 - 1e-3);
+            (focal * th.tan() / far).max(1.0)
+        } else {
+            ((far / focal).atan() / half * reach / far).min(1.0)
+        }
+    } else {
+        1.0
+    };
+    Some(Kernel::Optics {
+        center: [center[0] as f32, center[1] as f32],
+        fit: fit as f32,
+        focal: focal as f32,
+        reach: reach as f32,
+        half: half as f32,
+        reverse,
+    })
+}
+
+/// The Simple Choker as a kernel, with its parameters read as [`apply`] reads them, or `None` for
+/// what stays on the CPU: a matte spread, which grows the picture and finds colors for what was
+/// clear.
+pub fn choker_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    let spec = spec("matte.simplechoker")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let choke = values.f("chokeMatte") * per_source;
+    let matte = values.e("view") == 1;
+    if choke < -1e-6 {
+        return None;
+    }
+    if choke <= 1e-6 && !matte {
+        return Some(Kernel::Nothing);
+    }
+    let choke = choke.max(0.0);
+    let whole = choke.floor();
+    let between = (choke - whole) as f32;
+    Some(Kernel::Choke {
+        radius: whole as u32,
+        between: if between < 1e-4 { 0.0 } else { between },
+        choked: choke > 1e-6,
+        matte,
+    })
+}
+
+/// The Key Cleaner as a kernel, with its parameters read as [`apply`] reads them, or `None` for
+/// what stays on the CPU: Reduce Chatter, which blurs the matte by passes of another kind.
+pub fn key_cleaner_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    let spec = spec("key.keycleaner")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    if values.b("reduceChatter") {
+        return None;
+    }
+    let radius = (values.f("additionalEdgeRadius") * per_source).max(0.0);
+    let strength = values.f("strength") as f32 / 100.0;
+    let sigma = radius * 0.5;
+    // As `gaussian_blur` takes them: under a twentieth of a pixel the colors around a pixel are
+    // its own.
+    let around = (radius > 0.0 && strength > 0.0).then(|| {
+        if sigma > 0.05 {
+            kerf_raster_fx::box_radii(sigma, 3)
+                .into_iter()
+                .map(|r| r as u32)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    });
+    Some(Kernel::KeyCleaner {
+        around,
+        strength,
+        contrast: values.f("alphaContrast") as f32 / 100.0,
+    })
+}
+
 /// Add Grain as a kernel, with its parameters read as [`apply`] reads them, or `None` for what stays
 /// on the CPU: a Softness, whose blur of each plane costs what it costs there, and a view of its
 /// matte or a preview of its region.
@@ -272,6 +418,31 @@ pub fn color_kernel(
                     take,
                     relative: values.e("method") == 0,
                 }
+            }
+        }
+        // Its other method finds the key by adding up the whole picture, which a kernel cannot.
+        "key.advancedspill" if values.e("method") == 1 => {
+            let key = values.color("ultraSettings/keyColor");
+            let primary = if key[1] >= key[0] && key[1] >= key[2] {
+                1
+            } else if key[2] >= key[0] && key[2] >= key[1] {
+                2
+            } else {
+                0
+            };
+            let share = |id: &str| values.f(id) as f32 / 100.0;
+            KeptColor::Spill {
+                primary,
+                amount: share("suppression"),
+                range: share("ultraSettings/spillRange"),
+                luma: share("ultraSettings/lumaCorrection"),
+                key_hue: kerf_color::rgb_to_hsl(key[0], key[1], key[2])[0],
+                tolerance: values
+                    .get("ultraSettings/tolerance")
+                    .map_or(100.0, FxValue::as_f64) as f32
+                    / 100.0,
+                desaturate: share("ultraSettings/desaturate"),
+                neutral: share("ultraSettings/spillColorCorrection"),
             }
         }
         _ => return None,
@@ -446,6 +617,267 @@ impl EffectHost for Adapter<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_optics_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let bright = (x / 9 + y / 7) % 3 == 0;
+                let a = if y % 11 == 0 { 0.5 } else { 1.0 };
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let c = if bright { [1.0, 0.9, 0.7] } else { [u, v, 1.0 - u] };
+                px.extend_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        let flag = |on: bool| kerf_model::Param::Static(Value::Bool(on));
+        let choice = |name: &str| kerf_model::Param::Static(Value::Enum(name.into()));
+        // A lens's curve put in, taken out, measured each way, off its center, and fitted.
+        let cases: Vec<Vec<(&str, kerf_model::Param)>> = vec![
+            vec![("fieldOfView", number(70.0))],
+            vec![("fieldOfView", number(90.0)), ("reverseLensDistortion", flag(true))],
+            vec![("fieldOfView", number(120.0)), ("fovOrientation", choice("vertical"))],
+            vec![
+                ("fieldOfView", number(60.0)),
+                ("fovOrientation", choice("diagonal")),
+                ("viewCenter_x", number(0.3)),
+                ("viewCenter_y", number(0.6)),
+            ],
+            vec![("fieldOfView", number(100.0)), ("optimalPixels", flag(true))],
+            vec![
+                ("fieldOfView", number(80.0)),
+                ("reverseLensDistortion", flag(true)),
+                ("optimalPixels", flag(true)),
+            ],
+        ];
+        for params in cases {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("distort.opticscompensation").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            let said = format!("{:?}", params.iter().map(|(name, _)| *name).collect::<Vec<_>>());
+            for (name, value) in params {
+                effect.params.insert(name.into(), value);
+            }
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = optics_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 4e-3, "{said}: differs by {worst:.2e}");
+            assert_ne!(cpu.px, image.px, "{said} changes nothing");
+        }
+        // Nothing asked is nothing done, and a picture that grows is the CPU's.
+        let mut effect = Effect {
+            fx: kerf_model::Id::new("distort.opticscompensation").unwrap(),
+            version: 1,
+            enabled: true,
+            params: Default::default(),
+        };
+        assert!(matches!(
+            optics_kernel(&effect, Time::ZERO, (w, h), 1.0),
+            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+        ));
+        effect.params.insert("fieldOfView".into(), number(60.0));
+        effect.params.insert("reverseLensDistortion".into(), flag(true));
+        effect.params.insert("resize".into(), choice("max-2x"));
+        assert!(optics_kernel(&effect, Time::ZERO, (w, h), 1.0).is_none());
+    }
+
+    #[test]
+    fn the_choker_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        // A picture with a soft round matte, and a hole in it.
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 48.0, y as f32 - 27.0);
+                let far = (dx * dx + dy * dy).sqrt();
+                let hole = ((x as f32 - 60.0).powi(2) + (y as f32 - 20.0).powi(2)).sqrt();
+                let a = ((24.0 - far) / 6.0).clamp(0.0, 1.0) * ((hole - 3.0) / 2.0).clamp(0.0, 1.0);
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                px.extend_from_slice(&[u * a, v * a, (1.0 - u) * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        let choice = |name: &str| kerf_model::Param::Static(Value::Enum(name.into()));
+        let choker = |params: Vec<(&str, kerf_model::Param)>| {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("matte.simplechoker").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            for (name, value) in params {
+                effect.params.insert(name.into(), value);
+            }
+            effect
+        };
+        // A whole pixel, between two, many, and the matte shown, drawn in and as it is.
+        for (said, params) in [
+            ("1", vec![("chokeMatte", number(1.0))]),
+            ("2.4", vec![("chokeMatte", number(2.4))]),
+            ("7.5", vec![("chokeMatte", number(7.5))]),
+            ("3, its matte", vec![("chokeMatte", number(3.0)), ("view", choice("matte"))]),
+            ("its matte", vec![("view", choice("matte"))]),
+        ] {
+            let effect = choker(params);
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = choker_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 2e-3, "{said}: differs by {worst:.2e}");
+            assert_ne!(cpu.px, image.px, "{said} changes nothing");
+        }
+        // Nothing asked is nothing done, and a matte spread is the CPU's.
+        assert!(matches!(
+            choker_kernel(&choker(vec![]), Time::ZERO, (w, h), 1.0),
+            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+        ));
+        assert!(choker_kernel(&choker(vec![("chokeMatte", number(-2.0))]), Time::ZERO, (w, h), 1.0)
+            .is_none());
+    }
+
+    #[test]
+    fn the_key_cleaner_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        // A keyed picture: a soft round matte, its edge tinted as a screen leaves it.
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 48.0, y as f32 - 27.0);
+                let a = ((22.0 - (dx * dx + dy * dy).sqrt()) / 8.0).clamp(0.0, 1.0);
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let edge = 1.0 - a;
+                px.extend_from_slice(&[u * a, (v * (1.0 - edge) + 0.8 * edge) * a, (1.0 - u) * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        let cleaner = |params: Vec<(&str, kerf_model::Param)>| {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("key.keycleaner").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            for (name, value) in params {
+                effect.params.insert(name.into(), value);
+            }
+            effect
+        };
+        // As it comes, wider and half as strong, the matte's contrast alone, and too near to blur.
+        for (said, params) in [
+            ("as it comes", vec![]),
+            (
+                "wide",
+                vec![("additionalEdgeRadius", number(12.0)), ("strength", number(50.0))],
+            ),
+            (
+                "contrast",
+                vec![("alphaContrast", number(250.0)), ("strength", number(0.0))],
+            ),
+            ("near", vec![("additionalEdgeRadius", number(0.08))]),
+        ] {
+            let effect = cleaner(params);
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = key_cleaner_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 2e-3, "{said}: differs by {worst:.2e}");
+        }
+        let chatter = cleaner(vec![(
+            "reduceChatter",
+            kerf_model::Param::Static(Value::Bool(true)),
+        )]);
+        assert!(key_cleaner_kernel(&chatter, Time::ZERO, (w, h), 1.0).is_none());
+    }
+
     #[test]
     fn the_radial_zoom_kernel_matches_the_effect() {
         let Some(gpu) = kerf_gpu::shared() else {
@@ -748,6 +1180,29 @@ mod tests {
                     ("colorize", Value::Bool(true)),
                     ("colorizeHue", number(-460.0)),
                     ("colorizeLightness", number(-30.0)),
+                ],
+            ),
+            // The spill suppressor told its key: green, blue with what it takes put back as
+            // light, and near the key's hue alone with the color taken out.
+            ("key.advancedspill", vec![("method", choice("ultra"))]),
+            (
+                "key.advancedspill",
+                vec![
+                    ("method", choice("ultra")),
+                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(20, 40, 230))),
+                    ("suppression", number(80.0)),
+                    ("ultraSettings/spillRange", number(20.0)),
+                    ("ultraSettings/lumaCorrection", number(60.0)),
+                    ("ultraSettings/spillColorCorrection", number(40.0)),
+                ],
+            ),
+            (
+                "key.advancedspill",
+                vec![
+                    ("method", choice("ultra")),
+                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(230, 30, 20))),
+                    ("ultraSettings/tolerance", number(30.0)),
+                    ("ultraSettings/desaturate", number(70.0)),
                 ],
             ),
             ("color.selectivecolor", vec![]),

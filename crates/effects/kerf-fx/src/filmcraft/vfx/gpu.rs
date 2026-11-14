@@ -93,6 +93,49 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    /// The Key Cleaner, kept from EffectCraft: a key's soft edge given the colors around it, and
+    /// its matte more contrast.
+    KeyCleaner {
+        /// The box passes that find the colors around a pixel, each way, where it looks for any.
+        around: Option<Vec<u32>>,
+        strength: f32,
+        contrast: f32,
+    },
+    /// The Simple Choker, kept from EffectCraft, drawing its matte in.
+    Choke {
+        /// The whole pixels its matte comes in by, and how far toward one more.
+        radius: u32,
+        between: f32,
+        /// Whether it comes in at all: a view of the matte alone does not.
+        choked: bool,
+        matte: bool,
+    },
+    /// Optics Compensation, kept from EffectCraft: a lens's curve put in or taken out.
+    Optics {
+        center: [f32; 2],
+        /// How much the result is scaled to fit or fill the picture.
+        fit: f32,
+        focal: f32,
+        /// The distance from the center its field of view is measured to, and half that field.
+        reach: f32,
+        half: f32,
+        reverse: bool,
+    },
+    /// A 360° frame turned, or seen through another field of view (`immersive`).
+    Sphere {
+        turn: [[f32; 3]; 3],
+        /// How much of the sphere the frame holds, across and down.
+        share: [f32; 2],
+        layout: u32,
+    },
+    /// A flat picture put on a 360° frame.
+    PlaneToSphere {
+        turn: [[f32; 3]; 3],
+        /// The tangent of half the picture's width on the sphere.
+        half: f32,
+        feather: f32,
+        layout: u32,
+    },
     Lens {
         center: [f32; 2],
         /// Half of the picture's diagonal, which its curvature is measured by.
@@ -175,6 +218,19 @@ pub enum KeptColor {
         /// The cyan, magenta, yellow, and black taken from each of its nine ranges.
         take: [[f32; 4]; 9],
         relative: bool,
+    },
+    /// The Advanced Spill Suppressor told its key (`keying::advanced_spill`, its Ultra method).
+    Spill {
+        /// Which of red, green, and blue the key is most of.
+        primary: u32,
+        amount: f32,
+        range: f32,
+        luma: f32,
+        /// The key's hue, and how far from it, of a turn's half, spill is still taken.
+        key_hue: f32,
+        tolerance: f32,
+        desaturate: f32,
+        neutral: f32,
     },
 }
 
@@ -780,6 +836,23 @@ impl Kernel {
                     },
                 }
             }
+            "vr_projection" | "vr_rotate_sphere" => match super::immersive::turn_of(e, cx) {
+                Some((turn, share)) => Kernel::Sphere {
+                    turn,
+                    share,
+                    layout: chv(e, "frame_layout"),
+                },
+                None => Kernel::Nothing,
+            },
+            "vr_plane_to_sphere" => {
+                let (turn, half) = super::immersive::plane_of(e, cx);
+                Kernel::PlaneToSphere {
+                    turn,
+                    half,
+                    feather: fv(e, "feather", cx) / 100.0,
+                    layout: chv(e, "frame_layout"),
+                }
+            }
             "lens_distortion" => {
                 let (w, h) = (size.0 as f64, size.1 as f64);
                 let off = |id: &str, across: f64| {
@@ -1328,12 +1401,165 @@ impl Kernel {
                         };
                         (&stage.selective_color, Some(table), numbers)
                     }
+                    KeptColor::Spill {
+                        primary,
+                        amount,
+                        range,
+                        luma,
+                        key_hue,
+                        tolerance,
+                        desaturate,
+                        neutral,
+                    } => {
+                        let numbers = U {
+                            a: [*primary, 0, 0, 0],
+                            p0: [*amount, *range, *luma, *key_hue],
+                            p1: [*tolerance, *desaturate, *neutral, 0.0],
+                            ..U::default()
+                        };
+                        (&stage.spill, None, numbers)
+                    }
                 };
                 let table = table.map(|table| frame.image(&table));
                 let out = stage.pass(frame, pipeline, &picture, table.as_ref(), &numbers);
                 if let Some(table) = table {
                     frame.release(table);
                 }
+                frame.release(picture);
+                out
+            }
+            Kernel::KeyCleaner {
+                around,
+                strength,
+                contrast,
+            } => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                let around = match around {
+                    Some(radii) => {
+                        let again =
+                            stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                        if radii.iter().all(|radius| *radius == 0) {
+                            Some(again)
+                        } else {
+                            Some(run_ops(
+                                frame,
+                                again,
+                                &[FxOp::Gaussian {
+                                    rx: radii.clone(),
+                                    ry: radii.clone(),
+                                    repeat: true,
+                                }],
+                            )?)
+                        }
+                    }
+                    None => None,
+                };
+                frame.release(picture);
+                let cleaned = stage.pass(
+                    frame,
+                    &stage.key_clean,
+                    &encoded,
+                    around.as_ref(),
+                    &U {
+                        a: [u32::from(around.is_some()), 0, 0, 0],
+                        p0: [*strength, *contrast, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                if let Some(around) = around {
+                    frame.release(around);
+                }
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &cleaned, None, &U::default());
+                frame.release(cleaned);
+                out
+            }
+            Kernel::Choke {
+                radius,
+                between,
+                choked,
+                matte,
+            } => {
+                let numbers = U {
+                    a: [*radius, u32::from(*choked), u32::from(*matte), 0],
+                    p0: [*between, 0.0, 0.0, 0.0],
+                    ..U::default()
+                };
+                let across = stage.pass(frame, &stage.choke_rows, &picture, None, &numbers);
+                let down = stage.pass(frame, &stage.choke_columns, &across, None, &numbers);
+                frame.release(across);
+                let out = stage.pass(frame, &stage.choke_put, &picture, Some(&down), &numbers);
+                frame.release(down);
+                frame.release(picture);
+                out
+            }
+            Kernel::Optics {
+                center,
+                fit,
+                focal,
+                reach,
+                half,
+                reverse,
+            } => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                frame.release(picture);
+                let bent = stage.pass(
+                    frame,
+                    &stage.optics,
+                    &encoded,
+                    None,
+                    &U {
+                        a: [u32::from(*reverse), 0, 0, 0],
+                        p0: [center[0], center[1], *fit, *focal],
+                        p1: [*reach, *half, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &bent, None, &U::default());
+                frame.release(bent);
+                out
+            }
+            Kernel::Sphere {
+                turn,
+                share,
+                layout,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.sphere,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*layout, 0, 0, 0],
+                        p0: [turn[0][0], turn[0][1], turn[0][2], share[0]],
+                        p1: [turn[1][0], turn[1][1], turn[1][2], share[1]],
+                        p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::PlaneToSphere {
+                turn,
+                half,
+                feather,
+                layout,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.plane_to_sphere,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*layout, 0, 0, 0],
+                        p0: [turn[0][0], turn[0][1], turn[0][2], *half],
+                        p1: [turn[1][0], turn[1][1], turn[1][2], *feather],
+                        p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
+                        ..U::default()
+                    },
+                );
                 frame.release(picture);
                 out
             }
@@ -1616,8 +1842,16 @@ struct Stage {
     curves: wgpu::ComputePipeline,
     hue_saturation: wgpu::ComputePipeline,
     selective_color: wgpu::ComputePipeline,
+    spill: wgpu::ComputePipeline,
     cineon: wgpu::ComputePipeline,
     lens: wgpu::ComputePipeline,
+    sphere: wgpu::ComputePipeline,
+    optics: wgpu::ComputePipeline,
+    key_clean: wgpu::ComputePipeline,
+    choke_rows: wgpu::ComputePipeline,
+    choke_columns: wgpu::ComputePipeline,
+    choke_put: wgpu::ComputePipeline,
+    plane_to_sphere: wgpu::ComputePipeline,
     magnify: wgpu::ComputePipeline,
     four_colors: wgpu::ComputePipeline,
     grid: wgpu::ComputePipeline,
@@ -1682,8 +1916,16 @@ impl Stage {
                 curves: kernel("curves"),
                 hue_saturation: kernel("hue_saturation"),
                 selective_color: kernel("selective_color"),
+                spill: kernel("spill"),
                 cineon: kernel("cineon"),
                 lens: kernel("lens"),
+                sphere: kernel("sphere"),
+                optics: kernel("optics"),
+                key_clean: kernel("key_clean"),
+                choke_rows: kernel("choke_rows"),
+                choke_columns: kernel("choke_columns"),
+                choke_put: kernel("choke_put"),
+                plane_to_sphere: kernel("plane_to_sphere"),
                 magnify: kernel("magnify"),
                 four_colors: kernel("four_colors"),
                 grid: kernel("grid"),
@@ -2045,6 +2287,42 @@ mod tests {
                     ("softness", fl(100.0)),
                 ],
             ),
+            // A 360° frame turned each way, seen through a narrower view, and one of two views.
+            ("vr_rotate_sphere", vec![("pan", fl(40.0))]),
+            (
+                "vr_rotate_sphere",
+                vec![("tilt", fl(25.0)), ("pan", fl(-110.0)), ("roll", fl(15.0))],
+            ),
+            (
+                "vr_rotate_sphere",
+                vec![("tilt", fl(-35.0)), ("frame_layout", ParamValue::Choice(1))],
+            ),
+            ("vr_projection", vec![("fov", fl(120.0))]),
+            (
+                "vr_projection",
+                vec![
+                    ("fov", fl(200.0)),
+                    ("pan", fl(30.0)),
+                    ("stretch", ParamValue::Bool(false)),
+                    ("frame_layout", ParamValue::Choice(2)),
+                ],
+            ),
+            // A flat picture on the sphere, turned, and with a soft edge.
+            ("vr_plane_to_sphere", vec![]),
+            (
+                "vr_plane_to_sphere",
+                vec![
+                    ("scale", fl(100.0)),
+                    ("pan", fl(-50.0)),
+                    ("tilt", fl(20.0)),
+                    ("roll", fl(10.0)),
+                    ("feather", fl(30.0)),
+                ],
+            ),
+            (
+                "vr_plane_to_sphere",
+                vec![("scale", fl(80.0)), ("frame_layout", ParamValue::Choice(1))],
+            ),
             // A lens that bulges, one that pinches, and one off its center.
             ("lens_distortion", vec![("curvature", fl(40.0))]),
             ("lens_distortion", vec![("curvature", fl(-60.0))]),
@@ -2285,6 +2563,9 @@ mod tests {
                     "mosaic",
                     "lens_distortion",
                     "magnify",
+                    "vr_rotate_sphere",
+                    "vr_projection",
+                    "vr_plane_to_sphere",
                     "ramp",
                     "gradient",
                     "checkerboard",

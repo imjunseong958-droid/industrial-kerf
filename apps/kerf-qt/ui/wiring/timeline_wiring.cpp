@@ -81,6 +81,12 @@ void TimelineWiring::attach() {
                                                   {QStringLiteral("clip"), clip},
                                                   {QStringLiteral("props"), QJsonObject{{QStringLiteral("gain"), gain}}}}});
     });
+    // A signal's number drawn by hand is its clip's `value`, keyed.
+    connect(timeline, &TimelineWidget::signalDrawn, this, [this](const QString &clip, const QJsonValue &value) {
+        m_window->sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")},
+                                                  {QStringLiteral("clip"), clip},
+                                                  {QStringLiteral("props"), QJsonObject{{QStringLiteral("value"), value}}}}});
+    });
     connect(timeline, &TimelineWidget::commentMarkActivated, this, [this](const QString &id) {
         if (m_shared) m_shared->setCurrentThread(id);
         m_own->setCurrentThread(id);

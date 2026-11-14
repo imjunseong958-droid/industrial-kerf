@@ -90,6 +90,45 @@ fn sample_dir(img: &Image, d: V3) -> [f32; 4] {
     )
 }
 
+/// What a 360° frame is turned by, for the GPU's kernel: the matrix a direction on the frame is
+/// turned by to where it reads from, as its rows, and how much of the sphere across and down
+/// the frame holds. None where the effect as set changes nothing.
+pub(super) fn turn_of(e: &EffectInstance, cx: &FxCtx) -> Option<([[f32; 3]; 3], [f32; 2])> {
+    let r = rotation(
+        fv(e, "tilt", cx) as f64,
+        fv(e, "pan", cx) as f64,
+        fv(e, "roll", cx) as f64,
+    );
+    let fov = if e.effect == "vr_projection" {
+        fv(e, "fov", cx) as f64
+    } else {
+        360.0
+    };
+    let stretch = e.effect == "vr_projection" && bv(e, "stretch");
+    let ident =
+        (0..3).all(|i| (0..3).all(|j| (r[i][j] - if i == j { 1.0 } else { 0.0 }).abs() < 1e-12));
+    if ident && (fov - 360.0).abs() < 1e-9 {
+        return None;
+    }
+    let rt = transpose(r);
+    let ky = if stretch { (fov / 180.0).min(1.0) } else { 1.0 };
+    Some((rt.map(|row| row.map(|v| v as f32)), [(fov / 360.0) as f32, ky as f32]))
+}
+
+/// Where a flat picture is put on a 360° frame, for the GPU's kernel: the matrix a direction on
+/// the frame is turned by, as its rows, and the tangent of half the picture's width.
+pub(super) fn plane_of(e: &EffectInstance, cx: &FxCtx) -> ([[f32; 3]; 3], f32) {
+    let fov = (fv(e, "scale", cx) as f64)
+        .to_radians()
+        .clamp(1e-3, PI * 0.999);
+    let r = transpose(rotation(
+        fv(e, "tilt", cx) as f64,
+        fv(e, "pan", cx) as f64,
+        fv(e, "roll", cx) as f64,
+    ));
+    (r.map(|row| row.map(|v| v as f32)), (fov / 2.0).tan() as f32)
+}
+
 /// Run `f` on each view of the frame layout.
 fn per_view(img: &mut Image, layout: u32, f: impl Fn(&mut Image)) {
     let (w, h) = (img.w, img.h);

@@ -933,6 +933,226 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
+// `keying::key_cleaner`, on what `encode_kept` makes. a.x: whether aux has the picture blurred, the
+// colors around each pixel; p0: how far a soft edge's color goes toward them, and the matte's
+// contrast.
+@compute @workgroup_size(16, 16)
+fn key_clean(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = textureLoad(src, p, 0);
+    var c = vec3(0.0);
+    if px.a > 1e-6 { c = px.rgb / px.a; }
+    if u.a.x != 0u && px.a > 1e-4 && px.a < 0.999 {
+        let e = textureLoad(aux, p, 0);
+        if e.a > 1e-4 {
+            c += (e.rgb / e.a - c) * (u.p0.x * (1.0 - px.a));
+        }
+    }
+    var a = clamp((px.a - 0.5) * u.p0.y + 0.5, 0.0, 1.0);
+    if px.a <= 1e-6 { a = 0.0; }
+    textureStore(dst, p, vec4(c * a, a));
+}
+
+// `matte::simple_choker` drawing a matte in: `util::morph_frac`'s two erosions at once, the least of
+// a picture's alpha along a row within a.x pixels in its red and within one more in its green, the
+// picture held at its edges.
+@compute @workgroup_size(16, 16)
+fn choke_rows(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let last = i32(textureDimensions(src).x) - 1;
+    let r = i32(u.a.x);
+    var least = vec2(1e30);
+    for (var d = -r - 1; d <= r + 1; d++) {
+        let a = textureLoad(src, vec2(clamp(p.x + d, 0, last), p.y), 0).a;
+        least.y = min(least.y, a);
+        if abs(d) <= r { least.x = min(least.x, a); }
+    }
+    textureStore(dst, p, vec4(least, 0.0, 0.0));
+}
+
+// The same down a column, of what `choke_rows` made.
+@compute @workgroup_size(16, 16)
+fn choke_columns(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let last = i32(textureDimensions(src).y) - 1;
+    let r = i32(u.a.x);
+    var least = vec2(1e30);
+    for (var d = -r - 1; d <= r + 1; d++) {
+        let m = textureLoad(src, vec2(p.x, clamp(p.y + d, 0, last)), 0).xy;
+        least.y = min(least.y, m.y);
+        if abs(d) <= r { least.x = min(least.x, m.x); }
+    }
+    textureStore(dst, p, vec4(least, 0.0, 0.0));
+}
+
+// The picture with its matte drawn in (`util::set_alpha`), there and back in the one pass. a.y:
+// whether it is drawn in; a.z: whether the matte is shown in place of the picture; p0.x: how far
+// between the two erosions in aux.
+@compute @workgroup_size(16, 16)
+fn choke_put(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    var px = kept_in(textureLoad(src, p, 0));
+    if u.a.y != 0u {
+        let m = textureLoad(aux, p, 0).xy;
+        let to = clamp(m.x + (m.y - m.x) * u.p0.x, 0.0, 1.0);
+        var c = vec3(0.0);
+        if px.a > 1e-6 { c = px.rgb / px.a; }
+        px = vec4(c * to, to);
+    }
+    if u.a.z != 0u {
+        let a = clamp(px.a, 0.0, 1.0);
+        px = vec4(a, a, a, 1.0);
+    }
+    textureStore(dst, p, kept_out(px));
+}
+
+// `distort2::optics_compensation`, on what `encode_kept` makes. a.x: whether it takes a lens's curve
+// out; p0: its center, how much the result is scaled, and its focal length; p1: how far from the
+// center its field of view is measured to, and half that field.
+// By hand, as `lens` is and for its reason.
+@compute @workgroup_size(16, 16)
+fn optics(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let at = vec2<f32>(id.xy) + 0.5;
+    let d = at - u.p0.xy;
+    let r = length(d) * u.p0.z;
+    if r < 1e-9 {
+        textureStore(dst, p, sample(at.x, at.y));
+        return;
+    }
+    var rs = 0.0;
+    if u.a.x != 0u {
+        rs = atan(r / u.p0.w) / u.p1.y * u.p1.x;
+    } else {
+        let th = r / u.p1.x * u.p1.y;
+        if th >= 0.5 * HALF_TURN - 1e-4 {
+            textureStore(dst, p, vec4(0.0));
+            return;
+        }
+        rs = u.p0.w * tan(th);
+    }
+    let read = u.p0.xy + d * (rs / r * u.p0.z);
+    textureStore(dst, p, sample(read.x, read.y));
+}
+
+// The view of a 360° frame a pixel is in, as `immersive::per_view` cuts them: the whole frame, the
+// halves of one over another (1), or of one beside another (2). Its left, top, width, and height.
+fn view_of(p: vec2<i32>, cut: u32) -> vec4<i32> {
+    let size = vec2<i32>(textureDimensions(src));
+    if cut == 1u && size.y >= 2 {
+        let half = size.y / 2;
+        if p.y < half { return vec4(0, 0, size.x, half); }
+        return vec4(0, half, size.x, size.y - half);
+    }
+    if cut == 2u && size.x >= 2 {
+        let half = size.x / 2;
+        if p.x < half { return vec4(0, 0, half, size.y); }
+        return vec4(half, 0, size.x - half, size.y);
+    }
+    return vec4(0, 0, size.x, size.y);
+}
+
+// `immersive::sample_wrap` in a view: bilinear, going round across and held at the top and bottom.
+fn sample_round(view: vec4<i32>, x: f32, y: f32) -> vec4<f32> {
+    let fx = x - 0.5;
+    let fy = clamp(y - 0.5, 0.0, f32(view.w - 1));
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let t = vec2(fx - x0, fy - y0);
+    let xa = ((i32(x0) % view.z) + view.z) % view.z;
+    let xb = (xa + 1) % view.z;
+    let ya = clamp(i32(y0), 0, view.w - 1);
+    let yb = min(ya + 1, view.w - 1);
+    let o = view.xy;
+    let a = textureLoad(src, o + vec2(xa, ya), 0);
+    let b = textureLoad(src, o + vec2(xb, ya), 0);
+    let c = textureLoad(src, o + vec2(xa, yb), 0);
+    let d = textureLoad(src, o + vec2(xb, yb), 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+// `Image::sample_bilinear_clamped` in a view.
+fn sample_held(view: vec4<i32>, x: f32, y: f32) -> vec4<f32> {
+    let f = clamp(vec2(x, y) - 0.5, vec2(0.0), vec2<f32>(view.zw - 1));
+    let p0 = vec2<i32>(f);
+    let p1 = min(p0 + 1, view.zw - 1);
+    let t = f - vec2<f32>(p0);
+    let o = view.xy;
+    let a = textureLoad(src, o + p0, 0);
+    let b = textureLoad(src, o + vec2(p1.x, p0.y), 0);
+    let c = textureLoad(src, o + vec2(p0.x, p1.y), 0);
+    let d = textureLoad(src, o + p1, 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+const HALF_TURN: f32 = 3.14159265358979;
+
+// The way a pixel of a view looks on the sphere: across is around it, down is from pole to pole
+// (`immersive::px_to_lonlat` and `dir`), with `share` of the sphere across and down the view.
+fn way_of(p: vec2<i32>, view: vec4<i32>, share: vec2<f32>) -> vec3<f32> {
+    let at = vec2<f32>(p - view.xy) + 0.5;
+    let lon = (at.x / f32(view.z) - 0.5) * 2.0 * HALF_TURN * share.x;
+    let lat = (0.5 - at.y / f32(view.w)) * HALF_TURN * share.y;
+    return vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));
+}
+
+// `immersive`'s projection and its turning of the sphere. a.x: the frame's layout; p0, p1, p2: the
+// rows of what a way is turned by, and in p0.w and p1.w how much of the sphere the frame holds
+// across and down.
+// By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
+// where a pixel comes from.
+@compute @workgroup_size(16, 16)
+fn sphere(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let view = view_of(p, u.a.x);
+    let way = way_of(p, view, vec2(u.p0.w, u.p1.w));
+    let d = vec3(dot(u.p0.xyz, way), dot(u.p1.xyz, way), dot(u.p2.xyz, way));
+    let lon = atan2(d.x, d.z);
+    // The CPU's arcsine, said so that 32 bits keep it near a pole, where an arcsine loses half its
+    // digits.
+    let lat = atan2(d.y, length(d.xz));
+    let x = (lon / (2.0 * HALF_TURN) + 0.5) * f32(view.z);
+    let y = (0.5 - lat / HALF_TURN) * f32(view.w);
+    textureStore(dst, p, sample_round(view, x, y));
+}
+
+// `immersive`'s flat picture on the sphere. a.x: the frame's layout; p0, p1, p2: the rows of what a
+// way is turned by; p0.w: the tangent of half the picture's width; p1.w: its feather.
+// By hand, for `sphere`'s reason.
+@compute @workgroup_size(16, 16)
+fn plane_to_sphere(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let view = view_of(p, u.a.x);
+    let way = way_of(p, view, vec2(1.0));
+    let d = vec3(dot(u.p0.xyz, way), dot(u.p1.xyz, way), dot(u.p2.xyz, way));
+    var out = vec4(0.0);
+    if d.z > 1e-6 {
+        let tx = u.p0.w;
+        let ty = tx * f32(view.w) / f32(view.z);
+        let at = vec2(d.x / d.z / tx, -d.y / d.z / ty);
+        if abs(at.x) <= 1.0 && abs(at.y) <= 1.0 {
+            out = sample_held(view, (at.x + 1.0) / 2.0 * f32(view.z), (at.y + 1.0) / 2.0 * f32(view.w));
+            if u.p1.w > 0.0 {
+                let edge = 1.0 - max(abs(at.x), abs(at.y));
+                let t = clamp(edge / max(u.p1.w, 1e-6), 0.0, 1.0);
+                out *= t * t * (3.0 - 2.0 * t);
+            }
+        }
+    }
+    textureStore(dst, p, out);
+}
+
 // The lens distortion in `effects`. p0: its center, half of the picture's diagonal, and its curvature.
 // By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
 // where a pixel comes from.
@@ -1228,6 +1448,42 @@ fn hue_saturation(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let rgb = hsl_to_rgb(vec3(rem_euclid(to.x, 1.0), to.y, to.z));
     textureStore(dst, p, kept_out(vec4(rgb * px.a, px.a)));
+}
+
+// `keying::advanced_spill`, told its key. a.x: which of red, green, and blue the key is most of; p0:
+// how much is taken, how far toward the other two's mean the limit is, how much of what is taken
+// comes back as light, and the key's hue; p1: how near that hue a pixel's has to be, how much color
+// goes with the spill, and how much comes back as neutral light.
+// By hand, not from `kerf_kernel`: which channel it takes from is told it, an index `Num` has not.
+@compute @workgroup_size(16, 16)
+fn spill(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = kept_in(textureLoad(src, p, 0));
+    if px.a <= 0.0 {
+        textureStore(dst, p, kept_out(px));
+        return;
+    }
+    var c = px.rgb / px.a;
+    var near = 1.0;
+    if u.p1.x < 1.0 {
+        let apart = abs(rgb_to_hsl(c).x - u.p0.w);
+        near = clamp(1.0 - min(apart, 1.0 - apart) / max(u.p1.x * 0.5, 1e-4), 0.0, 1.0);
+    }
+    let key = i32(u.a.x);
+    let one = c[(key + 1) % 3];
+    let other = c[(key + 2) % 3];
+    let most = max(one, other);
+    let limit = most + (0.5 * (one + other) - most) * u.p0.y;
+    let taken = max(c[key] - limit, 0.0) * u.p0.x * near;
+    c[key] -= taken;
+    let weights = vec3(0.2126, 0.7152, 0.0722);
+    c += taken * weights[key] * u.p0.z + taken * u.p1.z / 3.0;
+    if u.p1.y > 0.0 && taken > 0.0 {
+        let l = luma(c);
+        c += (l - c) * min(u.p1.y * min(taken * 4.0, 1.0), 1.0);
+    }
+    textureStore(dst, p, kept_out(vec4(c * px.a, px.a)));
 }
 
 // `color2::selective_color`. a.x: 1 when what it takes is by how much ink there is; aux: a pixel to

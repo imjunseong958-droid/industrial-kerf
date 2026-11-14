@@ -51,11 +51,12 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with this program, by name.
-pub const BUNDLED: [(&str, &str); 11] = [
+pub const BUNDLED: [(&str, &str); 12] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
     ("shot-led", include_str!("../workflows/shot-led.json")),
+    ("shot-moved", include_str!("../workflows/shot-moved.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),
@@ -280,7 +281,10 @@ impl Workflow {
         if signals > 0 {
             reads.push("signal");
         }
-        if blanks.contains(crate::request::MOVES) || blanks.contains(crate::request::MOVES_VIDEO) {
+        if blanks.contains(crate::request::MOVES)
+            || blanks.contains(crate::request::MOVES_VIDEO)
+            || blanks.contains(crate::request::MOVES_BOX)
+        {
             reads.push(crate::request::MOVES);
         }
         let more: Map<String, Value> = self
@@ -608,9 +612,10 @@ mod tests {
                 .any(|node| node["class_type"] == "LoadDA3Model"
                     && node["inputs"]["weight_dtype"] == "fp32"));
         }
-        // Depth is refined three times unless a line says otherwise.
+        // Depth is refined once unless a line says otherwise: three times, as the model
+        // comes, takes over twice as long for a grey's difference.
         let depth = Workflow::named("depth").unwrap();
-        assert_eq!(depth.takes()["more"]["refine_steps"], json!(3));
+        assert_eq!(depth.takes()["more"]["refine_steps"], json!(1));
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("shot"), "{missing}");
     }
