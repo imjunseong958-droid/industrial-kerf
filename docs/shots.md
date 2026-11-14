@@ -737,7 +737,7 @@ whatever its depth: a set is not named, since it is where it is whatever
 the take did.
 
 What they took, and how a take read back holds beside its guide, is in
-[architecture.md](architecture.md#next) (Next, 3 and 4).
+[shots-measured.md](shots-measured.md) (3 and 4).
 
 ## Signals
 
