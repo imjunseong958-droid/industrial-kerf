@@ -1373,6 +1373,42 @@ fn hue_saturation(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, p, kept_out(vec4(rgb * px.a, px.a)));
 }
 
+// `keying::advanced_spill`, told its key. a.x: which of red, green, and blue the key is most of; p0:
+// how much is taken, how far toward the other two's mean the limit is, how much of what is taken
+// comes back as light, and the key's hue; p1: how near that hue a pixel's has to be, how much color
+// goes with the spill, and how much comes back as neutral light.
+// By hand, not from `kerf_kernel`: which channel it takes from is told it, an index `Num` has not.
+@compute @workgroup_size(16, 16)
+fn spill(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = kept_in(textureLoad(src, p, 0));
+    if px.a <= 0.0 {
+        textureStore(dst, p, kept_out(px));
+        return;
+    }
+    var c = px.rgb / px.a;
+    var near = 1.0;
+    if u.p1.x < 1.0 {
+        let apart = abs(rgb_to_hsl(c).x - u.p0.w);
+        near = clamp(1.0 - min(apart, 1.0 - apart) / max(u.p1.x * 0.5, 1e-4), 0.0, 1.0);
+    }
+    let key = i32(u.a.x);
+    let one = c[(key + 1) % 3];
+    let other = c[(key + 2) % 3];
+    let most = max(one, other);
+    let limit = most + (0.5 * (one + other) - most) * u.p0.y;
+    let taken = max(c[key] - limit, 0.0) * u.p0.x * near;
+    c[key] -= taken;
+    let weights = vec3(0.2126, 0.7152, 0.0722);
+    c += taken * weights[key] * u.p0.z + taken * u.p1.z / 3.0;
+    if u.p1.y > 0.0 && taken > 0.0 {
+        let l = luma(c);
+        c += (l - c) * min(u.p1.y * min(taken * 4.0, 1.0), 1.0);
+    }
+    textureStore(dst, p, kept_out(vec4(c * px.a, px.a)));
+}
+
 // `color2::selective_color`. a.x: 1 when what it takes is by how much ink there is; aux: a pixel to
 // each of its nine ranges, with the cyan, magenta, yellow, and black it takes from that range.
 // By hand, not from `kerf_kernel`: its ranges go by which channel is the largest and which the

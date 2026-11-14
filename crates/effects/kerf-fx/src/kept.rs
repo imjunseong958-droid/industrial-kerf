@@ -337,6 +337,31 @@ pub fn color_kernel(
                 }
             }
         }
+        // Its other method finds the key by adding up the whole picture, which a kernel cannot.
+        "key.advancedspill" if values.e("method") == 1 => {
+            let key = values.color("ultraSettings/keyColor");
+            let primary = if key[1] >= key[0] && key[1] >= key[2] {
+                1
+            } else if key[2] >= key[0] && key[2] >= key[1] {
+                2
+            } else {
+                0
+            };
+            let share = |id: &str| values.f(id) as f32 / 100.0;
+            KeptColor::Spill {
+                primary,
+                amount: share("suppression"),
+                range: share("ultraSettings/spillRange"),
+                luma: share("ultraSettings/lumaCorrection"),
+                key_hue: kerf_color::rgb_to_hsl(key[0], key[1], key[2])[0],
+                tolerance: values
+                    .get("ultraSettings/tolerance")
+                    .map_or(100.0, FxValue::as_f64) as f32
+                    / 100.0,
+                desaturate: share("ultraSettings/desaturate"),
+                neutral: share("ultraSettings/spillColorCorrection"),
+            }
+        }
         _ => return None,
     };
     Some(Kernel::Kept(Box::new(kept)))
@@ -908,6 +933,29 @@ mod tests {
                     ("colorize", Value::Bool(true)),
                     ("colorizeHue", number(-460.0)),
                     ("colorizeLightness", number(-30.0)),
+                ],
+            ),
+            // The spill suppressor told its key: green, blue with what it takes put back as
+            // light, and near the key's hue alone with the color taken out.
+            ("key.advancedspill", vec![("method", choice("ultra"))]),
+            (
+                "key.advancedspill",
+                vec![
+                    ("method", choice("ultra")),
+                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(20, 40, 230))),
+                    ("suppression", number(80.0)),
+                    ("ultraSettings/spillRange", number(20.0)),
+                    ("ultraSettings/lumaCorrection", number(60.0)),
+                    ("ultraSettings/spillColorCorrection", number(40.0)),
+                ],
+            ),
+            (
+                "key.advancedspill",
+                vec![
+                    ("method", choice("ultra")),
+                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(230, 30, 20))),
+                    ("ultraSettings/tolerance", number(30.0)),
+                    ("ultraSettings/desaturate", number(70.0)),
                 ],
             ),
             ("color.selectivecolor", vec![]),

@@ -194,7 +194,7 @@ impl KernelEffect for Kept {
                 kept::grain_kernel(effect, run.at, run.size, run.per_source, run.seed)?
             }
             "color.curves" | "color.huesaturation" | "color.photofilter"
-            | "color.selectivecolor" | "key.unmult" => {
+            | "color.selectivecolor" | "key.unmult" | "key.advancedspill" => {
                 kept::color_kernel(effect, run.at, run.size, run.per_source)?
             }
             _ => return None,

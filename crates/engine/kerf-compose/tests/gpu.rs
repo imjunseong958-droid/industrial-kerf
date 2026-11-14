@@ -175,6 +175,7 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("lens pinched, off its center", clip("      set scale=0.9\n      fx distort.lens curvature=-50 h_decentering=20 v_decentering=-30\n")),
         ("magnify", clip("      fx distort.magnify center_x=0.35 center_y=0.4 size=60 magnification=250\n")),
         ("magnify square, feathered and screened", clip("      fx distort.magnify shape=square center_x=0.7 center_y=0.6 size=50 feather=20 opacity=80 mode=screen\n")),
+        ("spill taken out, told its key", clip("      fx key.advancedspill method=ultra suppression=80\n")),
         ("a lens's curve put in", clip("      fx distort.opticscompensation fieldOfView=80\n")),
         ("a lens's curve taken out, fitted", clip("      fx distort.opticscompensation fieldOfView=70 reverseLensDistortion=true optimalPixels=true viewCenter_x=0.4\n")),
         ("sphere turned", clip("      fx vr.rotatesphere tilt=20 pan=-70 roll=10\n")),

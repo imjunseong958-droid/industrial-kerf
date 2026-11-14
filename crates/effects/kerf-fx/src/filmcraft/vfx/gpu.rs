@@ -202,6 +202,19 @@ pub enum KeptColor {
         take: [[f32; 4]; 9],
         relative: bool,
     },
+    /// The Advanced Spill Suppressor told its key (`keying::advanced_spill`, its Ultra method).
+    Spill {
+        /// Which of red, green, and blue the key is most of.
+        primary: u32,
+        amount: f32,
+        range: f32,
+        luma: f32,
+        /// The key's hue, and how far from it, of a turn's half, spill is still taken.
+        key_hue: f32,
+        tolerance: f32,
+        desaturate: f32,
+        neutral: f32,
+    },
 }
 
 /// How many steps a curve of Curves is kept at between 0 and 1, as `Curve::eval` reads it.
@@ -1371,6 +1384,24 @@ impl Kernel {
                         };
                         (&stage.selective_color, Some(table), numbers)
                     }
+                    KeptColor::Spill {
+                        primary,
+                        amount,
+                        range,
+                        luma,
+                        key_hue,
+                        tolerance,
+                        desaturate,
+                        neutral,
+                    } => {
+                        let numbers = U {
+                            a: [*primary, 0, 0, 0],
+                            p0: [*amount, *range, *luma, *key_hue],
+                            p1: [*tolerance, *desaturate, *neutral, 0.0],
+                            ..U::default()
+                        };
+                        (&stage.spill, None, numbers)
+                    }
                 };
                 let table = table.map(|table| frame.image(&table));
                 let out = stage.pass(frame, pipeline, &picture, table.as_ref(), &numbers);
@@ -1729,6 +1760,7 @@ struct Stage {
     curves: wgpu::ComputePipeline,
     hue_saturation: wgpu::ComputePipeline,
     selective_color: wgpu::ComputePipeline,
+    spill: wgpu::ComputePipeline,
     cineon: wgpu::ComputePipeline,
     lens: wgpu::ComputePipeline,
     sphere: wgpu::ComputePipeline,
@@ -1798,6 +1830,7 @@ impl Stage {
                 curves: kernel("curves"),
                 hue_saturation: kernel("hue_saturation"),
                 selective_color: kernel("selective_color"),
+                spill: kernel("spill"),
                 cineon: kernel("cineon"),
                 lens: kernel("lens"),
                 sphere: kernel("sphere"),
