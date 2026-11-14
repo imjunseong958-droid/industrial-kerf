@@ -93,6 +93,17 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    /// Optics Compensation, kept from EffectCraft: a lens's curve put in or taken out.
+    Optics {
+        center: [f32; 2],
+        /// How much the result is scaled to fit or fill the picture.
+        fit: f32,
+        focal: f32,
+        /// The distance from the center its field of view is measured to, and half that field.
+        reach: f32,
+        half: f32,
+        reverse: bool,
+    },
     /// A 360° frame turned, or seen through another field of view (`immersive`).
     Sphere {
         turn: [[f32; 3]; 3],
@@ -1369,6 +1380,33 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::Optics {
+                center,
+                fit,
+                focal,
+                reach,
+                half,
+                reverse,
+            } => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                frame.release(picture);
+                let bent = stage.pass(
+                    frame,
+                    &stage.optics,
+                    &encoded,
+                    None,
+                    &U {
+                        a: [u32::from(*reverse), 0, 0, 0],
+                        p0: [center[0], center[1], *fit, *focal],
+                        p1: [*reach, *half, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &bent, None, &U::default());
+                frame.release(bent);
+                out
+            }
             Kernel::Sphere {
                 turn,
                 share,
@@ -1694,6 +1732,7 @@ struct Stage {
     cineon: wgpu::ComputePipeline,
     lens: wgpu::ComputePipeline,
     sphere: wgpu::ComputePipeline,
+    optics: wgpu::ComputePipeline,
     plane_to_sphere: wgpu::ComputePipeline,
     magnify: wgpu::ComputePipeline,
     four_colors: wgpu::ComputePipeline,
@@ -1762,6 +1801,7 @@ impl Stage {
                 cineon: kernel("cineon"),
                 lens: kernel("lens"),
                 sphere: kernel("sphere"),
+                optics: kernel("optics"),
                 plane_to_sphere: kernel("plane_to_sphere"),
                 magnify: kernel("magnify"),
                 four_colors: kernel("four_colors"),

@@ -187,6 +187,9 @@ impl KernelEffect for Kept {
     fn on_gpu(&self, effect: &Effect, run: &KernelRun) -> Option<OnGpu> {
         let kernel = match self.0 {
             "blur.radialzoom" => kept::radial_zoom_kernel(effect, run.at, run.size, run.per_source)?,
+            "distort.opticscompensation" => {
+                kept::optics_kernel(effect, run.at, run.size, run.per_source)?
+            }
             "noise.addgrain" => {
                 kept::grain_kernel(effect, run.at, run.size, run.per_source, run.seed)?
             }

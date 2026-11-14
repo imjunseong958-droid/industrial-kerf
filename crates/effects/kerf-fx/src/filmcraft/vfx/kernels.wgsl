@@ -933,6 +933,36 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
+// `distort2::optics_compensation`, on what `encode_kept` makes. a.x: whether it takes a lens's curve
+// out; p0: its center, how much the result is scaled, and its focal length; p1: how far from the
+// center its field of view is measured to, and half that field.
+// By hand, as `lens` is and for its reason.
+@compute @workgroup_size(16, 16)
+fn optics(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let at = vec2<f32>(id.xy) + 0.5;
+    let d = at - u.p0.xy;
+    let r = length(d) * u.p0.z;
+    if r < 1e-9 {
+        textureStore(dst, p, sample(at.x, at.y));
+        return;
+    }
+    var rs = 0.0;
+    if u.a.x != 0u {
+        rs = atan(r / u.p0.w) / u.p1.y * u.p1.x;
+    } else {
+        let th = r / u.p1.x * u.p1.y;
+        if th >= 0.5 * HALF_TURN - 1e-4 {
+            textureStore(dst, p, vec4(0.0));
+            return;
+        }
+        rs = u.p0.w * tan(th);
+    }
+    let read = u.p0.xy + d * (rs / r * u.p0.z);
+    textureStore(dst, p, sample(read.x, read.y));
+}
+
 // The view of a 360° frame a pixel is in, as `immersive::per_view` cuts them: the whole frame, the
 // halves of one over another (1), or of one beside another (2). Its left, top, width, and height.
 fn view_of(p: vec2<i32>, cut: u32) -> vec4<i32> {

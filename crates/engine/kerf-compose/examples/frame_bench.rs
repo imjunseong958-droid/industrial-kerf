@@ -130,6 +130,7 @@ const SCENES: &[(&str, &str)] = &[
         "      fx transform.spacer@1 left=120 radius=60 fill=true color=#203040\n",
     ),
     ("lens", "      fx distort.lens@2 curvature=30\n"),
+    ("optics", "      fx distort.opticscompensation fieldOfView=80\n"),
     ("sphere", "      fx vr.rotatesphere tilt=20 pan=-70 roll=10\n"),
     ("plane to sphere", "      fx vr.planetosphere scale=90 pan=30 feather=20\n"),
     (
