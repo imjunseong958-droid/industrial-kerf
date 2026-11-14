@@ -429,6 +429,34 @@ head of each part are the architecture's.
    guide's shapes stand for something else, it is not how good the take
    is.
 
+   *On the walk again* (2026-11-14), another four seconds of the same
+   film as 3's first shot (*Walking Keage Incline*, Kamigata0, CC BY-SA
+   4.0; not in the repository), the path between the rails, read back,
+   with a crate put a little above the path, both takes made and read as
+   on the travelling shot:
+
+   | The take's guide | `follows`: `order` | `off`, the frame | `off`, the crate | `placed`: frames followed, of 65 | `off` | `size` | `overlap` | `held` |
+   |---|---|---|---|---|---|---|---|---|
+   | The set's picture | -0.098 | 0.379 | 0.588, nearer | 65 | 0.010 | 1.03 | 0.86 | 0.35 |
+   | The set's depth | 0.867 | 0.100 | 0.179, nearer | 1 | | | 0.005 | 0.004 |
+
+   The two readings part again, the other way round from the travelling
+   shot's first takes. The picture-guided take has the crate where it was
+   asked for, a red square kept as a red square, and a depth that reads
+   against its guide's: the set of one frame has holes over a third of
+   the frame, the model that makes the shot kept them black, and the one
+   that reads depth took the bright band along the horizon between them
+   for the nearest thing in the picture. The depth-guided take kept the
+   scene's depth and drew its crate on the ground by the path, where a
+   crate would stand, and not above it where the box was: followed on one
+   frame. So `held` is low for both, each for its own half, and says
+   which half by its parts. One thing was found on the way: this path has
+   no frame at its origin to the last digit, the nearest being frame 14
+   and three ten-thousandths off, so no `anchor` was reported and the set
+   was taken to be in frame 0's space; the frame nearest the origin is
+   now the anchor where it is within two thousandths of it
+   (`camera_file.rs`).
+
    What is still not done is a set with what moved left out. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
 5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is

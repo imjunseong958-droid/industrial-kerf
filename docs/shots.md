@@ -607,7 +607,7 @@ being where its clip puts it, with as few keyframes as say it.
 | In `mesh` | Says |
 |---|---|
 | `from` | The file. What a model wrote of a shot's camera is a path. A file that is one number is a lens alone, degrees down the picture: the camera a set was seen by, standing at the set's own origin. |
-| `frame` | The frame of `from` whose camera is at the mesh's own origin, 0 unless given, the others being where they were from it. For a set one model rebuilt of a frame alone (`set`), that frame, the `frame=` its line gave. For a set of the path's own reading (`set-views`), the path's `anchor`, whichever frame the set shows. |
+| `frame` | The frame of `from` whose camera is at the mesh's own origin (the `anchor` is the frame nearest it, a model leaving it a little off), 0 unless given, the others being where they were from it. For a set one model rebuilt of a frame alone (`set`), that frame, the `frame=` its line gave. For a set of the path's own reading (`set-views`), the path's `anchor`, whichever frame the set shows. |
 | `rate` | How many frames of `from` a second has, the sequence's unless given: a path of a shot at 16 a second in a sequence at 24 is spread over half as many frames again. |
 | `scale` | How much of the mesh's file one of the path's units is, 1 unless given. A set and a path come from two models, and neither is in metres the other knows. |
 | `fits` | In place of `scale`: the media the path is the camera of, to find the size from. |

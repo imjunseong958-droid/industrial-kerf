@@ -718,7 +718,11 @@ recipes, in `fixtures/shots/car`.
    0.52. So `overlap` says how nearly what is there is the box that was
    asked for, which is what was wanted of a crate and not of a car drawn
    from two solids; it chooses between takes of one guide, and is no
-   judge of which guide made the better picture.
+   judge of which guide made the better picture. On a second filmed shot
+   the two halves parted the other way: a picture-guided take with its
+   crate in place (`overlap` 0.86) and its depth read against the guide's
+   through the set's holes, and a depth-guided one that kept the depth
+   and stood its crate elsewhere.
 5. **More than one guide on a line**, which is in
    ([the record](docs/shots-measured.md)): `guide_<name>=`, each sent to the workflow blank
    of its name. `shot-into` reads the footage and a mask and puts a thing
