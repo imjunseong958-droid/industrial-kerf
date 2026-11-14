@@ -880,7 +880,8 @@ four points toward its corners, so that how large the clip is on each frame
 is said with where. `shot-moved`, which comes with `kerf-comfy`, hands a
 model that, a picture to start from (`first=<picture>`), and the prompt:
 `generate model=<name> first=refs/start.png moves=<clip> prompt="…"`. What
-is in the picture where the clip starts goes where the clip goes; the rest
+is in the picture where the clip starts goes where the clip goes, in 4
+steps, by weights added to the model's for that (`lora=`); the rest
 of the picture stays about where it was, since nothing is said of it.
 `moves-shown`, which comes
 with `kerf-comfy` too, has the node that reads points read `{moves}` and draws them over a

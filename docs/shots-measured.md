@@ -486,9 +486,11 @@ head of each part are the architecture's.
    left and ends large at the right in each, and the street stays about
    where the first frame has it and does not travel as the footage does:
    nothing was said of it. With steps reused the picture is coarse from
-   the first frame, so the workflow reuses none unless a line asks. The 4
-   steps are a distilled variant kept out of the repository; its picture
-   is as clean as 20 steps'. It
+   the first frame. The 4 steps are by weights added to the model's for
+   that; their picture is as clean as 20 steps' and the container is held
+   as well, in a seventh of the time, so `shot-moved` is made that way as
+   it comes (66 s, 0.61 again), and `steps=`, `cfg=` and `lora=` on a line
+   say otherwise. It
    is the fourth row of the table at the top: where, when, what, and
    how each thing goes.
 7. **A signal measured** (2026-11-13), on the one model in reach, which
