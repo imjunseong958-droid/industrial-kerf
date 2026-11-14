@@ -4,6 +4,23 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
+## 0.1.3
+
+- A first cut Kerf makes lands in the conversation as a card with its picture:
+  the first clip's poster, its length and a play mark, and moving over it runs
+  through its clips. While Kerf is still cutting, the card is already there,
+  with light running round its picture as each clip is placed. Pressing it
+  grows the picture out of the card onto the stage and brings the timeline in;
+  closing the panel puts it back. Its title sits beside Reject and Accept.
+- The editor draws less while panels open and close and while the picture
+  plays: the timeline moves as a picture of itself, the conversation is laid
+  out once, unchanged threads are kept rather than made again, and nothing is
+  drawn under what covers it. A long conversation no longer makes each new
+  comment slower.
+- On a Mac in a virtual machine, Kerf encodes in software, since VideoToolbox
+  there can stop answering and leave an export waiting for ever;
+  `KERF_ENCODER=hardware` still asks for it.
+
 ## 0.1.2
 
 - On Windows, a `kerf://` review link opens in the Kerf you already have open,
