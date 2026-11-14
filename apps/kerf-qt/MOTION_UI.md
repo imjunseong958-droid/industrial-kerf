@@ -36,8 +36,9 @@ repeating their numbers, so changing a value does not make it wrong.
 | Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
-| Picture arrives | The first clip or proposal | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
-| Cut builds | Each new clip in a proposal | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
+| Picture arrives | A project opens with clips on its timeline | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `MainWindow::growStage`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
+| Cut card | Kerf proposes a first cut | It lands in the conversation as its card's picture; moving over it runs through its clips. Pressed, the picture grows out of it as the conversation gives way and the timeline comes in; the card says it is on the stage. Closed, the picture goes back into the card | `CardPicture`, `MainWindow::openCutFromCard`, `MainWindow::growStage`, `MainWindow::cardPictureHome`, `StageShell::setPictureHome` | `aCutKerfMadeOpensFromItsCard` |
+| Cut builds | Each new clip in a proposal, with the stage open | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
 | First cut shows | A proposal on an empty program | Timeline shows it, read-only; the picture takes its format and renders it | `MainWindow::showProposedCut` | `aFirstCutShowsOnTheTimelineUntilItIsTheProgram`, `aProposedCutBringsItsOwnFormat` |
 | Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview` | none |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
@@ -53,7 +54,8 @@ Look here before writing a new animation.
 
 | You want | Use |
 |---|---|
-| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to |
+| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to; `StageShell::setPictureHome` for where it returns to when no origin is given |
+| The stage to grow out of something, with a stand-in until its frame | `MainWindow::growStage` |
 | Something to travel across regions | `StageMotion::fly` with a `Flight` |
 | Something to hold a place until the real thing comes | `Flight::stays`, ended by `releaseStaying` |
 | A stand-in for the picture | `Flight::fit`, so it shows footage as the render will |

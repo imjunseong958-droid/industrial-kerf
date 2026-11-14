@@ -256,6 +256,11 @@ void MainWindow::buildSidebar() {
         connect(review, &ReviewModel::changed, this, &MainWindow::refreshSidebar);
         connect(review, &ReviewModel::currentChanged, this, &MainWindow::refreshSidebar);
     }
+    // A cut Kerf made opens from its card in the conversation, and goes back into it.
+    m_chat->setPictureSource([this](const QString &proposalId) { return cutPicture(proposalId); });
+    connect(m_chat, &ChatPanel::pictureRequested, this, &MainWindow::openCutFromCard);
+    connect(m_artwork, &MediaArtwork::changed, m_chat, &ChatPanel::refreshPictures);
+    m_shell->setPictureHome([this] { return cardPictureHome(); });
     // Looking at something in the conversation shows it.
     connect(m_chat, &ChatPanel::seekRequested, this, [this] { revealPanel(true, false); });
     connect(m_chat, &ChatPanel::previewRequested, this, [this](const QString &, bool on) {
@@ -307,6 +312,8 @@ void MainWindow::applyPanes() {
                                        {m_mediaButton, m_shell->sheet() == StageShell::Sheet::Media},
                                        {m_followButton, m_followKerf}})
         if (button) button->setOn(open);
+    // The picture has gone from the stage: its card has it again.
+    if (!panes.picture && !m_chat->stageProposal().isEmpty()) m_chat->setStageProposal(QString());
     // A note stamps and draws on the picture.
     if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) {
         composer->stamp()->setVisible(panes.picture);
@@ -316,11 +323,14 @@ void MainWindow::applyPanes() {
 
 void MainWindow::followContentWithPanes() {
     if (!m_panesFollowContent) return;
-    bool content = !m_proposalId.isEmpty();
+    bool program = false;
     for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray())
-        content = content || !track.toObject().value(QStringLiteral("clips")).toArray().isEmpty();
-    if (!content) return;
+        program = program || !track.toObject().value(QStringLiteral("clips")).toArray().isEmpty();
+    if (!program && m_proposalId.isEmpty()) return;
     m_panesFollowContent = false;
+    // A cut Kerf makes lands in the conversation, as its card's picture: the
+    // conversation keeps the room until that is pressed.
+    if (!program) return;
     // The picture grows out of the tile of the first thing it was going to show,
     // over the conversation, which gives way as it does. The timeline follows.
     QString firstClip;
@@ -331,17 +341,25 @@ void MainWindow::followContentWithPanes() {
             const QJsonArray clips = track.toObject().value(QStringLiteral("clips")).toArray();
             if (firstClip.isEmpty() && !clips.isEmpty()) firstClip = clips.first().toObject().value(QStringLiteral("id")).toString();
         }
-    const QRect origin = flightStart(sourceOfClip(firstClip));
-    const QImage first = posterForClip(firstClip);
+    growStage(flightStart(sourceOfClip(firstClip)), posterForClip(firstClip), true);
+}
+
+void MainWindow::growStage(const QRect &origin, const QImage &poster, bool waitForRender) {
+    if (m_shell->panes().picture) {
+        revealPanel(true, true);
+        return;
+    }
     revealPanel(true, true, origin);
-    if (!first.isNull()) {
+    if (!poster.isNull()) {
         StageMotion::Flight grow;
-        grow.image = first;
+        grow.image = poster;
         grow.from = origin;
         grow.to = m_shell->rects().picture;
         grow.lively = false;
-        // It holds the place until the first frame is there.
-        grow.stays = true;
+        // It holds the place until the first frame is there, or fades over the
+        // frame that is there already.
+        grow.stays = waitForRender;
+        grow.tail = waitForRender ? 0 : tokens::motion::standInRelease;
         grow.fit = true;
         grow.radius = tokens::layout::pictureRadius;
         grow.duration = tokens::motion::stage;
@@ -356,6 +374,64 @@ void MainWindow::followContentWithPanes() {
             flushFlights();
         });
     }
+}
+
+CutPicture MainWindow::cutPicture(const QString &proposalId) const {
+    // A proposal on a program changes it; only a first cut is a picture of its own.
+    for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray())
+        if (!track.toObject().value(QStringLiteral("clips")).toArray().isEmpty()) return {};
+    const QJsonObject cut = proposalTimelineFor(m_snapshot, proposalId);
+    CutPicture picture;
+    bool shown = false;
+    for (const QJsonValue &value : cut.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = value.toObject();
+        const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+        for (const QJsonValue &entry : clips) {
+            const QJsonObject clip = entry.toObject();
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            picture.duration = std::max(picture.duration, start + clip.value(QStringLiteral("duration")).toDouble());
+        }
+        // The first picture track there is, clip by clip.
+        if (shown || track.value(QStringLiteral("type")).toString() != QStringLiteral("video") || clips.isEmpty()) continue;
+        shown = true;
+        for (const QJsonValue &entry : clips) {
+            const QJsonObject clip = entry.toObject();
+            picture.frames << CutPicture::Frame{clip.value(QStringLiteral("timelineStart")).toDouble(),
+                                                m_artwork->frames.value(clip.value(QStringLiteral("sourceId")).toString())};
+        }
+    }
+    std::sort(picture.frames.begin(), picture.frames.end(), [](const CutPicture::Frame &a, const CutPicture::Frame &b) { return a.at < b.at; });
+    // Nothing to show until a poster has come.
+    if (std::none_of(picture.frames.cbegin(), picture.frames.cend(), [](const CutPicture::Frame &frame) { return !frame.poster.isNull(); }))
+        return {};
+    const QSize canvas = resolvedCanvasSize(cut, m_project.value(QStringLiteral("sources")).toArray());
+    if (canvas.width() > 0 && canvas.height() > 0) picture.aspect = double(canvas.width()) / canvas.height();
+    return picture;
+}
+
+void MainWindow::openCutFromCard(const QString &proposalId) {
+    ProposalCard *card = m_chat->card(proposalId);
+    CardPicture *picture = card ? card->picture() : nullptr;
+    const bool fromCard = picture && picture->isVisible();
+    const QRect origin = fromCard ? toShell(picture, picture->pictureRect()) : QRect();
+    const QImage poster = fromCard ? picture->poster() : QImage();
+    m_panesFollowContent = false;
+    m_chat->setStageProposal(card ? card->shownId() : proposalId);
+    // The render of the cut may still be coming.
+    const bool rendering = m_cutRendering || m_cutPreview.isActive() || m_previewedCut != m_proposalId;
+    growStage(origin, poster, rendering);
+}
+
+QRect MainWindow::cardPictureHome() const {
+    if (m_chat->stageProposal().isEmpty()) return {};
+    m_chat->layOutNow();
+    ProposalCard *card = m_chat->card(m_chat->stageProposal());
+    CardPicture *picture = card ? card->picture() : nullptr;
+    if (!picture || !picture->isVisible()) return {};
+    const QRect home = toShell(picture, picture->pictureRect());
+    // Only into a card in sight.
+    QWidget *list = m_chat->list()->viewport();
+    return toShell(list, list->rect()).contains(home) ? home : QRect();
 }
 
 void MainWindow::refreshSidebar() {

@@ -16,6 +16,7 @@
 
 #include "test_friends.h"
 #include "comment_row.h"
+#include "proposal_card.h"
 #include "review_model.h"
 #include "stage_motion.h"
 
@@ -145,6 +146,17 @@ public:
     QString previewProposal() const { return m_previewProposal; }
     // A proposal accepted or rejected from this panel: its card settles to one line.
     void markSettledHere(const QString &proposalId, bool accepted);
+    // The picture of the cut a proposal (or its version) makes, for its card;
+    // an empty one when it has none to show.
+    void setPictureSource(std::function<CutPicture(const QString &)> source) { m_pictureSource = std::move(source); }
+    // The posters may have come since the cards were made: their pictures again.
+    void refreshPictures();
+    // The proposal whose cut the stage shows, opened from its card; empty when none.
+    void setStageProposal(const QString &proposalId);
+    QString stageProposal() const { return m_stageProposal; }
+    // Lays the list out for the panel's size now, not when its posted requests
+    // come: where things will be once a move has settled.
+    void layOutNow() { syncContent(); }
 
     // ---- threads -----------------------------------------------------------
     QList<ThreadWidget *> threadWidgets() const;
@@ -275,6 +287,8 @@ signals:
     void previewRequested(const QString &proposalId, bool on);
     // A card's Watch what changed.
     void changedPartsRequested(const QString &proposalId);
+    // A card's picture was pressed: the stage, for that cut.
+    void pictureRequested(const QString &proposalId);
     // A card's Versions menu chose the version it shows.
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     void postRequested();
@@ -359,6 +373,9 @@ private:
     bool m_connected = false;
     bool m_placed = false;
     std::function<ProposalChange(const QString &)> m_describer;
+    std::function<CutPicture(const QString &)> m_pictureSource;
+    QString m_stageProposal;
+    bool onStage(const ReviewModel::Proposal &proposal) const;
     std::function<QString(double)> m_reviewLink;
     QJsonArray m_steps;
     QStringList m_models;

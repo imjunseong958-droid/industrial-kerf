@@ -387,8 +387,6 @@ void MainWindow::followLiveProposal() {
         for (const ReviewModel::ClipChange &change : proposal->changes) placed += !change.removed && !m_timeline->isAudioLane(change.track);
         m_chat->setTurnStatus(placed == 1 ? QStringLiteral("Cutting · 1 clip") : QStringLiteral("Cutting · %1 clips").arg(placed));
     }
-    // Back from an export, the stage opens again for what comes next.
-    if (keys != before && m_followKerf && !m_panesFollowContent && !m_shell->panes().panelOpen()) revealPanel(true, true);
     // The new ones fly to where they land, once the timeline is there.
     for (const ReviewModel::ClipChange &change : proposal->changes)
         if (!change.removed && !before.contains(QStringLiteral("%1@%2").arg(change.clip).arg(change.newEnd))) m_pendingFlights << change;

@@ -54,6 +54,7 @@ class StageWiring;
 class TimelineWiring;
 class ToolbarWiring;
 struct ProposalChange;
+struct CutPicture;
 class CommentRow;
 class CommandRegistry;
 class ExportButton;
@@ -428,9 +429,20 @@ private:
     void setPanelOpen(bool open);
     void revealPanel(bool picture, bool timeline, const QRect &origin = QRect());
     void applyPanes();
-    // The panel opens by itself once there is something to see, until one
-    // opens or closes a pane by hand.
+    // The panel opens by itself for a program there is to see, until one opens
+    // or closes a pane by hand. A cut Kerf makes stays in the conversation, as
+    // its card's picture, until that is pressed.
     void followContentWithPanes();
+    // The stage opens out of `origin`, `poster` standing in for the picture
+    // until its first frame; the timeline comes in after it.
+    void growStage(const QRect &origin, const QImage &poster, bool waitForRender);
+    // A first cut's picture for its card; empty for a proposal on a program.
+    CutPicture cutPicture(const QString &proposalId) const;
+    // A card's picture was pressed: the stage grows out of it.
+    void openCutFromCard(const QString &proposalId);
+    // Where the picture goes back to as the stage closes: the card it came
+    // out of, while that is in sight; else empty.
+    QRect cardPictureHome() const;
     void refreshSidebar();
     void buildSidebar();
     // Kerf at work (main_window_agent.cpp).

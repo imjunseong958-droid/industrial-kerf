@@ -63,8 +63,11 @@ Import media with File ▸ Import Media… (⌘O).
 ## The window
 
 - **Conversation** on the left: you and Kerf, and every comment on the project.
-- **Picture** and **timeline** at the right, once there is something to show.
+- **Picture** and **timeline** at the right, once there is a cut to show.
   ⌥⌘P and ⌥⌘T open and close them.
+- A first cut Kerf makes comes back in the conversation as a card with its
+  picture. Move over the picture to run through its clips; click it to open it
+  with the timeline. Closing them puts it back in the card.
 - **Media** (⌘1) opens over the conversation: the project's media, with Import.
 - The format picker in the timeline's strip switches the sequence between 16:9
   and 9:16 (⌥1, ⌥2).

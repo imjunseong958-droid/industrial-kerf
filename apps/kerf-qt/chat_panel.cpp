@@ -667,6 +667,12 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     const QString versionId = shown.isEmpty() ? proposal.id : shown;
     card->setPinned(pinned, proposal.blocking);
     card->setTitle(proposal.summary);
+    // A cut Kerf made shows its picture; pressing it opens the stage.
+    if (m_pictureSource && proposal.isOpen()) {
+        card->setPicture(m_pictureSource(versionId));
+        card->picture()->setOnStage(onStage(proposal));
+        connect(card, &ProposalCard::pictureRequested, this, [this, id = proposal.id] { emit pictureRequested(id); });
+    }
 
     // The changes: from the timelines when there are some, else the script's words.
     QList<ProposalCard::Change> rows;
@@ -991,6 +997,24 @@ ProposalCard *ChatPanel::card(const QString &proposalId) const {
 }
 
 QList<ProposalCard *> ChatPanel::cards() const { return m_content->findChildren<ProposalCard *>(); }
+
+bool ChatPanel::onStage(const ReviewModel::Proposal &proposal) const {
+    return !m_stageProposal.isEmpty() && (proposal.id == m_stageProposal || proposal.hasVersion(m_stageProposal));
+}
+
+void ChatPanel::refreshPictures() {
+    if (!m_pictureSource || !m_model) return;
+    for (ProposalCard *card : cards())
+        if (!card->isSettled()) card->setPicture(m_pictureSource(card->shownId()));
+}
+
+void ChatPanel::setStageProposal(const QString &proposalId) {
+    m_stageProposal = proposalId;
+    for (ProposalCard *card : cards()) {
+        const ReviewModel::Proposal *proposal = m_model ? m_model->proposal(card->proposalId()) : nullptr;
+        card->picture()->setOnStage(proposal && onStage(*proposal));
+    }
+}
 
 void ChatPanel::setConversationLook(bool on) {
     if (on == m_conversationLook) return;

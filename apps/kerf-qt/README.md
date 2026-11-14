@@ -4,7 +4,7 @@ This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Work starts as a conversation: the folders
 at the left and Kerf beside them. The picture and the timeline open in a panel at
-the right once there is something to show; Media opens on demand. All of them are backed by the
+the right once there is a cut to show, or when a cut Kerf made is opened from its card; Media opens on demand. All of them are backed by the
 bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
@@ -285,9 +285,11 @@ the picture and the room are one surface with no line between them: the shell pa
 the room and the picture's shadow, and the conversation and the picture's region are
 clear over it, so the picture floats. The room stays neutral, whatever the picture
 shows, so its colours can be judged. Kerf's footage gathers as named tiles
-in the conversation; the first grows into the picture over the conversation as it
-gives way, the timeline comes in out of the room, and each tile flies to its lane
-while the picture becomes that clip. While a first cut is only a proposal the timeline
+in the conversation. A first cut Kerf makes lands there too, as its card's picture:
+moving over it runs through its clips, and pressing it grows it into the picture as
+the conversation gives way and the timeline comes in out of the room; closing the
+panel puts the picture back into the card. With the stage open while Kerf works,
+each tile flies to its lane while the picture becomes that clip. While a first cut is only a proposal the timeline
 shows it, read-only, the picture takes its format, and its preview follows. Watching what changed, what the picture
 was wipes to and fro over what it now is, with the changed clips lifted off their
 lanes; and when Kerf has rendered what was asked, the picture goes back into the
@@ -295,8 +297,9 @@ project's folder and the conversation has the room again. Under Reduce Motion
 everything is simply there. [`MOTION_UI.md`](MOTION_UI.md) lists each scene and what to
 reuse; start there when adding one.
 
-**The panel** opens by itself with the first thing to show: a clip on the
-timeline, or a proposal. After that, or once a pane is opened or closed by hand,
+**The panel** opens by itself for a cut there is to show: clips on the
+timeline. A first cut Kerf proposes stays in the conversation, as the picture on its
+card, until that is pressed. After that, or once a pane is opened or closed by hand,
 it stays as it is left. Clicking a timecode or previewing a proposal in the
 conversation shows the picture, and Media and Effects show the panel, so a drag
 has somewhere to land. The toolbar's two pane buttons, ⌥⌘P and ⌥⌘T, open and close

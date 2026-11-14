@@ -11,6 +11,9 @@
 //   - … / + …                                         (Script: the diff)
 //   [□ Preview] [Script]          [Reject] [Accept]   (open: the footer)
 //
+// A first cut Kerf made has its picture at the top: each clip's poster, the
+// length, and a play mark. Pressing it opens the stage, which grows out of it.
+//
 // Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
 // guest mode the buttons give way to "Waiting for the editor".
 
@@ -49,6 +52,51 @@ protected:
     void paintEvent(QPaintEvent *) override;
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override { update(); }
+};
+
+// What a cut looks like, for its card: the poster of each clip from where it
+// starts, how long it is, and its shape.
+struct CutPicture {
+    struct Frame {
+        double at = 0.0;
+        QImage poster;
+    };
+    QList<Frame> frames; // in time order
+    double duration = 0.0;
+    double aspect = 16.0 / 9.0;
+    bool isEmpty() const { return frames.isEmpty() || duration <= 0.0; }
+};
+
+// A cut's picture on its card. Moving over it runs through the cut's clips;
+// pressing it asks for the stage. While the stage shows it, it says so.
+class CardPicture final : public QAbstractButton {
+    Q_OBJECT
+public:
+    explicit CardPicture(QWidget *parent = nullptr);
+    void setPicture(const CutPicture &picture);
+    const CutPicture &picture() const { return m_picture; }
+    void setOnStage(bool on);
+    bool onStage() const { return m_onStage; }
+    // Where the picture is drawn, in this widget: what the stage grows out of.
+    QRect pictureRect() const;
+    // The poster it shows now.
+    QImage poster() const;
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override;
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void enterEvent(QEnterEvent *) override { update(); }
+    void leaveEvent(QEvent *) override;
+
+private:
+    QRect boxFor(int width) const;
+    CutPicture m_picture;
+    bool m_onStage = false;
+    // How far through the cut the pointer is, 0 to 1; below 0 when it is not over it.
+    qreal m_scrub = -1.0;
 };
 
 class ProposalCard final : public QFrame {
@@ -116,6 +164,9 @@ public:
     // Small: what to do with it stays when its changes are folded, and watching
     // is the first thing it offers.
     void setCompact(bool compact);
+    // The cut's picture; an empty one takes it away.
+    void setPicture(const CutPicture &picture);
+    CardPicture *picture() const { return m_picture; }
     bool isSettled() const { return m_settled; }
 
     QWidget *pinHeader() const { return m_pinHeader; }
@@ -145,6 +196,8 @@ signals:
     void scriptToggled(bool shown);
     void previewToggled(bool on);
     void watchRequested();
+    // The picture was pressed.
+    void pictureRequested();
     void versionChosen(const QString &proposalId);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
@@ -170,6 +223,7 @@ private:
     QVBoxLayout *m_layout = nullptr;
     QWidget *m_pinHeader = nullptr;
     QLabel *m_pinText = nullptr;
+    CardPicture *m_picture = nullptr;
     QLabel *m_title = nullptr;
     QWidget *m_second = nullptr;
     ChatExpander *m_changesLink = nullptr;

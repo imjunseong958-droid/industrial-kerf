@@ -185,6 +185,136 @@ void VersionButton::paintEvent(QPaintEvent *) {
     if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::small);
 }
 
+// ------------------------------------------------------------------ CardPicture
+
+namespace {
+// Under the picture, before the title.
+constexpr int kPictureGap = 10;
+constexpr int kPlayMark = 40;
+} // namespace
+
+CardPicture::CardPicture(QWidget *parent) : QAbstractButton(parent) {
+    setObjectName(QStringLiteral("cardPicture"));
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::TabFocus);
+    setMouseTracking(true);
+    QSizePolicy policy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    policy.setHeightForWidth(true);
+    setSizePolicy(policy);
+    ui::setTip(this, QStringLiteral("Open on the stage"));
+    setAccessibleName(QStringLiteral("Open on the stage"));
+}
+
+void CardPicture::setPicture(const CutPicture &picture) {
+    m_picture = picture;
+    updateGeometry();
+    update();
+}
+
+void CardPicture::setOnStage(bool on) {
+    if (on == m_onStage) return;
+    m_onStage = on;
+    setCursor(on ? Qt::ArrowCursor : Qt::PointingHandCursor);
+    update();
+}
+
+QRect CardPicture::boxFor(int width) const {
+    const double aspect = m_picture.aspect > 0.0 ? m_picture.aspect : 16.0 / 9.0;
+    int w = std::min(width, tokens::layout::cardPictureWidest);
+    int h = int(std::lround(w / aspect));
+    if (h > tokens::layout::cardPictureTallest) {
+        h = tokens::layout::cardPictureTallest;
+        w = int(std::lround(h * aspect));
+    }
+    return QRect(0, 0, std::max(0, w), std::max(0, h));
+}
+
+QRect CardPicture::pictureRect() const { return boxFor(width()); }
+
+int CardPicture::heightForWidth(int width) const { return boxFor(width).height() + kPictureGap; }
+
+QSize CardPicture::sizeHint() const {
+    const QRect box = boxFor(tokens::layout::cardPictureWidest);
+    return QSize(box.width(), box.height() + kPictureGap);
+}
+
+QImage CardPicture::poster() const {
+    if (m_picture.frames.isEmpty()) return {};
+    const double at = m_scrub >= 0.0 ? m_scrub * m_picture.duration : 0.0;
+    QImage shown = m_picture.frames.constFirst().poster;
+    for (const CutPicture::Frame &frame : m_picture.frames)
+        if (frame.at <= at && !frame.poster.isNull()) shown = frame.poster;
+    return shown;
+}
+
+void CardPicture::mouseMoveEvent(QMouseEvent *event) {
+    const QRect box = pictureRect();
+    const qreal scrub = m_onStage || box.width() <= 0 || !box.contains(event->position().toPoint())
+                            ? -1.0
+                            : std::clamp((event->position().x() - box.left()) / box.width(), 0.0, 0.999);
+    if (scrub != m_scrub) {
+        m_scrub = scrub;
+        update();
+    }
+    QAbstractButton::mouseMoveEvent(event);
+}
+
+void CardPicture::leaveEvent(QEvent *event) {
+    m_scrub = -1.0;
+    update();
+    QAbstractButton::leaveEvent(event);
+}
+
+void CardPicture::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    const QRectF box(pictureRect());
+    if (box.isEmpty()) return;
+    QPainterPath shape;
+    shape.addRoundedRect(box, radius::card, radius::card);
+    p.fillPath(shape, color(overlay::deviceScreen));
+    p.save();
+    p.setClipPath(shape);
+    const QImage shown = poster();
+    if (!shown.isNull()) {
+        QSizeF size = shown.size();
+        size.scale(box.size(), Qt::KeepAspectRatioByExpanding);
+        p.drawImage(QRectF(box.center() - QPointF(size.width(), size.height()) / 2.0, size), shown);
+    }
+    if (m_scrub >= 0.0) p.fillRect(QRectF(box.left(), box.bottom() - 2, box.width() * m_scrub, 2), QColor(255, 255, 255, 230));
+    if (m_onStage) {
+        // It is on the stage now: what is left here says so.
+        p.fillRect(box, QColor(18, 18, 18, alpha(0.78)));
+        p.setFont(tokens::font(control));
+        p.setPen(color(ink2));
+        p.drawText(box, Qt::AlignCenter, QStringLiteral("On the stage"));
+    }
+    p.restore();
+    if (!m_onStage) {
+        // How long it is, at its foot.
+        const int seconds = int(std::lround(m_picture.duration));
+        const QString length = QStringLiteral("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
+        const QFont mono = tokens::font(monoSmall);
+        const QFontMetricsF metrics(mono);
+        const QRectF badge(box.right() - 6 - metrics.horizontalAdvance(length) - 10, box.bottom() - 6 - 18, metrics.horizontalAdvance(length) + 10, 18);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, alpha(0.66)));
+        p.drawRoundedRect(badge, radius::small, radius::small);
+        p.setFont(mono);
+        p.setPen(Qt::white);
+        p.drawText(badge, Qt::AlignCenter, length);
+        // And that it plays.
+        const QRectF mark(box.center() - QPointF(kPlayMark, kPlayMark) / 2.0, QSizeF(kPlayMark, kPlayMark));
+        p.setOpacity(underMouse() || isDown() ? 1.0 : 0.85);
+        p.setBrush(QColor(0, 0, 0, alpha(0.5)));
+        p.drawEllipse(mark);
+        icons::paint(p, QStringLiteral("g-play"), QRectF(mark.center() - QPointF(7, 8), QSizeF(16, 16)), Qt::white, 16);
+        p.setOpacity(1.0);
+    }
+    if (hasFocus()) ui::paintFocusRing(p, box, radius::card);
+}
+
 // ------------------------------------------------------------------ ProposalCard
 
 ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(parent), m_id(proposalId) {
@@ -210,6 +340,14 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     pinLayout->addWidget(m_pinText, 1);
     m_layout->addWidget(m_pinHeader);
     m_pinHeader->hide();
+
+    // A cut's picture, over its title.
+    m_picture = new CardPicture;
+    m_picture->hide();
+    connect(m_picture, &QAbstractButton::clicked, this, [this] {
+        if (!m_picture->onStage()) emit pictureRequested();
+    });
+    m_layout->addWidget(m_picture);
 
     // The title: click opens or closes the card.
     m_title = new QLabel;
@@ -498,11 +636,17 @@ void ProposalCard::setCompact(bool compact) {
     updateParts();
 }
 
+void ProposalCard::setPicture(const CutPicture &picture) {
+    m_picture->setPicture(picture);
+    updateParts();
+}
+
 void ProposalCard::updateParts() {
     const bool card = !m_settled;
     const bool marked = m_pinned && !m_compact;
     m_layout->setContentsMargins(card ? 12 : 0, card ? (marked ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
     m_pinHeader->setVisible(card && marked);
+    m_picture->setVisible(card && !m_picture->picture().isEmpty());
     m_title->setVisible(card);
     m_second->setVisible(card);
     m_changes->setVisible(card && m_open);

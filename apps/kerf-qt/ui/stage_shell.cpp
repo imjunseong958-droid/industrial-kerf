@@ -353,6 +353,10 @@ void StageShell::transition(const QRect &pictureOrigin) {
     for (QWidget *region : regions)
         if (region) before.append({region, region->isVisible() ? region->geometry() : QRect()});
     place();
+    // Where a picture that closes goes back to, now that the regions are where
+    // they are going: what it names, else its home.
+    QRect back = pictureOrigin;
+    if (!back.isValid() && m_pictureHome && m_picture && !m_picture->isVisible()) back = m_pictureHome();
     QList<Move> moves;
     for (const auto &[region, from] : std::as_const(before)) {
         const bool shown = region->isVisible();
@@ -374,7 +378,7 @@ void StageShell::transition(const QRect &pictureOrigin) {
             // The picture goes back into what it names, if anything.
             move.to = region == m_sidebar                          ? from.translated(-from.width(), 0)
                       : region == m_timeline                       ? from.translated(0, 48)
-                      : region == m_picture && pictureOrigin.isValid() ? pictureOrigin
+                      : region == m_picture && back.isValid()      ? back
                       : region == m_picture                        ? from.translated(48, 0)
                                                                    : from;
             region->show();

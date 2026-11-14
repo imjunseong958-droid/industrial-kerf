@@ -9,6 +9,8 @@
 #include "command_registry.h"
 #include "design_tokens.h"
 #include "main_window.h"
+#include "media_artwork.h"
+#include "proposal_card.h"
 #include "project_panel.h"
 #include "timeline_widget.h"
 #include "ui/components.h"
@@ -69,6 +71,16 @@ void expectFilled(const stage::Rects &r, const QSize &window, const char *what) 
                      r.conversation.width() * r.conversation.height() + r.timeline.width() * r.timeline.height();
     QCOMPARE(area, content.width() * content.height());
     QVERIFY2(r.slot.isEmpty() || r.slot.contains(r.picture), what);
+}
+
+// An empty program, and Kerf proposing a first cut of it.
+QJsonObject proposingAFirstCut() {
+    QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+    QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+    timeline.insert(QStringLiteral("tracks"), QJsonArray{});
+    snapshot.insert(QStringLiteral("timeline"), timeline);
+    snapshot.insert(QStringLiteral("duration"), 0.0);
+    return snapshot;
 }
 
 QJsonObject snapshotOf(const QSize &canvas) {
@@ -592,6 +604,73 @@ private slots:
         emit window.m_chat->seekRequested(1.0);
         QVERIFY(window.m_shell->panes().picture);
         QVERIFY(!window.m_shell->panes().timeline);
+        window.close();
+    }
+
+    // A cut Kerf makes stays in the conversation as its card's picture; pressing
+    // it opens the stage out of it, and closing the stage puts it back.
+    void aCutKerfMadeOpensFromItsCard() {
+        QSettings().remove(QStringLiteral("layout"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const QJsonObject proposing = proposingAFirstCut();
+        window.applySnapshot(proposing);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        ProposalCard *card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card);
+        CardPicture *picture = card->picture();
+        // No poster yet, no picture; it comes with them.
+        QVERIFY(!picture->isVisible());
+        fakeArtwork(window.m_artwork);
+        emit window.m_artwork->changed();
+        QCoreApplication::processEvents();
+        QVERIFY(picture->isVisible());
+        QCOMPARE(picture->picture().frames.size(), 2);
+        QCOMPARE(picture->picture().duration, 18.0);
+        QCOMPARE(picture->pictureRect().size(), QSize(440, 248));
+        QVERIFY(!picture->poster().isNull());
+
+        QTest::mouseClick(picture, Qt::LeftButton, {}, picture->pictureRect().center());
+        QVERIFY(window.m_shell->panes().picture && window.m_shell->panes().timeline);
+        QCOMPARE(window.m_chat->stageProposal(), QStringLiteral("p7"));
+        card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card->picture()->onStage());
+        // Pressed again while the stage has it, it asks for nothing.
+        QSignalSpy asked(window.m_chat, &ChatPanel::pictureRequested);
+        QTest::mouseClick(card->picture(), Qt::LeftButton, {}, card->picture()->pictureRect().center());
+        QCOMPARE(asked.count(), 0);
+
+        // The stage closes back into the card.
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        QVERIFY(!window.cardPictureHome().isEmpty());
+        window.m_panelButton->click();
+        QVERIFY(window.m_shell->isMoving());
+        QVERIFY(window.m_chat->stageProposal().isEmpty());
+        QWidget *stagePicture = window.m_shell->m_picture;
+        QRect last;
+        while (window.m_shell->isMoving()) {
+            if (stagePicture->isVisible()) last = stagePicture->geometry();
+            QTest::qWait(10);
+        }
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(!card->picture()->onStage());
+        const QRect home = window.toShell(card->picture(), card->picture()->pictureRect());
+        QVERIFY2((last.center() - home.center()).manhattanLength() < 60, "the picture goes back into its card");
+        QVERIFY(last.width() < home.width() * 2);
+
+        // Accepted, the program has the cut and its card no picture.
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        QVERIFY(window.cutPicture(QStringLiteral("p7")).isEmpty());
+        // Nor does the program open the stage now that it is left closed.
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        QSettings().remove(QStringLiteral("layout"));
         window.close();
     }
 
