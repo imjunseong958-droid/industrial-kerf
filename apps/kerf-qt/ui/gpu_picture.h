@@ -31,10 +31,9 @@ public:
     explicit GpuPicture(QWidget *parent = nullptr);
     ~GpuPicture() override;
 
-    // Whether the window system puts windows together on the GPU, and the device
-    // QRhiWidget would draw with starts here: Metal on macOS, Direct3D 11 on
-    // Windows, OpenGL elsewhere. Asked once. Where not, no GpuPicture is made: one
-    // in a window turns all of it over to the GPU.
+    // Whether the device QRhiWidget would draw with starts here: Metal on macOS,
+    // Direct3D 11 on Windows, OpenGL elsewhere. Asked once. Where it does not,
+    // no GpuPicture is made: one in a window turns all of it over to the GPU.
     static bool available();
     // For tests: what available() answers, whatever the machine; -1 asks it.
     static inline int s_availableForTests = -1;

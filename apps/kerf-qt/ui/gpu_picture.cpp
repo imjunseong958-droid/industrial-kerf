@@ -6,8 +6,6 @@
 #include <QMatrix4x4>
 
 #include <QOffscreenSurface>
-#include <QtGui/private/qguiapplication_p.h>
-#include <QtGui/qpa/qplatformintegration.h>
 
 #include <rhi/qrhi.h>
 #include <rhi/qrhi_platform.h>
@@ -33,10 +31,6 @@ constexpr quint32 kUniformBytes = 64 + 16;
 bool GpuPicture::available() {
     if (s_availableForTests >= 0) return s_availableForTests == 1;
     static const bool starts = [] {
-        // The window system must put a window together on the GPU: the offscreen
-        // platform does not, even on a Mac whose Metal starts.
-        const QPlatformIntegration *platform = QGuiApplicationPrivate::platformIntegration();
-        if (!platform || !platform->hasCapability(QPlatformIntegration::RhiBasedRendering)) return false;
 #if defined(Q_OS_MACOS)
         QRhiMetalInitParams params;
         return QRhi::probe(QRhi::Metal, &params);
