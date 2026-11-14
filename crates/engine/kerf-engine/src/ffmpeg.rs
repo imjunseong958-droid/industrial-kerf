@@ -222,14 +222,19 @@ fn hw_device_opens(kind: &str) -> bool {
 /// (`VTDecompressionSessionCreateWithOptions`, in
 /// `VTParavirtualizationGuestSupportSetUpWithHandlers`) and stays behind
 /// when killed, so whatever reads its frames waits too. A guest has no
-/// decoder of its own to gain from: it decodes in software.
-fn runs_in_a_guest() -> bool {
-    cfg!(target_os = "macos")
-        && Command::new("/usr/sbin/sysctl")
-            .args(["-n", "kern.hv_vmm_present"])
-            .stdin(Stdio::null())
-            .output()
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1")
+/// decoder of its own to gain from: it decodes in software. Its encoders
+/// are VideoToolbox's too, and wait the same way, with the render that
+/// feeds them: it encodes in software as well.
+pub(crate) fn runs_in_a_guest() -> bool {
+    static GUEST: OnceLock<bool> = OnceLock::new();
+    *GUEST.get_or_init(|| {
+        cfg!(target_os = "macos")
+            && Command::new("/usr/sbin/sysctl")
+                .args(["-n", "kern.hv_vmm_present"])
+                .stdin(Stdio::null())
+                .output()
+                .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1")
+    })
 }
 
 /// Cached `ffmpeg -encoders` listing used by hardware encoder selection.
