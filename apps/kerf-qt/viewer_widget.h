@@ -7,6 +7,7 @@
 #include <QColor>
 #include <QElapsedTimer>
 #include <QImage>
+#include <QRegion>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
@@ -84,6 +85,11 @@ public:
     bool verticalSequence() const;
     // The frame at Fit: the largest of its shape in the region, centred.
     QRectF videoRect() const;
+    // What of it is painted, every pixel, whatever it shows: the frame at Fit
+    // but for its rounded corners, in whole pixels.
+    QRegion coveredRegion() const;
+    // Where the frame shows: the frame at Fit and as drawn, in whole pixels.
+    QRect shownRect() const;
     // The picture as drawn: the frame at Fit, else at the zoom, centred on it
     // (clipped to the frame at Fit).
     QRectF pictureRect() const;

@@ -1127,6 +1127,7 @@ private slots:
         ui::setReducedMotionOverride(0);
         const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
         QWidget *content = window.m_chat->listContent();
+        const QImage timeline = window.m_timelinePanel->grab().toImage().convertToFormat(QImage::Format_RGB32);
         window.m_panelButton->click();
         QVERIFY(window.m_shell->isMoving());
         const int held = window.m_chat->heldWidth();
@@ -1137,6 +1138,9 @@ private slots:
         QWidget *still = window.m_shell->m_still;
         QVERIFY(still && still->isVisible());
         QVERIFY(!window.m_timelinePanel->updatesEnabled());
+        // It is the timeline as it shows, and covers all it is over.
+        QVERIFY(still->testAttribute(Qt::WA_OpaquePaintEvent));
+        QCOMPARE(still->grab().toImage().convertToFormat(QImage::Format_RGB32), timeline);
         int seen = 0;
         while (window.m_shell->isMoving()) {
             QCOMPARE(content->width(), width);

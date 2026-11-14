@@ -106,7 +106,20 @@ with it. So:
   as the before side of the wipe, is made at its size once.
 - **What only travels is shown from a picture of it.** While the regions move, the
   timeline, which keeps its size, is shown from a picture taken as the move begins
-  (`StageShell`'s still), and is not drawn again until the move ends.
+  (`StageShell`'s still), and is not drawn again until the move ends. The picture is
+  laid over the room once, so it is opaque: each frame copies it, and nothing under
+  it is drawn.
+- **What fills all it repaints says so, and keeps saying so.** The style sheet clears
+  `Qt::WA_OpaquePaintEvent` as it polishes a widget, after the widget set it, and Qt
+  then draws what is under it in each frame too. Set it with `KeepsOpaque`
+  (`stage_shell.cpp`), which sets it again once shown and after each restyle. Only a
+  widget that paints every pixel it is asked for: the floating viewer is not one.
+- **Under the picture, the room is not drawn.** The viewer paints all of its frame at
+  Fit but the rounded corners (`ViewerWidget::coveredRegion`), so `StageShell` leaves
+  that out of what it fills and shadows. A frame of the same shape marks only where
+  the frame shows (`ViewerWidget::shownRect`): as it plays, only the corners of the
+  room are drawn. `playingDrawsOnlyThePicture` holds the screen to a whole drawing of
+  the window.
 - **Draw an icon once.** `icons::paint` keeps each icon it has filled, at its size,
   colour and place within a pixel, and copies it from then on.
 - **Away from the picture's corners, keep to its rect.** Rounding the clip costs a pass

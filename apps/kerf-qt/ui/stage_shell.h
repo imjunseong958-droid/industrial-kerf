@@ -34,6 +34,7 @@
 #include <QList>
 #include <QPointer>
 #include <QRect>
+#include <QRegion>
 #include <QSize>
 #include <QColor>
 #include <QWidget>
@@ -124,6 +125,9 @@ public:
     // Where the picture goes back into as it closes with no origin given, asked
     // once the regions have their new places (empty: it slides away).
     void setPictureHome(std::function<QRect()> home) { m_pictureHome = std::move(home); }
+    // What of the room the picture's region paints over, every pixel of it, in
+    // this widget's coordinates: the room is not filled there first.
+    void setPictureCovers(std::function<QRegion()> covers) { m_pictureCovers = std::move(covers); }
     // The layer flights are drawn on, over everything but the bars.
     void setMotion(QWidget *motion);
     // How much of the room lies over the timeline, 0 to 1, eased there after
@@ -210,6 +214,7 @@ private:
     double m_aspect = 16.0 / 9.0;
     stage::Panes m_panes;
     std::function<QRect()> m_pictureHome;
+    std::function<QRegion()> m_pictureCovers;
     Sheet m_sheet = Sheet::None;
 };
 
