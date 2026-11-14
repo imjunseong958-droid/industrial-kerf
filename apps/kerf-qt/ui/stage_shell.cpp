@@ -17,8 +17,6 @@
 #include <QTimer>
 #include <QVariantAnimation>
 
-#include <qdrawutil.h>
-
 #include <algorithm>
 #include <cmath>
 
@@ -690,12 +688,32 @@ void StageShell::paintEvent(QPaintEvent *event) {
     // The picture covers what is under its middle: only its corners show any.
     const QRect shown = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
     const int corner = tokens::layout::pictureRadius;
-    p.setClipRegion((QRegion(m_shadowed) - shown.adjusted(corner, corner, -corner, -corner)) & room);
-    // Its shadow, wide and soft under it.
+    // Its shadow, wide and soft under it: each piece of the tile drawn only where
+    // it shows, its corners copied and its edges and middle drawn out between
+    // them. One clip for each piece costs less than one for all of them.
     const QPixmap &tile = shadowTile(std::max(1.0, devicePixelRatioF()));
-    const QMargins edges(kShadowCorner, kShadowCorner, kShadowCorner, kShadowCorner);
-    const int cornerPixels = qRound(kShadowCorner * tile.devicePixelRatio());
-    qDrawBorderPixmap(&p, m_shadowed, edges, tile, tile.rect(), QMargins(cornerPixels, cornerPixels, cornerPixels, cornerPixels));
+    const QRegion falls = (QRegion(m_shadowed) - shown.adjusted(corner, corner, -corner, -corner)) & room;
+    const int c = kShadowCorner;
+    const int cp = qRound(c * tile.devicePixelRatio());
+    const int mp = tile.width() - 2 * cp;
+    const QRect &r = m_shadowed;
+    const int w = std::max(0, r.width() - 2 * c);
+    const int h = std::max(0, r.height() - 2 * c);
+    const auto piece = [&](const QRect &to, const QRect &from) {
+        const QRegion part = falls & to;
+        if (part.isEmpty()) return;
+        p.setClipRegion(part);
+        p.drawPixmap(to, tile, from);
+    };
+    piece(QRect(r.left(), r.top(), c, c), QRect(0, 0, cp, cp));
+    piece(QRect(r.left() + c + w, r.top(), c, c), QRect(cp + mp, 0, cp, cp));
+    piece(QRect(r.left(), r.top() + c + h, c, c), QRect(0, cp + mp, cp, cp));
+    piece(QRect(r.left() + c + w, r.top() + c + h, c, c), QRect(cp + mp, cp + mp, cp, cp));
+    piece(QRect(r.left() + c, r.top(), w, c), QRect(cp, 0, mp, cp));
+    piece(QRect(r.left() + c, r.top() + c + h, w, c), QRect(cp, cp + mp, mp, cp));
+    piece(QRect(r.left(), r.top() + c, c, h), QRect(0, cp, cp, mp));
+    piece(QRect(r.left() + c + w, r.top() + c, c, h), QRect(cp + mp, cp, cp, mp));
+    piece(QRect(r.left() + c, r.top() + c, w, h), QRect(cp, cp, mp, mp));
 }
 
 bool StageShell::eventFilter(QObject *watched, QEvent *event) {
