@@ -141,6 +141,18 @@ title bar, the window buttons sit at the toolbar's leading end, and the
 project's name is centred on the window with its state under it
 ("Edited 2m ago · rev 22").
 
+The viewer can draw its picture on the GPU, as an experiment that is off
+unless asked for: `KERF_GPU_PICTURE=1`, or `viewer/gpuPicture` set to true in
+the editor's settings, read when the window opens. Built with Qt 6.7 or later
+(`QRhiWidget`), a frame at Fit is uploaded once and drawn by Metal on macOS,
+Direct3D 11 on Windows and OpenGL elsewhere, between the picture's rounded
+top and bottom (`ui/gpu_picture.cpp`); the CPU draws its rounded edges, the
+before/after wipe, a zoomed picture, and what is over it (the caption, safe
+zones, drawings, masks), on a layer over the GPU's. Where that device does
+not start, as on the offscreen platform the tests run on, none is made and
+all is drawn as before; if one stops drawing, the viewer takes the picture
+back. Its shaders are compiled into the `.qsb` files in `resources/shaders/`.
+
 Sources live in the `kerf` namespace. `main_window.cpp` builds the window;
 its members are split by region into `main_window_<region>.cpp` (stage,
 review, agent, timeline, bin, toolbar, status), and each region

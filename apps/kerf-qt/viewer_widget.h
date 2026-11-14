@@ -57,6 +57,14 @@ public:
     // While the window's regions move, the picture it has is drawn to size, smooth
     // enough to move, rather than made again in each frame.
     void setStageMoving(bool moving);
+    // The picture drawn on the GPU where it can be (ui/gpu_picture.h): a frame at
+    // Fit, with nothing being compared or wiped, between its rounded top and
+    // bottom. The CPU draws the rest of it and what is over it. Off, all is drawn
+    // on the CPU, as before. Without Qt 6.7 it stays off.
+    void setGpuPicture(bool on);
+    bool gpuPicture() const { return m_gpu != nullptr; }
+    // Where the GPU draws the picture now, in this widget: empty where it does not.
+    QRect gpuRect() const { return m_gpuRect; }
     // The engine's caption at the playhead (a `caption {text}` event).
     void setCaption(const QString &caption);
     QString caption() const { return m_caption; }
@@ -255,6 +263,12 @@ private:
     void paintCaption(QPainter &p, bool flagged);
     void paintOverlap(QPainter &p);
     void paintAnnotations(QPainter &p);
+    // Over the picture: the caption, the QC overlap box, safe zones, the
+    // comments' drawings, the masks and the motion path, and the HUD's shadow.
+    void paintOver(QPainter &p, const QRect &dirty);
+    // The picture on the GPU where it can be now, and on the CPU elsewhere.
+    void syncGpu();
+    friend class ViewerOverLayer;
     void paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials);
     // The caption's text box: its lines wrapped (and balanced) on a vertical
     // picture, one line on a wide one, and the box with its padding.
@@ -272,6 +286,9 @@ private:
     void updateLine(qreal from, qreal to, int reach);
     QImage m_scaled;
     bool m_stageMoving = false;
+    QWidget *m_gpu = nullptr;
+    QWidget *m_overLayer = nullptr;
+    QRect m_gpuRect;
     bool m_floating = false;
     QImage m_compareFrame;
     qreal m_compareAt = tokens::motion::compareFrom;
