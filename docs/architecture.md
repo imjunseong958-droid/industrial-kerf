@@ -1113,7 +1113,7 @@ recipes, in `fixtures/shots/car`.
    as tracks of points in the model's pixels
    ([shots.md](shots.md#where-a-thing-goes), `recipe/moves.rs`). On the
    travelling shot the crate's 65 places are the boxes `shows` gives. The
-   model that follows points is still not on the server, so it was run on
+   model that follows points was not then on the server, so it was first run on
    the one that is, which follows a layout: `kerf-comfy` draws the boxes
    as a video, white with each box's edge in black (`{moves_video}`), and
    its workflow `shot-led` hands the model that and the prompt, with no
@@ -1132,8 +1132,31 @@ recipes, in `fixtures/shots/car`.
    read what `kerf-comfy` fills `{moves}` with and draws the points over a
    guide. Over the take `shot-led` made, the crate's point is on the
    container on the frames looked at, so the text Kerf hands is the text
-   the node reads, in the model's pixels; what is untried is the model. It
-   would be the fourth row of the table at the top: where, when, what, and
+   the node reads, in the model's pixels. The weights came the next day,
+   and the model was run (2026-11-14): `shot-moved` hands it a picture to
+   start from, the first frame of the take with the container put into the
+   footage, the crate's points, and the prompt. `placed` against the crate,
+   beside the layout's take:
+
+   | What is handed | Frames followed | Off | Size | Overlap | Made in |
+   |---|---|---|---|---|---|
+   | A layout of the box (`shot-led`) | 65 of 65 | 0.040 | 1.14 | 0.57 | |
+   | One track, the box's middle, 4 steps | 59 of 65 | 0.028 | 1.37 | 0.48 | 63 s |
+   | Five tracks, the middle and toward the corners (`{moves_box}`), 4 steps | 65 of 65 | 0.040 | 1.13 | 0.61 | 71 s |
+   | Five tracks, 20 steps | 65 of 65 | 0.035 | 0.96 | 0.60 | 460 s |
+   | Five tracks, 20 steps, steps reused (`cache=0.2`) | 65 of 65 | 0.047 | 0.98 | 0.58 | 216 s |
+
+   A point says where and not how large: the container is nearest its
+   place with one track and a third too large. Five tracks say both, and
+   hold the container to the box better than the layout did, so
+   `shot-moved` hands five. Looked at, the container starts small at the
+   left and ends large at the right in each, and the street stays about
+   where the first frame has it and does not travel as the footage does:
+   nothing was said of it. With steps reused the picture is coarse from
+   the first frame, so the workflow reuses none unless a line asks. The 4
+   steps are a distilled variant kept out of the repository; its picture
+   is as clean as 20 steps'. It
+   is the fourth row of the table at the top: where, when, what, and
    how each thing goes.
 7. **A signal measured** (2026-11-13), on the one model in reach, which
    takes no number a frame and does take a mask a frame. `kerf-comfy`

@@ -314,6 +314,20 @@ pub fn make(
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    } else if !request.moves.is_empty() && blanks.contains(request::MOVES_BOX) {
+        values.insert(
+            request::MOVES_BOX.to_owned(),
+            json!(request::tracks_of_boxes(&request.moves, frames, fps, (width, height))),
+        );
+        say(&format!(
+            "handed where {} goes as five tracks of {frames} points each",
+            request
+                .moves
+                .iter()
+                .map(|clip| format!("`{}`", clip.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     } else if !request.moves.is_empty() {
         if blanks.contains(request::MOVES) {
             values.insert(

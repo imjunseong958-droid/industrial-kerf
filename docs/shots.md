@@ -444,6 +444,7 @@ start from. `kerf-comfy --list` names those that come with it; the others
 | `{guide_depth}`, `{guide_ids}` … | A guide the line gives beside the first, by its name: sent up as `{guide}` is, brought to the size, rate, and frames asked for. |
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
 | `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
+| `{moves_box}` | The same, five tracks a clip: its box's middle and four points toward its corners, so how large it is on each frame is said too. |
 | `{signal_video}`, `{signal2_video}` … | The same signal as a picture in motion: a grey video of the size and frames asked for, each frame as light all over as the signal is then, sent up as a file is. For a node that reads a mask a frame, which a list of numbers does not reach. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
@@ -874,10 +875,15 @@ A workflow reads it at `{moves}`, as tracks of points, or at
 white, with each clip's box outlined in black where it is on that frame.
 `shot-led`, which comes with `kerf-comfy`, hands a model that layout and the
 prompt and no picture of the scene: the subject the prompt names goes where
-the clip goes. The server the rest was measured on has the nodes that take
-point tracks and not the weights, so `{moves}` itself was not run on a
-model. What was run is the node that reads them: `moves-shown`, which comes
-with `kerf-comfy` too, has it read `{moves}` and draws the points over a
+the clip goes. `{moves_box}` is the same text with five tracks a clip, its box's middle and
+four points toward its corners, so that how large the clip is on each frame
+is said with where. `shot-moved`, which comes with `kerf-comfy`, hands a
+model that, a picture to start from (`first=<picture>`), and the prompt:
+`generate model=<name> first=refs/start.png moves=<clip> prompt="…"`. What
+is in the picture where the clip starts goes where the clip goes; the rest
+of the picture stays about where it was, since nothing is said of it.
+`moves-shown`, which comes
+with `kerf-comfy` too, has the node that reads points read `{moves}` and draws them over a
 guide (`generate model=<name> guide=<take> moves=<clip>`), with no model.
 It is what a model that follows points is told, to look at before a take or
 over one.
