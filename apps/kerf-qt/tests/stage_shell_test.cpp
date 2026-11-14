@@ -607,6 +607,51 @@ private slots:
         window.close();
     }
 
+    // While Kerf makes a first cut, its card is in Kerf's row of the turn, at work,
+    // with nothing to do yet; done, the proposal's card shows that it is done.
+    void aCutAtWorkIsItsCardInTheTurn() {
+        QSettings().remove(QStringLiteral("layout"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const QJsonObject proposing = proposingAFirstCut();
+        window.applySnapshot(proposing);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        fakeArtwork(window.m_artwork);
+        emit window.m_artwork->changed();
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(!window.m_shell->panes().panelOpen());
+        ProposalCard *building = window.m_chat->buildingCard();
+        QVERIFY(building);
+        QCOMPARE(window.m_chat->buildingProposal(), QStringLiteral("p7"));
+        QVERIFY(window.m_chat->turnKerfRow(false)->isAncestorOf(building));
+        QVERIFY(building->isVisible() && building->picture()->isVisible());
+        QVERIFY(building->picture()->isWorking());
+        QVERIFY(building->lineTitle()->isVisible());
+        QVERIFY(!building->acceptButton()->isVisible() && !building->rejectButton()->isVisible());
+        // Only the one at work: the proposal's own thread waits for it.
+        QCOMPARE(window.m_chat->cards().size(), 1);
+        // At work the picture is the newest clip placed.
+        QCOMPARE(building->picture()->poster().cacheKey(), building->picture()->picture().frames.constLast().poster.cacheKey());
+        // Another look at the same cut keeps the same card.
+        window.applySnapshot(proposing);
+        QCOMPARE(window.m_chat->buildingCard(), building);
+
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        QVERIFY(window.m_chat->buildingProposal().isEmpty());
+        QVERIFY(!window.m_chat->buildingCard());
+        ProposalCard *card = window.m_chat->card(QStringLiteral("p7"));
+        QVERIFY(card);
+        QVERIFY(!card->picture()->isWorking());
+        QVERIFY(card->picture()->isFinishing());
+        QVERIFY(card->acceptButton()->isVisible() && card->rejectButton()->isVisible());
+        window.close();
+    }
+
     // A cut Kerf makes stays in the conversation as its card's picture; pressing
     // it opens the stage out of it, and closing the stage puts it back.
     void aCutKerfMadeOpensFromItsCard() {
@@ -633,6 +678,7 @@ private slots:
         QCOMPARE(picture->picture().frames.size(), 2);
         QCOMPARE(picture->picture().duration, 18.0);
         QCOMPARE(picture->pictureRect().size(), QSize(440, 248));
+        QCOMPARE(picture->pictureRect().topLeft(), QPoint(tokens::layout::cardRing, tokens::layout::cardRing));
         QVERIFY(!picture->poster().isNull());
         // The picture says what the cut is: the card keeps to its title, Reject and
         // Accept, on one line under it.

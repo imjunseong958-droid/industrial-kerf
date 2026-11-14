@@ -671,6 +671,12 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
     if (m_pictureSource && proposal.isOpen()) {
         card->setPicture(m_pictureSource(versionId));
         card->picture()->setOnStage(onStage(proposal));
+        // Just made: it shows it is done, from where it has got to.
+        if (proposal.hasVersion(m_justBuilt) || proposal.id == m_justBuilt) {
+            const qint64 ago = CardPicture::clock() - m_builtAt;
+            if (ago < tokens::motion::cardDone) card->picture()->setFinished(ago);
+            else m_justBuilt.clear();
+        }
         connect(card, &ProposalCard::pictureRequested, this, [this, id = proposal.id] { emit pictureRequested(id); });
     }
 
@@ -844,8 +850,10 @@ void ChatPanel::rebuild() {
     }
     for (const ReviewModel::Thread &thread : threads) {
         if (thread.origin == ReviewModel::Origin::Welcome) continue;
-        // Held, as the picture is showing them.
-        if (m_holdingProposals && thread.origin == ReviewModel::Origin::Proposal) continue;
+        // The cut Kerf is making has its card in the turn.
+        if (m_buildingCard && thread.origin == ReviewModel::Origin::Proposal && m_model->proposal(m_building) &&
+            thread.openProposal == m_model->proposal(m_building)->id)
+            continue;
         auto *widget = new ThreadWidget(thread.id, first);
         widget->setFlat(m_conversationLook);
         CommentRow *root = buildRow(thread.root, thread, true);
@@ -1023,9 +1031,42 @@ void ChatPanel::setConversationLook(bool on) {
     scheduleRebuild();
 }
 
-void ChatPanel::setHoldingProposals(bool holding) {
-    if (holding == m_holdingProposals) return;
-    m_holdingProposals = holding;
+void ChatPanel::setBuildingProposal(const QString &proposalId) {
+    const ReviewModel::Proposal *proposal = m_model && !proposalId.isEmpty() ? m_model->proposal(proposalId) : nullptr;
+    if (proposalId == m_building && (m_buildingCard || proposalId.isEmpty())) {
+        // The same cut, further on: its picture becomes the newest clip.
+        if (m_buildingCard) {
+            if (m_pictureSource) m_buildingCard->setPicture(m_pictureSource(proposalId));
+            if (proposal) m_buildingCard->setTitle(proposal->summary);
+        }
+        return;
+    }
+    if (!m_building.isEmpty() && proposalId.isEmpty() && m_buildingCard) {
+        m_justBuilt = m_building;
+        m_builtAt = CardPicture::clock();
+    }
+    m_building = proposalId;
+    if (m_buildingCard) {
+        // It goes with what holds it in the row.
+        QWidget *holder = m_buildingCard->parentWidget();
+        m_buildingCard->hide();
+        if (holder && !qobject_cast<CommentRow *>(holder)) holder->deleteLater();
+        else m_buildingCard->deleteLater();
+        m_buildingCard = nullptr;
+    }
+    if (CommentRow *kerf = proposalId.isEmpty() ? nullptr : turnKerfRow(true)) {
+        auto *card = new ProposalCard(proposalId);
+        card->setCompact(m_conversationLook);
+        card->setBuilding(true);
+        card->setTitle(proposal ? proposal->summary : QString());
+        if (m_pictureSource) card->setPicture(m_pictureSource(proposalId));
+        card->picture()->setOnStage(proposal && onStage(*proposal));
+        connect(card, &ProposalCard::pictureRequested, this, [this, proposalId] { emit pictureRequested(proposalId); });
+        moves::fadeIn(card);
+        kerf->addBodyWidget(card);
+        m_buildingCard = card;
+        scheduleFollow();
+    }
     scheduleRebuild();
 }
 
@@ -1127,7 +1168,7 @@ QString ChatPanel::pinBarProposal() const {
 }
 
 void ChatPanel::updatePinBar() {
-    if (m_holdingProposals) {
+    if (m_buildingCard) {
         m_pinBar->hide();
         return;
     }

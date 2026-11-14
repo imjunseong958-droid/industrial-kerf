@@ -336,7 +336,8 @@ void MainWindow::quietenCutPreview() {
     m_stageWiring->previewChip()->setSuppressed(quiet || m_changeReel->isActive());
     // The reel's strip already says it is getting the picture.
     m_stageWiring->hud()->setQuiet(quiet || m_cutRendering || m_changeReel->isActive());
-    m_chat->setHoldingProposals(quiet);
+    // The cut it is making is its card in the conversation, at work.
+    m_chat->setBuildingProposal(quiet ? m_proposalId : QString());
     if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
 }
 

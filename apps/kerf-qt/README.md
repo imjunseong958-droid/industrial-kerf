@@ -285,8 +285,10 @@ the picture and the room are one surface with no line between them: the shell pa
 the room and the picture's shadow, and the conversation and the picture's region are
 clear over it, so the picture floats. The room stays neutral, whatever the picture
 shows, so its colours can be judged. Kerf's footage gathers as named tiles
-in the conversation. A first cut Kerf makes lands there too, as its card's picture:
-moving over it runs through its clips, and pressing it grows it into the picture as
+in the conversation. A first cut Kerf makes is a card there from the start: while Kerf
+works, light runs round its picture, which becomes each clip as it is placed, and
+when it is done the ring lights once and goes out. Moving over the picture runs
+through its clips, and pressing it grows it into the picture as
 the conversation gives way and the timeline comes in out of the room; closing the
 panel puts the picture back into the card. With the stage open while Kerf works,
 each tile flies to its lane while the picture becomes that clip. While a first cut is only a proposal the timeline

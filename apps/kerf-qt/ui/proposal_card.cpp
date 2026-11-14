@@ -5,6 +5,7 @@
 #include "design_tokens.h"
 #include "icons.h"
 
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
@@ -14,11 +15,13 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace kerf {
@@ -208,9 +211,24 @@ void VersionButton::paintEvent(QPaintEvent *) {
 
 namespace {
 // Under the picture, before the title.
-constexpr int kPictureGap = 10;
+constexpr int kPictureGap = 8;
 constexpr int kPlayMark = 40;
+// Where things show on the picture as it finishes.
+constexpr int kMarkAfter = 900;
+constexpr int kDoneFade = 1000;
+constexpr double kPi = 3.14159265358979323846;
+
+qreal ramp(qint64 at, qint64 from, qint64 length) {
+    if (length <= 0) return at >= from ? 1.0 : 0.0;
+    return std::clamp(qreal(at - from) / qreal(length), 0.0, 1.0);
+}
 } // namespace
+
+qint64 CardPicture::clock() {
+    static QElapsedTimer timer;
+    if (!timer.isValid()) timer.start();
+    return timer.elapsed();
+}
 
 CardPicture::CardPicture(QWidget *parent) : QAbstractButton(parent) {
     setObjectName(QStringLiteral("cardPicture"));
@@ -222,13 +240,46 @@ CardPicture::CardPicture(QWidget *parent) : QAbstractButton(parent) {
     setSizePolicy(policy);
     ui::setTip(this, QStringLiteral("Open on the stage"));
     setAccessibleName(QStringLiteral("Open on the stage"));
+    m_ticker = new QTimer(this);
+    m_ticker->setInterval(tokens::motion::cardFrame);
+    connect(m_ticker, &QTimer::timeout, this, &CardPicture::tick);
 }
 
 void CardPicture::setPicture(const CutPicture &picture) {
-    m_picture = picture;
+    // At work, the picture becomes the newest clip, from what it was.
+    if (m_working && !ui::reducedMotion()) {
+        const QImage was = poster();
+        m_picture = picture;
+        if (poster().cacheKey() != was.cacheKey()) {
+            m_before = was;
+            m_turnedAt = clock();
+        }
+    } else {
+        m_picture = picture;
+    }
+    m_ready.clear();
     updateGeometry();
     update();
+    followTicks();
 }
+
+void CardPicture::setWorking(bool working) {
+    if (working == m_working) return;
+    m_working = working;
+    m_before = QImage();
+    m_turnedAt = -1;
+    m_scrub = -1.0;
+    update();
+    followTicks();
+}
+
+void CardPicture::setFinished(qint64 ago) {
+    m_finishedAt = clock() - std::max<qint64>(0, ago);
+    update();
+    followTicks();
+}
+
+bool CardPicture::isFinishing() const { return m_finishedAt >= 0 && clock() - m_finishedAt < tokens::motion::cardDone; }
 
 void CardPicture::setOnStage(bool on) {
     if (on == m_onStage) return;
@@ -237,28 +288,80 @@ void CardPicture::setOnStage(bool on) {
     update();
 }
 
+void CardPicture::showEvent(QShowEvent *event) {
+    QAbstractButton::showEvent(event);
+    followTicks();
+}
+
+void CardPicture::hideEvent(QHideEvent *event) {
+    QAbstractButton::hideEvent(event);
+    m_ticker->stop();
+}
+
+// Frames only while something moves, and only while it can be seen.
+void CardPicture::followTicks() {
+    const bool moving = !ui::reducedMotion() && isVisible() && (m_working || isFinishing());
+    if (moving && !m_ticker->isActive()) m_ticker->start();
+    if (!moving) m_ticker->stop();
+}
+
+void CardPicture::tick() {
+    const QRect box = pictureRect();
+    const qint64 now = clock();
+    const bool turning = m_turnedAt >= 0 && now - m_turnedAt < tokens::motion::cardCrossfade;
+    if (!turning && m_turnedAt >= 0) {
+        m_before = QImage();
+        m_turnedAt = -1;
+        update(box);
+    }
+    if (turning || isFinishing()) {
+        // The whole picture changes: it lightens, or the clip under it turns.
+        update(rect());
+    } else {
+        // Only the ring, the chip's dots and the line under it move.
+        const int ring = tokens::layout::cardRing;
+        QRegion moving(box.adjusted(-ring, -ring, ring, ring));
+        moving -= QRegion(box.adjusted(ring, ring, -ring, -ring));
+        moving += QRect(box.left(), box.top(), 140, 34);
+        moving += QRect(box.left(), box.bottom() + 1, box.width(), height() - box.bottom() - 1);
+        update(moving);
+    }
+    if (m_finishedAt >= 0 && now - m_finishedAt >= tokens::motion::cardDone) {
+        m_finishedAt = -1;
+        update(rect());
+    }
+    followTicks();
+}
+
 QRect CardPicture::boxFor(int width) const {
+    const int ring = tokens::layout::cardRing;
     const double aspect = m_picture.aspect > 0.0 ? m_picture.aspect : 16.0 / 9.0;
-    int w = std::min(width, tokens::layout::cardPictureWidest);
+    int w = std::min(width - 2 * ring, tokens::layout::cardPictureWidest);
     int h = int(std::lround(w / aspect));
     if (h > tokens::layout::cardPictureTallest) {
         h = tokens::layout::cardPictureTallest;
         w = int(std::lround(h * aspect));
     }
-    return QRect(0, 0, std::max(0, w), std::max(0, h));
+    return QRect(ring, ring, std::max(0, w), std::max(0, h));
 }
 
 QRect CardPicture::pictureRect() const { return boxFor(width()); }
 
-int CardPicture::heightForWidth(int width) const { return boxFor(width).height() + kPictureGap; }
+int CardPicture::heightForWidth(int width) const { return boxFor(width).height() + 2 * tokens::layout::cardRing + kPictureGap; }
 
 QSize CardPicture::sizeHint() const {
-    const QRect box = boxFor(tokens::layout::cardPictureWidest);
-    return QSize(box.width(), box.height() + kPictureGap);
+    const int widest = tokens::layout::cardPictureWidest + 2 * tokens::layout::cardRing;
+    return QSize(widest, heightForWidth(widest));
 }
 
 QImage CardPicture::poster() const {
     if (m_picture.frames.isEmpty()) return {};
+    // At work, the newest clip; else the one under the pointer, or the first.
+    if (m_working) {
+        for (auto it = m_picture.frames.crbegin(); it != m_picture.frames.crend(); ++it)
+            if (!it->poster.isNull()) return it->poster;
+        return {};
+    }
     const double at = m_scrub >= 0.0 ? m_scrub * m_picture.duration : 0.0;
     QImage shown = m_picture.frames.constFirst().poster;
     for (const CutPicture::Frame &frame : m_picture.frames)
@@ -266,9 +369,20 @@ QImage CardPicture::poster() const {
     return shown;
 }
 
+QImage CardPicture::readyAt(const QImage &poster, const QSize &size) const {
+    if (poster.isNull() || size.isEmpty()) return {};
+    const auto found = m_ready.constFind(poster.cacheKey());
+    if (found != m_ready.constEnd() && found->size() == size) return *found;
+    const QImage filled = poster.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    QImage ready = filled.copy((filled.width() - size.width()) / 2, (filled.height() - size.height()) / 2, size.width(), size.height())
+                       .convertToFormat(QImage::Format_RGB32);
+    m_ready.insert(poster.cacheKey(), ready);
+    return ready;
+}
+
 void CardPicture::mouseMoveEvent(QMouseEvent *event) {
     const QRect box = pictureRect();
-    const qreal scrub = m_onStage || box.width() <= 0 || !box.contains(event->position().toPoint())
+    const qreal scrub = m_onStage || m_working || box.width() <= 0 || !box.contains(event->position().toPoint())
                             ? -1.0
                             : std::clamp((event->position().x() - box.left()) / box.width(), 0.0, 0.999);
     if (scrub != m_scrub) {
@@ -290,18 +404,45 @@ void CardPicture::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::SmoothPixmapTransform);
     const QRectF box(pictureRect());
     if (box.isEmpty()) return;
+    const bool still = ui::reducedMotion();
+    const qint64 now = clock();
+    const qint64 since = m_finishedAt >= 0 ? now - m_finishedAt : std::numeric_limits<qint64>::max() / 2;
+    const bool finishing = !still && since < tokens::motion::cardDone;
+    // How much it is still at work: 1 while Kerf works, going to 0 as it finishes.
+    const qreal work = m_working ? 1.0 : finishing ? 1.0 - ramp(since, 0, tokens::motion::cardRing) : 0.0;
+    const qreal ratio = devicePixelRatioF();
+    const QSize pixels = (box.size() * ratio).toSize();
+
     QPainterPath shape;
     shape.addRoundedRect(box, radius::card, radius::card);
-    p.fillPath(shape, color(overlay::deviceScreen));
     p.save();
     p.setClipPath(shape);
+    p.fillRect(box, color(overlay::deviceScreen));
     const QImage shown = poster();
-    if (!shown.isNull()) {
-        QSizeF size = shown.size();
-        size.scale(box.size(), Qt::KeepAspectRatioByExpanding);
-        p.drawImage(QRectF(box.center() - QPointF(size.width(), size.height()) / 2.0, size), shown);
+    if (shown.isNull()) {
+        // Nothing placed yet: a slow wash in the room's greys and the accent, never black.
+        const qreal phase = still ? 0.0 : qreal(now % 6000) / 6000.0 * 2.0 * kPi;
+        p.fillRect(box, QColor(0x14, 0x17, 0x20));
+        const auto wash = [&](qreal x, qreal y, qreal r, QColor tint) {
+            QRadialGradient glow(QPointF(box.left() + box.width() * x, box.top() + box.height() * y), box.width() * r);
+            glow.setColorAt(0.0, tint);
+            tint.setAlpha(0);
+            glow.setColorAt(1.0, tint);
+            p.fillRect(box, glow);
+        };
+        wash(0.32 + 0.06 * std::sin(phase), 0.42 - 0.05 * std::cos(phase), 0.42, QColor(143, 176, 255, 70));
+        wash(0.68 - 0.05 * std::sin(phase), 0.58 + 0.04 * std::cos(phase), 0.36, QColor(180, 170, 255, 46));
+    } else {
+        const QImage now_ = readyAt(shown, pixels);
+        const qreal turned = m_turnedAt >= 0 && !m_before.isNull() ? ramp(now, m_turnedAt, tokens::motion::cardCrossfade) : 1.0;
+        if (turned < 1.0) p.drawImage(box, readyAt(m_before, pixels));
+        p.setOpacity(turned);
+        p.drawImage(box, now_);
+        p.setOpacity(1.0);
     }
     if (m_scrub >= 0.0) p.fillRect(QRectF(box.left(), box.bottom() - 2, box.width() * m_scrub, 2), QColor(255, 255, 255, 230));
+    // At work the picture sits a little back.
+    if (work > 0.0) p.fillRect(box, QColor(0, 0, 0, int(alpha(0.22) * work)));
     if (m_onStage) {
         // It is on the stage now: what is left here says so.
         p.fillRect(box, QColor(18, 18, 18, alpha(0.78)));
@@ -309,9 +450,99 @@ void CardPicture::paintEvent(QPaintEvent *) {
         p.setPen(color(ink2));
         p.drawText(box, Qt::AlignCenter, QStringLiteral("On the stage"));
     }
+
+    // What Kerf is doing, at its top left: hopping dots and Cutting, then a tick and Done.
+    const qreal chip = m_working ? 1.0 : finishing ? 1.0 - ramp(since, tokens::motion::cardDone - kDoneFade, kDoneFade) : 0.0;
+    if (chip > 0.0 && !m_onStage) {
+        const QFont face = tokens::font(meta);
+        const QFontMetricsF metrics(face);
+        const QString text = m_working ? QStringLiteral("Cutting") : QStringLiteral("Done");
+        const QRectF pill(box.left() + 8, box.top() + 8, 8 + 18 + metrics.horizontalAdvance(text) + 9, 22);
+        p.setOpacity(chip);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(10, 12, 18, alpha(0.62)));
+        p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+        p.setBrush(color(accentInk));
+        if (m_working) {
+            for (int dot = 0; dot < 3; ++dot) {
+                const qreal t = still ? 0.0 : std::fmod(qreal(now) / 1100.0 - dot * 0.14 + 1.0, 1.0);
+                const qreal hop = t < 0.6 ? std::sin(t / 0.6 * kPi) : 0.0;
+                p.setOpacity(chip * (0.5 + 0.5 * hop));
+                p.drawEllipse(QPointF(pill.left() + 10 + dot * 6, pill.center().y() - 3 * hop), 2, 2);
+            }
+        } else {
+            QPen tick(color(accentInk), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            p.setPen(tick);
+            p.setBrush(Qt::NoBrush);
+            const QPointF at(pill.left() + 9, pill.center().y());
+            p.drawPolyline(QPolygonF{at + QPointF(0, 0.5), at + QPointF(3.5, 4), at + QPointF(10, -3.5)});
+        }
+        p.setOpacity(chip);
+        p.setFont(face);
+        p.setPen(Qt::white);
+        p.drawText(QRectF(pill.left() + 8 + 18, pill.top(), pill.width() - 26, pill.height()), Qt::AlignVCenter | Qt::AlignLeft, text);
+        p.setOpacity(1.0);
+    }
     p.restore();
-    if (!m_onStage) {
-        // How long it is, at its foot.
+
+    // The light round it: running while Kerf works, lit once and going out when done.
+    const qreal ring = tokens::layout::cardRing;
+    const QRectF band = box.adjusted(-ring / 2, -ring / 2, ring / 2, ring / 2);
+    if (m_working) {
+        if (still) {
+            p.setPen(QPen(QColor(143, 176, 255, 150), 2));
+        } else {
+            const qreal turn = qreal(now % tokens::motion::cardTurn) / tokens::motion::cardTurn;
+            const auto lightAt = [&](int strength) {
+                QConicalGradient light(box.center(), -turn * 360.0);
+                const auto at = [strength](int a) { return a * strength / 255; };
+                light.setColorAt(0.0, QColor(255, 255, 255, at(250)));
+                light.setColorAt(0.06, QColor(143, 176, 255, at(240)));
+                light.setColorAt(0.3, QColor(143, 176, 255, at(70)));
+                light.setColorAt(0.5, QColor(143, 176, 255, at(18)));
+                light.setColorAt(0.9, QColor(143, 176, 255, at(18)));
+                light.setColorAt(0.97, QColor(200, 215, 255, at(160)));
+                light.setColorAt(1.0, QColor(255, 255, 255, at(250)));
+                return QBrush(light);
+            };
+            // A soft glow under it, then the light itself.
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(lightAt(70), 6));
+            p.drawRoundedRect(band, radius::card + ring / 2, radius::card + ring / 2);
+            p.setPen(QPen(lightAt(255), 2));
+        }
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(band, radius::card + ring / 2, radius::card + ring / 2);
+    } else if (finishing && since < tokens::motion::cardRing) {
+        p.setPen(QPen(QColor(255, 255, 255, int(240 * (1.0 - ramp(since, 0, tokens::motion::cardRing)))), 2));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(band, radius::card + ring / 2, radius::card + ring / 2);
+    }
+
+    // Under it, a line of light runs while Kerf works.
+    if (work > 0.0 && !still) {
+        const QRectF line(box.left(), box.bottom() + ring + 3, box.width(), 2);
+        p.setOpacity(work);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color(on));
+        p.drawRoundedRect(line, 1, 1);
+        const qreal run = qreal(now % 1400) / 1400.0;
+        const qreal head = line.left() - line.width() * 0.4 + run * line.width() * 1.4;
+        QLinearGradient light(QPointF(head, 0), QPointF(head + line.width() * 0.4, 0));
+        light.setColorAt(0.0, QColor(143, 176, 255, 0));
+        light.setColorAt(0.5, QColor(220, 230, 255, 230));
+        light.setColorAt(1.0, QColor(143, 176, 255, 0));
+        p.save();
+        p.setClipRect(line);
+        p.fillRect(line, light);
+        p.restore();
+        p.setOpacity(1.0);
+    }
+
+    if (!m_onStage && !m_working) {
+        // How long it is, at its foot, and that it plays: once it is done.
+        const qreal shownAfter = finishing ? ramp(since, kMarkAfter, 300) : 1.0;
+        p.setOpacity(shownAfter);
         const int seconds = int(std::lround(m_picture.duration));
         const QString length = QStringLiteral("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
         const QFont mono = tokens::font(monoSmall);
@@ -323,9 +554,9 @@ void CardPicture::paintEvent(QPaintEvent *) {
         p.setFont(mono);
         p.setPen(Qt::white);
         p.drawText(badge, Qt::AlignCenter, length);
-        // And that it plays.
         const QRectF mark(box.center() - QPointF(kPlayMark, kPlayMark) / 2.0, QSizeF(kPlayMark, kPlayMark));
-        p.setOpacity(underMouse() || isDown() ? 1.0 : 0.85);
+        p.setOpacity(shownAfter * (underMouse() || isDown() ? 1.0 : 0.85));
+        p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, alpha(0.5)));
         p.drawEllipse(mark);
         icons::paint(p, QStringLiteral("g-play"), QRectF(mark.center() - QPointF(7, 8), QSizeF(16, 16)), Qt::white, 16);
@@ -671,23 +902,32 @@ void ProposalCard::setPicture(const CutPicture &picture) {
     updateParts();
 }
 
+void ProposalCard::setBuilding(bool building) {
+    m_building = building;
+    m_picture->setWorking(building);
+    updateParts();
+}
+
 void ProposalCard::updateParts() {
     const bool card = !m_settled;
     const bool marked = m_pinned && !m_compact;
     // With its picture a cut says what it is: the card keeps to its title and what
     // to do with it.
-    const bool pictured = !m_picture->picture().isEmpty();
-    m_layout->setContentsMargins(card ? 12 : 0, card ? (marked ? 8 : 12) : 0, card ? 12 : 0, card ? 12 : 0);
+    const bool pictured = !m_picture->picture().isEmpty() || m_building;
+    // A picture's ring lies in the card's padding, so the picture lines up with the title.
+    const int inset = card && pictured ? 12 - tokens::layout::cardRing : card ? 12 : 0;
+    m_layout->setContentsMargins(inset, card && !pictured ? (marked ? 8 : 12) : inset, inset, card ? 12 : 0);
     m_pinHeader->setVisible(card && marked);
     m_picture->setVisible(card && pictured);
     // And it is as wide as its picture.
-    setMaximumWidth(card && pictured ? tokens::layout::cardPictureWidest + 24 : QWIDGETSIZE_MAX);
+    setMaximumWidth(card && pictured ? tokens::layout::cardPictureWidest + 2 * tokens::layout::cardRing + 24 : QWIDGETSIZE_MAX);
     m_title->setVisible(card && !pictured);
     m_lineTitle->setVisible(card && pictured);
     // Under a picture the line comes right after it.
-    m_footer->layout()->setContentsMargins(0, pictured ? 0 : 8, 0, 0);
+    const int ring = pictured ? tokens::layout::cardRing : 0;
+    m_footer->layout()->setContentsMargins(ring, pictured ? 0 : 8, ring, 0);
     m_footer->setFixedHeight(pictured ? 24 : 24 + 8);
-    m_second->setVisible(card && (!pictured || m_versions.size() > 1));
+    m_second->setVisible(card && (!pictured || (m_versions.size() > 1 && !m_building)));
     m_changesLink->setVisible(!pictured);
     m_changes->setVisible(card && m_open && !pictured);
     m_diff->parentWidget()->setVisible(card && m_open && m_script->isChecked() && !pictured);
@@ -696,9 +936,10 @@ void ProposalCard::updateParts() {
     m_preview->setVisible(!pictured);
     m_script->setVisible(!pictured);
     m_settledLabel->setVisible(m_settled);
-    m_reject->setVisible(!m_guest);
-    m_accept->setVisible(!m_guest);
-    m_wait->setVisible(m_guest);
+    // Nothing to do with a cut until Kerf has made it.
+    m_reject->setVisible(!m_guest && !m_building);
+    m_accept->setVisible(!m_guest && !m_building);
+    m_wait->setVisible(m_guest && !m_building);
     updateGeometry();
     update();
 }

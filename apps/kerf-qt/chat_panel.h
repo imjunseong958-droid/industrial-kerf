@@ -249,9 +249,12 @@ public:
     // The footage Kerf chooses from, in the list under the latest row; none takes
     // it away.
     void setFootage(const QList<FootageTile> &tiles);
-    // While Kerf builds a first cut, the card waits for it to be done; the picture
-    // and the timeline are showing it.
-    void setHoldingProposals(bool holding);
+    // The first cut Kerf is making now: its card is in Kerf's row of the turn, at
+    // work, until it is done; then it is the proposal's card, which shows it is
+    // done. Empty when none.
+    void setBuildingProposal(const QString &proposalId);
+    QString buildingProposal() const { return m_building; }
+    ProposalCard *buildingCard() const { return m_buildingCard.data(); }
     // What one asks as a bubble and what Kerf says as plain text; the cards small,
     // their changes folded.
     void setConversationLook(bool on);
@@ -417,7 +420,11 @@ private:
     QVBoxLayout *m_listLayout = nullptr;
     QList<ThreadWidget *> m_threads;
     FootageSheet *m_footage = nullptr;
-    bool m_holdingProposals = false;
+    QString m_building;
+    QPointer<ProposalCard> m_buildingCard;
+    // The cut Kerf last finished, and when.
+    QString m_justBuilt;
+    qint64 m_builtAt = -1;
     bool m_conversationLook = false;
     QWidget *m_stash = nullptr;
     CommentRow *m_welcomeRow = nullptr;

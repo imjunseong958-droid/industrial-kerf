@@ -22,6 +22,7 @@
 #include "test_friends.h"
 
 #include <QAbstractButton>
+#include <QHash>
 #include <QFrame>
 #include <QImage>
 #include <QList>
@@ -29,6 +30,7 @@
 #include <QStringList>
 
 class QHBoxLayout;
+class QTimer;
 class QLabel;
 class QVBoxLayout;
 
@@ -71,11 +73,23 @@ struct CutPicture {
 
 // A cut's picture on its card. Moving over it runs through the cut's clips;
 // pressing it asks for the stage. While the stage shows it, it says so.
+//
+// While Kerf makes the cut, light runs round it, the picture is a little dim and
+// becomes each clip as it is placed, and a line of light runs under it. Done, the
+// ring lights once and goes out, the picture lightens and it says Done.
 class CardPicture final : public QAbstractButton {
     Q_OBJECT
 public:
     explicit CardPicture(QWidget *parent = nullptr);
     void setPicture(const CutPicture &picture);
+    // Kerf is making it.
+    void setWorking(bool working);
+    bool isWorking() const { return m_working; }
+    // Kerf finished it `ago` ms ago: it shows that it is done, from there on.
+    void setFinished(qint64 ago);
+    bool isFinishing() const;
+    // The time every card's light keeps, so one made again goes on where the last was.
+    static qint64 clock();
     const CutPicture &picture() const { return m_picture; }
     void setOnStage(bool on);
     bool onStage() const { return m_onStage; }
@@ -92,11 +106,24 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override;
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private:
     QRect boxFor(int width) const;
+    void followTicks();
+    void tick();
+    // A poster as it is drawn at `size`: filled, cropped, ready to draw again and again.
+    QImage readyAt(const QImage &poster, const QSize &size) const;
     CutPicture m_picture;
     bool m_onStage = false;
+    bool m_working = false;
+    qint64 m_finishedAt = -1;
+    // What it showed before the newest clip, and when that began to show.
+    QImage m_before;
+    qint64 m_turnedAt = -1;
+    QTimer *m_ticker = nullptr;
+    mutable QHash<qint64, QImage> m_ready;
     // How far through the cut the pointer is, 0 to 1; below 0 when it is not over it.
     qreal m_scrub = -1.0;
 };
@@ -168,6 +195,9 @@ public:
     void setCompact(bool compact);
     // The cut's picture; an empty one takes it away.
     void setPicture(const CutPicture &picture);
+    // Kerf is making the cut: its picture is at work, and it offers nothing to do yet.
+    void setBuilding(bool building);
+    bool isBuilding() const { return m_building; }
     CardPicture *picture() const { return m_picture; }
     bool isSettled() const { return m_settled; }
 
@@ -212,6 +242,7 @@ protected:
 
 private:
     bool m_compact = false;
+    bool m_building = false;
     void updateParts();
 
     QString m_id;

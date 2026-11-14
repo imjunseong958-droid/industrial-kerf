@@ -401,9 +401,9 @@ CutPicture MainWindow::cutPicture(const QString &proposalId) const {
         }
     }
     std::sort(picture.frames.begin(), picture.frames.end(), [](const CutPicture::Frame &a, const CutPicture::Frame &b) { return a.at < b.at; });
-    // Nothing to show until a poster has come.
+    // Nothing to show until a poster has come, but its shape.
     if (std::none_of(picture.frames.cbegin(), picture.frames.cend(), [](const CutPicture::Frame &frame) { return !frame.poster.isNull(); }))
-        return {};
+        picture.frames.clear();
     const QSize canvas = resolvedCanvasSize(cut, m_project.value(QStringLiteral("sources")).toArray());
     if (canvas.width() > 0 && canvas.height() > 0) picture.aspect = double(canvas.width()) / canvas.height();
     return picture;
