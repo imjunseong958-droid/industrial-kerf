@@ -409,8 +409,27 @@ head of each part are the architecture's.
    0. The subjects are named and not guessed: by how much of the frame a
    clip has, four of the five sets were taken for subjects.
 
-   What is still not done is a set with what moved left out, and either
-   reading on more than a shot or two. Either is what lets an agent say of a
+   *On a third scene* (2026-11-14), the car of `fixtures/shots/car`, its
+   takes as they were made, 64 frames, each clip followed on all of them:
+
+   | The take's guide | the body: `off` | `size` | `overlap` | the cabin: `off` | `size` | `overlap` |
+   |---|---|---|---|---|---|---|
+   | The picture, in flat colors | 0.024 | 0.83 | 0.72 | 0.018 | 0.73 | 0.58 |
+   | `pass=depth` | 0.119 | 1.26 | 0.40 | 0.041 | 0.64 | 0.40 |
+   | `pass=ids` | 0.065 | 0.98 | 0.52 | 0.049 | 0.54 | 0.29 |
+
+   `held` of the depth-guided take is 0.37, its depth read back in the
+   guide's order over the frame (`order` 0.992) and the body 0.11 off,
+   nearer. By eye the depth-guided take was the best of the three, a car
+   on its path, the picture-guided one red boxes in a van, and the
+   ids-guided one nearly black. The numbers have them the other way
+   round: what kept the boxes as boxes is nearest the boxes, and a car is
+   larger than the two solids it was drawn from. So the place says how
+   nearly what is there is what the guide's box asked for, and where a
+   guide's shapes stand for something else, it is not how good the take
+   is.
+
+   What is still not done is a set with what moved left out. Either is what lets an agent say of a
    take what a person says of it, and choose between two.
 5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is
    of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds

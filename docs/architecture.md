@@ -710,8 +710,15 @@ recipes, in `fixtures/shots/car`.
    0.085 over a floor of 0.006, and its `overlap` orders takes as the eye
    does: 0.90 for the guide's own picture, 0.42 for the best take that made
    the whole picture, 0.002 for one with nothing there. The two are read
-   together, since a take can pass either alone. *Not done:* either
-   reading on more than a shot or two.
+   together, since a take can pass either alone. On a third scene, the
+   car of `fixtures/shots/car`, the place does not order takes as the eye
+   did (2026-11-14): the take that kept the guide's boxes as boxes has the
+   body at an `overlap` of 0.72, the one that made a car of them 0.40,
+   since a car is a quarter larger than its box, and the nearly black one
+   0.52. So `overlap` says how nearly what is there is the box that was
+   asked for, which is what was wanted of a crate and not of a car drawn
+   from two solids; it chooses between takes of one guide, and is no
+   judge of which guide made the better picture.
 5. **More than one guide on a line**, which is in
    ([the record](docs/shots-measured.md)): `guide_<name>=`, each sent to the workflow blank
    of its name. `shot-into` reads the footage and a mask and puts a thing
