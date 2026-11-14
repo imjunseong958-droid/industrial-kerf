@@ -346,7 +346,13 @@ private:
     QWidget *buildSearch();
     void scheduleRebuild();
     void syncContent();
+    // Lays the list out again from the review. A thread whose widgets would come
+    // out the same as last time keeps them; only what changed is made again.
     void rebuild();
+    // Everything a thread's widgets are made from, beyond what all of them share.
+    QByteArray threadKey(const ReviewModel::Thread &thread, bool first) const;
+    // A timeline as a number that changes when it does, worked out once.
+    static size_t timelineHash(const QJsonObject &timeline);
     CommentRow *buildRow(const ReviewModel::Comment &comment, const ReviewModel::Thread &thread, bool root);
     ProposalCard *buildCard(const ReviewModel::Proposal &proposal, const ReviewModel::Thread &thread);
     QList<ReviewModel::ClipChange> versionChanges(const ReviewModel::Proposal &proposal, const QString &versionId) const;
@@ -419,7 +425,17 @@ private:
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
     QList<ThreadWidget *> m_threads;
+    QPointer<ThreadWidget> m_welcomeThread;
     FootageSheet *m_footage = nullptr;
+    // The threads' widgets as last made, by thread id, with what they were made from,
+    // and what all of them share.
+    QHash<QString, QByteArray> m_threadKeys;
+    QByteArray m_sharedKey;
+    // Threads local rows went into: they are made again, without them, next time.
+    QSet<QString> m_touched;
+    size_t m_timelineHash = 0;
+    size_t m_namedHash = 0;
+    mutable QHash<QString, size_t> m_proposalHashes;
     QString m_building;
     QPointer<ProposalCard> m_buildingCard;
     // The cut Kerf last finished, and when.

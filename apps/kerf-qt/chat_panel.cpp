@@ -8,6 +8,8 @@
 #include "icons.h"
 #include "proposal_card.h"
 
+#include <QDataStream>
+#include <QJsonDocument>
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
@@ -30,6 +32,8 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <memory>
 #include <QVariantAnimation>
 
 #include <algorithm>
@@ -388,14 +392,17 @@ void ChatPanel::setSnapshot(const QJsonObject &snapshot) {
     const QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
     const QJsonObject timelines = snapshot.value(QStringLiteral("proposalTimelines")).toObject();
     if (timeline == m_timeline && timelines == m_proposalTimelines) return;
+    if (timeline != m_timeline) m_timelineHash = timelineHash(timeline);
     m_timeline = timeline;
     m_proposalTimelines = timelines;
+    m_proposalHashes.clear();
     scheduleRebuild();
 }
 
 void ChatPanel::setNamedTimeline(const QJsonObject &timeline) {
     if (timeline == m_named) return;
     m_named = timeline;
+    m_namedHash = timelineHash(timeline);
     scheduleRebuild();
 }
 
@@ -807,7 +814,6 @@ ProposalCard *ChatPanel::buildCard(const ReviewModel::Proposal &proposal, const 
 }
 
 void ChatPanel::stashLocalRows() {
-    m_welcomeRow->setParent(m_stash);
     for (LocalTurn &turn : m_turns)
         for (const QPointer<CommentRow> &row : std::as_const(turn.rows))
             if (row) row->setParent(m_stash);
@@ -815,23 +821,107 @@ void ChatPanel::stashLocalRows() {
         if (row) row->setParent(m_stash);
 }
 
+size_t ChatPanel::timelineHash(const QJsonObject &timeline) {
+    return timeline.isEmpty() ? 0 : qHash(QJsonDocument(timeline).toJson(QJsonDocument::Compact));
+}
+
+QByteArray ChatPanel::threadKey(const ReviewModel::Thread &thread, bool first) const {
+    QByteArray key;
+    QDataStream out(&key, QIODevice::WriteOnly);
+    // The thread itself, as the review log and the snapshot have it.
+    out << first << int(thread.origin) << thread.proposals << thread.openProposal << thread.acceptedProposal
+        << thread.acceptedRevision << thread.open << thread.blocking << thread.flagged << thread.hasDrawing << thread.tags;
+    QList<const ReviewModel::Comment *> comments{&thread.root};
+    for (const ReviewModel::Comment &reply : thread.replies) comments << &reply;
+    for (const ReviewModel::Comment *comment : comments) {
+        out << QJsonDocument(comment->json).toJson(QJsonDocument::Compact) << comment->qcKey << m_stepsOpen.contains(comment->id)
+            << (comment->id == m_selectedComment);
+    }
+    // What the panel keeps of it.
+    out << (m_foldState.contains(thread.id) ? int(m_foldState.value(thread.id)) : -1);
+    // Its proposals' cards: each proposal, its versions' timelines, the program
+    // they change and the names it gives, and how its card was left.
+    QStringList carried = thread.proposals;
+    for (const QString &id : {thread.openProposal, thread.root.proposal})
+        if (!id.isEmpty()) carried << id;
+    for (const ReviewModel::Comment &reply : thread.replies)
+        if (!reply.proposal.isEmpty()) carried << reply.proposal;
+    if (!carried.isEmpty() && m_model) out << quint64(m_timelineHash) << quint64(m_namedHash);
+    for (const QString &id : std::as_const(carried)) {
+        const ReviewModel::Proposal *proposal = m_model ? m_model->proposal(id) : nullptr;
+        if (!proposal) {
+            out << id;
+            continue;
+        }
+        out << QJsonDocument(proposal->json).toJson(QJsonDocument::Compact) << proposal->status << proposal->summary
+            << int(proposal->changes.size()) << proposal->blocking << proposal->stale;
+        for (const ReviewModel::Version &version : proposal->versions) {
+            out << version.proposalId << version.script << version.documentDiff;
+            auto hash = m_proposalHashes.constFind(version.proposalId);
+            if (hash == m_proposalHashes.constEnd())
+                hash = m_proposalHashes.insert(version.proposalId, timelineHash(m_proposalTimelines.value(version.proposalId).toObject()));
+            out << quint64(*hash);
+        }
+        const auto state = m_cardState.constFind(proposal->id);
+        if (state != m_cardState.constEnd()) out << state->open << state->openSet << state->script << state->shown;
+        for (auto it = m_settledHere.cbegin(); it != m_settledHere.cend(); ++it)
+            if (proposal->hasVersion(it.key()) || it.key() == proposal->id)
+                out << it.key() << it.value() << review::age(m_settledAt.value(it.key()), QDateTime::currentDateTime());
+    }
+    return key;
+}
+
 void ChatPanel::rebuild() {
     m_rebuildQueued = false;
     const int scrolled = m_list->verticalScrollBar()->value();
     stashLocalRows();
-    // Later, not now: a row of an old thread may be the sender of the
-    // signal that asked for this rebuild.
-    for (ThreadWidget *thread : std::as_const(m_threads)) {
+    // What every thread's widgets are made from alike: a change to it makes them
+    // all again.
+    QByteArray shared;
+    {
+        QDataStream out(&shared, QIODevice::WriteOnly);
+        out << m_fps << m_conversationLook << m_connected << bool(m_describer)
+            << (m_acceptAction ? ui::keyText(m_acceptAction->shortcut()) : QString());
+        if (m_model) {
+            out << QJsonDocument(m_model->identity()).toJson(QJsonDocument::Compact) << m_model->viewAs();
+            const QList<ReviewModel::Proposal> open = m_model->openProposals();
+            out << (open.isEmpty() ? QString() : open.constFirst().id);
+        }
+    }
+    if (shared != m_sharedKey) {
+        m_sharedKey = shared;
+        m_threadKeys.clear();
+    }
+    // The threads as they were, to keep those that come out the same. Later, not
+    // now, for the rest: a row of an old thread may be the sender of the signal
+    // that asked for this rebuild.
+    // Those kept stay in the list where they are: taken out and put back, the
+    // list would measure all their text again.
+    QHash<QString, ThreadWidget *> kept;
+    const auto letGo = [this](ThreadWidget *thread) {
         m_listLayout->removeWidget(thread);
         thread->hide();
         thread->setParent(nullptr);
         thread->deleteLater();
+    };
+    for (ThreadWidget *thread : std::as_const(m_threads)) {
+        // The welcome's thread stays as long as the welcome does.
+        if (thread == m_welcomeThread) continue;
+        if (m_threadKeys.contains(thread->threadId()) && !m_touched.contains(thread->threadId()) && !kept.contains(thread->threadId()))
+            kept.insert(thread->threadId(), thread);
+        else
+            letGo(thread);
     }
     m_threads.clear();
+    m_touched.clear();
 
     bool first = true;
     const auto addThread = [this, &first](ThreadWidget *thread) {
-        m_listLayout->insertWidget(int(m_threads.size()), thread);
+        const int at = int(m_threads.size());
+        if (m_listLayout->indexOf(thread) != at) {
+            m_listLayout->removeWidget(thread);
+            m_listLayout->insertWidget(at, thread);
+        }
         m_threads.append(thread);
         // Shown now, not by the layout's queued show, so the list measures it.
         thread->show();
@@ -842,11 +932,18 @@ void ChatPanel::rebuild() {
         return thread.origin == ReviewModel::Origin::Welcome;
     });
     if (welcome) {
-        auto *thread = new ThreadWidget(QString::fromLatin1(ReviewModel::kWelcomeId), first);
-        thread->setRoot(m_welcomeRow);
-        m_welcomeRow->setThreadId(thread->threadId());
+        if (!m_welcomeThread) {
+            m_welcomeThread = new ThreadWidget(QString::fromLatin1(ReviewModel::kWelcomeId), true);
+            m_welcomeThread->setRoot(m_welcomeRow);
+            m_welcomeRow->setThreadId(m_welcomeThread->threadId());
+        }
         m_welcomeRow->show();
-        addThread(thread);
+        addThread(m_welcomeThread);
+    } else if (m_welcomeThread) {
+        // Its row is the panel's for good: it waits for the welcome to come back.
+        m_welcomeRow->setParent(m_stash);
+        letGo(m_welcomeThread);
+        m_welcomeThread = nullptr;
     }
     for (const ReviewModel::Thread &thread : threads) {
         if (thread.origin == ReviewModel::Origin::Welcome) continue;
@@ -854,6 +951,15 @@ void ChatPanel::rebuild() {
         if (m_buildingCard && thread.origin == ReviewModel::Origin::Proposal && m_model->proposal(m_building) &&
             thread.openProposal == m_model->proposal(m_building)->id)
             continue;
+        const QByteArray key = threadKey(thread, first);
+        if (ThreadWidget *same = kept.take(thread.id); same && m_threadKeys.value(thread.id) == key) {
+            if (CommentRow *root = same->root()) root->setCurrent(m_model->isCurrent(thread.id));
+            addThread(same);
+            continue;
+        } else if (same) {
+            letGo(same);
+        }
+        const bool wasFirst = first;
         auto *widget = new ThreadWidget(thread.id, first);
         widget->setFlat(m_conversationLook);
         CommentRow *root = buildRow(thread.root, thread, true);
@@ -884,6 +990,13 @@ void ChatPanel::rebuild() {
         root->setReplyFold(int(thread.replies.size()), open);
         widget->setRepliesShown(open);
         addThread(widget);
+        // What it was made from, as making it left the panel's state.
+        m_threadKeys.insert(thread.id, threadKey(thread, wasFirst));
+    }
+    // Those gone from the review go.
+    for (ThreadWidget *thread : std::as_const(kept)) {
+        m_threadKeys.remove(thread->threadId());
+        letGo(thread);
     }
     placeLocalRows(first);
     // What is said later comes after the note, and the footage stays last.
@@ -907,6 +1020,7 @@ void ChatPanel::placeLocalRows(bool &first) {
     const auto place = [this, &first](const QString &threadId, const QList<CommentRow *> &rows) {
         if (rows.isEmpty()) return;
         if (ThreadWidget *thread = threadWidget(threadId)) {
+            m_touched.insert(threadId);
             for (CommentRow *row : rows) {
                 thread->addReply(row);
                 row->setThreadId(threadId);
@@ -990,8 +1104,12 @@ CommentRow *ChatPanel::rowFor(const QString &commentId) const {
 void ChatPanel::setAcceptAction(QAction *action) {
     m_acceptAction = action;
     if (!action) return;
-    const auto follow = [this, action] {
-        for (ProposalCard *card : cards()) card->setAcceptKey(ui::keyText(action->shortcut()));
+    // The action changes whenever it is enabled or not; the cards only care about its key.
+    const auto follow = [this, action, said = std::make_shared<QString>()] {
+        const QString key = ui::keyText(action->shortcut());
+        if (key == *said) return;
+        *said = key;
+        for (ProposalCard *card : cards()) card->setAcceptKey(key);
     };
     connect(action, &QAction::changed, this, follow);
     follow();

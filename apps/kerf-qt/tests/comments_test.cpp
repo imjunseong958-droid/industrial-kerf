@@ -1402,6 +1402,58 @@ private slots:
         }
     }
 
+    // A thread the review gives the same widgets as before keeps them; one that
+    // changed, or is new, is made again. Its text is measured once per width.
+    void aThreadThatStaysTheSameKeepsItsWidgets() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        ThreadWidget *road = window.m_chat->threadWidget(QStringLiteral("c-0300"));
+        ThreadWidget *loudness = window.m_chat->threadWidget(QStringLiteral("c-2718"));
+        QVERIFY(road && loudness);
+        CommentRow *roadRow = road->root();
+        QJsonArray items = seedComments();
+        items.append(reply("c-2718-new", "c-2718", you(), "2026-11-03T10:30:00.000000Z", "One more thing on the bus"));
+        items.append(note("c-new", you(), "2026-11-04T08:00:00.000000Z", "Start on the harbor instead"));
+        window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", items}});
+        seeded.settle();
+        // Untouched: the same widgets, in the list where they were.
+        QCOMPARE(window.m_chat->threadWidget(QStringLiteral("c-0300")), road);
+        QCOMPARE(road->root(), roadRow);
+        QVERIFY(road->isVisible());
+        // A reply came: made again, with it.
+        QVERIFY(window.m_chat->threadWidget(QStringLiteral("c-2718")) != loudness);
+        QVERIFY(window.m_chat->rowFor(QStringLiteral("c-2718-new")));
+        // A new one is there, and the list is in the review's order, also in the layout.
+        QVERIFY(window.m_chat->threadWidget(QStringLiteral("c-new")));
+        QStringList order;
+        for (const ReviewModel::Thread &thread : window.m_reviewWiring->model()->threads())
+            if (thread.origin != ReviewModel::Origin::Welcome) order << thread.id;
+        QStringList shown;
+        for (ThreadWidget *thread : window.m_chat->threadWidgets())
+            if (order.contains(thread->threadId())) shown << thread->threadId();
+        QCOMPARE(shown, order);
+        QVBoxLayout *list = window.m_chat->m_listLayout;
+        for (qsizetype index = 0; index < window.m_chat->threadWidgets().size(); ++index)
+            QCOMPARE(list->itemAt(int(index))->widget(), window.m_chat->threadWidgets().at(index));
+        // Made again from nothing new, nothing is made again.
+        const QList<ThreadWidget *> before = window.m_chat->threadWidgets();
+        window.m_chat->rebuild();
+        for (qsizetype index = 1; index < before.size(); ++index) QCOMPARE(window.m_chat->threadWidgets().at(index), before.at(index));
+        // What the panel keeps of a thread, folded here, makes it again.
+        emit road->root()->foldToggled(true);
+        window.m_chat->rebuild();
+        QVERIFY(window.m_chat->threadWidget(QStringLiteral("c-0300")) != road);
+
+        ui::WrapLabel label;
+        label.setFont(tokens::font(tokens::reading));
+        label.setText(QStringLiteral("A sentence long enough to wrap onto a second line at this width."));
+        const int two = label.heightForWidth(160);
+        QCOMPARE(label.heightForWidth(160), two);
+        QVERIFY(label.heightForWidth(1000) < two);
+        label.setText(QStringLiteral("Short"));
+        QVERIFY(label.heightForWidth(160) < two);
+    }
+
     // A word as wide as the conversation, such as a file's name, wraps where it has to: it ran past
     // the row's edge and the rest of it could not be read.
     void aLongWordInACommentWraps() {

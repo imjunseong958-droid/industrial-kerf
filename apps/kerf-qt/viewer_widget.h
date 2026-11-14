@@ -5,6 +5,7 @@
 #include "test_friends.h"
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -285,6 +286,14 @@ private:
     bool m_skimming = false;
     bool m_liveScrub = false;
     bool m_scaledFast = false;
+    // Frames coming one after another, as they do while playing: each is drawn as it
+    // comes, sampled straight onto the screen, and the last at its best once they stop.
+    bool m_streaming = false;
+    QImage m_straight;
+    // The before still at the picture's size, made once for as long as it is watched.
+    QImage m_compareScaled;
+    QElapsedTimer m_frameClock;
+    class QTimer *m_settle = nullptr;
     qreal m_scaledDpr = 1.0;
     QString m_caption;
 

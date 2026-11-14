@@ -700,7 +700,7 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     m_layout->addWidget(m_picture);
 
     // The title: click opens or closes the card.
-    m_title = new QLabel;
+    m_title = new ui::WrapLabel;
     m_title->setObjectName(QStringLiteral("proposalTitle"));
     m_title->setFont(tokens::font(bodyName));
     m_title->setWordWrap(true);

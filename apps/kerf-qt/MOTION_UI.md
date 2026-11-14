@@ -100,6 +100,12 @@ with it. So:
 - **Every start has its end**, also when cut short: `transitionFinished` always follows
   `transitionStarted`.
 - Avoid a new `QGraphicsEffect` on a large region: it draws all of it again each frame.
+- **Frames that keep coming are drawn as they come.** While playing, each frame is
+  sampled straight onto the screen, and the last is drawn at its best once they stop
+  (`ViewerWidget::setFrame`, `tokens::motion::frameStream`). A still watched for long,
+  as the before side of the wipe, is made at its size once.
+- **Away from the picture's corners, keep to its rect.** Rounding the clip costs a pass
+  over the whole picture, so what is drawn again in its middle is kept inside its rect.
 
 To measure, from the repository root:
 

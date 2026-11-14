@@ -1,5 +1,7 @@
 #include "viewer_widget.h"
 
+#include <QTimer>
+
 #include "components.h"
 #include "design_tokens.h"
 #include "stage_shell.h"
@@ -307,12 +309,34 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
     m_frame = frame;
     m_time = time;
     m_scaled = QImage();
+    const bool following = m_frameClock.isValid() && m_frameClock.elapsed() < tokens::motion::frameStream;
+    m_frameClock.restart();
+    m_streaming = following && !m_frame.isNull();
+    // Drawn as it comes, a picture is opaque: in the format the screen is drawn in,
+    // once, rather than in the paint.
+    m_straight = m_streaming ? m_frame.convertToFormat(QImage::Format_RGB32) : QImage();
+    if (m_streaming) {
+        if (!m_settle) {
+            m_settle = new QTimer(this);
+            m_settle->setSingleShot(true);
+            m_settle->setInterval(tokens::motion::frameSettle);
+            connect(m_settle, &QTimer::timeout, this, [this] {
+                // They have stopped: the last is drawn at its best.
+                m_streaming = false;
+                m_straight = QImage();
+                update();
+            });
+        }
+        m_settle->start();
+    }
     update();
 }
 
 void ViewerWidget::clearFrame() {
     m_frame = QImage();
     m_scaled = QImage();
+    m_straight = QImage();
+    m_streaming = false;
     update();
 }
 
@@ -327,6 +351,7 @@ void ViewerWidget::updateLine(qreal from, qreal to, int reach) {
 void ViewerWidget::setCompareFrame(const QImage &before) {
     // In the format it draws fastest in, as it is drawn for as long as it is watched.
     m_compareFrame = before.isNull() || before.format() == QImage::Format_RGB32 ? before : before.convertToFormat(QImage::Format_RGB32);
+    m_compareScaled = QImage();
     if (before.isNull()) {
         if (m_compareSweep) m_compareSweep->stop();
         update();
@@ -1507,7 +1532,7 @@ void ViewerWidget::paintAnnotations(QPainter &p) {
     p.restore();
 }
 
-void ViewerWidget::paintEvent(QPaintEvent *) {
+void ViewerWidget::paintEvent(QPaintEvent *event) {
     const EditorTheme &theme = editorTheme();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -1518,10 +1543,22 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     const QRectF picture = pictureRect();
     QPainterPath viewport;
     viewport.addRoundedRect(card, tokens::layout::pictureRadius, tokens::layout::pictureRadius);
+    // Kept inside the picture's rounded corners. Rounding costs a pass over all of
+    // it; what is drawn again away from the corners (a line crossing it) is kept
+    // inside its rect instead, which costs nothing.
+    const qreal round = tokens::layout::pictureRadius + 1;
+    const QRect dirty = event->rect();
+    bool nearCorner = false;
+    for (const QPointF &corner : {card.topLeft(), card.topRight(), card.bottomLeft(), card.bottomRight()})
+        nearCorner = nearCorner || dirty.intersects(QRectF(corner - QPointF(round, round), QSizeF(2 * round, 2 * round)).toAlignedRect());
+    const auto keepInside = [&] {
+        if (nearCorner) p.setClipPath(viewport);
+        else p.setClipRect(card);
+    };
     p.fillPath(viewport, theme.viewerCanvas);
     if (!m_frame.isNull()) {
         p.save();
-        p.setClipPath(viewport);
+        keepInside();
         const qreal dpr = m_liveScrub ? 1.0 : std::max(1.0, devicePixelRatioF());
         const QSize target(std::max(1, static_cast<int>(std::round(picture.width() * dpr))),
                            std::max(1, static_cast<int>(std::round(picture.height() * dpr))));
@@ -1529,14 +1566,24 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         // On the move what it has will do, unless it is far too small by now: making
         // it again costs far more than drawing it, in the frames that show it least.
         const bool enough = m_stageMoving && !m_scaled.isNull() && m_scaled.width() * 10 >= target.width() * 7;
-        if (!enough && (m_scaled.isNull() || m_scaled.size() != target || (m_scaledFast && !fast) || (!m_scaledFast && m_liveScrub))) {
+        // Playing, each frame is on screen for a moment: sampled straight onto it,
+        // with no picture of it made first.
+        const bool straight = m_streaming && !m_straight.isNull() && !m_stageMoving && !m_liveScrub;
+        if (straight) {
+            const QSizeF shown = QSizeF(m_straight.size()).scaled(picture.size(), Qt::KeepAspectRatio);
+            p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            p.drawImage(QRectF(picture.center() - QPointF(shown.width(), shown.height()) / 2.0, shown), m_straight);
+            p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        } else if (!enough && (m_scaled.isNull() || m_scaled.size() != target || (m_scaledFast && !fast) || (!m_scaledFast && m_liveScrub))) {
             m_scaled = m_frame.scaled(target, Qt::KeepAspectRatio, fast ? Qt::FastTransformation : Qt::SmoothTransformation)
                            .convertToFormat(QImage::Format_RGB32);
             m_scaledDpr = dpr;
             m_scaled.setDevicePixelRatio(dpr);
             m_scaledFast = fast;
         }
-        if (m_stageMoving) {
+        if (straight) {
+            // Drawn above.
+        } else if (m_stageMoving) {
             // Its size is the picture's, as it goes.
             const QSizeF shown = QSizeF(m_scaled.size()).scaled(picture.size(), Qt::KeepAspectRatio);
             p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -1552,7 +1599,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
             const qreal edge = card.left() + card.width() * m_wipe;
             p.setClipRect(QRectF(edge, card.top(), card.right() - edge, card.height()), Qt::IntersectClip);
             p.drawImage(card, m_wipeFrom);
-            p.setClipPath(viewport);
+            keepInside();
             p.fillRect(QRectF(edge - 1.0, card.top(), 2.0, card.height()), Qt::white);
         }
         p.restore();
@@ -1582,15 +1629,33 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         // What it was, to the left of the moving line; what it is, to its right.
         const qreal edge = card.left() + card.width() * m_compareAt;
         p.save();
-        p.setClipPath(viewport);
+        keepInside();
         p.save();
         p.setClipRect(QRectF(card.left(), card.top(), edge - card.left(), card.height()), Qt::IntersectClip);
-        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        p.drawImage(picture, m_compareFrame);
+        // Made at the picture's size once: the line moves every frame, and only
+        // what it uncovers is drawn, as a copy.
+        const qreal ratio = std::max(1.0, devicePixelRatioF());
+        const QSize target = m_compareFrame.size().scaled(QSize(std::max(1, int(std::round(picture.width() * ratio))),
+                                                                std::max(1, int(std::round(picture.height() * ratio)))),
+                                                          Qt::KeepAspectRatio);
+        if (m_compareScaled.size() != target) {
+            m_compareScaled = m_compareFrame.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
+            m_compareScaled.setDevicePixelRatio(ratio);
+        }
+        p.drawImage(QPointF(picture.center().x() - target.width() / ratio / 2.0, picture.center().y() - target.height() / ratio / 2.0), m_compareScaled);
         p.restore();
-        for (int spread = 8; spread >= 1; --spread)
-            p.fillRect(QRectF(edge - spread, card.top(), spread * 2.0, card.height()), QColor(255, 255, 255, 12));
+        // A soft light either side of the line, in one fill: eight faint bands laid
+        // over one another would blend each pixel eight times in every frame.
+        QLinearGradient glow(QPointF(edge - 8.0, 0.0), QPointF(edge + 8.0, 0.0));
+        glow.setColorAt(0.0, QColor(255, 255, 255, 0));
+        glow.setColorAt(0.25, QColor(255, 255, 255, 24));
+        glow.setColorAt(0.5, QColor(255, 255, 255, 82));
+        glow.setColorAt(0.75, QColor(255, 255, 255, 24));
+        glow.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(QRectF(edge - 8.0, card.top(), 16.0, card.height()), glow);
         p.fillRect(QRectF(edge - 1.0, card.top(), 2.0, card.height()), Qt::white);
+        p.setRenderHint(QPainter::Antialiasing, true);
         const QFont font = tokens::font(tokens::meta);
         const QFontMetricsF metrics(font);
         p.setFont(font);
@@ -1610,7 +1675,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     // Over the picture, inside its rect: the caption, the QC overlap box,
     // safe zones and the comments' drawings; the masks' outlines on top.
     p.save();
-    p.setClipPath(viewport);
+    keepInside();
     paintCaption(p, m_overlapShown || m_overlapLevel > 0.0);
     paintOverlap(p);
     if (m_safeZones) paintSafeZones(p, picture);

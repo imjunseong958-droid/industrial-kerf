@@ -215,6 +215,8 @@ constexpr int cardFrame = 50;      // how often that light is drawn again
 constexpr int cardCrossfade = 600; // the card's picture becoming the newest clip
 constexpr int cardRing = 900;      // done: the ring going out, and the picture lightening
 constexpr int cardDone = 2400;     // done: how long it says so
+constexpr int frameStream = 160;   // frames closer than this are playing: drawn as they come
+constexpr int frameSettle = 220;   // after the last of them, the picture is drawn at its best
 constexpr int workPulseSteps = 24; // the dot's redraws in a pulse: it is slow, and need not be drawn every frame
 constexpr int posterMost = 1280;   // the widest a poster is kept while it moves about
 // How far things go.

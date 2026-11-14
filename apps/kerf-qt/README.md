@@ -396,7 +396,12 @@ then says which note and where, and shows the blocking notes in Review; a Draft
 still exports. Filters (All / Open / Proposals, From, tags, search),
 sort, resolve, drawings on the frame, @mentions and timecodes work as in the
 design; the pinned proposal card previews, accepts or rejects the version it
-shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link.
+shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link. When the review
+changes, the panel keeps each thread whose widgets would come out the same and makes
+only the others again, leaving the kept ones where they are in the list; its wrapped
+text remembers its height at each width (`ui::WrapLabel`). So a comment arriving or a
+proposal changing costs about the same in a long conversation as in a short one
+(`whatAConversationCosts` measures it).
 `<project>` is the slug of the project's folder name (lower case, each
 run of anything but letters and digits one `-`: "Atlas Cut" is `atlas-cut`),
 whatever the document calls itself, so a link finds a project that is not
