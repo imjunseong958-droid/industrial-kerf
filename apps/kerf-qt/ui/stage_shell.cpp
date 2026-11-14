@@ -158,13 +158,46 @@ const QPixmap &shadowTile(qreal ratio) {
     return tile;
 }
 
+// Keeps a widget that paints every pixel it is asked for marked opaque: the
+// editor's style sheet clears the attribute as it polishes a widget, and Qt then
+// paints what is under the widget too, in each frame, only to be drawn over.
+class KeepsOpaque final : public QObject {
+public:
+    explicit KeepsOpaque(QWidget *widget) : QObject(widget) {
+        widget->setAttribute(Qt::WA_OpaquePaintEvent);
+        widget->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        // The style sheet clears it as it polishes, after the Polish event: set
+        // again once shown, and after each restyle.
+        const QEvent::Type type = event->type();
+        if (type == QEvent::Show || type == QEvent::StyleChange || type == QEvent::Polish)
+            static_cast<QWidget *>(watched)->setAttribute(Qt::WA_OpaquePaintEvent);
+        return false;
+    }
+};
+
 // A region as it was when a move began, shown in its place while it travels:
 // one picture copied in each frame, not all that is in it drawn again.
 class Still final : public QWidget {
 public:
-    Still(QWidget *parent, const QPixmap &picture) : QWidget(parent), m_picture(picture) {
+    // The picture is laid over `room`, what is under it, so it covers all it is
+    // over: the room is not drawn beneath it, and each frame copies it rather
+    // than blends it.
+    Still(QWidget *parent, const QPixmap &picture, const QColor &room) : QWidget(parent) {
         setObjectName(QStringLiteral("stageStill"));
         setAttribute(Qt::WA_TransparentForMouseEvents);
+        new KeepsOpaque(this);
+        QImage opaque(picture.size(), QImage::Format_RGB32);
+        opaque.setDevicePixelRatio(picture.devicePixelRatio());
+        opaque.fill(room);
+        {
+            QPainter p(&opaque);
+            p.drawPixmap(0, 0, picture);
+        }
+        m_picture = QPixmap::fromImage(std::move(opaque));
     }
 
 protected:
@@ -235,7 +268,8 @@ private:
 
 StageShell::StageShell(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("stageShell"));
-    setAttribute(Qt::WA_OpaquePaintEvent);
+    // It fills all it repaints with the room.
+    new KeepsOpaque(this);
     m_seamSidebar = seam(this, "stageSeamSidebar");
     m_seamUpright = seam(this, "stageSeamUpright");
     m_seamAcross = seam(this, "stageSeamAcross");
@@ -431,7 +465,7 @@ void StageShell::transition(const QRect &pictureOrigin) {
         if (move.widget != m_timeline || move.from.size() != move.to.size() || move.from.isEmpty()) continue;
         const QPixmap picture = m_timeline->grab();
         if (picture.isNull()) break;
-        m_still = new Still(this, picture);
+        m_still = new Still(this, picture, tokens::color(tokens::chrome));
         m_still->setGeometry(move.from);
         m_still->stackUnder(m_veil);
         m_still->show();
@@ -646,13 +680,17 @@ void StageShell::paintEvent(QPaintEvent *event) {
     // picture floats. The room stays neutral, whatever the picture shows, as colour
     // around a picture changes how its colours look.
     QPainter p(this);
-    p.fillRect(event->rect(), tokens::color(tokens::chrome));
+    // Not where the picture paints every pixel over it: as it plays, that is all
+    // there is to repaint.
+    QRegion room = event->region();
+    if (m_pictureCovers) room -= m_pictureCovers();
+    for (const QRect &rect : room) p.fillRect(rect, tokens::color(tokens::chrome));
     m_shadowed = shadowed();
     if (m_shadowed.isEmpty()) return;
     // The picture covers what is under its middle: only its corners show any.
     const QRect shown = stage::fitted(stage::paddedSlot(m_picture->geometry()), m_aspect);
     const int corner = tokens::layout::pictureRadius;
-    p.setClipRegion(QRegion(m_shadowed) - shown.adjusted(corner, corner, -corner, -corner));
+    p.setClipRegion((QRegion(m_shadowed) - shown.adjusted(corner, corner, -corner, -corner)) & room);
     // Its shadow, wide and soft under it.
     const QPixmap &tile = shadowTile(std::max(1.0, devicePixelRatioF()));
     const QMargins edges(kShadowCorner, kShadowCorner, kShadowCorner, kShadowCorner);

@@ -261,6 +261,9 @@ void MainWindow::buildSidebar() {
     connect(m_chat, &ChatPanel::pictureRequested, this, &MainWindow::openCutFromCard);
     connect(m_artwork, &MediaArtwork::changed, m_chat, &ChatPanel::refreshPictures);
     m_shell->setPictureHome([this] { return cardPictureHome(); });
+    m_shell->setPictureCovers([this] {
+        return m_viewer->isVisible() && m_viewer->parentWidget() == m_shell ? m_viewer->coveredRegion().translated(m_viewer->pos()) : QRegion();
+    });
     // Looking at something in the conversation shows it.
     connect(m_chat, &ChatPanel::seekRequested, this, [this] { revealPanel(true, false); });
     connect(m_chat, &ChatPanel::previewRequested, this, [this](const QString &, bool on) {

@@ -112,6 +112,38 @@ class MotionTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    // Playing, a frame draws again only the picture: the room around it, and what
+    // is under the picture, are not drawn, and the screen is as a whole drawing
+    // of the window would make it.
+    void playingDrawsOnlyThePicture() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        stage::Panes open = window.m_shell->panes();
+        open.picture = true;
+        open.timeline = true;
+        window.m_shell->setPanes(open);
+        QTest::qWait(200);
+        // The room fills all it repaints: what is under it is not drawn first.
+        QVERIFY(window.m_shell->testAttribute(Qt::WA_OpaquePaintEvent));
+        const QRect shown = window.m_viewer->shownRect();
+        QVERIFY(!shown.isEmpty() && shown != window.m_viewer->rect());
+        QVERIFY(window.m_viewer->rect().contains(window.m_viewer->coveredRegion().boundingRect()));
+        for (int i = 1; i <= 6; ++i) {
+            window.m_viewer->setFrame(footageFrame(QSize(1920, 1080), i), i / 24.0);
+            QCoreApplication::processEvents();
+        }
+        QTest::qWait(50);
+        // What is on the screen, read back from it, against the window drawn whole
+        // afresh: the second is the same only at one pixel a point.
+        if (window.devicePixelRatio() != 1.0) QSKIP("The offscreen screen is read back at one pixel a point");
+        QCOMPARE(window.screen()->grabWindow(window.winId()).toImage().convertToFormat(QImage::Format_RGB32),
+                 window.grab().toImage().convertToFormat(QImage::Format_RGB32));
+    }
+
     // KERF_MOTION_COSTS=1 QT_SCALE_FACTOR=2 kerf-qt-tests -platform offscreen whatEachSceneCosts
     void whatEachSceneCosts() {
         if (qEnvironmentVariableIsEmpty("KERF_MOTION_COSTS")) QSKIP("A measurement, run on request");

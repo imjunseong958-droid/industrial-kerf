@@ -306,6 +306,7 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
             m_wipeRun->start();
         }
     }
+    const QRect shownBefore = shownRect();
     m_frame = frame;
     m_time = time;
     m_scaled = QImage();
@@ -329,7 +330,15 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
         }
         m_settle->start();
     }
-    update();
+    // A frame of the same shape changes only the picture: what is around it, and
+    // what is under that, is not drawn again.
+    const QRect shown = shownRect();
+    if (shown == shownBefore && !shown.isEmpty()) update(shown);
+    else update();
+}
+
+QRect ViewerWidget::shownRect() const {
+    return videoRect().united(pictureRect()).toAlignedRect().adjusted(-1, -1, 1, 1).intersected(rect());
 }
 
 void ViewerWidget::clearFrame() {
@@ -429,6 +438,21 @@ double ViewerWidget::aspect() const {
 bool ViewerWidget::verticalSequence() const { return !stage::isWide(aspect()); }
 
 QRectF ViewerWidget::videoRect() const { return QRectF(stage::fitted(stage::paddedSlot(rect()), aspect())); }
+
+QRegion ViewerWidget::coveredRegion() const {
+    // All of the frame at Fit but the squares its corners are rounded in.
+    const QRectF card = videoRect();
+    const qreal round = tokens::layout::pictureRadius;
+    const auto inward = [](const QRectF &r) {
+        if (r.isEmpty()) return QRect();
+        const int left = int(std::ceil(r.left()));
+        const int top = int(std::ceil(r.top()));
+        return QRect(QPoint(left, top), QPoint(int(std::floor(r.right())) - 1, int(std::floor(r.bottom())) - 1));
+    };
+    QRegion covered(inward(card.adjusted(round, 0, -round, 0)));
+    covered += inward(card.adjusted(0, round, 0, -round));
+    return covered;
+}
 
 QRectF ViewerWidget::pictureRect() const {
     const QRectF card = videoRect();
