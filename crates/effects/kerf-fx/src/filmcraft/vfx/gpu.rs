@@ -93,6 +93,21 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    /// A 360° frame turned, or seen through another field of view (`immersive`).
+    Sphere {
+        turn: [[f32; 3]; 3],
+        /// How much of the sphere the frame holds, across and down.
+        share: [f32; 2],
+        layout: u32,
+    },
+    /// A flat picture put on a 360° frame.
+    PlaneToSphere {
+        turn: [[f32; 3]; 3],
+        /// The tangent of half the picture's width on the sphere.
+        half: f32,
+        feather: f32,
+        layout: u32,
+    },
     Lens {
         center: [f32; 2],
         /// Half of the picture's diagonal, which its curvature is measured by.
@@ -780,6 +795,23 @@ impl Kernel {
                     },
                 }
             }
+            "vr_projection" | "vr_rotate_sphere" => match super::immersive::turn_of(e, cx) {
+                Some((turn, share)) => Kernel::Sphere {
+                    turn,
+                    share,
+                    layout: chv(e, "frame_layout"),
+                },
+                None => Kernel::Nothing,
+            },
+            "vr_plane_to_sphere" => {
+                let (turn, half) = super::immersive::plane_of(e, cx);
+                Kernel::PlaneToSphere {
+                    turn,
+                    half,
+                    feather: fv(e, "feather", cx) / 100.0,
+                    layout: chv(e, "frame_layout"),
+                }
+            }
             "lens_distortion" => {
                 let (w, h) = (size.0 as f64, size.1 as f64);
                 let off = |id: &str, across: f64| {
@@ -1337,6 +1369,49 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::Sphere {
+                turn,
+                share,
+                layout,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.sphere,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*layout, 0, 0, 0],
+                        p0: [turn[0][0], turn[0][1], turn[0][2], share[0]],
+                        p1: [turn[1][0], turn[1][1], turn[1][2], share[1]],
+                        p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
+            Kernel::PlaneToSphere {
+                turn,
+                half,
+                feather,
+                layout,
+            } => {
+                let out = stage.pass(
+                    frame,
+                    &stage.plane_to_sphere,
+                    &picture,
+                    None,
+                    &U {
+                        a: [*layout, 0, 0, 0],
+                        p0: [turn[0][0], turn[0][1], turn[0][2], *half],
+                        p1: [turn[1][0], turn[1][1], turn[1][2], *feather],
+                        p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
+                        ..U::default()
+                    },
+                );
+                frame.release(picture);
+                out
+            }
             Kernel::Lens {
                 center,
                 reach,
@@ -1618,6 +1693,8 @@ struct Stage {
     selective_color: wgpu::ComputePipeline,
     cineon: wgpu::ComputePipeline,
     lens: wgpu::ComputePipeline,
+    sphere: wgpu::ComputePipeline,
+    plane_to_sphere: wgpu::ComputePipeline,
     magnify: wgpu::ComputePipeline,
     four_colors: wgpu::ComputePipeline,
     grid: wgpu::ComputePipeline,
@@ -1684,6 +1761,8 @@ impl Stage {
                 selective_color: kernel("selective_color"),
                 cineon: kernel("cineon"),
                 lens: kernel("lens"),
+                sphere: kernel("sphere"),
+                plane_to_sphere: kernel("plane_to_sphere"),
                 magnify: kernel("magnify"),
                 four_colors: kernel("four_colors"),
                 grid: kernel("grid"),
@@ -2045,6 +2124,42 @@ mod tests {
                     ("softness", fl(100.0)),
                 ],
             ),
+            // A 360° frame turned each way, seen through a narrower view, and one of two views.
+            ("vr_rotate_sphere", vec![("pan", fl(40.0))]),
+            (
+                "vr_rotate_sphere",
+                vec![("tilt", fl(25.0)), ("pan", fl(-110.0)), ("roll", fl(15.0))],
+            ),
+            (
+                "vr_rotate_sphere",
+                vec![("tilt", fl(-35.0)), ("frame_layout", ParamValue::Choice(1))],
+            ),
+            ("vr_projection", vec![("fov", fl(120.0))]),
+            (
+                "vr_projection",
+                vec![
+                    ("fov", fl(200.0)),
+                    ("pan", fl(30.0)),
+                    ("stretch", ParamValue::Bool(false)),
+                    ("frame_layout", ParamValue::Choice(2)),
+                ],
+            ),
+            // A flat picture on the sphere, turned, and with a soft edge.
+            ("vr_plane_to_sphere", vec![]),
+            (
+                "vr_plane_to_sphere",
+                vec![
+                    ("scale", fl(100.0)),
+                    ("pan", fl(-50.0)),
+                    ("tilt", fl(20.0)),
+                    ("roll", fl(10.0)),
+                    ("feather", fl(30.0)),
+                ],
+            ),
+            (
+                "vr_plane_to_sphere",
+                vec![("scale", fl(80.0)), ("frame_layout", ParamValue::Choice(1))],
+            ),
             // A lens that bulges, one that pinches, and one off its center.
             ("lens_distortion", vec![("curvature", fl(40.0))]),
             ("lens_distortion", vec![("curvature", fl(-60.0))]),
@@ -2285,6 +2400,9 @@ mod tests {
                     "mosaic",
                     "lens_distortion",
                     "magnify",
+                    "vr_rotate_sphere",
+                    "vr_projection",
+                    "vr_plane_to_sphere",
                     "ramp",
                     "gradient",
                     "checkerboard",

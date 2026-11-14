@@ -933,6 +933,119 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
+// The view of a 360° frame a pixel is in, as `immersive::per_view` cuts them: the whole frame, the
+// halves of one over another (1), or of one beside another (2). Its left, top, width, and height.
+fn view_of(p: vec2<i32>, cut: u32) -> vec4<i32> {
+    let size = vec2<i32>(textureDimensions(src));
+    if cut == 1u && size.y >= 2 {
+        let half = size.y / 2;
+        if p.y < half { return vec4(0, 0, size.x, half); }
+        return vec4(0, half, size.x, size.y - half);
+    }
+    if cut == 2u && size.x >= 2 {
+        let half = size.x / 2;
+        if p.x < half { return vec4(0, 0, half, size.y); }
+        return vec4(half, 0, size.x - half, size.y);
+    }
+    return vec4(0, 0, size.x, size.y);
+}
+
+// `immersive::sample_wrap` in a view: bilinear, going round across and held at the top and bottom.
+fn sample_round(view: vec4<i32>, x: f32, y: f32) -> vec4<f32> {
+    let fx = x - 0.5;
+    let fy = clamp(y - 0.5, 0.0, f32(view.w - 1));
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let t = vec2(fx - x0, fy - y0);
+    let xa = ((i32(x0) % view.z) + view.z) % view.z;
+    let xb = (xa + 1) % view.z;
+    let ya = clamp(i32(y0), 0, view.w - 1);
+    let yb = min(ya + 1, view.w - 1);
+    let o = view.xy;
+    let a = textureLoad(src, o + vec2(xa, ya), 0);
+    let b = textureLoad(src, o + vec2(xb, ya), 0);
+    let c = textureLoad(src, o + vec2(xa, yb), 0);
+    let d = textureLoad(src, o + vec2(xb, yb), 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+// `Image::sample_bilinear_clamped` in a view.
+fn sample_held(view: vec4<i32>, x: f32, y: f32) -> vec4<f32> {
+    let f = clamp(vec2(x, y) - 0.5, vec2(0.0), vec2<f32>(view.zw - 1));
+    let p0 = vec2<i32>(f);
+    let p1 = min(p0 + 1, view.zw - 1);
+    let t = f - vec2<f32>(p0);
+    let o = view.xy;
+    let a = textureLoad(src, o + p0, 0);
+    let b = textureLoad(src, o + vec2(p1.x, p0.y), 0);
+    let c = textureLoad(src, o + vec2(p0.x, p1.y), 0);
+    let d = textureLoad(src, o + p1, 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+const HALF_TURN: f32 = 3.14159265358979;
+
+// The way a pixel of a view looks on the sphere: across is around it, down is from pole to pole
+// (`immersive::px_to_lonlat` and `dir`), with `share` of the sphere across and down the view.
+fn way_of(p: vec2<i32>, view: vec4<i32>, share: vec2<f32>) -> vec3<f32> {
+    let at = vec2<f32>(p - view.xy) + 0.5;
+    let lon = (at.x / f32(view.z) - 0.5) * 2.0 * HALF_TURN * share.x;
+    let lat = (0.5 - at.y / f32(view.w)) * HALF_TURN * share.y;
+    return vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));
+}
+
+// `immersive`'s projection and its turning of the sphere. a.x: the frame's layout; p0, p1, p2: the
+// rows of what a way is turned by, and in p0.w and p1.w how much of the sphere the frame holds
+// across and down.
+// By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
+// where a pixel comes from.
+@compute @workgroup_size(16, 16)
+fn sphere(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let view = view_of(p, u.a.x);
+    let way = way_of(p, view, vec2(u.p0.w, u.p1.w));
+    let d = vec3(dot(u.p0.xyz, way), dot(u.p1.xyz, way), dot(u.p2.xyz, way));
+    let lon = atan2(d.x, d.z);
+    // The CPU's arcsine, said so that 32 bits keep it near a pole, where an arcsine loses half its
+    // digits.
+    let lat = atan2(d.y, length(d.xz));
+    let x = (lon / (2.0 * HALF_TURN) + 0.5) * f32(view.z);
+    let y = (0.5 - lat / HALF_TURN) * f32(view.w);
+    textureStore(dst, p, sample_round(view, x, y));
+}
+
+// `immersive`'s flat picture on the sphere. a.x: the frame's layout; p0, p1, p2: the rows of what a
+// way is turned by; p0.w: the tangent of half the picture's width; p1.w: its feather.
+// By hand, for `sphere`'s reason.
+@compute @workgroup_size(16, 16)
+fn plane_to_sphere(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let view = view_of(p, u.a.x);
+    let way = way_of(p, view, vec2(1.0));
+    let d = vec3(dot(u.p0.xyz, way), dot(u.p1.xyz, way), dot(u.p2.xyz, way));
+    var out = vec4(0.0);
+    if d.z > 1e-6 {
+        let tx = u.p0.w;
+        let ty = tx * f32(view.w) / f32(view.z);
+        let at = vec2(d.x / d.z / tx, -d.y / d.z / ty);
+        if abs(at.x) <= 1.0 && abs(at.y) <= 1.0 {
+            out = sample_held(view, (at.x + 1.0) / 2.0 * f32(view.z), (at.y + 1.0) / 2.0 * f32(view.w));
+            if u.p1.w > 0.0 {
+                let edge = 1.0 - max(abs(at.x), abs(at.y));
+                let t = clamp(edge / max(u.p1.w, 1e-6), 0.0, 1.0);
+                out *= t * t * (3.0 - 2.0 * t);
+            }
+        }
+    }
+    textureStore(dst, p, out);
+}
+
 // The lens distortion in `effects`. p0: its center, half of the picture's diagonal, and its curvature.
 // By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
 // where a pixel comes from.

@@ -87,6 +87,9 @@ on `main`; its section here becomes the release's notes on GitHub
 - A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
   where that clip shows and black elsewhere, with what stands before it cut
   out, which is the mask a model is handed to make a thing in one place.
+- VR Rotate Sphere, VR Projection and VR Plane to Sphere are drawn on the
+  GPU, so a 360° frame turned or re-projected no longer sends each frame to
+  the CPU.
 - `kerf-comfy`'s `depth` reads a take's depth in under half the time: it
   refines once, for a depth a grey of 255 from before. `refine_steps=3` is
   as it was.

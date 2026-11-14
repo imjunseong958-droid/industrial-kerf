@@ -628,6 +628,8 @@ const EXACT_EFFECTS: &[&str] = &[
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",
     "      fx distort.lens curvature=35 h_decentering=15\n",
     "      fx distort.magnify center_x=0.4 center_y=0.45 size=30 magnification=250 feather=6\n",
+    "      fx vr.rotatesphere tilt=20 pan=-70\n",
+    "      fx vr.planetosphere scale=90 pan=30 feather=20\n",
     "      fx generate.fourcolor blend=200 opacity=50\n",
     "      fx generate.grid size=20 border=2 opacity=80\n",
     "      fx generate.gradientramp start_x=0.2 end_x=0.8 blend=50\n",
