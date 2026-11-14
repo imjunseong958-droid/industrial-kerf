@@ -676,7 +676,7 @@ recipes, in `fixtures/shots/car`.
    head, looked at by hand. Splats, for a set rebuilt from photographs, wait for
    those.
 3. **Footage into the scene, and a picture read back**, which is in but
-   for a whole set ([the record](docs/shots-measured.md)). A filmed shot is made into a
+   for a whole set ([the record](shots-measured.md)). A filmed shot is made into a
    scene by models a recipe reaches: its set as a mesh clip with the shot
    as its colors, its camera as a `gen=camera@1` clip `look` with `mesh`
    writes from a path or a lens (`from`), and what is added stands among
@@ -703,7 +703,7 @@ recipes, in `fixtures/shots/car`.
    splats made of a filmed scene, which nothing in reach makes; the two
    lenses reconciled further than by their ratio.
 4. **A take held to its guide by numbers**, which is in
-   ([the record](docs/shots-measured.md)). `look` with `follows` holds a take's depth to its
+   ([the record](shots-measured.md)). `look` with `follows` holds a take's depth to its
    guide's by the clip, `placed` follows a clip's subject in the take and
    in the guide's own picture and holds the two boxes together, and `held`
    gives a take one number of both. `placed` measures a move of 0.083 as
@@ -724,14 +724,14 @@ recipes, in `fixtures/shots/car`.
    through the set's holes, and a depth-guided one that kept the depth
    and stood its crate elsewhere.
 5. **More than one guide on a line**, which is in
-   ([the record](docs/shots-measured.md)): `guide_<name>=`, each sent to the workflow blank
+   ([the record](shots-measured.md)): `guide_<name>=`, each sent to the workflow blank
    of its name. `shot-into` reads the footage and a mask and puts a thing
    into the footage where a box stands in the scene, on all 65 frames of
    the travelling shot, the rest 7 of 255 from what it was (`overlap`
    0.66); `render … matte=<clip>` draws the mask with what the set hides
    cut out. A picture with its depth waits for a model that reads both.
 6. **How a point moves, as a direction of its own**, which is in
-   ([the record](docs/shots-measured.md)): `generate … moves=<clip>` hands a clip's place on
+   ([the record](shots-measured.md)): `generate … moves=<clip>` hands a clip's place on
    each frame, as a layout (`shot-led`, `overlap` 0.57) or as tracks of
    points with a picture to start from (`shot-moved`, 0.60). One track
    says where and not how large (0.48, a third too large), so a clip is
@@ -739,7 +739,7 @@ recipes, in `fixtures/shots/car`.
    rest of the scene, which stays about where the first frame has it. It
    is the fourth row of the table at the top: where, when, what, and how
    each thing goes.
-7. **A signal measured** ([the record](docs/shots-measured.md)): handed as a mask a frame
+7. **A signal measured** ([the record](shots-measured.md)): handed as a mask a frame
    (`shot-timed`), a take leaves its guide where the signal says and when
    (correlation 0.93, and 0.84 the other way round). Still wanting is a
    model that takes the number itself, for what a mask cannot say.
