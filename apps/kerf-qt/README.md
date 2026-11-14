@@ -46,7 +46,7 @@ are not supported, and the Homebrew libraries it carries are bottled for the run
 macOS 26. The script writes that minimum into the app's `Info.plist`
 (`LSMinimumSystemVersion`, so an older macOS says so), and `check-kerf-macos.sh` fails
 if any file in the app needs a newer macOS than it names, as one built on a newer
-runner would (`docs/architecture.md`, Packaging). Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
+runner would (`docs/shipping.md`, Packaging). Homebrew's FFmpeg is GPL, so `scripts/collect-kerf-macos-sources.sh`
 collects the source of each Homebrew formula the app has files of; the Package workflow
 publishes the two together on a `v<version>` tag. Where pushing a tag is not possible, Actions ▸ Package ▸ Run
 workflow on `main` with **release** checked publishes the same release and makes its
