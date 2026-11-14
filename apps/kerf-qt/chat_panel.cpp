@@ -1204,12 +1204,24 @@ void ChatPanel::setFootage(const QList<FootageTile> &tiles) {
     if (m_follow) m_list->verticalScrollBar()->setValue(m_list->verticalScrollBar()->maximum());
 }
 
+void ChatPanel::holdWidth(int width) {
+    if (width == m_heldWidth) return;
+    m_heldWidth = std::max(0, width);
+    // Held, the list is laid out once at the width it is going to, and keeps it
+    // however wide it is on the way, rather than wrapping its text again in each
+    // frame. Let go, it follows its width again.
+    m_list->setWidgetResizable(m_heldWidth == 0);
+    QResizeEvent same(size(), size());
+    resizeEvent(&same);
+    syncContent();
+}
+
 void ChatPanel::syncContent() {
     // The scroll area sizes its content on a posted layout request; size it
     // now, so the scroll range is the content's before scrolling.
     QCoreApplication::sendPostedEvents(m_content, QEvent::LayoutRequest);
     m_content->layout()->activate();
-    const int width = m_list->viewport()->width();
+    const int width = m_heldWidth > 0 ? m_heldWidth - (this->width() - m_list->viewport()->width()) : m_list->viewport()->width();
     const int height = std::max(m_list->viewport()->height(),
                                 m_content->hasHeightForWidth() ? m_content->heightForWidth(width) : m_content->sizeHint().height());
     if (m_content->size() != QSize(width, height)) m_content->resize(width, height);
@@ -1947,10 +1959,14 @@ void ChatPanel::paintEvent(QPaintEvent *) {
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
-    // With the room to itself the conversation keeps a column to read in.
-    const int inset = std::max(0, (width() - tokens::layout::conversationColumn) / 2);
+    // With the room to itself the conversation keeps a column to read in. The
+    // list keeps the column of the width it is on its way to; the composer is
+    // where it is.
+    const int column = tokens::layout::conversationColumn;
+    const int inset = std::max(0, (width() - column) / 2);
+    const int listInset = m_heldWidth > 0 ? std::max(0, (m_heldWidth - column) / 2) : inset;
     const QMargins list = m_listLayout->contentsMargins();
-    m_listLayout->setContentsMargins(inset, list.top(), inset, list.bottom());
+    m_listLayout->setContentsMargins(listInset, list.top(), listInset, list.bottom());
     m_replyBar->setContentsMargins(inset, 0, inset, 0);
     m_composer->setContentsMargins(inset, 0, inset, 0);
     QTimer::singleShot(0, this, &ChatPanel::updatePinBar);

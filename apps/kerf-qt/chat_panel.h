@@ -157,6 +157,10 @@ public:
     // Lays the list out for the panel's size now, not when its posted requests
     // come: where things will be once a move has settled.
     void layOutNow() { syncContent(); }
+    // While the window moves to a new arrangement: the width the panel will have
+    // when it is there, which the list is laid out at meanwhile; 0 lets it go.
+    void holdWidth(int width);
+    int heldWidth() const { return m_heldWidth; }
 
     // ---- threads -----------------------------------------------------------
     QList<ThreadWidget *> threadWidgets() const;
@@ -436,6 +440,7 @@ private:
     size_t m_timelineHash = 0;
     size_t m_namedHash = 0;
     mutable QHash<QString, size_t> m_proposalHashes;
+    int m_heldWidth = 0;
     QString m_building;
     QPointer<ProposalCard> m_buildingCard;
     // The cut Kerf last finished, and when.

@@ -93,8 +93,13 @@ void MainWindow::buildAgentViews() {
     m_viewer->setWorkChip(m_workChip);
     // The picture is not rescaled in each frame while the stage moves, and flights
     // wait for the timeline to have reached where they land.
-    connect(m_shell, &StageShell::transitionStarted, this, [this] { m_viewer->setStageMoving(true); });
+    connect(m_shell, &StageShell::transitionStarted, this, [this] {
+        m_viewer->setStageMoving(true);
+        // The conversation is laid out once, at the width it is going to.
+        m_chat->holdWidth(m_shell->rects().conversation.width());
+    });
     connect(m_shell, &StageShell::transitionFinished, this, [this] {
+        m_chat->holdWidth(0);
         m_viewer->setStageMoving(false);
         flushFlights();
     });

@@ -104,6 +104,8 @@ with it. So:
   sampled straight onto the screen, and the last is drawn at its best once they stop
   (`ViewerWidget::setFrame`, `tokens::motion::frameStream`). A still watched for long,
   as the before side of the wipe, is made at its size once.
+- **Draw an icon once.** `icons::paint` keeps each icon it has filled, at its size,
+  colour and place within a pixel, and copies it from then on.
 - **Away from the picture's corners, keep to its rect.** Rounding the clip costs a pass
   over the whole picture, so what is drawn again in its middle is kept inside its rect.
 
@@ -128,5 +130,5 @@ in, and each region drawn whole.
 - Stand-ins are posters, so they are soft until the render arrives.
 - Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
   it costs, not how it looks. Only a real window shows that.
-- The conversation lays its text out again in each frame it changes width
-  (about 2 ms a frame, more with a long conversation).
+- While the regions move, the conversation's list keeps the width it is going to
+  (`ChatPanel::holdWidth`): its text wraps once, at the start, not in each frame.

@@ -1113,6 +1113,38 @@ private slots:
         window.close();
     }
 
+    // While the window moves to a new arrangement the conversation's list is laid
+    // out once, at the width it is going to, not again in every frame; once there,
+    // it follows its width again.
+    void aMoveLaysTheConversationOutOnce() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        QWidget *content = window.m_chat->listContent();
+        window.m_panelButton->click();
+        QVERIFY(window.m_shell->isMoving());
+        const int held = window.m_chat->heldWidth();
+        QCOMPARE(held, window.m_shell->rects().conversation.width());
+        const int width = content->width();
+        int seen = 0;
+        while (window.m_shell->isMoving()) {
+            QCOMPARE(content->width(), width);
+            ++seen;
+            QTest::qWait(16);
+        }
+        QVERIFY(seen > 2);
+        QCOMPARE(window.m_chat->heldWidth(), 0);
+        QCOMPARE(content->width(), window.m_chat->list()->viewport()->width());
+        // The composer kept to where it was all along.
+        QVERIFY(window.m_chat->composerWidget()->isVisible());
+        window.close();
+    }
+
     void watchingLeavesARoomOverThePicture() {
         stage::Panes panes;
         panes.reel = true;

@@ -2,6 +2,8 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QImage>
+#include <QPaintDevice>
 #include <QList>
 #include <QPainter>
 #include <QPainterPathStroker>
@@ -378,10 +380,9 @@ QRectF iconBox(const QString &name, const QRectF &rect, qreal px) {
     return QRectF(rect.center() - QPointF(box.width() / 2, box.height() / 2), box);
 }
 
-void paint(QPainter &painter, const QString &name, const QRectF &rect, const QColor &color, qreal px) {
-    const Icon *icon = find(name);
-    if (!icon || px <= 0) return;
-    const QRectF box = iconBox(name, rect, px);
+namespace {
+
+void drawShapes(QPainter &painter, const Icon *icon, const QRectF &box, const QColor &color, qreal px) {
     const qreal scale = box.width() / icon->viewBox.width();
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -402,6 +403,48 @@ void paint(QPainter &painter, const QString &name, const QRectF &rect, const QCo
         }
     }
     painter.restore();
+}
+
+} // namespace
+
+void paint(QPainter &painter, const QString &name, const QRectF &rect, const QColor &color, qreal px) {
+    const Icon *icon = find(name);
+    if (!icon || px <= 0) return;
+    const QRectF box = iconBox(name, rect, px);
+    // Drawn once at each size, colour and place within a pixel, and from then on
+    // copied: its paths cost far more to fill than a copy, and a window draws the
+    // same icons over and over. Under any transform but a move it is drawn as is.
+    const QTransform &world = painter.worldTransform();
+    QPaintDevice *device = painter.device();
+    if (!device || world.type() > QTransform::TxTranslate || box.isEmpty()) {
+        drawShapes(painter, icon, box, color, px);
+        return;
+    }
+    const qreal ratio = device->devicePixelRatio();
+    const QPointF at = world.map(box.topLeft()) * ratio;
+    // Where it falls within a device pixel, to a sixteenth.
+    const QPointF whole(std::floor(at.x()), std::floor(at.y()));
+    const QPointF part(std::round((at.x() - whole.x()) * 16.0) / 16.0, std::round((at.y() - whole.y()) * 16.0) / 16.0);
+    static QHash<QByteArray, QImage> drawn;
+    const qint64 parts[] = {qint64(quintptr(icon)), qint64(color.rgba()), qRound64(box.width() * 64), qRound64(box.height() * 64),
+                            qRound64(px * 64), qRound64(ratio * 64), qRound64(part.x() * 16), qRound64(part.y() * 16)};
+    const QByteArray id(reinterpret_cast<const char *>(parts), sizeof(parts));
+    auto found = drawn.constFind(id);
+    if (found == drawn.constEnd()) {
+        const QSize pixels(int(std::ceil(box.width() * ratio + part.x())) + 1, int(std::ceil(box.height() * ratio + part.y())) + 1);
+        QImage image(pixels, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        {
+            QPainter into(&image);
+            into.translate(part);
+            into.scale(ratio, ratio);
+            drawShapes(into, icon, QRectF(QPointF(0, 0), box.size()), color, px);
+        }
+        image.setDevicePixelRatio(ratio);
+        if (drawn.size() >= 1024) drawn.clear();
+        found = drawn.insert(id, image);
+    }
+    painter.drawImage(world.inverted().map(whole / ratio), *found);
 }
 
 QPixmap pixmap(const QString &name, const QColor &color, qreal px, qreal dpr) {
