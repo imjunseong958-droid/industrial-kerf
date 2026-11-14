@@ -87,6 +87,9 @@ on `main`; its section here becomes the release's notes on GitHub
 - A recipe's `render` line draws one clip as a matte, `matte=<clip>`: white
   where that clip shows and black elsewhere, with what stands before it cut
   out, which is the mask a model is handed to make a thing in one place.
+- An `.rpm` for Fedora: `sudo dnf install ./Industrial-Kerf-…-linux-x64.rpm`
+  installs Kerf with what it needs from the system, as the `.deb` does on
+  Debian and Ubuntu; `sudo dnf remove industrial-kerf` takes it away.
 - Optics Compensation is drawn on the GPU, but where it grows the picture,
   the Advanced Spill Suppressor with its Ultra method, the Simple Choker
   where it draws a matte in, and the Key Cleaner.
