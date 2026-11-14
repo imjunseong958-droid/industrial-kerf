@@ -172,6 +172,9 @@ private:
     void transition(const QRect &pictureOrigin = QRect());
     // Stops the move under way, if there is one, and says so.
     bool stopMoves();
+    // The timeline's picture during a move, if it is shown from one; gone with it.
+    void releaseStill();
+    QPointer<QWidget> m_still;
     // What a move leaves behind it, however it ended.
     void settle();
     // What the picture's shadow falls on; empty when it is not painted.

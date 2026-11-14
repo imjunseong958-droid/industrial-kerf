@@ -104,6 +104,9 @@ with it. So:
   sampled straight onto the screen, and the last is drawn at its best once they stop
   (`ViewerWidget::setFrame`, `tokens::motion::frameStream`). A still watched for long,
   as the before side of the wipe, is made at its size once.
+- **What only travels is shown from a picture of it.** While the regions move, the
+  timeline, which keeps its size, is shown from a picture taken as the move begins
+  (`StageShell`'s still), and is not drawn again until the move ends.
 - **Draw an icon once.** `icons::paint` keeps each icon it has filled, at its size,
   colour and place within a pixel, and copies it from then on.
 - **Away from the picture's corners, keep to its rect.** Rounding the clip costs a pass

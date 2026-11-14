@@ -1114,8 +1114,9 @@ private slots:
     }
 
     // While the window moves to a new arrangement the conversation's list is laid
-    // out once, at the width it is going to, not again in every frame; once there,
-    // it follows its width again.
+    // out once, at the width it is going to, not again in every frame, and the
+    // timeline, which only travels, is shown from a picture of it; once there,
+    // both are themselves again.
     void aMoveLaysTheConversationOutOnce() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -1131,14 +1132,22 @@ private slots:
         const int held = window.m_chat->heldWidth();
         QCOMPARE(held, window.m_shell->rects().conversation.width());
         const int width = content->width();
+        // The timeline only travels: a picture of it is shown in its place, and it
+        // is not drawn meanwhile.
+        QWidget *still = window.m_shell->m_still;
+        QVERIFY(still && still->isVisible());
+        QVERIFY(!window.m_timelinePanel->updatesEnabled());
         int seen = 0;
         while (window.m_shell->isMoving()) {
             QCOMPARE(content->width(), width);
+            if (window.m_shell->m_still) QCOMPARE(window.m_shell->m_still->geometry(), window.m_timelinePanel->geometry());
             ++seen;
             QTest::qWait(16);
         }
         QVERIFY(seen > 2);
         QCOMPARE(window.m_chat->heldWidth(), 0);
+        QVERIFY(!window.m_shell->m_still);
+        QVERIFY(window.m_timelinePanel->updatesEnabled());
         QCOMPARE(content->width(), window.m_chat->list()->viewport()->width());
         // The composer kept to where it was all along.
         QVERIFY(window.m_chat->composerWidget()->isVisible());
