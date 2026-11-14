@@ -29,7 +29,9 @@ the zip and move Industrial Kerf to Applications. For Debian 13, Ubuntu 24.04 an
 comes from them, `sudo apt install ./Industrial-Kerf-…-linux-x64.deb` in the folder you
 downloaded it to installs Kerf with what it needs from the system, adds it to your
 applications, opens `kerf://` review links in it, and puts `kerf`, `kerfd` and `kerf-mcp`
-on your `PATH`; `sudo apt remove industrial-kerf` takes it away. On any other Linux
+on your `PATH`; `sudo apt remove industrial-kerf` takes it away. For Fedora,
+`sudo dnf install ./Industrial-Kerf-…-linux-x64.rpm` does the same, and
+`sudo dnf remove industrial-kerf` takes it away. On any other Linux
 (x86-64, as new as Ubuntu 24.04), or to keep it in a folder of your own,
 unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
 beyond what every desktop has, which `system-libraries.txt` beside it lists. Run
