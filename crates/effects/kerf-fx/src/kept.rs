@@ -167,6 +167,45 @@ pub fn optics_kernel(
     })
 }
 
+/// The Simple Choker as a kernel, with its parameters read as [`apply`] reads them, or `None` for
+/// what stays on the CPU: a matte spread, which grows the picture and finds colors for what was
+/// clear.
+pub fn choker_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    let spec = spec("matte.simplechoker")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    let choke = values.f("chokeMatte") * per_source;
+    let matte = values.e("view") == 1;
+    if choke < -1e-6 {
+        return None;
+    }
+    if choke <= 1e-6 && !matte {
+        return Some(Kernel::Nothing);
+    }
+    let choke = choke.max(0.0);
+    let whole = choke.floor();
+    let between = (choke - whole) as f32;
+    Some(Kernel::Choke {
+        radius: whole as u32,
+        between: if between < 1e-4 { 0.0 } else { between },
+        choked: choke > 1e-6,
+        matte,
+    })
+}
+
 /// Add Grain as a kernel, with its parameters read as [`apply`] reads them, or `None` for what stays
 /// on the CPU: a Softness, whose blur of each plane costs what it costs there, and a view of its
 /// matte or a preview of its region.
@@ -629,6 +668,88 @@ mod tests {
         effect.params.insert("reverseLensDistortion".into(), flag(true));
         effect.params.insert("resize".into(), choice("max-2x"));
         assert!(optics_kernel(&effect, Time::ZERO, (w, h), 1.0).is_none());
+    }
+
+    #[test]
+    fn the_choker_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        // A picture with a soft round matte, and a hole in it.
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 48.0, y as f32 - 27.0);
+                let far = (dx * dx + dy * dy).sqrt();
+                let hole = ((x as f32 - 60.0).powi(2) + (y as f32 - 20.0).powi(2)).sqrt();
+                let a = ((24.0 - far) / 6.0).clamp(0.0, 1.0) * ((hole - 3.0) / 2.0).clamp(0.0, 1.0);
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                px.extend_from_slice(&[u * a, v * a, (1.0 - u) * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        let choice = |name: &str| kerf_model::Param::Static(Value::Enum(name.into()));
+        let choker = |params: Vec<(&str, kerf_model::Param)>| {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("matte.simplechoker").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            for (name, value) in params {
+                effect.params.insert(name.into(), value);
+            }
+            effect
+        };
+        // A whole pixel, between two, many, and the matte shown, drawn in and as it is.
+        for (said, params) in [
+            ("1", vec![("chokeMatte", number(1.0))]),
+            ("2.4", vec![("chokeMatte", number(2.4))]),
+            ("7.5", vec![("chokeMatte", number(7.5))]),
+            ("3, its matte", vec![("chokeMatte", number(3.0)), ("view", choice("matte"))]),
+            ("its matte", vec![("view", choice("matte"))]),
+        ] {
+            let effect = choker(params);
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = choker_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 2e-3, "{said}: differs by {worst:.2e}");
+            assert_ne!(cpu.px, image.px, "{said} changes nothing");
+        }
+        // Nothing asked is nothing done, and a matte spread is the CPU's.
+        assert!(matches!(
+            choker_kernel(&choker(vec![]), Time::ZERO, (w, h), 1.0),
+            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+        ));
+        assert!(choker_kernel(&choker(vec![("chokeMatte", number(-2.0))]), Time::ZERO, (w, h), 1.0)
+            .is_none());
     }
 
     #[test]

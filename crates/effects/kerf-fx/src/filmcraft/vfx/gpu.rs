@@ -93,6 +93,15 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    /// The Simple Choker, kept from EffectCraft, drawing its matte in.
+    Choke {
+        /// The whole pixels its matte comes in by, and how far toward one more.
+        radius: u32,
+        between: f32,
+        /// Whether it comes in at all: a view of the matte alone does not.
+        choked: bool,
+        matte: bool,
+    },
     /// Optics Compensation, kept from EffectCraft: a lens's curve put in or taken out.
     Optics {
         center: [f32; 2],
@@ -1411,6 +1420,25 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::Choke {
+                radius,
+                between,
+                choked,
+                matte,
+            } => {
+                let numbers = U {
+                    a: [*radius, u32::from(*choked), u32::from(*matte), 0],
+                    p0: [*between, 0.0, 0.0, 0.0],
+                    ..U::default()
+                };
+                let across = stage.pass(frame, &stage.choke_rows, &picture, None, &numbers);
+                let down = stage.pass(frame, &stage.choke_columns, &across, None, &numbers);
+                frame.release(across);
+                let out = stage.pass(frame, &stage.choke_put, &picture, Some(&down), &numbers);
+                frame.release(down);
+                frame.release(picture);
+                out
+            }
             Kernel::Optics {
                 center,
                 fit,
@@ -1765,6 +1793,9 @@ struct Stage {
     lens: wgpu::ComputePipeline,
     sphere: wgpu::ComputePipeline,
     optics: wgpu::ComputePipeline,
+    choke_rows: wgpu::ComputePipeline,
+    choke_columns: wgpu::ComputePipeline,
+    choke_put: wgpu::ComputePipeline,
     plane_to_sphere: wgpu::ComputePipeline,
     magnify: wgpu::ComputePipeline,
     four_colors: wgpu::ComputePipeline,
@@ -1835,6 +1866,9 @@ impl Stage {
                 lens: kernel("lens"),
                 sphere: kernel("sphere"),
                 optics: kernel("optics"),
+                choke_rows: kernel("choke_rows"),
+                choke_columns: kernel("choke_columns"),
+                choke_put: kernel("choke_put"),
                 plane_to_sphere: kernel("plane_to_sphere"),
                 magnify: kernel("magnify"),
                 four_colors: kernel("four_colors"),

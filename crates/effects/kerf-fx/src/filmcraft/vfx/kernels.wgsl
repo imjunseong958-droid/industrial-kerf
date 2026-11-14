@@ -933,6 +933,62 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
+// `matte::simple_choker` drawing a matte in: `util::morph_frac`'s two erosions at once, the least of
+// a picture's alpha along a row within a.x pixels in its red and within one more in its green, the
+// picture held at its edges.
+@compute @workgroup_size(16, 16)
+fn choke_rows(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let last = i32(textureDimensions(src).x) - 1;
+    let r = i32(u.a.x);
+    var least = vec2(1e30);
+    for (var d = -r - 1; d <= r + 1; d++) {
+        let a = textureLoad(src, vec2(clamp(p.x + d, 0, last), p.y), 0).a;
+        least.y = min(least.y, a);
+        if abs(d) <= r { least.x = min(least.x, a); }
+    }
+    textureStore(dst, p, vec4(least, 0.0, 0.0));
+}
+
+// The same down a column, of what `choke_rows` made.
+@compute @workgroup_size(16, 16)
+fn choke_columns(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let last = i32(textureDimensions(src).y) - 1;
+    let r = i32(u.a.x);
+    var least = vec2(1e30);
+    for (var d = -r - 1; d <= r + 1; d++) {
+        let m = textureLoad(src, vec2(p.x, clamp(p.y + d, 0, last)), 0).xy;
+        least.y = min(least.y, m.y);
+        if abs(d) <= r { least.x = min(least.x, m.x); }
+    }
+    textureStore(dst, p, vec4(least, 0.0, 0.0));
+}
+
+// The picture with its matte drawn in (`util::set_alpha`), there and back in the one pass. a.y:
+// whether it is drawn in; a.z: whether the matte is shown in place of the picture; p0.x: how far
+// between the two erosions in aux.
+@compute @workgroup_size(16, 16)
+fn choke_put(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    var px = kept_in(textureLoad(src, p, 0));
+    if u.a.y != 0u {
+        let m = textureLoad(aux, p, 0).xy;
+        let to = clamp(m.x + (m.y - m.x) * u.p0.x, 0.0, 1.0);
+        var c = vec3(0.0);
+        if px.a > 1e-6 { c = px.rgb / px.a; }
+        px = vec4(c * to, to);
+    }
+    if u.a.z != 0u {
+        let a = clamp(px.a, 0.0, 1.0);
+        px = vec4(a, a, a, 1.0);
+    }
+    textureStore(dst, p, kept_out(px));
+}
+
 // `distort2::optics_compensation`, on what `encode_kept` makes. a.x: whether it takes a lens's curve
 // out; p0: its center, how much the result is scaled, and its focal length; p1: how far from the
 // center its field of view is measured to, and half that field.
