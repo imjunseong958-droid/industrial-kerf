@@ -19,7 +19,7 @@ Default resource limits:
 
 - CPU budget from `available_parallelism` (override with `KERF_CPUS`)
 - ffmpeg thread caps so decode does not oversubscribe
-- hardware encode by default when VideoToolbox/NVENC/QSV/AMF is listed, but not on a Mac in a virtual machine, whose VideoToolbox can stop answering (`--software` or `KERF_ENCODER=software` to force libx264; `--prefer-hardware` or `KERF_ENCODER=hardware` to force a hardware attempt)
+- hardware encode by default when VideoToolbox/NVENC/QSV/AMF is listed (`--software` or `KERF_ENCODER=software` to force libx264; `--prefer-hardware` to force a hardware attempt)
 - libx264 `veryfast`/`faster` on small machines instead of `medium`
 - frame extraction parallelism is capped
 - a transcription runs on half the CPUs, four at most (whisper.cpp alone takes four whatever the machine has)

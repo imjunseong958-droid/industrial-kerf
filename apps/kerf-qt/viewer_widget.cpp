@@ -4,7 +4,6 @@
 
 #include "components.h"
 #include "design_tokens.h"
-#include "gpu_picture.h"
 #include "stage_shell.h"
 #include <QVariantAnimation>
 #include "editor_common.h"
@@ -21,8 +20,6 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
-#include <QPaintEvent>
-#include <QRegion>
 #include <QPolygonF>
 #include <QVariantAnimation>
 
@@ -32,26 +29,6 @@
 #include <initializer_list>
 
 namespace kerf {
-
-// What is over the viewer's picture, drawn over the GPU's part of it: a child
-// paints over the GPU's, where the viewer itself would paint under it.
-class ViewerOverLayer final : public QWidget {
-public:
-    explicit ViewerOverLayer(ViewerWidget *viewer) : QWidget(viewer), m_viewer(viewer) {
-        setObjectName(QStringLiteral("viewerOver"));
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        m_viewer->paintOver(p, event->rect());
-    }
-
-private:
-    ViewerWidget *m_viewer;
-};
 
 namespace {
 
@@ -319,7 +296,6 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
                 connect(m_wipeRun, &QAbstractAnimation::finished, this, [this] {
                     m_wipe = -1.0;
                     m_wipeFrom = QImage();
-                    syncGpu();
                     update();
                 });
             }
@@ -337,10 +313,9 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
     const bool following = m_frameClock.isValid() && m_frameClock.elapsed() < tokens::motion::frameStream;
     m_frameClock.restart();
     m_streaming = following && !m_frame.isNull();
-    syncGpu();
     // Drawn as it comes, a picture is opaque: in the format the screen is drawn in,
-    // once, rather than in the paint. The GPU takes it as it is.
-    m_straight = m_streaming && m_gpuRect.isEmpty() ? m_frame.convertToFormat(QImage::Format_RGB32) : QImage();
+    // once, rather than in the paint.
+    m_straight = m_streaming ? m_frame.convertToFormat(QImage::Format_RGB32) : QImage();
     if (m_streaming) {
         if (!m_settle) {
             m_settle = new QTimer(this);
@@ -358,15 +333,6 @@ void ViewerWidget::setFrame(const QImage &frame, double time) {
     // A frame of the same shape changes only the picture: what is around it, and
     // what is under that, is not drawn again.
     const QRect shown = shownRect();
-#ifdef KERF_GPU_PICTURE
-    if (!m_gpuRect.isEmpty()) {
-        static_cast<GpuPicture *>(m_gpu)->setFrame(m_frame);
-        // The GPU draws its part; only the edges it leaves are drawn here.
-        if (shown == shownBefore && !shown.isEmpty()) update(QRegion(shown) - m_gpuRect);
-        else update();
-        return;
-    }
-#endif
     if (shown == shownBefore && !shown.isEmpty()) update(shown);
     else update();
 }
@@ -380,7 +346,6 @@ void ViewerWidget::clearFrame() {
     m_scaled = QImage();
     m_straight = QImage();
     m_streaming = false;
-    syncGpu();
     update();
 }
 
@@ -396,7 +361,6 @@ void ViewerWidget::setCompareFrame(const QImage &before) {
     // In the format it draws fastest in, as it is drawn for as long as it is watched.
     m_compareFrame = before.isNull() || before.format() == QImage::Format_RGB32 ? before : before.convertToFormat(QImage::Format_RGB32);
     m_compareScaled = QImage();
-    syncGpu();
     if (before.isNull()) {
         if (m_compareSweep) m_compareSweep->stop();
         update();
@@ -423,7 +387,6 @@ void ViewerWidget::setCompareFrame(const QImage &before) {
 
 void ViewerWidget::setFloating(bool floating) {
     m_floating = floating;
-    syncGpu();
     update();
 }
 
@@ -463,7 +426,6 @@ void ViewerWidget::setProjectInfo(double width, double height) {
     m_height = height;
     m_scaled = QImage();
     placeOverlays();
-    syncGpu();
     update();
 }
 
@@ -624,7 +586,6 @@ void ViewerWidget::setZoom(double zoom) {
     if (zoom == m_zoom) return;
     m_zoom = zoom;
     m_scaled = QImage();
-    syncGpu();
     update();
 }
 
@@ -689,72 +650,6 @@ QPointF ViewerWidget::fromFrame(const QPointF &fraction) const {
 void ViewerWidget::resizeEvent(QResizeEvent *) {
     if (!m_stageMoving) m_scaled = QImage();
     placeOverlays();
-    syncGpu();
-}
-
-void ViewerWidget::setGpuPicture(bool on) {
-#ifdef KERF_GPU_PICTURE
-    if (on && !GpuPicture::available()) on = false;
-    if (on == (m_gpu != nullptr)) return;
-    if (on) {
-        auto *gpu = new GpuPicture(this);
-        // Where the GPU cannot draw, all is drawn here again, as before.
-        connect(gpu, &QRhiWidget::renderFailed, this, [this] { QTimer::singleShot(0, this, [this] { setGpuPicture(false); }); });
-        m_overLayer = new ViewerOverLayer(this);
-        // Over the GPU's picture and under the HUD and the chips.
-        m_overLayer->lower();
-        gpu->lower();
-        gpu->hide();
-        m_overLayer->hide();
-        m_gpu = gpu;
-    } else {
-        delete m_gpu;
-        delete m_overLayer;
-        m_gpu = nullptr;
-        m_overLayer = nullptr;
-    }
-    syncGpu();
-    update();
-#else
-    Q_UNUSED(on);
-#endif
-}
-
-void ViewerWidget::syncGpu() {
-    QRect area;
-#ifdef KERF_GPU_PICTURE
-    if (m_gpu && !m_frame.isNull() && m_compareFrame.isNull() && m_wipe < 0.0 && m_zoom <= 0.0) {
-        // Between the rounded corners, in whole pixels inside the picture.
-        const QRectF card = videoRect();
-        const qreal round = tokens::layout::pictureRadius;
-        const QRectF inside = card.adjusted(0.0, round, 0.0, -round);
-        if (!inside.isEmpty())
-            area = QRect(QPoint(int(std::ceil(inside.left())), int(std::ceil(inside.top()))),
-                         QPoint(int(std::floor(inside.right())) - 1, int(std::floor(inside.bottom())) - 1));
-    }
-#endif
-    if (area != m_gpuRect) {
-        // Where the GPU leaves off or takes over, the CPU's part changes.
-        update(m_gpuRect.united(area));
-        m_gpuRect = area;
-    }
-#ifdef KERF_GPU_PICTURE
-    if (!m_gpu) return;
-    auto *gpu = static_cast<GpuPicture *>(m_gpu);
-    if (area.isEmpty()) {
-        gpu->hide();
-        m_overLayer->hide();
-        return;
-    }
-    const QRectF picture = pictureRect();
-    gpu->setGeometry(area);
-    gpu->setSource(QRectF((area.left() - picture.left()) / picture.width(), (area.top() - picture.top()) / picture.height(),
-                          area.width() / picture.width(), area.height() / picture.height()));
-    if (gpu->isHidden()) gpu->setFrame(m_frame);
-    m_overLayer->setGeometry(rect());
-    gpu->show();
-    m_overLayer->show();
-#endif
 }
 
 void ViewerWidget::showEvent(QShowEvent *) { placeOverlays(); }
@@ -1665,11 +1560,6 @@ void ViewerWidget::paintEvent(QPaintEvent *event) {
     const EditorTheme &theme = editorTheme();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    // Where the GPU draws the picture, nothing is drawn here: it is a child, over
-    // all of this, and what is over the picture is drawn over it by the layer.
-    const bool gpu = !m_gpuRect.isEmpty();
-    if (gpu) p.setClipRegion(QRegion(rect()) - m_gpuRect);
-    const Qt::ClipOperation within = gpu ? Qt::IntersectClip : Qt::ReplaceClip;
     // Black bars, where the region is not of the picture's shape; floating, the
     // room shows there.
     if (!m_floating) p.fillRect(rect(), Qt::black);
@@ -1686,28 +1576,11 @@ void ViewerWidget::paintEvent(QPaintEvent *event) {
     for (const QPointF &corner : {card.topLeft(), card.topRight(), card.bottomLeft(), card.bottomRight()})
         nearCorner = nearCorner || dirty.intersects(QRectF(corner - QPointF(round, round), QSizeF(2 * round, 2 * round)).toAlignedRect());
     const auto keepInside = [&] {
-        if (nearCorner) p.setClipPath(viewport, within);
-        else p.setClipRect(card, within);
+        if (nearCorner) p.setClipPath(viewport);
+        else p.setClipRect(card);
     };
     p.fillPath(viewport, theme.viewerCanvas);
-    if (gpu) {
-        // The edges the GPU leaves, each from its own slice of the frame: the
-        // frame is never converted or scaled whole here.
-        p.save();
-        keepInside();
-        const QRegion edges = (event->region() & card.toAlignedRect()) - m_gpuRect;
-        const qreal across = m_frame.width() / picture.width();
-        const qreal down = m_frame.height() / picture.height();
-        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        for (const QRect &edge : edges) {
-            const QRectF from((edge.left() - picture.left()) * across, (edge.top() - picture.top()) * down, edge.width() * across,
-                              edge.height() * down);
-            const QRect slice = from.toAlignedRect().adjusted(-1, -1, 1, 1).intersected(m_frame.rect());
-            if (slice.isEmpty()) continue;
-            p.drawImage(QRectF(edge), m_frame.copy(slice).convertToFormat(QImage::Format_RGB32), from.translated(-slice.topLeft()));
-        }
-        p.restore();
-    } else if (!m_frame.isNull()) {
+    if (!m_frame.isNull()) {
         p.save();
         keepInside();
         const qreal dpr = m_liveScrub ? 1.0 : std::max(1.0, devicePixelRatioF());
@@ -1823,26 +1696,10 @@ void ViewerWidget::paintEvent(QPaintEvent *event) {
         tag(QStringLiteral("After"), false, tokens::color(tokens::accent));
         p.restore();
     }
-    if (!gpu) {
-        p.setClipping(false);
-        paintOver(p, dirty);
-    }
-}
-
-void ViewerWidget::paintOver(QPainter &p, const QRect &dirty) {
-    const QRectF card = videoRect();
-    const QRectF picture = pictureRect();
-    QPainterPath viewport;
-    viewport.addRoundedRect(card, tokens::layout::pictureRadius, tokens::layout::pictureRadius);
-    const qreal round = tokens::layout::pictureRadius + 1;
-    bool nearCorner = false;
-    for (const QPointF &corner : {card.topLeft(), card.topRight(), card.bottomLeft(), card.bottomRight()})
-        nearCorner = nearCorner || dirty.intersects(QRectF(corner - QPointF(round, round), QSizeF(2 * round, 2 * round)).toAlignedRect());
     // Over the picture, inside its rect: the caption, the QC overlap box,
     // safe zones and the comments' drawings; the masks' outlines on top.
     p.save();
-    if (nearCorner) p.setClipPath(viewport);
-    else p.setClipRect(card);
+    keepInside();
     paintCaption(p, m_overlapShown || m_overlapLevel > 0.0);
     paintOverlap(p);
     if (m_safeZones) paintSafeZones(p, picture);

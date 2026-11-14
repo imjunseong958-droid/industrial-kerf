@@ -135,18 +135,6 @@ foreach(side 16 24 32 48 64 128 256)
 endforeach()
 qt_add_resources(kerf-qt-shared icon PREFIX /icon BASE resources/icon FILES ${KERF_QT_ICON_PNGS})
 
-# The viewer can draw its picture on the GPU (ui/gpu_picture.cpp), with
-# QRhiWidget from Qt 6.7 and QRhi from Qt's private GUI headers. Its shaders
-# are compiled once, with Qt's qsb, into the .qsb files beside their sources,
-# which are in the repository so that a build needs no Qt Shader Tools:
-#   qsb --glsl "100 es,120,150" --hlsl 50 --msl 12 -o picture.vert.qsb picture.vert
-if(Qt6Widgets_VERSION VERSION_GREATER_EQUAL 6.7)
-    find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
-    target_link_libraries(kerf-qt-shared PUBLIC Qt6::GuiPrivate)
-    qt_add_resources(kerf-qt-shared shaders PREFIX /shaders BASE resources/shaders
-        FILES resources/shaders/picture.vert.qsb resources/shaders/picture.frag.qsb)
-endif()
-
 add_executable(kerf-qt main.cpp ${KERF_QT_VARIANT_SOURCES})
 if(APPLE)
     target_sources(kerf-qt PRIVATE ${KERF_QT_FONT_LICENSES})

@@ -12,7 +12,6 @@
 #include "ui/components.h"
 #include "ui/stage_motion.h"
 #include "ui/stage_shell.h"
-#include "gpu_picture.h"
 #include "viewer_widget.h"
 
 #include <QElapsedTimer>
@@ -141,92 +140,6 @@ private slots:
         // What is on the screen, read back from it, against the window drawn whole
         // afresh: the second is the same only at one pixel a point.
         if (window.devicePixelRatio() != 1.0) QSKIP("The offscreen screen is read back at one pixel a point");
-        QCOMPARE(window.screen()->grabWindow(window.winId()).toImage().convertToFormat(QImage::Format_RGB32),
-                 window.grab().toImage().convertToFormat(QImage::Format_RGB32));
-    }
-
-    // The GPU draws the picture only where nothing else does: a frame at Fit,
-    // between its rounded top and bottom, with nothing compared or wiped. The
-    // rest goes back to the CPU as it changes.
-    void theGpuDrawsOnlyAFrameAtFitBetweenItsRoundedEdges() {
-#ifdef KERF_GPU_PICTURE
-        // Never shown, so never drawn: whether this machine has a GPU is not asked.
-        GpuPicture::s_availableForTests = 1;
-        const auto restore = qScopeGuard([] { GpuPicture::s_availableForTests = -1; });
-        ViewerWidget viewer;
-        viewer.resize(960, 540);
-        viewer.setGpuPicture(true);
-        QVERIFY(viewer.gpuPicture());
-        QVERIFY(viewer.gpuRect().isEmpty());
-        const QImage frame = footageFrame(QSize(1920, 1080), 2);
-        viewer.setFrame(frame, 0.0);
-        const QRect area = viewer.gpuRect();
-        const QRectF card = viewer.videoRect();
-        const int round = tokens::layout::pictureRadius;
-        QVERIFY(!area.isEmpty());
-        QVERIFY(card.contains(QRectF(area)));
-        QVERIFY(area.top() >= card.top() + round && area.bottom() < card.bottom() - round);
-        QVERIFY(area.width() >= card.width() - 2);
-        // It shows the part of the frame it covers.
-        auto *gpu = static_cast<GpuPicture *>(viewer.m_gpu);
-        QCOMPARE(gpu->geometry(), area);
-        QVERIFY(qAbs(gpu->source().top() - (area.top() - card.top()) / card.height()) < 1e-9);
-        QVERIFY(qAbs(gpu->source().height() - area.height() / card.height()) < 1e-9);
-        viewer.setCompareFrame(frame);
-        QVERIFY(viewer.gpuRect().isEmpty());
-        QVERIFY(gpu->isHidden());
-        viewer.setCompareFrame(QImage());
-        QCOMPARE(viewer.gpuRect(), area);
-        viewer.setZoom(1.0);
-        QVERIFY(viewer.gpuRect().isEmpty());
-        viewer.setZoom(0.0);
-        QCOMPARE(viewer.gpuRect(), area);
-        // Hidden, it has its new size only when shown, and is told of it then.
-        viewer.resize(800, 600);
-        QResizeEvent resized(viewer.size(), QSize(960, 540));
-        QCoreApplication::sendEvent(&viewer, &resized);
-        QVERIFY(viewer.gpuRect() != area && !viewer.gpuRect().isEmpty());
-        viewer.clearFrame();
-        QVERIFY(viewer.gpuRect().isEmpty());
-        viewer.setFrame(frame, 0.0);
-        viewer.setGpuPicture(false);
-        QVERIFY(!viewer.gpuPicture());
-        QVERIFY(viewer.gpuRect().isEmpty());
-#else
-        QSKIP("The GPU picture needs Qt 6.7");
-#endif
-    }
-
-    // Where no GPU starts, as on the offscreen platform, none is asked to draw:
-    // the window stays as it was, and the viewer draws all of the picture.
-    void aPictureNoGpuCanDrawIsDrawnHere() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
-        window.m_viewer->setGpuPicture(true);
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        stage::Panes open = window.m_shell->panes();
-        open.picture = true;
-        open.timeline = true;
-        window.m_shell->setPanes(open);
-        for (int i = 1; i <= 3; ++i) {
-            window.m_viewer->setFrame(footageFrame(QSize(1920, 1080), i), i / 24.0);
-            QCoreApplication::processEvents();
-        }
-#ifdef KERF_GPU_PICTURE
-        // Where one does start, it draws.
-        if (GpuPicture::available()) {
-            QVERIFY(window.m_viewer->gpuPicture());
-            QTRY_VERIFY_WITH_TIMEOUT(static_cast<GpuPicture *>(window.m_viewer->m_gpu)->uploads() > 0, 3000);
-            return;
-        }
-#endif
-        QVERIFY(!window.m_viewer->gpuPicture());
-        QVERIFY(window.m_viewer->gpuRect().isEmpty());
-        QTest::qWait(50);
-        if (window.devicePixelRatio() != 1.0) return;
         QCOMPARE(window.screen()->grabWindow(window.winId()).toImage().convertToFormat(QImage::Format_RGB32),
                  window.grab().toImage().convertToFormat(QImage::Format_RGB32));
     }

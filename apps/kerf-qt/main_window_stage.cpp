@@ -212,9 +212,6 @@ void MainWindow::buildStage() {
     connect(m_viewer, &ViewerWidget::playRequested, this, [this] { triggerCommand(QStringLiteral("playback.toggle")); });
     m_stageWiring->build();
     m_viewer->setSafeZones(QSettings().value(QStringLiteral("viewer/safeZones"), false).toBool());
-    // Experimental, and off unless asked for: the picture drawn on the GPU.
-    m_viewer->setGpuPicture(QSettings().value(QStringLiteral("viewer/gpuPicture"), false).toBool() ||
-                            qEnvironmentVariableIntValue("KERF_GPU_PICTURE") == 1);
 }
 
 // The picture's commands: the mask tools' keys (⇧R ⇧E ⇧P, wherever the window
