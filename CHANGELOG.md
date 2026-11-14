@@ -88,8 +88,8 @@ on `main`; its section here becomes the release's notes on GitHub
   where that clip shows and black elsewhere, with what stands before it cut
   out, which is the mask a model is handed to make a thing in one place.
 - Optics Compensation is drawn on the GPU, but where it grows the picture,
-  the Advanced Spill Suppressor with its Ultra method, and the Simple Choker
-  where it draws a matte in.
+  the Advanced Spill Suppressor with its Ultra method, the Simple Choker
+  where it draws a matte in, and the Key Cleaner.
 - VR Rotate Sphere, VR Projection and VR Plane to Sphere are drawn on the
   GPU, so a 360° frame turned or re-projected no longer sends each frame to
   the CPU.

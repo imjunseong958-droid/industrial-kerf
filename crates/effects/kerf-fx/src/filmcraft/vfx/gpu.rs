@@ -93,6 +93,14 @@ pub enum Kernel {
         way: u32,
         told: kerf_kernel::Cineon<f32>,
     },
+    /// The Key Cleaner, kept from EffectCraft: a key's soft edge given the colors around it, and
+    /// its matte more contrast.
+    KeyCleaner {
+        /// The box passes that find the colors around a pixel, each way, where it looks for any.
+        around: Option<Vec<u32>>,
+        strength: f32,
+        contrast: f32,
+    },
     /// The Simple Choker, kept from EffectCraft, drawing its matte in.
     Choke {
         /// The whole pixels its matte comes in by, and how far toward one more.
@@ -1420,6 +1428,52 @@ impl Kernel {
                 frame.release(picture);
                 out
             }
+            Kernel::KeyCleaner {
+                around,
+                strength,
+                contrast,
+            } => {
+                let encoded = stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                let around = match around {
+                    Some(radii) => {
+                        let again =
+                            stage.pass(frame, &stage.encode_kept, &picture, None, &U::default());
+                        if radii.iter().all(|radius| *radius == 0) {
+                            Some(again)
+                        } else {
+                            Some(run_ops(
+                                frame,
+                                again,
+                                &[FxOp::Gaussian {
+                                    rx: radii.clone(),
+                                    ry: radii.clone(),
+                                    repeat: true,
+                                }],
+                            )?)
+                        }
+                    }
+                    None => None,
+                };
+                frame.release(picture);
+                let cleaned = stage.pass(
+                    frame,
+                    &stage.key_clean,
+                    &encoded,
+                    around.as_ref(),
+                    &U {
+                        a: [u32::from(around.is_some()), 0, 0, 0],
+                        p0: [*strength, *contrast, 0.0, 0.0],
+                        ..U::default()
+                    },
+                );
+                if let Some(around) = around {
+                    frame.release(around);
+                }
+                frame.release(encoded);
+                let out = stage.pass(frame, &stage.decode_kept, &cleaned, None, &U::default());
+                frame.release(cleaned);
+                out
+            }
             Kernel::Choke {
                 radius,
                 between,
@@ -1793,6 +1847,7 @@ struct Stage {
     lens: wgpu::ComputePipeline,
     sphere: wgpu::ComputePipeline,
     optics: wgpu::ComputePipeline,
+    key_clean: wgpu::ComputePipeline,
     choke_rows: wgpu::ComputePipeline,
     choke_columns: wgpu::ComputePipeline,
     choke_put: wgpu::ComputePipeline,
@@ -1866,6 +1921,7 @@ impl Stage {
                 lens: kernel("lens"),
                 sphere: kernel("sphere"),
                 optics: kernel("optics"),
+                key_clean: kernel("key_clean"),
                 choke_rows: kernel("choke_rows"),
                 choke_columns: kernel("choke_columns"),
                 choke_put: kernel("choke_put"),

@@ -175,6 +175,7 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("lens pinched, off its center", clip("      set scale=0.9\n      fx distort.lens curvature=-50 h_decentering=20 v_decentering=-30\n")),
         ("magnify", clip("      fx distort.magnify center_x=0.35 center_y=0.4 size=60 magnification=250\n")),
         ("magnify square, feathered and screened", clip("      fx distort.magnify shape=square center_x=0.7 center_y=0.6 size=50 feather=20 opacity=80 mode=screen\n")),
+        ("a key's edge cleaned", clip("      mask k1 ellipse=0.5,0.5,0.35,0.35 feather=20\n      fx key.keycleaner additionalEdgeRadius=6 alphaContrast=150\n")),
         ("a matte drawn in", clip("      mask k1 ellipse=0.5,0.5,0.35,0.35 feather=12\n      fx matte.simplechoker chokeMatte=3.5\n")),
         ("spill taken out, told its key", clip("      fx key.advancedspill method=ultra suppression=80\n")),
         ("a lens's curve put in", clip("      fx distort.opticscompensation fieldOfView=80\n")),

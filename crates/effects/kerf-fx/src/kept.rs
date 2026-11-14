@@ -206,6 +206,50 @@ pub fn choker_kernel(
     })
 }
 
+/// The Key Cleaner as a kernel, with its parameters read as [`apply`] reads them, or `None` for
+/// what stays on the CPU: Reduce Chatter, which blurs the matte by passes of another kind.
+pub fn key_cleaner_kernel(
+    effect: &Effect,
+    at: Time,
+    size: (usize, usize),
+    per_source: f64,
+) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
+    use crate::filmcraft::vfx::gpu::Kernel;
+    let spec = spec("key.keycleaner")?;
+    let per_source = per_source.max(1e-6);
+    let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
+    let mut values = Params::default();
+    for param in &spec.params {
+        values.values.insert(
+            param.id.to_owned(),
+            value_at(param, &effect.params, at, layer_size),
+        );
+    }
+    if values.b("reduceChatter") {
+        return None;
+    }
+    let radius = (values.f("additionalEdgeRadius") * per_source).max(0.0);
+    let strength = values.f("strength") as f32 / 100.0;
+    let sigma = radius * 0.5;
+    // As `gaussian_blur` takes them: under a twentieth of a pixel the colors around a pixel are
+    // its own.
+    let around = (radius > 0.0 && strength > 0.0).then(|| {
+        if sigma > 0.05 {
+            kerf_raster_fx::box_radii(sigma, 3)
+                .into_iter()
+                .map(|r| r as u32)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    });
+    Some(Kernel::KeyCleaner {
+        around,
+        strength,
+        contrast: values.f("alphaContrast") as f32 / 100.0,
+    })
+}
+
 /// Add Grain as a kernel, with its parameters read as [`apply`] reads them, or `None` for what stays
 /// on the CPU: a Softness, whose blur of each plane costs what it costs there, and a view of its
 /// matte or a preview of its region.
@@ -750,6 +794,88 @@ mod tests {
         ));
         assert!(choker_kernel(&choker(vec![("chokeMatte", number(-2.0))]), Time::ZERO, (w, h), 1.0)
             .is_none());
+    }
+
+    #[test]
+    fn the_key_cleaner_kernel_matches_the_effect() {
+        let Some(gpu) = kerf_gpu::shared() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        // A keyed picture: a soft round matte, its edge tinted as a screen leaves it.
+        let (w, h) = (96usize, 54usize);
+        let mut px = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 48.0, y as f32 - 27.0);
+                let a = ((22.0 - (dx * dx + dy * dy).sqrt()) / 8.0).clamp(0.0, 1.0);
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let edge = 1.0 - a;
+                px.extend_from_slice(&[u * a, (v * (1.0 - edge) + 0.8 * edge) * a, (1.0 - u) * a, a]);
+            }
+        }
+        let image = kerf_draw::Image { w, h, px };
+        let number = |value: f64| kerf_model::Param::Static(Value::Number(value));
+        let cleaner = |params: Vec<(&str, kerf_model::Param)>| {
+            let mut effect = Effect {
+                fx: kerf_model::Id::new("key.keycleaner").unwrap(),
+                version: 1,
+                enabled: true,
+                params: Default::default(),
+            };
+            for (name, value) in params {
+                effect.params.insert(name.into(), value);
+            }
+            effect
+        };
+        // As it comes, wider and half as strong, the matte's contrast alone, and too near to blur.
+        for (said, params) in [
+            ("as it comes", vec![]),
+            (
+                "wide",
+                vec![("additionalEdgeRadius", number(12.0)), ("strength", number(50.0))],
+            ),
+            (
+                "contrast",
+                vec![("alphaContrast", number(250.0)), ("strength", number(0.0))],
+            ),
+            ("near", vec![("additionalEdgeRadius", number(0.08))]),
+        ] {
+            let effect = cleaner(params);
+            let mut cpu = image.clone();
+            apply(
+                &mut cpu,
+                &effect,
+                &Run {
+                    at: Time::ZERO,
+                    sequence_time: 0.0,
+                    frame_rate: 24.0,
+                    index: 0,
+                    seed: 1,
+                    per_source: 1.0,
+                    masks: &[],
+                    sounds: &[],
+                    host: None,
+                },
+            );
+            let kernel = key_cleaner_kernel(&effect, Time::ZERO, (w, h), 1.0).expect("a kernel");
+            let mut frame = gpu.frame();
+            let picture = frame.image(&image);
+            let out = kernel.run(&mut frame, picture).expect("the stage builds");
+            let drawn = frame.read_floats(&out).expect("read back");
+            let worst = cpu
+                .px
+                .iter()
+                .zip(&drawn)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 2e-3, "{said}: differs by {worst:.2e}");
+        }
+        let chatter = cleaner(vec![(
+            "reduceChatter",
+            kerf_model::Param::Static(Value::Bool(true)),
+        )]);
+        assert!(key_cleaner_kernel(&chatter, Time::ZERO, (w, h), 1.0).is_none());
     }
 
     #[test]

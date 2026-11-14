@@ -933,6 +933,27 @@ fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
+// `keying::key_cleaner`, on what `encode_kept` makes. a.x: whether aux has the picture blurred, the
+// colors around each pixel; p0: how far a soft edge's color goes toward them, and the matte's
+// contrast.
+@compute @workgroup_size(16, 16)
+fn key_clean(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let px = textureLoad(src, p, 0);
+    var c = vec3(0.0);
+    if px.a > 1e-6 { c = px.rgb / px.a; }
+    if u.a.x != 0u && px.a > 1e-4 && px.a < 0.999 {
+        let e = textureLoad(aux, p, 0);
+        if e.a > 1e-4 {
+            c += (e.rgb / e.a - c) * (u.p0.x * (1.0 - px.a));
+        }
+    }
+    var a = clamp((px.a - 0.5) * u.p0.y + 0.5, 0.0, 1.0);
+    if px.a <= 1e-6 { a = 0.0; }
+    textureStore(dst, p, vec4(c * a, a));
+}
+
 // `matte::simple_choker` drawing a matte in: `util::morph_frac`'s two erosions at once, the least of
 // a picture's alpha along a row within a.x pixels in its red and within one more in its green, the
 // picture held at its edges.
