@@ -12,6 +12,7 @@ mod lex;
 pub mod preset;
 mod reference;
 mod script;
+mod sound;
 mod text;
 
 pub use captions::{
@@ -20,9 +21,10 @@ pub use captions::{
 };
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
-pub use facts::{Breaks, Facts, NoFacts, Snap, Speech};
+pub use facts::{Breaks, Facts, NoFacts, Place, Snap, Speech};
 pub use reference::{fx_reference, property_reference, reference};
 pub use script::{
     apply_script, apply_script_with, print_op, print_ops, sequence_position, Applied,
 };
+pub use sound::{EdgeSound, Heard, Sound};
 pub use text::Clock;

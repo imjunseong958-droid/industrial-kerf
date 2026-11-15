@@ -558,9 +558,14 @@ fn src_and_out_can_quote_what_was_said() {
 fn edges_snap_into_pauses_and_onto_cuts() {
     let project = base();
     // c1 plays m1 from 10s at the sequence's start. 1s 21f plays 11.875s,
-    // just before the pause that starts at 12s: the out point moves into it.
+    // just before the pause that starts at 12s: the out point moves into it,
+    // to the frame nearest 12.15s, which leaves the word before it its decay.
     let trimmed = known(&project, "trim c1 out to=01:00:01:21 snap=pause").unwrap();
-    assert_eq!(frames(trimmed.project.clip("c1").unwrap().duration), 49);
+    assert_eq!(frames(trimmed.project.clip("c1").unwrap().duration), 52);
+    // An in point from after the pause stops a tenth of a second short of
+    // the word that follows it at 12.6s.
+    let trimmed = known(&project, "trim c1 in to=01:00:02:20 snap=pause").unwrap();
+    assert_eq!(source(&trimmed, "c1").0, 300);
     // 1s 10f plays 11.42s; the picture cuts at 11.5s.
     let split = known(&project, "split c1 at=01:00:01:10 snap=cut as=c1b").unwrap();
     assert_eq!(frames(split.project.clip("c1b").unwrap().start), 36);
@@ -570,7 +575,7 @@ fn edges_snap_into_pauses_and_onto_cuts() {
         "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
     )
     .unwrap();
-    assert_eq!(source(&placed, "c3"), (289, 301));
+    assert_eq!(source(&placed, "c3"), (292, 300));
 
     let far = known(&project, "split c1 at=01:00:00:12 snap=cut within=2f").unwrap_err();
     assert!(far.message.contains("no cut of `m1` within"), "{far:?}");

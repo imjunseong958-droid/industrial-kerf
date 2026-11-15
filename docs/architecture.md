@@ -924,6 +924,50 @@ code nothing calls was cut once already and should not come back as such.
 Has: ripple, roll, slip, slide, transitions, nested sequences, captions from
 transcripts, snapping to pauses and cuts, roles, proxies, interchange, QC.
 
+A cut in speech is placed and judged by the sound, not by a transcript's times, which are a tenth
+of a second or two out and have no word for a breath or for what a transcriber missed. The index
+keeps the level of a media's sound for each hundredth of a second, read at 16 kHz so that an `s`
+is in it (`kerf_engine::cached_media_sound`), and `kerf_lang::Sound` reads it by the recording's
+own levels: its room tone is the level a tenth of what sounds stays under, its speech the level it
+is over for the loudest seventh, and quiet is within 8 dB of the first and at least 15 dB under the
+second. A fixed -35 dB, which the index went by before, calls a noisy room all sound and takes the
+last of a word for the pause after it: on 3.7 minutes of read speech (LJ Speech, public domain),
+at 21 of the 46 places `snap=pause` then put an edge after a word, the sound was still over that
+recording's quiet, -47 dB (worked out beside this work, by the same rule; no test holds it).
+`snap=pause`
+takes a quiet of 0.16 s or more, where it took 0.35 s, leaves 0.15 s after the sound before an
+edge and 0.1 s before the sound after it, and puts the edge on the nearest frame still inside the
+pause. A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
+with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
+transcript has a word there; a cut in a pause is not said to be in the word a transcript stretches
+over it; and the pauses of 0.75 s or more and the words said twice in a row that the cut still
+plays are said as information (`pause.kept`, `word.repeated`), since an edit reads the footage and
+not what it leaves. A sound that holds one level, a room's own tone or music mastered loud, has
+no pauses and judges no cut. `look` with `cuts` gives all of it as numbers.
+
+Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
+starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
+with the gap of a stopped consonant, in a room at -55 dBFS and again at -38 dBFS, a cut asked for
+in every gap of 0.1 s or more, as far out as a transcript is, on a 24 fps frame. Nobody listened
+to it, and it is not speech:
+
+| Room | Placing | Placed | Refused | In a word | Hard against one |
+|---|---|---|---|---|---|
+| -55 dBFS | as asked | 386 | 0 | 112 | 105 |
+| | `snap=pause` before | 106 | 280 | 8 | 9 |
+| | `snap=pause` now | 306 | 80 | 0 | 1 |
+| -38 dBFS | as asked | 418 | 0 | 51 | 99 |
+| | `snap=pause` before | 65 | 353 | 0 | 2 |
+| | `snap=pause` now | 408 | 10 | 0 | 8 |
+
+Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts. A cut is
+refused where no pause is within half a second of it. The 8 are a hiss barely over the room's
+tone, which reads as the room. A check called every cut
+through a voice sound (17 of 17 and 9 of 9), none sound that was in no word, and every cut clear
+of a word quiet. Not done: a cut in the dip between two words run together, which needs a
+transcript to tell it from a stopped consonant, and so a pause under 0.16 s; and a room whose
+level drifts over an hour, since one room tone is taken for a whole file.
+
 Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. Speed changes over a clip
 (`kerf_model::Speed`, `speed={0f:1 24f:1/4}`): the model knows one curve, source played by clip time,
 and everything from trims to handles reads it. FFmpeg's `atempo` cannot follow a ramp (timed tempo
@@ -1160,6 +1204,13 @@ most of the picture agrees on between small frames four times a second (`kerf_tr
 60 seconds of 1080p takes 7 s the first time, and it is kept with the media's other derivatives. It reads a push in as a zoom and a move sideways as a pan, and only `track` with `camera` tells those apart. It says in `notMeasured` what it
 leaves out, since silence would read as a finding: faces and the subject, which take a trained model, and on-screen text, which without one cannot be found reliably.
 
+`look` with `cuts` reads the cuts of a sequence's sound as an ear would, from numbers (Edit,
+above): how many are in a pause, through a faint sound, or through sound at the level of speech,
+how much quiet the tightest and the middle one leave beside what plays, each cut that is not
+clean with the level either side of it, and the pauses and repeated words the sequence still
+plays. It measures nothing new, so it costs a read of what each media's index kept, and indexes a
+media that has none.
+
 That loudness is the media's own. `look` with `loudness` gives the sequence's, as it plays: its whole mix through the meter a delivery is checked with (`kerf_engine::measure_program`), as integrated loudness beside the target, loudness range, true peak beside its limit, and the loudest three seconds and 400 ms with where each ends. It is measured once for a revision, of the project or of a pending proposal, so a gain or a mix can be read back before it is accepted.
 
 ## Before shipping
@@ -1213,6 +1264,16 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   a plain one, since a model covers it. Kerf takes the assets, as files a
   recipe makes, and builds none of the models (What directs a model, Next
   2).
+- **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9`) is an
+  editor for dialogue that agents cut: TypeScript over FFmpeg filter graphs, with nothing to take
+  for the picture. What it measures of a cut was worth doing our own way, and is (Edit): levels
+  kept fine enough to place an edge between syllables, an edge judged by the recording and not by
+  a transcript's times, more quiet left after a word than before one, the pauses and doubled
+  words an edit still plays, and a score of all of it against a recording whose words are known.
+  Left: its forced alignment of words (wav2vec2, a model of English letters), its filler and
+  transcription models (their own licenses, one not for commercial use), reading the text on a
+  screen, and telling speakers apart. Not yet looked at closely: encoded sections kept by what
+  they depend on and joined without encoding again, where Kerf encodes a whole program each time.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

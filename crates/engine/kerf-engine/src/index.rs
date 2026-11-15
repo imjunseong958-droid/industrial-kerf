@@ -3,15 +3,18 @@
 //! words), and its tempo when it has a steady one.
 //!
 //! One FFmpeg pass reads the file: scene detection on a small copy of the
-//! picture, and silence detection and a loudness envelope on a mono
-//! low-rate copy of the sound. The rest is computed from the envelope.
+//! picture, and a loudness envelope on a mono copy of the sound at the rate
+//! speech is read at. The rest is computed from the envelope, which is kept
+//! beside the index ([`cached_media_sound`]): a cut is placed and judged by
+//! it, a hundredth of a second at a time.
 //! Indexes are cached with the media's other derivatives.
 
 use crate::derivatives::DerivativeCache;
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::{resolve_ffmpeg_bin, video_decode_prefix};
-use crate::probe::{info, parse_scene_times, parse_silencedetect};
+use crate::probe::{info, parse_scene_times};
 use crate::sidecar::{self, CancellationToken};
+use kerf_lang::Sound;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
@@ -19,11 +22,17 @@ use std::path::Path;
 
 const SCENES: &str = "scenes.txt";
 const ENVELOPE: &str = "envelope.txt";
+/// The envelope as it is kept: a byte for each hop, the level in half
+/// decibels under full scale.
+const LEVELS: &str = "levels.u8";
 const SCENE_THRESHOLD: f64 = 0.35;
 const SCENE_WIDTH: u32 = 160;
-const PAUSE_NOISE_DB: f64 = -35.0;
+/// A pause is this long or longer and quiet throughout, by the recording's
+/// own room tone and speech level (`kerf_lang::Sound`).
 const PAUSE_SECONDS: f64 = 0.35;
-const SAMPLE_RATE: u32 = 8_000;
+/// What a transcriber reads at, so that an `s` or a breath, which sound
+/// above 4 kHz, is in the levels.
+const SAMPLE_RATE: u32 = 16_000;
 /// The loudness envelope has one value per hop.
 const HOP_SECONDS: f64 = 0.01;
 /// Quieter than this counts as silence.
@@ -77,10 +86,9 @@ fn index_entry(src: &Path, cache: &DerivativeCache) -> Result<crate::derivatives
         src,
         "media-index",
         &json!({
-            "version": 2,
+            "version": 3,
             "sceneThreshold": SCENE_THRESHOLD,
             "sceneWidth": SCENE_WIDTH,
-            "pauseNoiseDb": PAUSE_NOISE_DB,
             "pauseSeconds": PAUSE_SECONDS,
             "sampleRate": SAMPLE_RATE,
             "hopSeconds": HOP_SECONDS,
@@ -96,6 +104,33 @@ pub fn cached_media_index(src: &Path, cache: &DerivativeCache) -> Option<MediaIn
     } else {
         None
     }
+}
+
+/// How loud the sound of `src` is, a hundredth of a second at a time, when
+/// the cache already has its index; nothing is made. A media with no sound
+/// has none.
+pub fn cached_media_sound(src: &Path, cache: &DerivativeCache) -> Option<Sound> {
+    let entry = index_entry(src, cache).ok()?;
+    if !entry.is_complete(&["index.json"]) {
+        return None;
+    }
+    let levels = fs::read(entry.path(LEVELS)).ok()?;
+    (!levels.is_empty()).then(|| sound(&levels))
+}
+
+/// A level as it is kept: half decibels under full scale.
+fn kept(level: f64) -> u8 {
+    (-level * 2.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn sound(levels: &[u8]) -> Sound {
+    Sound::new(
+        HOP_SECONDS,
+        levels
+            .iter()
+            .map(|level| -f32::from(*level) / 2.0)
+            .collect(),
+    )
 }
 
 /// The index of `src`, from the cache or made now.
@@ -128,7 +163,6 @@ pub fn media_index(
         let hop = (f64::from(SAMPLE_RATE) * HOP_SECONDS).round() as u32;
         graph.push(format!(
             "[0:a:0]aresample={SAMPLE_RATE},aformat=sample_fmts=flt:channel_layouts=mono,\
-             silencedetect=noise={PAUSE_NOISE_DB}dB:d={PAUSE_SECONDS},\
              asetnsamples=n={hop}:p=0,astats=metadata=1:reset=1,\
              ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file={ENVELOPE}[a]"
         ));
@@ -146,13 +180,7 @@ pub fn media_index(
             .arg(src.canonicalize()?)
             .args(["-filter_complex", &graph.join(";")])
             .args(outputs);
-        let mut stderr = String::new();
-        let finished = sidecar::run(command, cancellation, |line| {
-            if line.contains("silence_") {
-                stderr.push_str(line);
-                stderr.push('\n');
-            }
-        })?;
+        let finished = sidecar::run(command, cancellation, |_| {})?;
         if !finished.status.success() {
             return Err(EngineError::msg(format!(
                 "media analysis failed: {}",
@@ -167,12 +195,12 @@ pub fn media_index(
                 .collect();
         }
         if has_audio {
-            let end = probe.duration.unwrap_or(0.0);
-            index.pauses = parse_silencedetect(&stderr)
-                .into_iter()
-                .map(|pause| (pause.start, pause.end.unwrap_or(end)))
-                .collect();
             let levels = parse_envelope(&fs::read_to_string(&envelope)?);
+            // Pauses are read from the levels as they are kept, so that
+            // whoever reads them later finds the same ones.
+            let stored: Vec<u8> = levels.iter().copied().map(kept).collect();
+            index.pauses = sound(&stored).quiet(PAUSE_SECONDS);
+            fs::write(entry.path(LEVELS), &stored)?;
             index.peaks = peaks(&levels);
             index.onsets = onsets(&levels);
             index.tempo = tempo(&levels, index.onsets.len());

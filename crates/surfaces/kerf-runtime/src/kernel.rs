@@ -8,7 +8,7 @@ use crate::RuntimeError;
 use kerf_engine::ProbeInfo;
 use kerf_lang::{
     apply_script_with, parse_document, print_document, print_ops, Breaks, Facts, PrintOptions,
-    Speech,
+    Sound, Speech,
 };
 use kerf_model::{
     apply, track_role, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Domain, Edge, Effect,
@@ -148,16 +148,25 @@ impl Facts for CachedFacts {
             .collect()
     }
 
-    /// Where the media index made on import found pauses and cuts. Nothing
-    /// is indexed here.
+    /// Where the media index made on import found cuts, and the pauses its
+    /// sound has between words and longer. Nothing is indexed here.
     fn breaks(&self, media: &Media) -> Option<Breaks> {
         let path = self.directory.join(&media.path);
         let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
         let index = kerf_engine::cached_media_index(&path, &cache)?;
         Some(Breaks {
-            pauses: index.pauses,
+            pauses: kerf_engine::cached_media_sound(&path, &cache)
+                .map(|sound| sound.pauses())
+                .unwrap_or_default(),
             cuts: index.cuts,
         })
+    }
+
+    /// How loud the media's sound is, as its index measured it.
+    fn sound(&self, media: &Media) -> Option<Sound> {
+        let path = self.directory.join(&media.path);
+        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        kerf_engine::cached_media_sound(&path, &cache)
     }
 }
 

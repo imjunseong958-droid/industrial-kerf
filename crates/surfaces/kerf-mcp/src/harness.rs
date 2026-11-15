@@ -69,6 +69,7 @@ cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound, and the pauses and repeated words the sequence still plays; look after cutting speech, and trim with `snap=pause` what it finds. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
 With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say; with `held`, both at once and one number for the take. \
@@ -268,7 +269,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              is said (`words` times each word), and with `facts` what the camera does in \
              each shot and how loud it is. `contrast`: titles and captions too faint to read. \
              `sheet`: a contact sheet of a range. `loudness`: how loud the sequence \
-             plays, by R128. \
+             plays, by R128. `cuts`: whether each cut of its sound is in a pause or \
+             goes through a word or a sound, and the pauses and repeated words it \
+             still plays. \
              `at`: frames, as source frames of `media` or program frames of the \
              sequence. `transcript` without `media`: what the sequence says. \
              `track`: where a point, a surface, an object, or the camera goes, as keyframes. \
@@ -290,6 +293,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
+                    "cuts": {"type": "boolean", "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, not judged), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. With a transcript of what plays, `pauses` are the waits of 0.75 s or more still played between words, longest first, and `repeats` the words and phrases said twice in a row, with `cutTo` where a cut sits in one. A trim or split with `snap=pause` moves a cut into the nearest pause. Use with `sequence` or `proposal` only."},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row, each with its time in its corner (`frames` lists them in order): of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
@@ -434,6 +438,8 @@ struct LookInput {
     contrast: bool,
     #[serde(default)]
     loudness: bool,
+    #[serde(default)]
+    cuts: bool,
     track: Option<TrackInput>,
     #[serde(default)]
     sync: Vec<String>,
@@ -2361,6 +2367,7 @@ impl KerfMcpRouter {
             && !input.transcript
             && !input.contrast
             && !input.loudness
+            && !input.cuts
             && input.track.is_none()
             && input.sheet.is_none()
             && input.sequence.is_none()
@@ -2408,6 +2415,9 @@ impl KerfMcpRouter {
         if input.loudness {
             // Of the sequence only, which it says of a look that asks more.
             return self.program_loudness(&project, revision, &input);
+        }
+        if input.cuts {
+            return self.program_cuts(&project, revision, &input);
         }
         let mut result = match input.media.as_deref() {
             None if input.contrast => self.program_contrast(&project, revision, &input)?,
@@ -3403,6 +3413,49 @@ impl KerfMcpRouter {
 
     /// How loud the sequence is as it plays, by R128: its whole mix through
     /// the meter a delivery is checked with, kept for the revision.
+    /// How the cuts of a sequence's sound sit in the sound (`cuts::report`). A media the
+    /// sequence's sound plays that has no index yet is indexed first, as `look` with `media`
+    /// would, since a cut is measured by the levels an index keeps.
+    fn program_cuts(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+    ) -> Result<Value, McpError> {
+        if input.media.is_some()
+            || !input.at.is_empty()
+            || input.from.is_some()
+            || input.to.is_some()
+            || input.transcript
+            || input.loudness
+            || input.sheet.is_some()
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`cuts` is of a whole sequence's sound: use it with `sequence` or `proposal` only",
+            ));
+        }
+        let sequence = program(project, input.sequence.as_deref())?;
+        let cache = DerivativeCache::new(&self.dir);
+        let mut indexed = Vec::new();
+        for cut in crate::cuts::sound_cuts(project, sequence) {
+            if indexed.contains(&&cut.media.id) {
+                continue;
+            }
+            indexed.push(&cut.media.id);
+            let path = resolve_project_source_path(&self.dir, &cut.media.path);
+            if kerf_engine::cached_media_index(&path, &cache).is_none() {
+                // One that cannot be read is said by the report, as not measured.
+                let _ =
+                    kerf_engine::media_index(&path, &cache, &kerf_engine::CancellationToken::new());
+            }
+        }
+        let mut report = crate::cuts::report(project, sequence, &CachedFacts::new(&self.dir));
+        report["sequence"] = json!(sequence.id.to_string());
+        report["revision"] = json!(revision);
+        Ok(report)
+    }
+
     fn program_loudness(
         &self,
         project: &Project,

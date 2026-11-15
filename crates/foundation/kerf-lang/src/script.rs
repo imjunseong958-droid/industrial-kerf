@@ -22,7 +22,7 @@ use crate::doc::{
     parse_sequence_color, parse_size, pinned, sequence_fields, sequence_line, take_mask_shape,
     take_role, take_sync, word_or_quote,
 };
-use crate::facts::{Facts, NoFacts, Snap};
+use crate::facts::{Facts, NoFacts, Place, Snap};
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::text::{
     parse_fx_ref, parse_param, parse_speed, print_fx_ref, print_speed, quote, Clock, Fields,
@@ -794,7 +794,7 @@ impl Script<'_> {
         ) = (media, snap, &mut content, wrote("src"))
         {
             *source_in = self
-                .snap_source(media, *source_in, to, speed.played(within), false)
+                .snap_source(media, *source_in, to, speed.played(within))
                 .map_err(|m| line.error(1, m))?;
         }
         let positions = Positions::of(&self.project, s);
@@ -815,7 +815,7 @@ impl Script<'_> {
                     (media, snap, &content)
                 {
                     out_time = self
-                        .snap_source(media, out_time, to, speed.played(within), true)
+                        .snap_source(media, out_time, to, speed.played(within))
                         .map_err(|m| fields.error(out, m))?;
                 }
                 let (Content::Media {
@@ -1115,8 +1115,9 @@ impl Script<'_> {
     }
 
     /// `edge`, a time on the sequence where `clip` plays, moved to the
-    /// nearest place `snap` allows in the clip's media that `keeps`, on the
-    /// nearest frame.
+    /// nearest place `snap` allows in the clip's media that `keeps`, on a
+    /// frame of the sequence: the frame nearest a cut, or the frame nearest
+    /// the place in a pause that the clip still plays inside that pause.
     fn snap_edge(
         &self,
         clip: &Clip,
@@ -1132,57 +1133,69 @@ impl Script<'_> {
         let speed = clip.speed();
         let offset = edge - clip.start;
         let reach = speed.played(offset + within) - speed.played(offset);
-        self.snaps(media, source, snap, reach, false)?
+        let played = |seconds: f64| {
+            clip.played_at(media_time(seconds))
+                .expect("a media clip plays a source")
+        };
+        self.snaps(media, source, snap, reach)?
             .into_iter()
-            .map(|at| rate.round(clip.played_at(at).expect("a media clip plays a source")))
+            .filter_map(|place| match snap {
+                // An index's times are rounded to microseconds.
+                Snap::Cut => Some(
+                    rate.round(
+                        clip.played_at(media.rate.round(media_time(place.at)))
+                            .expect("a media clip plays a source"),
+                    ),
+                ),
+                Snap::Pause => {
+                    // A clip in reverse plays the end of a pause first.
+                    let (from, to) = (played(place.room.0), played(place.room.1));
+                    frame_within(rate, played(place.at), (from.min(to), from.max(to)))
+                }
+            })
             .find(|at| keeps(*at))
             .ok_or_else(|| nothing_near(media, source, snap, reach))
     }
 
     /// `at`, a time on `media`, moved to the nearest place `snap` allows
-    /// within `reach`.
+    /// within `reach`, on a frame of the media: the frame a cut starts, or
+    /// the frame nearest the place in a pause that is still inside it.
     fn snap_source(
         &self,
         media: &Media,
         at: Time,
         snap: Snap,
         reach: Time,
-        out: bool,
     ) -> Result<Time, String> {
-        self.snaps(media, at, snap, reach, out)?
-            .first()
-            .copied()
+        self.snaps(media, at, snap, reach)?
+            .into_iter()
+            .find_map(|place| match snap {
+                Snap::Cut => Some(media.rate.round(media_time(place.at))),
+                Snap::Pause => frame_within(
+                    media.rate,
+                    media_time(place.at),
+                    (media_time(place.room.0), media_time(place.room.1)),
+                ),
+            })
             .ok_or_else(|| nothing_near(media, at, snap, reach))
     }
 
     /// The places `snap` allows within `reach` of `at` on `media`, nearest
-    /// first, on the media's frames: a cut on the frame it starts, a place in
-    /// a pause on the frame it falls in, or for an `out` point after it.
+    /// first, in seconds of the media.
     fn snaps(
         &self,
         media: &Media,
         at: Time,
         snap: Snap,
         reach: Time,
-        out: bool,
-    ) -> Result<Vec<Time>, String> {
+    ) -> Result<Vec<Place>, String> {
         let breaks = self.facts.breaks(media).ok_or_else(|| {
             format!(
                 "`{}` is not indexed yet; look at it with media first",
                 media.id
             )
         })?;
-        Ok(breaks
-            .snaps(snap, at.seconds(), reach.seconds())
-            .into_iter()
-            .map(|seconds| match snap {
-                // An index's times are rounded to microseconds.
-                Snap::Cut => media
-                    .rate
-                    .round(Time::from_seconds(seconds.max(0.0)).unwrap_or(Time::ZERO)),
-                Snap::Pause => source_time(seconds, media.rate, out),
-            })
-            .collect())
+        Ok(breaks.snaps(snap, at.seconds(), reach.seconds()))
     }
 
     /// Where on the sequence `clip` plays the source position `text`, on
@@ -1674,6 +1687,19 @@ fn source_time(seconds: f64, rate: Rate, out: bool) -> Time {
         frames
     };
     rate.time_of(frames)
+}
+
+/// `seconds` of a media as a time, none of it before its start.
+fn media_time(seconds: f64) -> Time {
+    Time::from_seconds(seconds.max(0.0)).unwrap_or(Time::ZERO)
+}
+
+/// The frame of `rate` nearest `at` that is no earlier than `from` and no
+/// later than `to`; `None` when no frame falls between them.
+fn frame_within(rate: Rate, at: Time, (from, to): (Time, Time)) -> Option<Time> {
+    let first = rate.frames_floor(from) + i64::from(!rate.is_aligned(from));
+    let last = rate.frames_floor(to);
+    (first <= last).then(|| rate.time_of(rate.frames_round(at).clamp(first, last)))
 }
 
 /// `snap=pause|cut` and `within=<amount>`, half a second unless given: what
