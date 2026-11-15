@@ -884,6 +884,44 @@ Three limits remain, in this order:
    (`KERF_FRAME_CACHE`, or `off`). A title's fonts are not in the key, as in memory.
    A 96-frame 720p render with Lumetri and a glow took 4.53 s, 0.63 s the second time, and 1.70 s
    after an edit to half of it.
+
+   Kept frames spare the drawing and not the encoding, and they are large: 1080p takes about
+   4 MB a frame, so 10 GB holds some 2,500 frames, 100 seconds at 24 fps. A render longer than
+   that reads none back the second time, since the frames it needs first are the ones it put out
+   last. So a render also keeps its picture encoded (`kerf-engine/src/sections.rs`): it encodes a
+   stretch of about four seconds at a time, each an FFmpeg and a file of its own, named by what
+   its frames depend on (`Compositor::frame_key`) and how it is encoded, and joins the files with
+   the sound without encoding the picture again. Where a stretch ends is decided by its frames'
+   numbers and not by where they fall, between two and ten seconds on, so a cut near the start of
+   a program moves the stretches after it and leaves them the same stretches. Rendering again
+   draws and encodes the stretches an edit touched and joins the rest; five minutes of H.264 is
+   100 MB, so a whole program stays. A join that fails, or whose frames do not count up to the
+   render's, is encoded whole as before, as are a render under two seconds, one most of whose
+   frames have no number, and HDR10, each stretch of which says how bright the whole picture is.
+   Up to 10 GB (`KERF_SECTION_CACHE_GB`) beside the frames (`KERF_SECTION_CACHE`, or `off`), the
+   least recently joined going first.
+
+   With `examples/export_bench.rs` in `kerf-engine`, on four cores of a Linux virtual machine
+   with no GPU, libx264, and 1080p footage at 24 fps (*Tears of Steel*), in seconds; a program is
+   clips of five seconds cut one after another, and no frames are kept for the last two rows:
+
+   | Program | Whole | Again, unchanged | After one clip's opacity changes |
+   |---|---|---|---|
+   | 90 s, kept frames alone | 37 | 42 | 39 |
+   | 90 s with a Lumetri on every clip, kept frames alone | 201 | 39 | 49 |
+   | 5 min, kept frames alone | 150 | 181 | 187 |
+   | 5 min, whole, nothing kept | 135 | | |
+   | 5 min, in stretches | 144 | 12 | 18 |
+
+   Drawing the 90 seconds takes 11 s of the 37 and reading them back 8, so encoding is most of a
+   render of plain footage, and kept frames gain it nothing; with a grade on every clip they
+   gain five times. In stretches the five minutes render again in 12 s, and in 15 s after two
+   seconds are cut out near the start: 2 of 78 stretches encoded. The first render is 7% slower
+   for starting 78 encoders and the file 3% larger for starting 78 times on a whole picture.
+   Nearly all of the 12 s is mixing the sound, which each clip is padded to the program's length
+   for and mixed with every other: joining the picture alone takes 1.4 s. That is the next thing
+   in the way, and it grows with a program's clips times its length. Nothing here was run with a
+   hardware encoder, whose stretches take the same path.
 3. **Depth and color.** Footage decodes at its depth, with its transfer and gamut, into the float
    working picture (`bits=` and `color=` on a media line, found on import): `InputTransform`
    on the CPU, `input.wgsl` on the GPU. A ProRes master takes 16-bit frames, so it keeps that
