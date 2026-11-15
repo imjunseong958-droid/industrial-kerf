@@ -344,7 +344,7 @@ pub(crate) const FLASH_FRAMES: RowDef = RowDef {
 pub(crate) const CUTS_IN_WORDS: RowDef = RowDef {
     code: "cut.in_word",
     name: "Cuts in words",
-    codes: &["cut.in_word"],
+    codes: &["cut.in_word", crate::lint::CUT_IN_SOUND],
     noun: "in words",
     limit: None,
 };

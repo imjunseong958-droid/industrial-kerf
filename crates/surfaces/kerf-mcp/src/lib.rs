@@ -7,6 +7,7 @@
 //! carry the client's name, as `initialize` gave it, as their author.
 
 mod camera_file;
+mod cuts;
 pub mod docs;
 pub mod harness;
 pub mod inbound;

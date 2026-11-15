@@ -920,14 +920,15 @@ fn edits_snap_to_what_the_index_found() {
         "edit",
         json!({"script": "trim c1 out to=00:00:02:15 snap=pause within=1s"}),
     );
-    // Asked for 2s 15f, the out point lands just inside the pause after 3s.
+    // Asked for 2s 15f, the out point lands in the pause after 3s, far enough
+    // into it to leave the tone its decay.
     let script = trimmed["script"].as_str().unwrap();
     let shortened: i64 = script
         .split_once("trim c1 out -")
         .and_then(|(_, rest)| rest.split_once('f'))
         .and_then(|(frames, _)| frames.parse().ok())
         .unwrap_or_else(|| panic!("{script}"));
-    assert!((26..=30).contains(&shortened), "{script}");
+    assert!((24..=26).contains(&shortened), "{script}");
     router
         .runtime()
         .reject_proposal(trimmed["proposal"].as_str().unwrap())
@@ -1075,6 +1076,40 @@ fn a_transcript_nothing_here_can_make_is_refused_before_any_work() {
         .filter(|name| name.starts_with("program-sound"))
         .collect();
     assert!(rendered.is_empty(), "{rendered:?}");
+}
+
+#[test]
+fn look_counts_the_cuts_of_a_sequences_sound() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // a1 plays the whole of its media: nothing is cut into, and with no transcript nothing is
+    // said of pauses. Asking indexes the media, whose tone holds one level.
+    let whole = ok(&router, "look", json!({"cuts": true}));
+    assert_eq!(whole["sequence"], "s1");
+    assert_eq!(whole["summary"]["cuts"], 0, "{whole}");
+    assert_eq!(whole["media"][0]["media"], "m1", "{whole}");
+    assert_eq!(whole["media"][0]["judged"], false, "{whole}");
+    assert!(
+        whole["words"].as_str().unwrap().contains("no transcript"),
+        "{whole}"
+    );
+    // As a proposal would make it: one cut, into a tone that tells no word from a pause.
+    let proposal = ok(
+        &router,
+        "edit",
+        json!({"script": "trim a1 out to=00:00:02:00"}),
+    );
+    let cut = ok(
+        &router,
+        "look",
+        json!({"cuts": true, "proposal": proposal["proposal"]}),
+    );
+    assert_eq!(cut["summary"]["cuts"], 1, "{cut}");
+    assert_eq!(cut["summary"]["notMeasured"], 1, "{cut}");
+    // It is of a sequence's sound and nothing else.
+    let refused = error(&router, "look", json!({"cuts": true, "media": "m1"}));
+    assert_eq!(refused["code"], "INVALID_ARGUMENTS");
 }
 
 #[test]

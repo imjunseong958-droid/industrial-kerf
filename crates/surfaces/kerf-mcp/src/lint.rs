@@ -1,19 +1,18 @@
 //! What an editor would catch in a cut that validation does not: black
 //! frames, picture that leaves the frame's edges uncovered, flash frames
 //! (including a sliver of another shot at a clip's edge), sound cut
-//! inside a word, and text and captions a viewer cannot read (see
-//! `text_lint`).
+//! inside a word or through a sound, pauses and repeated words the cut
+//! still plays (see `cuts`), and text and captions a viewer cannot read
+//! (see `text_lint`).
 
+use crate::cuts::{self, Known};
 use crate::qc::{Finding, Severity};
 use crate::text_lint;
-use kerf_lang::{Breaks, Clock, Facts, Speech};
+use kerf_lang::{Breaks, Clock, Facts};
 use kerf_model::{Clip, Content, Id, Param, Project, Sequence, Time, TrackKind, Value};
 
 /// A picture or sound clip shorter than this many frames is a flash frame.
 const FLASH_FRAMES: i64 = 3;
-/// How far inside a word a cut must land to count as cutting through it,
-/// in seconds. Word times from a transcript are approximate.
-const WORD_MARGIN: f64 = 0.06;
 /// Pixels of frame edge a picture may leave uncovered without a finding.
 const EDGE_TOLERANCE: f64 = 0.5;
 
@@ -26,7 +25,9 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         picture(project, sequence, &mut findings);
         flash_frames(sequence, &mut findings);
         slivers(project, sequence, facts, &mut findings);
-        cuts_in_words(project, sequence, facts, &mut findings);
+        let mut known = Known::new(facts);
+        cuts_in_sound(project, sequence, &mut known, &mut findings);
+        leftovers(project, sequence, &mut known, &mut findings);
         speech_unheard(project, sequence, facts, &mut findings);
         text_lint::text(sequence, &mut findings);
         text_lint::captions(sequence, &mut findings);
@@ -516,89 +517,90 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
 /// them, only that nobody looked.
 pub(crate) const CUT_UNHEARD: &str = "cut.unheard";
 
-/// Sound clips whose first or last frame falls inside a word; and, as information, the cuts that
-/// could not be checked because no transcript of their media covers them, once for each media.
-fn cuts_in_words(
+/// What a cut through a sound no transcript has a word for is called.
+pub(crate) const CUT_IN_SOUND: &str = "cut.in_sound";
+
+/// Sound clips whose first or last frame falls inside a word, by a transcript, or in the middle of
+/// a sound, by the levels their media's index kept; and, as information, the cuts that could not be
+/// checked because no transcript of their media covers them and its sound was not measured, once
+/// for each media.
+///
+/// Where the two disagree the levels are right: a cut in a pause is not said to be in the word a
+/// transcript stretches over it, and a cut through a breath or a word a transcriber missed is said
+/// though no word is there.
+fn cuts_in_sound(
     project: &Project,
     sequence: &Sequence,
-    facts: &dyn Facts,
+    known: &mut Known<'_>,
     findings: &mut Vec<Finding>,
 ) {
-    let mut known: std::collections::HashMap<_, Speech> = std::collections::HashMap::new();
     // For each media, the clips with a cut nothing heard, how many such cuts, and the first.
     let mut unheard: Vec<(&Id, Vec<&Id>, usize, Time)> = Vec::new();
-    for track in sequence
-        .tracks
-        .iter()
-        .filter(|track| track.kind == TrackKind::Audio && track.enabled && !track.muted)
-    {
-        for clip in track.clips.iter().filter(|clip| clip.enabled) {
-            let Content::Media { media, speed, .. } = &clip.content else {
-                continue;
-            };
-            let Some(media) = project.media(media.as_str()) else {
-                continue;
-            };
-            let Some((source_in, source_out)) = clip.source_range() else {
-                continue;
-            };
-            if speed.is_reverse() {
-                continue;
-            }
-            let spoken = known
-                .entry(media.id.clone())
-                .or_insert_with(|| facts.speech(media));
-            let clock = Clock::of_media(media);
-            let frame = sequence.rate.frame_duration();
-            for (end, at, cut) in [
-                ("starts", source_in, clip.start),
-                ("ends", source_out, clip.end() - frame),
-            ] {
-                // Nothing heard the media here: the cut is not checked, and that is said. A clip
-                // that starts where its media does, or ends where it ends, cuts into nothing there.
-                if !spoken.reaches(at.seconds()) {
-                    if at > Time::ZERO && at < media.duration {
-                        match unheard.iter_mut().find(|(id, ..)| *id == &media.id) {
-                            Some((_, clips, cuts, _)) => {
-                                if !clips.contains(&&clip.id) {
-                                    clips.push(&clip.id);
-                                }
-                                *cuts += 1;
-                            }
-                            None => unheard.push((&media.id, vec![&clip.id], 1, cut)),
-                        }
-                    }
-                    continue;
-                }
-                let at = at.seconds();
-                let Some((from, to, word)) = spoken
-                    .words
-                    .iter()
-                    .map(|word| (&word.start, &word.end, word.text.trim()))
-                    .find(|(from, to, _)| *from + WORD_MARGIN < at && at < *to - WORD_MARGIN)
-                else {
-                    continue;
-                };
-                let position = |seconds: f64| {
-                    let time = Time::from_seconds(seconds).unwrap_or(Time::ZERO);
-                    clock.print_position(clock.rate.round(time))
-                };
-                findings.push(finding(
+    let frame = sequence.rate.frame_duration();
+    for cut in cuts::sound_cuts(project, sequence) {
+        let (clip, media, end) = (cut.clip, cut.media, cut.end.verb());
+        let judged = cuts::judge(&cut, known);
+        let clock = Clock::of_media(media);
+        let position = |seconds: f64| {
+            let time = Time::from_seconds(seconds).unwrap_or(Time::ZERO);
+            clock.print_position(clock.rate.round(time))
+        };
+        if let Some(word) = &judged.word {
+            findings.push(
+                finding(
                     "cut.in_word",
                     clip.id.as_str(),
                     format!(
-                        "clip `{}` {end} inside the word \"{word}\" ({}–{} of `{}`, by its transcript)",
+                        "clip `{}` {end} inside the word \"{}\" ({}–{} of `{}`, by its transcript)",
                         clip.id,
-                        position(*from),
-                        position(*to),
+                        word.text.trim(),
+                        position(word.start),
+                        position(word.end),
                         media.id,
                     ),
                 )
-                .during(sequence, cut, cut + frame));
+                .during(sequence, cut.frame, cut.frame + frame),
+            );
+        } else if let (true, Some(edge), Some(sound)) =
+            (judged.in_sound(), judged.edge, known.sound(media))
+        {
+            let mut finding = finding(
+                CUT_IN_SOUND,
+                clip.id.as_str(),
+                format!(
+                    "clip `{}` {end} in the middle of a sound{}: {:.0} dB at {} of `{}`, which speaks at \
+                     {:.0} dB and pauses under {:.0} dB; trim it with snap=pause to move the cut into \
+                     the nearest pause",
+                    clip.id,
+                    if judged.transcribed {
+                        " its transcript has no word for"
+                    } else {
+                        ""
+                    },
+                    edge.through(),
+                    position(cut.source.seconds()),
+                    media.id,
+                    sound.speech(),
+                    sound.quiet_below(),
+                ),
+            )
+            .during(sequence, cut.frame, cut.frame + frame);
+            finding.value = Some((edge.through() * 10.0).round() / 10.0);
+            finding.unit = Some("dB".to_owned());
+            findings.push(finding);
+        } else if judged.unchecked() {
+            // Nothing heard the media here: the cut is not checked, and that is said.
+            match unheard.iter_mut().find(|(id, ..)| *id == &media.id) {
+                Some((_, clips, cuts, _)) => {
+                    if !clips.contains(&&clip.id) {
+                        clips.push(&clip.id);
+                    }
+                    *cuts += 1;
+                }
+                None => unheard.push((&media.id, vec![&clip.id], 1, cut.frame)),
             }
         }
     }
-    let frame = sequence.rate.frame_duration();
     for (media, clips, cuts, first) in unheard {
         let named: Vec<String> = clips.iter().take(3).map(|id| format!("`{id}`")).collect();
         let more = match clips.len() - named.len() {
@@ -622,6 +624,141 @@ fn cuts_in_words(
         .during(sequence, first, first + frame);
         finding.value = Some(cuts as f64);
         finding.unit = Some("cuts".to_owned());
+        findings.push(finding);
+    }
+}
+
+/// What a pause the sequence still plays between two words is called, and a word it plays twice
+/// in a row: information, since a pause may be meant and a word may have been said twice.
+pub(crate) const PAUSE_KEPT: &str = "pause.kept";
+pub(crate) const WORD_REPEATED: &str = "word.repeated";
+/// How many pauses or repeats one finding names.
+const NAMED: usize = 4;
+
+/// What the sound of `sequence` still plays, by the transcripts of its media: the pauses of three
+/// quarters of a second or more between words, and the words and phrases said twice in a row.
+/// A cut reads the footage and not what it leaves, so a wait it trimmed too little, a second take
+/// it kept, and a word doubled across one of its own cuts are said here. Each repeat across a cut
+/// is a finding, since the cut may have made it; the rest are counted in one.
+fn leftovers(
+    project: &Project,
+    sequence: &Sequence,
+    known: &mut Known<'_>,
+    findings: &mut Vec<Finding>,
+) {
+    known.hear(project, sequence);
+    let words = cuts::played_words(project, sequence, known);
+    if words.is_empty() {
+        return;
+    }
+    let clock = Clock::of_sequence(sequence);
+    let at = |time: Time| clock.print_position(sequence.rate.round(time));
+    let and_more = |named: usize, all: usize| match all - named {
+        0 => String::new(),
+        more => format!("; and {more} more"),
+    };
+
+    let pauses = cuts::kept_pauses(project, sequence, &words, known);
+    if let Some(longest) = pauses.first() {
+        let named: Vec<String> = pauses
+            .iter()
+            .take(NAMED)
+            .map(|pause| {
+                format!(
+                    "{:.1} s after \"{}\" at {} {}",
+                    pause.seconds,
+                    pause.after.text,
+                    at(pause.after.end),
+                    if pause.at_cut() {
+                        format!(
+                            "across the cut from `{}` to `{}`",
+                            pause.after.clip.id, pause.before.clip.id
+                        )
+                    } else {
+                        format!("in `{}`", pause.after.clip.id)
+                    },
+                )
+            })
+            .collect();
+        let total: f64 = pauses.iter().map(|pause| pause.seconds).sum();
+        let mut finding = Finding::new(
+            Severity::Info,
+            PAUSE_KEPT,
+            Some(sequence.id.as_str()),
+            format!(
+                "`{}` plays {} of {} s or more between words, {total:.1} s in all: {}{}",
+                sequence.id,
+                match pauses.len() {
+                    1 => "1 pause".to_owned(),
+                    count => format!("{count} pauses"),
+                },
+                cuts::KEPT_PAUSE_SECONDS,
+                named.join("; "),
+                and_more(named.len(), pauses.len()),
+            ),
+        )
+        .during(sequence, longest.after.end, longest.before.start);
+        finding.value = Some((total * 10.0).round() / 10.0);
+        finding.unit = Some("s".to_owned());
+        findings.push(finding);
+    }
+
+    let repeats = cuts::repeats(&words);
+    let (at_cuts, said): (Vec<_>, Vec<_>) = repeats.iter().partition(|repeat| repeat.at_cut());
+    for repeat in at_cuts {
+        let (first, last) = (&repeat.words[0], &repeat.words[repeat.words.len() - 1]);
+        findings.push(
+            Finding::new(
+                Severity::Info,
+                WORD_REPEATED,
+                Some(last.clip.id.as_str()),
+                format!(
+                    "\"{}\" is said twice in a row at {}, across the cut from `{}` to `{}`: the cut \
+                     may have kept two takes of it",
+                    repeat.text(),
+                    at(first.start),
+                    first.clip.id,
+                    last.clip.id,
+                ),
+            )
+            .during(sequence, first.start, last.end),
+        );
+    }
+    if let Some(first) = said.first() {
+        let named: Vec<String> = said
+            .iter()
+            .take(NAMED)
+            .map(|repeat| {
+                format!(
+                    "\"{}\" at {} in `{}`",
+                    repeat.text(),
+                    at(repeat.words[0].start),
+                    repeat.words[0].clip.id
+                )
+            })
+            .collect();
+        let mut finding = Finding::new(
+            Severity::Info,
+            WORD_REPEATED,
+            Some(sequence.id.as_str()),
+            format!(
+                "`{}` plays {} twice in a row, as it was said: {}{}",
+                sequence.id,
+                match said.len() {
+                    1 => "1 word or phrase".to_owned(),
+                    count => format!("{count} words or phrases"),
+                },
+                named.join("; "),
+                and_more(named.len(), said.len()),
+            ),
+        )
+        .during(
+            sequence,
+            first.words[0].start,
+            first.words[first.words.len() - 1].end,
+        );
+        finding.value = Some(said.len() as f64);
+        finding.unit = Some("repeats".to_owned());
         findings.push(finding);
     }
 }
@@ -738,7 +875,7 @@ fn subtract(spans: &[(Time, Time)], removed: &[(Time, Time)]) -> Vec<(Time, Time
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_lang::{apply_script, parse_document, Word};
+    use kerf_lang::{apply_script, parse_document, Sound, Speech, Word};
     use kerf_model::{Catalog, Media};
 
     const DOCUMENT: &str = "kerf 1
@@ -762,6 +899,8 @@ sequence s1 rate=24 size=1920x1080
         cuts: Vec<f64>,
         /// The seconds of each media that sound like speech and have no words.
         unheard: Vec<(f64, f64)>,
+        /// How loud each media is, a hundredth of a second at a time.
+        sound: Option<Sound>,
     }
 
     impl Facts for Known {
@@ -781,6 +920,10 @@ sequence s1 rate=24 size=1920x1080
 
         fn unheard(&self, _: &Media) -> Vec<(f64, f64)> {
             self.unheard.clone()
+        }
+
+        fn sound(&self, _: &Media) -> Option<Sound> {
+            self.sound.clone()
         }
     }
 
@@ -813,12 +956,247 @@ sequence s1 rate=24 size=1920x1080
                 .collect(),
             covered: covered.to_vec(),
             cuts: cuts.to_vec(),
-            unheard: Vec::new(),
+            ..Known::default()
         };
         findings(&project, &known)
             .into_iter()
             .map(|finding| (finding.code, finding.message))
             .collect()
+    }
+
+    fn words(words: &[(f64, f64, &str)]) -> Vec<Word> {
+        words
+            .iter()
+            .map(|(start, end, text)| Word {
+                start: *start,
+                end: *end,
+                text: (*text).to_owned(),
+            })
+            .collect()
+    }
+
+    /// A minute in a room at -55 dB where somebody speaks at -20 dB for the first 1.2 s of every
+    /// two, and besides from `loud` to `quiet` seconds of it, each `(from, to)`.
+    fn recording(loud: &[(f64, f64)], quiet: &[(f64, f64)]) -> Sound {
+        let mut levels: Vec<f32> = (0..6000)
+            .map(|hop| if hop % 200 < 120 { -20.0 } else { -55.0 })
+            .collect();
+        for (stretches, level) in [(loud, -20.0), (quiet, -55.0)] {
+            for (from, to) in stretches {
+                levels[(from * 100.0).round() as usize..(to * 100.0).round() as usize].fill(level);
+            }
+        }
+        Sound::new(0.01, levels)
+    }
+
+    fn project() -> Project {
+        parse_document(DOCUMENT, Catalog::builtin())
+            .unwrap()
+            .project
+    }
+
+    fn said(known: &Known) -> Vec<(String, String)> {
+        findings(&project(), known)
+            .into_iter()
+            .map(|finding| (finding.code, finding.message))
+            .collect()
+    }
+
+    #[test]
+    fn a_cut_is_judged_by_the_sound_where_a_transcript_is_loose_or_has_nothing() {
+        // a1 ends at 4 s of m1, a2 starts at 10 s of it and ends at 14 s. The room is quiet for
+        // 0.8 s before each of those, and somebody starts to speak at each.
+        // A transcript stretches "country" over the pause a1 ends in: the cut is in the pause.
+        let loose = Known {
+            words: words(&[(3.6, 4.3, "country")]),
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[], &[])),
+            ..Known::default()
+        };
+        assert!(said(&loose).is_empty(), "{:?}", said(&loose));
+        // Without the sound the transcript is all there is to go by.
+        let unmeasured = Known {
+            sound: None,
+            ..loose
+        };
+        assert_eq!(said(&unmeasured)[0].0, "cut.in_word");
+        // A word where the sound says there is one is still cut through.
+        let through = Known {
+            words: words(&[(3.6, 4.3, "country")]),
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[(3.2, 4.0)], &[])),
+            ..Known::default()
+        };
+        assert_eq!(said(&through)[0].0, "cut.in_word");
+
+        // Somebody is already speaking where a2 starts, and the transcript has no word there.
+        let missed = Known {
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[(9.8, 10.0)], &[])),
+            ..Known::default()
+        };
+        let found = said(&missed);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "cut.in_sound");
+        assert_eq!(
+            found[0].1,
+            "clip `a2` starts in the middle of a sound its transcript has no word for: -20 dB at \
+             00:00:10:00 of `m1`, which speaks at -20 dB and pauses under -47 dB; trim it with \
+             snap=pause to move the cut into the nearest pause"
+        );
+        // With no transcript at all the sound still checks every cut: the one is found, and the
+        // other two are not said to be unchecked.
+        let untranscribed = Known {
+            covered: Vec::new(),
+            ..missed
+        };
+        let found = said(&untranscribed);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0]
+                .1
+                .starts_with("clip `a2` starts in the middle of a sound: -20 dB"),
+            "{found:?}"
+        );
+        // A sound that holds one level judges nothing, and the cuts are said to be unchecked.
+        let flat = Known {
+            sound: Some(Sound::new(0.01, vec![-30.0; 6000])),
+            ..Known::default()
+        };
+        assert_eq!(said(&flat)[0].0, "cut.unheard");
+        // The two halves of a split play on: no cut is heard between them.
+        let catalog = Catalog::builtin();
+        let split = apply_script(&project(), catalog, "split a2 at=00:00:05:00")
+            .unwrap()
+            .project;
+        let speaking = Known {
+            words: words(&[(10.8, 11.3, "country")]),
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[], &[])),
+            ..Known::default()
+        };
+        assert!(findings(&split, &speaking).is_empty());
+    }
+
+    #[test]
+    fn pauses_and_repeated_words_the_cut_still_plays_are_said() {
+        // a1 plays "we went to" and stops 1.1 s later; a2 starts 0.2 s before the same words.
+        let known = Known {
+            words: words(&[
+                (2.0, 2.3, "We"),
+                (2.3, 2.6, "went"),
+                (2.6, 2.9, "to"),
+                (10.2, 10.5, "we"),
+                (10.5, 10.8, "went"),
+                (10.8, 11.0, "to"),
+                (11.0, 11.2, "the"),
+                (11.2, 11.6, "store."),
+                (12.0, 12.2, "So"),
+                (12.3, 12.5, "so"),
+                (12.5, 12.9, "that."),
+                (13.0, 13.4, "That"),
+            ]),
+            covered: vec![(0.0, 60.0)],
+            ..Known::default()
+        };
+        let found = said(&known);
+        let codes: Vec<&str> = found.iter().map(|(code, _)| code.as_str()).collect();
+        assert_eq!(
+            codes,
+            ["pause.kept", "word.repeated", "word.repeated"],
+            "{found:?}"
+        );
+        assert_eq!(
+            found[0].1,
+            "`s1` plays 1 pause of 0.75 s or more between words, 1.3 s in all: 1.3 s after \"to\" \
+             at 00:00:02:22 across the cut from `a1` to `a2`"
+        );
+        assert_eq!(
+            found[1].1,
+            "\"We went to we went to\" is said twice in a row at 00:00:02:00, across the cut from \
+             `a1` to `a2`: the cut may have kept two takes of it"
+        );
+        // "that. That" ends one sentence and starts the next.
+        assert_eq!(
+            found[2].1,
+            "`s1` plays 1 word or phrase twice in a row, as it was said: \"So so\" at 00:00:06:00 in `a2`"
+        );
+        // Sound in the pause is not a pause: somebody speaks from 3 s to 3.6 s of m1, which the
+        // transcript has no words for.
+        let spoken = Known {
+            sound: Some(recording(
+                &[(3.0, 3.6)],
+                &[(2.9, 3.0), (3.6, 4.0), (10.0, 10.2)],
+            )),
+            ..known
+        };
+        let found = said(&spoken);
+        assert!(
+            !found.iter().any(|(code, _)| code == "pause.kept"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn cuts_are_counted_for_a_look() {
+        let known = Known {
+            words: words(&[
+                (13.7, 14.3, "country"),
+                (2.0, 2.3, "We"),
+                (11.0, 11.4, "went"),
+            ]),
+            covered: vec![(0.0, 60.0)],
+            // a1 ends 0.03 s after somebody stops, a2 starts in a sound and ends in a word.
+            sound: Some(recording(&[(3.2, 3.97), (9.8, 10.0), (13.2, 14.0)], &[])),
+            ..Known::default()
+        };
+        let project = project();
+        let report = cuts::report(&project, &project.sequences[0], &known);
+        assert_eq!(
+            report["summary"],
+            serde_json::json!({
+                "cuts": 3, "quiet": 1, "low": 0, "sound": 2, "inWords": 1, "tight": 1,
+                "faded": 0, "notMeasured": 0, "air": {"least": 0.03, "median": 0.03},
+            }),
+            "{report:#}"
+        );
+        assert_eq!(
+            report["cuts"],
+            serde_json::json!([
+                {"clip": "a1", "end": "ends", "at": "00:00:03:23", "media": "m1",
+                 "source": "00:00:04:00", "heard": "quiet", "before": -55.0, "after": -20.0,
+                 "air": 0.03},
+                {"clip": "a2", "end": "starts", "at": "00:00:04:00", "media": "m1",
+                 "source": "00:00:10:00", "heard": "sound", "before": -20.0, "after": -20.0},
+                {"clip": "a2", "end": "ends", "at": "00:00:07:23", "media": "m1",
+                 "source": "00:00:14:00", "heard": "sound", "before": -20.0, "after": -20.0,
+                 "word": "country"},
+            ]),
+            "{report:#}"
+        );
+        assert_eq!(
+            report["media"],
+            serde_json::json!([{"media": "m1", "speech": -20.0, "quietBelow": -47.0}])
+        );
+        // Somebody speaks through what lies between the two words the transcript has.
+        assert_eq!(report["pauses"]["count"], 0, "{report:#}");
+        assert_eq!(report["repeats"]["count"], 0, "{report:#}");
+        // Without a transcript the cuts are still measured, and the rest is said to need one.
+        let report = cuts::report(
+            &project,
+            &project.sequences[0],
+            &Known {
+                sound: Some(recording(&[], &[])),
+                ..Known::default()
+            },
+        );
+        assert_eq!(report["summary"]["quiet"], 3, "{report:#}");
+        // a2 starts on the very hop somebody starts to speak: nothing is cut through, and no
+        // air is left before it.
+        assert_eq!(report["summary"]["tight"], 1, "{report:#}");
+        assert_eq!(report["cuts"].as_array().unwrap().len(), 1, "{report:#}");
+        assert_eq!(report["cuts"][0]["air"], 0.0, "{report:#}");
+        assert!(report["words"].as_str().unwrap().contains("no transcript"));
     }
 
     #[test]

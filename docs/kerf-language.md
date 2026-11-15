@@ -390,7 +390,14 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   `overwrite` moves the edges the line gives (`insert` and `overwrite`:
   `src=` and `out=`) into the nearest pause of the media's sound, clear of
   the sound either side, or onto a cut of its picture, as the index made on
-  import found them; within half a second unless given. A split stays inside
+  import found them; within half a second unless given. A pause is 0.16 s
+  or more of quiet, which is what lies between two words, and quiet is
+  measured by the recording itself: within 8 dB of its room tone, so a
+  noisy room has pauses and a soft recording is not all pause. An edge
+  moved into one stops 0.15 s after the sound before it, which dies away,
+  and 0.1 s before the sound after it, on the nearest frame still in the
+  pause; a pause too short for both is divided in that proportion, and an
+  edge already clear of both stays where it was put. A split stays inside
   its clip and a trimmed clip keeps a length. Without an index, or with
   nothing in reach, the line is refused.
 - `trim … src=<source position>` puts the edge where the clip plays that
