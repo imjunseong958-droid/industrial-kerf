@@ -19,6 +19,7 @@ pub mod ramps;
 pub mod recipe;
 pub mod render;
 pub mod resources;
+pub mod sections;
 pub mod shows;
 pub mod sidecar;
 pub mod still;

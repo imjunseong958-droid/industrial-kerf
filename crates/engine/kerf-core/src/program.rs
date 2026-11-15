@@ -267,6 +267,13 @@ impl Shown<'_> {
     }
 }
 
+/// A clip's sound in a graph, and the samples of its window it sounds from and to.
+struct Sounding {
+    label: String,
+    start: i64,
+    end: i64,
+}
+
 struct Graph<'a> {
     project: &'a Project,
     catalog: &'a Catalog,
@@ -429,6 +436,7 @@ impl<'a> Graph<'a> {
                 continue;
             }
             let items = self.shown(track, sequence.rate)?;
+            let mut sounds = Vec::new();
             for item in &items {
                 if !item.clip.enabled {
                     continue;
@@ -436,11 +444,12 @@ impl<'a> Graph<'a> {
                 let Some(portion) = self.portion(item, from, to) else {
                     continue;
                 };
-                if let Some(label) = self.sound(item, &portion, from, duration)? {
-                    match &track.bus {
-                        Some(bus) => feeding.entry(bus.clone()).or_default().push(label),
-                        None => inputs.push(label),
-                    }
+                sounds.extend(self.sound(item, &portion, from)?);
+            }
+            for lane in self.lanes(sounds, samples(duration)) {
+                match &track.bus {
+                    Some(bus) => feeding.entry(bus.clone()).or_default().push(lane),
+                    None => inputs.push(lane),
                 }
             }
         }
@@ -477,14 +486,82 @@ impl<'a> Graph<'a> {
         Ok(mixed)
     }
 
+    /// The sounds of one track as streams as long as the window, `total` samples: as few as
+    /// hold them with no two of a stream sounding at once.
+    ///
+    /// A track's clips play one after another, so its sounds are laid end to end in one stream,
+    /// each padded with silence up to the sample the next starts on, and two where a crossfade
+    /// has a clip start before the one before it stops. A mix then sums a stream or two for each
+    /// track, which takes as long as the program is; padding every clip out to the whole program
+    /// and summing them all took that long for each clip.
+    fn lanes(&mut self, mut sounds: Vec<Sounding>, total: i64) -> Vec<String> {
+        sounds.sort_by_key(|sound| sound.start);
+        let mut lanes: Vec<Vec<Sounding>> = Vec::new();
+        for sound in sounds {
+            match lanes
+                .iter_mut()
+                .find(|lane| lane.last().is_some_and(|last| last.end <= sound.start))
+            {
+                Some(lane) => lane.push(sound),
+                None => lanes.push(vec![sound]),
+            }
+        }
+        let mut labels = Vec::new();
+        for lane in lanes {
+            let mut pieces = Vec::new();
+            // Silence up to the first, counted in samples as everything after it is.
+            if lane[0].start > 0 {
+                let gap = self.label("gap");
+                self.parts.push(format!(
+                    "anullsrc=r={SAMPLE_RATE}:cl=stereo,atrim=end_sample={}[{gap}]",
+                    lane[0].start
+                ));
+                pieces.push(gap);
+            }
+            for (index, sound) in lane.iter().enumerate() {
+                let until = lane.get(index + 1).map_or(total, |next| next.start);
+                let length = until - sound.start;
+                let piece = self.label("piece");
+                self.parts.push(format!(
+                    "[{}]apad=whole_len={length},atrim=end_sample={length}[{piece}]",
+                    sound.label
+                ));
+                pieces.push(piece);
+            }
+            if let [only] = pieces.as_slice() {
+                labels.push(only.clone());
+                continue;
+            }
+            let label = self.label("lane");
+            self.parts.push(format!(
+                "{}concat=n={}:v=0:a=1[{label}]",
+                pieces
+                    .iter()
+                    .map(|piece| format!("[{piece}]"))
+                    .collect::<String>(),
+                pieces.len()
+            ));
+            labels.push(label);
+        }
+        labels
+    }
+
+    /// A clip's sound inside a window that starts at `window`, not yet placed in it; nothing
+    /// for a clip with no sound, or less than a sample of it.
     fn sound(
         &mut self,
         item: &Shown,
         portion: &Portion,
         window: Time,
-        total: Time,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Sounding>> {
         let clip = item.clip;
+        let (start, end) = (
+            samples(portion.lo - window),
+            samples(portion.hi - window),
+        );
+        if end <= start {
+            return Ok(None);
+        }
         let input = match &clip.content {
             Content::Media { media, .. } => {
                 let media = self.project.media(media.as_str()).ok_or_else(|| {
@@ -519,11 +596,8 @@ impl<'a> Graph<'a> {
             portion,
         )?;
         let label = self.label("sound");
-        self.parts.push(format!(
-            "[{input}]{filters},{}[{label}]",
-            place(samples(portion.lo - window), total)
-        ));
-        Ok(Some(label))
+        self.parts.push(format!("[{input}]{filters}[{label}]"));
+        Ok(Some(Sounding { label, start, end }))
     }
 
     // ---- parameters ------------------------------------------------------------
@@ -677,7 +751,9 @@ pub fn sound_filters(
 }
 
 /// The filters that start a sound `delay` samples into a stream `total`
-/// long.
+/// long: how playback places a nested clip's sound inside its holder
+/// (`sound`). A render lays a track's sounds end to end instead
+/// ([`Graph::lanes`]).
 fn place(delay: i64, total: Time) -> String {
     // `adelay` leaves the silence it adds before its first input frame
     // untimed, and times what follows from there, which `atrim` misreads
