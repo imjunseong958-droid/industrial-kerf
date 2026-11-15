@@ -1,18 +1,22 @@
 //! Where the time of an export goes: drawing, reading kept frames, and
 //! encoding.
 //!
-//!     export_bench render <project.kerf> <out> [standard|review|prores_hq]
+//!     export_bench render <project.kerf> <out> [standard|review|prores_hq] [edit] [silent]
 //!     export_bench draw <project.kerf>
 //!
-//! `render` is an export as `kerf-engine render` makes one. `draw` draws
+//! `render` is an export as `kerf-engine render` makes one, of the document
+//! after `edit` when one is given (`ripple-delete c3`, `set c30 opacity=0.5`),
+//! and without its sound when `silent` follows. `draw` draws
 //! every frame the same export would, on as many threads, and encodes
 //! nothing, so the difference between the two is what encoding costs. Each
 //! prints how long it took and what the folder of kept frames did
 //! (`KERF_FRAME_CACHE`, `KERF_FRAME_CACHE_GB`): frames read back, frames
 //! drawn, written, dropped unwritten, and put out to make room; and what a
 //! render did with its encoded stretches (`KERF_SECTION_CACHE`): how many
-//! it joined as they were kept and how many it encoded, and whether it gave
-//! up on them and encoded the picture whole.
+//! it joined as they were kept and how many it encoded, whether it gave up
+//! on them and encoded the picture whole, and what it kept and made of the
+//! sound: clips read decoded or decoded, pieces of encoded sound used or
+//! encoded, and whether one encoder made it all.
 
 use kerf_compose::{default_frame_folder, frame_cache_stats, ComposeOptions, Compositor};
 use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
@@ -36,7 +40,12 @@ fn project(path: &Path) -> Project {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mode, document) = (args[0].as_str(), Path::new(&args[1]));
-    let project = project(document);
+    let mut project = project(document);
+    if let Some(edit) = args.get(4).filter(|edit| !edit.is_empty()) {
+        project = kerf_lang::apply_script(&project, Catalog::builtin(), edit)
+            .expect("the edit applies")
+            .project;
+    }
     let sequence = &project.sequences[0];
     let frames = sequence.rate.frames_floor(sequence.duration()) as usize;
     let started = Instant::now();
@@ -52,6 +61,7 @@ fn main() {
                 &RenderOptions {
                     output: args[2].clone(),
                     preset,
+                    sound: args.get(5).is_none_or(|word| word != "silent"),
                     project_dir: document.parent().map(Path::to_path_buf),
                     ..RenderOptions::default()
                 },
@@ -96,7 +106,10 @@ fn main() {
         "{{\"mode\":\"{mode}\",\"frames\":{frames},\"seconds\":{seconds:.2},\"fps\":{:.1},\
          \"read\":{},\"drawn\":{},\"written\":{},\"dropped\":{},\"evicted\":{},\
          \"stretchesJoined\":{},\"framesJoined\":{},\"stretchesEncoded\":{},\
-         \"framesEncoded\":{},\"soundKept\":{},\"soundMixed\":{},\"encodedWhole\":{}}}",
+         \"framesEncoded\":{},\"soundKept\":{},\"soundMixed\":{},\
+         \"soundClipsKept\":{},\"soundClipsDecoded\":{},\"soundPiecesKept\":{},\
+         \"soundPiecesEncoded\":{},\"soundWhole\":{},\"soundUnjoined\":{},\
+         \"encodedWhole\":{}}}",
         frames as f64 / seconds,
         stats.hits,
         stats.misses,
@@ -109,6 +122,12 @@ fn main() {
         sections.encoded_frames,
         sections.sound_kept,
         sections.sound_mixed,
+        sections.sound_clips_kept,
+        sections.sound_clips_decoded,
+        sections.sound_pieces_kept,
+        sections.sound_pieces_encoded,
+        sections.sound_whole,
+        sections.sound_unjoined,
         sections.whole,
     );
 }

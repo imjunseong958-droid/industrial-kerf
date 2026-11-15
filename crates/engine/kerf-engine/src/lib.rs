@@ -10,6 +10,7 @@ pub mod error;
 pub mod ffmpeg;
 pub mod follows;
 pub mod index;
+mod kept_sound;
 pub mod loudness;
 pub mod placed;
 pub mod probe;
