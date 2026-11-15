@@ -360,14 +360,29 @@ private:
     // its path, and whether it is the one the media is.
     QJsonArray mediaTakes(const QString &mediaId) const;
     void useTake(const QString &mediaId, int take, const QString &path);
-    // Ask the bridge what making `mediaId` from its recipe would run; it
-    // answers media_make_plan and runs nothing.
-    void makeMedia(const QString &mediaId);
+    // Who and what `mediaId`'s recipe shows and how it looks: the names of the project's
+    // cast and styles it gives, as the project lists them.
+    QStringList mediaShows(const QString &mediaId) const;
+    // Ask the bridge what making `mediaId` from its recipe would run, `rolls` takes of it
+    // one after another; it answers media_make_plan and runs nothing.
+    void makeMedia(const QString &mediaId, int rolls = 1);
+    // Ask the bridge for the project's cast; it answers cast, which shows the dialog.
+    void showCast();
+    // The dialog that shows and sets the project's cast and styles, from a cast event:
+    // a table of them, and Save sends cast_set with its rows. The caller shows it.
+    QDialog *castDialog(const QJsonObject &cast);
+    // What is said once a cast is saved: the shots that want making for it, from a cast
+    // event's toMake.
+    static QString castSaved(const QJsonObject &cast);
+    // `file` as a cast's picture names it, from the project's folder: as it is where it is
+    // inside the project, else copied into its refs folder. Empty where it cannot be copied.
+    static QString castPicturePath(const QString &projectDirectory, const QString &file);
     // What a person is asked before a recipe's command is run, from a
     // media_make_plan event.
     static QString makeQuestion(const QJsonObject &plan);
-    // Run the recipe of `mediaId`: only after a person's yes to its plan.
-    void runMake(const QString &mediaId);
+    // Run the recipe of `mediaId`, `rolls` takes of it: only after a person's yes to its
+    // plan.
+    void runMake(const QString &mediaId, int rolls = 1);
     // Stop the making of `mediaId` that is running: its step is asked to end.
     void stopMake(const QString &mediaId);
     // What the toolbar says of a making under way, from a media_making event.

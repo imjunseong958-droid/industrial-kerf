@@ -79,7 +79,7 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   shape leaves edges: the check says the `scale` that fills it.
 - `look` lists the project's `cast` and `styles`: name them,
   `cast=Ada style=film`, and have the prompt say what they do, not how
-  they look. One it lacks is the person's to add.
+  they look. One it lacks is added with `edit`'s `cast`.
 - Mend what `toMake`'s `cannot` and `notes` say, then ask for the making
   once with `make`, with `why`. Asked, the person makes it; let through, it
   runs as a job you `wait` for. A making costs minutes and money: never ask

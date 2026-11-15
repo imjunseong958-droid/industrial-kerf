@@ -232,8 +232,13 @@ asked for once. Rolls go on from the last one a take of the recipe as it is
 written now had, so asking for three more gives 10, 11, 12. The media
 becomes the last take made, `kerf takes` says which roll each is, and a roll
 is another of the same shot: none of them is asked for again. A making that
-fails leaves the takes made before it. Only a person makes rolls; an agent
-asks for one making at a time.
+fails leaves the takes made before it, and the media is the last of those.
+
+In the editor it is **Make Several from Recipe** on the media in the bin, for
+two, three, or four takes: the steps show once, with how many takes they
+write, and run on a yes. An agent asks with `make` and `rolls`, up to eight.
+Each roll is a making the person's limit counts, so where the limit lets
+fewer than were asked, the person is asked for them all, and none runs.
 
 `kerf shots` reads every media a recipe makes at once, a line each, with a
 `!` on one that wants making and why, and what they come to:
@@ -343,10 +348,20 @@ cannot run, said before anything does, with the names it has and the line
 that adds it.
 
 `look` with no arguments lists them, as `cast` and `styles`, so an agent
-names ones that exist. Its limit, as it is now: the file is a person's to
-write, or an agent's that has the project's files; `edit` writes recipes and
-not the cast, since a change to it is a change to shots already made and not
-a proposal to review.
+names ones that exist. One a shot needs that the file has not, an agent adds
+with its edit: `edit` takes `cast`, lines as the file writes them, and adds
+each after what the file holds, its comments left as they are. They are
+written at once and not proposed, since adding one asks for no shot again.
+A line for one the file has is refused: changing what shots were made from
+is the person's.
+
+In the editor it is **Cast and Styles…** in the bin's menu: a table of them,
+a row each, with its words and its pictures. Add Picture… names a picture of
+the project as it is, and copies one from elsewhere into the project's
+`refs` folder. Save writes the file, and says which shots want making for
+the change; the dialog shows which want making already. Saving from the
+editor writes the file anew, so comments written into it by hand are not
+kept. In the bin, a shot's Make from Recipe… says who it shows.
 
 ## Models
 

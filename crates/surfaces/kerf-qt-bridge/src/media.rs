@@ -66,6 +66,7 @@ pub(crate) fn make(
     client: &kerf_runtime::RuntimeClient,
     id: &str,
     confirmed: bool,
+    rolls: u32,
     commands: &SyncSender<Command>,
     tx: &SyncSender<Value>,
 ) {
@@ -77,11 +78,19 @@ pub(crate) fn make(
         .and_then(|project| {
             let models =
                 kerf_engine::recipe::model::Models::load().map_err(|error| error.to_string())?;
-            let plan = kerf_engine::recipe::plan(&project, directory, id, &models)
+            // One making is the recipe as it is written. Several are rolls of it, each with
+            // its seeds one on from the last, from the first roll no take of it has had.
+            let first = if rolls > 1 {
+                kerf_engine::recipe::next_roll(&project, directory, id)
+                    .map_err(|error| error.to_string())?
+            } else {
+                0
+            };
+            let plan = kerf_engine::recipe::plan_rolled(&project, directory, id, &models, first)
                 .map_err(|error| error.to_string())?;
-            Ok((project, models, plan))
+            Ok((project, models, plan, first))
         });
-    let (project, models, plan) = match planned {
+    let (project, models, plan, first) = match planned {
         Ok(planned) => planned,
         Err(error) => return make_failed(tx, id, error),
     };
@@ -97,6 +106,7 @@ pub(crate) fn make(
                 "notes": plan.notes,
                 "take": plan.take,
                 "file": plan.file.to_string_lossy(),
+                "rolls": rolls,
             }),
         );
     }
@@ -116,45 +126,162 @@ pub(crate) fn make(
     let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
     let client = client.clone();
     thread::spawn(move || {
-        let take = plan.take;
-        // A step says the same line again and again while nothing changes: once is enough.
-        let mut last = String::new();
-        let made = kerf_engine::recipe::make(
-            &project,
-            &shared.directory,
-            &plan,
-            &models,
-            &cancellation,
-            |line| {
-                let line = line.trim();
-                if !line.is_empty() && line != last {
-                    crate::emit(&tx, making(&id, take, line));
-                    last = line.to_owned();
+        // The takes made so far, the last of which the media becomes.
+        let mut last_made: Option<kerf_engine::recipe::Made> = None;
+        let mut ended = Ok(());
+        for roll in 0..rolls {
+            let plan = match roll {
+                0 => Ok(plan.clone()),
+                roll => kerf_engine::recipe::plan_rolled(
+                    &project,
+                    &shared.directory,
+                    &id,
+                    &models,
+                    first + roll,
+                ),
+            };
+            let made = plan.and_then(|plan| {
+                let take = plan.take;
+                if roll > 0 {
+                    crate::emit(&tx, making(&id, take, ""));
                 }
-            },
-        );
+                // A step says the same line again and again while nothing changes: once is
+                // enough.
+                let mut last = String::new();
+                kerf_engine::recipe::make(
+                    &project,
+                    &shared.directory,
+                    &plan,
+                    &models,
+                    &cancellation,
+                    |line| {
+                        let line = line.trim();
+                        if !line.is_empty() && line != last {
+                            crate::emit(&tx, making(&id, take, line));
+                            last = line.to_owned();
+                        }
+                    },
+                )
+            });
+            match made {
+                Ok(made) => last_made = Some(made),
+                Err(error) => {
+                    ended = Err(error);
+                    break;
+                }
+            }
+        }
         if let Ok(mut makings) = shared.makings.lock() {
             makings.remove(&id);
         }
-        match made {
-            Ok(made) => {
-                crate::emit(
-                    &tx,
-                    json!({"type": "media_made", "media": id, "take": made.take}),
-                );
-                // What an agent asked for is made: its asking in the review is answered.
-                kerf_mcp::answer_make_requests(&client, &id);
-                let _ = commands.send(Command::MediaReplace {
-                    media: id,
-                    path: made.stored,
-                });
-            }
+        // What was made is kept, whatever the making after it came to: the media becomes the
+        // last take there is.
+        if let Some(made) = last_made {
+            crate::emit(
+                &tx,
+                json!({"type": "media_made", "media": id, "take": made.take}),
+            );
+            // What an agent asked for is made: its asking in the review is answered.
+            kerf_mcp::answer_make_requests(&client, &id);
+            let _ = commands.send(Command::MediaReplace {
+                media: id.clone(),
+                path: made.stored,
+            });
+        }
+        match ended {
+            Ok(()) => {}
             Err(kerf_engine::EngineError::Cancelled) => {
                 crate::emit(&tx, json!({"type": "media_make_cancelled", "media": id}));
             }
             Err(error) => make_failed(&tx, &id, error),
         }
     });
+}
+
+/// One of a project's cast, as the editor shows and sets it.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct CastEntry {
+    /// `cast` or `style`.
+    kind: String,
+    name: String,
+    #[serde(default)]
+    words: String,
+    #[serde(default)]
+    refs: Vec<String>,
+}
+
+/// Read the cast of the project, or with `set` write it first: `cast {entries, toMake}`, each
+/// entry a `kind`, `name`, `words`, and `refs`, and `toMake` the media whose shots want
+/// making as things stand, each with why. A cast that does not read is an `error` that says
+/// its line, and one that cannot be set leaves the file as it was.
+pub(crate) fn cast(
+    shared: &Arc<Shared>,
+    client: &kerf_runtime::RuntimeClient,
+    set: Option<Vec<CastEntry>>,
+    tx: &SyncSender<Value>,
+) {
+    use kerf_engine::recipe::cast::{Cast, Entry, Kind};
+    let directory = shared.directory.as_path();
+    let failed = |error: String| {
+        crate::emit(
+            tx,
+            json!({"type": "error", "message": error, "command": "cast"}),
+        );
+    };
+    let saved = set.is_some();
+    if let Some(entries) = set {
+        let entries = entries
+            .into_iter()
+            .map(|entry| {
+                let kind = match entry.kind.as_str() {
+                    "cast" => Kind::Cast,
+                    "style" => Kind::Style,
+                    other => return Err(format!("`{other}` is not `cast` or `style`")),
+                };
+                Ok((
+                    kind,
+                    entry.name.trim().to_owned(),
+                    Entry {
+                        words: entry.words.split_whitespace().collect::<Vec<_>>().join(" "),
+                        references: entry.refs,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>();
+        let written = entries.and_then(|entries| {
+            Cast::of_entries(entries)
+                .and_then(|cast| cast.write(directory))
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = written {
+            return failed(format!("cannot save the cast: {error}"));
+        }
+    }
+    let cast = match Cast::read(directory) {
+        Ok(cast) => cast,
+        Err(error) => return failed(error.to_string()),
+    };
+    let entries: Vec<Value> = cast
+        .entries()
+        .map(|(kind, name, entry)| {
+            json!({"kind": kind.word(), "name": name, "words": entry.words, "refs": entry.references})
+        })
+        .collect();
+    // The shots that want making as the cast stands, so a change to it says what it costs.
+    let to_make: Vec<Value> = client
+        .get_document(false)
+        .and_then(|(_, text)| kerf_runtime::parse_document(&text))
+        .map(|project| {
+            kerf_engine::recipe::shots(&project, directory)
+                .into_iter()
+                .filter_map(|shot| Some(json!({"media": shot.media, "why": shot.wants?.reason()})))
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::emit(
+        tx,
+        json!({"type": "cast", "entries": entries, "toMake": to_make, "saved": saved}),
+    );
 }
 
 /// Who shows the makings an agent's session runs on its own, where the person lets it: the
@@ -712,12 +839,32 @@ mod tests {
         assert_eq!((media.as_str(), path.as_str()), ("m2", "/takes/b.mov"));
         assert!(read(json!({"type": "media_replace", "media": "m2"})).is_err());
         // A recipe runs only when the command says a person agreed to it.
-        let Command::MediaMake { media, confirmed } =
-            read(json!({"type": "media_make", "media": "m2"})).unwrap()
+        let Command::MediaMake {
+            media,
+            confirmed,
+            rolls,
+        } = read(json!({"type": "media_make", "media": "m2"})).unwrap()
         else {
             panic!("expected media_make");
         };
-        assert_eq!((media.as_str(), confirmed), ("m2", false));
+        assert_eq!((media.as_str(), confirmed, rolls), ("m2", false, None));
+        assert!(matches!(
+            read(json!({"type": "media_make", "media": "m2", "rolls": 3})).unwrap(),
+            Command::MediaMake { rolls: Some(3), .. }
+        ));
+        // The cast is read, and set from entries.
+        assert!(matches!(
+            read(json!({"type": "cast_get"})).unwrap(),
+            Command::CastGet
+        ));
+        let Command::CastSet { entries } = read(json!({"type": "cast_set", "entries": [
+            {"kind": "cast", "name": "Ada", "words": "an old keeper", "refs": ["refs/ada.png"]},
+            {"kind": "style", "name": "film"},
+        ]}))
+        .unwrap() else {
+            panic!("expected cast_set");
+        };
+        assert_eq!(entries.len(), 2);
         assert!(matches!(
             read(json!({"type": "media_make", "media": "m2", "confirmed": true})).unwrap(),
             Command::MediaMake {

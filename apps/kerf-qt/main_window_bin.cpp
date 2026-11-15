@@ -64,6 +64,9 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QHeaderView>
+#include <QLabel>
+#include <QTableWidget>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
@@ -345,8 +348,182 @@ void MainWindow::useTake(const QString &mediaId, int take, const QString &path) 
         addActivity(QStringLiteral("import"), QStringLiteral("Using take %1 of %2").arg(take).arg(mediaId));
 }
 
-void MainWindow::makeMedia(const QString &mediaId) {
-    execute(QStringLiteral("media.make"), QJsonObject{{QStringLiteral("media"), mediaId}});
+QStringList MainWindow::mediaShows(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() != mediaId) continue;
+        QStringList shows;
+        for (const QJsonValue name : source.value(QStringLiteral("shows")).toArray()) shows << name.toString();
+        return shows;
+    }
+    return {};
+}
+
+void MainWindow::makeMedia(const QString &mediaId, int rolls) {
+    QJsonObject params{{QStringLiteral("media"), mediaId}};
+    if (rolls > 1) params.insert(QStringLiteral("rolls"), rolls);
+    execute(QStringLiteral("media.make"), params);
+}
+
+void MainWindow::showCast() {
+    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("cast_get")}});
+}
+
+QString MainWindow::castSaved(const QJsonObject &cast) {
+    QStringList wanting;
+    for (const QJsonValue value : cast.value(QStringLiteral("toMake")).toArray())
+        wanting << value.toObject().value(QStringLiteral("media")).toString();
+    if (wanting.isEmpty()) return QStringLiteral("Saved the cast; no shot wants making for it");
+    return QStringLiteral("Saved the cast; %1 %2 making again").arg(wanting.join(QStringLiteral(", ")),
+                                                                   wanting.size() == 1 ? QStringLiteral("wants") : QStringLiteral("want"));
+}
+
+QDialog *MainWindow::castDialog(const QJsonObject &cast) {
+    auto *dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("castDialog"));
+    dialog->setWindowTitle(QStringLiteral("Cast and Styles"));
+    dialog->setMinimumSize(720, 420);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
+    auto *intro = new QLabel(QStringLiteral("Who and what this project's shots show, and how they look, said once. A recipe names them "
+        "with cast= and style=, and a model is asked with their words and handed their pictures. Changing one asks again for the shots it is in."));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *table = new QTableWidget(0, 4);
+    table->setObjectName(QStringLiteral("castTable"));
+    table->setHorizontalHeaderLabels({QStringLiteral("Kind"), QStringLiteral("Name"), QStringLiteral("Words"), QStringLiteral("Pictures")});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Interactive);
+    // Wide enough for two pictures' paths; the words take what is left.
+    table->setColumnWidth(3, 280);
+    table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    // A row: its kind, which is not typed, then what a person writes.
+    const auto addRow = [table](const QString &kind, const QString &name, const QString &words, const QStringList &pictures) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        auto *kindItem = new QTableWidgetItem(kind);
+        kindItem->setFlags(kindItem->flags() & ~Qt::ItemIsEditable);
+        table->setItem(row, 0, kindItem);
+        table->setItem(row, 1, new QTableWidgetItem(name));
+        table->setItem(row, 2, new QTableWidgetItem(words));
+        auto *picturesItem = new QTableWidgetItem(pictures.join(QStringLiteral(", ")));
+        picturesItem->setToolTip(QStringLiteral("Pictures of it, each a path from the project's folder, with a comma between them"));
+        table->setItem(row, 3, picturesItem);
+        return row;
+    };
+    for (const QJsonValue value : cast.value(QStringLiteral("entries")).toArray()) {
+        const QJsonObject entry = value.toObject();
+        QStringList pictures;
+        for (const QJsonValue picture : entry.value(QStringLiteral("refs")).toArray()) pictures << picture.toString();
+        addRow(entry.value(QStringLiteral("kind")).toString(), entry.value(QStringLiteral("name")).toString(),
+               entry.value(QStringLiteral("words")).toString(), pictures);
+    }
+    layout->addWidget(table, 1);
+    auto *row = new QHBoxLayout;
+    row->setSpacing(8);
+    const auto button = [row](const QString &text, const QString &name, const QString &tip) {
+        auto *made = new QPushButton(text);
+        made->setObjectName(name);
+        made->setToolTip(tip);
+        made->setAutoDefault(false);
+        row->addWidget(made);
+        return made;
+    };
+    auto *addCast = button(QStringLiteral("Add Cast"), QStringLiteral("castAdd"), QStringLiteral("Someone or something a shot shows: a person, a place, a prop"));
+    auto *addStyle = button(QStringLiteral("Add Style"), QStringLiteral("castAddStyle"), QStringLiteral("How a shot looks: its stock, its grade, its light"));
+    auto *addPicture = button(QStringLiteral("Add Picture…"), QStringLiteral("castPicture"),
+                              QStringLiteral("A picture of the chosen row; one outside the project is copied into its refs folder"));
+    auto *remove = button(QStringLiteral("Remove"), QStringLiteral("castRemove"), QStringLiteral("Take the chosen row out; a recipe that names it cannot run until it names another"));
+    row->addStretch(1);
+    layout->addLayout(row);
+    const auto chosen = [table] { return table->currentRow(); };
+    const auto follow = [table, addPicture, remove] {
+        const bool has = table->currentRow() >= 0;
+        addPicture->setEnabled(has);
+        remove->setEnabled(has);
+    };
+    connect(table, &QTableWidget::currentCellChanged, dialog, follow);
+    const auto added = [table, addRow](const QString &kind) {
+        const int at = addRow(kind, QString(), QString(), {});
+        table->setCurrentCell(at, 1);
+        table->editItem(table->item(at, 1));
+    };
+    connect(addCast, &QPushButton::clicked, dialog, [added] { added(QStringLiteral("cast")); });
+    connect(addStyle, &QPushButton::clicked, dialog, [added] { added(QStringLiteral("style")); });
+    connect(remove, &QPushButton::clicked, dialog, [table, chosen, follow] {
+        if (chosen() >= 0) table->removeRow(chosen());
+        follow();
+    });
+    connect(addPicture, &QPushButton::clicked, dialog, [this, dialog, table, chosen] {
+        if (chosen() < 0) return;
+        const QString file = QFileDialog::getOpenFileName(dialog, QStringLiteral("Add Picture"), m_projectDirectory,
+                                                          QStringLiteral("Pictures (*.png *.jpg *.jpeg *.webp *.tif *.tiff *.bmp)"));
+        if (file.isEmpty()) return;
+        const QString inside = castPicturePath(m_projectDirectory, file);
+        if (inside.isEmpty()) {
+            showError(QStringLiteral("Could not copy %1 into the project's refs folder").arg(QFileInfo(file).fileName()));
+            return;
+        }
+        QTableWidgetItem *pictures = table->item(chosen(), 3);
+        QStringList have = pictures->text().split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (QString &one : have) one = one.trimmed();
+        if (!have.contains(inside)) have << inside;
+        pictures->setText(have.join(QStringLiteral(", ")));
+    });
+    follow();
+    // What wants making as the cast stands, so a change is made knowing what it adds to.
+    QStringList wanting;
+    for (const QJsonValue value : cast.value(QStringLiteral("toMake")).toArray()) {
+        const QJsonObject shot = value.toObject();
+        wanting << QStringLiteral("%1 (%2)").arg(shot.value(QStringLiteral("media")).toString(), shot.value(QStringLiteral("why")).toString());
+    }
+    auto *wants = new QLabel(wanting.isEmpty() ? QStringLiteral("No shot wants making as the cast stands.")
+                                               : QStringLiteral("Wants making now: %1").arg(wanting.join(QStringLiteral("; "))));
+    wants->setObjectName(QStringLiteral("muted"));
+    wants->setWordWrap(true);
+    layout->addWidget(wants);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+    buttons->setObjectName(QStringLiteral("castButtons"));
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, [this, dialog, table] {
+        // A cell still being typed in is taken as it stands.
+        table->setCurrentCell(-1, -1);
+        QJsonArray entries;
+        for (int at = 0; at < table->rowCount(); ++at) {
+            QJsonArray pictures;
+            for (const QString &picture : table->item(at, 3)->text().split(QLatin1Char(','), Qt::SkipEmptyParts))
+                if (!picture.trimmed().isEmpty()) pictures.append(picture.trimmed());
+            entries.append(QJsonObject{{QStringLiteral("kind"), table->item(at, 0)->text()},
+                                       {QStringLiteral("name"), table->item(at, 1)->text().trimmed()},
+                                       {QStringLiteral("words"), table->item(at, 2)->text().simplified()},
+                                       {QStringLiteral("refs"), pictures}});
+        }
+        // The bridge reads it as the file would be read: what is wrong with a row is an error
+        // that says so, and the file is as it was.
+        if (sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("cast_set")}, {QStringLiteral("entries"), entries}})) dialog->accept();
+    });
+    return dialog;
+}
+
+QString MainWindow::castPicturePath(const QString &projectDirectory, const QString &file) {
+    const QDir project(projectDirectory);
+    const QString relative = project.relativeFilePath(QFileInfo(file).absoluteFilePath());
+    // A picture of the project is named as it is; another is copied in, beside the others.
+    if (!relative.startsWith(QStringLiteral("..")) && !QDir::isAbsolutePath(relative)) return relative;
+    if (!project.mkpath(QStringLiteral("refs"))) return {};
+    const QFileInfo info(file);
+    QString name = info.fileName();
+    for (int number = 2; QFileInfo::exists(project.filePath(QStringLiteral("refs/") + name)); ++number)
+        name = QStringLiteral("%1-%2.%3").arg(info.completeBaseName()).arg(number).arg(info.suffix());
+    return QFile::copy(file, project.filePath(QStringLiteral("refs/") + name)) ? QStringLiteral("refs/") + name : QString();
 }
 
 QString MainWindow::makeQuestion(const QJsonObject &plan) {
@@ -355,14 +532,27 @@ QString MainWindow::makeQuestion(const QJsonObject &plan) {
     for (const QJsonValue note : plan.value(QStringLiteral("notes")).toArray()) notes += QStringLiteral("\n• %1").arg(note.toString());
     if (!notes.isEmpty()) notes = QStringLiteral("\n\nBefore you run it:%1").arg(notes);
     // A recipe is commands someone wrote, perhaps someone else: show every step.
+    const int rolls = plan.value(QStringLiteral("rolls")).toInt(1);
+    if (rolls > 1) {
+        const int take = plan.value(QStringLiteral("take")).toInt();
+        return QStringLiteral("Making %1 runs this on your computer, %6 times:\n\n%2%5\n\nIt comes from the recipe %3 and writes %6 new takes, %7 to %8, "
+                              "the first at %4, each with every seed one on from the last. %1 then is the last of them, and you choose "
+                              "among them under Takes. The takes before them are kept.\n\nRun them?")
+            .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
+                 plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString(), notes)
+            .arg(rolls).arg(take).arg(take + rolls - 1);
+    }
     return QStringLiteral("Making %1 runs this on your computer:\n\n%2%5\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
         .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
              plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString(), notes);
 }
 
-void MainWindow::runMake(const QString &mediaId) {
-    if (execute(QStringLiteral("media.make"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("confirmed"), true}}))
-        addActivity(QStringLiteral("import"), QStringLiteral("Making %1 from %2").arg(mediaId, mediaRecipe(mediaId)));
+void MainWindow::runMake(const QString &mediaId, int rolls) {
+    QJsonObject params{{QStringLiteral("media"), mediaId}, {QStringLiteral("confirmed"), true}};
+    if (rolls > 1) params.insert(QStringLiteral("rolls"), rolls);
+    if (execute(QStringLiteral("media.make"), params))
+        addActivity(QStringLiteral("import"), rolls > 1 ? QStringLiteral("Making %3 takes of %1 from %2").arg(mediaId, mediaRecipe(mediaId)).arg(rolls)
+                                                        : QStringLiteral("Making %1 from %2").arg(mediaId, mediaRecipe(mediaId)));
 }
 
 void MainWindow::stopMake(const QString &mediaId) {
@@ -446,9 +636,24 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
             QAction *make = menu->addAction(QStringLiteral("Make from Recipe…"));
             make->setObjectName(QStringLiteral("binMake"));
             make->setEnabled(m_commands->isEnabled(QStringLiteral("media.make")));
-            make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first").arg(mediaId, recipe)
+            // Who and what it shows, where its recipe names any of the project's cast.
+            const QStringList shows = mediaShows(mediaId);
+            const QString showing = shows.isEmpty() ? QString() : QStringLiteral("; it shows %1").arg(shows.join(QStringLiteral(", ")));
+            make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first%3").arg(mediaId, recipe, showing)
                                                : m_commands->reason(QStringLiteral("media.make")));
             connect(make, &QAction::triggered, this, [this, mediaId] { makeMedia(mediaId); });
+            // Several takes of the same shot to choose among, each with its seeds one on.
+            auto *several = new QMenu(QStringLiteral("Make Several from Recipe"), menu);
+            several->setObjectName(QStringLiteral("binMakeSeveral"));
+            several->setToolTipsVisible(true);
+            several->setEnabled(make->isEnabled());
+            for (const int rolls : {2, 3, 4}) {
+                QAction *roll = several->addAction(QStringLiteral("%1 Takes…").arg(rolls));
+                roll->setObjectName(QStringLiteral("binMake%1").arg(rolls));
+                roll->setToolTip(QStringLiteral("Make %1 takes of %2, each with every seed of its recipe one on from the last; the command is shown first").arg(rolls).arg(mediaId));
+                connect(roll, &QAction::triggered, this, [this, mediaId, rolls] { makeMedia(mediaId, rolls); });
+            }
+            menu->addMenu(several);
         }
         if (const QJsonArray takes = mediaTakes(mediaId); !takes.isEmpty()) {
             // Every take is kept: the one the media is is ticked, and another is chosen here.
@@ -482,6 +687,10 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
     }
     menu->addAction(m_commands->action(QStringLiteral("file.import")));
     menu->addAction(m_commands->action(QStringLiteral("collab.consolidate")));
+    QAction *cast = menu->addAction(QStringLiteral("Cast and Styles…"));
+    cast->setObjectName(QStringLiteral("binCast"));
+    cast->setToolTip(QStringLiteral("Who and what this project's shots show, and how they look, said once for every recipe"));
+    connect(cast, &QAction::triggered, this, &MainWindow::showCast);
     return menu;
 }
 

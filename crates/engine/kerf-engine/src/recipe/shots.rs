@@ -4,7 +4,8 @@
 //! A project with a dozen made shots is otherwise asked about one media at
 //! a time. This reads the takes' folders and records and runs nothing.
 
-use super::{takes, unmade, Recipe, Unmade};
+use super::takes::Standing;
+use super::Unmade;
 use kerf_model::{Content, Project};
 use std::path::Path;
 
@@ -35,24 +36,13 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
         .iter()
         .filter_map(|media| {
             let recipe = media.recipe.clone()?;
-            let made = takes(project, directory, media).unwrap_or_default();
-            let (mut cast, mut styles) = (Vec::new(), Vec::new());
-            if let Some(read) = std::fs::read_to_string(directory.join(&recipe))
-                .ok()
-                .and_then(|text| Recipe::parse(&text).ok())
-            {
-                for step in &read.steps {
-                    if let super::Step::Generate(ask) = step {
-                        for (names, of) in [(&mut cast, &ask.cast), (&mut styles, &ask.styles)] {
-                            for name in of {
-                                if !names.contains(name) {
-                                    names.push(name.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // The recipe is read, and what it reads hashed, once for both questions.
+            let standing = Standing::of(project, directory, media);
+            let made = standing
+                .as_ref()
+                .and_then(|standing| standing.takes().ok())
+                .unwrap_or_default();
+            let (cast, styles) = super::cast::named_by(directory, &recipe);
             Some(Shot {
                 media: media.id.to_string(),
                 seconds: media.duration.seconds(),
@@ -69,7 +59,7 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
                 chosen: made.iter().find(|take| take.chosen).map(|take| take.number),
                 cast,
                 styles,
-                wants: unmade(project, directory, media),
+                wants: standing.and_then(|standing| standing.unmade()),
                 recipe,
             })
         })

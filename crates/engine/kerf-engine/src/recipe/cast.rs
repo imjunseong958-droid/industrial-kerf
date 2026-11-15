@@ -28,8 +28,8 @@ use super::model::{Ask, Source};
 use super::{within, words, Recipe, Step};
 use crate::error::{EngineError, Result};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 /// The file a project's cast is kept in, in the project's folder.
 pub const FILE: &str = "cast.kerfcast";
@@ -82,9 +82,26 @@ impl Entry {
 /// A project's cast, as its file says it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cast {
-    entries: BTreeMap<(Kind, String), Entry>,
+    /// Each one, in the order the file says them.
+    entries: Vec<(Kind, String, Entry)>,
     /// Whether the project has the file at all.
     there: bool,
+}
+
+/// A cast file as it was when it was read: where, how long, and when written.
+type Read = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+
+/// The cast last read, and the file it was read from.
+fn known() -> &'static Mutex<Option<(Read, Cast)>> {
+    static KNOWN: OnceLock<Mutex<Option<(Read, Cast)>>> = OnceLock::new();
+    KNOWN.get_or_init(Mutex::default)
+}
+
+/// Read the next cast asked for from its file: one is about to be written.
+fn forget() {
+    if let Ok(mut known) = known().lock() {
+        *known = None;
+    }
 }
 
 /// Whether `name` can name a cast or a style: letters, digits, `-` and `_`.
@@ -108,7 +125,7 @@ impl Cast {
             _ => return Err(EngineError::msg(format!("`{FILE}` starts with `{HEADER}`"))),
         }
         let mut cast = Self {
-            entries: BTreeMap::new(),
+            entries: Vec::new(),
             there: true,
         };
         for (number, line) in lines {
@@ -159,9 +176,10 @@ impl Cast {
                     "`{name}` says nothing: give it words in quotes, a `ref=<picture>`, or both"
                 )));
             }
-            if cast.entries.insert((kind, name.clone()), entry).is_some() {
+            if cast.find(kind, &name).is_some() {
                 return Err(wrong(format!("{} `{name}` is said twice", kind.word())));
             }
+            cast.entries.push((kind, name, entry));
         }
         Ok(cast)
     }
@@ -169,26 +187,129 @@ impl Cast {
     /// The cast of the project kept in `directory`. A project with no cast
     /// file has none.
     pub fn read(directory: &Path) -> Result<Self> {
-        match std::fs::read_to_string(directory.join(FILE)) {
-            Ok(text) => Self::parse(&text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(EngineError::msg(format!("cannot read `{FILE}`: {error}"))),
+        // A making, a look, and a list of shots each ask for it several times over: it is
+        // read once for as long as the file's length and time stay what they were.
+        let file = directory.join(FILE);
+        let key = match std::fs::metadata(&file) {
+            Ok(metadata) => (file.clone(), metadata.len(), metadata.modified().ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default())
+            }
+            Err(error) => return Err(EngineError::msg(format!("cannot read `{FILE}`: {error}"))),
+        };
+        let known = known();
+        if let Some(cast) = known.lock().ok().and_then(|known| {
+            known
+                .as_ref()
+                .filter(|(read, _)| *read == key)
+                .map(|(_, cast)| cast.clone())
+        }) {
+            return Ok(cast);
         }
+        let cast = match std::fs::read_to_string(&file) {
+            Ok(text) => Self::parse(&text)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default())
+            }
+            Err(error) => return Err(EngineError::msg(format!("cannot read `{FILE}`: {error}"))),
+        };
+        if let Ok(mut known) = known.lock() {
+            *known = Some((key, cast.clone()));
+        }
+        Ok(cast)
     }
 
-    /// Every one of `kind`, by name, in the order of their names.
-    pub fn of(&self, kind: Kind) -> impl Iterator<Item = (&str, &Entry)> {
+    /// A cast of `entries`, in their order, read as a file of them would be: what is wrong
+    /// with one is said as it is of a file's line.
+    pub fn of_entries(entries: impl IntoIterator<Item = (Kind, String, Entry)>) -> Result<Self> {
+        let cast = Self {
+            entries: entries.into_iter().collect(),
+            there: true,
+        };
+        Self::parse(&cast.text())
+    }
+
+    /// The cast as its file says it.
+    pub fn text(&self) -> String {
+        let mut text = format!("{HEADER}\n");
+        for (kind, name, entry) in &self.entries {
+            text.push_str(&line(*kind, name, entry));
+            text.push('\n');
+        }
+        text
+    }
+
+    /// Write the cast as the cast file of the project in `directory`, in place of the one
+    /// there. A file's comments are not kept.
+    pub fn write(&self, directory: &Path) -> Result<()> {
+        forget();
+        std::fs::write(directory.join(FILE), self.text())
+            .map_err(|error| EngineError::msg(format!("cannot write `{FILE}`: {error}")))
+    }
+
+    /// Add `lines`, each a cast file's line, to the cast file of the project in `directory`,
+    /// after what it holds, and say the names added. Only ones the file has not are added:
+    /// a line for one it has is refused, since what a shot was made from is not changed by
+    /// adding to it, and is by saying one again.
+    pub fn add(directory: &Path, lines: &[String]) -> Result<Vec<String>> {
+        let has = Self::read(directory)?;
+        let adds = Self::parse(&format!("{HEADER}\n{}\n", lines.join("\n")))?;
+        for (kind, name, _) in &adds.entries {
+            if has.find(*kind, name).is_some() {
+                return Err(EngineError::msg(format!(
+                    "`{FILE}` has a {} `{name}` already, and changing one asks again for the shots it is in: that is the person's to do. Name it as it is, or add one by another name",
+                    kind.word()
+                )));
+            }
+        }
+        let file = directory.join(FILE);
+        let mut text = match std::fs::read_to_string(&file) {
+            Ok(text) if text.is_empty() || text.ends_with('\n') => text,
+            Ok(text) => format!("{text}\n"),
+            Err(_) => String::new(),
+        };
+        if !has.there {
+            text = format!("{HEADER}\n");
+        }
+        for (kind, name, entry) in &adds.entries {
+            text.push_str(&line(*kind, name, entry));
+            text.push('\n');
+        }
+        forget();
+        std::fs::write(&file, text)
+            .map_err(|error| EngineError::msg(format!("cannot write `{FILE}`: {error}")))?;
+        Ok(adds
+            .entries
+            .iter()
+            .map(|(kind, name, _)| format!("{} {name}", kind.word()))
+            .collect())
+    }
+
+    /// Every one, with its kind and name, in the order the file says them.
+    pub fn entries(&self) -> impl Iterator<Item = (Kind, &str, &Entry)> {
         self.entries
             .iter()
-            .filter(move |((of, _), _)| *of == kind)
-            .map(|((_, name), entry)| (name.as_str(), entry))
+            .map(|(kind, name, entry)| (*kind, name.as_str(), entry))
+    }
+
+    fn find(&self, kind: Kind, name: &str) -> Option<&Entry> {
+        self.entries
+            .iter()
+            .find(|(of, named, _)| *of == kind && named == name)
+            .map(|(_, _, entry)| entry)
+    }
+
+    /// Every one of `kind`, by name, in the order the file says them.
+    pub fn of(&self, kind: Kind) -> impl Iterator<Item = (&str, &Entry)> {
+        self.entries()
+            .filter(move |(of, _, _)| *of == kind)
+            .map(|(_, name, entry)| (name, entry))
     }
 
     /// The one of `kind` named `name`, or an error that says which there are
     /// and the line that adds it.
     fn named(&self, kind: Kind, name: &str) -> Result<&Entry> {
-        self.entries
-            .get(&(kind, name.to_owned()))
+        self.find(kind, name)
             .ok_or_else(|| {
                 let word = kind.word();
                 let line = match kind {
@@ -214,6 +335,30 @@ impl Cast {
                 })
             })
     }
+}
+
+/// `word` as a line writes it: in quotes where it holds a space or a quote.
+fn quoted(word: &str) -> String {
+    if word.is_empty() || word.contains(|c: char| c.is_whitespace() || c == '"') {
+        format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        word.to_owned()
+    }
+}
+
+/// One of a cast as a line of its file.
+fn line(kind: Kind, name: &str, entry: &Entry) -> String {
+    let mut line = format!("{} {name}", kind.word());
+    if !entry.words.is_empty() {
+        line.push_str(&format!(
+            " \"{}\"",
+            entry.words.replace('\\', "\\\\").replace('"', "\\\"")
+        ));
+    }
+    for reference in &entry.references {
+        line.push_str(&format!(" ref={}", quoted(reference)));
+    }
+    line
 }
 
 /// `prompt` and then each of `more` as a sentence of its own.
@@ -275,6 +420,27 @@ fn told(ask: &Ask, cast: &Cast, directory: &Path, folder: &Path) -> Result<Ask> 
     }
     asked.prompt = sentences(&ask.prompt, more);
     Ok(asked)
+}
+
+/// The cast and the styles the recipe named `recipe` in the project in `directory` names, each
+/// once, in the order its lines give them: none where it names none or does not read. The
+/// names are the recipe's own, so one the cast file has not is among them.
+pub fn named_by(directory: &Path, recipe: &str) -> (Vec<String>, Vec<String>) {
+    let (mut cast, mut styles) = (Vec::new(), Vec::new());
+    let read = within(Path::new(""), recipe, "recipe")
+        .ok()
+        .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
+        .and_then(|text| Recipe::parse(&text).ok());
+    for ask in read.iter().flat_map(Recipe::asks) {
+        for (names, of) in [(&mut cast, &ask.cast), (&mut styles, &ask.styles)] {
+            for name in of {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    (cast, styles)
 }
 
 impl Recipe {

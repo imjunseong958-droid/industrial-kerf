@@ -223,7 +223,12 @@ void kerf_bridge_free(void *bridge);
 // what it takes), and the number and file of the take they would write, for
 // a person to read. A recipe that
 // could not run, such as one asking a model that is not set up, is an error
-// {message} instead. With confirmed: true, which only a person's yes to that
+// {message} instead. With rolls: N (2 to 16) it is N takes, one after
+// another, each with the recipe's seeds one on from the last: the plan says
+// rolls and the first take, each take answers a media_making of its own as it
+// begins, and media_made names the last, which the media then is; a take
+// that fails leaves the ones before it, the media being the last made.
+// With confirmed: true, which only a person's yes to that
 // plan may send, it runs the recipe off the GUI thread, answers media_made
 // {media, take} and then the state of the replace that has the media be
 // that take, or error {message, command: "media_make", media} with the media
@@ -240,6 +245,13 @@ void kerf_bridge_free(void *bridge);
 // media_make_cancelled and error as it goes, though nothing asked the bridge
 // for it, and media_make_cancel {media} stops it too. Closing the bridge
 // leaves it running.
+// Cast: cast_get answers cast {entries, toMake, saved: false}: the project's
+// cast.kerfcast as entries {kind: "cast"|"style", name, words, refs}, in the
+// file's order, and the media whose shots want making as things stand, each
+// {media, why}. cast_set {entries} writes those as the file, in place of the
+// one there (its comments are not kept), and answers the same with saved:
+// true; entries that would not read as a cast file are an error {message,
+// command: "cast"} and the file is as it was.
 // Projection: projection_import loads a project.kerf changed outside Kerf
 // (a git pull in a terminal, a text editor) as one revision;
 // projection_repair writes the editor's project over it.

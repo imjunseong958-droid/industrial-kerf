@@ -1663,3 +1663,80 @@ fn the_shots_of_a_project_are_read_at_once() {
     );
     assert_eq!(super::shots::summary(&all[..1]), "1 shot, 4s, all made");
 }
+
+#[test]
+fn a_cast_is_written_as_it_reads_and_added_to_without_changing_what_is_there() {
+    use super::cast::{Cast, Entry, Kind};
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    // No file is no cast, and adding to none starts one.
+    assert_eq!(Cast::read(directory).unwrap().entries().count(), 0);
+    let added = Cast::add(
+        directory,
+        &[
+            "cast lamp \"a lamp room\"".to_owned(),
+            "style film \"35mm\"".to_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(added, ["cast lamp", "style film"]);
+    // What a person wrote there, its comments among it, stays as it is.
+    std::fs::write(
+        directory.join("cast.kerfcast"),
+        "kerf-cast 1\n# The keeper.\ncast Ada \"an old keeper\" ref=refs/ada.png",
+    )
+    .unwrap();
+    Cast::add(directory, &["cast gull \"a herring gull\"".to_owned()]).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(directory.join("cast.kerfcast")).unwrap(),
+        "kerf-cast 1\n# The keeper.\ncast Ada \"an old keeper\" ref=refs/ada.png\ncast gull \"a herring gull\"\n"
+    );
+    // One the file has is not said again, and a line that does not read adds nothing.
+    for (line, why) in [
+        ("cast Ada \"a young keeper\"", "has a cast `Ada` already"),
+        ("cast \"no name\"", "followed by a name"),
+    ] {
+        let error = Cast::add(directory, &[line.to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(why), "{line}: {error}");
+    }
+    // They are kept in the order the file says them, and read the moment it changes.
+    let cast = Cast::read(directory).unwrap();
+    let names: Vec<&str> = cast.entries().map(|(_, name, _)| name).collect();
+    assert_eq!(names, ["Ada", "gull"]);
+    // A cast of entries is the file an editor writes: words and paths that hold spaces and
+    // quotes come back as they went.
+    let said = Cast::of_entries([
+        (
+            Kind::Cast,
+            "Ada".to_owned(),
+            Entry {
+                words: "an old keeper, \"the last\"".to_owned(),
+                references: vec!["refs/ada front.png".to_owned()],
+            },
+        ),
+        (
+            Kind::Style,
+            "film".to_owned(),
+            Entry {
+                words: "35mm".to_owned(),
+                references: Vec::new(),
+            },
+        ),
+    ])
+    .unwrap();
+    assert_eq!(
+        said.text(),
+        "kerf-cast 1\ncast Ada \"an old keeper, \\\"the last\\\"\" ref=\"refs/ada front.png\"\nstyle film \"35mm\"\n"
+    );
+    said.write(directory).unwrap();
+    assert_eq!(Cast::read(directory).unwrap(), said);
+    assert_eq!(Cast::parse(&said.text()).unwrap(), said);
+    // One that says nothing, or two of a name, is refused as a file's line is.
+    let nothing = Cast::of_entries([(Kind::Cast, "Ada".to_owned(), Entry::default())]);
+    assert!(nothing
+        .unwrap_err()
+        .to_string()
+        .contains("`Ada` says nothing"));
+}

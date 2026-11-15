@@ -4143,3 +4143,92 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     let unknown = error(&router, "make", json!({"job": "make-none"}));
     assert_eq!(unknown["code"], "UNKNOWN_JOB");
 }
+
+#[test]
+fn an_agent_adds_to_the_cast_and_asks_for_several_takes() {
+    use kerf_mcp::permissions::{Mode, Permissions};
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let dir = directory.path();
+    let given = |mode: Mode, makes: u32| {
+        router.set_permissions(Some(Permissions {
+            mode,
+            makes,
+            ..Permissions::default()
+        }))
+    };
+    given(Mode::AcceptEdits, 0);
+    // Who a recipe of the edit shows that the project has not said is added with it.
+    let edited = ok(
+        &router,
+        "edit",
+        json!({
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
+            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=160x90\n"},
+            "cast": ["cast Ada \"an old keeper\"", "style film \"35mm\""],
+        }),
+    );
+    assert_eq!(edited["status"], "accepted", "{edited}");
+    assert_eq!(edited["cast"], json!(["cast Ada", "style film"]));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("cast.kerfcast")).unwrap(),
+        "kerf-cast 1\ncast Ada \"an old keeper\"\nstyle film \"35mm\"\n"
+    );
+    let said = ok(&router, "look", json!({}));
+    assert_eq!(said["cast"][0]["name"], "Ada");
+    // One the file has is the person's to change, and what is there stays.
+    let twice = error(
+        &router,
+        "edit",
+        json!({"cast": ["cast Ada \"a young keeper\""]}),
+    );
+    assert_eq!(twice["code"], "INVALID_CAST", "{twice}");
+    assert!(twice["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("has a cast `Ada` already")));
+    // Alone, lines for ones it has not are written, with no proposal.
+    let alone = ok(
+        &router,
+        "edit",
+        json!({"cast": ["cast lamp \"a lamp room\""]}),
+    );
+    assert_eq!(alone["status"], "written", "{alone}");
+    assert_eq!(alone["cast"], json!(["cast lamp"]));
+
+    // Several takes are asked of the person as one making of that many.
+    let asked = ok(&router, "make", json!({"media": "m9", "rolls": 3}));
+    assert_eq!(asked["status"], "asked", "{asked}");
+    assert_eq!(asked["takes"], json!([1, 2, 3]));
+    let requests = kerf_mcp::make_requests(router.runtime());
+    assert!(
+        requests[0].1.body.contains("as takes 1 to 3")
+            && requests[0].1.body.contains("`kerf make m9 --rolls 3`"),
+        "{}",
+        requests[0].1.body
+    );
+    for rolls in [0, 9] {
+        let refused = error(&router, "make", json!({"media": "m9", "rolls": rolls}));
+        assert_eq!(refused["code"], "INVALID_ARGUMENTS", "{refused}");
+    }
+    // Each roll is a making the person's limit counts: more than it lets is asked for whole.
+    given(Mode::Auto, 2);
+    let over = ok(&router, "make", json!({"media": "m9", "rolls": 3}));
+    assert_eq!(over["status"], "asked", "{over}");
+    assert!(!dir.join("shots/open.takes/001.mp4").exists());
+    // Within it, they run one after another, and the media is the last.
+    let made = ok(
+        &router,
+        "make",
+        json!({"media": "m9", "rolls": 2, "wait": true}),
+    );
+    assert_eq!(made["status"], "made", "{made}");
+    assert_eq!(made["takes"], json!([1, 2]));
+    assert_eq!(made["take"], 2);
+    assert_eq!(made["path"], "shots/open.takes/002.mp4");
+    assert!(dir.join("shots/open.takes/001.mp4").is_file());
+    assert!(dir.join("shots/open.takes/002.mp4").is_file());
+    // The limit is spent: one more is asked for.
+    let past = ok(&router, "make", json!({"media": "m9"}));
+    assert_eq!(past["status"], "asked", "{past}");
+}

@@ -268,6 +268,17 @@ enum Command {
         media: String,
         #[serde(default)]
         confirmed: bool,
+        /// How many takes to make, each with its seeds one on from the last: one where it
+        /// is not said.
+        #[serde(default)]
+        rolls: Option<u32>,
+    },
+    /// Read the project's cast file: `cast`.
+    CastGet,
+    /// Write `entries` as the project's cast file, in place of the one there: `cast`, with
+    /// the shots that want making for it.
+    CastSet {
+        entries: Vec<media::CastEntry>,
     },
     /// Stop the making of a media that is running: `media_make_cancelled`.
     MediaMakeCancel {
@@ -799,8 +810,29 @@ fn runtime_worker(
                 });
                 continue;
             }
-            Command::MediaMake { media, confirmed } => {
-                media::make(&shared, &active_client, &media, confirmed, &commands, &tx);
+            Command::MediaMake {
+                media,
+                confirmed,
+                rolls,
+            } => {
+                let rolls = rolls.unwrap_or(1).clamp(1, 16);
+                media::make(
+                    &shared,
+                    &active_client,
+                    &media,
+                    confirmed,
+                    rolls,
+                    &commands,
+                    &tx,
+                );
+                continue;
+            }
+            Command::CastGet => {
+                media::cast(&shared, &active_client, None, &tx);
+                continue;
+            }
+            Command::CastSet { entries } => {
+                media::cast(&shared, &active_client, Some(entries), &tx);
                 continue;
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {

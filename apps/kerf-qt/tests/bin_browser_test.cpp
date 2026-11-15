@@ -34,6 +34,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QTableWidget>
 #include <QDialogButtonBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -648,7 +649,8 @@ private slots:
                 QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m2"}, {"path", "/Volumes/Shoot/b.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}},
-                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"}},
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"},
+                            {"shows", QJsonArray{"Ada", "film"}}},
                 QJsonObject{{"id", "m5"}, {"path", "shots/boat.takes/002.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/boat.kerfrecipe"},
                             {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/boat.takes/001.mp4"}, {"chosen", false}},
                                                  QJsonObject{{"number", 2}, {"path", "shots/boat.takes/002.mp4"}, {"chosen", true}}}}}}}}}});
@@ -668,7 +670,8 @@ private slots:
         QStringList labels;
         for (const QAction *action : menu->actions())
             if (!action->isSeparator()) labels << action->text();
-        QCOMPARE(labels, (QStringList{"Insert", "Overwrite", "Replace Media…", "Reveal in Finder", "Import Media…", "Consolidate Media"}));
+        QCOMPARE(labels, (QStringList{"Insert", "Overwrite", "Replace Media…", "Reveal in Finder", "Import Media…", "Consolidate Media",
+                                       "Cast and Styles…"}));
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReplace"))->isEnabled());
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
         delete menu;
@@ -686,6 +689,26 @@ private slots:
         QAction *make = menu->findChild<QAction *>(QStringLiteral("binMake"));
         QVERIFY(make && make->isEnabled());
         QVERIFY(make->toolTip().contains(QStringLiteral("shots/open.kerfrecipe")));
+        // Who and what its recipe shows is said with it.
+        QCOMPARE(window.mediaShows(QStringLiteral("m4")), (QStringList{"Ada", "film"}));
+        QVERIFY(make->toolTip().endsWith(QStringLiteral("; it shows Ada, film")));
+        // Several takes of it are asked for by how many, and shown before anything runs too.
+        QMenu *several = menu->findChild<QMenu *>(QStringLiteral("binMakeSeveral"));
+        QVERIFY(several && several->isEnabled());
+        QCOMPARE(several->title(), QStringLiteral("Make Several from Recipe"));
+        QCOMPARE(several->actions().size(), 3);
+        QAction *three = several->findChild<QAction *>(QStringLiteral("binMake3"));
+        QVERIFY(three);
+        QCOMPARE(three->text(), QStringLiteral("3 Takes…"));
+        three->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", false}, {"rolls", 3}}));
+        const QString rolled = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+                                                                   {"command", "dawn-adapter"}, {"take", 2}, {"rolls", 3},
+                                                                   {"file", "/p/shots/open.takes/002.mp4"}});
+        QVERIFY(rolled.contains(QStringLiteral("3 times")) && rolled.contains(QStringLiteral("writes 3 new takes, 2 to 4")));
+        QVERIFY(rolled.contains(QStringLiteral("each with every seed one on from the last")) && rolled.endsWith(QStringLiteral("Run them?")));
+        window.runMake(QStringLiteral("m4"), 3);
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}, {"rolls", 3}}));
         make->trigger();
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", false}}));
         // Every step shows, and the take it writes, which leaves the ones before it.
@@ -706,6 +729,77 @@ private slots:
         window.runMake(QStringLiteral("m4"));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", true}}));
         delete menu;
+
+        // The project's cast is asked for from the bin's menu, and shows as rows to set.
+        menu = window.binMenu(QString());
+        QAction *castAction = menu->findChild<QAction *>(QStringLiteral("binCast"));
+        QVERIFY(castAction);
+        castAction->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "cast_get"}}));
+        delete menu;
+        QDialog *cast = window.castDialog(QJsonObject{
+            {"type", "cast"},
+            {"entries", QJsonArray{QJsonObject{{"kind", "cast"}, {"name", "Ada"}, {"words", "an old keeper"},
+                                               {"refs", QJsonArray{"refs/ada.png", "refs/ada-side.png"}}},
+                                   QJsonObject{{"kind", "style"}, {"name", "film"}, {"words", "35mm"}, {"refs", QJsonArray{}}}}},
+            {"toMake", QJsonArray{QJsonObject{{"media", "m4"}, {"why", "its file is not there yet"}}}}});
+        auto *castTable = cast->findChild<QTableWidget *>(QStringLiteral("castTable"));
+        QVERIFY(castTable);
+        QCOMPARE(castTable->rowCount(), 2);
+        QCOMPARE(castTable->item(0, 1)->text(), QStringLiteral("Ada"));
+        QCOMPARE(castTable->item(0, 3)->text(), QStringLiteral("refs/ada.png, refs/ada-side.png"));
+        // A kind is which button added the row, and is not typed.
+        QVERIFY(!(castTable->item(0, 0)->flags() & Qt::ItemIsEditable));
+        bool saysWanting = false;
+        for (const QLabel *label : cast->findChildren<QLabel *>())
+            saysWanting |= label->text() == QStringLiteral("Wants making now: m4 (its file is not there yet)");
+        QVERIFY(saysWanting);
+        // With KERF_SCREENSHOT_DIR set, the dialog is saved as a person would see it.
+        if (const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR"); !shots.isEmpty()) {
+            cast->resize(820, 460);
+            QVERIFY(cast->grab().save(QDir(shots).filePath(QStringLiteral("cast-dialog.png"))));
+        }
+        // A picture and a removal are of the chosen row.
+        QVERIFY(!cast->findChild<QPushButton *>(QStringLiteral("castRemove"))->isEnabled());
+        cast->findChild<QPushButton *>(QStringLiteral("castAdd"))->click();
+        QCOMPARE(castTable->rowCount(), 3);
+        QCOMPARE(castTable->item(2, 0)->text(), QStringLiteral("cast"));
+        castTable->item(2, 1)->setText(QStringLiteral(" lamp "));
+        castTable->item(2, 2)->setText(QStringLiteral("the lamp  room"));
+        castTable->item(2, 3)->setText(QStringLiteral("refs/lamp.png, "));
+        castTable->setCurrentCell(1, 1);
+        QVERIFY(cast->findChild<QPushButton *>(QStringLiteral("castRemove"))->isEnabled());
+        cast->findChild<QPushButton *>(QStringLiteral("castRemove"))->click();
+        QCOMPARE(castTable->rowCount(), 2);
+        cast->findChild<QDialogButtonBox *>(QStringLiteral("castButtons"))->button(QDialogButtonBox::Save)->click();
+        QCOMPARE(window.m_lastCommand,
+                 (QJsonObject{{"type", "cast_set"},
+                              {"entries", QJsonArray{QJsonObject{{"kind", "cast"}, {"name", "Ada"}, {"words", "an old keeper"},
+                                                                 {"refs", QJsonArray{"refs/ada.png", "refs/ada-side.png"}}},
+                                                     QJsonObject{{"kind", "cast"}, {"name", "lamp"}, {"words", "the lamp room"},
+                                                                 {"refs", QJsonArray{"refs/lamp.png"}}}}}}));
+        // Saved, it says what the change costs: the shots that want making for it.
+        QCOMPARE(MainWindow::castSaved(QJsonObject{{"toMake", QJsonArray{QJsonObject{{"media", "m4"}}, QJsonObject{{"media", "m5"}}}}}),
+                 QStringLiteral("Saved the cast; m4, m5 want making again"));
+        QCOMPARE(MainWindow::castSaved(QJsonObject{{"toMake", QJsonArray{QJsonObject{{"media", "m4"}}}}}),
+                 QStringLiteral("Saved the cast; m4 wants making again"));
+        QCOMPARE(MainWindow::castSaved(QJsonObject{}), QStringLiteral("Saved the cast; no shot wants making for it"));
+        // A picture of the project is named as it is; one from elsewhere is copied into refs.
+        {
+            QTemporaryDir folder;
+            QDir(folder.path()).mkpath(QStringLiteral("project/refs"));
+            QDir(folder.path()).mkpath(QStringLiteral("elsewhere"));
+            const QString project = folder.filePath(QStringLiteral("project"));
+            for (const QString &file : {QStringLiteral("project/refs/ada.png"), QStringLiteral("elsewhere/ada.png")}) {
+                QFile written(folder.filePath(file));
+                QVERIFY(written.open(QIODevice::WriteOnly));
+                written.write("a picture");
+            }
+            QCOMPARE(MainWindow::castPicturePath(project, folder.filePath(QStringLiteral("project/refs/ada.png"))), QStringLiteral("refs/ada.png"));
+            // One of the same name is kept beside it, not written over.
+            QCOMPARE(MainWindow::castPicturePath(project, folder.filePath(QStringLiteral("elsewhere/ada.png"))), QStringLiteral("refs/ada-2.png"));
+            QVERIFY(QFileInfo::exists(folder.filePath(QStringLiteral("project/refs/ada-2.png"))));
+        }
 
         // A media with takes offers them: the one it is is ticked, and another is chosen as a
         // replace of its file, which the document names.
