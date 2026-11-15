@@ -132,6 +132,17 @@ pub struct SectionStats {
     /// Renders whose sound was copied as it was kept, and renders that mixed and encoded it.
     pub sound_kept: u64,
     pub sound_mixed: u64,
+    /// Of the renders that mixed it: the clips whose sound was read as it was kept decoded,
+    /// and the clips decoded.
+    pub sound_clips_kept: u64,
+    pub sound_clips_decoded: u64,
+    /// The pieces of encoded sound used as they were kept, and the pieces encoded.
+    pub sound_pieces_kept: u64,
+    pub sound_pieces_encoded: u64,
+    /// Renders whose sound one encoder made from start to end, and of those the renders whose
+    /// pieces had no frame to join at.
+    pub sound_whole: u64,
+    pub sound_unjoined: u64,
     /// Renders that gave up on stretches and encoded the picture whole.
     pub whole: u64,
 }
@@ -142,6 +153,12 @@ static ENCODED: AtomicU64 = AtomicU64::new(0);
 static ENCODED_FRAMES: AtomicU64 = AtomicU64::new(0);
 static SOUND_KEPT: AtomicU64 = AtomicU64::new(0);
 static SOUND_MIXED: AtomicU64 = AtomicU64::new(0);
+static SOUND_CLIPS_KEPT: AtomicU64 = AtomicU64::new(0);
+static SOUND_CLIPS_DECODED: AtomicU64 = AtomicU64::new(0);
+static SOUND_PIECES_KEPT: AtomicU64 = AtomicU64::new(0);
+static SOUND_PIECES_ENCODED: AtomicU64 = AtomicU64::new(0);
+static SOUND_WHOLE: AtomicU64 = AtomicU64::new(0);
+static SOUND_UNJOINED: AtomicU64 = AtomicU64::new(0);
 static WHOLE: AtomicU64 = AtomicU64::new(0);
 
 /// What renders in this process have done with their stretches.
@@ -153,12 +170,36 @@ pub fn section_stats() -> SectionStats {
         encoded_frames: ENCODED_FRAMES.load(Ordering::Relaxed),
         sound_kept: SOUND_KEPT.load(Ordering::Relaxed),
         sound_mixed: SOUND_MIXED.load(Ordering::Relaxed),
+        sound_clips_kept: SOUND_CLIPS_KEPT.load(Ordering::Relaxed),
+        sound_clips_decoded: SOUND_CLIPS_DECODED.load(Ordering::Relaxed),
+        sound_pieces_kept: SOUND_PIECES_KEPT.load(Ordering::Relaxed),
+        sound_pieces_encoded: SOUND_PIECES_ENCODED.load(Ordering::Relaxed),
+        sound_whole: SOUND_WHOLE.load(Ordering::Relaxed),
+        sound_unjoined: SOUND_UNJOINED.load(Ordering::Relaxed),
         whole: WHOLE.load(Ordering::Relaxed),
     }
 }
 
 pub(crate) fn count_sound(kept: bool) {
     if kept { &SOUND_KEPT } else { &SOUND_MIXED }.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn count_sound_clips(kept: usize, decoded: usize) {
+    SOUND_CLIPS_KEPT.fetch_add(kept as u64, Ordering::Relaxed);
+    SOUND_CLIPS_DECODED.fetch_add(decoded as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn count_sound_pieces(kept: usize, encoded: usize) {
+    SOUND_PIECES_KEPT.fetch_add(kept as u64, Ordering::Relaxed);
+    SOUND_PIECES_ENCODED.fetch_add(encoded as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn count_sound_whole() {
+    SOUND_WHOLE.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn count_sound_unjoined() {
+    SOUND_UNJOINED.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn count_kept(frames: usize) {
@@ -224,7 +265,7 @@ impl Kept {
         )
     }
 
-    fn at(root: &Path, stamp: &str, budget: u64) -> Option<Self> {
+    pub(crate) fn at(root: &Path, stamp: &str, budget: u64) -> Option<Self> {
         let folder = root.join(stamp);
         std::fs::create_dir_all(folder.join("making")).ok()?;
         Some(Self {

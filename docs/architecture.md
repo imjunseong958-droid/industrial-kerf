@@ -897,7 +897,9 @@ Three limits remain, in this order:
    draws and encodes the stretches an edit touched and joins the rest; five minutes of H.264 is
    100 MB, so a whole program stays. The sound is mixed and encoded on its own while the picture
    is, and kept by what it mixes and the files it reads, so a clip drawn another way does not mix
-   it again; the two are then copied into the file. A join that fails, or whose frames do not
+   it again; the two are then copied into the file. When it is mixed again, it is made from
+   what is kept of it: each clip's sound decoded, and the encoded sound in pieces (below). A
+   join that fails, or whose frames do not
    count up to the render's, or are not decoded one frame apart, is encoded whole as before, as
    are a render under two seconds, one most of whose frames have no number, and HDR10, each
    stretch of which says how bright the whole picture is. No stretch is shorter than two seconds:
@@ -938,6 +940,114 @@ Three limits remain, in this order:
    (`kerf-engine/tests/sound_place.rs` tells every sample of a mix apart, at 29.97 frames a
    second, where a frame is not a whole number of samples). Mixing the five minutes' 60 clips
    now takes 2.7 s, 2.2 of them opening the file 60 times, and encoding them as AAC 4.2 more.
+
+   That was still paid whole after a cut: a clip taken out near the start of the five minutes
+   rendered again in 8.6 s and one near the end in 11.2 s, against 2.8 s and 5.5 s for the same
+   two renders with no sound. So a render keeps two more things of its sound
+   (`kerf-engine/src/kept_sound.rs`), in the same folder and under the same limit:
+
+   - *Each clip's sound, decoded.* What a media clip reads of its file, as stereo floats at
+     48 kHz, named by the file as it is and the part of it read, and by nothing of the clip, so
+     a clip made quieter or moved reads the same file. `kerf_core::program` gives the graph in
+     a second form that starts from these (`CompiledProgram::decoded_filter`). Mixing the five
+     minutes from 60 kept clips takes 0.6 s and is the same bytes as mixing from the footage;
+     decoding all 60 the first time, four at once, takes 1.1 s. They are 23 MB a minute, so the
+     five minutes' sound takes as much room decoded as its picture does encoded. The master's
+     sound is PCM, and is mixed from them straight into its file: that is all of what keeping
+     gains it.
+   - *The AAC, in pieces.* AAC is frames of 1024 samples on a grid that starts with the
+     program, each overlapping its neighbours. A piece is 1024 of those frames, 21.8 s, on that
+     grid, kept by the samples it is encoded from. An edit that changes the sound for a while
+     changes the pieces it falls in and leaves the rest; one that closes a gap leaves the pieces
+     before it and moves everything after it to another place on the grid, where no kept frame
+     is of any use, and those pieces are encoded again, each by an encoder of its own, all at
+     once.
+
+   Pieces encoded apart do not simply follow one another. FFmpeg's `aac` begins every sound
+   with a frame of short windows and one that leads back to long ones, so a piece started at its
+   own first frame has short windows where the piece before it ends on a long one, the halves
+   that should cancel do not, and the join is heard. Measured on the five minutes' sound
+   (speech, music and effects, cut every five seconds), at 54 joins, as the error of the 1024
+   samples a join is heard in against the error a whole encode has in the same samples:
+
+   | Frames encoded before the piece | Joins where the windows differ | Error at the join, median | Worst |
+   |---|---|---|---|
+   | 0 | all (the first frame is of silence) | 11.8 times | 56 |
+   | 2 | 51 of 54 | 3.5 | 20 |
+   | 4 | 0 | 1.2 | 3.8 |
+   | 8 | 0 | 1.1 | 3.7 |
+
+   For comparison, a frame chosen anywhere in a piece is 1.1 times a whole encode's error at
+   the median and 2.7 at the 99th percentile, and two whole encodes half a frame apart differ
+   frame by frame by 1.0 at the median and 1.9 at the 99th. So each piece is encoded from 16
+   frames before its first, which are kept with it, and two pieces are joined at a frame where
+   the frame before has the same window in both: the earlier piece's own frame, and the later
+   piece's lead. The window is read from the frame itself (two bits of sequence and one of
+   shape), so the check is exact and costs nothing: no sound is decoded for it. A frame whose
+   channels have windows of their own, one in fifty here, cannot be read without decoding it;
+   the join then goes back a frame at a time through the lead, and the lead's frames take the
+   earlier piece's place. Two pieces with no such frame are not joined: one encoder makes the
+   whole sound, as it does when the sound is not FFmpeg's `aac` at all.
+
+   An encoder that has just started is also a little worse for a few seconds than one that
+   has been running, however long its lead: it spends fewer bits until it has the measure of
+   the sound. Pieces a quarter as long made the five minutes 0.8 dB noisier than a whole encode
+   at 128 kb/s; at 1024 frames it is 0.4 dB (two whole encodes half a frame apart differ by
+   0.1), and at the review copy's 320 kb/s 0.02 dB. So when the picture has more than an eighth
+   of its frames to draw, and no piece is kept, one encoder makes the sound from its start, as
+   a whole render does, and its frames are kept as the pieces: a first render's sound is the
+   whole render's, sample for sample, and nothing waited for it.
+
+   The pieces go into the file through ADTS, which has no times. The first frame of AAC is
+   before the sound, 1024 samples that the file must say to skip, and a copy that does not say
+   so plays the sound 21.3 ms late (what Scarlet found joining its cached sections); and the
+   last frame is cut to the program's last sample. Both are set when the frames are wrapped,
+   and the file is read back: its packets have the times and lengths a whole render's have, or
+   the sound is mixed and encoded whole as before.
+
+   The five minutes again, in seconds, each from the same first render:
+
+   | Render again | Sound encoded whole (before) | From what is kept | With no sound |
+   |---|---|---|---|
+   | Unchanged | 1.6 | 1.6 | |
+   | One clip's opacity changed | 7.8 | 7.9 | 8.3 |
+   | A clip taken out near the start | 8.6 | 4.9 | 2.8 |
+   | A clip taken out near the end | 11.2 | 5.3 | 5.5 |
+   | One clip made quieter | | 2.9 | |
+
+   Near the end, 13 of 14 pieces are kept and the sound takes 1.0 s (0.6 mixing, 0.3 naming
+   the pieces and encoding one, 0.1 wrapping), which the picture's two stretches hide. Near
+   the start every piece is encoded again, 14 encoders on four cores, and the sound takes
+   2.6 s where it took 6.6: that is what is left, since the frames after the cut are on another
+   grid and AAC has no way to say so. The kept renders' sound is nearer the whole render's than
+   a second whole encode at another place on the grid is (0.79 and 0.64 of that distance after
+   the cut), its packets have the whole render's times to the tick, and the picture's packets
+   are where they were. `kerf-engine/tests/kept_sound.rs` holds a render to that at 29.97
+   frames a second, for a cut near the start and one near the end, and holds the master's
+   sound and a first render's to the whole render's sample for sample.
+
+   Tried and left:
+
+   - *One input for each file*, split and trimmed in the graph, in place of one for each clip.
+     Mixing took 1.4 s for 2.6, but 3% of the samples came out different. FFmpeg's AAC decoder
+     fills the bands an encoder marked as noise from a generator that carries on from wherever
+     decoding began, so a clip's samples depended on which clip of that file came first, and an
+     edit to the first would have changed every later clip's sound and with it every piece.
+     Each clip read on its own decodes the same every time.
+   - *Telling FFmpeg to read less of each input* (`-vn`, `-analyzeduration`, `-probesize`):
+     no faster. Opening is 40 ms a clip whatever it is told.
+   - *The mix kept in stretches as well.* It is 0.6 s of five minutes once the clips are kept,
+     so it is mixed whole. An hour would take some 7 s and 1.4 GB while it is made; not done.
+   - *Judging a join by decoding it.* Where the encoder substitutes noise, a good encode is
+     already as far from the samples as the sound is loud, so no threshold told a bad join
+     from a noisy passage. The windows do.
+   - *A faster encoder.* Kerf's arguments name no sound encoder for a standard render, which
+     for an MP4 is FFmpeg's own `aac` at 128 kb/s, and `aac` at 320 kb/s for the review copy
+     and HDR10. `aac_at` is not asked for anywhere and is not in this FFmpeg. Not changed:
+     another encoder starts differently, and its pieces would need their own measuring.
+
+   What is left of a render again: 1.3 s of the 1.6 s unchanged is FFmpeg opening the 78
+   stretches to join them.
 3. **Depth and color.** Footage decodes at its depth, with its transfer and gamut, into the float
    working picture (`bits=` and `color=` on a media line, found on import): `InputTransform`
    on the CPU, `input.wgsl` on the GPU. A ProRes master takes 16-bit frames, so it keeps that

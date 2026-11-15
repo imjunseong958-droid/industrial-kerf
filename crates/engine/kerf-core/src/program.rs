@@ -45,10 +45,48 @@ pub struct CompiledProgram {
     /// appends the picture's input, codec arguments, the rate, and the output.
     pub argv: Vec<String>,
     pub filter_complex: String,
+    /// What the graph reads, in the order of its inputs.
+    pub inputs: Vec<SoundInput>,
+    /// The same graph for inputs that are already what [`decoded_filters`] makes of them:
+    /// a render keeps each clip's sound decoded, and mixes from those.
+    pub decoded_filter: String,
+    /// The label of the mix in either graph.
+    pub mixed: String,
     pub duration: Time,
     pub rate: Rate,
     pub width: u32,
     pub height: u32,
+}
+
+/// A stretch of a media file's sound that a graph reads: `span` of it from `seek`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoundInput {
+    pub path: String,
+    pub seek: Time,
+    pub span: Time,
+}
+
+impl SoundInput {
+    /// What FFmpeg is told before `-i` to read it.
+    pub fn args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.seek.is_positive() {
+            args.extend(["-ss".to_owned(), secs(self.seek)]);
+        }
+        args.extend(["-t".to_owned(), secs(self.span)]);
+        args
+    }
+}
+
+/// The filters every media clip's sound starts with: `span` of what its input decodes to, as
+/// stereo floats at [`SAMPLE_RATE`]. Nothing of the clip but how much of the file it reads is
+/// in them, so what they make can be kept for as long as the file is the same.
+pub fn decoded_filters(span: Time) -> String {
+    format!(
+        "atrim=start=0:end={},asetpts=PTS-STARTPTS,\
+         aformat=sample_fmts=fltp:sample_rates={SAMPLE_RATE}:channel_layouts=stereo",
+        secs(span)
+    )
 }
 
 impl CompiledProgram {
@@ -129,17 +167,14 @@ pub fn compile_program(
     let audio = graph.mix(sequence, from, to, None)?;
     let (width, height) = canvas(sequence);
     let filter_complex = graph.parts.join(";\n");
+    let mut decoded = graph.parts;
+    for (part, filters) in graph.decoded {
+        decoded[part] = filters;
+    }
     let mut argv = vec!["ffmpeg".to_owned(), "-y".to_owned()];
     for input in &graph.inputs {
-        if input.seek.is_positive() {
-            argv.extend(["-ss".to_owned(), secs(input.seek)]);
-        }
-        argv.extend([
-            "-t".to_owned(),
-            secs(input.span),
-            "-i".to_owned(),
-            input.path.clone(),
-        ]);
+        argv.extend(input.args());
+        argv.extend(["-i".to_owned(), input.path.clone()]);
     }
     argv.extend([
         "-filter_complex".to_owned(),
@@ -149,6 +184,9 @@ pub fn compile_program(
     Ok(CompiledProgram {
         argv,
         filter_complex,
+        inputs: graph.inputs,
+        decoded_filter: decoded.join(";"),
+        mixed: audio,
         duration: to - from,
         rate: sequence.rate,
         width,
@@ -185,12 +223,6 @@ pub fn rate_arg(rate: Rate) -> String {
 pub fn canvas(sequence: &Sequence) -> (u32, u32) {
     let even = |value: u32| (value.max(2) / 2) * 2;
     (even(sequence.width), even(sequence.height))
-}
-
-struct Input {
-    path: String,
-    seek: Time,
-    span: Time,
 }
 
 /// How a clip enters across a transition.
@@ -279,7 +311,10 @@ struct Graph<'a> {
     catalog: &'a Catalog,
     next: u32,
     parts: Vec<String>,
-    inputs: Vec<Input>,
+    /// The parts that begin with [`decoded_filters`], by their place in `parts`, as they are
+    /// without them.
+    decoded: Vec<(usize, String)>,
+    inputs: Vec<SoundInput>,
     input_index: HashMap<(String, i64, i64), usize>,
     nesting: Vec<Id>,
 }
@@ -291,6 +326,7 @@ impl<'a> Graph<'a> {
             catalog,
             next: 0,
             parts: Vec::new(),
+            decoded: Vec::new(),
             inputs: Vec::new(),
             input_index: HashMap::new(),
             nesting: Vec::new(),
@@ -309,7 +345,7 @@ impl<'a> Graph<'a> {
             return *index;
         }
         let index = self.inputs.len();
-        self.inputs.push(Input {
+        self.inputs.push(SoundInput {
             path: path.to_owned(),
             seek,
             span,
@@ -562,6 +598,7 @@ impl<'a> Graph<'a> {
         if end <= start {
             return Ok(None);
         }
+        let mut read = None;
         let input = match &clip.content {
             Content::Media { media, .. } => {
                 let media = self.project.media(media.as_str()).ok_or_else(|| {
@@ -573,6 +610,7 @@ impl<'a> Graph<'a> {
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
                     .expect("media clips have a source");
                 let index = self.input(&media.path, start, end - start);
+                read = Some(end - start);
                 format!("{index}:a")
             }
             Content::Sequence {
@@ -596,6 +634,13 @@ impl<'a> Graph<'a> {
             portion,
         )?;
         let label = self.label("sound");
+        if let Some(rest) = read
+            .and_then(|span| filters.strip_prefix(&decoded_filters(span)))
+            .and_then(|rest| rest.strip_prefix(','))
+        {
+            self.decoded
+                .push((self.parts.len(), format!("[{input}]{rest}[{label}]")));
+        }
         self.parts.push(format!("[{input}]{filters}[{label}]"));
         Ok(Some(Sounding { label, start, end }))
     }
@@ -683,11 +728,7 @@ pub fn sound_filters(
     if let Content::Media { .. } = clip.content {
         let (start, end) = Graph::source_window(clip, portion.decode, portion.hi)
             .expect("media clips have a source");
-        filters.push(format!("atrim=start=0:end={}", secs(end - start)));
-        filters.push("asetpts=PTS-STARTPTS".into());
-        filters.push(format!(
-            "aformat=sample_fmts=fltp:sample_rates={SAMPLE_RATE}:channel_layouts=stereo"
-        ));
+        filters.push(decoded_filters(end - start));
     }
     let speed = clip.speed();
     if speed.is_reverse() {
