@@ -53,6 +53,44 @@ fn sound_comes_from_audio_tracks_alone() {
 }
 
 #[test]
+fn the_graph_also_reads_clips_already_decoded() {
+    let project = project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=m1 src=00:00:02:00 at=0f dur=48f\n\
+         \x20   clip a2 media=m2 src=00:00:05:00 at=48f dur=24f\n",
+    );
+    let compiled = compile(&project);
+    // What it reads, in the order of its inputs, as the arguments name them.
+    let read: Vec<(&str, String, String)> = compiled
+        .inputs
+        .iter()
+        .map(|input| (input.path.as_str(), secs(input.seek), secs(input.span)))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("/media/a.mov", "2".to_owned(), "2".to_owned()),
+            ("/media/b.mov", "5".to_owned(), "1".to_owned())
+        ]
+    );
+    assert_eq!(compiled.inputs[0].args(), ["-ss", "2", "-t", "2"]);
+    // Each clip's chain starts with what makes its input stereo floats at the program's rate,
+    // and the other graph is the same graph without that start.
+    let (whole, decoded) = (compiled.filter_complex.replace('\n', ""), &compiled.decoded_filter);
+    let mut put_back = decoded.clone();
+    for (index, input) in compiled.inputs.iter().enumerate() {
+        let start = format!("[{index}:a]{},", decoded_filters(input.span));
+        assert!(whole.contains(&start), "{whole}");
+        assert!(!decoded.contains(&decoded_filters(input.span)), "{decoded}");
+        put_back = put_back.replace(&format!("[{index}:a]"), &start);
+    }
+    assert_eq!(put_back, whole);
+    assert!(decoded.ends_with(&format!("[{}]", compiled.mixed)), "{decoded}");
+    assert!(compiled.argv.ends_with(&["-map".to_owned(), format!("[{}]", compiled.mixed)]));
+}
+
+#[test]
 fn crossfades_use_handles_and_fade_both_sides() {
     let project = project(
         "sequence s1 rate=24 size=1920x1080 audio=48000\n\
