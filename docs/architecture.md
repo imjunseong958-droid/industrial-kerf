@@ -942,7 +942,7 @@ Three limits remain, in this order:
    now takes 2.7 s, 2.2 of them opening the file 60 times, and encoding them as AAC 4.2 more.
 
    That was still paid whole after a cut: a clip taken out near the start of the five minutes
-   rendered again in 8.6 s and one near the end in 11.2 s, against 2.8 s and 5.5 s for the same
+   rendered again in 9.1 s and one near the end in 10.2 s, against 3.2 s and 5.8 s for the same
    two renders with no sound. So a render keeps two more things of its sound
    (`kerf-engine/src/kept_sound.rs`), in the same folder and under the same limit:
 
@@ -1005,18 +1005,23 @@ Three limits remain, in this order:
    and the file is read back: its packets have the times and lengths a whole render's have, or
    the sound is mixed and encoded whole as before.
 
-   The five minutes again, in seconds, each from the same first render:
+   The five minutes again, in seconds: the median of three, the two ways run in turn, each
+   from a first render of its own (155 s before, 152 s now):
 
    | Render again | Sound encoded whole (before) | From what is kept | With no sound |
    |---|---|---|---|
-   | Unchanged | 1.6 | 1.6 | |
-   | One clip's opacity changed | 7.8 | 7.9 | 8.3 |
-   | A clip taken out near the start | 8.6 | 4.9 | 2.8 |
-   | A clip taken out near the end | 11.2 | 5.3 | 5.5 |
-   | One clip made quieter | | 2.9 | |
+   | Unchanged | 1.8 | 1.7 | |
+   | One clip's opacity changed | 9.4 | 9.0 | 9.0 |
+   | A clip taken out near the start | 9.1 | 5.5 | 3.2 |
+   | A clip taken out near the end | 10.2 | 5.9 | 5.8 |
+   | One clip made quieter | 9.9 | 3.7 | |
 
-   Near the end, 13 of 14 pieces are kept and the sound takes 1.0 s (0.6 mixing, 0.3 naming
-   the pieces and encoding one, 0.1 wrapping), which the picture's two stretches hide. Near
+   The machine ran a tenth slower for these than for the table above, which is why its
+   unchanged and opacity rows are not that table's.
+
+   Near the end, 13 of 14 pieces are kept and the sound takes about a second (0.6 mixing, 0.3
+   naming the pieces and encoding one, the rest wrapping it and reading it back), which the
+   picture's two stretches hide. Near
    the start every piece is encoded again, 14 encoders on four cores, and the sound takes
    2.6 s where it took 6.6: that is what is left, since the frames after the cut are on another
    grid and AAC has no way to say so. The kept renders' sound is nearer the whole render's than
@@ -1046,7 +1051,7 @@ Three limits remain, in this order:
      and HDR10. `aac_at` is not asked for anywhere and is not in this FFmpeg. Not changed:
      another encoder starts differently, and its pieces would need their own measuring.
 
-   What is left of a render again: 1.3 s of the 1.6 s unchanged is FFmpeg opening the 78
+   What is left of a render again: 1.3 s of the 1.7 s unchanged is FFmpeg opening the 78
    stretches to join them.
 3. **Depth and color.** Footage decodes at its depth, with its transfer and gamut, into the float
    working picture (`bits=` and `color=` on a media line, found on import): `InputTransform`
