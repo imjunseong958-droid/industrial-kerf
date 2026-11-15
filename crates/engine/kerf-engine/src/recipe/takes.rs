@@ -19,7 +19,8 @@
 //!
 //! A take's record holds a hash of each thing it was made from: the recipe,
 //! each file the recipe reads, each sequence it has Kerf render, and each
-//! signal it hands a model, as the model is handed it. A media
+//! signal it hands a model, as the model is handed it, and each of the
+//! project's cast and styles it names ([`super::cast`]). A media
 //! wants making again when one of those is no longer what its take was made
 //! from, and says which. Nothing else about a project is in the record, so
 //! trimming, moving, grading, or titling a made shot never asks for it
@@ -146,16 +147,30 @@ struct Record {
     /// Seconds since 1970.
     made: u64,
     from: BTreeMap<String, String>,
+    /// Which roll of the recipe it is: how far on its seeds were from the ones the recipe
+    /// gives. A take is not held to it, being another of the same shot.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    rolled: u32,
 }
 
-/// Write the record of `take`, made just now from `from`.
-pub(crate) fn record(place: &Place, take: u32, from: BTreeMap<String, String>) -> Result<()> {
+fn is_zero(number: &u32) -> bool {
+    *number == 0
+}
+
+/// Write the record of `take`, made just now from `from` as roll `rolled` of its recipe.
+pub(crate) fn record(
+    place: &Place,
+    take: u32,
+    from: BTreeMap<String, String>,
+    rolled: u32,
+) -> Result<()> {
     let record = Record {
         version: RECORD_VERSION,
         made: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |since| since.as_secs()),
         from,
+        rolled,
     };
     std::fs::write(place.record(take), serde_json::to_vec_pretty(&record)?)?;
     Ok(())
@@ -252,7 +267,8 @@ fn sequence_hash(project: &Project, directory: &Path, id: &str) -> String {
 
 /// What a take of `recipe`, whose text is `text` and whose folder in the
 /// project is `folder`, is made from as things stand: each thing by name,
-/// with a hash of it.
+/// with a hash of it. `recipe` is as its models are asked ([`Recipe::told`]),
+/// so the pictures of the cast it names are among the files it reads.
 pub(crate) fn from(
     project: &Project,
     directory: &Path,
@@ -293,6 +309,7 @@ pub(crate) fn from(
                 .hash(),
         );
     }
+    from.extend(recipe.cast_held(directory)?);
     Ok(from)
 }
 
@@ -363,7 +380,11 @@ pub fn unmade(project: &Project, directory: &Path, media: &Media) -> Option<Unma
     let name = media.recipe.as_deref()?;
     let recipe_file = directory.join(within(Path::new(""), name, "recipe").ok()?);
     let text = std::fs::read_to_string(&recipe_file).ok()?;
-    let recipe = match Recipe::parse(&text) {
+    let folder = recipe_file
+        .parent()
+        .and_then(|folder| folder.strip_prefix(directory).ok())
+        .unwrap_or(Path::new(""));
+    let recipe = match Recipe::parse(&text).and_then(|recipe| recipe.told(directory, folder)) {
         Ok(recipe) => recipe,
         Err(error) => return Some(Unmade::Unreadable(error.to_string())),
     };
@@ -378,10 +399,6 @@ pub fn unmade(project: &Project, directory: &Path, media: &Media) -> Option<Unma
         let made = std::fs::metadata(&file).ok()?.modified().ok()?;
         return (made < written).then(|| Unmade::Stale(vec!["the recipe".to_owned()]));
     };
-    let folder = recipe_file
-        .parent()
-        .and_then(|folder| folder.strip_prefix(directory).ok())
-        .unwrap_or(Path::new(""));
     match from(project, directory, folder, &text, &recipe) {
         Ok(now) => {
             let what = changed(&record.from, &now);
@@ -407,6 +424,9 @@ pub struct Take {
     /// of the versions there holds what its record says: the `recipe=` a media that is this
     /// take again names, so that it is not asked for again.
     pub recipe: Option<String>,
+    /// Which roll of its recipe it is: how far on its seeds were from the ones the recipe
+    /// gives.
+    pub rolled: u32,
 }
 
 /// The takes of `media`, in the order they were made. A media that names
@@ -421,7 +441,7 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
     let now = std::fs::read_to_string(directory.join(name))
         .ok()
         .and_then(|text| {
-            let recipe = Recipe::parse(&text).ok()?;
+            let recipe = Recipe::parse(&text).ok()?.told(directory, folder).ok()?;
             from(project, directory, folder, &text, &recipe).ok()
         });
     // Each version of the recipe, by the hash a take's record keeps of it.
@@ -454,6 +474,7 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
                     .as_ref()
                     .and_then(|record| record.from.get(RECIPE))
                     .and_then(|hash| versions.get(hash).cloned()),
+                rolled: record.as_ref().map_or(0, |record| record.rolled),
                 stored,
             }
         })

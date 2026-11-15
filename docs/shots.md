@@ -56,6 +56,7 @@ but a file's name stand for themselves.
 | `guide_<name>=` | Another picture in motion to follow, by what it is of, for a model that reads more than one: `guide_depth={depth.mp4}` beside the picture, or `guide_ids=`. A name is lowercase letters and digits, each given once; the request holds them under `guides`. |
 | `first=`, `last=` | The first and the last frame. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
+| `cast=`, `style=` | Who and what is in it, and how it looks, by the names the project's `cast.kerfcast` gives them. As many as wanted. See [The cast](#the-cast). |
 | `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
 | `moves=` | Where a thing goes: a clip of the project, by its id, handed over as its place on every frame. As many as wanted. See [Where a thing goes](#where-a-thing-goes). |
 | `seconds=`, `size=WxH` | How long and how large. |
@@ -125,6 +126,7 @@ kerf accept [<id>]       # accept the one that waits, or the one named
 kerf reject [<id>]       # leave the project as it is
 kerf make m3             # run its recipe
 kerf takes m3            # its takes
+kerf shots               # every media a recipe makes: its take, its cast, whether it wants making
 ```
 
 - `kerf load` is the editor's Load from Disk. Kerf reads its own state of a
@@ -217,6 +219,31 @@ kerf takes m3            # the takes, a * on the one the media is
 kerf takes m3 --use 1    # have the media be take 1 again
 ```
 
+Several takes of one shot to choose among are made at once with `--rolls`:
+
+```bash
+kerf make m3 --rolls 3   # three takes, each seed one on from the last
+```
+
+A model that gives the same file for the same seed would make one picture
+three times, so each roll asks with every `seed=` of the recipe one further
+on: 7, 8, 9. The steps are shown once, with how many takes they make, and
+asked for once. Rolls go on from the last one a take of the recipe as it is
+written now had, so asking for three more gives 10, 11, 12. The media
+becomes the last take made, `kerf takes` says which roll each is, and a roll
+is another of the same shot: none of them is asked for again. A making that
+fails leaves the takes made before it. Only a person makes rolls; an agent
+asks for one making at a time.
+
+`kerf shots` reads every media a recipe makes at once, a line each, with a
+`!` on one that wants making and why, and what they come to:
+
+```text
+  m3  shots/open.kerfrecipe  take 2 of 3  4s  Ada, lamp, film
+! m4  shots/pier.kerfrecipe  no take  2s  Ada, film  to make: its file is not there yet
+2 shots, 1 to make (m4); 4s of 6s made
+```
+
 In the editor it is **Takes** on the media in the bin: every take there is
 a file of, the one the media is ticked, and choosing another has the media
 be it.
@@ -240,6 +267,8 @@ A take's record holds a hash of each thing it was made from:
   and the media lines they play;
 - each signal it hands a model, as the model is handed it: the numbers, and
   nothing else of the sequence its clip is in;
+- each cast and style it names, by its words and its pictures
+  ([The cast](#the-cast)), and nothing else of `cast.kerfcast`;
 - the sequence of each clip it hands a model the way of (`moves=`), as for
   one it renders: where a clip is on the frame is what its whole sequence
   draws of it.
@@ -262,6 +291,62 @@ Two limits, as they are now: a media file a rendered sequence plays is seen
 by its length, so one replaced in place by another of the same length is not
 seen; and a file that no take made (one put there by hand, or made before
 takes) is held to its recipe by their times alone.
+
+## The cast
+
+A model keeps a face, a boat, or a room from one shot to the next only when
+each shot is asked for with the same words and the same pictures. Written
+into every recipe, they drift apart, and changing one means finding every
+recipe it is in. So a project says them once, in `cast.kerfcast` in its own
+folder, beside `project.kerf`:
+
+```text
+kerf-cast 1
+# Who and what the shots show.
+cast Ada "an old keeper in a wool coat" ref=refs/ada-front.png ref=refs/ada-side.png
+cast lamp "the lamp room of a lighthouse, brass and salt-stained glass" ref=refs/lamp.png
+# How every shot looks.
+style film "shot on 35mm colour negative, a cold blue-steel grade, blue-hour light"
+```
+
+| Line | What it says |
+|---|---|
+| `cast <name> "<words>" [ref=<picture> …]` | Someone or something a shot shows: a person, a place, a prop. |
+| `style <name> "<words>" [ref=<picture> …]` | How a shot looks: its stock, its grade, its light. |
+
+A name is letters, digits, `-` and `_`. The words are one quoted text, a
+picture is a path from the project's folder, and a line has words, pictures,
+or both. A `generate` line names what it shows:
+
+```text
+generate model=dawn prompt="Ada wipes the great lens" guide={guide.mp4} cast=Ada cast=lamp style=film seed=7
+```
+
+and the model is asked with the line's prompt, then each cast's name and
+words, then each style's words, a sentence each:
+
+```text
+Ada wipes the great lens. Ada: an old keeper in a wool coat. lamp: the lamp room of a lighthouse, brass and salt-stained glass. shot on 35mm colour negative, a cold blue-steel grade, blue-hour light.
+```
+
+The name ties what the prompt says someone does to what they look like, so
+write the prompt with the names the file has. Their pictures are handed over
+as `ref=` is, after the line's own, each once. `kerf make` and Make from
+Recipe… show the prompt as it is asked, and a model that reads no pictures
+is noted as for any `ref=`.
+
+A take is held to each one it names and to nothing else of the file. Saying
+Ada another way, or giving her another picture, asks again for the shots Ada
+is in, each naming `cast Ada` or the picture as what changed; adding the
+gull to the file asks for none. A name the file has not is why a recipe
+cannot run, said before anything does, with the names it has and the line
+that adds it.
+
+`look` with no arguments lists them, as `cast` and `styles`, so an agent
+names ones that exist. Its limit, as it is now: the file is a person's to
+write, or an agent's that has the project's files; `edit` writes recipes and
+not the cast, since a change to it is a change to shots already made and not
+a proposal to review.
 
 ## Models
 

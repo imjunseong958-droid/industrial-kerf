@@ -134,6 +134,10 @@ enum Command {
         /// Run the recipe's steps without asking first.
         #[arg(long)]
         yes: bool,
+        /// Make this many takes, one after another, each with its seeds one on from the
+        /// last: several of the same shot to choose among.
+        #[arg(long, value_name = "N", default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=16))]
+        rolls: u32,
     },
     /// List the takes a media's recipe has made, or have the media be another of them.
     Takes {
@@ -143,6 +147,8 @@ enum Command {
         #[arg(long = "use", value_name = "TAKE")]
         choose: Option<u32>,
     },
+    /// List every media a recipe makes: its take, its cast, and whether it wants making.
+    Shots,
     /// Take `project.kerf` as it is on disk, changed by hand or by another program, as the project.
     Load {
         /// Load it without asking first.
@@ -278,13 +284,17 @@ fn run() -> Result<()> {
                 .with_context(|| format!("no project at {}", directory.display()))?;
             return run_sync(&directory, args.kerfd.as_deref(), message.as_deref());
         }
-        Some(Command::Make { media, yes }) => {
+        Some(Command::Make { media, yes, rolls }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
-            return run_make(&directory, args.kerfd.as_deref(), media, *yes);
+            return run_make(&directory, args.kerfd.as_deref(), media, *yes, *rolls);
         }
         Some(Command::Takes { media, choose }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
             return run_takes(&directory, args.kerfd.as_deref(), media, *choose);
+        }
+        Some(Command::Shots) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_shots(&directory, args.kerfd.as_deref());
         }
         Some(Command::Load { yes }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
@@ -708,25 +718,46 @@ fn in_step(state: &kerf_runtime::StateSnapshot) -> Result<()> {
     Ok(())
 }
 
-fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Result<()> {
+fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: u32) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
     in_step(&state)?;
     let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     let models = kerf_engine::recipe::model::Models::load().map_err(|error| anyhow!(error))?;
-    let plan = kerf_engine::recipe::plan(&project, directory, id, &models)
-        .map_err(|error| anyhow!(error))?;
+    // One making is the recipe as it is written. Several are rolls of it, each with its seeds
+    // one on from the last, from the first roll no take of this recipe has had.
+    let first = if rolls > 1 {
+        kerf_engine::recipe::next_roll(&project, directory, id).map_err(|error| anyhow!(error))?
+    } else {
+        0
+    };
+    let planned = |roll: u32| {
+        kerf_engine::recipe::plan_rolled(&project, directory, id, &models, first + roll)
+            .map_err(|error| anyhow!(error))
+    };
+    let plan = planned(0)?;
     println!("recipe  {}", plan.recipe.display());
     for (number, step) in plan.steps.iter().enumerate() {
         println!("step {}  {step}", number + 1);
     }
-    println!("makes   {} (take {})", plan.file.display(), plan.take);
+    if rolls > 1 {
+        println!(
+            "makes   {} (take {}), and {} more after it, takes {} to {}: the same steps, each seed one on from the last",
+            plan.file.display(),
+            plan.take,
+            rolls - 1,
+            plan.take + 1,
+            plan.take + rolls - 1
+        );
+    } else {
+        println!("makes   {} (take {})", plan.file.display(), plan.take);
+    }
     // What its model has said it does not take: worth mending before it is paid for.
     for note in &plan.notes {
         println!("note    {note}");
     }
     // A recipe is commands someone wrote, perhaps someone else.
-    if !yes && !confirmed("Run it?") {
+    if !yes && !confirmed(if rolls > 1 { "Run them?" } else { "Run it?" }) {
         bail!("not run; `kerf make {id} --yes` runs it without asking");
     }
     // Ctrl-C stops it as the editor's Stop Making does: its step is asked to end, a model's
@@ -734,35 +765,76 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool) -> Resu
     // left. A second Ctrl-C ends it at once.
     let cancellation = kerf_engine::CancellationToken::new();
     let stop = kerf_engine::sidecar::stop_on_termination(&cancellation);
-    let made =
-        kerf_engine::recipe::make(&project, directory, &plan, &models, &cancellation, |line| {
-            eprintln!("{line}")
+    let mut made = Vec::new();
+    let mut ended = None;
+    for roll in 0..rolls {
+        let plan = match roll {
+            0 => Ok(plan.clone()),
+            roll => planned(roll),
+        };
+        let take = plan.and_then(|plan| {
+            if rolls > 1 {
+                eprintln!("take {} ({} of {rolls})", plan.take, roll + 1);
+            }
+            kerf_engine::recipe::make(&project, directory, &plan, &models, &cancellation, |line| {
+                eprintln!("{line}")
+            })
+            .map_err(|error| match error {
+                kerf_engine::EngineError::Cancelled => anyhow!("stopped"),
+                error => anyhow!(error),
+            })
         });
-    drop(stop);
-    let made = match made {
-        Ok(made) => made,
-        Err(kerf_engine::EngineError::Cancelled) => {
-            bail!("stopped: no take was made, and {id} is as it was")
+        match take {
+            Ok(take) => made.push(take),
+            Err(error) => {
+                ended = Some(error);
+                break;
+            }
         }
-        Err(error) => return Err(anyhow!(error)),
+    }
+    drop(stop);
+    let Some(last) = made.last() else {
+        let error = ended.expect("no take is an error");
+        if error.to_string() == "stopped" {
+            bail!("stopped: no take was made, and {id} is as it was");
+        }
+        return Err(error);
     };
-    // The media becomes the new take: the document takes its path, length and streams, and
-    // clips keep their timing.
+    // The media becomes the new take, the last where there are several: the document takes its
+    // path, length and streams, and clips keep their timing.
     let state = runtime
         .replace_media_request(
             "ui",
             &operation_key("make"),
             id,
-            &made.stored,
+            &last.stored,
             state.revision,
         )
         .map_err(runtime_error)?;
-    println!(
-        "made take {} of {id} (revision {})",
-        made.take, state.revision
-    );
+    if let [only] = made.as_slice() {
+        println!(
+            "made take {} of {id} (revision {})",
+            only.take, state.revision
+        );
+    } else {
+        println!(
+            "made takes {} of {id}, which is take {} (revision {}); `kerf takes {id} --use <take>` has it be another",
+            made.iter()
+                .map(|take| take.take.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            last.take,
+            state.revision
+        );
+    }
     kerf_mcp::answer_make_requests(&runtime, id);
-    Ok(())
+    match ended {
+        Some(error) => Err(anyhow!(
+            "{} of the {rolls} takes were made, and the next was not: {error}",
+            made.len()
+        )),
+        None => Ok(()),
+    }
 }
 
 fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u32>) -> Result<()> {
@@ -800,6 +872,26 @@ fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u3
     for take in takes {
         println!("{}", take_line(&take));
     }
+    Ok(())
+}
+
+/// Every shot a recipe makes, a line each, and what they come to. Nothing is run.
+fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    in_step(&state)?;
+    let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    let shots = kerf_engine::recipe::shots(&project, directory);
+    if shots.is_empty() {
+        println!(
+            "no media names a recipe; `recipe=\"<file>\"` on a media's line does (docs/shots.md)"
+        );
+        return Ok(());
+    }
+    for shot in &shots {
+        println!("{}", shot.line());
+    }
+    println!("{}", kerf_engine::recipe::shots::summary(&shots));
     Ok(())
 }
 
@@ -1036,6 +1128,9 @@ fn take_line(take: &kerf_engine::recipe::Take) -> String {
         take.number,
         take.stored
     );
+    if take.rolled > 0 {
+        line.push_str(&format!("  roll {}", take.rolled));
+    }
     if !take.changed.is_empty() {
         line.push_str(&format!("  ({} changed since)", take.changed.join(", ")));
     }
@@ -1700,14 +1795,23 @@ mod tests {
 
     #[test]
     fn make_names_a_media_and_asks_unless_told_not_to() {
-        let Some(Command::Make { media, yes }) =
+        let Some(Command::Make { media, yes, rolls }) =
             Args::try_parse_from(["kerf", "make", "m3", "--dir", "p"])
                 .unwrap()
                 .command
         else {
             panic!("make command");
         };
-        assert_eq!((media.as_str(), yes), ("m3", false));
+        assert_eq!((media.as_str(), yes, rolls), ("m3", false, 1));
+        let Some(Command::Make { rolls, .. }) =
+            Args::try_parse_from(["kerf", "make", "m3", "--rolls", "4"])
+                .unwrap()
+                .command
+        else {
+            panic!("make command");
+        };
+        assert_eq!(rolls, 4);
+        assert!(Args::try_parse_from(["kerf", "make", "m3", "--rolls", "0"]).is_err());
         let Some(Command::Make { yes, .. }) = Args::try_parse_from(["kerf", "make", "m3", "--yes"])
             .unwrap()
             .command
@@ -1882,6 +1986,7 @@ mod tests {
             ("m3".to_owned(), Some(2))
         );
         let take = |chosen, changed: &[&str]| kerf_engine::recipe::Take {
+            rolled: 0,
             number: 2,
             stored: "shots/open.takes/002.mp4".to_owned(),
             made: None,
@@ -1892,6 +1997,13 @@ mod tests {
         assert_eq!(
             take_line(&take(true, &[])),
             "* take 2  shots/open.takes/002.mp4"
+        );
+        assert_eq!(
+            take_line(&kerf_engine::recipe::Take {
+                rolled: 2,
+                ..take(false, &[])
+            }),
+            "  take 2  shots/open.takes/002.mp4  roll 2"
         );
         assert_eq!(
             take_line(&take(false, &["the recipe", "refs/boat.png"])),

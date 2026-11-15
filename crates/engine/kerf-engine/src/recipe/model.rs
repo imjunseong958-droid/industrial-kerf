@@ -108,6 +108,11 @@ pub struct Ask {
     /// What goes where: clips of the project, by their ids, each handed over as its place
     /// on every frame.
     pub moves: Vec<String>,
+    /// Who and what it shows, and how it looks: the project's cast and styles, by their
+    /// names ([`super::cast`]). Each one's words follow the prompt and its pictures the
+    /// references, once the recipe is read for a making.
+    pub cast: Vec<String>,
+    pub styles: Vec<String>,
     /// Anything else the line says, which only that model reads.
     pub more: BTreeMap<String, String>,
     /// The file it writes: `out`, or the name of one a later step reads.
@@ -131,6 +136,8 @@ impl Ask {
             seed: None,
             signals: Vec::new(),
             moves: Vec::new(),
+            cast: Vec::new(),
+            styles: Vec::new(),
             more: BTreeMap::new(),
             out: "out".to_owned(),
         };
@@ -197,6 +204,24 @@ impl Ask {
                     )
                 }
                 "moves" => ask.moves.push(value.to_owned()),
+                "cast" | "style" => {
+                    if !super::cast::names_one(value) {
+                        return Err(format!(
+                            "`{key}=` names one of the project's `{}` by its name there, such as `{key}={}`",
+                            super::cast::FILE,
+                            if key == "cast" { "Ada" } else { "film" }
+                        ));
+                    }
+                    let named = if key == "cast" {
+                        &mut ask.cast
+                    } else {
+                        &mut ask.styles
+                    };
+                    if named.iter().any(|given| given == value) {
+                        return Err(format!("`{word}` is given twice"));
+                    }
+                    named.push(value.to_owned());
+                }
                 "out" => {
                     ask.out = super::whole(value).ok_or_else(|| {
                         format!("`out={value}` names the file it makes in braces, such as `{{first.png}}`")
