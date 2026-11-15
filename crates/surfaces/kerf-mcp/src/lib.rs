@@ -6,6 +6,7 @@
 //! proposal for the user, and posts notes to the project's review log. Both
 //! carry the client's name, as `initialize` gave it, as their author.
 
+mod brand;
 mod camera_file;
 mod cuts;
 pub mod docs;

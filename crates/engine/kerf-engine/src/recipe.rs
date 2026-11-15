@@ -27,6 +27,8 @@
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
 //!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
 //!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
+//!   `cast=` and `style=` name who and what it shows and how it looks, as
+//!   the project says them once for every recipe ([`cast`]).
 //!
 //! `{out}` stands for the media's file, and `{name}` for a file a step
 //! makes on the way and a later one reads. `needs` names the files a recipe
@@ -39,8 +41,10 @@
 //! runs one only when a person asks for that media to be made, never on
 //! opening or drawing a project.
 
+pub mod cast;
 pub mod model;
 pub mod moves;
+pub mod shots;
 pub mod signal;
 pub mod takes;
 pub mod told;
@@ -56,6 +60,7 @@ use signal::Signal;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+pub use shots::{shots, Shot};
 pub use takes::{take, takes, unmade, Take, Unmade};
 pub use told::{ask_to_stop, told, Going, Told};
 
@@ -285,6 +290,18 @@ impl Recipe {
         made
     }
 
+    /// The recipe as roll `roll` of it is asked: each seed a `generate` line gives, that
+    /// many on. A model that gives the same file for the same seed gives another for
+    /// another roll, with nothing else of the shot changed.
+    fn rolled(mut self, roll: u32) -> Self {
+        for step in &mut self.steps {
+            if let Step::Generate(ask) = step {
+                ask.seed = ask.seed.map(|seed| seed.wrapping_add(u64::from(roll)));
+            }
+        }
+        self
+    }
+
     /// The recipe with no comments and no spare space, which is what a
     /// take is held to: a comment changed is not the recipe changed.
     pub fn essence(text: &str) -> String {
@@ -433,6 +450,9 @@ pub struct Plan {
     /// another size, a shot longer than it makes, a file it does not read.
     /// None of these stops a making.
     pub notes: Vec<String>,
+    /// Which roll of the recipe this making is: how far on each seed is from the one its
+    /// line gives. The recipe as it is written is roll 0.
+    pub roll: u32,
     /// The media made, and its recipe as the document names it.
     media: String,
     name: String,
@@ -670,7 +690,7 @@ pub(crate) fn read(project: &kerf_model::Project, directory: &Path, id: &str) ->
             file.display()
         ))
     })?;
-    let recipe = Recipe::parse(&text)?;
+    let recipe = Recipe::parse(&text)?.told(directory, &folder_of(name))?;
     Ok(Read {
         name: name.to_owned(),
         text,
@@ -688,10 +708,38 @@ pub fn plan(
     id: &str,
     models: &Models,
 ) -> Result<Plan> {
+    plan_rolled(project, directory, id, models, 0)
+}
+
+/// The roll a making of media `id` that is to be another of the same shot takes: one past
+/// the last roll a take of its recipe, as the recipe is written now, was made with, and 0
+/// where it has none.
+pub fn next_roll(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<u32> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    Ok(takes(project, directory, media)?
+        .iter()
+        .filter(|take| take.recipe.as_deref() == media.recipe.as_deref())
+        .map(|take| take.rolled + 1)
+        .max()
+        .unwrap_or(0))
+}
+
+/// [`plan`], of roll `roll` of the recipe: the same shot asked for with each seed its
+/// lines give `roll` on, so that several takes of one recipe are not one picture.
+pub fn plan_rolled(
+    project: &kerf_model::Project,
+    directory: &Path,
+    id: &str,
+    models: &Models,
+    roll: u32,
+) -> Result<Plan> {
     // Each path a plan holds is whole: a step runs in its recipe's folder, where a path from
     // wherever this was asked does not lead.
     let directory = &rooted(directory)?;
     let Read { name, text, recipe } = read(project, directory, id)?;
+    let recipe = recipe.rolled(roll);
     let media = project.media(id).expect("read found it");
     let folder = folder_of(&name);
     for sequence in recipe.sequences() {
@@ -801,6 +849,7 @@ pub fn plan(
         command: steps.join("\n"),
         steps,
         notes: notes(project, &recipe, models),
+        roll,
         media: id.to_owned(),
         name,
         text,
@@ -976,11 +1025,13 @@ pub fn make(
     mut on_line: impl FnMut(&str),
 ) -> Result<Made> {
     let directory = &rooted(directory)?;
-    let recipe = Recipe::parse(&plan.text)?;
     let media = project
         .media(&plan.media)
         .ok_or_else(|| EngineError::msg(format!("no media `{}` in this project", plan.media)))?;
     let folder = folder_of(&plan.name);
+    let recipe = Recipe::parse(&plan.text)?
+        .told(directory, &folder)?
+        .rolled(plan.roll);
     let place = takes::Place::of(directory, &plan.name, &media.path)?;
     // What the take is made from, read before anything runs.
     let from = takes::from(project, directory, &folder, &plan.text, &recipe)?;
@@ -1023,7 +1074,7 @@ pub fn make(
             return Err(error);
         }
         std::fs::rename(&making, place.file(take))?;
-        takes::record(&place, take, from)?;
+        takes::record(&place, take, from, plan.roll)?;
         Ok(Made {
             take,
             stored: place.stored(take),
@@ -1164,8 +1215,9 @@ impl Making<'_> {
 }
 
 /// A line's words: split at spaces, with `"…"` keeping what it holds as
-/// one word, `\"` and `\\` inside it standing for themselves.
-fn words(line: &str) -> std::result::Result<Vec<String>, String> {
+/// one word, `\"` and `\\` inside it standing for themselves. A recipe's lines are read so, and
+/// those of the other text files a project keeps beside its document.
+pub fn words(line: &str) -> std::result::Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut started = false;

@@ -68,7 +68,7 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose recipe (`recipe=`) has yet to be run, or reads something that has changed since its take was made, which it names: a recipe is commands, so you ask for a making with `make`, and the person runs it or has let you. With `media`, a media that names a recipe lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before a person is asked, and its `notes` what its model has said it does not take; an edit that names a recipe answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a recipe's `generate` can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a line can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` line that draws a guide at its size and rate. Write that line and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound, and the pauses and repeated words the sequence still plays; look after cutting speech, and trim with `snap=pause` what it finds. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
@@ -2390,6 +2390,37 @@ impl KerfMcpRouter {
                 if !to_make.is_empty() {
                     result["toMake"] = json!(to_make);
                 }
+            }
+            // Who and what the project's shots show and how they look, which a `generate` line
+            // names by `cast=` and `style=`, and the project's brand, for titles and captions.
+            match kerf_engine::recipe::cast::Cast::read(&self.dir) {
+                Ok(cast) => {
+                    use kerf_engine::recipe::cast::Kind;
+                    for (key, kind) in [("cast", Kind::Cast), ("styles", Kind::Style)] {
+                        let listed: Vec<Value> = cast
+                            .of(kind)
+                            .map(|(name, entry)| {
+                                let mut listed = json!({"name": name});
+                                if !entry.words.is_empty() {
+                                    listed["words"] = json!(entry.words);
+                                }
+                                if !entry.references.is_empty() {
+                                    listed["refs"] = json!(entry.references);
+                                }
+                                listed
+                            })
+                            .collect();
+                        if !listed.is_empty() {
+                            result[key] = json!(listed);
+                        }
+                    }
+                }
+                Err(error) => result["castError"] = json!(error.to_string()),
+            }
+            match crate::brand::Brand::read(&self.dir) {
+                Ok(Some(brand)) => result["brand"] = brand.json(),
+                Ok(None) => {}
+                Err(error) => result["brandError"] = json!(error),
             }
             // The models a recipe's `generate` can name: those the person has set up, each
             // with what their file says it takes. Nothing is run to learn it.

@@ -390,6 +390,35 @@ fn look_shows_the_document_media_index_and_frames() {
     assert!(text.contains("clip c1 media=m1"), "{text}");
     assert!(text.contains('#'), "annotated: {text}");
     assert!(document["proposal"].is_null());
+    // A project that says no cast and no brand lists neither.
+    assert!(document.get("cast").is_none() && document.get("brand").is_none());
+    std::fs::write(
+        _directory.path().join("cast.kerfcast"),
+        "kerf-cast 1\ncast Ada \"an old keeper\" ref=refs/ada.png\nstyle film \"35mm\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        _directory.path().join("brand.kerfbrand"),
+        "kerf-brand 1\ncolor ember #c2410c\navoid cheap\n",
+    )
+    .unwrap();
+    let said = ok(&router, "look", json!({}));
+    assert_eq!(
+        said["cast"],
+        json!([{"name": "Ada", "words": "an old keeper", "refs": ["refs/ada.png"]}])
+    );
+    assert_eq!(said["styles"], json!([{"name": "film", "words": "35mm"}]));
+    assert_eq!(
+        said["brand"],
+        json!({"colors": [{"name": "ember", "color": "#c2410c"}], "avoid": ["cheap"]})
+    );
+    // One that does not read is said, and the rest of the look is as it was.
+    std::fs::write(_directory.path().join("cast.kerfcast"), "cast Ada\n").unwrap();
+    let unread = ok(&router, "look", json!({}));
+    assert!(unread["castError"].as_str().unwrap().contains("starts with `kerf-cast 1`"));
+    assert!(unread["document"].is_string());
+    std::fs::remove_file(_directory.path().join("cast.kerfcast")).unwrap();
+    std::fs::remove_file(_directory.path().join("brand.kerfbrand")).unwrap();
 
     let index = ok(&router, "look", json!({"media": "m1"}));
     assert_eq!(index["end"], "00:00:04:00");

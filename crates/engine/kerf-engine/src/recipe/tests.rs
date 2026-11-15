@@ -1393,3 +1393,273 @@ fn every_version_of_a_recipe_keeps_its_takes_in_one_folder() {
         "shots/a.b.takes/002.mp4"
     );
 }
+
+#[test]
+fn a_cast_file_says_who_is_in_the_shots_and_how_they_look() {
+    use super::cast::{Cast, Kind};
+    let cast = Cast::parse(
+        "kerf-cast 1\n# Who the shots show.\n\
+         cast Ada \"an old keeper   in a wool coat\" ref=refs/ada.png ref=refs/ada-side.png ref=refs/ada.png\n\
+         cast lamp ref=refs/lamp.png\n\
+         style film \"shot on 35mm colour negative\"\n",
+    )
+    .unwrap();
+    let ada = cast.of(Kind::Cast).next().unwrap();
+    assert_eq!(ada.0, "Ada");
+    assert_eq!(ada.1.words, "an old keeper in a wool coat");
+    assert_eq!(ada.1.references, ["refs/ada.png", "refs/ada-side.png"]);
+    assert_eq!(cast.of(Kind::Cast).count(), 2);
+    assert_eq!(
+        cast.of(Kind::Style)
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>(),
+        ["film"]
+    );
+
+    for (text, why) in [
+        ("cast Ada \"a keeper\"\n", "starts with `kerf-cast 1`"),
+        (
+            "kerf-cast 1\nlook film \"35mm\"\n",
+            "`look` is not a cast file's word",
+        ),
+        (
+            "kerf-cast 1\ncast \"an old keeper\"\n",
+            "followed by a name",
+        ),
+        ("kerf-cast 1\ncast Ada\n", "`Ada` says nothing"),
+        (
+            "kerf-cast 1\ncast Ada \"a keeper\" \"in a coat\"\n",
+            "one quoted text",
+        ),
+        (
+            "kerf-cast 1\ncast Ada ref=../outside.png\n",
+            "is not inside the project",
+        ),
+        (
+            "kerf-cast 1\ncast Ada \"a\"\ncast Ada \"b\"\n",
+            "cast `Ada` is said twice",
+        ),
+    ] {
+        let error = Cast::parse(text).unwrap_err().to_string();
+        assert!(error.contains(why), "{text:?}: {error}");
+    }
+    // A line names one by its name alone, once.
+    for (line, why) in [
+        (
+            "generate model=dawn cast=\"the keeper\"",
+            "names one of the project's `cast.kerfcast`",
+        ),
+        (
+            "generate model=dawn style=film style=film",
+            "`style=film` is given twice",
+        ),
+    ] {
+        let error = Recipe::parse(&format!("kerf-recipe 1\n{line}\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(why), "{line}: {error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_model_is_asked_with_the_cast_a_line_names_and_a_take_is_held_to_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::create_dir_all(directory.join("refs")).unwrap();
+    for picture in ["ada.png", "lamp.png", "sea.png"] {
+        std::fs::write(directory.join("refs").join(picture), picture).unwrap();
+    }
+    let recipe = "kerf-recipe 1\n\
+         generate model=dawn prompt=\"Ada wipes the great lens\" ref=../refs/sea.png ref=../refs/lamp.png cast=Ada cast=lamp style=film seed=7\n";
+    std::fs::write(directory.join("shots/open.kerfrecipe"), recipe).unwrap();
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+    );
+    let project = shot("shots/open.json");
+    let cannot = |why: &str| {
+        let error = plan(&project, directory, "m1", &some)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(why), "{error}");
+    };
+    // A name the project does not say is refused before anything runs, with the line that says it.
+    cannot("the project has no `cast.kerfcast`");
+    let write = |text: &str| std::fs::write(directory.join("cast.kerfcast"), text).unwrap();
+    write("kerf-cast 1\ncast lamp \"a lamp room\"\nstyle film \"35mm\"\n");
+    cannot(
+        "which `cast.kerfcast` has not; it has lamp. Name one of those, or add the line `cast Ada",
+    );
+    write("kerf-cast 1\ncast Ada \"a keeper\" ref=refs/gone.png\ncast lamp \"a lamp room\"\nstyle film \"35mm\"\n");
+    cannot("cast `Ada` in `cast.kerfcast` names the picture `refs/gone.png`, which is not there");
+
+    let cast = |ada: &str, more: &str| {
+        write(&format!(
+            "kerf-cast 1\ncast Ada \"{ada}\" ref=refs/ada.png\n\
+             cast lamp \"the lamp room of a lighthouse.\" ref=refs/lamp.png\n\
+             style film \"shot on 35mm colour negative\"\n{more}"
+        ));
+    };
+    cast("an old keeper in a wool coat", "");
+    let token = CancellationToken::new();
+    let planned = plan(&project, directory, "m1", &some).unwrap();
+    // The person is shown what the model is asked, the cast's words among it.
+    assert!(
+        planned.steps[0].contains("Ada: an old keeper in a wool coat."),
+        "{}",
+        planned.steps[0]
+    );
+    let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join(&made.stored)).unwrap()).unwrap();
+    assert_eq!(
+        request["prompt"],
+        "Ada wipes the great lens. Ada: an old keeper in a wool coat. \
+         lamp: the lamp room of a lighthouse. shot on 35mm colour negative."
+    );
+    // The line's own pictures first, then the cast's, each once.
+    let path = |name: &str| directory.join(name).to_string_lossy().into_owned();
+    assert_eq!(
+        request["references"],
+        serde_json::json!([
+            path("refs/sea.png"),
+            path("refs/lamp.png"),
+            path("refs/ada.png")
+        ])
+    );
+
+    let mut taken = project.clone();
+    taken.media[0].path = made.stored.clone();
+    let wants = || unmade(&taken, directory, taken.media("m1").unwrap());
+    assert_eq!(wants(), None);
+    // Someone the shot does not show is added, and it is not asked for again.
+    cast(
+        "an old keeper in a wool coat",
+        "cast gull \"a herring gull\"\nstyle night \"moonlight\"\n",
+    );
+    assert_eq!(wants(), None);
+    // What it shows is said another way, or shown by another picture, and it is.
+    cast("a young keeper in oilskins", "");
+    assert_eq!(
+        wants().unwrap().reason(),
+        "cast Ada changed after its file was made"
+    );
+    cast("an old keeper in a wool coat", "");
+    assert_eq!(wants(), None);
+    std::fs::write(directory.join("refs/ada.png"), "another picture of her").unwrap();
+    assert_eq!(
+        wants().unwrap().reason(),
+        "refs/ada.png changed after its file was made"
+    );
+    // One the file no longer says is why the recipe cannot run.
+    write("kerf-cast 1\ncast lamp \"a lamp room\" ref=refs/lamp.png\nstyle film \"35mm\"\n");
+    let gone = wants().unwrap().reason();
+    assert!(
+        gone.starts_with("its recipe cannot run: the recipe names `cast=Ada`"),
+        "{gone}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn another_roll_of_a_recipe_is_the_same_shot_with_its_seeds_on() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1
+generate model=dawn prompt=\"a boat leaves\" seed=7\n",
+    )
+    .unwrap();
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+    );
+    let mut project = shot("shots/open.json");
+    let token = CancellationToken::new();
+    assert_eq!(next_roll(&project, directory, "m1").unwrap(), 0);
+    let mut seeds = Vec::new();
+    for _ in 0..3 {
+        let roll = next_roll(&project, directory, "m1").unwrap();
+        let planned = plan_rolled(&project, directory, "m1", &some, roll).unwrap();
+        // The person is shown the seed this one is asked with.
+        assert!(
+            planned.steps[0].contains(&format!("seed {}", 7 + roll)),
+            "{}",
+            planned.steps[0]
+        );
+        let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+        let request: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join(&made.stored)).unwrap()).unwrap();
+        seeds.push(request["seed"].as_u64().unwrap());
+        project.media[0].path = made.stored;
+    }
+    assert_eq!(seeds, [7, 8, 9]);
+    let media = project.media("m1").unwrap();
+    let all = takes(&project, directory, media).unwrap();
+    assert_eq!(
+        all.iter().map(|take| take.rolled).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    // A roll is another of the same shot: none of them is asked for again.
+    assert!(all.iter().all(|take| take.changed.is_empty()));
+    assert_eq!(unmade(&project, directory, media), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_shots_of_a_project_are_read_at_once() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("cast.kerfcast"),
+        "kerf-cast 1\ncast Ada \"an old keeper\"\nstyle film \"35mm\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\ngenerate model=dawn prompt=\"she waits\" cast=Ada style=film seed=7\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("shots/pier.kerfrecipe"),
+        "kerf-recipe 1\ngenerate model=dawn prompt=\"an empty pier\"\n",
+    )
+    .unwrap();
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+    );
+    let mut project = project(
+        "media m1 path=\"shots/open.json\" rate=24 dur=4s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         media m2 path=\"shots/pier.json\" rate=24 dur=2s video=160x120 recipe=\"shots/pier.kerfrecipe\"\n\
+         media m3 path=\"footage/sea.mp4\" rate=24 dur=9s video=160x120\n\
+         sequence s1 rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m1 at=0f src=0f dur=96f\n",
+    );
+    let token = CancellationToken::new();
+    let planned = plan(&project, directory, "m1", &some).unwrap();
+    let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+    project.media[0].path = made.stored;
+    let all = shots(&project, directory);
+    // A media no recipe makes is not a shot.
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all[0].line(),
+        "  m1  shots/open.kerfrecipe  take 1 of 1  4s  Ada, film"
+    );
+    assert_eq!(
+        all[1].line(),
+        "! m2  shots/pier.kerfrecipe  no take  2s  (no clip plays it)  to make: its file is not there yet"
+    );
+    assert_eq!(
+        super::shots::summary(&all),
+        "2 shots, 1 to make (m2); 4s of 6s made"
+    );
+    assert_eq!(super::shots::summary(&all[..1]), "1 shot, 4s, all made");
+}

@@ -146,6 +146,13 @@ as you like: none of that asks for it again. Kerf says when a shot does want
 making again, and for what: its recipe, a file the recipe reads, or the
 sequence that guides it changed.
 
+To keep the same people, places, and look from shot to shot, say them once in
+`cast.kerfcast` in the project's folder, each with a name, a few words, and
+pictures of it, and Kerf's recipes name them; change one there and Kerf says
+which shots want making again ([the cast](shots.md#the-cast)). `kerf make
+<media> --rolls 3` makes three takes of a shot to choose among, and `kerf
+shots` lists every such shot with its take and whether it wants making.
+
 Kerf comes with no model. To have a recipe ask one, name the program that
 reaches it in `~/.kerf/models.json`; [shots.md](shots.md) has the format and
 what the program is handed.
@@ -182,6 +189,33 @@ When `project.kerf` changes outside Kerf, a banner offers **Load from Disk** or
 **Keep Editor Version**. From a terminal, `kerf load` is Load from Disk, and
 `kerf proposals`, `kerf accept` and `kerf reject` answer what an agent
 proposed, with no editor open.
+
+## A brand
+
+When what you make is for one name, say its colors, fonts, and words once, in
+`brand.kerfbrand` in the project's folder:
+
+```text
+kerf-brand 1
+color ember #c2410c
+color ink #1f2937
+font heading "Fraunces"
+font body "Inter"
+tone "warm and plain, never selling"
+say "handmade" "small batch"
+avoid "cheap" "discount"
+logo media/logo.png
+```
+
+A line is `color <name> #rrggbb`, `font <what it is for> "<family>"`, `tone
+"<how it speaks>"`, `say` and `avoid` with words in quotes, or `logo` with a
+picture of the project; each is there only if you want it. Kerf reads it with
+the project whenever you ask for a title or captions, and sets them in those
+fonts and colors and in that voice. A check then says, as information that
+fails nothing, where a title is set in a font or a color the brand has not,
+and where a title or a caption says a word it avoids, as a word of its own:
+"cheaper" is not "cheap". A title that sets no font or color of its own is
+left alone, and nothing is changed for you.
 
 ## Check and export
 

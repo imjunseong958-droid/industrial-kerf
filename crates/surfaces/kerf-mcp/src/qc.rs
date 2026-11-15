@@ -465,6 +465,7 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
         ));
     }
     findings.extend(lint::findings(project, &CachedFacts::new(dir)));
+    findings.extend(crate::brand::findings(project, dir));
     for finding in &mut findings {
         place(project, finding);
     }
