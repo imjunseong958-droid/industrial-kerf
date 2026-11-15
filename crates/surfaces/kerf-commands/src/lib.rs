@@ -214,6 +214,10 @@ pub enum Request {
     MediaMake {
         media: String,
         confirmed: bool,
+        /// How many takes to make, one after another, each with its seeds one on from the
+        /// last: one where it is not said.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rolls: Option<u32>,
     },
     /// Stop the making of a media that is running.
     MediaMakeCancel {
@@ -1465,6 +1469,11 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "media.make" => Request::MediaMake {
             media: params.require_string("media")?,
             confirmed: params.bool("confirmed")?.unwrap_or(false),
+            rolls: match params.int("rolls")? {
+                None | Some(1) => None,
+                Some(rolls @ 2..=16) => Some(rolls as u32),
+                Some(_) => return Err("`rolls` is how many takes to make, 1 to 16".to_owned()),
+            },
         },
         "media.makeCancel" => Request::MediaMakeCancel {
             media: params.require_string("media")?,
@@ -2449,6 +2458,20 @@ mod tests {
             ),
             json!({"type": "media_make", "media": "m1", "confirmed": true})
         );
+        // Several takes of it are asked for by how many.
+        assert_eq!(
+            request(
+                "media.make",
+                &context,
+                json!({"media": "m1", "confirmed": true, "rolls": 3})
+            ),
+            json!({"type": "media_make", "media": "m1", "confirmed": true, "rolls": 3})
+        );
+        assert_eq!(
+            request("media.make", &context, json!({"media": "m1", "rolls": 1})),
+            json!({"type": "media_make", "media": "m1", "confirmed": false})
+        );
+        assert!(run("media.make", &context, &json!({"media": "m1", "rolls": 40})).is_err());
         // A making under way is stopped by the media it makes.
         assert_eq!(
             request("media.makeCancel", &context, json!({"media": "m1"})),

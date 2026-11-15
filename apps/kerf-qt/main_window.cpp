@@ -1770,7 +1770,11 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         // Nothing has run: the recipe's steps run only on a yes here.
         if (QMessageBox::question(this, QStringLiteral("Make from Recipe"), makeQuestion(event), QMessageBox::Yes | QMessageBox::No,
                                   QMessageBox::No) == QMessageBox::Yes)
-            runMake(event.value(QStringLiteral("media")).toString());
+            runMake(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("rolls")).toInt(1));
+    } else if (type == QStringLiteral("cast")) {
+        // Asked for, the cast shows to be set; saved, it says which shots want making for it.
+        if (event.value(QStringLiteral("saved")).toBool()) showStatus(castSaved(event), 8000);
+        else castDialog(event)->open();
     } else if (type == QStringLiteral("media_making")) {
         // Each line a step says, as it says it: a rendering's share done, a model's
         // program's words. It stays until the next, or until the making ends.

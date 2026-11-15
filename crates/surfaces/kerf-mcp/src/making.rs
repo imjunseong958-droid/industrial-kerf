@@ -81,7 +81,12 @@ struct Job {
 #[derive(Clone)]
 enum Status {
     Making,
-    Made { revision: u64, path: String },
+    Made {
+        revision: u64,
+        path: String,
+        /// The takes it made, the last of which the media is.
+        takes: Vec<u32>,
+    },
     Failed(String),
     Stopped,
 }
@@ -101,14 +106,34 @@ impl JobState {
         });
         match &self.status {
             Status::Making => value["status"] = json!("making"),
-            Status::Made { revision, path } => {
+            Status::Made {
+                revision,
+                path,
+                takes,
+            } => {
+                let take = takes.last().copied().unwrap_or(take);
                 value["status"] = json!("made");
                 value["revision"] = json!(revision);
                 value["path"] = json!(path);
-                value["next"] = json!(format!(
-                    "{media} is take {take} now: look at it with `look` `media` and `sheet`, and \
-                     say what the model kept and what it lost"
-                ));
+                value["take"] = json!(take);
+                value["next"] = json!(if takes.len() > 1 {
+                    value["takes"] = json!(takes);
+                    format!(
+                        "{media} is take {take} now, the last of takes {}: look at each with \
+                         `look` `media` and `sheet`, say which kept the most, and have the media \
+                         be it with its `use` line",
+                        takes
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    format!(
+                        "{media} is take {take} now: look at it with `look` `media` and `sheet`, \
+                         and say what the model kept and what it lost"
+                    )
+                });
             }
             Status::Failed(why) => {
                 value["status"] = json!("failed");
@@ -135,6 +160,8 @@ struct MakeInput {
     wait: bool,
     #[serde(default)]
     cancel: bool,
+    /// How many takes to make, each with its seeds one on from the last.
+    rolls: Option<u32>,
 }
 
 pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
@@ -149,6 +176,7 @@ pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
             "type": "object",
             "properties": {
                 "media": {"type": "string", "description": "The media to make."},
+                "rolls": {"type": "integer", "minimum": 1, "maximum": 8, "description": "With `media`: make this many takes, one after another, each with the recipe's seeds one on from the last, to choose among. Each is a making the person pays for and their limit counts: ask for more than one only when they asked for takes to choose from."},
                 "why": {"type": "string", "description": "What this making is for, said to the person with the plan: what changed since the last take, and what to look for."},
                 "job": {"type": "string", "description": "A making this session started: what it has said, and how it ended."},
                 "wait": {"type": "boolean", "description": "Answer once the making has ended, up to twenty minutes, rather than at once."},
@@ -169,10 +197,10 @@ impl KerfMcpRouter {
         let input: MakeInput = super::harness::input(arguments)?;
         match (&input.media, &input.job) {
             (None, Some(job)) => {
-                if input.why.is_some() {
+                if input.why.is_some() || input.rolls.is_some() {
                     return Err(McpError::new(
                         "INVALID_ARGUMENTS",
-                        "`why` goes with a `media` to make",
+                        "`why` and `rolls` go with a `media` to make",
                     ));
                 }
                 self.making_job(job, input.cancel, input.wait)
@@ -184,7 +212,14 @@ impl KerfMcpRouter {
                         "`cancel` stops a `job`; pass the job a making answered with",
                     ));
                 }
-                self.make_media(media, input.why.as_deref(), input.wait)
+                let rolls = input.rolls.unwrap_or(1);
+                if !(1..=8).contains(&rolls) {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        "`rolls` is how many takes to make, 1 to 8",
+                    ));
+                }
+                self.make_media(media, input.why.as_deref(), input.wait, rolls)
             }
             _ => Err(McpError::new(
                 "INVALID_ARGUMENTS",
@@ -193,7 +228,13 @@ impl KerfMcpRouter {
         }
     }
 
-    fn make_media(&self, media: &str, why: Option<&str>, wait: bool) -> Result<Value, McpError> {
+    fn make_media(
+        &self,
+        media: &str,
+        why: Option<&str>,
+        wait: bool,
+        rolls: u32,
+    ) -> Result<Value, McpError> {
         let (_, project) = self.project_at(None)?;
         // A media an edit has just added is in its proposal, not in the project, until the
         // person accepts it: a making is of the project, and is not asked of a proposal.
@@ -214,12 +255,21 @@ impl KerfMcpRouter {
         }
         let models =
             Models::load().map_err(|error| McpError::new("CANNOT_MAKE", error.to_string()))?;
-        let plan = recipe::plan(&project, &self.dir, media, &models).map_err(|error| {
+        let cannot = |error: EngineError| {
             McpError::new(
                 "CANNOT_MAKE",
                 super::harness::cannot_said(error.to_string(), Some(&models)),
             )
-        })?;
+        };
+        // One making is the recipe as it is written. Several are rolls of it, each with its
+        // seeds one on from the last, from the first roll no take of it has had.
+        let first = if rolls > 1 {
+            recipe::next_roll(&project, &self.dir, media).map_err(cannot)?
+        } else {
+            0
+        };
+        let plan =
+            recipe::plan_rolled(&project, &self.dir, media, &models, first).map_err(cannot)?;
         let permissions = self.permissions().map_err(|error| {
             McpError::new(
                 "PERMISSIONS",
@@ -251,11 +301,21 @@ impl KerfMcpRouter {
         if !plan.notes.is_empty() {
             answer["notes"] = json!(plan.notes);
         }
-        if !permissions.runs_makings(makings.started) {
+        if rolls > 1 {
+            answer["rolls"] = json!(rolls);
+            answer["takes"] = json!((plan.take..plan.take + rolls).collect::<Vec<_>>());
+        }
+        // Every roll is a making the person's limit counts: all of them are let through, or
+        // the person is asked for them all.
+        if !permissions.runs_makings(makings.started + rolls - 1) {
             drop(makings);
+            let takes = if rolls > 1 {
+                format!("takes {} to {}", plan.take, plan.take + rolls - 1)
+            } else {
+                format!("take {}", plan.take)
+            };
             let mut body = format!(
-                "{ASKS}{media}, as take {}, from {}:",
-                plan.take,
+                "{ASKS}{media}, as {takes}, from {}:",
                 std::path::absolute(&self.dir)
                     .ok()
                     .and_then(|dir| plan.recipe.strip_prefix(dir).ok())
@@ -271,9 +331,15 @@ impl KerfMcpRouter {
             for note in &plan.notes {
                 body.push_str(&format!("\nNote: {note}"));
             }
-            body.push_str(&format!(
-                "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
-            ));
+            if rolls > 1 {
+                body.push_str(&format!(
+                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several from Recipe in the editor's bin."
+                ));
+            } else {
+                body.push_str(&format!(
+                    "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
+                ));
+            }
             let author = self.author();
             let actor = if author.kind == "mcp" { "mcp" } else { "agent" };
             let mut comment = NewComment::new(author, &body);
@@ -281,10 +347,17 @@ impl KerfMcpRouter {
             let (comment, _) = self.runtime.add_comment(actor, comment)?;
             answer["status"] = json!("asked");
             answer["comment"] = json!(comment.id);
-            answer["make"] = json!(format!(
-                "the person is asked, in the review thread, and makes it with `kerf make {media}` \
-                 or Make from Recipe…; `look` lists the take once it is made"
-            ));
+            answer["make"] = json!(if rolls > 1 {
+                format!(
+                    "the person is asked, in the review thread, and makes them with `kerf make \
+                     {media} --rolls {rolls}`; `look` `media` lists the takes once they are made"
+                )
+            } else {
+                format!(
+                    "the person is asked, in the review thread, and makes it with `kerf make \
+                     {media}` or Make from Recipe…; `look` lists the take once it is made"
+                )
+            });
             if permissions.mode == crate::permissions::Mode::Auto {
                 answer["why"] = json!(format!(
                     "this session has made the {} its person lets an agent make on its own",
@@ -293,7 +366,7 @@ impl KerfMcpRouter {
             }
             return Ok(answer);
         }
-        makings.started += 1;
+        makings.started += rolls;
         let take = plan.take;
         let id = format!("make-{}", operation_key("job"));
         let token = CancellationToken::new();
@@ -319,37 +392,93 @@ impl KerfMcpRouter {
             let (router, token, state) = (self.clone(), token.clone(), state.clone());
             let media = media.to_owned();
             thread::spawn(move || {
-                let mut last = String::new();
-                let made = recipe::make(&project, &router.dir, &plan, &models, &token, |line| {
-                    let line = line.trim();
-                    if line.is_empty() || line == last {
-                        return;
-                    }
-                    last = line.to_owned();
-                    tell(MakingEvent::Said {
-                        media: media.clone(),
-                        take,
-                        line: line.to_owned(),
-                    });
-                    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-                    // How far a step has come is one line, said again as it goes on.
-                    let further = |said: &str| {
-                        let named =
-                            |line: &str| line.rsplit_once(": ").map(|(named, _)| named.to_owned());
-                        line.ends_with('%') && said.ends_with('%') && named(line) == named(said)
+                // The takes made, in order, and why the making after the last was not.
+                let mut all: Vec<recipe::Made> = Vec::new();
+                let mut ended = Ok(());
+                for roll in 0..rolls {
+                    let plan = match roll {
+                        0 => Ok(plan.clone()),
+                        roll => recipe::plan_rolled(
+                            &project,
+                            &router.dir,
+                            &media,
+                            &models,
+                            first + roll,
+                        ),
                     };
-                    if state.said.back().is_some_and(|said| further(said)) {
-                        state.said.pop_back();
-                    } else if state.said.len() == KEPT_LINES {
-                        state.said.pop_front();
+                    let made = plan.and_then(|plan| {
+                        let take = plan.take;
+                        if roll > 0 {
+                            tell(MakingEvent::Began {
+                                media: media.clone(),
+                                take,
+                                stop: token.clone(),
+                            });
+                        }
+                        let mut last = String::new();
+                        recipe::make(&project, &router.dir, &plan, &models, &token, |line| {
+                            let line = line.trim();
+                            if line.is_empty() || line == last {
+                                return;
+                            }
+                            last = line.to_owned();
+                            tell(MakingEvent::Said {
+                                media: media.clone(),
+                                take,
+                                line: line.to_owned(),
+                            });
+                            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                            // How far a step has come is one line, said again as it goes on.
+                            let further = |said: &str| {
+                                let named = |line: &str| {
+                                    line.rsplit_once(": ").map(|(named, _)| named.to_owned())
+                                };
+                                line.ends_with('%')
+                                    && said.ends_with('%')
+                                    && named(line) == named(said)
+                            };
+                            if state.said.back().is_some_and(|said| further(said)) {
+                                state.said.pop_back();
+                            } else if state.said.len() == KEPT_LINES {
+                                state.said.pop_front();
+                            }
+                            state.said.push_back(line.to_owned());
+                        })
+                    });
+                    match made {
+                        Ok(made) => all.push(made),
+                        Err(error) => {
+                            ended = Err(error);
+                            break;
+                        }
                     }
-                    state.said.push_back(line.to_owned());
-                });
+                }
+                // What was made is kept, whatever the making after it came to: the media
+                // becomes the last take there is, and the job says why it has no more.
+                let takes: Vec<u32> = all.iter().map(|made| made.take).collect();
+                let made = match (all.pop(), ended) {
+                    (Some(made), ended) => {
+                        if let Err(error) = ended {
+                            state
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .said
+                                .push_back(format!(
+                                    "made {} of the {rolls} takes, and the next was not: {error}",
+                                    takes.len()
+                                ));
+                        }
+                        Ok(made)
+                    }
+                    (None, Err(error)) => Err(error),
+                    (None, Ok(())) => unreachable!("a making is of one take at least"),
+                };
                 let status = match made {
                     Ok(made) => match router.place_take(&media, &made.stored) {
                         Ok(revision) => Status::Made {
                             revision,
                             path: made.stored,
+                            takes: takes.clone(),
                         },
                         Err(error) => Status::Failed(format!(
                             "take {} was made, and the document could not take it: {}; its `use` \
@@ -361,9 +490,9 @@ impl KerfMcpRouter {
                     Err(error) => Status::Failed(error.to_string()),
                 };
                 tell(match &status {
-                    Status::Made { .. } => MakingEvent::Made {
+                    Status::Made { takes, .. } => MakingEvent::Made {
                         media: media.clone(),
-                        take,
+                        take: takes.last().copied().unwrap_or(take),
                     },
                     Status::Stopped => MakingEvent::Stopped {
                         media: media.clone(),

@@ -34,7 +34,8 @@ use serde_json::{json, Map, Value as Json};
 
 /// [`timeline_json`] with, on each source its recipe has made takes of, `takes`: each one's
 /// `number`, its `path` as the document would name it, and whether it is the one the
-/// source is (`chosen`), for an editor to offer them.
+/// source is (`chosen`), for an editor to offer them; and on each whose recipe names any of
+/// the project's cast or styles, `shows`: their names.
 pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path) -> Json {
     let mut value = timeline_json(project);
     let sources = value["sources"].as_array_mut().into_iter().flatten();
@@ -45,6 +46,12 @@ pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path
                 .into_iter()
                 .map(|(number, path, chosen)| json!({"number": number, "path": path, "chosen": chosen}))
                 .collect();
+        }
+        if let Some(recipe) = &media.recipe {
+            let (cast, styles) = kerf_engine::recipe::cast::named_by(directory, recipe);
+            if !cast.is_empty() || !styles.is_empty() {
+                source["shows"] = json!([cast, styles].concat());
+            }
         }
     }
     value

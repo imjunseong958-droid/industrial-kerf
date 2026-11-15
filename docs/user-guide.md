@@ -146,12 +146,14 @@ as you like: none of that asks for it again. Kerf says when a shot does want
 making again, and for what: its recipe, a file the recipe reads, or the
 sequence that guides it changed.
 
-To keep the same people, places, and look from shot to shot, say them once in
-`cast.kerfcast` in the project's folder, each with a name, a few words, and
-pictures of it, and Kerf's recipes name them; change one there and Kerf says
-which shots want making again ([the cast](shots.md#the-cast)). `kerf make
-<media> --rolls 3` makes three takes of a shot to choose among, and `kerf
-shots` lists every such shot with its take and whether it wants making.
+To keep the same people, places, and look from shot to shot, say them once:
+right-click in the Media sheet and choose Cast and Styles…, and give each a
+name, a few words, and pictures of it. Kerf's recipes name them, and when you
+change one, saving says which shots want making again
+([the cast](shots.md#the-cast)). For several takes of a shot to choose among,
+choose Make Several from Recipe on the media, or run `kerf make <media>
+--rolls 3`; pick one under Takes. `kerf shots` lists every such shot with
+its take and whether it wants making.
 
 Kerf comes with no model. To have a recipe ask one, name the program that
 reaches it in `~/.kerf/models.json`; [shots.md](shots.md) has the format and

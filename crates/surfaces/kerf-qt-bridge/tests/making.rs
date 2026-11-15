@@ -252,3 +252,78 @@ fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
         event["type"] == "media_make_cancelled"
     });
 }
+
+#[test]
+fn several_takes_are_made_one_after_another_and_the_cast_is_read_and_set() {
+    let project = Project::new("rolls", "render s2 {out}");
+    let mut editor = Editor::open(&project.0);
+
+    // The plan says how many it is for, and nothing runs.
+    editor.send(json!({"type": "media_make", "media": "m1", "rolls": 3}));
+    let plan = editor.expect("the plan", |event| event["type"] == "media_make_plan");
+    assert_eq!((&plan["take"], &plan["rolls"]), (&json!(1), &json!(3)));
+    assert!(!project.0.join("shots/open.takes").exists());
+
+    editor.send(json!({"type": "media_make", "media": "m1", "confirmed": true, "rolls": 3}));
+    // Each take says that it began, and the media is the last once all are made.
+    for take in 1..=3 {
+        editor.expect("a take to begin", |event| {
+            event["type"] == "media_making" && event["take"] == take && event["line"] == ""
+        });
+    }
+    let made = editor.expect("the takes", |event| event["type"] == "media_made");
+    assert_eq!(made["take"], 3);
+    editor.expect("the media to be the last take", |event| {
+        event["type"] == "state"
+            && event["snapshot"]["document"]
+                .as_str()
+                .is_some_and(|document| document.contains("path=\"shots/open.takes/003.mp4\""))
+    });
+    for take in ["001", "002", "003"] {
+        assert!(project
+            .0
+            .join(format!("shots/open.takes/{take}.mp4"))
+            .is_file());
+    }
+    assert!(
+        !editor.events.iter().any(|event| event["type"] == "error"),
+        "{:#?}",
+        editor.events
+    );
+
+    // A project that says no cast has none to show.
+    editor.send(json!({"type": "cast_get"}));
+    let none = editor.expect("the cast", |event| event["type"] == "cast");
+    assert_eq!(
+        (&none["entries"], &none["saved"]),
+        (&json!([]), &json!(false))
+    );
+    // Set, it is the project's cast file, and comes back as it reads.
+    editor.send(json!({"type": "cast_set", "entries": [
+        {"kind": "cast", "name": "Ada", "words": "an  old keeper", "refs": ["refs/ada.png"]},
+        {"kind": "style", "name": "film", "words": "35mm"},
+    ]}));
+    let saved = editor.expect("the cast", |event| event["type"] == "cast");
+    assert_eq!(saved["saved"], true);
+    assert_eq!(
+        saved["entries"],
+        json!([
+            {"kind": "cast", "name": "Ada", "words": "an old keeper", "refs": ["refs/ada.png"]},
+            {"kind": "style", "name": "film", "words": "35mm", "refs": []},
+        ])
+    );
+    assert_eq!(
+        fs::read_to_string(project.0.join("cast.kerfcast")).unwrap(),
+        "kerf-cast 1\ncast Ada \"an old keeper\" ref=refs/ada.png\nstyle film \"35mm\"\n"
+    );
+    // One that does not read is an error that says so, and the file is as it was.
+    editor.send(json!({"type": "cast_set", "entries": [{"kind": "cast", "name": "the keeper", "words": "old"}]}));
+    let refused = editor.expect("an error", |event| event["type"] == "error");
+    assert_eq!(refused["command"], "cast");
+    assert!(refused["message"]
+        .as_str()
+        .is_some_and(|message| message.starts_with("cannot save the cast:")));
+    assert!(fs::read_to_string(project.0.join("cast.kerfcast"))
+        .unwrap()
+        .contains("cast Ada"));
+}

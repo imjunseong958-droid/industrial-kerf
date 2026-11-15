@@ -350,9 +350,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "scopes": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_LOOK_FRAMES, "description": "Sequence positions to read scopes at once the edit is made, as `look` with `scopes` reads them: the answer's `scopes` has a reading for each, with `before`, what was read there before the edit. A grade and its numbers in one call."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
-                    "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."}
+                    "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."},
+                    "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a recipe of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "oneOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "oneOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -654,6 +655,10 @@ struct EditInput {
     /// Recipe files the edit writes, by the path a media line names, each with its text.
     #[serde(default)]
     recipes: BTreeMap<String, String>,
+    /// Lines the edit adds to the project's cast file, each a cast or a style the file has
+    /// not.
+    #[serde(default)]
+    cast: Vec<String>,
     /// Positions to read scopes at once the edit is made.
     #[serde(default)]
     scopes: Vec<String>,
@@ -3761,7 +3766,7 @@ impl KerfMcpRouter {
     fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
         if [
-            input.script.is_some() || !input.recipes.is_empty(),
+            input.script.is_some() || !input.recipes.is_empty() || !input.cast.is_empty(),
             input.preset.is_some(),
             input.save_preset.is_some(),
         ]
@@ -3772,7 +3777,7 @@ impl KerfMcpRouter {
         {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "pass exactly one of script (with or without recipes), recipes, preset, or savePreset",
+                "pass exactly one of script (with or without recipes and cast), recipes, cast, preset, or savePreset",
             ));
         }
         if let Some(file) = &input.save_preset {
@@ -3866,6 +3871,14 @@ impl KerfMcpRouter {
             applied =
                 apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
         }
+        // Who and what the edit's recipes show that the project has not said yet is added to its
+        // cast file, which asks for no shot again; one it has is the person's to change.
+        let cast_added = if input.cast.is_empty() {
+            Vec::new()
+        } else {
+            kerf_engine::recipe::cast::Cast::add(&self.dir, &input.cast)
+                .map_err(|error| McpError::new("INVALID_CAST", error.to_string()))?
+        };
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
         {
@@ -3873,6 +3886,13 @@ impl KerfMcpRouter {
             // changes, and nothing can be made of it until a person makes it.
             let written: Vec<&RecipeVersion> =
                 recipes.iter().filter(|recipe| recipe.version.new).collect();
+            if written.is_empty() && !cast_added.is_empty() {
+                return Ok(json!({
+                    "proposal": null,
+                    "status": "written",
+                    "cast": cast_added,
+                }));
+            }
             if written.is_empty() {
                 return Err(McpError::new(
                     "NO_CHANGE",
@@ -3887,12 +3907,16 @@ impl KerfMcpRouter {
                 kerf_engine::recipe::write_version(&self.dir, &recipe.version, &recipe.text)
                     .map_err(engine_error)?;
             }
-            return Ok(json!({
+            let mut written = json!({
                 "proposal": null,
                 "status": "written",
                 "recipes": recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>(),
                 "toMake": self.to_make(&applied.project, false),
-            }));
+            });
+            if !cast_added.is_empty() {
+                written["cast"] = json!(cast_added);
+            }
+            return Ok(written);
         }
         // An extension runs the operations of the proposal it extends, which
         // read nothing that could have changed since, and then this script;
@@ -3998,6 +4022,9 @@ impl KerfMcpRouter {
         });
         if !recipes.is_empty() {
             result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
+        }
+        if !cast_added.is_empty() {
+            result["cast"] = json!(cast_added);
         }
         // What scopes read of it, each beside what they read before: a grade and its numbers
         // in one call, where an edit and then a look took two.
