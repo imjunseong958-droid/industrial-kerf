@@ -47,19 +47,26 @@ pub(crate) struct Stretch {
 /// How many frames the shortest stretch holds at `rate` frames a second. A
 /// render with fewer is encoded whole.
 pub(crate) fn least_frames(rate: f64) -> usize {
-    ((LEAST_SECONDS * rate).round() as usize).max(1)
+    ((LEAST_SECONDS * rate).round() as usize).max(LEAST_FRAMES)
 }
+
+/// No stretch is shorter than this many frames, however slow the rate. An
+/// encoder that puts frames out of order holds a few back before the first
+/// leaves it, and gives each file's frames times that allow for that; a file
+/// of fewer frames than it holds back is timed as if it held none, and does
+/// not join.
+const LEAST_FRAMES: usize = 8;
 
 /// The frames of a render as stretches, in order, where `keys` has each
 /// frame's number and the render draws `rate` frames a second.
 pub(crate) fn stretches(keys: &[Option<u64>], rate: f64) -> Vec<Stretch> {
     let frames = |seconds: f64| ((seconds * rate).round() as usize).max(1);
     let (least, every, most) = (
-        frames(LEAST_SECONDS),
+        least_frames(rate),
         frames(EVERY_SECONDS) as u64,
-        frames(MOST_SECONDS),
+        frames(MOST_SECONDS).max(least_frames(rate)),
     );
-    let mut stretches = Vec::new();
+    let mut stretches: Vec<Stretch> = Vec::new();
     let mut start = 0;
     for at in 1..=keys.len() {
         let length = at - start;
@@ -74,12 +81,28 @@ pub(crate) fn stretches(keys: &[Option<u64>], rate: f64) -> Vec<Stretch> {
             }
         };
         if ends {
-            stretches.push(Stretch {
-                frames: start..at,
-                keyed: keys[start].is_some(),
-            });
+            let keyed = keys[start].is_some();
+            match stretches.last_mut() {
+                // What is left at the end, or a few frames with no number among ones that have
+                // one, is too short to be a file of its own: it goes with the stretch before
+                // it, which is then kept only if both would be.
+                Some(before) if length < least => {
+                    before.frames.end = at;
+                    before.keyed &= keyed;
+                }
+                _ => stretches.push(Stretch {
+                    frames: start..at,
+                    keyed,
+                }),
+            }
             start = at;
         }
+    }
+    // A short one at the very start goes with the one after it.
+    if stretches.len() > 1 && stretches[0].frames.len() < least {
+        let first = stretches.remove(0);
+        stretches[0].frames.start = first.frames.start;
+        stretches[0].keyed &= first.keyed;
     }
     stretches
 }
@@ -106,6 +129,9 @@ pub struct SectionStats {
     /// Stretches drawn and encoded, and the frames in them.
     pub encoded: u64,
     pub encoded_frames: u64,
+    /// Renders whose sound was copied as it was kept, and renders that mixed and encoded it.
+    pub sound_kept: u64,
+    pub sound_mixed: u64,
     /// Renders that gave up on stretches and encoded the picture whole.
     pub whole: u64,
 }
@@ -114,6 +140,8 @@ static KEPT: AtomicU64 = AtomicU64::new(0);
 static KEPT_FRAMES: AtomicU64 = AtomicU64::new(0);
 static ENCODED: AtomicU64 = AtomicU64::new(0);
 static ENCODED_FRAMES: AtomicU64 = AtomicU64::new(0);
+static SOUND_KEPT: AtomicU64 = AtomicU64::new(0);
+static SOUND_MIXED: AtomicU64 = AtomicU64::new(0);
 static WHOLE: AtomicU64 = AtomicU64::new(0);
 
 /// What renders in this process have done with their stretches.
@@ -123,8 +151,14 @@ pub fn section_stats() -> SectionStats {
         kept_frames: KEPT_FRAMES.load(Ordering::Relaxed),
         encoded: ENCODED.load(Ordering::Relaxed),
         encoded_frames: ENCODED_FRAMES.load(Ordering::Relaxed),
+        sound_kept: SOUND_KEPT.load(Ordering::Relaxed),
+        sound_mixed: SOUND_MIXED.load(Ordering::Relaxed),
         whole: WHOLE.load(Ordering::Relaxed),
     }
+}
+
+pub(crate) fn count_sound(kept: bool) {
+    if kept { &SOUND_KEPT } else { &SOUND_MIXED }.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn count_kept(frames: usize) {
@@ -312,7 +346,16 @@ mod tests {
         let lengths: Vec<usize> = found.iter().map(|stretch| stretch.frames.len()).collect();
         let (last, rest) = lengths.split_last().unwrap();
         assert!(rest.iter().all(|length| (48..=240).contains(length)), "{lengths:?}");
-        assert!(*last <= 240);
+        // What is left at the end is never a short stretch of its own.
+        assert!((48..240 + 48).contains(last), "{lengths:?}");
+        for count in 49..400 {
+            let found = stretches(&keys[..count], 24.0);
+            assert!(
+                found.iter().all(|stretch| stretch.frames.len() >= 48),
+                "{count} frames: {found:?}"
+            );
+            assert_eq!(found.last().unwrap().frames.end, count);
+        }
         let mean = keys.len() as f64 / found.len() as f64 / 24.0;
         assert!((3.5..4.6).contains(&mean), "{mean}");
         assert!(found.iter().all(|stretch| stretch.keyed));
@@ -362,10 +405,25 @@ mod tests {
         assert_eq!(unkeyed.len(), 1);
         assert_eq!(unkeyed[0].frames, 100..160);
         // No stretch with a name has such a frame in it.
-        assert!(found
-            .iter()
-            .filter(|stretch| stretch.keyed)
-            .all(|stretch| keys[stretch.frames.clone()].iter().all(Option::is_some)));
+        let named = |found: &[Stretch], keys: &[Option<u64>]| {
+            found
+                .iter()
+                .filter(|stretch| stretch.keyed)
+                .all(|stretch| keys[stretch.frames.clone()].iter().all(Option::is_some))
+        };
+        assert!(named(&found, &keys));
+        // A few such frames are too short to be a file of their own: they go with the stretch
+        // before them, which then has no name either; and at the very start, with the one after.
+        for (from, to) in [(300, 303), (0, 2), (718, 720)] {
+            let mut keys = self::keys(24 * 30, 3);
+            for key in &mut keys[from..to] {
+                *key = None;
+            }
+            let found = stretches(&keys, 24.0);
+            assert!(found.iter().all(|stretch| stretch.frames.len() >= 48), "{found:?}");
+            assert_eq!(found.iter().filter(|stretch| !stretch.keyed).count(), 1, "{found:?}");
+            assert!(named(&found, &keys));
+        }
     }
 
     #[test]

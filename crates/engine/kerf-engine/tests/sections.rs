@@ -134,6 +134,7 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         "{first_stats:?}"
     );
     assert!((2..=8).contains(&first_stats.encoded), "{first_stats:?}");
+    assert_eq!((first_stats.sound_kept, first_stats.sound_mixed), (0, 1), "{first_stats:?}");
     let first = frames(&file("first.mp4"));
     assert_eq!(first.len(), FRAMES);
     // Each frame is shown exactly when it should be, across every join.
@@ -149,7 +150,7 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         assert!(here < apart(&first[frame], &whole[frame + 1]), "frame {frame}");
     }
     // The sound is the whole render's.
-    assert_eq!(sound(&file("first.mp4")), sound(&file("whole.mp4")));
+    assert!(sound(&file("first.mp4")) == sound(&file("whole.mp4")), "the sound differs");
 
     // Again, unchanged: nothing is drawn or encoded, and the file holds the same frames.
     render(&project, &file("second.mp4"));
@@ -157,10 +158,14 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     assert_eq!(second_stats.encoded, first_stats.encoded, "{second_stats:?}");
     assert_eq!(second_stats.kept, first_stats.encoded, "{second_stats:?}");
     assert_eq!(second_stats.kept_frames, FRAMES as u64, "{second_stats:?}");
-    assert_eq!(frames(&file("second.mp4")), first);
+    assert_eq!((second_stats.sound_kept, second_stats.sound_mixed), (1, 1), "{second_stats:?}");
+    assert!(frames(&file("second.mp4")) == first, "the frames differ");
+    assert!(sound(&file("second.mp4")) == sound(&file("whole.mp4")), "the sound differs");
 
-    // The middle clip drawn another way: its stretches are encoded again and the rest joined.
-    let edited = apply_script(&project, Catalog::builtin(), "set c2 opacity=0.5")
+    // The last clip drawn another way: its stretches are encoded again and the rest joined.
+    // Where a stretch ends changes from run to run, with the footage's file, but the first is
+    // no longer than ten seconds, and the last clip starts twelve in.
+    let edited = apply_script(&project, Catalog::builtin(), "set c3 opacity=0.5")
         .expect("edits")
         .project;
     render(&edited, &file("third.mp4"));
@@ -170,14 +175,17 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         third_stats.encoded_frames - second_stats.encoded_frames,
     );
     assert_eq!(kept + encoded, FRAMES as u64, "{third_stats:?}");
-    assert!(kept >= 48 && encoded >= 144, "{kept} kept, {encoded} encoded");
+    assert!(kept >= 48 && encoded >= 96, "{kept} kept, {encoded} encoded");
     let third = frames(&file("third.mp4"));
     assert_eq!(third.len(), FRAMES);
-    // What was joined is the very frames of the first render; the middle clip is not.
+    // What was joined is the very frames of the first render; the last clip is not.
     let same = (0..FRAMES).filter(|frame| third[*frame] == first[*frame]).count();
     assert!(same as u64 >= kept, "{same} the same, {kept} kept");
-    assert!((144..288).all(|frame| apart(&third[frame], &first[frame]) > 2.0));
+    assert!((288..FRAMES).all(|frame| apart(&third[frame], &first[frame]) > 2.0));
     assert_eq!(times(&file("third.mp4")), shown);
+    // A clip drawn another way sounds as it did: the sound is not mixed again.
+    assert_eq!((third_stats.sound_kept, third_stats.sound_mixed), (2, 1), "{third_stats:?}");
+    assert!(sound(&file("third.mp4")) == sound(&file("whole.mp4")), "the sound differs");
 
     // The first clip taken out: what follows closes up, and is the render of that.
     let cut = apply_script(&project, Catalog::builtin(), "ripple-delete c1")
@@ -198,6 +206,22 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         assert!(here < 2.0, "frame {frame} is {here} from the whole render's");
     }
     assert_eq!(fourth_stats.whole, 0, "{fourth_stats:?}");
+    // Its sound is another sound, mixed again: the last ten seconds of the whole render's, as
+    // near as an encoder that starts six seconds later comes to it.
+    assert_eq!((fourth_stats.sound_kept, fourth_stats.sound_mixed), (2, 2), "{fourth_stats:?}");
+    let (heard, before) = (sound(&file("fourth.mp4")), sound(&file("whole.mp4")));
+    // Two channels of 16 bits, 48,000 times a second.
+    assert_eq!(heard.len(), 48_000 * 4 * 10);
+    let level = |bytes: &[u8; 2]| i32::from(i16::from_le_bytes(*bytes));
+    let off: i64 = heard
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(before[48_000 * 4 * 6..].as_chunks::<2>().0)
+        .map(|(heard, before)| i64::from((level(heard) - level(before)).abs()))
+        .sum();
+    let mean = off as f64 / (heard.len() / 2) as f64;
+    assert!(mean < 40.0, "the sound is {mean} of 32768 from the whole render's");
 
     // Every other way a render is encoded joins too: none falls back to encoding whole, and each
     // has its frames at their times.

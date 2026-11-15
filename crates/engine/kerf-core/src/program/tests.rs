@@ -80,10 +80,49 @@ fn crossfades_use_handles_and_fade_both_sides() {
         graph.contains("afade=t=in:st=0:d=0.5:curve=qsin"),
         "{graph}"
     );
+    // The incoming clip starts 84000 samples in, while the outgoing one still sounds: each is a
+    // stream of its own, as long as the program, and the two are summed.
     assert!(
-        graph.contains("adelay=delays=84000S:all=1,asetpts=N/SR/TB"),
+        graph.contains("anullsrc=r=48000:cl=stereo,atrim=end_sample=84000[gap4]"),
         "{graph}"
     );
+    assert!(
+        graph.contains("[sound1]apad=whole_len=192000,atrim=end_sample=192000[piece3]"),
+        "{graph}"
+    );
+    assert!(
+        graph.contains("[sound2]apad=whole_len=108000,atrim=end_sample=108000[piece5]"),
+        "{graph}"
+    );
+    assert!(
+        graph.contains("[gap4][piece5]concat=n=2:v=0:a=1[lane6]"),
+        "{graph}"
+    );
+    assert!(graph.contains("[bed0][piece3][lane6]amix=inputs=3"), "{graph}");
+}
+
+#[test]
+fn clips_cut_one_after_another_are_one_stream() {
+    // Three clips on a track with a gap before the last: laid end to end, each padded to the
+    // sample the next starts on, so the mix sums one stream and not three.
+    let project = project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=m1 src=00:00:02:00 at=0f dur=48f\n\
+         \x20   clip a2 media=m2 src=00:00:02:00 at=48f dur=24f\n\
+         \x20   clip a3 media=m1 src=00:00:06:00 at=96f dur=24f\n",
+    );
+    let graph = compile(&project).filter_complex;
+    for piece in [
+        "[sound1]apad=whole_len=96000,atrim=end_sample=96000[",
+        "[sound2]apad=whole_len=96000,atrim=end_sample=96000[",
+        "[sound3]apad=whole_len=48000,atrim=end_sample=48000[",
+        "concat=n=3:v=0:a=1[",
+        "amix=inputs=2:",
+    ] {
+        assert!(graph.contains(piece), "{piece} in {graph}");
+    }
+    assert!(!graph.contains("anullsrc") && !graph.contains("adelay"), "{graph}");
 }
 
 #[test]

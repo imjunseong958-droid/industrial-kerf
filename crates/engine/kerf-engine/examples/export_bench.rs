@@ -96,7 +96,7 @@ fn main() {
         "{{\"mode\":\"{mode}\",\"frames\":{frames},\"seconds\":{seconds:.2},\"fps\":{:.1},\
          \"read\":{},\"drawn\":{},\"written\":{},\"dropped\":{},\"evicted\":{},\
          \"stretchesJoined\":{},\"framesJoined\":{},\"stretchesEncoded\":{},\
-         \"framesEncoded\":{},\"encodedWhole\":{}}}",
+         \"framesEncoded\":{},\"soundKept\":{},\"soundMixed\":{},\"encodedWhole\":{}}}",
         frames as f64 / seconds,
         stats.hits,
         stats.misses,
@@ -107,6 +107,8 @@ fn main() {
         sections.kept_frames,
         sections.encoded,
         sections.encoded_frames,
+        sections.sound_kept,
+        sections.sound_mixed,
         sections.whole,
     );
 }

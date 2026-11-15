@@ -765,10 +765,13 @@ struct CompositedRender {
 struct SectionArgs {
     /// To encode a stretch's frames from stdin to a file with no sound; the file follows.
     encode: Vec<String>,
-    /// To join the stretches with the sound into the render's file: the list of stretches goes
-    /// between the two.
-    join: (Vec<String>, Vec<String>),
-    /// What kind of file a stretch is: the render's own.
+    /// To mix the sound and encode it to a file with no picture; the file follows. None for a
+    /// render with no sound.
+    sound: Option<Vec<String>>,
+    /// To copy the stretches and the sound into the render's file: what follows the inputs,
+    /// which are the sound's file, when there is one, and then the list of stretches.
+    join: Vec<String>,
+    /// What kind of file a stretch is, and the sound: the render's own.
     extension: String,
 }
 
@@ -884,28 +887,39 @@ fn composited_render(
         "-i".to_owned(),
         "pipe:0".to_owned(),
     ];
-    // Joining reads the stretches where encoding whole reads the frames, and copies them.
-    let mut join = (args[..at].to_vec(), args[at..].to_vec());
-    join.0
-        .extend(["-f", "concat", "-safe", "0", "-i"].map(String::from));
-    join.1.extend(["-map".to_owned(), format!("{picture}:v")]);
-    if !opts.sound {
-        join.1.push("-an".to_owned());
-    }
-    join.1.extend(["-c:v".to_owned(), "copy".to_owned()]);
-    let mut kept = encoding.output.iter();
-    while let Some(arg) = kept.next() {
-        if ENCODER_ONLY.contains(&arg.as_str()) {
-            kept.next();
-        } else {
-            join.1.push(arg.clone());
+    // In stretches the sound is mixed and encoded alone, as it would be with the picture, and
+    // the two are copied into the file. Of what follows the codec, the sound's file takes what
+    // is the sound's and the file's, and the copy what is the file's and the picture's own.
+    let (mut sounds, mut copied) = (Vec::new(), Vec::new());
+    let mut output = encoding.output.iter();
+    while let Some(arg) = output.next() {
+        let value = output.next().cloned().unwrap_or_default();
+        match arg.as_str() {
+            arg if ENCODER_ONLY.contains(&arg) => {}
+            "-c:a" | "-b:a" => sounds.extend([arg.clone(), value]),
+            "-bsf:v" => copied.extend([arg.clone(), value]),
+            _ => {
+                sounds.extend([arg.clone(), value.clone()]);
+                copied.extend([arg.clone(), value]);
+            }
         }
     }
-    join.1.extend([
-        "-t".to_owned(),
-        crate::program::secs(duration),
-        opts.output.clone(),
-    ]);
+    let lasts = ["-t".to_owned(), crate::program::secs(duration)];
+    let sound = opts.sound.then(|| {
+        let mut sound = args.clone();
+        sound.push("-vn".to_owned());
+        sound.extend(sounds);
+        sound.extend(lasts.iter().cloned());
+        sound
+    });
+    let mut join: Vec<String> = match sound {
+        Some(_) => ["-map", "1:v", "-map", "0:a"].map(String::from).into(),
+        None => ["-map", "0:v", "-an"].map(String::from).into(),
+    };
+    join.extend(["-c".to_owned(), "copy".to_owned()]);
+    join.extend(copied);
+    join.extend(lasts);
+    join.push(opts.output.clone());
     let mut encode = vec!["-y".to_owned(), "-hide_banner".to_owned()];
     encode.extend(frames_in.iter().cloned());
     encode.push("-an".to_owned());
@@ -957,6 +971,7 @@ fn composited_render(
     // another file whenever any other changed.
     let sections = (opts.preset != RenderPreset::HevcHdr).then(|| SectionArgs {
         encode,
+        sound,
         join,
         extension: Path::new(&opts.output)
             .extension()
@@ -1158,7 +1173,27 @@ fn render_in_sections(
     let mut files = Vec::new();
     let mut scratch = Vec::new();
     let mut done = 0;
-    let made = (|| {
+    // The sound is the same file for as long as what is mixed and how it is encoded are the
+    // same: a clip drawn another way leaves it as it was.
+    let sound_name = sections.sound.as_deref().and_then(sound_name);
+    let sound_kept = sound_name
+        .as_deref()
+        .and_then(|name| kept.find(name, &sections.extension));
+    let sound_making = kept.making(&sections.extension);
+    let made = thread::scope(|scope| {
+        // Mixed and encoded while the picture is, since it waits for nothing of it.
+        let mixing = match (&sections.sound, &sound_kept) {
+            (Some(args), None) => {
+                scratch.push(sound_making.clone());
+                let making = &sound_making;
+                Some(scope.spawn(move || {
+                    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+                    command.args(args).arg(making);
+                    finished_well(sidecar::run(command, cancellation, |_| {})?)
+                }))
+            }
+            _ => None,
+        };
         for stretch in crate::sections::stretches(&keys, render.rate.fps()) {
             if cancellation.is_cancelled() {
                 return Err(EngineError::Cancelled);
@@ -1200,6 +1235,23 @@ fn render_in_sections(
             };
             files.push((file, frames.len()));
         }
+        let sound = match (mixing, sound_kept.clone()) {
+            (Some(mixing), _) => {
+                mixing
+                    .join()
+                    .map_err(|_| EngineError::msg("mixing the sound stopped"))??;
+                crate::sections::count_sound(false);
+                Some(match &sound_name {
+                    Some(name) => kept.keep(&sound_making, name, &sections.extension)?,
+                    None => sound_making.clone(),
+                })
+            }
+            (None, Some(kept)) => {
+                crate::sections::count_sound(true);
+                Some(kept)
+            }
+            (None, None) => None,
+        };
         // The list FFmpeg joins: each stretch and exactly how long it plays.
         let mut list = String::from("ffconcat version 1.0\n");
         for (file, frames) in &files {
@@ -1213,26 +1265,25 @@ fn render_in_sections(
         scratch.push(listed.clone());
         std::fs::write(&listed, list)?;
         let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
-        command
-            .args(&sections.join.0)
-            .arg(&listed)
-            .args(&sections.join.1);
-        let finished = sidecar::run(command, cancellation, |_| {})?;
-        if !finished.status.success() {
-            return Err(EngineError::Ffmpeg {
-                code: finished.status.code().unwrap_or(-1),
-                stderr: tail(finished.stderr.trim(), 2000).to_owned(),
-            });
+        command.args(["-y", "-hide_banner"]);
+        if let Some(sound) = &sound {
+            command.arg("-i").arg(sound);
         }
+        command
+            .args(["-f", "concat", "-safe", "0", "-i"])
+            .arg(&listed)
+            .args(&sections.join);
+        finished_well(sidecar::run(command, cancellation, |_| {})?)?;
+        files.extend(sound.map(|sound| (sound, 0)));
         // A join that lost or doubled a frame is no render: the picture is encoded whole.
-        let output = sections.join.1.last().expect("a join ends with its file");
+        let output = sections.join.last().expect("a join ends with its file");
         match picture_frames(output) {
             Some(frames) if frames == total => Ok(()),
             found => Err(EngineError::msg(format!(
                 "the stretches joined to {found:?} frames, not {total}"
             ))),
         }
-    })();
+    });
     compositor.flush_frames();
     for file in scratch {
         let _ = std::fs::remove_file(file);
@@ -1242,7 +1293,41 @@ fn render_in_sections(
     made.map(|()| true)
 }
 
-/// How many frames the picture of the file at `path` holds, counted from its packets.
+/// An FFmpeg that ended, as an error unless it ended well.
+fn finished_well(finished: sidecar::Finished) -> Result<()> {
+    if finished.status.success() {
+        return Ok(());
+    }
+    Err(EngineError::Ffmpeg {
+        code: finished.status.code().unwrap_or(-1),
+        stderr: tail(finished.stderr.trim(), 2000).to_owned(),
+    })
+}
+
+/// The name a render's sound is kept by: the FFmpeg, the arguments that mix and encode it, and
+/// each file they read as it is now. None when one of those files cannot be read.
+fn sound_name(args: &[String]) -> Option<String> {
+    let mut said = format!("sound\n{}\n{}", resolve_ffmpeg_bin(), ffmpeg_version());
+    for (at, arg) in args.iter().enumerate() {
+        said.push('\n');
+        said.push_str(arg);
+        if at > 0 && args[at - 1] == "-i" {
+            let file = std::fs::metadata(arg).ok()?;
+            let changed = file
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            said.push_str(&format!(" {} {}", file.len(), changed.as_nanos()));
+        }
+    }
+    Some(crate::sections::name(said.as_bytes(), &[]))
+}
+
+/// How many frames the picture of the file at `path` holds, counted from its packets; none
+/// unless each is decoded one frame after the one before it. Stretches whose encoders timed
+/// them differently join into a file whose frames are shown when they should be and decoded at
+/// odd times, which FFmpeg makes up for with frames of its own when it reads the file again.
 fn picture_frames(path: &str) -> Option<usize> {
     let output = run_allow_failure(
         crate::ffmpeg::resolve_ffprobe_bin(),
@@ -1251,9 +1336,8 @@ fn picture_frames(path: &str) -> Option<usize> {
             "error",
             "-select_streams",
             "v:0",
-            "-count_packets",
             "-show_entries",
-            "stream=nb_read_packets",
+            "packet=dts",
             "-of",
             "csv=p=0",
             path,
@@ -1261,7 +1345,17 @@ fn picture_frames(path: &str) -> Option<usize> {
         .map(String::from),
     )
     .ok()?;
-    output.stdout.trim().trim_end_matches(',').parse().ok()
+    let decoded: Vec<i64> = output
+        .stdout
+        .lines()
+        .map(|line| line.trim().trim_end_matches(',').parse())
+        .collect::<std::result::Result<_, _>>()
+        .ok()?;
+    let step = decoded.get(1)? - decoded[0];
+    decoded
+        .windows(2)
+        .all(|pair| pair[1] - pair[0] == step)
+        .then_some(decoded.len())
 }
 
 /// What FFmpeg says it is, once: a stretch another FFmpeg encoded is not joined to this one's.
