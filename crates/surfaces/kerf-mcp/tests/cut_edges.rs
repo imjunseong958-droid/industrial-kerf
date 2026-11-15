@@ -77,8 +77,8 @@ fn recording(room: f64, seed: u64) -> Recording {
         let level = 0.3 * 10f64.powf(dice.between(-6.0, 3.0) / 20.0);
         let pitch = dice.between(110.0, 230.0);
         let decay = dice.between(0.02, 0.05);
-        let hiss_before = (dice.roll() < 0.3).then(|| 0.07);
-        let hiss_after = (dice.roll() < 0.3).then(|| 0.09);
+        let hiss_before = (dice.roll() < 0.3).then_some(0.07);
+        let hiss_after = (dice.roll() < 0.3).then_some(0.09);
         let closure = (length > 0.3 && dice.roll() < 0.35).then(|| {
             let at = length * dice.between(0.4, 0.6);
             (at, at + dice.between(0.04, 0.09))
@@ -87,9 +87,7 @@ fn recording(room: f64, seed: u64) -> Recording {
         // How loud the voice and the hiss are at `t` seconds into the word.
         let voice = |t: f64| {
             let t = t - lead;
-            if t < 0.0 {
-                0.0
-            } else if closure.is_some_and(|(from, to)| t >= from && t < to) {
+            if t < 0.0 || closure.is_some_and(|(from, to)| t >= from && t < to) {
                 0.0
             } else if t < length {
                 level * (t / 0.012).min(1.0)
