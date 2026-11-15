@@ -29,8 +29,8 @@ Default resource limits:
 `KERF_WHISPER_THREADS`, `KERF_EXTRACT_JOBS`, `KERF_PRESET`, `KERF_CRF`.
 
 A render encodes its picture a stretch of about four seconds at a time and keeps the stretches,
-so rendering again after an edit encodes only what the edit touched and joins the rest
-(`src/sections.rs`). `KERF_SECTION_CACHE` names their folder, or `off` encodes every render
+and its sound beside them, so rendering again after an edit encodes only what the edit touched
+and joins the rest (`src/sections.rs`). `KERF_SECTION_CACHE` names their folder, or `off` encodes every render
 whole; `KERF_SECTION_CACHE_GB` is how much they may take, 10 unless told. `cargo run --release
 --example export_bench` says where a render's time goes.
 

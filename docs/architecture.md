@@ -895,11 +895,16 @@ Three limits remain, in this order:
    numbers and not by where they fall, between two and ten seconds on, so a cut near the start of
    a program moves the stretches after it and leaves them the same stretches. Rendering again
    draws and encodes the stretches an edit touched and joins the rest; five minutes of H.264 is
-   100 MB, so a whole program stays. A join that fails, or whose frames do not count up to the
-   render's, is encoded whole as before, as are a render under two seconds, one most of whose
-   frames have no number, and HDR10, each stretch of which says how bright the whole picture is.
-   Up to 10 GB (`KERF_SECTION_CACHE_GB`) beside the frames (`KERF_SECTION_CACHE`, or `off`), the
-   least recently joined going first.
+   100 MB, so a whole program stays. The sound is mixed and encoded on its own while the picture
+   is, and kept by what it mixes and the files it reads, so a clip drawn another way does not mix
+   it again; the two are then copied into the file. A join that fails, or whose frames do not
+   count up to the render's, or are not decoded one frame apart, is encoded whole as before, as
+   are a render under two seconds, one most of whose frames have no number, and HDR10, each
+   stretch of which says how bright the whole picture is. No stretch is shorter than two seconds:
+   an encoder that puts frames out of order times a file of a frame or two as if it held none
+   back, and such a file joined with its decode times three frames off, which FFmpeg made up for
+   with frames of its own when it read the render again. Up to 10 GB (`KERF_SECTION_CACHE_GB`)
+   beside the frames (`KERF_SECTION_CACHE`, or `off`), the least recently joined going first.
 
    With `examples/export_bench.rs` in `kerf-engine`, on four cores of a Linux virtual machine
    with no GPU, libx264, and 1080p footage at 24 fps (*Tears of Steel*), in seconds; a program is
@@ -910,18 +915,29 @@ Three limits remain, in this order:
    | 90 s, kept frames alone | 37 | 42 | 39 |
    | 90 s with a Lumetri on every clip, kept frames alone | 201 | 39 | 49 |
    | 5 min, kept frames alone | 150 | 181 | 187 |
-   | 5 min, whole, nothing kept | 135 | | |
-   | 5 min, in stretches | 144 | 12 | 18 |
+   | 5 min, whole, nothing kept | 130 | | |
+   | 5 min, in stretches | 143 | 1.5 | 7.9 |
 
    Drawing the 90 seconds takes 11 s of the 37 and reading them back 8, so encoding is most of a
    render of plain footage, and kept frames gain it nothing; with a grade on every clip they
-   gain five times. In stretches the five minutes render again in 12 s, and in 15 s after two
-   seconds are cut out near the start: 2 of 78 stretches encoded. The first render is 7% slower
-   for starting 78 encoders and the file 3% larger for starting 78 times on a whole picture.
-   Nearly all of the 12 s is mixing the sound, which each clip is padded to the program's length
-   for and mixed with every other: joining the picture alone takes 1.4 s. That is the next thing
-   in the way, and it grows with a program's clips times its length. Nothing here was run with a
-   hardware encoder, whose stretches take the same path.
+   gain five times. In stretches the five minutes render again in 1.5 s, in 7.9 s after one
+   clip's opacity changes, and in 10.3 s after two seconds are cut out near the start, each with
+   2 of 78 stretches encoded; the cut mixes the sound again and the opacity does not. The first
+   render is a tenth slower for starting 78 encoders and the file 3% larger for starting 78
+   times on a whole picture. Every frame of all four renders is shown and decoded one frame
+   after the one before, and the sound of the three that mix the same is the whole render's,
+   sample for sample. Nothing here was run with a hardware encoder, whose stretches take the
+   same path.
+
+   The sound was most of what was left once the picture was kept: 10 s of 12. Every clip's
+   sound was padded out to the whole program and all of them summed, so mixing took the
+   program's length for each clip. A track's clips play one after another, so
+   `kerf_core::program` now lays a track's sounds end to end in one stream, each padded with
+   silence up to the sample the next starts on, and in two where a crossfade has one start before
+   the other stops, and sums a stream or two for a track. The mix is the same bytes as before
+   (`kerf-engine/tests/sound_place.rs` tells every sample of a mix apart, at 29.97 frames a
+   second, where a frame is not a whole number of samples). Mixing the five minutes' 60 clips
+   now takes 2.7 s, 2.2 of them opening the file 60 times, and encoding them as AAC 4.2 more.
 3. **Depth and color.** Footage decodes at its depth, with its transfer and gamut, into the float
    working picture (`bits=` and `color=` on a media line, found on import): `InputTransform`
    on the CPU, `input.wgsl` on the GPU. A ProRes master takes 16-bit frames, so it keeps that
