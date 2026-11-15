@@ -9,7 +9,10 @@
 //! nothing, so the difference between the two is what encoding costs. Each
 //! prints how long it took and what the folder of kept frames did
 //! (`KERF_FRAME_CACHE`, `KERF_FRAME_CACHE_GB`): frames read back, frames
-//! drawn, written, dropped unwritten, and put out to make room.
+//! drawn, written, dropped unwritten, and put out to make room; and what a
+//! render did with its encoded stretches (`KERF_SECTION_CACHE`): how many
+//! it joined as they were kept and how many it encoded, and whether it gave
+//! up on them and encoded the picture whole.
 
 use kerf_compose::{default_frame_folder, frame_cache_stats, ComposeOptions, Compositor};
 use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
@@ -88,14 +91,22 @@ fn main() {
     let stats = default_frame_folder()
         .map(|folder| frame_cache_stats(&folder))
         .unwrap_or_default();
+    let sections = kerf_engine::sections::section_stats();
     println!(
         "{{\"mode\":\"{mode}\",\"frames\":{frames},\"seconds\":{seconds:.2},\"fps\":{:.1},\
-         \"read\":{},\"drawn\":{},\"written\":{},\"dropped\":{},\"evicted\":{}}}",
+         \"read\":{},\"drawn\":{},\"written\":{},\"dropped\":{},\"evicted\":{},\
+         \"stretchesJoined\":{},\"framesJoined\":{},\"stretchesEncoded\":{},\
+         \"framesEncoded\":{},\"encodedWhole\":{}}}",
         frames as f64 / seconds,
         stats.hits,
         stats.misses,
         stats.writes,
         stats.dropped,
         stats.evicted,
+        sections.kept,
+        sections.kept_frames,
+        sections.encoded,
+        sections.encoded_frames,
+        sections.whole,
     );
 }

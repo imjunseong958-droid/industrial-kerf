@@ -28,6 +28,7 @@ use crate::ffmpeg::{
 };
 use crate::program::{compile_program, ProgramOptions};
 use crate::resources::{budget, should_try_hardware_encode};
+use crate::sections::Kept;
 use crate::sidecar::{self, CancellationToken};
 
 const CANCEL_FILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -752,7 +753,34 @@ struct CompositedRender {
     size: (u32, u32),
     /// Frames go to FFmpeg at 16 bits a component.
     deep: bool,
+    /// How the picture is encoded a stretch at a time and joined, where it can be.
+    sections: Option<SectionArgs>,
+    /// How many frames a second it draws.
+    rate: Rate,
 }
+
+/// FFmpeg's arguments for a render whose picture is encoded a stretch at a time
+/// ([`crate::sections`]).
+#[derive(Debug)]
+struct SectionArgs {
+    /// To encode a stretch's frames from stdin to a file with no sound; the file follows.
+    encode: Vec<String>,
+    /// To join the stretches with the sound into the render's file: the list of stretches goes
+    /// between the two.
+    join: (Vec<String>, Vec<String>),
+    /// What kind of file a stretch is: the render's own.
+    extension: String,
+}
+
+/// Arguments that say how a picture is encoded, each with its value, which a picture copied
+/// as it is has no use for.
+const ENCODER_ONLY: [&str; 5] = [
+    "-vendor",
+    "-colorspace",
+    "-color_primaries",
+    "-color_trc",
+    "-color_range",
+];
 
 /// The share of a `canvas` to draw so that the picture fills `size`: the larger of the two
 /// sides' shares, within what the compositor draws. What is over on the other side is cut off,
@@ -844,21 +872,45 @@ fn composited_render(
         .iter()
         .position(|arg| arg == "-filter_complex")
         .unwrap_or(args.len());
-    args.splice(
-        at..at,
-        [
-            "-f".to_owned(),
-            "rawvideo".to_owned(),
-            "-pix_fmt".to_owned(),
-            if deep { "rgba64le" } else { "rgba" }.to_owned(),
-            "-s".to_owned(),
-            format!("{}x{}", size.0, size.1),
-            "-framerate".to_owned(),
-            crate::program::rate_arg(rate),
-            "-i".to_owned(),
-            "pipe:0".to_owned(),
-        ],
-    );
+    let frames_in = [
+        "-f".to_owned(),
+        "rawvideo".to_owned(),
+        "-pix_fmt".to_owned(),
+        if deep { "rgba64le" } else { "rgba" }.to_owned(),
+        "-s".to_owned(),
+        format!("{}x{}", size.0, size.1),
+        "-framerate".to_owned(),
+        crate::program::rate_arg(rate),
+        "-i".to_owned(),
+        "pipe:0".to_owned(),
+    ];
+    // Joining reads the stretches where encoding whole reads the frames, and copies them.
+    let mut join = (args[..at].to_vec(), args[at..].to_vec());
+    join.0
+        .extend(["-f", "concat", "-safe", "0", "-i"].map(String::from));
+    join.1.extend(["-map".to_owned(), format!("{picture}:v")]);
+    if !opts.sound {
+        join.1.push("-an".to_owned());
+    }
+    join.1.extend(["-c:v".to_owned(), "copy".to_owned()]);
+    let mut kept = encoding.output.iter();
+    while let Some(arg) = kept.next() {
+        if ENCODER_ONLY.contains(&arg.as_str()) {
+            kept.next();
+        } else {
+            join.1.push(arg.clone());
+        }
+    }
+    join.1.extend([
+        "-t".to_owned(),
+        crate::program::secs(duration),
+        opts.output.clone(),
+    ]);
+    let mut encode = vec!["-y".to_owned(), "-hide_banner".to_owned()];
+    encode.extend(frames_in.iter().cloned());
+    encode.push("-an".to_owned());
+    encode.extend(encoding.video.iter().cloned());
+    args.splice(at..at, frames_in);
     args.extend(["-map".to_owned(), format!("{picture}:v")]);
     if !opts.sound {
         args.push("-an".to_owned());
@@ -881,9 +933,18 @@ fn composited_render(
     }
     filters.extend(encoding.convert.map(str::to_owned));
     if !filters.is_empty() {
-        args.extend(["-vf".to_owned(), filters.join(",")]);
+        let filters = ["-vf".to_owned(), filters.join(",")];
+        encode.extend(filters.iter().cloned());
+        args.extend(filters);
     }
-    args.extend(["-pix_fmt".to_owned(), encoding.pix_fmt.to_owned()]);
+    let encoded = [
+        "-pix_fmt".to_owned(),
+        encoding.pix_fmt.to_owned(),
+    ];
+    encode.extend(encoded.iter().cloned());
+    encode.extend(encoding.output.iter().cloned());
+    encode.extend(["-r".to_owned(), crate::program::rate_arg(rate)]);
+    args.extend(encoded);
     args.extend(encoding.output);
     args.extend([
         "-r".to_owned(),
@@ -892,12 +953,25 @@ fn composited_render(
         crate::program::secs(duration),
         opts.output.clone(),
     ]);
+    // HDR10 says how bright the whole picture is in every stretch of it, so a stretch would be
+    // another file whenever any other changed.
+    let sections = (opts.preset != RenderPreset::HevcHdr).then(|| SectionArgs {
+        encode,
+        join,
+        extension: Path::new(&opts.output)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("mp4")
+            .to_owned(),
+    });
     Ok(CompositedRender {
         args,
         times,
         scale,
         size,
         deep,
+        sections,
+        rate,
     })
 }
 
@@ -943,8 +1017,59 @@ where
         opts
     };
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
+    let total = render.times.len();
+    if let Some((sections, kept)) = render.sections.as_ref().zip(Kept::open()) {
+        let mut progress = |frames: usize| {
+            if let Some(callback) = on_progress.as_mut() {
+                callback(frames as f64 / total as f64);
+            }
+        };
+        match render_in_sections(
+            &compositor,
+            &render,
+            sections,
+            &kept,
+            cancellation,
+            &mut progress,
+        ) {
+            Ok(true) => return Ok(()),
+            Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+            // Not worth doing in stretches, or it went wrong: the picture is encoded whole, which
+            // says what is wrong if anything is.
+            Ok(false) => {}
+            Err(_) => crate::sections::count_whole(),
+        }
+    }
+    let mut written = 0;
+    let drawn = encode_frames(
+        &compositor,
+        &render,
+        0..total,
+        &render.args,
+        || {
+            written += 1;
+            if let Some(callback) = on_progress.as_mut() {
+                callback(written as f64 / total as f64);
+            }
+        },
+        cancellation,
+    );
+    compositor.flush_frames();
+    drawn
+}
+
+/// Draw `frames` of `render` and hand them to an FFmpeg run with `args`, calling `drawn` as each
+/// goes.
+fn encode_frames(
+    compositor: &Compositor,
+    render: &CompositedRender,
+    frames: std::ops::Range<usize>,
+    args: &[String],
+    mut drawn: impl FnMut(),
+    cancellation: &CancellationToken,
+) -> Result<()> {
     let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
-        .args(&render.args)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -957,16 +1082,15 @@ where
         let _ = stderr.read_to_string(&mut text);
         text
     });
-    let total = render.times.len();
-    let mut written = 0;
-    let drawn = draw_in_order(
-        total,
+    let first = frames.start;
+    let result = draw_in_order(
+        frames.len(),
         RENDER_DRAWERS,
         |index| {
             if render.deep {
-                compositor.frame16(render.times[index], render.scale)
+                compositor.frame16(render.times[first + index], render.scale)
             } else {
-                compositor.frame(render.times[index], render.scale)
+                compositor.frame(render.times[first + index], render.scale)
             }
         },
         |frame| {
@@ -977,22 +1101,18 @@ where
                 )));
             }
             stdin.write_all(&frame.rgba)?;
-            written += 1;
-            if let Some(callback) = on_progress.as_mut() {
-                callback(written as f64 / total as f64);
-            }
+            drawn();
             Ok(())
         },
         cancellation,
     );
     drop(stdin);
-    compositor.flush_frames();
-    if drawn.is_err() {
+    if result.is_err() {
         let _ = child.kill();
     }
     let status = child.wait()?;
     let stderr = reader.join().unwrap_or_default();
-    match drawn {
+    match result {
         Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
         // FFmpeg stopping reading is FFmpeg's error to tell.
         Err(EngineError::Io(_)) | Ok(()) if !status.success() => Err(EngineError::Ffmpeg {
@@ -1002,6 +1122,156 @@ where
         Err(error) => Err(error),
         Ok(()) => Ok(()),
     }
+}
+
+/// Render with the picture encoded a stretch at a time ([`crate::sections`]): the stretches
+/// `kept` has are joined as they are, and the rest are drawn, encoded, and kept. `progress` is
+/// told how many frames are done. `Ok(false)` when the render is not one for stretches, with
+/// nothing written.
+fn render_in_sections(
+    compositor: &Compositor,
+    render: &CompositedRender,
+    sections: &SectionArgs,
+    kept: &Kept,
+    cancellation: &CancellationToken,
+    progress: &mut dyn FnMut(usize),
+) -> Result<bool> {
+    let total = render.times.len();
+    let keys: Vec<Option<u64>> = render
+        .times
+        .iter()
+        .map(|at| compositor.frame_key(*at, render.scale))
+        .collect();
+    // A render shorter than a stretch is not worth another FFmpeg to join it, and where most
+    // frames have no number there is nothing to keep.
+    if total < crate::sections::least_frames(render.rate.fps())
+        || keys.iter().flatten().count() * 2 < total
+    {
+        return Ok(false);
+    }
+    // Everything a stretch's file depends on but its frames: the FFmpeg and how it encodes.
+    let mut encoded = format!("{}\n{}", resolve_ffmpeg_bin(), ffmpeg_version());
+    for arg in &sections.encode {
+        encoded.push('\n');
+        encoded.push_str(arg);
+    }
+    let mut files = Vec::new();
+    let mut scratch = Vec::new();
+    let mut done = 0;
+    let made = (|| {
+        for stretch in crate::sections::stretches(&keys, render.rate.fps()) {
+            if cancellation.is_cancelled() {
+                return Err(EngineError::Cancelled);
+            }
+            let frames = stretch.frames.clone();
+            let name = stretch
+                .keyed
+                .then(|| crate::sections::name(encoded.as_bytes(), &keys[frames.clone()]));
+            if let Some(file) = name
+                .as_deref()
+                .and_then(|name| kept.find(name, &sections.extension))
+            {
+                crate::sections::count_kept(frames.len());
+                done += frames.len();
+                progress(done);
+                files.push((file, frames.len()));
+                continue;
+            }
+            let making = kept.making(&sections.extension);
+            scratch.push(making.clone());
+            let mut args = sections.encode.clone();
+            args.push(making.to_string_lossy().into_owned());
+            encode_frames(
+                compositor,
+                render,
+                frames.clone(),
+                &args,
+                || {
+                    done += 1;
+                    progress(done);
+                },
+                cancellation,
+            )?;
+            crate::sections::count_encoded(frames.len());
+            // One with no name is joined from where it was made, and goes when the render ends.
+            let file = match &name {
+                Some(name) => kept.keep(&making, name, &sections.extension)?,
+                None => making,
+            };
+            files.push((file, frames.len()));
+        }
+        // The list FFmpeg joins: each stretch and exactly how long it plays.
+        let mut list = String::from("ffconcat version 1.0\n");
+        for (file, frames) in &files {
+            let seconds = render.rate.time_of(*frames as i64).seconds();
+            list.push_str(&format!(
+                "file '{}'\nduration {seconds:.9}\n",
+                file.to_string_lossy().replace('\'', "'\\''")
+            ));
+        }
+        let listed = kept.making("ffconcat");
+        scratch.push(listed.clone());
+        std::fs::write(&listed, list)?;
+        let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+        command
+            .args(&sections.join.0)
+            .arg(&listed)
+            .args(&sections.join.1);
+        let finished = sidecar::run(command, cancellation, |_| {})?;
+        if !finished.status.success() {
+            return Err(EngineError::Ffmpeg {
+                code: finished.status.code().unwrap_or(-1),
+                stderr: tail(finished.stderr.trim(), 2000).to_owned(),
+            });
+        }
+        // A join that lost or doubled a frame is no render: the picture is encoded whole.
+        let output = sections.join.1.last().expect("a join ends with its file");
+        match picture_frames(output) {
+            Some(frames) if frames == total => Ok(()),
+            found => Err(EngineError::msg(format!(
+                "the stretches joined to {found:?} frames, not {total}"
+            ))),
+        }
+    })();
+    compositor.flush_frames();
+    for file in scratch {
+        let _ = std::fs::remove_file(file);
+    }
+    let joined: Vec<PathBuf> = files.into_iter().map(|(file, _)| file).collect();
+    kept.tidy(&joined);
+    made.map(|()| true)
+}
+
+/// How many frames the picture of the file at `path` holds, counted from its packets.
+fn picture_frames(path: &str) -> Option<usize> {
+    let output = run_allow_failure(
+        crate::ffmpeg::resolve_ffprobe_bin(),
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=nb_read_packets",
+            "-of",
+            "csv=p=0",
+            path,
+        ]
+        .map(String::from),
+    )
+    .ok()?;
+    output.stdout.trim().trim_end_matches(',').parse().ok()
+}
+
+/// What FFmpeg says it is, once: a stretch another FFmpeg encoded is not joined to this one's.
+fn ffmpeg_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        run_allow_failure(resolve_ffmpeg_bin(), &["-version".to_owned()])
+            .map(|output| output.stdout.lines().next().unwrap_or_default().to_owned())
+            .unwrap_or_default()
+    })
 }
 
 /// Whether a render still has to work out HDR10's content light levels.
