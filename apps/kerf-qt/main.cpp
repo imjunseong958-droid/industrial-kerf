@@ -38,6 +38,12 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const
         openEditor(path, kerfd);
         window->close();
     });
+    // The same, on one of that project's conversations.
+    QObject::connect(window, &kerf::MainWindow::conversationOpenRequested, window,
+                     [window, kerfd](const QString &path, const QString &conversation) {
+                         openEditor(path, kerfd, window->geometry())->openConversation(conversation);
+                         window->close();
+                     });
     window->show();
     return window;
 }

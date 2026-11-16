@@ -153,6 +153,11 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     layout->addWidget(m_list, 1);
     connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this,
             [this](int value) { m_follow = value >= m_list->verticalScrollBar()->maximum() - 4; });
+    // What is said got taller or shorter (it streamed on, or wrapped again as
+    // the panel changed width): kept to the latest, it stays at the latest.
+    connect(m_list->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int maximum) {
+        if (m_follow) m_list->verticalScrollBar()->setValue(maximum);
+    });
 
     m_composer = new Composer;
     m_composer->setOverlayParent(this);
@@ -168,6 +173,14 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
         if (m_composer->isBusy()) emit stopRequested();
         else emit escapeUnused();
     });
+    // What a request goes with: the mode, the model and how full the context is.
+    m_composer->setAgentControls(true);
+    connect(m_composer, &Composer::permissionModeChosen, this, [this](PermissionMode mode) {
+        updateWelcome();
+        emit permissionModeChosen(mode);
+    });
+    connect(m_composer, &Composer::modelChosen, this, [this](const QString &model) { emit moreAction(QStringLiteral("model"), model); });
+    connect(m_composer, &Composer::agentSettingsRequested, this, [this] { emit moreAction(QStringLiteral("settings"), QString()); });
     layout->addWidget(m_composer);
 
     m_welcome = buildWelcome();
@@ -231,8 +244,8 @@ QWidget *ChatPanel::buildWelcome() {
     body->setObjectName(QStringLiteral("welcomeText"));
     body->setFont(tokens::font(reading));
     body->setWordWrap(true);
-    body->setText(QStringLiteral("Ask for a cut or a change. Each edit comes back as a proposal you can watch before it "
-                                 "touches the sequence."));
+    m_welcomeText = body;
+    updateWelcome();
     QPalette palette = body->palette();
     palette.setColor(QPalette::WindowText, color(ink2));
     body->setPalette(palette);
@@ -273,6 +286,49 @@ void ChatPanel::refillWelcome() {
         m_examplesLayout->addWidget(button);
         m_exampleButtons << button;
     }
+}
+
+void ChatPanel::updateWelcome() {
+    if (!m_welcomeText) return;
+    // What an edit comes back as, in the mode the composer is in.
+    QString text = QStringLiteral("Ask for a cut or a change. ");
+    switch (m_composer->permissionMode()) {
+    case PermissionMode::Ask:
+        text += QStringLiteral("Each edit comes back as a proposal you can watch before it touches the sequence.");
+        break;
+    case PermissionMode::AcceptEdits:
+        text += QStringLiteral("Edits go into the sequence as Kerf makes them; Undo takes any of them back.");
+        break;
+    case PermissionMode::Auto:
+        text += QStringLiteral("Edits go into the sequence as Kerf makes them, and it makes the shots it asks for; Undo takes an "
+                               "edit back.");
+        break;
+    }
+    m_welcomeText->setText(text);
+}
+
+void ChatPanel::setPermissionMode(PermissionMode mode) {
+    m_composer->setPermissionMode(mode);
+    updateWelcome();
+}
+
+PermissionMode ChatPanel::permissionMode() const { return m_composer->permissionMode(); }
+
+void ChatPanel::setContextUse(const QString &conversation, qint64 used, qint64 limit, bool tokens) {
+    m_context = ContextUse{conversation, used, limit, tokens};
+    updateContextMeter();
+}
+
+void ChatPanel::updateContextMeter() {
+    ContextMeter *meter = m_composer->contextMeter();
+    const QString open = m_conversations ? m_conversations->currentId() : QString();
+    // Said of a conversation just started, it is of the one that is open as
+    // soon as the bridge names it.
+    if (m_context.conversation.isEmpty() && !open.isEmpty() && (m_live.active || m_live.finished) && m_live.conversation == open)
+        m_context.conversation = open;
+    const bool here = m_context.limit > 0 && (m_context.conversation == open || (m_context.conversation.isEmpty() && m_live.active));
+    if (here) meter->setUse(m_context.used, m_context.limit, m_context.tokens);
+    meter->setVisible(here);
 }
 
 QList<QAbstractButton *> ChatPanel::examples() const {
@@ -323,6 +379,7 @@ void ChatPanel::setConversations(ConversationModel *model) {
         connect(model, &ConversationModel::currentChanged, this, [this] {
             updateHeader();
             rebuild();
+            updateContextMeter();
             scheduleFollow();
         });
         connect(model, &ConversationModel::listChanged, this, &ChatPanel::updateHeader);
@@ -369,6 +426,7 @@ void ChatPanel::setModels(const QStringList &models, const QString &current, boo
     m_models = models;
     m_currentModel = current;
     m_modelsChoosable = choosable;
+    m_composer->setModels(models, current, choosable);
 }
 
 void ChatPanel::setNextSteps(const QJsonArray &steps) {
@@ -1063,24 +1121,12 @@ void ChatPanel::setFootage(const QList<FootageTile> &tiles) {
     if (m_follow) m_list->verticalScrollBar()->setValue(m_list->verticalScrollBar()->maximum());
 }
 
-void ChatPanel::holdWidth(int width) {
-    if (width == m_heldWidth) return;
-    m_heldWidth = std::max(0, width);
-    // Held, the list is laid out once at the width it is going to, and keeps it
-    // however wide it is on the way, rather than wrapping its text again in each
-    // frame. Let go, it follows its width again.
-    m_list->setWidgetResizable(m_heldWidth == 0);
-    QResizeEvent same(size(), size());
-    resizeEvent(&same);
-    syncContent();
-}
-
 void ChatPanel::syncContent() {
     // The scroll area sizes its content on a posted layout request; size it
     // now, so the scroll range is the content's before scrolling.
     QCoreApplication::sendPostedEvents(m_content, QEvent::LayoutRequest);
     m_content->layout()->activate();
-    const int width = m_heldWidth > 0 ? m_heldWidth - (this->width() - m_list->viewport()->width()) : m_list->viewport()->width();
+    const int width = m_list->viewport()->width();
     const int height = std::max(m_list->viewport()->height(),
                                 m_content->hasHeightForWidth() ? m_content->heightForWidth(width) : m_content->sizeHint().height());
     if (m_content->size() != QSize(width, height)) m_content->resize(width, height);
@@ -1193,15 +1239,18 @@ void ChatPanel::paintEvent(QPaintEvent *) {
 
 void ChatPanel::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
-    // With the room to itself the conversation keeps a column to read in. The
-    // list keeps the column of the width it is on its way to; the composer is
-    // where it is.
+    // With the room to itself the conversation keeps a column to read in,
+    // the list and the composer alike, in the middle of whatever width it has:
+    // as the window's regions move, what is said goes with them.
     const int column = tokens::layout::conversationColumn;
     const int inset = std::max(0, (width() - column) / 2);
-    const int listInset = m_heldWidth > 0 ? std::max(0, (m_heldWidth - column) / 2) : inset;
     const QMargins list = m_listLayout->contentsMargins();
-    m_listLayout->setContentsMargins(kSidePadding + listInset, list.top(), kSidePadding + listInset, list.bottom());
+    if (list.left() != kSidePadding + inset)
+        m_listLayout->setContentsMargins(kSidePadding + inset, list.top(), kSidePadding + inset, list.bottom());
     m_composer->setContentsMargins(inset, 0, inset, 0);
+    // Laid out now, at this width, not a frame behind it: the list's posted
+    // layout would come after this frame is drawn.
+    syncContent();
     updateHeader();
 }
 

@@ -114,11 +114,16 @@ public:
     // Takes the place of a start window that looked like `look`, its request box
     // flying from `box` to the conversation's.
     void takeOverFrom(const QPixmap &look, const QRect &box);
+    // Opens a conversation kept beside this project, once it is connected.
+    void openConversation(const QString &id);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
     // window of its own and close this one.
     void projectOpenRequested(const QString &path);
+    // The sidebar, on another folder's conversation: open `path` as above, on
+    // that conversation (a new one when `conversation` is empty).
+    void conversationOpenRequested(const QString &path, const QString &conversation);
 
 private slots:
     void pollBridge();
@@ -446,7 +451,7 @@ private:
     void setPaneOpen(const QString &command, bool open);
     // The picture and the timeline together, as the toolbar's button has them.
     void setPanelOpen(bool open);
-    void revealPanel(bool picture, bool timeline, const QRect &origin = QRect());
+    void revealPanel(bool picture, bool timeline, const QRect &origin = QRect(), int duration = tokens::motion::panel);
     void applyPanes();
     // The panel opens by itself for a program there is to see, until one opens
     // or closes a pane by hand. A cut Kerf makes stays in the conversation, as

@@ -25,6 +25,7 @@ use kerf_agent::{
     ReasoningEffort,
 };
 use kerf_mcp::inbound;
+use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::{
     AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
@@ -83,29 +84,65 @@ impl ChatProvider {
     }
 }
 
-/// The agent behind a chat: Kerf's own loop on a model API, or Claude Code.
+/// The agent behind a chat: Kerf's own loop on a model API, with the router
+/// its tools run on, or Claude Code.
 enum Agent {
-    Native(Box<AgentSession>),
+    Native(Box<AgentSession>, KerfMcpRouter),
     ClaudeCode(claude_code::ClaudeCodeSession),
 }
 
 impl Agent {
     fn abort_handle(&self) -> Arc<AtomicBool> {
         match self {
-            Self::Native(session) => session.abort_handle(),
+            Self::Native(session, _) => session.abort_handle(),
             Self::ClaudeCode(session) => session.abort_handle(),
+        }
+    }
+
+    /// What the next turn may do without asking: the mode the person chose
+    /// in the editor, or their own file's with none. The session goes on, so
+    /// a change of mode keeps what the agent knows of the conversation.
+    /// What its context is counted in: the model's tokens on Claude Code,
+    /// which says how many a request read, or Kerf's own measure of its
+    /// input allowance.
+    fn context_unit(&self) -> &'static str {
+        match self {
+            Self::Native(..) => "units",
+            Self::ClaudeCode(_) => "tokens",
+        }
+    }
+
+    fn set_permissions(&mut self, mode: Option<Mode>) {
+        match self {
+            Self::Native(_, router) => router.set_permissions(mode.map(chosen_permissions)),
+            Self::ClaudeCode(session) => session.set_permissions(mode),
         }
     }
 
     fn run_with_events(&mut self, text: &str, emit: impl FnMut(AgentEvent)) -> Result<(), String> {
         match self {
-            Self::Native(session) => session
+            Self::Native(session, _) => session
                 .run_with_events(text, emit)
                 .map(|_| ())
                 .map_err(|error| error.to_string()),
             Self::ClaudeCode(session) => session.run_with_events(text, emit),
         }
     }
+}
+
+/// The person's permissions with the mode they chose in the editor in place
+/// of their file's: how many makings run on their own stays the file's say.
+fn chosen_permissions(mode: Mode) -> Permissions {
+    Permissions {
+        mode,
+        ..Permissions::load().unwrap_or_default()
+    }
+}
+
+/// The mode a request names: `ask`, `accept-edits` or `auto`. A name that is
+/// none of them asks, never lets more through.
+fn permission_mode(name: Option<&str>) -> Option<Mode> {
+    name.map(|name| Mode::named(name).unwrap_or(Mode::Ask))
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +204,10 @@ enum Command {
         /// Where the playhead was when it was asked, in seconds.
         #[serde(default)]
         at: Option<f64>,
+        /// What Kerf may do without asking, as chosen in the editor: `ask`,
+        /// `accept-edits` or `auto`. None is the person's own file's say.
+        #[serde(default)]
+        permissions: Option<String>,
         #[serde(flatten)]
         settings: AgentSettings,
     },
@@ -466,6 +507,8 @@ struct AgentRequest {
     /// starts one), and the playhead when it was asked: every turn of one
     /// agent is kept; one of several versions is not.
     turn: Option<(String, Option<String>, Option<f64>)>,
+    /// What this turn may do without asking; none is the person's file's say.
+    permissions: Option<Mode>,
 }
 
 fn emit(tx: &SyncSender<Value>, value: Value) {
@@ -1663,7 +1706,7 @@ fn new_agent(
             .map(Agent::ClaudeCode);
     }
     native_agent(shared, directory, binary, settings, tx)
-        .map(|session| Agent::Native(Box::new(session)))
+        .map(|(session, router)| Agent::Native(Box::new(session), router))
 }
 
 fn native_agent(
@@ -1672,7 +1715,7 @@ fn native_agent(
     binary: &std::path::Path,
     settings: &AgentSettings,
     tx: &SyncSender<Value>,
-) -> Result<AgentSession, String> {
+) -> Result<(AgentSession, KerfMcpRouter), String> {
     // Kerf Cloud speaks the Anthropic Messages protocol with the account token.
     let cloud = if settings.cloud {
         let store = kerf_cloud::Store::default_path()
@@ -1793,7 +1836,7 @@ fn native_agent(
             },
         ),
     );
-    Ok(AgentSession::new(AgentSessionOptions {
+    let session = AgentSession::new(AgentSessionOptions {
         provider,
         api_mode,
         reasoning_effort,
@@ -1822,7 +1865,8 @@ fn native_agent(
         tools,
         context: Some(router.agent_context()),
         ..Default::default()
-    }))
+    });
+    Ok((session, router))
 }
 
 /// The most next steps the editor shows at once.
@@ -2048,7 +2092,9 @@ fn run_version(
                     stopped = true;
                     turn.stopped();
                 }
-                AgentEvent::TextDelta(_) | AgentEvent::TurnStarted { .. } => {}
+                AgentEvent::TextDelta(_)
+                | AgentEvent::TurnStarted { .. }
+                | AgentEvent::Context { .. } => {}
             },
         )?;
         Ok::<_, String>(())
@@ -2130,10 +2176,23 @@ fn agent_worker(
                 }
             }
             let current = &mut session.as_mut().ok_or("Agent session unavailable")?.2;
+            current.set_permissions(request.permissions);
             if let Ok(mut abort) = shared.abort.lock() {
                 *abort = Some(current.abort_handle());
             }
+            let unit = current.context_unit();
             current.run_with_events(&text, |event| {
+                // How full Kerf's context is, for the composer's meter.
+                if let AgentEvent::Context { used, limit } = &event {
+                    emit(
+                        &tx,
+                        json!({
+                            "type": "agent_context", "used": used, "limit": limit,
+                            "unit": unit, "conversation": conversation,
+                        }),
+                    );
+                    return;
+                }
                 if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
                     if let Some(focus) = focus_event(name, targets) {
                         emit(&tx, focus);
@@ -2178,6 +2237,7 @@ fn agent_worker(
                         emit(&tx, json!({"type":"agent_state","state":"aborted"}));
                         ("status", "Stopped".into())
                     }
+                    AgentEvent::Context { .. } => return,
                 };
                 if let Some((_, turn, _)) = kept.as_mut() {
                     if step {
@@ -2507,6 +2567,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             focus,
             conversation,
             at,
+            permissions,
             settings,
         } => {
             if text.trim().is_empty() || bridge.shared.agent_busy.swap(true, Ordering::SeqCst) {
@@ -2524,6 +2585,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                     settings,
                     versions: 0,
                     turn,
+                    permissions: permission_mode(permissions.as_deref()),
                 })
                 .is_err()
             {
@@ -2551,6 +2613,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                     settings,
                     versions: count,
                     turn: None,
+                    permissions: None,
                 })
                 .is_err()
             {
@@ -3191,6 +3254,32 @@ mod tests {
             panic!("expected agent command");
         };
         assert!(settings.cloud);
+    }
+
+    #[test]
+    fn a_turn_names_the_mode_it_runs_in() {
+        use super::{permission_mode, Mode};
+        let Command::Agent {
+            permissions,
+            settings,
+            ..
+        } = serde_json::from_value(
+            json!({"type": "agent", "text": "x", "permissions": "accept-edits", "cloud": true}),
+        )
+        .unwrap()
+        else {
+            panic!("expected agent command");
+        };
+        // The mode is the turn's, not the connection's: a change of mode keeps the session.
+        assert!(settings.cloud);
+        assert_eq!(
+            permission_mode(permissions.as_deref()),
+            Some(Mode::AcceptEdits)
+        );
+        assert_eq!(permission_mode(Some("auto")), Some(Mode::Auto));
+        // None named leaves the person's own file its say; a wrong name asks.
+        assert_eq!(permission_mode(None), None);
+        assert_eq!(permission_mode(Some("everything")), Some(Mode::Ask));
     }
 
     #[test]

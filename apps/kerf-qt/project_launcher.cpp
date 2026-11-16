@@ -1233,6 +1233,13 @@ void ProjectLauncher::rememberProject(const QString &path) {
     QSettings().setValue(kRecentKey, recent.mid(0, kRecentLimit));
 }
 
+void ProjectLauncher::forgetProject(const QString &path) {
+    if (path.isEmpty()) return;
+    const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QStringList recent = recentProjects();
+    if (recent.removeAll(clean) + recent.removeAll(path) > 0) QSettings().setValue(kRecentKey, recent);
+}
+
 void ProjectLauncher::clearRecentProjects() {
     QSettings().remove(kRecentKey);
 }

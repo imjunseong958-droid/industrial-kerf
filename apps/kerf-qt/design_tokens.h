@@ -209,6 +209,7 @@ constexpr int fade = 160;    // popovers and fades
 constexpr int segment = 200; // the segmented control's sliding fill
 constexpr int move = 220;    // the kit's larger moves
 constexpr int stage = 850;   // the window's regions moving to a new arrangement
+constexpr int panel = 420;   // a pane opened or closed by hand: the sidebar, the panel, the Media column
 // Motion UI: what each scene takes (MOTION_UI.md says which is which).
 constexpr int settle = 420;       // falling back or coming forward: dims, the veil
 constexpr int appear = 320;       // a thing fading in where it is
@@ -284,8 +285,11 @@ constexpr int toolbar = 40;     // toolbar height
 constexpr int strip = 28;       // the sheets' strips, the timeline's
 constexpr int bin = 272;        // the Media sheet's width
 // The minimal layout (ui/stage_shell.h).
-constexpr int sidebar = 252;            // the folders and conversations, at the left
-constexpr int sidebarFoot = 48;         // the account at its foot
+constexpr int sidebar = 288;            // the folders and conversations, at the left, until its edge is dragged
+constexpr int sidebarLeast = 232;       // and how narrow and how wide a drag leaves it
+constexpr int sidebarMost = 440;
+constexpr int sidebarGrip = 8;          // what of its edge takes the drag
+constexpr int sidebarFoot = 52;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
 constexpr int rail = 560;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width

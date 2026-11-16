@@ -10,10 +10,12 @@
 // picture's aspect and which panes are open; StageShell places its children by
 // it. A format change lays out again at once, with no animation.
 //
-//   The sidebar is 240 wide, and gives way in a window under 1100.
-//   With the panel closed the conversation has the rest. With it open the
-//   conversation is 400 wide, giving way down to 320 only when it would leave
-//   the panel under 600. At 1600 x 1000, the panel is 960 x 960 at (640, 40):
+//   The sidebar is 288 wide until its edge is dragged (232 to 440), and gives
+//   way in a window under 1100. With the panel closed the conversation has the
+//   rest. With it open the conversation is 560 wide, giving way down to 320
+//   only when it would leave the panel under 600. The Media sheet, open, is a
+//   column 272 wide between the two, and the conversation gives way to it the
+//   same way. At 1600 x 1000, the panel is 752 x 960 at (848, 40):
 //   Wide (aspect >= 1.2):
 //     picture slot 960 x 420 at the top, timeline 960 x 540 under it. The
 //     timeline has 56% of the height, at least 260, and whatever the picture's
@@ -24,9 +26,14 @@
 //   is 36% of the height, at least 220; the picture fits inside the slot.
 //   The picture keeps 12 points inside its slot, with rounded corners.
 //
-// Regions move to a new arrangement rather than jump to it, over 620 ms: the
-// picture from what it grows out of (setPanes' origin), the timeline up from
-// below. Under reduced motion, and while hidden, they are simply there.
+// Regions move to a new arrangement rather than jump to it. A pane that opens
+// comes in from the window's edge it belongs to, its edge against the edge of
+// what makes room for it, so nothing lies over anything on the way: the
+// sidebar from the left, the panel from the right as the conversation narrows,
+// the timeline up from the foot, the Media column out from between the
+// conversation and the panel. The picture alone can come from somewhere else:
+// what it grows out of (setPanes' origin). Under reduced motion, and while
+// hidden, they are simply there.
 
 #include "design_tokens.h"
 #include "test_friends.h"
@@ -55,9 +62,15 @@ struct Panes {
     // Watching a proposal's changes: the stage grows over the conversation,
     // with a strip floating over the picture.
     bool reel = false;
+    // The Media sheet: a column of its own between the conversation and the
+    // panel, so it covers neither what is said nor the timeline a drag goes to.
+    bool media = false;
+    // How wide the sidebar is, as its edge was last dragged.
+    int sidebarWidth = tokens::layout::sidebar;
     bool panelOpen() const { return picture || timeline; }
     bool operator==(const Panes &other) const {
-        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline && reel == other.reel;
+        return sidebar == other.sidebar && picture == other.picture && timeline == other.timeline && reel == other.reel &&
+               media == other.media && sidebarWidth == other.sidebarWidth;
     }
 };
 
@@ -76,7 +89,7 @@ struct Rects {
     QRect transport;
     QRect conversation;
     QRect timeline;
-    QRect media;
+    QRect media; // the Media sheet's column; empty while it is closed
 };
 
 // The part of a slot the picture fits inside.
@@ -120,8 +133,13 @@ public:
     void setAspect(double aspect);
     double aspect() const { return m_aspect; }
     // `pictureOrigin`, in this widget's coordinates: where the picture grows
-    // from, when it opens.
-    void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect());
+    // from, when it opens. `duration` is how long the regions take to get
+    // there: the stage's own time, or a pane's when one is opened by hand.
+    void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect(), int duration = tokens::motion::stage);
+    // The sidebar's width, as its edge is dragged: at once, with no motion.
+    void setSidebarWidth(int width);
+    // What takes that drag, over the sidebar's edge.
+    QWidget *sidebarGrip() const { return m_grip; }
     // Where the picture goes back into as it closes with no origin given, asked
     // once the regions have their new places (empty: it slides away).
     void setPictureHome(std::function<QRect()> home) { m_pictureHome = std::move(home); }
@@ -154,6 +172,8 @@ public:
     static QString sheetId(Sheet sheet);
 
 signals:
+    // The sidebar's edge was dragged to a new width.
+    void sidebarWidthChanged(int width);
     void sheetChanged(StageShell::Sheet sheet);
     void coveredChanged(bool covered);
     void panesChanged();
@@ -175,7 +195,9 @@ private:
         QRect to;
     };
     void place();
-    void transition(const QRect &pictureOrigin = QRect());
+    // Moves the regions from where they are, laid out as `was`, to where they
+    // now belong.
+    void transition(const stage::Rects &was, const QRect &pictureOrigin = QRect(), int duration = tokens::motion::stage);
     // Stops the move under way, if there is one, and says so.
     bool stopMoves();
     // The timeline's picture during a move, if it is shown from one; gone with it.
@@ -194,6 +216,7 @@ private:
     bool takesEscape(QObject *watched, QEvent *event);
     bool m_filtering = false;
     QWidget *m_sidebar = nullptr;
+    QWidget *m_grip = nullptr;
     QWidget *m_reelBar = nullptr;
     QWidget *m_motion = nullptr;
     QRect m_shadowed;

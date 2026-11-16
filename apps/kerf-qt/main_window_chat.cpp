@@ -198,6 +198,13 @@ void ChatWiring::attach(ChatPanel *panel) {
             if (w->confirmDeleteConversation(m_conversations->current().summary.title)) deleteConversation(id);
         }
     });
+    // How far Kerf may go without asking is the person's choice, kept from
+    // one project and one launch to the next.
+    panel->setPermissionMode(permission::named(QSettings().value(QStringLiteral("agent/permissions")).toString()));
+    connect(panel, &ChatPanel::permissionModeChosen, this, [w](PermissionMode mode) {
+        QSettings().setValue(QStringLiteral("agent/permissions"), permission::name(mode));
+        w->showStatus(QStringLiteral("%1 · %2").arg(permission::label(mode), permission::summary(mode)), 3000);
+    });
     connect(panel, &ChatPanel::moreAction, this, [this, w](const QString &action, const QString &argument) {
         if (action == QLatin1String("settings")) {
             w->showSettings(QStringLiteral("ai"));
@@ -240,6 +247,8 @@ bool ChatWiring::sendTurn(const QString &text, const QJsonObject &focus, const Q
     const QString conversation = m_conversations->currentId();
     if (!conversation.isEmpty()) request.insert(QStringLiteral("conversation"), conversation);
     if (std::isfinite(at)) request.insert(QStringLiteral("at"), at);
+    // What this turn may do without asking, as the composer's chip says.
+    if (m_panel) request.insert(QStringLiteral("permissions"), permission::name(m_panel->permissionMode()));
     // The AI bar names what Kerf works on once the bridge reports it busy.
     w->m_agentFocusLabel = focusLabel;
     if (!m_bus->send(request)) return false;
@@ -404,6 +413,11 @@ void MainWindow::askAboutInChat(const QString &subject) {
 }
 
 void MainWindow::sendChat() { m_chatWiring->post(); }
+
+void MainWindow::openConversation(const QString &id) {
+    // Chosen now; the bridge sends it as soon as it is ready (ChatWiring::handleEvent).
+    if (!id.isEmpty()) m_chatWiring->openConversation(id);
+}
 
 bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel) {
     // Asked about a range: the turn is stamped at its start.
@@ -713,6 +727,11 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
             // Stopped, with Ask again.
             m_chat->stopTurn();
         }
+    } else if (type == QStringLiteral("agent_context")) {
+        // How full Kerf's context is, for the composer's meter.
+        m_chat->setContextUse(event.value(QStringLiteral("conversation")).toString(), event.value(QStringLiteral("used")).toInteger(),
+                              event.value(QStringLiteral("limit")).toInteger(),
+                              event.value(QStringLiteral("unit")).toString() == QLatin1String("tokens"));
     } else if (type == QStringLiteral("agent_next")) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
     } else if (type == QStringLiteral("agent_focus")) {

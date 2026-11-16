@@ -204,6 +204,12 @@ pub enum AgentEvent {
         text: String,
     },
     Aborted,
+    /// How much of its input allowance the request just sent took, in the
+    /// allowance's own units (see [`ContextBudget`]): what a meter shows.
+    Context {
+        used: u64,
+        limit: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -264,6 +270,8 @@ pub struct AgentSession {
     view: context::View,
     /// The context last added to the conversation.
     snapshot: Option<String>,
+    /// What the last request took of its input allowance, and the allowance.
+    context_use: (usize, usize),
     aborted: Arc<AtomicBool>,
 }
 
@@ -384,6 +392,7 @@ impl AgentSession {
             context_budget: ContextBudget::default(),
             view: context::View::default(),
             snapshot: None,
+            context_use: (0, 0),
             aborted: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -465,11 +474,16 @@ impl AgentSession {
         }
         self.view = context::fit(&self.messages, view, available, budget)
             .map_err(AgentError::ContextBudget)?;
+        let messages = context::render(&self.messages, &self.view, budget);
+        self.context_use = (
+            fixed.saturating_add(context::cost(&messages)),
+            budget.max_input_units,
+        );
         Ok(ProviderRequest {
             model: self.model.clone(),
             system,
             tools,
-            messages: context::render(&self.messages, &self.view, budget),
+            messages,
         })
     }
 
@@ -521,6 +535,11 @@ impl AgentSession {
                 return Ok(final_text);
             }
             let chunks = self.stream_bounded()?;
+            let (used, limit) = self.context_use;
+            emit(AgentEvent::Context {
+                used: used as u64,
+                limit: limit as u64,
+            });
             let mut stop_reason = "end_turn".to_owned();
             let mut content = Vec::new();
             for chunk in chunks {
@@ -1161,6 +1180,43 @@ mod tests {
             session.messages[1].to_string().contains("old"),
             "the transcript keeps it"
         );
+    }
+
+    #[test]
+    fn each_request_says_how_much_of_its_allowance_it_took() {
+        let mut session = AgentSession::from_provider(
+            Box::new(FakeProvider {
+                chunks: vec![ProviderChunk::MessageEnd {
+                    stop_reason: "end_turn".into(),
+                    content: vec![json!({"type":"text","text":"done"})],
+                }],
+            }),
+            None,
+            Some("fixed instructions".into()),
+            Vec::new(),
+            ToolMap::new(),
+            4,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        let mut readings = Vec::new();
+        for request in ["a short request", &"a much longer request ".repeat(200)] {
+            session
+                .run_with_events(request, |event| {
+                    if let AgentEvent::Context { used, limit } = event {
+                        readings.push((used, limit));
+                    }
+                })
+                .unwrap();
+        }
+        let limit = ContextBudget::default().max_input_units as u64;
+        assert_eq!(readings.len(), 2, "one reading for each request sent");
+        assert!(readings.iter().all(|reading| reading.1 == limit));
+        // The instructions and the request are counted, and a longer
+        // conversation takes more.
+        assert!(readings[0].0 > "fixed instructions".len() as u64);
+        assert!(readings[1].0 > readings[0].0 + 4000, "{readings:?}");
+        assert!(readings[1].0 < limit);
     }
 
     #[test]

@@ -26,6 +26,7 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QTextEdit>
+#include <QTimeZone>
 
 #include <cmath>
 #include <initializer_list>
@@ -104,7 +105,7 @@ private slots:
         QCOMPARE(list.count(), 1);
         QCOMPARE(model.list().size(), 2);
         QCOMPARE(model.summary(QStringLiteral("c-2"))->archived, true);
-        QCOMPARE(model.list().first().updated, QDateTime(QDate(2026, 11, 16), QTime(9, 5), QTimeZone::UTC));
+        QCOMPARE(model.list().first().updated, QDateTime(QDate(2026, 11, 16), QTime(9, 5), QTimeZone::utc()));
         // Another conversation's whole is not the open one's.
         QVERIFY(model.applyEvent(QStringLiteral("conversation"), conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it")})));
         QCOMPARE(current.count(), 0);

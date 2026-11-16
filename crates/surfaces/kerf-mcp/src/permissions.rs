@@ -18,6 +18,12 @@
 //! Every edit is still one revision that undo takes back, and a making still
 //! writes a new take beside the ones before it, so what was let through is
 //! seen and undone as anything else.
+//!
+//! The editor's chat has the same three modes beside its composer. What is
+//! chosen there holds for the turns sent from it, in place of the file's
+//! `permissions`: the built-in agent is given it directly, and Claude Code's
+//! `kerf-mcp` reads it from `KERF_AGENT_PERMISSIONS`, which the editor sets
+//! for the turn. The person sets both, never a project.
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -25,6 +31,10 @@ use std::path::{Path, PathBuf};
 /// How many makings an agent runs on its own in one session when the file
 /// does not say.
 pub const DEFAULT_MAKES: u32 = 5;
+
+/// The variable that names a mode in place of the file's: the editor sets it
+/// for the `kerf-mcp` a chat turn on Claude Code starts.
+pub const MODE_VARIABLE: &str = "KERF_AGENT_PERMISSIONS";
 
 /// What an agent may do without a person saying yes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,7 +58,8 @@ impl Mode {
         }
     }
 
-    fn named(name: &str) -> Option<Self> {
+    /// The mode a file, or the editor, names; none for any other word.
+    pub fn named(name: &str) -> Option<Self> {
         match name {
             "ask" => Some(Self::Ask),
             "accept-edits" => Some(Self::AcceptEdits),
@@ -100,7 +111,25 @@ impl Permissions {
                     .map(|home| PathBuf::from(home).join(".kerf").join("agent.json"))
             })
             .unwrap_or_else(|| PathBuf::from("agent.json"));
-        Self::read(&file)
+        let chosen = std::env::var_os(MODE_VARIABLE).filter(|name| !name.is_empty());
+        Self::read(&file)?.in_mode(
+            chosen
+                .as_ref()
+                .map(|name| name.to_string_lossy())
+                .as_deref(),
+        )
+    }
+
+    /// These permissions in the mode `chosen` names, the one the editor set
+    /// for a turn, or as they are with none. A name that is no mode is an
+    /// error, never taken as one that lets more through.
+    pub fn in_mode(mut self, chosen: Option<&str>) -> Result<Self, String> {
+        if let Some(name) = chosen {
+            self.mode = Mode::named(name).ok_or_else(|| {
+                format!("{MODE_VARIABLE} is ask, accept-edits, or auto, not {name:?}")
+            })?;
+        }
+        Ok(self)
     }
 
     /// The permissions `file` gives. A file that is there and does not read
@@ -180,6 +209,22 @@ mod tests {
             read(r#"{"permissions": "auto"}"#).unwrap().makes,
             DEFAULT_MAKES
         );
+    }
+
+    #[test]
+    fn a_mode_chosen_in_the_editor_stands_in_for_the_files() {
+        let file = read(r#"{"permissions": "auto", "makes": 2}"#).unwrap();
+        // Chosen lower, it asks; chosen higher, it lets through, and the
+        // file's count of makings still holds.
+        let asks = file.clone().in_mode(Some("ask")).unwrap();
+        assert!(!asks.accepts_edits());
+        let auto = read("{}").unwrap().in_mode(Some("auto")).unwrap();
+        assert!(auto.accepts_edits() && auto.runs_makings(0));
+        assert_eq!(file.clone().in_mode(Some("accept-edits")).unwrap().makes, 2);
+        // None chosen leaves the file's.
+        assert_eq!(file.clone().in_mode(None).unwrap(), file);
+        let wrong = file.in_mode(Some("everything")).unwrap_err();
+        assert!(wrong.contains(MODE_VARIABLE), "{wrong}");
     }
 
     #[test]

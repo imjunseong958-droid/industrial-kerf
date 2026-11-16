@@ -1,20 +1,23 @@
 #pragma once
 
-// The conversation's footer: the composer, with the timecode stamp and Send
-// (Stop while Kerf works); the suggestions popover over it while it is
-// focused and empty.
+// The conversation's footer: the composer. What to ask, and under it what the
+// request goes with: how far Kerf may go without asking, which model answers,
+// the playhead's stamp, how full Kerf's context is, and Send (Stop while Kerf
+// works); the suggestions popover over it while it is focused and empty.
 //
-//   ┌──────────────────────────────────────────────────────────────┐
-//   │ Ask Kerf to make or change something                         │   input 20, UI 13/20
-//   │ [clock 00:00:17:08]                                   [send] │   row 28, gap 4
-//   └──────────────────────────────────────────────────────────────┘
+//   ┌──────────────────────────────────────────────────────────────────────┐
+//   │ Ask Kerf to make or change something                                 │  input, UI 14/22
+//   │ [lock Ask before edits v] [claude-opus-5-5 v] [clock 00:00:17:08]  ◔ [send] │  row 28, gap 4
+//   └──────────────────────────────────────────────────────────────────────┘
 //
-// The composer only collects what is written; ChatWiring sends it as an
-// agent turn (main_window_chat.cpp).
+// The composer only collects what is written and chosen; ChatWiring sends it
+// as an agent turn (main_window_chat.cpp).
 
+#include "components.h"
 #include "test_friends.h"
 
 #include <QAbstractButton>
+#include <QColor>
 #include <QFrame>
 #include <QJsonArray>
 #include <QPointer>
@@ -26,6 +29,7 @@
 class QAction;
 class QHBoxLayout;
 class QLabel;
+class QMenu;
 class QTextEdit;
 class QVariantAnimation;
 
@@ -34,6 +38,85 @@ namespace kerf {
 namespace ui {
 class IconButton;
 } // namespace ui
+
+// How far Kerf goes without asking, as kerf-mcp's permissions name it: every
+// edit a proposal to accept; edits accepted as they are made; or edits
+// accepted and the shots it asks for made too, up to the person's limit.
+enum class PermissionMode { Ask, AcceptEdits, Auto };
+
+namespace permission {
+// "ask", "accept-edits", "auto": what a request and the settings say.
+QString name(PermissionMode mode);
+// The mode a name stands for; anything else asks.
+PermissionMode named(const QString &name);
+// "Ask before edits", "Accept edits", "Auto": what the chip says.
+QString label(PermissionMode mode);
+// One line on what it lets through, for the menu and the tip.
+QString summary(PermissionMode mode);
+// The next mode round, as Shift-Tab goes.
+PermissionMode next(PermissionMode mode);
+} // namespace permission
+
+// A chip in the composer's row (24 tall, radius 6, pad 0 6): a 14 pt icon, a
+// word in UI 12/16, and the chevron of something that opens. Ink2 at rest, or
+// its tone; hover2 under the pointer.
+class ComposerChip final : public ui::KitButton {
+    Q_OBJECT
+public:
+    explicit ComposerChip(QWidget *parent = nullptr);
+    void setIconName(const QString &icon);
+    QString iconName() const { return m_icon; }
+    void setLabel(const QString &text);
+    // The colour of its icon and word at rest; invalid goes back to ink2.
+    void setTone(const QColor &tone);
+    QColor tone() const { return m_tone; }
+    // Whether it opens something: without, it only says.
+    void setChevron(bool chevron);
+    bool hasChevron() const { return m_chevron; }
+    // The widest its word is drawn before it is cut with an ellipsis.
+    void setWidestLabel(int width);
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QString m_icon;
+    QColor m_tone;
+    int m_widest = 180;
+    bool m_chevron = true;
+};
+
+// How full Kerf's context is: a ring, 16 across, filled round from the top as
+// the conversation takes more of what a request can hold. Ink2, then the
+// warning's amber past three quarters and red past nine tenths. Hidden until
+// a turn has said how full it is.
+class ContextMeter final : public QWidget {
+    Q_OBJECT
+public:
+    explicit ContextMeter(QWidget *parent = nullptr);
+    // `used` of `limit`; `tokens` when they are the model's tokens, not Kerf's
+    // own measure. A limit of none hides it.
+    void setUse(qint64 used, qint64 limit, bool tokens);
+    void clear() { setUse(0, 0, false); }
+    // 0 to 1.
+    qreal fraction() const;
+    qint64 used() const { return m_used; }
+    qint64 limit() const { return m_limit; }
+    // The ring's colour now.
+    QColor ringColor() const;
+    // "Context 34% full", and what that is of.
+    QString describe() const;
+    QSize sizeHint() const override { return QSize(24, 24); }
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    qint64 m_used = 0;
+    qint64 m_limit = 0;
+    bool m_tokens = false;
+};
 
 // Send (.send): 24 x 24, radius 6. Idle (nothing to send): on and ink3;
 // ready: accent and white, accent-hover under the pointer. As Stop (Kerf
@@ -123,6 +206,22 @@ public:
     SendButton *sendButton() const { return m_send; }
     SendButton *stopButton() const { return m_stop; }
     StampButton *stamp() const { return m_stamp; }
+    // What a request goes with, in the row under the text. They show once
+    // setAgentControls(true) says the composer sends to an agent that takes
+    // them (the start window's does not).
+    ComposerChip *modeChip() const { return m_mode; }
+    ComposerChip *modelChip() const { return m_model; }
+    ContextMeter *contextMeter() const { return m_context; }
+    void setAgentControls(bool shown);
+    // How far Kerf goes without asking. Shift-Tab in the text goes round the three.
+    PermissionMode permissionMode() const { return m_permission; }
+    void setPermissionMode(PermissionMode mode);
+    // The menu the mode chip opens, made as it opens (for tests).
+    QMenu *buildModeMenu();
+    // The models the model chip offers (only while `choosable`), and the one
+    // each request names.
+    void setModels(const QStringList &models, const QString &current, bool choosable);
+    QMenu *buildModelMenu();
     QWidget *box() const { return m_box; }
     QLabel *errorLabel() const { return m_error; }
     FloatingList *suggestionsPopover() const { return m_suggestions; }
@@ -159,6 +258,11 @@ public:
 signals:
     void submitRequested();
     void stopRequested();
+    // Chosen here, from the chip's menu or with Shift-Tab.
+    void permissionModeChosen(kerf::PermissionMode mode);
+    void modelChosen(const QString &model);
+    // The model menu's way to where the connection is set up.
+    void agentSettingsRequested();
     void suggestionChosen(int index);
     // Esc with nothing else to close.
     void escapePressed();
@@ -180,6 +284,14 @@ private:
     int m_leastInput = 22;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
+    ComposerChip *m_mode = nullptr;
+    ComposerChip *m_model = nullptr;
+    ContextMeter *m_context = nullptr;
+    PermissionMode m_permission = PermissionMode::Ask;
+    QStringList m_models;
+    QString m_currentModel;
+    bool m_modelsChoosable = false;
+    bool m_agentControls = false;
     SendButton *m_send = nullptr;
     SendButton *m_stop = nullptr;
     QLabel *m_error = nullptr;

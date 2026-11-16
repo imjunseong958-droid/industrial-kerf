@@ -47,6 +47,7 @@
 #include <QToolBar>
 
 #include <cmath>
+#include <functional>
 
 namespace kerf {
 
@@ -135,8 +136,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(812, 40, 788, 420), QRect(854, 52, 704, 396), QRect(252, 40, 560, 960), QRect(812, 460, 788, 540)},
-    {"916", QSize(1080, 1920), QRect(812, 40, 788, 614), QRect(1040, 52, 332, 590), QRect(252, 40, 560, 960), QRect(812, 654, 788, 346)},
+    {"169", QSize(1920, 1080), QRect(848, 40, 752, 420), QRect(872, 52, 704, 396), QRect(288, 40, 560, 960), QRect(848, 460, 752, 540)},
+    {"916", QSize(1080, 1920), QRect(848, 40, 752, 614), QRect(1058, 52, 332, 590), QRect(288, 40, 560, 960), QRect(848, 654, 752, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -207,7 +208,7 @@ private slots:
             }
             QVERIFY(save(fmt));
 
-            // The sheets, each at the window's right edge and the conversation's height.
+            // The sheets, each a column of its own between the conversation and the panel.
             const struct {
                 StageShell::Sheet sheet;
                 const char *name;
@@ -219,13 +220,16 @@ private slots:
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
                 QVERIFY2(sheet.widget->isVisible(), sheet.name);
-                QCOMPARE(inWindow(sheet.widget, &window),
-                         QRect(format.conversation.right() + 1 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
-                // What is under it has not moved.
-                checkBase(window, format);
+                // The conversation and the panel part for it: it lies over neither.
+                const QRect column = inWindow(sheet.widget, &window);
+                QCOMPARE(column.size(), QSize(sheet.width, format.conversation.height()));
+                QCOMPARE(column.left(), inWindow(window.m_chat, &window).right() + 1);
+                QCOMPARE(column.right() + 1, inWindow(window.m_viewer, &window).left());
                 QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
+                // Closed, everything is where it was.
+                checkBase(window, format);
             }
 
             // ?preview=1: the chip, 12 inside the picture's top left.
@@ -252,6 +256,49 @@ private slots:
             window.close();
         }
         QCOMPARE(states, 2 * (1 + 1 + 1));
+    }
+
+    // KERF_SCREENSHOT_DIR=<dir> saves the window as its panes open and close,
+    // frame by frame, to look at: motion can only be judged where it runs.
+    void paneMovesForTheGallery() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");
+        QVERIFY(QDir().mkpath(shots));
+        MainWindow window{QString(), QString()};
+        window.m_cloudAccess = QStringLiteral("ready");
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.m_chatWiring->openConversation(QStringLiteral("c-seed"));
+        window.handleEvent(seedConversation());
+        fakeArtwork(window.m_artwork);
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.m_errorBanner->hide();
+        window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(960, 540)), 0.0);
+        QCoreApplication::processEvents();
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        // Each move, from the frame it starts on to the one it rests on.
+        const auto film = [&window, &shots](const QString &name, const std::function<void()> &start) {
+            start();
+            int frame = 0;
+            int waited = 0;
+            for (const int at : {0, 50, 110, 190, 300}) {
+                QTest::qWait(at - waited);
+                waited = at;
+                window.grab().save(QDir(shots).filePath(QStringLiteral("move-%1-%2.png").arg(name).arg(frame++)));
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(!window.m_shell->isMoving(), 3000);
+            window.grab().save(QDir(shots).filePath(QStringLiteral("move-%1-%2.png").arg(name).arg(frame)));
+        };
+        film(QStringLiteral("panel-close"), [&window] { window.m_panelButton->click(); });
+        film(QStringLiteral("panel-open"), [&window] { window.m_panelButton->click(); });
+        film(QStringLiteral("media-open"), [&window] { window.triggerCommand(QStringLiteral("window.project")); });
+        film(QStringLiteral("media-close"), [&window] { window.triggerCommand(QStringLiteral("window.project")); });
+        film(QStringLiteral("sidebar-close"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
+        film(QStringLiteral("sidebar-open"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
+        window.close();
     }
 
     // The timeline at the design's size: its strip, heads, default heights, and a
